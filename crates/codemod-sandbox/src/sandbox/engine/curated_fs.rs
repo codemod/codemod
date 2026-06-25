@@ -88,12 +88,7 @@ impl CuratedFsConfig {
     }
 
     fn normalized_target(&self) -> String {
-        let trimmed = self.target_dir.trim_end_matches('/');
-        if trimmed.is_empty() {
-            "/".to_string()
-        } else {
-            trimmed.to_string()
-        }
+        normalize_absolute_path(&self.target_dir)
     }
 
     /// Resolve an incoming path against [`Self::target_dir`]. Relative paths
@@ -104,14 +99,15 @@ impl CuratedFsConfig {
     /// can't escape via `target_dir/link-to-outside/...`).
     fn resolve(&self, input: &str) -> std::result::Result<(String, VfsPath), FsErrorKind> {
         let target = self.normalized_target();
-        let raw = if input.starts_with('/') {
-            input.to_string()
+        let input = to_posix_path(input);
+        let raw = if is_absolute_path(&input) {
+            input
         } else if target == "/" {
             format!("/{input}")
         } else {
             format!("{target}/{input}")
         };
-        let normalized = normalize_path(&raw);
+        let normalized = normalize_absolute_path(&raw);
         let within_target = normalized == target
             || (target == "/" && normalized.starts_with('/'))
             || normalized.starts_with(&format!("{target}/"));
@@ -161,6 +157,36 @@ fn check_no_symlink_escape(
         }
     }
     Ok(())
+}
+
+fn to_posix_path(input: &str) -> String {
+    let path = input.replace('\\', "/");
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
+        format!("{}{}", path[..1].to_ascii_uppercase(), &path[1..])
+    } else {
+        path
+    }
+}
+
+fn has_windows_drive_prefix(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
+}
+
+fn is_absolute_path(input: &str) -> bool {
+    input.starts_with('/') || has_windows_drive_prefix(input)
+}
+
+fn normalize_absolute_path(input: &str) -> String {
+    let input = to_posix_path(input);
+    if has_windows_drive_prefix(&input) {
+        normalize_path(&format!("/{input}"))
+    } else if input.starts_with('/') {
+        normalize_path(&input)
+    } else {
+        normalize_path(&format!("/{input}"))
+    }
 }
 
 /// Normalize a POSIX-style path: strip `.` segments, resolve `..` against
@@ -726,6 +752,51 @@ mod tests {
         assert_eq!(normalize_path("/app/src/../src/foo.ts"), "/app/src/foo.ts");
         assert_eq!(normalize_path("/app/../etc/passwd"), "/etc/passwd");
         assert_eq!(normalize_path("/app//src///foo.ts"), "/app/src/foo.ts");
+    }
+
+    #[test]
+    fn resolve_accepts_windows_style_paths_under_windows_target() {
+        let cfg = CuratedFsConfig::new(r"C:\repo", MemoryFS::new().into());
+
+        let (normalized, _) = cfg.resolve(r"C:\repo\src\foo.cs").unwrap();
+        assert_eq!(normalized, "/C:/repo/src/foo.cs");
+
+        let (normalized, _) = cfg.resolve("src\\foo.cs").unwrap();
+        assert_eq!(normalized, "/C:/repo/src/foo.cs");
+
+        let (normalized, _) = cfg.resolve("c:/repo/src/foo.cs").unwrap();
+        assert_eq!(normalized, "/C:/repo/src/foo.cs");
+    }
+
+    #[test]
+    fn resolve_rejects_windows_style_paths_outside_windows_target() {
+        let cfg = CuratedFsConfig::new(r"C:\repo", MemoryFS::new().into());
+
+        match cfg.resolve(r"C:\outside\secret.txt") {
+            Err(FsErrorKind::AccessDenied { path }) => {
+                assert_eq!(path, "/C:/outside/secret.txt");
+            }
+            other => panic!("expected AccessDenied, got {other:?}"),
+        }
+
+        match cfg.resolve(r"C:\repo\..\outside\secret.txt") {
+            Err(FsErrorKind::AccessDenied { path }) => {
+                assert_eq!(path, "/C:/outside/secret.txt");
+            }
+            other => panic!("expected AccessDenied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalize_absolute_path_handles_windows_drive_paths() {
+        assert_eq!(
+            normalize_absolute_path(r"c:\repo\src\..\foo.cs"),
+            "/C:/repo/foo.cs"
+        );
+        assert_eq!(
+            normalize_absolute_path("C:/repo//src/./foo.cs"),
+            "/C:/repo/src/foo.cs"
+        );
     }
 
     /// When `physical_target_dir` is set, traversing a symlink — even one

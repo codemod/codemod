@@ -1,5 +1,5 @@
 use super::codemod_lang::CodemodLang;
-use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
+use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule, FileFetcher};
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use super::transform_helpers::{
     build_transform_options, process_transform_result, ModificationCheck,
@@ -24,6 +24,7 @@ use rquickjs::prelude::Rest;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime, Ctx, Object, Type, Value};
 use rquickjs::{CatchResultExt, Function, Module};
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -38,6 +39,13 @@ pub struct ExecutionModeFlag {
 
 unsafe impl<'js> rquickjs::JsLifetime<'js> for ExecutionModeFlag {
     type Changed<'to> = ExecutionModeFlag;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DryRunExecutionFlag(pub bool);
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for DryRunExecutionFlag {
+    type Changed<'to> = DryRunExecutionFlag;
 }
 
 fn install_console_bridge(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -241,6 +249,64 @@ pub struct JssgExecutionOptions<'a, R> {
     pub target_directory: &'a Path,
 }
 
+struct DryRunDiskFetcher {
+    target_directory: PathBuf,
+}
+
+fn dry_run_virtual_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let bytes = path.as_bytes();
+    let has_windows_drive_prefix =
+        bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/';
+    if has_windows_drive_prefix {
+        format!("/{}{}", path[..1].to_ascii_uppercase(), &path[1..])
+    } else {
+        path
+    }
+}
+
+impl FileFetcher for DryRunDiskFetcher {
+    fn fetch(&self, path: &str) -> std::result::Result<Option<Vec<u8>>, String> {
+        let path = dry_run_virtual_path(path);
+        let target = dry_run_virtual_path(&self.target_directory.to_string_lossy());
+        let relative = path
+            .strip_prefix(&target)
+            .unwrap_or(&path)
+            .trim_start_matches('/');
+        let candidate = self.target_directory.join(relative);
+        match std::fs::read(candidate) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
+fn seed_dry_run_current_file(
+    root: &vfs::VfsPath,
+    target_directory: &Path,
+    file_path: &Path,
+    content: &str,
+) {
+    let relative = file_path
+        .strip_prefix(target_directory)
+        .unwrap_or(file_path);
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    if let Some(parent) = Path::new(&relative).parent() {
+        let parent = parent.to_string_lossy();
+        if !parent.is_empty() {
+            if let Ok(parent_vfs) = root.join(parent.trim_start_matches('/')) {
+                let _ = parent_vfs.create_dir_all();
+            }
+        }
+    }
+    if let Ok(file) = root.join(relative.trim_start_matches('/')) {
+        if let Ok(mut writer) = file.create_file() {
+            let _ = writer.write_all(content.as_bytes());
+        }
+    }
+}
+
 /// Execute a codemod on string content using QuickJS
 /// This is the core execution logic that doesn't touch the filesystem
 pub async fn execute_codemod_with_quickjs<'a, R>(
@@ -271,6 +337,10 @@ where
 
     // Create AstGrep instance for the SgRootRjs
     let ast_grep = AstGrep::new(options.content, options.language);
+    let canonical_target_directory = options
+        .target_directory
+        .canonicalize()
+        .unwrap_or_else(|_| options.target_directory.to_path_buf());
 
     // Track whether the caller opted into llrt's real-disk fs capability
     // so we know whether to install the curated fs below instead.
@@ -284,13 +354,15 @@ where
                 LlrtSupportedModules::Fetch => {
                     module_builder.enable_fetch();
                 }
-                LlrtSupportedModules::Fs => {
+                LlrtSupportedModules::Fs if !options.dry_run => {
                     module_builder.enable_fs();
                     fs_capability_enabled = true;
                 }
-                LlrtSupportedModules::ChildProcess => {
+                LlrtSupportedModules::Fs => {}
+                LlrtSupportedModules::ChildProcess if !options.dry_run => {
                     module_builder.enable_child_process();
                 }
+                LlrtSupportedModules::ChildProcess => {}
                 _ => {}
             }
         }
@@ -299,7 +371,7 @@ where
     // Install the curated `fs` when the caller gave us a target directory
     // and didn't explicitly opt into the unrestricted llrt fs.
     let curated_fs_target = if !fs_capability_enabled {
-        Some(options.target_directory.to_string_lossy().into_owned())
+        Some(canonical_target_directory.to_string_lossy().into_owned())
     } else {
         None
     };
@@ -366,6 +438,12 @@ where
             },
         })?;
 
+        ctx.store_userdata(DryRunExecutionFlag(options.dry_run)).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store DryRunExecutionFlag: {:?}", e),
+            },
+        })?;
+
         // Store shared accumulator for jssgTransform file changes
         let jssg_file_changes = JssgFileChanges::default();
         ctx.store_userdata(jssg_file_changes.clone()).map_err(|e| ExecutionError::Runtime {
@@ -414,12 +492,28 @@ where
         })?;
 
         if let Some(target_dir) = curated_fs_target.clone() {
-            let physical_root: vfs::VfsPath = vfs::PhysicalFS::new(std::path::PathBuf::from("/")).into();
-            // PhysicalFS is rooted at "/", so `target_dir` is already the
-            // host-disk path corresponding to the VFS target. Hand it through
-            // so the resolver can reject paths that traverse a symlink.
-            let cfg = CuratedFsConfig::new(target_dir.clone(), physical_root)
-                .with_physical_target_dir(std::path::PathBuf::from(&target_dir));
+            let cfg = if options.dry_run {
+                let target_path = std::path::PathBuf::from(&target_dir);
+                let memory_root: vfs::VfsPath = vfs::MemoryFS::new().into();
+                seed_dry_run_current_file(
+                    &memory_root,
+                    &target_path,
+                    options.file_path,
+                    options.content,
+                );
+                CuratedFsConfig::new(target_dir.clone(), memory_root).with_fetcher(Arc::new(
+                    DryRunDiskFetcher {
+                        target_directory: target_path,
+                    },
+                ))
+            } else {
+                let physical_root: vfs::VfsPath = vfs::PhysicalFS::new(std::path::PathBuf::from("/")).into();
+                // PhysicalFS is rooted at "/", so `target_dir` is already the
+                // host-disk path corresponding to the VFS target. Hand it through
+                // so the resolver can reject paths that traverse a symlink.
+                CuratedFsConfig::new(target_dir.clone(), physical_root)
+                    .with_physical_target_dir(std::path::PathBuf::from(&target_dir))
+            };
             ctx.store_userdata(cfg)
                 .map_err(|e| ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -477,10 +571,7 @@ where
                 .unwrap_or_else(|_| options.file_path.to_path_buf())
                 .to_string_lossy()
                 .to_string();
-            let target_directory = options
-                .target_directory
-                .canonicalize()
-                .unwrap_or_else(|_| options.target_directory.to_path_buf());
+            let target_directory = canonical_target_directory.clone();
             let parsed_content =
                 SgRootRjs::try_new_with_semantic(
                     ast_grep,
@@ -995,6 +1086,18 @@ mod tests {
         (temp_dir, codemod_path)
     }
 
+    #[test]
+    fn dry_run_virtual_path_normalizes_windows_drive_paths() {
+        assert_eq!(
+            dry_run_virtual_path(r"c:\repo\src\foo.cs"),
+            "/C:/repo/src/foo.cs"
+        );
+        assert_eq!(
+            dry_run_virtual_path("C:/repo/src/foo.cs"),
+            "/C:/repo/src/foo.cs"
+        );
+    }
+
     /// Create a simple console.log to logger.log codemod for testing
     fn create_test_codemod() -> String {
         r#"
@@ -1074,6 +1177,78 @@ function example() {
             },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
+    }
+
+    #[tokio::test]
+    async fn test_dry_run_curated_fs_does_not_mutate_disk() {
+        let codemod_content = r#"
+import fs from "fs";
+import { parseFile } from "codemod:ast-grep";
+
+export default function transform(root, options) {
+  const current = fs.readFileSync(root.filename(), "utf-8");
+  fs.writeFileSync(`${options.targetDir}/appsettings.json`, '{"dryRun":true}\n', "utf-8");
+  const written = fs.readFileSync(`${options.targetDir}/appsettings.json`, "utf-8");
+  parseFile("javascript", `${options.targetDir}/Sibling.js`).write("export const sibling = 2;");
+  fs.unlinkSync(root.filename());
+  return `current=${current};written=${written.trim()};exists=${fs.existsSync(root.filename())}`;
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let target_dir = temp_dir.path().join("repo");
+        fs::create_dir_all(&target_dir).expect("target dir should be created");
+        let file_path = target_dir.join("App.js");
+        fs::write(&file_path, "const config = true;").expect("fixture should be written");
+        let sibling_path = target_dir.join("Sibling.js");
+        fs::write(&sibling_path, "export const sibling = 1;").expect("sibling should be written");
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: &file_path,
+            content: "const config = true;",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: true,
+            target_directory: &target_dir,
+        };
+
+        let result = execute_codemod_with_quickjs(options)
+            .await
+            .expect("dry-run execution should succeed");
+        match result.primary {
+            ExecutionResult::Modified(modified) => {
+                assert_eq!(
+                    modified.content,
+                    "current=const config = true;;written={\"dryRun\":true};exists=false"
+                );
+            }
+            other => panic!("Expected modified result, got: {:?}", other),
+        }
+
+        assert_eq!(
+            fs::read_to_string(&file_path).expect("current file should remain on disk"),
+            "const config = true;"
+        );
+        assert!(
+            !target_dir.join("appsettings.json").exists(),
+            "dry-run fs writes must not create files on disk"
+        );
+        assert_eq!(
+            fs::read_to_string(&sibling_path).expect("root.write target should remain on disk"),
+            "export const sibling = 1;"
+        );
     }
 
     #[tokio::test]
