@@ -251,12 +251,15 @@ fn parse_pyproject_dependencies(content: &str, path: &str) -> Vec<DependencyFact
     {
         for dependency in dependencies {
             if let Some(spec) = dependency.as_str() {
-                if let Some(name) = python_dependency_name(spec) {
+                if let (Some(name), Some(version)) = (
+                    python_dependency_name(spec),
+                    python_dependency_version_requirement(spec),
+                ) {
                     push_dependency(
                         &mut facts,
                         Ecosystem::PyPI,
                         name,
-                        spec,
+                        &version,
                         path,
                         Some("dependencies"),
                     );
@@ -344,12 +347,15 @@ fn parse_requirements_dependencies(content: &str, path: &str) -> Vec<DependencyF
         if trimmed.is_empty() || trimmed.starts_with('-') {
             continue;
         }
-        if let Some(name) = python_dependency_name(trimmed) {
+        if let (Some(name), Some(version)) = (
+            python_dependency_name(trimmed),
+            python_dependency_version_requirement(trimmed),
+        ) {
             push_dependency(
                 &mut facts,
                 Ecosystem::PyPI,
                 name,
-                trimmed,
+                &version,
                 path,
                 Some("requirements"),
             );
@@ -473,6 +479,41 @@ fn python_dependency_name(spec: &str) -> Option<&str> {
     }
 }
 
+fn python_dependency_version_requirement(spec: &str) -> Option<String> {
+    let spec = spec.split(';').next().unwrap_or("").trim();
+    let name = python_dependency_name(spec)?;
+    let mut rest = spec.get(name.len()..)?.trim_start();
+
+    if let Some(after_extras) = rest.strip_prefix('[') {
+        let extras_end = after_extras.find(']')?;
+        rest = after_extras.get(extras_end + 1..)?.trim_start();
+    }
+
+    if rest.is_empty() {
+        return None;
+    }
+
+    let normalized = rest
+        .split(',')
+        .filter_map(|part| normalize_python_version_comparator(part.trim()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn normalize_python_version_comparator(comparator: &str) -> Option<String> {
+    for operator in ["==", "!=", ">=", "<=", "~=", ">", "<", "="] {
+        if let Some(version) = comparator.strip_prefix(operator) {
+            return Some(format!("{operator}{}", version.trim_start()));
+        }
+    }
+    None
+}
+
 fn push_dependency(
     facts: &mut Vec<DependencyFact>,
     ecosystem: Ecosystem,
@@ -562,9 +603,38 @@ require (
         assert_dependency(&facts, Ecosystem::Npm, "vite", "^5.0.0");
         assert_dependency(&facts, Ecosystem::Cargo, "anyhow", "1");
         assert_dependency(&facts, Ecosystem::Cargo, "serde", "1");
-        assert_dependency(&facts, Ecosystem::PyPI, "requests", "requests>=2.31.0");
+        assert_dependency(&facts, Ecosystem::PyPI, "requests", ">=2.31.0");
         assert_dependency(&facts, Ecosystem::Go, "github.com/gin-gonic/gin", "v1.9.1");
         assert_dependency(&facts, Ecosystem::Java, "org.slf4j:slf4j-api", "2.0.9");
+    }
+
+    #[test]
+    fn parses_python_requirement_versions_without_package_name() {
+        let facts = parse_requirements_dependencies(
+            r#"
+requests==2.31.0
+urllib3 >= 2.0.0, <3.0.0
+pkg-extra[security]~=1.2
+"#,
+            "requirements.txt",
+        );
+
+        assert_dependency_name_version(&facts, "requests", "==2.31.0");
+        assert_dependency_name_version(&facts, "urllib3", ">=2.0.0 <3.0.0");
+        assert_dependency_name_version(&facts, "pkg-extra", "~=1.2");
+    }
+
+    #[test]
+    fn parses_pyproject_dependency_versions_without_package_name() {
+        let facts = parse_pyproject_dependencies(
+            r#"[project]
+dependencies = ["requests>=2.31.0", "urllib3 < 3.0.0"]
+"#,
+            "pyproject.toml",
+        );
+
+        assert_dependency_name_version(&facts, "requests", ">=2.31.0");
+        assert_dependency_name_version(&facts, "urllib3", "<3.0.0");
     }
 
     #[test]
@@ -659,10 +729,8 @@ dependencies {
     }
 
     fn assert_dependency_name_version(facts: &[DependencyFact], name: &str, version: &str) {
-        assert!(facts.iter().any(|dependency| {
-            dependency.ecosystem == Ecosystem::Java
-                && dependency.name == name
-                && dependency.version == version
-        }));
+        assert!(facts
+            .iter()
+            .any(|dependency| { dependency.name == name && dependency.version == version }));
     }
 }

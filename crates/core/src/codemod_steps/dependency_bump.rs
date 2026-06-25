@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use butterflow_models::step::{BumpDependencySpec, PackageManager, UseBumpDependency};
 use butterflow_models::Error;
@@ -124,14 +124,7 @@ pub fn plan_bump_dependency_step(
     step: &UseBumpDependency,
     dry_run: bool,
 ) -> Result<BumpDependencyPlan, BumpDependencyPlanError> {
-    let root = step.root.as_ref().map(|root| {
-        let trimmed = root.trim();
-        if trimmed == "." {
-            PathBuf::from(".")
-        } else {
-            PathBuf::from(trimmed)
-        }
-    });
+    let root = step.root.as_ref().map(|root| normalize_step_root(root));
     let manager_root = infer_package_manager_root(
         facts,
         &PackageManagerInferenceRequest {
@@ -152,6 +145,21 @@ pub fn plan_bump_dependency_step(
         manager_root,
         actions,
     })
+}
+
+fn normalize_step_root(root: &str) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in Path::new(root.trim()).components() {
+        match component {
+            Component::CurDir => {}
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        normalized
+    }
 }
 
 pub async fn execute_bump_dependency_plan(
@@ -1028,6 +1036,24 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_step_root_before_package_root_matching() {
+        let facts = npm_facts("apps/web", "react", "^17.0.2");
+        let plan = plan_bump_dependency_step(
+            &facts,
+            &UseBumpDependency {
+                manager: Some(PackageManager::Pnpm),
+                root: Some("./apps/web".to_string()),
+                dependencies: vec![dependency_with_if_version("react", "^17.0.0", "^18.0.0")],
+            },
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(plan.manager_root.root, PathBuf::from("apps/web"));
+        assert_eq!(plan.actions.len(), 1);
+    }
+
+    #[test]
     fn wildcard_if_version_matches_existing_dependency() {
         let facts = npm_facts(".", "react", "workspace:*");
         let plan = plan_bump_dependency_step(
@@ -1077,6 +1103,37 @@ mod tests {
                 manager: Some(PackageManager::Npm),
                 root: Some(".".to_string()),
                 dependencies: vec![dependency_with_ensure("react", "^18.0.0", None)],
+            },
+            false,
+        )
+        .unwrap();
+
+        assert!(plan.actions.is_empty());
+    }
+
+    #[test]
+    fn ensure_skips_python_requirement_when_current_version_satisfies_requirement() {
+        let facts = WorkflowFacts {
+            schema_version: 1,
+            ecosystems: vec![EcosystemFact {
+                ecosystem: Ecosystem::PyPI,
+                source: EcosystemFactSource::LockFile,
+                path: "requirements.txt".to_string(),
+            }],
+            dependencies: vec![DependencyFact {
+                ecosystem: Ecosystem::PyPI,
+                name: "requests".to_string(),
+                version: "==2.31.0".to_string(),
+                path: "requirements.txt".to_string(),
+                dependency_type: Some("requirements".to_string()),
+            }],
+        };
+        let plan = plan_bump_dependency_step(
+            &facts,
+            &UseBumpDependency {
+                manager: Some(PackageManager::RequirementsTxt),
+                root: Some(".".to_string()),
+                dependencies: vec![dependency_with_ensure("requests", ">=2.0.0", None)],
             },
             false,
         )

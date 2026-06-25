@@ -105,6 +105,18 @@ pub fn infer_package_manager_root(
 
 pub fn detect_package_manager_roots(facts: &WorkflowFacts) -> Vec<PackageManagerRoot> {
     let mut roots: BTreeMap<(PathBuf, PackageManager), PackageManagerRoot> = BTreeMap::new();
+    let javascript_lock_roots = facts
+        .ecosystems
+        .iter()
+        .filter(|fact| {
+            fact.source == EcosystemFactSource::LockFile
+                && matches!(
+                    dependency_files::file_name(&fact.path),
+                    "package-lock.json" | "yarn.lock" | "pnpm-lock.yaml" | "bun.lock"
+                )
+        })
+        .map(|fact| package_root(&fact.path))
+        .collect::<BTreeSet<_>>();
     let uv_roots = facts
         .ecosystems
         .iter()
@@ -117,6 +129,12 @@ pub fn detect_package_manager_roots(facts: &WorkflowFacts) -> Vec<PackageManager
 
     for fact in &facts.ecosystems {
         let root = package_root(&fact.path);
+        if fact.source == EcosystemFactSource::ContextFile
+            && dependency_files::file_name(&fact.path) == "package.json"
+            && javascript_lock_roots.contains(&root)
+        {
+            continue;
+        }
         if fact.source == EcosystemFactSource::ContextFile
             && dependency_files::file_name(&fact.path) == "pyproject.toml"
             && uv_roots.contains(&root)
@@ -286,6 +304,34 @@ mod tests {
 
         assert_eq!(root.manager, PackageManager::Uv);
         assert_eq!(root.root, PathBuf::from("services/api"));
+    }
+
+    #[test]
+    fn javascript_lockfile_takes_precedence_over_package_json_context() {
+        let facts = facts_with_paths(&[
+            (
+                Ecosystem::Npm,
+                EcosystemFactSource::ContextFile,
+                "apps/web/package.json",
+            ),
+            (
+                Ecosystem::Npm,
+                EcosystemFactSource::LockFile,
+                "apps/web/pnpm-lock.yaml",
+            ),
+        ]);
+
+        let root = infer_package_manager_root(
+            &facts,
+            &PackageManagerInferenceRequest {
+                ecosystem: Some(Ecosystem::Npm),
+                ..PackageManagerInferenceRequest::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(root.manager, PackageManager::Pnpm);
+        assert_eq!(root.root, PathBuf::from("apps/web"));
     }
 
     #[test]
