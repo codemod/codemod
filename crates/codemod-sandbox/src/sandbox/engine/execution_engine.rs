@@ -267,31 +267,72 @@ fn dry_run_virtual_path(path: &str) -> String {
 
 impl FileFetcher for DryRunDiskFetcher {
     fn fetch(&self, path: &str) -> std::result::Result<Option<Vec<u8>>, String> {
-        let path = dry_run_virtual_path(path);
-        let target = dry_run_virtual_path(&self.target_directory.to_string_lossy());
-        let relative = path
-            .strip_prefix(&target)
-            .unwrap_or(&path)
-            .trim_start_matches('/');
-        let candidate = self.target_directory.join(relative);
+        let candidate = self.candidate(path);
         match std::fs::read(candidate) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.to_string()),
         }
     }
+
+    fn metadata(&self, path: &str) -> std::result::Result<Option<vfs::VfsMetadata>, String> {
+        let candidate = self.candidate(path);
+        match std::fs::metadata(candidate) {
+            Ok(meta) => Ok(Some(vfs::VfsMetadata {
+                file_type: if meta.is_dir() {
+                    vfs::VfsFileType::Directory
+                } else {
+                    vfs::VfsFileType::File
+                },
+                len: meta.len(),
+                created: meta.created().ok(),
+                modified: meta.modified().ok(),
+                accessed: meta.accessed().ok(),
+            })),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn read_dir(&self, path: &str) -> std::result::Result<Option<Vec<String>>, String> {
+        let candidate = self.candidate(path);
+        match std::fs::read_dir(candidate) {
+            Ok(entries) => entries
+                .map(|entry| {
+                    entry
+                        .map_err(|error| error.to_string())
+                        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                })
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
+impl DryRunDiskFetcher {
+    fn candidate(&self, path: &str) -> PathBuf {
+        let path = dry_run_virtual_path(path);
+        let target = dry_run_virtual_path(&self.target_directory.to_string_lossy());
+        let relative = path
+            .strip_prefix(&target)
+            .unwrap_or(&path)
+            .trim_start_matches('/');
+        self.target_directory.join(relative)
+    }
 }
 
 fn seed_dry_run_current_file(
     root: &vfs::VfsPath,
-    target_directory: &Path,
+    _target_directory: &Path,
     file_path: &Path,
     content: &str,
 ) {
-    let relative = file_path
-        .strip_prefix(target_directory)
-        .unwrap_or(file_path);
-    let relative = relative.to_string_lossy().replace('\\', "/");
+    let file_path = file_path
+        .canonicalize()
+        .unwrap_or_else(|_| file_path.to_path_buf());
+    let relative = dry_run_virtual_path(&file_path.to_string_lossy());
     if let Some(parent) = Path::new(&relative).parent() {
         let parent = parent.to_string_lossy();
         if !parent.is_empty() {
@@ -1186,12 +1227,31 @@ import fs from "fs";
 import { parseFile } from "codemod:ast-grep";
 
 export default function transform(root, options) {
+  const currentExistsBeforeRead = fs.existsSync(root.filename());
+  const currentSizeBeforeRead = fs.statSync(root.filename()).size;
+  const entriesBeforeRead = fs.readdirSync(options.targetDir).join(",");
+  const siblingPath = `${options.targetDir}/Sibling.js`;
+  const siblingExistsBeforeRead = fs.existsSync(siblingPath);
+  const siblingSizeBeforeRead = fs.statSync(siblingPath).size;
+  fs.unlinkSync(siblingPath);
+  const siblingExistsAfterUnlink = fs.existsSync(siblingPath);
   const current = fs.readFileSync(root.filename(), "utf-8");
   fs.writeFileSync(`${options.targetDir}/appsettings.json`, '{"dryRun":true}\n', "utf-8");
   const written = fs.readFileSync(`${options.targetDir}/appsettings.json`, "utf-8");
   parseFile("javascript", `${options.targetDir}/Sibling.js`).write("export const sibling = 2;");
   fs.unlinkSync(root.filename());
-  return `current=${current};written=${written.trim()};exists=${fs.existsSync(root.filename())}`;
+  const currentExistsAfterUnlink = fs.existsSync(root.filename());
+  return [
+    `currentExistsBeforeRead=${currentExistsBeforeRead}`,
+    `currentSizeBeforeRead=${currentSizeBeforeRead}`,
+    `entriesBeforeRead=${entriesBeforeRead}`,
+    `siblingExistsBeforeRead=${siblingExistsBeforeRead}`,
+    `siblingSizeBeforeRead=${siblingSizeBeforeRead}`,
+    `siblingExistsAfterUnlink=${siblingExistsAfterUnlink}`,
+    `current=${current}`,
+    `written=${written.trim()}`,
+    `currentExistsAfterUnlink=${currentExistsAfterUnlink}`,
+  ].join(";");
 }
         "#
         .trim();
@@ -1231,7 +1291,17 @@ export default function transform(root, options) {
             ExecutionResult::Modified(modified) => {
                 assert_eq!(
                     modified.content,
-                    "current=const config = true;;written={\"dryRun\":true};exists=false"
+                    concat!(
+                        "currentExistsBeforeRead=true;",
+                        "currentSizeBeforeRead=20;",
+                        "entriesBeforeRead=App.js,Sibling.js;",
+                        "siblingExistsBeforeRead=true;",
+                        "siblingSizeBeforeRead=25;",
+                        "siblingExistsAfterUnlink=false;",
+                        "current=const config = true;;",
+                        "written={\"dryRun\":true};",
+                        "currentExistsAfterUnlink=false"
+                    )
                 );
             }
             other => panic!("Expected modified result, got: {:?}", other),
