@@ -20,13 +20,13 @@ Every query line starts with a data source. The source decides what the query ca
 
 | Source | Use it when |
 | --- | --- |
-| **JSSG Codemod** | You need custom code analysis, semantic checks, or named metrics emitted from a codemod. |
+| **JSSG Codemod** | You need custom code analysis, semantic checks, or named [JSSG metrics](/jssg/metrics) emitted from a codemod. |
 | **ast-grep (YAML)** | You need a structural syntax match without writing TypeScript. |
 | **Dependencies** | You need package, version, ecosystem, workspace, or dependency depth data. |
 
 ## JSSG codemods
 
-Use [JSSG](/jssg/intro) when you need custom logic. A JSSG source can count files, inspect AST nodes, use semantic analysis, and emit named metrics with cardinality keys.
+Use [JSSG](/jssg/intro) when you need custom logic. A JSSG source can count files, inspect AST nodes, use semantic analysis, and emit named [JSSG metrics](/jssg/metrics) with cardinality keys.
 
 <Frame>
   <img
@@ -41,7 +41,7 @@ Use [JSSG](/jssg/intro) when you need custom logic. A JSSG source can count file
   />
 </Frame>
 
-You can use an inline JSSG codemod while you explore a metric, then move the code into a package when the metric should be reused.
+You can use an inline JSSG codemod while you explore a metric, then move the code into a package when the metric should be reused. JSSG metrics are emitted from code with `codemod:metrics`, which lets one codemod return multiple named counts that Insights can group, filter, and chart.
 
 <Frame>
   <img
@@ -78,7 +78,7 @@ JSSG queries can use [semantic analysis](/jssg/semantic-analysis) when the quest
 Use ast-grep when a structural pattern is enough. It works well for a specific import, function call, JSX prop, or syntax shape.
 
 <Tip>
-  Start with ast-grep for direct syntax questions. Move to JSSG when you need custom logic, semantic resolution, or multiple named metrics.
+  Start with ast-grep for direct syntax questions. Move to JSSG when you need custom logic, semantic resolution, or multiple named [JSSG metrics](/jssg/metrics).
 </Tip>
 
 ## Dependencies

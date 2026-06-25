@@ -25,7 +25,7 @@ Grouping controls the shape of the result. Use it when a single total is not eno
 | **Repository** | Which repos have the signal. |
 | **Directory** | Where the work is located inside a repo. |
 | **Code owner** | Which team likely owns the work. |
-| **Metric cardinality key** | A custom dimension emitted by JSSG, such as component name, package name, or API name. |
+| **Metric cardinality key** | A custom dimension emitted by a [JSSG metric](/jssg/metrics), such as component name, package name, or API name. |
 
 ## Group by directory
 
@@ -46,7 +46,7 @@ Directory grouping is useful when a large repository has several work areas. Sta
 
 ## Group by metric cardinality
 
-JSSG metrics can emit cardinality keys. For example, a codemod can emit one `prop-usage` metric for each deprecated prop and attach `name = Button` or `name = Link`.
+[JSSG metrics](/jssg/metrics) can emit cardinality keys. For example, a codemod can emit one `prop-usage` metric for each deprecated prop and attach `name = Button` or `name = Link`.
 
 Use metric cardinality when you want a table such as:
 
