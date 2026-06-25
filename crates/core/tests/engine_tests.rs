@@ -382,6 +382,43 @@ fn create_single_run_script_workflow(command: String) -> Workflow {
     }
 }
 
+fn create_single_bump_dependency_workflow(bump_dependency: UseBumpDependency) -> Workflow {
+    Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![Node {
+            id: "bump-node".to_string(),
+            name: "Bump Node".to_string(),
+            description: None,
+            r#type: NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: Some(Runtime {
+                r#type: RuntimeType::Direct,
+                image: None,
+                working_dir: None,
+                user: None,
+                network: None,
+                options: None,
+            }),
+            steps: vec![Step {
+                id: Some("bump-dependency".to_string()),
+                name: "Bump Dependency".to_string(),
+                action: StepAction::BumpDependency(bump_dependency),
+                env: None,
+                condition: None,
+                commit: None,
+            }],
+            env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
+        }],
+    }
+}
+
 // Helper function to create a workflow with a manual trigger
 fn create_manual_trigger_workflow() -> Workflow {
     Workflow {
@@ -1579,49 +1616,16 @@ async fn test_bump_dependency_dry_run_completes_without_modifying_manifest() {
     let state_adapter = Box::new(MockStateAdapter::new());
     let engine = Engine::with_state_adapter(state_adapter, config);
 
-    let workflow = Workflow {
-        version: "1".to_string(),
-        state: None,
-        params: None,
-        templates: vec![],
-        nodes: vec![Node {
-            id: "bump-node".to_string(),
-            name: "Bump Node".to_string(),
-            description: None,
-            r#type: NodeType::Automatic,
-            depends_on: vec![],
-            trigger: None,
-            strategy: None,
-            runtime: Some(Runtime {
-                r#type: RuntimeType::Direct,
-                image: None,
-                working_dir: None,
-                user: None,
-                network: None,
-                options: None,
-            }),
-            steps: vec![Step {
-                id: Some("bump-react".to_string()),
-                name: "Bump React".to_string(),
-                action: StepAction::BumpDependency(UseBumpDependency {
-                    manager: Some(PackageManager::Npm),
-                    root: Some(".".to_string()),
-                    dependencies: vec![BumpDependencySpec {
-                        name: "react".to_string(),
-                        target: None,
-                        if_version: None,
-                        ensure: Some("^18.0.0".to_string()),
-                    }],
-                }),
-                env: None,
-                condition: None,
-                commit: None,
-            }],
-            env: HashMap::new(),
-            branch_name: None,
-            pull_request: None,
+    let workflow = create_single_bump_dependency_workflow(UseBumpDependency {
+        manager: Some(PackageManager::Npm),
+        root: Some(".".to_string()),
+        dependencies: vec![BumpDependencySpec {
+            name: "react".to_string(),
+            target: None,
+            if_version: None,
+            ensure: Some("^18.0.0".to_string()),
         }],
-    };
+    });
 
     let workflow_run_id = engine
         .run_workflow(workflow, HashMap::new(), None, None)
@@ -1649,6 +1653,197 @@ async fn test_bump_dependency_dry_run_completes_without_modifying_manifest() {
     assert!(
         logs.contains("'npm' 'install' 'react@^18.0.0'"),
         "task logs should include the generated npm command, got: {logs}"
+    );
+}
+
+#[tokio::test]
+async fn test_bump_dependency_workflow_applies_maven_manifest_edit() {
+    let temp_dir = TempDir::new().unwrap();
+    let pom_xml = temp_dir.path().join("pom.xml");
+    fs::write(
+        &pom_xml,
+        r#"
+<project>
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-api</artifactId>
+      <version>5.9.0</version>
+    </dependency>
+  </dependencies>
+</project>
+"#,
+    )
+    .unwrap();
+
+    let config = workflow_run_config! {
+        target_path: temp_dir.path().to_path_buf(),
+        quiet: true,
+        ..WorkflowRunConfig::default()
+    };
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, config);
+    let workflow = create_single_bump_dependency_workflow(UseBumpDependency {
+        manager: Some(PackageManager::Maven),
+        root: Some(".".to_string()),
+        dependencies: vec![BumpDependencySpec {
+            name: "org.junit.jupiter:junit-jupiter-api".to_string(),
+            target: None,
+            if_version: None,
+            ensure: Some("5.10.2".to_string()),
+        }],
+    });
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let status = wait_for_task_status(&engine, workflow_run_id, "bump-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
+
+    let updated = fs::read_to_string(pom_xml).unwrap();
+    assert!(updated.contains("<version>5.10.2</version>"));
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "bump-node")
+        .expect("bump-node task should exist");
+    let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("Applied bump-dependency file edit"),
+        "task logs should include the applied file edit, got: {logs}"
+    );
+    assert!(
+        logs.contains("org.junit.jupiter:junit-jupiter-api -> 5.10.2"),
+        "task logs should include the Maven dependency edit, got: {logs}"
+    );
+}
+
+#[tokio::test]
+async fn test_bump_dependency_workflow_applies_gradle_kotlin_manifest_edit() {
+    let temp_dir = TempDir::new().unwrap();
+    let build_gradle = temp_dir.path().join("build.gradle.kts");
+    fs::write(
+        &build_gradle,
+        r#"
+dependencies {
+    implementation("org.slf4j:slf4j-api:2.0.9")
+}
+"#,
+    )
+    .unwrap();
+
+    let config = workflow_run_config! {
+        target_path: temp_dir.path().to_path_buf(),
+        quiet: true,
+        ..WorkflowRunConfig::default()
+    };
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, config);
+    let workflow = create_single_bump_dependency_workflow(UseBumpDependency {
+        manager: Some(PackageManager::Gradle),
+        root: Some(".".to_string()),
+        dependencies: vec![BumpDependencySpec {
+            name: "org.slf4j:slf4j-api".to_string(),
+            target: None,
+            if_version: None,
+            ensure: Some("2.1.0".to_string()),
+        }],
+    });
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let status = wait_for_task_status(&engine, workflow_run_id, "bump-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
+
+    let updated = fs::read_to_string(build_gradle).unwrap();
+    assert!(updated.contains(r#"implementation("org.slf4j:slf4j-api:2.1.0")"#));
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "bump-node")
+        .expect("bump-node task should exist");
+    let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("Applied bump-dependency file edit"),
+        "task logs should include the applied file edit, got: {logs}"
+    );
+    assert!(
+        logs.contains("org.slf4j:slf4j-api -> 2.1.0"),
+        "task logs should include the Gradle dependency edit, got: {logs}"
+    );
+}
+
+#[tokio::test]
+async fn test_bump_dependency_workflow_fails_for_ambiguous_package_manager_root() {
+    let temp_dir = TempDir::new().unwrap();
+    let web_dir = temp_dir.path().join("apps/web");
+    let admin_dir = temp_dir.path().join("apps/admin");
+    fs::create_dir_all(&web_dir).unwrap();
+    fs::create_dir_all(&admin_dir).unwrap();
+    fs::write(
+        web_dir.join("package.json"),
+        r#"{"dependencies":{"react":"^17.0.2"}}"#,
+    )
+    .unwrap();
+    fs::write(web_dir.join("package-lock.json"), "{}").unwrap();
+    fs::write(
+        admin_dir.join("package.json"),
+        r#"{"dependencies":{"react":"^17.0.2"}}"#,
+    )
+    .unwrap();
+    fs::write(admin_dir.join("package-lock.json"), "{}").unwrap();
+
+    let config = workflow_run_config! {
+        target_path: temp_dir.path().to_path_buf(),
+        quiet: true,
+        ..WorkflowRunConfig::default()
+    };
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, config);
+    let workflow = create_single_bump_dependency_workflow(UseBumpDependency {
+        manager: Some(PackageManager::Npm),
+        root: None,
+        dependencies: vec![BumpDependencySpec {
+            name: "react".to_string(),
+            target: None,
+            if_version: None,
+            ensure: Some("^18.0.0".to_string()),
+        }],
+    });
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let status = wait_for_task_status(&engine, workflow_run_id, "bump-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Failed);
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "bump-node")
+        .expect("bump-node task should exist");
+    let error = task.error.as_deref().unwrap_or_default();
+    assert!(
+        error.contains("multiple package-manager roots match"),
+        "task error should explain the ambiguous package manager root, got: {error}"
     );
 }
 
