@@ -571,7 +571,7 @@ steps:
           ensure: "^18.0.0"
 ```
 
-`ensure` describes the desired dependency range. If the current declaration already satisfies the range, the dependency is skipped. If it does not, Codemod writes the `ensure` range as the target version.
+`ensure` describes the desired dependency requirement. If the current declaration already satisfies the requirement, the dependency is skipped. If it does not, Codemod writes the `ensure` requirement as the target version.
 
 Use `if_version` for conditional remediation where the version to match and the version to write are different:
 
@@ -601,6 +601,10 @@ steps:
 
 **Bump Dependency Step Parameters**:
 
+<Note>
+  `ensure`, `if_version`, and `target` use the package manager's native dependency version syntax. They are not normalized to a universal semver grammar. For example, npm and Cargo commonly use semver-style ranges, Go uses module versions, Python requirements use PEP 440-style specifiers, and Maven/Gradle use their own declaration conventions.
+</Note>
+
 <ParamField path="name" type="string" required>
   Step label.
 </ParamField>
@@ -618,15 +622,15 @@ steps:
 </ParamField>
 
 <ParamField path="bump-dependency.dependencies[].ensure" type="string">
-  Desired version range. If the current declaration already satisfies this range, Codemod skips the dependency. If it does not, Codemod updates the dependency to this range unless `target` is provided.
+  Desired dependency version requirement in the package manager's native syntax. If the current declaration already satisfies this requirement, Codemod skips the dependency. If it does not, Codemod updates the dependency to this requirement unless `target` is provided.
 </ParamField>
 
 <ParamField path="bump-dependency.dependencies[].if_version" type="string">
-  Conditional match range. Use this when you only want to update dependencies currently matching a specific range. `*` and `any` match any existing version. Requires `target`.
+  Conditional match requirement in the package manager's native syntax. Use this when you only want to update dependencies currently matching a specific requirement. `*` and `any` match any existing version. Requires `target`.
 </ParamField>
 
 <ParamField path="bump-dependency.dependencies[].target" type="string">
-  Version range to write. Required with `if_version`. Optional with `ensure`; when omitted, Codemod writes the `ensure` range. Target syntax is package-manager-specific.
+  Dependency version requirement to write in the package manager's native syntax. Required with `if_version`. Optional with `ensure`; when omitted, Codemod writes the `ensure` requirement.
 </ParamField>
 
 <ParamField path="bump-dependency.manager" type="string">

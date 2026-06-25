@@ -1942,8 +1942,10 @@ async fn test_cancel_workflow() {
         .await
         .unwrap();
 
-    // Small delay to allow workflow to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::Running
+    })
+    .await;
 
     // Cancel the workflow
     engine.cancel_workflow(workflow_run_id).await.unwrap();
