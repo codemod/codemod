@@ -118,6 +118,22 @@ fn get_definitions() -> &'static [DynamicLanguageDefinition] {
     ]
 }
 
+pub fn supports_language_name(name: &str) -> bool {
+    get_definitions()
+        .iter()
+        .any(|definition| definition.name == name)
+}
+
+pub fn supports_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            get_definitions()
+                .iter()
+                .any(|definition| definition.extensions.contains(&extension))
+        })
+}
+
 fn current_platform() -> Result<(&'static str, &'static str), LoaderError> {
     let os = if cfg!(target_os = "macos") {
         "macos"
@@ -308,5 +324,25 @@ pub fn init() -> Result<(), LoaderError> {
         Err(LoaderError::Register(msg.clone()))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_supported_dynamic_language_names() {
+        assert!(supports_language_name("xml"));
+        assert!(supports_language_name("groovy"));
+        assert!(!supports_language_name("not-a-language"));
+    }
+
+    #[test]
+    fn reports_supported_dynamic_paths() {
+        assert!(supports_path(Path::new("pom.xml")));
+        assert!(supports_path(Path::new("build.gradle")));
+        assert!(!supports_path(Path::new("main.rs")));
+        assert!(!supports_path(Path::new("README")));
     }
 }
