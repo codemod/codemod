@@ -6,12 +6,12 @@ interface RegistryButtonProps {
 }
 
 export function RegistryButton({ url }: RegistryButtonProps) {
-  function openRegistry() {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }
-
   return (
-    <Button variant="outline" onClick={openRegistry}>
+    <Button
+      variant="outline"
+      nativeButton={false}
+      render={<a href={url} target="_blank" rel="noopener noreferrer" />}
+    >
       <ExternalLink className="size-4" />
       Registry
     </Button>
