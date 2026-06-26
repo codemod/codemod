@@ -159,6 +159,8 @@ npx codemod ai feedback --category ai-docs --message "The docs resource for runt
 
 Feedback is anonymous. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts in the message.
 
+When you run a codemod with `--report`, the local report UI also exposes a **Feedback** button. You can submit feedback manually or choose **Auto-submit with local agent** to let an installed coding agent inspect the target read-only, draft anonymous feedback from the run summary, and submit it for you. Feedback is disabled when `DISABLE_ANALYTICS` is set.
+
 **`ai update`**
 
 Run managed update reconciliation/apply through CLI (same policy engine used by periodic hooks).
@@ -608,6 +610,10 @@ npx codemod jssg run <codemod_file> <target_directory> [options]
 
 <ResponseField name="--dry-run" type="boolean">
   Perform a dry-run to see the changes without applying them.
+</ResponseField>
+
+<ResponseField name="--report" type="boolean">
+  Open the local execution report in your browser after the run completes. The report UI shows metrics, changed files, and diffs. You can also submit anonymous codemod performance feedback from the report, either manually or by letting a supported local coding agent draft it from the run context.
 </ResponseField>
 
 **`jssg test`**
