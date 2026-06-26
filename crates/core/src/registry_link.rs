@@ -43,22 +43,16 @@ mod tests {
 
     #[test]
     fn public_registry_package_links_to_package_page() {
-        let url = resolve_registry_link_url(
-            "https://app.codemod.com",
-            Some("debarrel"),
-            Some("public"),
-        );
+        let url =
+            resolve_registry_link_url("https://app.codemod.com", Some("debarrel"), Some("public"));
 
         assert_eq!(url, "https://app.codemod.com/registry/debarrel");
     }
 
     #[test]
     fn pro_registry_package_links_to_package_page() {
-        let url = resolve_registry_link_url(
-            "https://app.codemod.com",
-            Some("debarrel"),
-            Some("pro"),
-        );
+        let url =
+            resolve_registry_link_url("https://app.codemod.com", Some("debarrel"), Some("pro"));
 
         assert_eq!(url, "https://app.codemod.com/registry/debarrel");
     }
