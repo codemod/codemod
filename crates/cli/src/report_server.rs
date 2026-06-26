@@ -1427,6 +1427,7 @@ mod tests {
                 deletions: 2,
                 diffs: Vec::new(),
             }],
+            registry_link_url: None,
         }
     }
 

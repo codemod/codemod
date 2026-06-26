@@ -102,6 +102,9 @@ pub struct ExecutionReport {
     pub diffs: Vec<ReportFileDiff>,
     /// File diffs grouped by the step that produced them
     pub diff_groups: Vec<ReportDiffGroup>,
+    /// Registry URL opened by the report UI Registry button
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry_link_url: Option<String>,
 }
 
 impl ExecutionReport {
@@ -145,7 +148,13 @@ impl ExecutionReport {
             metrics,
             diffs: report_diffs.consolidated,
             diff_groups: report_diffs.by_step,
+            registry_link_url: None,
         }
+    }
+
+    pub fn with_registry_link_url(mut self, registry_link_url: Option<String>) -> Self {
+        self.registry_link_url = registry_link_url;
+        self
     }
 
     /// Create a copy of this report stripped for sharing.

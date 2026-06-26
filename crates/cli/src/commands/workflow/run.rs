@@ -234,6 +234,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             .map(|c| c.lock().unwrap().clone())
             .unwrap_or_default();
 
+        let registry_client = create_registry_client(None)?;
         let report = ExecutionReport::build(
             args.workflow.clone(),
             None,
@@ -246,7 +247,12 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             files_with_errors,
             convert_metrics(&metrics_data),
             convert_diffs(&collected_diffs, &target_path.display().to_string()),
-        );
+        )
+        .with_registry_link_url(Some(
+            crate::utils::registry_link::registry_link_url_for_local_run(
+                &registry_client.config.default_registry,
+            ),
+        ));
 
         crate::report_server::serve_report(report).await?;
     } else {
