@@ -24,6 +24,9 @@ use crate::ai_handoff::{
     build_agent_command, detect_parent_coding_agent, discover_installed_agents,
     find_agent_executable, resolve_agent_name, DetectionConfidence,
 };
+use crate::codemod_steps::dependency_bump::{
+    execute_bump_dependency_plan, plan_bump_dependency_step, BumpDependencyExecutionError,
+};
 use crate::config::{
     CapabilitiesSecurityCallback, InstallSkillExecutionRequest, InstallSkillExecutor,
     ShellCommandExecutionRequest, WorkflowRunConfig,
@@ -42,6 +45,7 @@ use crate::slog;
 use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::task_state_service::TaskStateService;
 use crate::utils::validate_workflow;
+use crate::workflow_facts::WorkflowFacts;
 use crate::workflow_runtime::{publish_event, WorkflowEvent};
 use chrono::Utc;
 use codemod_sandbox::sandbox::engine::CodemodOutput;
@@ -60,7 +64,7 @@ use crate::registry::ResolvedPackage;
 use crate::step_executor::{StepExecutionRequest, StepExecutor};
 use butterflow_models::runtime::RuntimeType;
 
-use butterflow_models::step::{UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
+use butterflow_models::step::{UseAI, UseAstGrep, UseBumpDependency, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
     evaluate_condition, resolve_string_list, resolve_string_with_expression, resolve_usize_value,
     DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskErrorDetails,
@@ -596,6 +600,9 @@ pub struct Engine {
     /// (today: the js-ast-grep file loop). `cancel_workflow` flips every entry
     /// so the step can short-circuit without polling the state backend.
     step_cancel_signals: Arc<std::sync::Mutex<HashMap<Uuid, Arc<AtomicBool>>>>,
+
+    /// Workflow-start fact snapshots keyed by workflow run id.
+    workflow_facts: Arc<std::sync::Mutex<HashMap<Uuid, WorkflowFacts>>>,
 }
 
 /// Represents a codemod dependency chain for cycle detection
@@ -968,6 +975,7 @@ impl Engine {
                 .with_text_log_fallthrough(true),
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            workflow_facts: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -994,6 +1002,7 @@ impl Engine {
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            workflow_facts: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -1016,6 +1025,19 @@ impl Engine {
 
     pub(crate) fn file_writer(&self) -> Arc<AsyncFileWriter> {
         Arc::clone(&self.file_writer)
+    }
+
+    pub fn workflow_facts(&self, workflow_run_id: Uuid) -> Option<WorkflowFacts> {
+        self.workflow_facts
+            .lock()
+            .ok()
+            .and_then(|facts| facts.get(&workflow_run_id).cloned())
+    }
+
+    fn save_workflow_facts(&self, workflow_run_id: Uuid, facts: WorkflowFacts) {
+        if let Ok(mut all_facts) = self.workflow_facts.lock() {
+            all_facts.insert(workflow_run_id, facts);
+        }
     }
 
     /// Create a new engine with a custom state adapter
@@ -1043,6 +1065,7 @@ impl Engine {
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            workflow_facts: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -1494,6 +1517,21 @@ impl Engine {
         validate_workflow(&workflow, bundle_path.as_deref().unwrap_or(Path::new("")))?;
         self.validate_codemod_dependencies(&workflow, &[]).await?;
 
+        let workflow_facts =
+            match WorkflowFacts::collect_from_path(&self.workflow_run_config.execution.target_path)
+            {
+                Ok(facts) => facts,
+                Err(error) => {
+                    slog!(
+                        &self.structured_logger,
+                        warn,
+                        "Failed to collect workflow facts: {}",
+                        error
+                    );
+                    WorkflowFacts::empty()
+                }
+            };
+
         let workflow_run = WorkflowRun {
             id: workflow_run_id,
             workflow: workflow.clone(),
@@ -1513,6 +1551,7 @@ impl Engine {
             .await
             .save_workflow_run(&workflow_run)
             .await?;
+        self.save_workflow_facts(workflow_run_id, workflow_facts);
         self.emit_workflow_started(&workflow_run);
 
         self.spawn_workflow_executor(workflow_run_id);
@@ -3795,6 +3834,141 @@ impl Engine {
         Ok(shards)
     }
 
+    /// Execute a single bump-dependency step.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn execute_bump_dependency_step(
+        &self,
+        runner: &dyn Runner,
+        bump_dependency: &UseBumpDependency,
+        step_name: &str,
+        step_env: &Option<HashMap<String, String>>,
+        node: &Node,
+        task: &Task,
+        state: &HashMap<String, serde_json::Value>,
+        bundle_path: &Option<PathBuf>,
+        logger: &StructuredLogger,
+    ) -> Result<()> {
+        let workflow_facts = if let Some(facts) = self.workflow_facts(task.workflow_run_id) {
+            facts
+        } else {
+            WorkflowFacts::collect_from_path(&self.workflow_run_config.execution.target_path)?
+        };
+        let dry_run = self.workflow_run_config.execution.dry_run;
+        let plan = plan_bump_dependency_step(&workflow_facts, bump_dependency, dry_run).map_err(
+            |error| Error::StepExecution(format!("bump-dependency planning failed: {error}")),
+        )?;
+
+        if plan.actions.is_empty() {
+            slog!(
+                logger,
+                info,
+                "Skipping bump-dependency step '{}': all dependencies already satisfy requested constraints",
+                step_name
+            );
+        }
+
+        let prepared = self.prepare_step_execution(step_env, node, task, state, bundle_path)?;
+
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let state_adapter = Arc::clone(&self.state_adapter);
+        let task_id = task.id;
+        let workflow_run_id = task.workflow_run_id;
+        let log_persist_task = tokio::spawn(async move {
+            while let Some(line) = log_rx.recv().await {
+                let line = line.trim_end_matches(['\r', '\n']).to_string();
+                if line.is_empty() {
+                    continue;
+                }
+
+                let mut adapter = state_adapter.lock().await;
+                let Ok(mut current_task) = adapter.get_task(task_id).await else {
+                    continue;
+                };
+                current_task.logs.push(line.clone());
+                let _ = adapter.save_task(&current_task).await;
+                publish_event(
+                    workflow_run_id,
+                    WorkflowEvent::TaskLogAppended {
+                        workflow_run_id,
+                        task_id,
+                        line,
+                        at: Utc::now(),
+                    },
+                );
+            }
+        });
+
+        let output_callback: OutputCallback = Arc::new(move |line: String| {
+            let _ = log_tx.send(line);
+        });
+
+        let execution = execute_bump_dependency_plan(
+            runner,
+            &plan,
+            &self.workflow_run_config.execution.target_path,
+            &prepared.env,
+            Some(Arc::clone(&output_callback)),
+        )
+        .await
+        .map_err(|error| match error {
+            BumpDependencyExecutionError::CommandFailed {
+                command,
+                exit_code,
+                output,
+            } => Error::ShellCommandStepFailed {
+                command,
+                exit_code,
+                output,
+            },
+            error => Error::StepExecution(format!("bump-dependency execution failed: {error}")),
+        });
+        drop(output_callback);
+        let _ = log_persist_task.await;
+
+        let execution = execution?;
+        for command in execution.commands {
+            if command.dry_run {
+                slog!(
+                    logger,
+                    info,
+                    "Dry-run bump-dependency command: {}",
+                    command.command
+                );
+            } else {
+                slog!(
+                    logger,
+                    info,
+                    "Executed bump-dependency command: {}",
+                    command.command
+                );
+            }
+        }
+        for file_edit in execution.file_edits {
+            if file_edit.dry_run {
+                slog!(
+                    logger,
+                    info,
+                    "Dry-run bump-dependency file edit: {} -> {} in {}",
+                    file_edit.dependency,
+                    file_edit.target,
+                    file_edit.path.display()
+                );
+            } else {
+                slog!(
+                    logger,
+                    info,
+                    "Applied bump-dependency file edit: {} -> {} in {}",
+                    file_edit.dependency,
+                    file_edit.target,
+                    file_edit.path.display()
+                );
+            }
+        }
+
+        self.finalize_step_execution(task, String::new(), prepared)
+            .await
+    }
+
     /// Execute a single RunScript step
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_run_script_step(
@@ -4110,6 +4284,7 @@ impl Clone for Engine {
             structured_logger: self.structured_logger.clone(),
             output_heartbeat_callbacks: Arc::clone(&self.output_heartbeat_callbacks),
             step_cancel_signals: Arc::clone(&self.step_cancel_signals),
+            workflow_facts: Arc::clone(&self.workflow_facts),
         }
     }
 }

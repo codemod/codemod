@@ -74,7 +74,11 @@ impl FromStr for CodemodLang {
             return Ok(CodemodLang::Static(lang));
         }
 
-        // Initialize dynamic parsers and try dynamic languages
+        if !tree_sitter_loader::supports_language_name(s) {
+            return Err(format!("Unsupported language: {s}"));
+        }
+
+        // Initialize dynamic parsers and try dynamic languages.
         if let Err(e) = tree_sitter_loader::init() {
             eprintln!("Warning: failed to initialize dynamic tree-sitter parsers: {e}");
         }
@@ -157,6 +161,9 @@ impl Language for CodemodLang {
     fn from_path<P: AsRef<std::path::Path>>(path: P) -> Option<Self> {
         if let Some(lang) = SupportLang::from_path(path.as_ref()) {
             return Some(CodemodLang::Static(lang));
+        }
+        if !tree_sitter_loader::supports_path(path.as_ref()) {
+            return None;
         }
         if let Err(e) = tree_sitter_loader::init() {
             eprintln!("Warning: failed to initialize dynamic tree-sitter parsers: {e}");

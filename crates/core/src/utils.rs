@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use butterflow_models::step::StepAction;
+use butterflow_models::step::{StepAction, UseBumpDependency};
 use serde_yaml;
 
 use butterflow_models::{Error, Node, Result, Workflow};
@@ -20,6 +20,105 @@ fn has_parent_path_components(path: &Path) -> bool {
             Component::ParentDir | Component::Prefix(_) | Component::RootDir
         )
     })
+}
+
+fn non_empty_optional(value: &Option<String>) -> Option<&str> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn validate_bump_dependency_step(
+    step_name: &str,
+    node_id: &str,
+    bump_dependency: &UseBumpDependency,
+) -> Result<()> {
+    if bump_dependency.dependencies.is_empty() {
+        return Err(Error::WorkflowValidation(format!(
+            "Step '{step_name}' in node '{node_id}': bump-dependency step requires at least one dependency"
+        )));
+    }
+
+    if let Some(root) = &bump_dependency.root {
+        let trimmed = root.trim();
+        if trimmed.is_empty() {
+            return Err(Error::WorkflowValidation(format!(
+                "Step '{step_name}' in node '{node_id}' has invalid bump-dependency root value"
+            )));
+        }
+        if trimmed == "*" {
+            return Err(Error::WorkflowValidation(format!(
+                "Step '{step_name}' in node '{node_id}' has invalid bump-dependency root value: wildcard roots are reserved but not supported yet"
+            )));
+        }
+
+        let parsed_root = Path::new(trimmed);
+        if parsed_root.is_absolute() {
+            return Err(Error::WorkflowValidation(format!(
+                "Step '{step_name}' in node '{node_id}' has invalid bump-dependency root value: absolute paths are not allowed"
+            )));
+        }
+        if has_parent_path_components(parsed_root) {
+            return Err(Error::WorkflowValidation(format!(
+                "Step '{step_name}' in node '{node_id}' has invalid bump-dependency root value: parent-directory traversal is not allowed"
+            )));
+        }
+    }
+
+    for (dependency_index, dependency) in bump_dependency.dependencies.iter().enumerate() {
+        if dependency.name.trim().is_empty() {
+            return Err(Error::WorkflowValidation(format!(
+                "Step '{step_name}' in node '{node_id}' has invalid bump-dependency dependency at index {dependency_index}: dependency name must be non-empty"
+            )));
+        }
+        let target = non_empty_optional(&dependency.target);
+        if dependency.target.is_some() && target.is_none() {
+            return Err(Error::WorkflowValidation(format!(
+                "Step '{step_name}' in node '{node_id}' has invalid bump-dependency dependency '{}': target must be non-empty",
+                dependency.name
+            )));
+        }
+
+        let if_version = non_empty_optional(&dependency.if_version);
+        let ensure = non_empty_optional(&dependency.ensure);
+        if dependency.if_version.is_some() && if_version.is_none() {
+            return Err(Error::WorkflowValidation(format!(
+                "Step '{step_name}' in node '{node_id}' has invalid bump-dependency dependency '{}': if_version must be non-empty",
+                dependency.name
+            )));
+        }
+        if dependency.ensure.is_some() && ensure.is_none() {
+            return Err(Error::WorkflowValidation(format!(
+                "Step '{step_name}' in node '{node_id}' has invalid bump-dependency dependency '{}': ensure must be non-empty",
+                dependency.name
+            )));
+        }
+
+        match (if_version, ensure) {
+            (None, None) => {
+                return Err(Error::WorkflowValidation(format!(
+                    "Step '{step_name}' in node '{node_id}' has invalid bump-dependency dependency '{}': specify exactly one of if_version or ensure",
+                    dependency.name
+                )));
+            }
+            (Some(_), Some(_)) => {
+                return Err(Error::WorkflowValidation(format!(
+                    "Step '{step_name}' in node '{node_id}' has invalid bump-dependency dependency '{}': if_version and ensure are mutually exclusive",
+                    dependency.name
+                )));
+            }
+            (Some(_), None) if target.is_none() => {
+                return Err(Error::WorkflowValidation(format!(
+                    "Step '{step_name}' in node '{node_id}' has invalid bump-dependency dependency '{}': target is required when if_version is used",
+                    dependency.name
+                )));
+            }
+            (Some(_), None) | (None, Some(_)) => {}
+        }
+    }
+
+    Ok(())
 }
 
 /// Parse a workflow definition from a file
@@ -196,6 +295,8 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                         )));
                     }
                 }
+            } else if let StepAction::BumpDependency(bump_dependency) = &step.action {
+                validate_bump_dependency_step(&step.name, &node.id, bump_dependency)?;
             }
         }
     }

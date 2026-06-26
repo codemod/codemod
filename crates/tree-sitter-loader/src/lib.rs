@@ -105,7 +105,33 @@ fn get_definitions() -> &'static [DynamicLanguageDefinition] {
                 "64b56832c2cffe41758f28e05c756a3a98d16f41"
             ),
         },
+        DynamicLanguageDefinition {
+            name: "groovy",
+            symbol: "tree_sitter_groovy",
+            extensions: &["groovy", "gradle"],
+            expando_char: '_',
+            urls: parser_urls!(
+                "tree-sitter-groovy",
+                "deb0dcf8c4544f07564060f6e9b9f6e4b0bfc27d"
+            ),
+        },
     ]
+}
+
+pub fn supports_language_name(name: &str) -> bool {
+    get_definitions()
+        .iter()
+        .any(|definition| definition.name == name)
+}
+
+pub fn supports_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            get_definitions()
+                .iter()
+                .any(|definition| definition.extensions.contains(&extension))
+        })
 }
 
 fn current_platform() -> Result<(&'static str, &'static str), LoaderError> {
@@ -162,6 +188,28 @@ fn cached_parser_has_symbol(path: &Path, symbol: &str) -> bool {
     })
 }
 
+fn download_parser_bytes(url: &'static str) -> Result<(reqwest::StatusCode, Vec<u8>), LoaderError> {
+    std::thread::spawn(move || {
+        let response = reqwest::blocking::get(url)
+            .map_err(|e| LoaderError::Download(format!("HTTP request failed: {e}")))?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .map_err(|e| LoaderError::Download(format!("Failed to read response body: {e}")))?
+            .to_vec();
+        Ok((status, bytes))
+    })
+    .join()
+    .map_err(|panic| {
+        let message = panic
+            .downcast_ref::<&str>()
+            .map(|message| (*message).to_string())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "parser download thread panicked".to_string());
+        LoaderError::Download(message)
+    })?
+}
+
 fn ensure_parser_cached(
     def: &DynamicLanguageDefinition,
     cache_dir: &Path,
@@ -208,20 +256,14 @@ fn ensure_parser_cached(
     log::info!("Downloading tree-sitter parser for {} ...", def.name);
     std::fs::create_dir_all(&parser_dir)?;
 
-    let response = reqwest::blocking::get(url)
-        .map_err(|e| LoaderError::Download(format!("HTTP request failed: {e}")))?;
+    let (status, bytes) = download_parser_bytes(url)?;
 
-    if !response.status().is_success() {
+    if !status.is_success() {
         return Err(LoaderError::Download(format!(
             "HTTP {} for {}",
-            response.status(),
-            url
+            status, url
         )));
     }
-
-    let bytes = response
-        .bytes()
-        .map_err(|e| LoaderError::Download(format!("Failed to read response body: {e}")))?;
 
     std::fs::write(&cached_path, &bytes)?;
     log::info!(
@@ -237,23 +279,38 @@ fn ensure_parser_cached(
 /// Register all dynamic language parsers, downloading any that are missing.
 ///
 /// This should be called once before using dynamic languages.
-/// Returns Ok(()) if all parsers were registered successfully.
+/// Returns Ok(()) if at least one parser was registered successfully. A parser
+/// that is unavailable for the current platform should not prevent other
+/// dynamic languages from working.
 pub fn register_all() -> Result<(), LoaderError> {
     let cache_dir = get_cache_dir()?;
     let definitions = get_definitions();
 
     let mut registrations = Vec::new();
+    let mut errors = Vec::new();
 
     for def in definitions {
-        let lib_path = ensure_parser_cached(def, &cache_dir)?;
-        registrations.push(Registration {
-            lang_name: def.name.to_string(),
-            lib_path,
-            symbol: def.symbol.to_string(),
-            meta_var_char: None,
-            expando_char: Some(def.expando_char),
-            extensions: def.extensions.iter().map(|s| s.to_string()).collect(),
-        });
+        match ensure_parser_cached(def, &cache_dir) {
+            Ok(lib_path) => registrations.push(Registration {
+                lang_name: def.name.to_string(),
+                lib_path,
+                symbol: def.symbol.to_string(),
+                meta_var_char: None,
+                expando_char: Some(def.expando_char),
+                extensions: def.extensions.iter().map(|s| s.to_string()).collect(),
+            }),
+            Err(error) => {
+                log::warn!("Failed to prepare dynamic parser {}: {error}", def.name);
+                errors.push(format!("{}: {error}", def.name));
+            }
+        }
+    }
+
+    if registrations.is_empty() {
+        return Err(LoaderError::Register(format!(
+            "no dynamic parsers could be prepared: {}",
+            errors.join("; ")
+        )));
     }
 
     unsafe {
@@ -283,5 +340,25 @@ pub fn init() -> Result<(), LoaderError> {
         Err(LoaderError::Register(msg.clone()))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_supported_dynamic_language_names() {
+        assert!(supports_language_name("xml"));
+        assert!(supports_language_name("groovy"));
+        assert!(!supports_language_name("not-a-language"));
+    }
+
+    #[test]
+    fn reports_supported_dynamic_paths() {
+        assert!(supports_path(Path::new("pom.xml")));
+        assert!(supports_path(Path::new("build.gradle")));
+        assert!(!supports_path(Path::new("main.rs")));
+        assert!(!supports_path(Path::new("README")));
     }
 }

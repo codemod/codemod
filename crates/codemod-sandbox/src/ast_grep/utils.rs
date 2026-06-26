@@ -99,6 +99,7 @@ fn detect_language_from_extension_with_xml_availability(
         "rb" => Ok("ruby"),
         "swift" => Ok("swift"),
         "kt" | "kts" => Ok("kotlin"),
+        "groovy" | "gradle" => Ok("groovy"),
         "scala" => Ok("scala"),
         "html" | "htm" => Ok("html"),
         "css" => Ok("css"),
@@ -167,6 +168,11 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Unsupported file extension: XML parser is not available"));
+    }
+
+    #[test]
+    fn detects_gradle_as_groovy() {
+        assert_eq!(detect_language_from_extension("gradle").unwrap(), "groovy");
     }
 
     #[test]

@@ -89,6 +89,43 @@
         }
       ]
     },
+    "BumpDependencySpec": {
+      "description": "A single dependency update request inside a `bump-dependency` step.",
+      "type": "object",
+      "properties": {
+        "ensure": {
+          "description": "Ensure the dependency satisfies this range. Skips when the current version already satisfies it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "if_version": {
+          "description": "Conditional remediation range. Use \"*\" or \"any\" to match any installed version.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "name": {
+          "description": "Dependency package name.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Package-manager-specific version requirement to write.\nRequired for if_version remediation. Optional for ensure, where it defaults to the ensure range.\nFor example, npm and Cargo accept semver-like ranges, while Go expects module versions.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
     "CommitConfig": {
       "description": "Configuration for a commit checkpoint on a step.\nWhen present (and cloud mode is active), a git commit is created after the step runs.",
       "type": "object",
@@ -274,6 +311,25 @@
           "type": "string",
           "const": "manual"
         }
+      ]
+    },
+    "PackageManager": {
+      "description": "Package managers supported by dependency bump planning.",
+      "type": "string",
+      "enum": [
+        "npm",
+        "yarn",
+        "pnpm",
+        "bun",
+        "cargo",
+        "go",
+        "requirements-txt",
+        "uv",
+        "poetry",
+        "pipenv",
+        "bundler",
+        "maven",
+        "gradle"
       ]
     },
     "PullRequestConfig": {
@@ -785,6 +841,18 @@
           "required": [
             "shard"
           ]
+        },
+        {
+          "description": "Bump dependency versions through the detected package manager",
+          "type": "object",
+          "properties": {
+            "bump-dependency": {
+              "$ref": "#/$defs/UseBumpDependency"
+            }
+          },
+          "required": [
+            "bump-dependency"
+          ]
         }
       ],
       "required": [
@@ -1192,6 +1260,42 @@
       },
       "required": [
         "config_file"
+      ]
+    },
+    "UseBumpDependency": {
+      "description": "Configuration for the `bump-dependency` step action.\nDelegates dependency updates to package managers instead of editing lockfiles directly.",
+      "type": "object",
+      "properties": {
+        "dependencies": {
+          "description": "Dependency version updates to apply.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BumpDependencySpec"
+          }
+        },
+        "manager": {
+          "description": "Optional package-manager override. If omitted, the engine infers it from workflow facts.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PackageManager"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "root": {
+          "description": "Optional package root used to disambiguate monorepos.\n`root: \"*\"` is reserved for explicit all-root behavior and is not single-root inference.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "dependencies"
       ]
     },
     "UseCodemod": {

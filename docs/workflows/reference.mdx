@@ -555,6 +555,120 @@ steps:
   Step-level environment variables applied to the process environment.
 </ParamField>
 
+### Bump Dependency Step
+
+Updates dependency declarations through the detected package manager. Use this when a migration requires a package version change before or after code transforms.
+
+```yaml
+steps:
+  - name: Ensure React 18
+    bump-dependency:
+      manager: npm
+      dependencies:
+        - name: react
+          ensure: "^18.0.0"
+        - name: react-dom
+          ensure: "^18.0.0"
+```
+
+`ensure` describes the desired dependency requirement. If the current declaration already satisfies the requirement, the dependency is skipped. If it does not, Codemod writes the `ensure` requirement as the target version.
+
+Use `if_version` for conditional remediation where the version to match and the version to write are different:
+
+```yaml
+steps:
+  - name: Move React 17 projects to React 18
+    bump-dependency:
+      manager: npm
+      root: apps/web
+      dependencies:
+        - name: react
+          if_version: "^17.0.0"
+          target: "^18.0.0"
+```
+
+For Python projects that use `requirements.txt`, use `requirements-txt`:
+
+```yaml
+steps:
+  - name: Ensure Requests 2.32
+    bump-dependency:
+      manager: requirements-txt
+      dependencies:
+        - name: requests
+          ensure: "2.32.3"
+```
+
+For Ruby projects that use a `Gemfile`, use `bundler`:
+
+```yaml
+steps:
+  - name: Ensure Rack 3
+    bump-dependency:
+      manager: bundler
+      dependencies:
+        - name: rack
+          ensure: "3.0.8"
+```
+
+**Bump Dependency Step Parameters**:
+
+<Note>
+  `ensure`, `if_version`, and `target` use the package manager's native dependency version syntax. They are not normalized to a universal semver grammar. For example, npm and Cargo commonly use semver-style ranges, Go uses module versions, Python requirements use PEP 440-style specifiers, and Maven/Gradle use their own declaration conventions.
+</Note>
+
+<ParamField path="name" type="string" required>
+  Step label.
+</ParamField>
+
+<ParamField path="if" type="string">
+  Conditional expression to gate step execution. See [Variable Resolution](#variable-resolution).
+</ParamField>
+
+<ParamField path="bump-dependency.dependencies" type="object[]" required>
+  Dependencies to check and update. Each entry requires `name` and exactly one matching mode: `ensure` or `if_version`.
+</ParamField>
+
+<ParamField path="bump-dependency.dependencies[].name" type="string" required>
+  Package name as it appears in the package manager manifest, for example `react`, `@scope/package`, `github.com/gin-gonic/gin`, `serde`, or the Maven/Gradle coordinate `group:artifact`.
+</ParamField>
+
+<ParamField path="bump-dependency.dependencies[].ensure" type="string">
+  Desired dependency version requirement in the package manager's native syntax. If the current declaration already satisfies this requirement, Codemod skips the dependency. If it does not, Codemod updates the dependency to this requirement unless `target` is provided.
+</ParamField>
+
+<ParamField path="bump-dependency.dependencies[].if_version" type="string">
+  Conditional match requirement in the package manager's native syntax. Use this when you only want to update dependencies currently matching a specific requirement. `*` and `any` match any existing version. Requires `target`.
+</ParamField>
+
+<ParamField path="bump-dependency.dependencies[].target" type="string">
+  Dependency version requirement to write in the package manager's native syntax. Required with `if_version`. Optional with `ensure`; when omitted, Codemod writes the `ensure` requirement.
+</ParamField>
+
+<ParamField path="bump-dependency.manager" type="string">
+  Package manager override. Supported managers include `npm`, `yarn`, `pnpm`, `bun`, `cargo`, `go`, `requirements-txt`, `uv`, `poetry`, `pipenv`, `bundler`, `maven`, and `gradle`. If omitted, Codemod infers the manager from package files in the repository.
+</ParamField>
+
+<ParamField path="bump-dependency.root" type="string">
+  Package root relative to the workflow target directory. Use this to disambiguate monorepos, for example `apps/web`.
+</ParamField>
+
+<ParamField path="bump-dependency.package_root" type="string">
+  Alias for `root`.
+</ParamField>
+
+<Info>
+In dry-run mode, Codemod plans and logs the package-manager command or manifest edit without changing files.
+</Info>
+
+<Info>
+`requirements-txt`, Maven, and Gradle update manifest files directly. Other supported managers use their package-manager command.
+</Info>
+
+<Info>
+Maven `pom.xml`, Gradle Kotlin DSL `build.gradle.kts`, and Gradle Groovy `build.gradle` files are supported for direct dependency declarations.
+</Info>
+
 ### Shard Step
 
 Evaluates file shards and writes results to workflow state for use with [matrix strategies](#matrix-strategy). Supports built-in grouping algorithms (directory, codeowner) and custom shard functions.

@@ -267,6 +267,21 @@ impl<'a> StepExecutor<'a> {
                         )
                         .await
                 }
+                StepAction::BumpDependency(bump_dependency) => {
+                    self.engine
+                        .execute_bump_dependency_step(
+                            request.runner,
+                            bump_dependency,
+                            request.step_name,
+                            request.step_env,
+                            request.node,
+                            request.task,
+                            request.state,
+                            request.bundle_path,
+                            request.logger,
+                        )
+                        .await
+                }
                 StepAction::InstallSkill(install_skill) => {
                     if self
                         .engine

@@ -71,6 +71,10 @@ pub enum StepAction {
     /// Evaluate file shards and write results to workflow state
     #[serde(rename = "shard")]
     Shard(UseShard),
+
+    /// Bump dependency versions through the detected package manager
+    #[serde(rename = "bump-dependency")]
+    BumpDependency(UseBumpDependency),
 }
 
 /// Represents a template use in a step
@@ -332,6 +336,98 @@ pub enum InstallSkillHarness {
 pub enum InstallSkillScope {
     Project,
     User,
+}
+
+/// Configuration for the `bump-dependency` step action.
+/// Delegates dependency updates to package managers instead of editing lockfiles directly.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct UseBumpDependency {
+    /// Dependency version updates to apply.
+    pub dependencies: Vec<BumpDependencySpec>,
+
+    /// Optional package-manager override. If omitted, the engine infers it from workflow facts.
+    #[serde(default)]
+    #[ts(optional, as = "Option<PackageManager>")]
+    pub manager: Option<PackageManager>,
+
+    /// Optional package root used to disambiguate monorepos.
+    /// `root: "*"` is reserved for explicit all-root behavior and is not single-root inference.
+    #[serde(default, alias = "package_root")]
+    #[ts(optional, as = "Option<String>")]
+    pub root: Option<String>,
+}
+
+/// A single dependency update request inside a `bump-dependency` step.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct BumpDependencySpec {
+    /// Dependency package name.
+    pub name: String,
+
+    /// Package-manager-specific version requirement to write.
+    /// Required for if_version remediation. Optional for ensure, where it defaults to the ensure range.
+    /// For example, npm and Cargo accept semver-like ranges, while Go expects module versions.
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub target: Option<String>,
+
+    /// Conditional remediation range. Use "*" or "any" to match any installed version.
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub if_version: Option<String>,
+
+    /// Ensure the dependency satisfies this range. Skips when the current version already satisfies it.
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub ensure: Option<String>,
+}
+
+/// Package managers supported by dependency bump planning.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema, TS,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum PackageManager {
+    Npm,
+    Yarn,
+    Pnpm,
+    Bun,
+    Cargo,
+    Go,
+    RequirementsTxt,
+    Uv,
+    Poetry,
+    Pipenv,
+    Bundler,
+    Maven,
+    Gradle,
+}
+
+impl PackageManager {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+            Self::Yarn => "yarn",
+            Self::Pnpm => "pnpm",
+            Self::Bun => "bun",
+            Self::Cargo => "cargo",
+            Self::Go => "go",
+            Self::RequirementsTxt => "requirements-txt",
+            Self::Uv => "uv",
+            Self::Poetry => "poetry",
+            Self::Pipenv => "pipenv",
+            Self::Bundler => "bundler",
+            Self::Maven => "maven",
+            Self::Gradle => "gradle",
+        }
+    }
+}
+
+impl std::fmt::Display for PackageManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Configuration for the `shard` step action.
@@ -608,6 +704,100 @@ mod tests {
         assert_eq!(
             method.min_shard_size,
             Some(serde_json::json!("${{ params.min_size }}"))
+        );
+    }
+
+    #[test]
+    fn test_bump_dependency_step_deserializes() {
+        let yaml = r#"
+            name: "bump react"
+            bump-dependency:
+              manager: pnpm
+              root: apps/web
+              dependencies:
+                - name: react
+                  if_version: "<18.0.0"
+                  target: "^18.2.0"
+                - name: react-dom
+                  ensure: ">=18.0.0"
+                  target: "^18.2.0"
+        "#;
+
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        let StepAction::BumpDependency(config) = step.action else {
+            panic!("expected bump-dependency action");
+        };
+
+        assert_eq!(config.manager, Some(PackageManager::Pnpm));
+        assert_eq!(config.root, Some("apps/web".to_string()));
+        assert_eq!(config.dependencies.len(), 2);
+        assert_eq!(config.dependencies[0].name, "react");
+        assert_eq!(config.dependencies[0].target, Some("^18.2.0".to_string()));
+        assert_eq!(
+            config.dependencies[0].if_version,
+            Some("<18.0.0".to_string())
+        );
+        assert_eq!(config.dependencies[1].name, "react-dom");
+        assert_eq!(config.dependencies[1].ensure, Some(">=18.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_bump_dependency_package_root_alias_deserializes() {
+        let yaml = r#"
+            name: "bump react"
+            bump-dependency:
+              package_root: apps/web
+              dependencies:
+                - name: react
+                  if_version: "*"
+                  target: "^18.2.0"
+        "#;
+
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        let StepAction::BumpDependency(config) = step.action else {
+            panic!("expected bump-dependency action");
+        };
+
+        assert_eq!(config.root, Some("apps/web".to_string()));
+        assert_eq!(config.dependencies[0].if_version, Some("*".to_string()));
+        assert_eq!(config.dependencies[0].target, Some("^18.2.0".to_string()));
+    }
+
+    #[test]
+    fn test_bump_dependency_ensure_deserializes_without_target() {
+        let yaml = r#"
+            name: "ensure react"
+            bump-dependency:
+              dependencies:
+                - name: react
+                  ensure: "^18.0.0"
+        "#;
+
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        let StepAction::BumpDependency(config) = step.action else {
+            panic!("expected bump-dependency action");
+        };
+
+        assert_eq!(config.dependencies[0].ensure, Some("^18.0.0".to_string()));
+        assert_eq!(config.dependencies[0].target, None);
+    }
+
+    #[test]
+    fn test_bump_dependency_schema_does_not_require_target() {
+        let schema_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/workflow.json");
+        let schema: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(schema_path).unwrap()).unwrap();
+
+        let required = schema
+            .pointer("/$defs/BumpDependencySpec/required")
+            .and_then(serde_json::Value::as_array)
+            .expect("BumpDependencySpec should have a required array");
+
+        assert!(required.contains(&serde_json::json!("name")));
+        assert!(
+            !required.contains(&serde_json::json!("target")),
+            "ensure-only dependency bumps should not require target in the schema"
         );
     }
 }

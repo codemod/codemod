@@ -1,7 +1,8 @@
 use std::error::Error;
+use std::fs;
 use std::path::Path;
 use std::str::FromStr;
-use std::{fs, panic};
+use std::sync::{Mutex, OnceLock};
 
 use ast_grep_config::{from_yaml_string, CombinedScan, RuleConfig};
 use ast_grep_core::tree_sitter::StrDoc;
@@ -19,27 +20,37 @@ pub struct CombinedScanWithRuleConfigs<'a> {
     pub rule_refs: Vec<&'a RuleConfig<SupportLang>>,
 }
 
+pub fn ast_grep_parse_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 pub fn with_combined_scan<T>(
     config_file_path: &str,
     f: impl for<'a> FnOnce(&CombinedScanWithRuleConfigs<'a>) -> Result<T, Box<dyn Error>>,
 ) -> Result<T, Box<dyn Error>> {
     let config_content = fs::read_to_string(config_file_path)?;
-    let rule_configs = from_yaml_string(&config_content, &Default::default())
-        .map_err(|e| AstGrepError::Config(format!("Failed to parse YAML rules: {e:?}")))?;
-
-    let combined_scan = CombinedScan::new(rule_configs.iter().collect());
+    let rule_configs = {
+        // Native tree-sitter parsers are initialized through process-global state.
+        // Keep config/rule parser setup serialized with per-file AST creation.
+        let _guard = ast_grep_parse_lock()
+            .lock()
+            .map_err(|_| AstGrepError::Config("ast-grep parser lock was poisoned".to_string()))?;
+        from_yaml_string(&config_content, &Default::default())
+            .map_err(|e| AstGrepError::Config(format!("Failed to parse YAML rules: {e:?}")))?
+    };
+    let combined_scan = {
+        let _guard = ast_grep_parse_lock()
+            .lock()
+            .map_err(|_| AstGrepError::Config("ast-grep parser lock was poisoned".to_string()))?;
+        CombinedScan::new(rule_configs.iter().collect())
+    };
     let rule_refs: Vec<&RuleConfig<SupportLang>> = rule_configs.iter().collect();
 
-    let original_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {
-        // Silently ignore panics during ast-grep scanning
-    }));
     let result = f(&CombinedScanWithRuleConfigs {
         combined_scan,
         rule_refs,
     })?;
-    // Restore the original panic hook
-    panic::set_hook(original_hook);
 
     Ok(result)
 }
@@ -61,6 +72,9 @@ pub fn scan_file_with_combined_scan(
     let language = SupportLang::from_str(language_str)
         .map_err(|_| AstGrepError::Language(format!("Language not supported: {language_str}")))?;
 
+    let _guard = ast_grep_parse_lock()
+        .lock()
+        .map_err(|_| AstGrepError::Config("ast-grep parser lock was poisoned".to_string()))?;
     let doc = StrDoc::new(&content, language);
     let root = AstGrep::doc(doc);
 
