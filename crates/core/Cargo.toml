@@ -28,7 +28,6 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
 async-trait = { workspace = true }
-regex = { workspace = true }
 reqwest = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }

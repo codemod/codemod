@@ -5,8 +5,15 @@ use std::path::Path;
 use butterflow_models::{Error, Result};
 use dependency_files::{detect_context_file, detect_lock_file, Ecosystem};
 use ignore::WalkBuilder;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+use crate::codemod_steps::utils::ast::{
+    ast_grep_root, nearest_ancestor, node_text_starts_with, AstNode,
+};
+use crate::codemod_steps::utils::ranges::quoted_string_content_range;
+use crate::codemod_steps::utils::xml::{
+    xml_direct_child_text, xml_element_is_inside, xml_element_name,
+};
 
 const FACTS_SCHEMA_VERSION: u32 = 1;
 
@@ -155,6 +162,7 @@ fn parse_dependency_facts(
         "pyproject.toml" => parse_pyproject_dependencies(&content, rel_path),
         "go.mod" => parse_go_mod_dependencies(&content, rel_path),
         "requirements.txt" => parse_requirements_dependencies(&content, rel_path),
+        "Gemfile" => parse_gemfile_dependencies(&content, rel_path),
         "pom.xml" => parse_maven_dependencies(&content, rel_path),
         "build.gradle" | "build.gradle.kts" => parse_gradle_dependencies(&content, rel_path),
         _ => Vec::new(),
@@ -364,19 +372,64 @@ fn parse_requirements_dependencies(content: &str, path: &str) -> Vec<DependencyF
     facts
 }
 
-fn parse_maven_dependencies(content: &str, path: &str) -> Vec<DependencyFact> {
-    let dependency_regex = Regex::new(r"(?s)<dependency\b[^>]*>(.*?)</dependency>").unwrap();
-    let content = remove_maven_non_project_dependency_sections(content);
+fn parse_gemfile_dependencies(content: &str, path: &str) -> Vec<DependencyFact> {
+    let Ok(root) = ast_grep_root(content, "ruby") else {
+        return Vec::new();
+    };
     let mut facts = Vec::new();
 
-    for dependency in dependency_regex.captures_iter(&content) {
-        let Some(block) = dependency.get(1).map(|match_| match_.as_str()) else {
+    for call in root.root().dfs().filter(|node| ruby_node_is_gem_call(node)) {
+        let strings = call
+            .dfs()
+            .filter(|node| node.kind() == "string")
+            .filter_map(|node| {
+                quoted_string_content_range(content, node.range()).map(|(text, _)| text)
+            })
+            .collect::<Vec<_>>();
+        let [name, version, ..] = strings.as_slice() else {
             continue;
         };
+        push_dependency(
+            &mut facts,
+            Ecosystem::RubyGems,
+            name,
+            version,
+            path,
+            Some("gem"),
+        );
+    }
+
+    facts
+}
+
+fn ruby_node_is_gem_call(node: &AstNode<'_>) -> bool {
+    matches!(node.kind().as_ref(), "call" | "command")
+        && node
+            .text()
+            .trim_start()
+            .strip_prefix("gem")
+            .is_some_and(|rest| {
+                rest.chars()
+                    .next()
+                    .is_some_and(|char| char.is_whitespace() || char == '(')
+            })
+}
+
+fn parse_maven_dependencies(content: &str, path: &str) -> Vec<DependencyFact> {
+    let Ok(root) = ast_grep_root(content, "xml") else {
+        return Vec::new();
+    };
+    let mut facts = Vec::new();
+
+    for dependency in root.root().dfs().filter(|node| {
+        node.kind() == "element"
+            && xml_element_name(node).as_deref() == Some("dependency")
+            && !xml_element_is_inside(node, &["dependencyManagement", "build"])
+    }) {
         let (Some(group_id), Some(artifact_id), Some(version)) = (
-            xml_tag_value(block, "groupId"),
-            xml_tag_value(block, "artifactId"),
-            xml_tag_value(block, "version"),
+            xml_direct_child_text(&dependency, "groupId"),
+            xml_direct_child_text(&dependency, "artifactId"),
+            xml_direct_child_text(&dependency, "version"),
         ) else {
             continue;
         };
@@ -388,7 +441,7 @@ fn parse_maven_dependencies(content: &str, path: &str) -> Vec<DependencyFact> {
             &mut facts,
             Ecosystem::Java,
             &name,
-            version,
+            &version,
             path,
             Some("dependencies"),
         );
@@ -397,43 +450,36 @@ fn parse_maven_dependencies(content: &str, path: &str) -> Vec<DependencyFact> {
     facts
 }
 
-fn remove_maven_non_project_dependency_sections(content: &str) -> String {
-    Regex::new(
-        r"(?s)<dependencyManagement\b[^>]*>.*?</dependencyManagement>|<build\b[^>]*>.*?</build>",
-    )
-    .unwrap()
-    .replace_all(content, "")
-    .into_owned()
-}
-
-fn xml_tag_value<'a>(content: &'a str, tag: &str) -> Option<&'a str> {
-    let tag_regex = Regex::new(&format!(r"(?s)<{tag}\b[^>]*>\s*([^<]+?)\s*</{tag}>")).unwrap();
-    tag_regex
-        .captures(content)?
-        .get(1)
-        .map(|match_| match_.as_str().trim())
-}
-
 fn parse_gradle_dependencies(content: &str, path: &str) -> Vec<DependencyFact> {
-    let dependency_regex =
-        Regex::new(r#"(?m)^\s*([A-Za-z][A-Za-z0-9_]*)\s*(?:\(\s*)?["']([^"']+)["']"#).unwrap();
+    let language = match dependency_files::file_name(path) {
+        "build.gradle.kts" => "kotlin",
+        "build.gradle" => "groovy",
+        _ => return Vec::new(),
+    };
+    let Ok(root) = ast_grep_root(content, language) else {
+        return Vec::new();
+    };
     let mut facts = Vec::new();
 
-    for dependency in dependency_regex.captures_iter(content) {
-        let (Some(configuration), Some(spec)) = (
-            dependency.get(1).map(|match_| match_.as_str()),
-            dependency.get(2).map(|match_| match_.as_str()),
-        ) else {
+    for literal in root
+        .root()
+        .dfs()
+        .filter(|node| matches!(node.kind().as_ref(), "string_literal" | "string"))
+    {
+        let Some(configuration) = gradle_dependency_configuration_for_literal(&literal) else {
             continue;
         };
         if !is_gradle_dependency_configuration(configuration) {
             continue;
         }
+        let Some((spec, _)) = quoted_string_content_range(content, literal.range()) else {
+            continue;
+        };
         let parts = spec.split(':').collect::<Vec<_>>();
         let [group, artifact, version] = parts.as_slice() else {
             continue;
         };
-        if version.contains('$') {
+        if version.contains('$') || literal.text().contains('$') {
             continue;
         }
         let name = format!("{group}:{artifact}");
@@ -450,20 +496,43 @@ fn parse_gradle_dependencies(content: &str, path: &str) -> Vec<DependencyFact> {
     facts
 }
 
+fn gradle_dependency_configuration_for_literal<'a>(literal: &AstNode<'a>) -> Option<&'a str> {
+    if let Some(call) = nearest_ancestor(literal, "call_expression") {
+        if let Some(configuration) = gradle_call_configuration(&call) {
+            return Some(configuration);
+        }
+    }
+
+    literal
+        .ancestors()
+        .filter(|ancestor| ancestor.text().lines().count() == 1)
+        .find_map(|ancestor| gradle_call_configuration(&ancestor))
+}
+
+fn gradle_call_configuration<'a>(call: &AstNode<'a>) -> Option<&'a str> {
+    for configuration in GRADLE_DEPENDENCY_CONFIGURATIONS {
+        if node_text_starts_with(call, configuration) {
+            return Some(configuration);
+        }
+    }
+    None
+}
+
+const GRADLE_DEPENDENCY_CONFIGURATIONS: &[&str] = &[
+    "api",
+    "implementation",
+    "compileOnly",
+    "compileOnlyApi",
+    "runtimeOnly",
+    "testImplementation",
+    "testCompileOnly",
+    "testRuntimeOnly",
+    "annotationProcessor",
+    "testAnnotationProcessor",
+];
+
 fn is_gradle_dependency_configuration(configuration: &str) -> bool {
-    matches!(
-        configuration,
-        "api"
-            | "implementation"
-            | "compileOnly"
-            | "compileOnlyApi"
-            | "runtimeOnly"
-            | "testImplementation"
-            | "testCompileOnly"
-            | "testRuntimeOnly"
-            | "annotationProcessor"
-            | "testAnnotationProcessor"
-    )
+    GRADLE_DEPENDENCY_CONFIGURATIONS.contains(&configuration)
 }
 
 fn python_dependency_name(spec: &str) -> Option<&str> {
@@ -591,6 +660,7 @@ require (
 "#,
         )
         .unwrap();
+        fs::write(temp.path().join("Gemfile"), r#"gem "rack", "3.0.8""#).unwrap();
 
         let facts = WorkflowFacts::collect_from_path(temp.path()).unwrap();
 
@@ -599,6 +669,7 @@ require (
         assert!(facts.has_ecosystem(Ecosystem::PyPI));
         assert!(facts.has_ecosystem(Ecosystem::Go));
         assert!(facts.has_ecosystem(Ecosystem::Java));
+        assert!(facts.has_ecosystem(Ecosystem::RubyGems));
         assert_dependency(&facts, Ecosystem::Npm, "react", "^18.2.0");
         assert_dependency(&facts, Ecosystem::Npm, "vite", "^5.0.0");
         assert_dependency(&facts, Ecosystem::Cargo, "anyhow", "1");
@@ -606,6 +677,7 @@ require (
         assert_dependency(&facts, Ecosystem::PyPI, "requests", ">=2.31.0");
         assert_dependency(&facts, Ecosystem::Go, "github.com/gin-gonic/gin", "v1.9.1");
         assert_dependency(&facts, Ecosystem::Java, "org.slf4j:slf4j-api", "2.0.9");
+        assert_dependency(&facts, Ecosystem::RubyGems, "rack", "3.0.8");
     }
 
     #[test]
@@ -622,6 +694,24 @@ pkg-extra[security]~=1.2
         assert_dependency_name_version(&facts, "requests", "==2.31.0");
         assert_dependency_name_version(&facts, "urllib3", ">=2.0.0 <3.0.0");
         assert_dependency_name_version(&facts, "pkg-extra", "~=1.2");
+    }
+
+    #[test]
+    fn parses_gemfile_dependencies() {
+        let facts = parse_gemfile_dependencies(
+            r#"
+source "https://rubygems.org"
+
+gem "rack", "3.0.8"
+gem "rails", "~> 7.1"
+gem "puma"
+"#,
+            "Gemfile",
+        );
+
+        assert_eq!(facts.len(), 2);
+        assert_dependency_name_version(&facts, "rack", "3.0.8");
+        assert_dependency_name_version(&facts, "rails", "~> 7.1");
     }
 
     #[test]
@@ -692,7 +782,7 @@ dependencies = ["requests>=2.31.0", "urllib3 < 3.0.0"]
             r#"
 dependencies {
     implementation("org.slf4j:slf4j-api:2.0.9")
-    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.2'
+    testImplementation("org.junit.jupiter:junit-jupiter-api:5.10.2")
     classpath "org.example:build-plugin:1.0.0"
     implementation(libs.slf4j)
 }

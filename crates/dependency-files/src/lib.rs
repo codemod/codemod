@@ -37,6 +37,7 @@ pub const CONTEXT_FILE_PATTERNS: &[(&str, Ecosystem)] = &[
     ("settings.gradle", Ecosystem::Java),
     ("settings.gradle.kts", Ecosystem::Java),
     ("gradle.lockfile", Ecosystem::Java),
+    ("Gemfile", Ecosystem::RubyGems),
 ];
 
 /// Project files that identify a Java package-manager root.
@@ -166,6 +167,8 @@ mod tests {
             ("services/api/settings.gradle", Ecosystem::Java),
             ("services/api/settings.gradle.kts", Ecosystem::Java),
             ("services/api/gradle.lockfile", Ecosystem::Java),
+            ("Gemfile", Ecosystem::RubyGems),
+            ("services/api/Gemfile", Ecosystem::RubyGems),
         ];
 
         for (path, expected) in cases {
