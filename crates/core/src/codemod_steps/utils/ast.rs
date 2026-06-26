@@ -12,6 +12,9 @@ pub(crate) fn ast_grep_root(
     content: &str,
     language: &str,
 ) -> Result<ast_grep_core::AstGrep<AstDoc>, String> {
+    // Dynamic tree-sitter languages are registered in process-global state by ast-grep.
+    // Serializing AST construction avoids racing parser initialization/use across test
+    // and workflow task threads, which can otherwise surface as native crashes.
     let _guard = ast_grep_parse_lock()
         .lock()
         .map_err(|_| "ast-grep parser lock was poisoned".to_string())?;
