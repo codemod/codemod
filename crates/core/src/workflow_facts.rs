@@ -510,12 +510,10 @@ fn gradle_dependency_configuration_for_literal<'a>(literal: &AstNode<'a>) -> Opt
 }
 
 fn gradle_call_configuration<'a>(call: &AstNode<'a>) -> Option<&'a str> {
-    for configuration in GRADLE_DEPENDENCY_CONFIGURATIONS {
-        if node_text_starts_with(call, configuration) {
-            return Some(configuration);
-        }
-    }
-    None
+    GRADLE_DEPENDENCY_CONFIGURATIONS
+        .iter()
+        .find(|configuration| node_text_starts_with(call, configuration))
+        .copied()
 }
 
 const GRADLE_DEPENDENCY_CONFIGURATIONS: &[&str] = &[

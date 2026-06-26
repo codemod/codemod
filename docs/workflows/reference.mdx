@@ -599,6 +599,18 @@ steps:
           ensure: "2.32.3"
 ```
 
+For Ruby projects that use a `Gemfile`, use `bundler`:
+
+```yaml
+steps:
+  - name: Ensure Rack 3
+    bump-dependency:
+      manager: bundler
+      dependencies:
+        - name: rack
+          ensure: "3.0.8"
+```
+
 **Bump Dependency Step Parameters**:
 
 <Note>
