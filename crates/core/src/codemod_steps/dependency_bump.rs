@@ -313,6 +313,7 @@ fn command_for_actions(
         manager_root.manager,
         actions,
     ));
+    args.extend(ignore_scripts_args(manager_root.manager));
 
     let invocation = match manager_root.manager {
         PackageManager::Bundler => shell_command("bundle", std::iter::empty::<&str>(), args),
@@ -336,6 +337,15 @@ fn command_args_with_packages(command: &str, packages: Vec<String>) -> Vec<Strin
     std::iter::once(command.to_string())
         .chain(packages)
         .collect()
+}
+
+fn ignore_scripts_args(manager: PackageManager) -> Vec<String> {
+    match manager {
+        PackageManager::Npm | PackageManager::Yarn | PackageManager::Pnpm | PackageManager::Bun => {
+            vec!["--ignore-scripts".to_string()]
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn dependency_type_args_for_actions(
@@ -1287,7 +1297,7 @@ mod tests {
         assert_eq!(command.working_dir, PathBuf::from("/repo/apps/web"));
         assert_eq!(
             command.command,
-            "cd '/repo/apps/web' && 'pnpm' 'add' 'react@^18.0.0' '--save-dev'"
+            "cd '/repo/apps/web' && 'pnpm' 'add' 'react@^18.0.0' '--save-dev' '--ignore-scripts'"
         );
     }
 
@@ -1327,7 +1337,7 @@ mod tests {
         assert_eq!(commands.len(), 1);
         assert_eq!(
             commands[0].command,
-            "cd '/repo' && 'npm' 'install' 'react@^18.0.0' 'react-dom@^18.0.0'"
+            "cd '/repo' && 'npm' 'install' 'react@^18.0.0' 'react-dom@^18.0.0' '--ignore-scripts'"
         );
     }
 
@@ -1376,11 +1386,11 @@ mod tests {
         assert_eq!(commands.len(), 2);
         assert_eq!(
             commands[0].command,
-            "cd '/repo' && 'npm' 'install' 'react@^18.0.0' 'react-dom@^18.0.0'"
+            "cd '/repo' && 'npm' 'install' 'react@^18.0.0' 'react-dom@^18.0.0' '--ignore-scripts'"
         );
         assert_eq!(
             commands[1].command,
-            "cd '/repo' && 'npm' 'install' 'vite@^6.0.0' '--save-dev'"
+            "cd '/repo' && 'npm' 'install' 'vite@^6.0.0' '--save-dev' '--ignore-scripts'"
         );
     }
 
@@ -1769,7 +1779,7 @@ mod tests {
         assert_eq!(execution.commands.len(), 1);
         assert_eq!(
             runner.commands.lock().unwrap().as_slice(),
-            ["cd '/repo' && 'npm' 'install' 'react@^18.0.0' 'react-dom@^18.0.0'"]
+            ["cd '/repo' && 'npm' 'install' 'react@^18.0.0' 'react-dom@^18.0.0' '--ignore-scripts'"]
         );
     }
 }
