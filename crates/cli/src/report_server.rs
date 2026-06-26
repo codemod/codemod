@@ -2,8 +2,9 @@ use anyhow::Result;
 use butterflow_core::ai_handoff::{discover_installed_agents, AgentOption};
 use butterflow_core::report::{ExecutionReport, ShareLevel};
 use hyper::body::to_bytes;
+use hyper::header::{CONTENT_TYPE, HOST, ORIGIN};
 use hyper::service::{make_service_fn, service_fn};
-use hyper::{Body, Method, Request, Response, Server, StatusCode};
+use hyper::{Body, HeaderMap, Method, Request, Response, Server, StatusCode};
 use std::convert::Infallible;
 use std::net::TcpListener;
 use std::process::Stdio;
@@ -11,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 use crate::auth::{OidcClient, TokenStorage};
 use crate::feedback;
@@ -444,12 +445,7 @@ async fn handle_feedback_agent_submit(
     state: Arc<ReportServerState>,
 ) -> Result<String> {
     let _feedback_job = state.feedback_job_guard();
-    let body_bytes = to_bytes(req.into_body()).await?;
-    let agent_req: FeedbackAgentRequest = if body_bytes.is_empty() {
-        FeedbackAgentRequest { agent: None }
-    } else {
-        serde_json::from_slice(&body_bytes).unwrap_or(FeedbackAgentRequest { agent: None })
-    };
+    let agent_req = parse_feedback_agent_request(req).await?;
 
     let agents = discover_installed_agents();
     let agent = select_feedback_agent(&agents, agent_req.agent.as_deref())
@@ -486,12 +482,7 @@ async fn handle_feedback_agent_stream(
     report: Arc<ExecutionReport>,
     state: Arc<ReportServerState>,
 ) -> Result<Response<Body>> {
-    let body_bytes = to_bytes(req.into_body()).await?;
-    let agent_req: FeedbackAgentRequest = if body_bytes.is_empty() {
-        FeedbackAgentRequest { agent: None }
-    } else {
-        serde_json::from_slice(&body_bytes).unwrap_or(FeedbackAgentRequest { agent: None })
-    };
+    let agent_req = parse_feedback_agent_request(req).await?;
 
     let agents = discover_installed_agents();
     let agent = select_feedback_agent(&agents, agent_req.agent.as_deref())
@@ -522,14 +513,12 @@ async fn handle_feedback_agent_stream(
         )
         .await;
 
-        let draft = timeout(
-            FEEDBACK_AGENT_TIMEOUT,
-            run_feedback_agent_stream(&canonical, &executable, &prompt, &target_path, &mut sender),
-        )
-        .await;
+        let draft =
+            run_feedback_agent_stream(&canonical, &executable, &prompt, &target_path, &mut sender)
+                .await;
 
         match draft {
-            Ok(Ok(draft)) => match parse_agent_feedback_message(&draft, Some(&target_path)) {
+            Ok(draft) => match parse_agent_feedback_message(&draft, Some(&target_path)) {
                 Ok(message) => {
                     let _ = send_stream_event(
                         &mut sender,
@@ -565,15 +554,8 @@ async fn handle_feedback_agent_stream(
                     let _ = send_stream_error(&mut sender, error).await;
                 }
             },
-            Ok(Err(error)) => {
+            Err(error) => {
                 let _ = send_stream_error(&mut sender, error).await;
-            }
-            Err(_) => {
-                let _ = send_stream_error(
-                    &mut sender,
-                    anyhow::anyhow!("Agent feedback drafting timed out."),
-                )
-                .await;
             }
         }
     });
@@ -584,6 +566,46 @@ async fn handle_feedback_agent_stream(
         .header("Cache-Control", "no-cache")
         .body(body)
         .unwrap())
+}
+
+async fn parse_feedback_agent_request(req: Request<Body>) -> Result<FeedbackAgentRequest> {
+    validate_feedback_agent_request_headers(req.headers())?;
+
+    let body_bytes = to_bytes(req.into_body()).await?;
+    if body_bytes.is_empty() {
+        anyhow::bail!("Feedback agent requests must include a JSON body.");
+    }
+
+    serde_json::from_slice(&body_bytes)
+        .map_err(|error| anyhow::anyhow!("Invalid feedback agent request JSON: {error}"))
+}
+
+fn validate_feedback_agent_request_headers(headers: &HeaderMap) -> Result<()> {
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let media_type = content_type.split(';').next().map(str::trim).unwrap_or("");
+    if !media_type.eq_ignore_ascii_case("application/json") {
+        anyhow::bail!("Feedback agent requests must use application/json.");
+    }
+
+    let Some(origin) = headers.get(ORIGIN) else {
+        return Ok(());
+    };
+    let origin = origin
+        .to_str()
+        .map_err(|_| anyhow::anyhow!("Invalid Origin header."))?;
+    let host = headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| anyhow::anyhow!("Missing Host header."))?;
+
+    if origin != format!("http://{host}") {
+        anyhow::bail!("Feedback agent requests must come from the report UI origin.");
+    }
+
+    Ok(())
 }
 
 async fn submit_report_feedback(category: String, message: String) -> Result<String> {
@@ -825,29 +847,86 @@ async fn run_feedback_agent_stream(
         .map(|stderr| spawn_agent_stream_reader(stderr, "stderr", line_tx.clone()));
     drop(line_tx);
 
-    let mut wait_task = tokio::spawn(async move { child.wait().await });
     let mut wait_status = None;
     let mut lines_closed = false;
     let mut combined = String::new();
+    let timeout_timer = sleep(FEEDBACK_AGENT_TIMEOUT);
+    tokio::pin!(timeout_timer);
 
     while wait_status.is_none() || !lines_closed {
-        tokio::select! {
-            line = line_rx.recv(), if !lines_closed => {
-                match line {
-                    Some((stream, line)) => {
-                        combined.push_str(&line);
-                        combined.push('\n');
-                        for event in feedback_stream_events_for_agent_line(canonical, &stream, &line) {
-                            send_stream_event(sender, event).await?;
-                        }
-                    }
-                    None => {
-                        lines_closed = true;
+        enum AgentStreamStep {
+            Line(Option<(String, String)>),
+            Exit(std::io::Result<std::process::ExitStatus>),
+            Timeout,
+        }
+
+        let step = if wait_status.is_none() {
+            let wait = child.wait();
+            tokio::pin!(wait);
+            tokio::select! {
+                line = line_rx.recv(), if !lines_closed => AgentStreamStep::Line(line),
+                status = &mut wait => AgentStreamStep::Exit(status),
+                _ = &mut timeout_timer => AgentStreamStep::Timeout,
+            }
+        } else {
+            tokio::select! {
+                line = line_rx.recv(), if !lines_closed => AgentStreamStep::Line(line),
+                _ = &mut timeout_timer => AgentStreamStep::Timeout,
+            }
+        };
+
+        match step {
+            AgentStreamStep::Line(line) => match line {
+                Some((stream, line)) => {
+                    combined.push_str(&line);
+                    combined.push('\n');
+                    for event in feedback_stream_events_for_agent_line(canonical, &stream, &line) {
+                        send_stream_event(sender, event).await?;
                     }
                 }
+                None => {
+                    lines_closed = true;
+                }
+            },
+            AgentStreamStep::Exit(status) => {
+                wait_status = Some(status?);
             }
-            status = &mut wait_task, if wait_status.is_none() => {
-                wait_status = Some(status.map_err(|error| anyhow::anyhow!("Failed to join agent wait task: {error}"))??);
+            AgentStreamStep::Timeout => {
+                let _ = send_stream_event(
+                    sender,
+                    serde_json::json!({
+                        "type": "status",
+                        "message": "Agent feedback drafting timed out; stopping the local agent.",
+                    }),
+                )
+                .await;
+                let _ = child.kill().await;
+                if let Some(reader) = &stdout_reader {
+                    reader.abort();
+                }
+                if let Some(reader) = &stderr_reader {
+                    reader.abort();
+                }
+                anyhow::bail!("Agent feedback drafting timed out.");
+            }
+        }
+
+        while wait_status.is_some() && !lines_closed {
+            match line_rx.try_recv() {
+                Ok((stream, line)) => {
+                    combined.push_str(&line);
+                    combined.push('\n');
+                    for event in feedback_stream_events_for_agent_line(canonical, &stream, &line) {
+                        send_stream_event(sender, event).await?;
+                    }
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    break;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    lines_closed = true;
+                    break;
+                }
             }
         }
     }
@@ -1412,5 +1491,35 @@ mod tests {
         );
         assert!(!message.contains("const secret"));
         assert!(!message.contains("/Users/me/private/project"));
+    }
+
+    #[test]
+    fn feedback_agent_headers_require_json_content_type() {
+        let headers = HeaderMap::new();
+
+        assert!(validate_feedback_agent_request_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn feedback_agent_headers_reject_cross_origin_requests() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        headers.insert(HOST, "127.0.0.1:4321".parse().unwrap());
+        headers.insert(ORIGIN, "https://example.com".parse().unwrap());
+
+        assert!(validate_feedback_agent_request_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn feedback_agent_headers_allow_report_ui_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            "application/json; charset=utf-8".parse().unwrap(),
+        );
+        headers.insert(HOST, "127.0.0.1:4321".parse().unwrap());
+        headers.insert(ORIGIN, "http://127.0.0.1:4321".parse().unwrap());
+
+        validate_feedback_agent_request_headers(&headers).expect("valid feedback agent headers");
     }
 }

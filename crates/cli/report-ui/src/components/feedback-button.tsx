@@ -171,7 +171,13 @@ export function FeedbackButton() {
 
   function handleFeedbackStreamLine(line: string) {
     if (!line.trim()) return;
-    const event = JSON.parse(line) as FeedbackStreamEvent;
+    let event: FeedbackStreamEvent;
+    try {
+      event = JSON.parse(line) as FeedbackStreamEvent;
+    } catch {
+      setAgentLog((current) => [...current, `Unparsed agent output: ${line.slice(0, 240)}`]);
+      return;
+    }
 
     if (event.type === "agent") {
       setActiveAgent(event.agent);
@@ -181,6 +187,11 @@ export function FeedbackButton() {
 
     if (event.type === "status") {
       setAgentLog((current) => [...current, event.message]);
+      return;
+    }
+
+    if (event.type === "output") {
+      setLiveDraft((current) => `${current}${event.text}`);
       return;
     }
 
