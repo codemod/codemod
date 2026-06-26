@@ -65,8 +65,8 @@ importers:
   crates/cli/report-ui:
     dependencies:
       '@codemod.com/report-ui':
-        specifier: ^0.0.7
-        version: 0.0.7(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        specifier: ^0.0.8
+        version: 0.0.8(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       lucide-react:
         specifier: ^0.468.0
         version: 0.468.0(react@19.2.4)
@@ -352,11 +352,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@codemod.com/report-ui@0.0.7':
-    resolution: {integrity: sha512-Npl7R3PrGKgfeae/oYN50BQHmMnei221s7cgrJpRJNn6HzqDuleB0QlSls6mNlC8uZBxDBHdqaVEd6F9t537Tg==}
+  '@codemod.com/report-ui@0.0.8':
+    resolution: {integrity: sha512-efg+4UWzkwDl82I3ME7dyfLu5kXa1evO3uxb92nJi3BhcOpJp0oPyBanQ48JJ0f59q0AvVhJb/DD/ceH77B7Zg==}
     peerDependencies:
       react: ^19.2.3
-      react-dom: 19.2.3
+      react-dom: ^19.2.3
 
   '@emnapi/core@1.8.1':
     resolution: {integrity: sha512-AvT9QFpxK0Zd8J0jopedNm+w/2fIzvtPKPjqyw9jwvBaReTTqPBk9Hixaz7KbjimP+QNz605/XnjFcDAL2pqBg==}
@@ -2899,7 +2899,7 @@ snapshots:
   '@codemod.com/cli-win32-x64-msvc@0.0.0':
     optional: true
 
-  '@codemod.com/report-ui@0.0.7(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@codemod.com/report-ui@0.0.8(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)

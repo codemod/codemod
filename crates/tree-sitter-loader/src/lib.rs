@@ -188,6 +188,28 @@ fn cached_parser_has_symbol(path: &Path, symbol: &str) -> bool {
     })
 }
 
+fn download_parser_bytes(url: &'static str) -> Result<(reqwest::StatusCode, Vec<u8>), LoaderError> {
+    std::thread::spawn(move || {
+        let response = reqwest::blocking::get(url)
+            .map_err(|e| LoaderError::Download(format!("HTTP request failed: {e}")))?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .map_err(|e| LoaderError::Download(format!("Failed to read response body: {e}")))?
+            .to_vec();
+        Ok((status, bytes))
+    })
+    .join()
+    .map_err(|panic| {
+        let message = panic
+            .downcast_ref::<&str>()
+            .map(|message| (*message).to_string())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "parser download thread panicked".to_string());
+        LoaderError::Download(message)
+    })?
+}
+
 fn ensure_parser_cached(
     def: &DynamicLanguageDefinition,
     cache_dir: &Path,
@@ -234,20 +256,14 @@ fn ensure_parser_cached(
     log::info!("Downloading tree-sitter parser for {} ...", def.name);
     std::fs::create_dir_all(&parser_dir)?;
 
-    let response = reqwest::blocking::get(url)
-        .map_err(|e| LoaderError::Download(format!("HTTP request failed: {e}")))?;
+    let (status, bytes) = download_parser_bytes(url)?;
 
-    if !response.status().is_success() {
+    if !status.is_success() {
         return Err(LoaderError::Download(format!(
             "HTTP {} for {}",
-            response.status(),
-            url
+            status, url
         )));
     }
-
-    let bytes = response
-        .bytes()
-        .map_err(|e| LoaderError::Download(format!("Failed to read response body: {e}")))?;
 
     std::fs::write(&cached_path, &bytes)?;
     log::info!(
