@@ -1,9 +1,8 @@
 use std::str::FromStr;
-use std::sync::{Mutex, OnceLock};
 
 use ast_grep_core::tree_sitter::{LanguageExt, StrDoc};
 use ast_grep_core::Node;
-use codemod_sandbox::CodemodLang;
+use codemod_sandbox::{ast_grep_parse_lock, CodemodLang};
 
 pub(crate) type AstDoc = StrDoc<CodemodLang>;
 pub(crate) type AstNode<'a> = Node<'a, AstDoc>;
@@ -20,11 +19,6 @@ pub(crate) fn ast_grep_root(
         .map_err(|_| "ast-grep parser lock was poisoned".to_string())?;
     let language = CodemodLang::from_str(language)?;
     Ok(language.ast_grep(content))
-}
-
-fn ast_grep_parse_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 pub(crate) fn nearest_ancestor<'a>(node: &AstNode<'a>, kind: &str) -> Option<AstNode<'a>> {

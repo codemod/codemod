@@ -46,7 +46,7 @@ pub(crate) mod scanner;
 pub(crate) mod serde;
 
 #[cfg(feature = "native")]
-pub use native::{scan_file_with_combined_scan, with_combined_scan};
+pub use native::{ast_grep_parse_lock, scan_file_with_combined_scan, with_combined_scan};
 
 #[allow(dead_code)]
 pub(crate) struct AstGrepModule;
