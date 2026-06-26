@@ -1,8 +1,8 @@
 use std::error::Error;
+use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::{Mutex, OnceLock};
-use std::{fs, panic};
 
 use ast_grep_config::{from_yaml_string, CombinedScan, RuleConfig};
 use ast_grep_core::tree_sitter::StrDoc;
@@ -47,16 +47,10 @@ pub fn with_combined_scan<T>(
     };
     let rule_refs: Vec<&RuleConfig<SupportLang>> = rule_configs.iter().collect();
 
-    let original_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {
-        // Silently ignore panics during ast-grep scanning
-    }));
     let result = f(&CombinedScanWithRuleConfigs {
         combined_scan,
         rule_refs,
     })?;
-    // Restore the original panic hook
-    panic::set_hook(original_hook);
 
     Ok(result)
 }
