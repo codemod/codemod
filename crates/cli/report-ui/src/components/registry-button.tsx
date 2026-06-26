@@ -1,5 +1,5 @@
 import { Button } from "@codemod.com/report-ui";
-import { Globe } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 
 interface RegistryButtonProps {
   url: string;
@@ -12,7 +12,7 @@ export function RegistryButton({ url }: RegistryButtonProps) {
 
   return (
     <Button variant="outline" onClick={openRegistry}>
-      <Globe className="size-4" />
+      <ExternalLink className="size-4" />
       Registry
     </Button>
   );
