@@ -7,8 +7,9 @@ use dependency_files::{detect_context_file, detect_lock_file, Ecosystem};
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 
-use crate::codemod_steps::utils::ast::{
-    ast_grep_root, nearest_ancestor, node_text_starts_with, AstNode,
+use crate::codemod_steps::utils::ast::{ast_grep_root, AstNode};
+use crate::codemod_steps::utils::gradle::{
+    gradle_dependency_configuration_for_literal, is_gradle_dependency_configuration,
 };
 use crate::codemod_steps::utils::ranges::quoted_string_content_range;
 use crate::codemod_steps::utils::xml::{
@@ -496,43 +497,6 @@ fn parse_gradle_dependencies(content: &str, path: &str) -> Vec<DependencyFact> {
     facts
 }
 
-fn gradle_dependency_configuration_for_literal<'a>(literal: &AstNode<'a>) -> Option<&'a str> {
-    if let Some(call) = nearest_ancestor(literal, "call_expression") {
-        if let Some(configuration) = gradle_call_configuration(&call) {
-            return Some(configuration);
-        }
-    }
-
-    literal
-        .ancestors()
-        .filter(|ancestor| ancestor.text().lines().count() == 1)
-        .find_map(|ancestor| gradle_call_configuration(&ancestor))
-}
-
-fn gradle_call_configuration<'a>(call: &AstNode<'a>) -> Option<&'a str> {
-    GRADLE_DEPENDENCY_CONFIGURATIONS
-        .iter()
-        .find(|configuration| node_text_starts_with(call, configuration))
-        .copied()
-}
-
-const GRADLE_DEPENDENCY_CONFIGURATIONS: &[&str] = &[
-    "api",
-    "implementation",
-    "compileOnly",
-    "compileOnlyApi",
-    "runtimeOnly",
-    "testImplementation",
-    "testCompileOnly",
-    "testRuntimeOnly",
-    "annotationProcessor",
-    "testAnnotationProcessor",
-];
-
-fn is_gradle_dependency_configuration(configuration: &str) -> bool {
-    GRADLE_DEPENDENCY_CONFIGURATIONS.contains(&configuration)
-}
-
 fn python_dependency_name(spec: &str) -> Option<&str> {
     let name = spec
         .split(['<', '>', '=', '!', '~', ';', '[', ' '])
@@ -651,9 +615,9 @@ require (
         .unwrap();
         fs::write(temp.path().join("pom.xml"), "<project></project>").unwrap();
         fs::write(
-            temp.path().join("build.gradle"),
+            temp.path().join("build.gradle.kts"),
             r#"dependencies {
-    implementation "org.slf4j:slf4j-api:2.0.9"
+    implementation("org.slf4j:slf4j-api:2.0.9")
 }
 "#,
         )

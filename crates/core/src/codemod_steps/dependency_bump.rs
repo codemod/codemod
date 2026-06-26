@@ -7,7 +7,8 @@ use butterflow_models::step::{BumpDependencySpec, PackageManager, UseBumpDepende
 use butterflow_models::Error;
 use butterflow_runners::{OutputCallback, Runner};
 
-use super::utils::ast::{ast_grep_root, nearest_ancestor, node_text_starts_with};
+use super::utils::ast::ast_grep_root;
+use super::utils::gradle::gradle_dependency_configuration_for_literal;
 use super::utils::ranges::{quoted_string_content_range, replace_range};
 use super::utils::xml::{
     xml_direct_child_element, xml_direct_child_text, xml_element_is_inside, xml_element_name,
@@ -565,12 +566,9 @@ fn edit_gradle_dependency_version(
     for literal in root
         .root()
         .dfs()
-        .filter(|node| node.kind() == "string_literal")
+        .filter(|node| matches!(node.kind().as_ref(), "string_literal" | "string"))
     {
-        let Some(call) = nearest_ancestor(&literal, "call_expression") else {
-            continue;
-        };
-        if !node_text_starts_with(&call, configuration) {
+        if gradle_dependency_configuration_for_literal(&literal) != Some(configuration) {
             continue;
         }
         let text = literal.text();
@@ -603,7 +601,7 @@ fn edit_gradle_dependency_version(
 
     let Some(range) = replacement else {
         return Err(format!(
-            "could not find direct Gradle Kotlin dependency {}",
+            "could not find direct Gradle dependency {}",
             action.dependency
         ));
     };
@@ -1666,7 +1664,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires released Groovy parser artifacts"]
     async fn executes_gradle_groovy_manifest_edit() {
         let temp = tempfile::tempdir().unwrap();
         fs::write(
