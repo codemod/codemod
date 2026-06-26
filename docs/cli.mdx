@@ -69,10 +69,12 @@ Manage Master Codemod Skill (MCS) lifecycle for supported harnesses.
 Install the `codemod` MCS skill package, configure Codemod MCP, and install the universal `/codemod` entrypoint where the harness supports it.
 
 ```bash
-npx codemod ai [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
+npx codemod ai [--allow-feedback] [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
 ```
 
 Interactive prompts are enabled by default in TTY sessions. Use `--no-interactive` to skip prompts and use flags/defaults directly.
+
+Use `--allow-feedback` to record anonymous Codemod AI and MCP feedback consent for the current OS user during install. The CLI stores that consent locally and reuses it for later `ai feedback` and MCP feedback-capable flows.
 
 Along with skill files, install writes or updates a Codemod MCP server entry:
 
@@ -164,7 +166,7 @@ Feedback is anonymous. Do not include source code, secrets, auth tokens, private
 Run managed update reconciliation/apply through CLI (same policy engine used by periodic hooks).
 
 ```bash
-npx codemod ai update [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
+npx codemod ai update [--allow-feedback] [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
 ```
 
 If managed install state is missing, `ai update` automatically falls back to an install flow and then applies update reconciliation.
@@ -321,6 +323,17 @@ Example machine-readable failure (`--format json`):
 Manage and execute [Codemod packages](/package-structure).
 
 A Codemod package is a directory containing `workflow.yaml` and transformation scripts. Workflows orchestrate multiple steps using different engines (jssg, YAML ast-grep, shell commands, AI, etc.).
+
+### `codemod mcp`
+
+Start the Codemod MCP server over stdio.
+
+```bash
+npx codemod mcp [--usage-log <path>] [--allow-feedback]
+```
+
+- `--usage-log <path>` writes MCP usage events to a local file for debugging.
+- `--allow-feedback` records anonymous Codemod AI and MCP feedback consent for the current OS user before the server starts.
 
 **When to use**:
 - ✅ Production codemods with multiple steps
