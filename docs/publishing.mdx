@@ -13,7 +13,7 @@ Codemod supports three authentication methods for publishing:
 | Method | Best For | Secrets Required | Setup |
 |--------|----------|------------------|-------|
 | [Interactive Login](#interactive-login) | Local development | None | None |
-| [API Keys](#api-keys) | CI/CD pipelines, automation | Yes (`CODEMOD_API_KEY`) | Create key in UI |
+| [API Keys](#api-keys) | CI/CD pipelines, automation | Yes (`CODEMOD_API_KEY` or `CODEMOD_AUTH_TOKEN`) | Create key in UI |
 | [Trusted Publishers](#trusted-publishers) | GitHub Actions, secure CI/CD | None (uses OIDC) | None for org scopes* |
 
 <sub>* If your GitHub organization name matches your package scope, trusted publishing works automatically with zero configuration. See [Organization Scopes](#organization-scopes-zero-configuration).</sub>
@@ -34,6 +34,12 @@ After logging in, you can publish packages:
 
 ```bash
 npx codemod publish
+```
+
+If you already have an API key, you can also store it through the CLI instead of using the browser flow:
+
+```bash
+npx codemod login --api-key $CODEMOD_API_KEY
 ```
 
 ### When to Use
@@ -297,6 +303,15 @@ jobs:
 </AccordionGroup>
 
 ## API Keys
+
+API keys are a good fit for CI systems that cannot use GitHub Actions OIDC or for local automation where you do not want to open a browser.
+
+The CLI supports two API-key based publish patterns:
+
+- `npx codemod login --api-key ...` to validate and persist the API key as your stored auth for later `codemod publish` runs
+- `CODEMOD_AUTH_TOKEN=... npx codemod publish` to inject a token for a single publish without writing auth to disk
+
+`CODEMOD_API_KEY` is still a convenient environment variable name for your own scripts or CI secrets, but `codemod publish` reads `CODEMOD_AUTH_TOKEN` directly when deciding which token to use.
 
 API keys allow non-interactive authentication, perfect for CI/CD pipelines and automation.
 
