@@ -216,7 +216,6 @@ const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &["BUTTERFLOW_API_AUTH_TOKEN", "LLM
 
 fn should_filter_platform_child_env() -> bool {
     std::env::var("BUTTERFLOW_STATE_BACKEND").is_ok_and(|backend| backend == "cloud")
-        || std::env::var_os("BUTTERFLOW_API_AUTH_TOKEN").is_some()
 }
 
 fn parent_env_for_child_processes() -> HashMap<String, String> {

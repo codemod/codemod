@@ -1470,8 +1470,8 @@ async fn test_run_script_does_not_persist_command_notice_in_task_logs() {
 #[tokio::test(flavor = "current_thread")]
 #[serial]
 async fn test_run_script_filters_inherited_platform_secrets() {
-    let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
-    let _api_token_guard = EnvVarGuard::set("BUTTERFLOW_API_AUTH_TOKEN", "platform-token");
+    let _backend_guard = EnvVarGuard::set("BUTTERFLOW_STATE_BACKEND", "cloud");
+    let _api_token_guard = EnvVarGuard::unset("BUTTERFLOW_API_AUTH_TOKEN");
     let _llm_key_guard = EnvVarGuard::set("LLM_API_KEY", "platform-llm-key");
     let _git_askpass_guard = EnvVarGuard::set("GIT_ASKPASS", "/tmp/codemod-git-askpass");
     let _http_proxy_guard = EnvVarGuard::set("HTTP_PROXY", "http://proxy.example");
@@ -1533,7 +1533,7 @@ if [ "${HTTP_PROXY:-}" = "http://proxy.example" ]; then echo "HTTP_PROXY_PRESERV
 #[tokio::test(flavor = "current_thread")]
 #[serial]
 async fn test_run_script_allows_explicit_step_env_for_filtered_names() {
-    let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
+    let _backend_guard = EnvVarGuard::set("BUTTERFLOW_STATE_BACKEND", "cloud");
     let _api_token_guard = EnvVarGuard::set("BUTTERFLOW_API_AUTH_TOKEN", "platform-token");
     let _llm_key_guard = EnvVarGuard::set("LLM_API_KEY", "platform-llm-key");
 
@@ -1584,7 +1584,7 @@ if [ "${LLM_API_KEY:-}" = "step-llm-key" ]; then echo "STEP_LLM_ENV_VISIBLE"; el
 #[serial]
 async fn test_run_script_preserves_local_inherited_llm_key_without_platform_context() {
     let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
-    let _api_token_guard = EnvVarGuard::unset("BUTTERFLOW_API_AUTH_TOKEN");
+    let _api_token_guard = EnvVarGuard::set("BUTTERFLOW_API_AUTH_TOKEN", "local-api-token");
     let _llm_key_guard = EnvVarGuard::set("LLM_API_KEY", "local-llm-key");
 
     let state_adapter = Box::new(MockStateAdapter::new());
@@ -1593,6 +1593,7 @@ async fn test_run_script_preserves_local_inherited_llm_key_without_platform_cont
     let workflow = create_single_run_script_workflow(
         r#"
 if [ "${LLM_API_KEY:-}" = "local-llm-key" ]; then echo "LOCAL_LLM_ENV_VISIBLE"; else echo "LOCAL_LLM_ENV_MISSING"; fi
+if [ "${BUTTERFLOW_API_AUTH_TOKEN:-}" = "local-api-token" ]; then echo "LOCAL_TOKEN_ENV_VISIBLE"; else echo "LOCAL_TOKEN_ENV_MISSING"; fi
 "#
         .to_string(),
     );
@@ -1622,6 +1623,14 @@ if [ "${LLM_API_KEY:-}" = "local-llm-key" ]; then echo "LOCAL_LLM_ENV_VISIBLE"; 
     assert!(
         !logs.contains("LOCAL_LLM_ENV_MISSING"),
         "local inherited LLM_API_KEY should remain available to shell commands, got: {logs}"
+    );
+    assert!(
+        logs.contains("LOCAL_TOKEN_ENV_VISIBLE"),
+        "local inherited BUTTERFLOW_API_AUTH_TOKEN should be preserved outside platform context, got: {logs}"
+    );
+    assert!(
+        !logs.contains("LOCAL_TOKEN_ENV_MISSING"),
+        "local inherited BUTTERFLOW_API_AUTH_TOKEN should remain available outside platform context, got: {logs}"
     );
 }
 
