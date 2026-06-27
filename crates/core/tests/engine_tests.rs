@@ -1466,6 +1466,100 @@ async fn test_run_script_does_not_persist_command_notice_in_task_logs() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+#[serial]
+async fn test_run_script_allows_explicit_step_env_for_filtered_names() {
+    let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
+    let _llm_key_guard = EnvVarGuard::set("LLM_API_KEY", "platform-llm-key");
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let mut workflow = create_single_run_script_workflow(
+        r#"
+if [ "${LLM_API_KEY:-}" = "step-llm-key" ]; then echo "STEP_LLM_ENV_VISIBLE"; else echo "STEP_LLM_ENV_MISSING"; fi
+"#
+        .to_string(),
+    );
+    workflow.nodes[0].steps[0].env = Some(HashMap::from([(
+        "LLM_API_KEY".to_string(),
+        "step-llm-key".to_string(),
+    )]));
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let status = wait_for_task_status(&engine, workflow_run_id, "shell-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "shell-node")
+        .expect("shell-node task should exist");
+
+    let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("STEP_LLM_ENV_VISIBLE"),
+        "explicit step env should override inherited platform filtering, got: {logs}"
+    );
+    assert!(
+        !logs.contains("STEP_LLM_ENV_MISSING"),
+        "explicit step env should be passed to shell commands, got: {logs}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+#[serial]
+async fn test_run_script_preserves_local_inherited_llm_key_without_platform_context() {
+    let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
+    let _llm_key_guard = EnvVarGuard::set("LLM_API_KEY", "local-llm-key");
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_single_run_script_workflow(
+        r#"
+if [ "${LLM_API_KEY:-}" = "local-llm-key" ]; then echo "LOCAL_LLM_ENV_VISIBLE"; else echo "LOCAL_LLM_ENV_MISSING"; fi
+"#
+        .to_string(),
+    );
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let status = wait_for_task_status(&engine, workflow_run_id, "shell-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "shell-node")
+        .expect("shell-node task should exist");
+
+    let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("LOCAL_LLM_ENV_VISIBLE"),
+        "local inherited LLM_API_KEY should be preserved outside platform context, got: {logs}"
+    );
+    assert!(
+        !logs.contains("LOCAL_LLM_ENV_MISSING"),
+        "local inherited LLM_API_KEY should remain available to shell commands, got: {logs}"
+    );
+}
+
 #[tokio::test]
 async fn test_run_script_approval_callback_receives_command_to_be_executed() {
     let observed_commands = Arc::new(Mutex::new(Vec::<String>::new()));
