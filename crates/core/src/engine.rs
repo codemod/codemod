@@ -214,9 +214,13 @@ pub(crate) struct PreparedStepExecution {
 
 const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &["BUTTERFLOW_API_AUTH_TOKEN", "LLM_API_KEY"];
 
+fn should_filter_platform_child_env_for_backend(backend: Option<&str>) -> bool {
+    backend == Some("cloud")
+}
+
 fn should_filter_platform_child_env() -> bool {
-    std::env::var("BUTTERFLOW_STATE_BACKEND").is_ok_and(|backend| backend == "cloud")
-        || std::env::var_os("BUTTERFLOW_API_AUTH_TOKEN").is_some()
+    let backend = std::env::var("BUTTERFLOW_STATE_BACKEND").ok();
+    should_filter_platform_child_env_for_backend(backend.as_deref())
 }
 
 fn parent_env_for_child_processes() -> HashMap<String, String> {
@@ -4199,6 +4203,13 @@ mod tests {
 
         std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
         assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
+    }
+
+    #[test]
+    fn platform_child_env_filter_requires_cloud_backend() {
+        assert!(should_filter_platform_child_env_for_backend(Some("cloud")));
+        assert!(!should_filter_platform_child_env_for_backend(None));
+        assert!(!should_filter_platform_child_env_for_backend(Some("local")));
     }
 
     #[test]
