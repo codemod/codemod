@@ -214,9 +214,13 @@ pub(crate) struct PreparedStepExecution {
 
 const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &["BUTTERFLOW_API_AUTH_TOKEN", "LLM_API_KEY"];
 
+fn should_filter_platform_child_env_for_backend(backend: Option<&str>) -> bool {
+    backend == Some("cloud")
+}
+
 fn should_filter_platform_child_env() -> bool {
-    std::env::var("BUTTERFLOW_STATE_BACKEND").is_ok_and(|backend| backend == "cloud")
-        || std::env::var_os("BUTTERFLOW_API_AUTH_TOKEN").is_some()
+    let backend = std::env::var("BUTTERFLOW_STATE_BACKEND").ok();
+    should_filter_platform_child_env_for_backend(backend.as_deref())
 }
 
 fn parent_env_for_child_processes() -> HashMap<String, String> {
@@ -4199,6 +4203,54 @@ mod tests {
 
         std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
         assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
+    }
+
+    #[test]
+    fn platform_child_env_filter_requires_cloud_backend() {
+        assert!(should_filter_platform_child_env_for_backend(Some("cloud")));
+        assert!(!should_filter_platform_child_env_for_backend(None));
+        assert!(!should_filter_platform_child_env_for_backend(Some("local")));
+    }
+
+    #[test]
+    #[serial]
+    fn parent_env_filters_platform_secrets_only_for_cloud_backend() {
+        let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
+        let _token_guard = EnvVarGuard::unset("BUTTERFLOW_API_AUTH_TOKEN");
+        let _llm_guard = EnvVarGuard::unset("LLM_API_KEY");
+        let _git_askpass_guard = EnvVarGuard::unset("GIT_ASKPASS");
+        let _http_proxy_guard = EnvVarGuard::unset("HTTP_PROXY");
+
+        std::env::set_var("BUTTERFLOW_API_AUTH_TOKEN", "local-token");
+        std::env::set_var("LLM_API_KEY", "local-llm-key");
+
+        let local_env = parent_env_for_child_processes();
+        assert_eq!(
+            local_env
+                .get("BUTTERFLOW_API_AUTH_TOKEN")
+                .map(String::as_str),
+            Some("local-token")
+        );
+        assert_eq!(
+            local_env.get("LLM_API_KEY").map(String::as_str),
+            Some("local-llm-key")
+        );
+
+        std::env::set_var("BUTTERFLOW_STATE_BACKEND", "cloud");
+        std::env::set_var("GIT_ASKPASS", "/tmp/codemod-git-askpass");
+        std::env::set_var("HTTP_PROXY", "http://proxy.example");
+
+        let cloud_env = parent_env_for_child_processes();
+        assert!(!cloud_env.contains_key("BUTTERFLOW_API_AUTH_TOKEN"));
+        assert!(!cloud_env.contains_key("LLM_API_KEY"));
+        assert_eq!(
+            cloud_env.get("GIT_ASKPASS").map(String::as_str),
+            Some("/tmp/codemod-git-askpass")
+        );
+        assert_eq!(
+            cloud_env.get("HTTP_PROXY").map(String::as_str),
+            Some("http://proxy.example")
+        );
     }
 
     #[test]
