@@ -389,7 +389,7 @@ pub async fn handler(
 
         let report = ExecutionReport::build(
             args.package.clone(),
-            None,
+            Some(resolved_package.version.clone()),
             duration_ms,
             dry_run,
             target_path.display().to_string(),
@@ -399,7 +399,13 @@ pub async fn handler(
             files_with_errors,
             convert_metrics(&metrics_data),
             convert_diffs(&collected_diffs, &target_path.display().to_string()),
-        );
+        )
+        .with_registry_link_url(Some(
+            crate::utils::registry_link::registry_link_url_for_resolved_package(
+                &registry_url,
+                &resolved_package,
+            ),
+        ));
 
         crate::report_server::serve_report(report).await?;
     } else {

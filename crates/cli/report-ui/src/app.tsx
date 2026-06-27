@@ -2,10 +2,15 @@ import { useState, useEffect } from "react";
 import { ReportViewer } from "@codemod.com/report-ui";
 import type { ExecutionReport } from "@codemod.com/report-ui";
 import { FeedbackButton } from "./components/feedback-button";
+import { RegistryButton } from "./components/registry-button";
 import { ShareButton } from "./components/share-button";
 
+type LocalExecutionReport = ExecutionReport & {
+  registryLinkUrl?: string;
+};
+
 export function App() {
-  const [report, setReport] = useState<ExecutionReport | null>(null);
+  const [report, setReport] = useState<LocalExecutionReport | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -19,7 +24,7 @@ export function App() {
 
         const resp = await fetch("/api/report");
         if (!resp.ok) throw new Error(`Failed to load report: ${resp.status}`);
-        const data = await resp.json();
+        const data = (await resp.json()) as LocalExecutionReport;
         setReport(data);
       } catch (e: any) {
         setError(e.message || "Failed to load report");
@@ -52,8 +57,9 @@ export function App() {
       data={report}
       actions={
         <div className="flex flex-wrap items-center gap-2">
-          <FeedbackButton />
           <ShareButton report={report} />
+          {report.registryLinkUrl ? <RegistryButton url={report.registryLinkUrl} /> : null}
+          <FeedbackButton />
         </div>
       }
     />

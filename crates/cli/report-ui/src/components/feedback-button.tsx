@@ -209,7 +209,7 @@ export function FeedbackButton() {
 
   return (
     <>
-      <Button variant="outline" onClick={handleOpenDialog}>
+      <Button onClick={handleOpenDialog}>
         <MessageSquare className="size-4" />
         Feedback
       </Button>

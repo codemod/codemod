@@ -1,4 +1,5 @@
 use crate::engine::create_progress_callback;
+use crate::engine::create_registry_client;
 use crate::utils::resolve_capabilities::resolve_capabilities;
 use crate::utils::resolve_capabilities::ResolveCapabilitiesArgs;
 use crate::TelemetrySenderMutex;
@@ -427,6 +428,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         &metrics_data,
         files_modified,
     ) {
+        let registry_client = create_registry_client(None)?;
         let report = ExecutionReport::build(
             args.js_file.clone(),
             None,
@@ -442,7 +444,12 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 &collected_diffs,
                 &target_directory_for_report.display().to_string(),
             ),
-        );
+        )
+        .with_registry_link_url(Some(
+            crate::utils::registry_link::registry_link_url_for_local_run(
+                &registry_client.config.default_registry,
+            ),
+        ));
 
         crate::report_server::serve_report(report).await?;
     } else {
