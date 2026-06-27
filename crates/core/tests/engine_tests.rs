@@ -1469,6 +1469,51 @@ async fn test_run_script_does_not_persist_command_notice_in_task_logs() {
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 #[serial]
+async fn test_run_script_filters_internal_api_token_without_platform_context() {
+    let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
+    let _api_token_guard = EnvVarGuard::set("BUTTERFLOW_API_AUTH_TOKEN", "internal-token");
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_single_run_script_workflow(
+        r#"
+if [ -z "${BUTTERFLOW_API_AUTH_TOKEN+x}" ]; then echo "API_TOKEN_HIDDEN"; else echo "API_TOKEN_LEAKED"; fi
+"#
+        .to_string(),
+    );
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let status = wait_for_task_status(&engine, workflow_run_id, "shell-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "shell-node")
+        .expect("shell-node task should exist");
+
+    let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("API_TOKEN_HIDDEN"),
+        "internal API token should not be inherited by shell commands, got: {logs}"
+    );
+    assert!(
+        !logs.contains("API_TOKEN_LEAKED"),
+        "internal API token should be hidden from shell commands, got: {logs}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+#[serial]
 async fn test_run_script_allows_explicit_step_env_for_filtered_names() {
     let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
     let _llm_key_guard = EnvVarGuard::set("LLM_API_KEY", "platform-llm-key");

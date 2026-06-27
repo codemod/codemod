@@ -212,7 +212,8 @@ pub(crate) struct PreparedStepExecution {
     pub(crate) state_input_path: PathBuf,
 }
 
-const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &["BUTTERFLOW_API_AUTH_TOKEN", "LLM_API_KEY"];
+const ALWAYS_FILTERED_CHILD_ENV: &[&str] = &["BUTTERFLOW_API_AUTH_TOKEN"];
+const CLOUD_FILTERED_CHILD_ENV: &[&str] = &["LLM_API_KEY"];
 
 fn should_filter_platform_child_env_for_backend(backend: Option<&str>) -> bool {
     backend == Some("cloud")
@@ -226,8 +227,12 @@ fn should_filter_platform_child_env() -> bool {
 fn parent_env_for_child_processes() -> HashMap<String, String> {
     let mut env: HashMap<String, String> = std::env::vars().collect();
 
+    for key in ALWAYS_FILTERED_CHILD_ENV {
+        env.remove(*key);
+    }
+
     if should_filter_platform_child_env() {
-        for key in PLATFORM_CHILD_ENV_DENYLIST {
+        for key in CLOUD_FILTERED_CHILD_ENV {
             env.remove(*key);
         }
     }
@@ -4214,7 +4219,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn parent_env_filters_platform_secrets_only_for_cloud_backend() {
+    fn parent_env_filters_internal_token_and_cloud_only_secrets() {
         let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
         let _token_guard = EnvVarGuard::unset("BUTTERFLOW_API_AUTH_TOKEN");
         let _llm_guard = EnvVarGuard::unset("LLM_API_KEY");
@@ -4225,12 +4230,7 @@ mod tests {
         std::env::set_var("LLM_API_KEY", "local-llm-key");
 
         let local_env = parent_env_for_child_processes();
-        assert_eq!(
-            local_env
-                .get("BUTTERFLOW_API_AUTH_TOKEN")
-                .map(String::as_str),
-            Some("local-token")
-        );
+        assert!(!local_env.contains_key("BUTTERFLOW_API_AUTH_TOKEN"));
         assert_eq!(
             local_env.get("LLM_API_KEY").map(String::as_str),
             Some("local-llm-key")
