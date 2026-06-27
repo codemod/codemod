@@ -212,7 +212,7 @@ pub(crate) struct PreparedStepExecution {
     pub(crate) state_input_path: PathBuf,
 }
 
-const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &["BUTTERFLOW_API_AUTH_TOKEN", "LLM_API_KEY"];
+const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &["LLM_API_KEY"];
 
 fn should_filter_platform_child_env_for_backend(backend: Option<&str>) -> bool {
     backend == Some("cloud")
@@ -4214,7 +4214,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn parent_env_filters_platform_secrets_only_for_cloud_backend() {
+    fn parent_env_filters_cloud_only_secrets_for_cloud_backend() {
         let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
         let _token_guard = EnvVarGuard::unset("BUTTERFLOW_API_AUTH_TOKEN");
         let _llm_guard = EnvVarGuard::unset("LLM_API_KEY");
@@ -4241,7 +4241,12 @@ mod tests {
         std::env::set_var("HTTP_PROXY", "http://proxy.example");
 
         let cloud_env = parent_env_for_child_processes();
-        assert!(!cloud_env.contains_key("BUTTERFLOW_API_AUTH_TOKEN"));
+        assert_eq!(
+            cloud_env
+                .get("BUTTERFLOW_API_AUTH_TOKEN")
+                .map(String::as_str),
+            Some("local-token")
+        );
         assert!(!cloud_env.contains_key("LLM_API_KEY"));
         assert_eq!(
             cloud_env.get("GIT_ASKPASS").map(String::as_str),
