@@ -212,6 +212,25 @@ pub(crate) struct PreparedStepExecution {
     pub(crate) state_input_path: PathBuf,
 }
 
+const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &["BUTTERFLOW_API_AUTH_TOKEN", "LLM_API_KEY"];
+
+fn should_filter_platform_child_env() -> bool {
+    std::env::var("BUTTERFLOW_STATE_BACKEND").is_ok_and(|backend| backend == "cloud")
+        || std::env::var_os("BUTTERFLOW_API_AUTH_TOKEN").is_some()
+}
+
+fn parent_env_for_child_processes() -> HashMap<String, String> {
+    let mut env: HashMap<String, String> = std::env::vars().collect();
+
+    if should_filter_platform_child_env() {
+        for key in PLATFORM_CHILD_ENV_DENYLIST {
+            env.remove(*key);
+        }
+    }
+
+    env
+}
+
 pub const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
 
 type ProgressHeartbeatCallback = Arc<dyn Fn() + Send + Sync>;
@@ -3933,8 +3952,9 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
     ) -> Result<PreparedStepExecution> {
-        // Start with a copy of the parent process's environment
-        let mut env: HashMap<String, String> = std::env::vars().collect();
+        // Start with the parent process environment, minus platform runtime secrets that
+        // should not be inherited by arbitrary workflow shell commands.
+        let mut env = parent_env_for_child_processes();
 
         // Set npm_config_yes for non-interactive mode (auto-accept package installations)
         if self.workflow_run_config.interaction.no_interactive {
