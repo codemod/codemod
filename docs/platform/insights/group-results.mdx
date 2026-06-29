@@ -1,0 +1,67 @@
+---
+title: 'Group results'
+description: 'Group Insights widgets by repository, directory, code owner, or metric cardinality.'
+---
+
+Grouping controls the shape of the result. Use it when a single total is not enough and you need to know where the work is. Insights can break down results by repository, directory, code owner, or a custom metric cardinality key emitted by your query.
+
+<Frame>
+  <img
+    src="/images/insights/group-by-options-light.png"
+    alt="Group by menu with repository, code owner, directory, and custom cardinality key options"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/group-by-options-dark.png"
+    alt="Group by menu with repository, code owner, directory, and custom cardinality key options"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## Common groups
+
+| Group by | What it shows |
+| --- | --- |
+| **Repository** | Which repos have the signal. |
+| **Directory** | Where the work is located inside a repo. |
+| **Code owner** | Which team likely owns the work. |
+| **Metric cardinality key** | A custom dimension emitted by a [JSSG metric](/jssg/metrics), such as component name, package name, or API name. |
+
+## Group by directory
+
+Directory grouping is useful when a large repository has several work areas. Start with depth `1` for a quick map, then increase the depth when you need a more specific path. This example groups JSSG results by top-level directory, so `apps`, `packages`, and `tooling` become separate rows.
+
+<Frame>
+  <img
+    src="/images/insights/group-by-light.png"
+    alt="Directory group by with depth 1 applied"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/insights/group-by-dark.png"
+    alt="Directory group by with depth 1 applied"
+    className="hidden dark:block"
+  />
+</Frame>
+
+## Group by metric cardinality
+
+[JSSG metrics](/jssg/metrics) can emit cardinality keys. For example, a codemod can emit one `prop-usage` metric for each deprecated prop and attach `name = Button` or `name = Link`.
+
+Use metric cardinality when you want a table such as:
+
+- deprecated prop usage by component name
+- API usage by imported symbol
+- package usage by package name
+- migration findings by rule id
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Filter results" href="/platform/insights/filters" icon="filter">
+    Narrow grouped results by metric dimensions or file paths.
+  </Card>
+  <Card title="Use formulas" href="/platform/insights/formulas" icon="calculator">
+    Compute ratios and progress from query lines.
+  </Card>
+</CardGroup>
