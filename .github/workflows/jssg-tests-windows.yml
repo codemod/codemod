@@ -1,4 +1,4 @@
-name: Codemod JSSG tests (windows-latest)
+name: Codemod JSSG tests (windows-2022)
 
 on:
   push:
@@ -34,8 +34,9 @@ permissions:
 
 jobs:
   jssg-tests-windows:
-    name: Codemod JSSG tests (windows-latest)
-    runs-on: windows-latest
+    name: Codemod JSSG tests (windows-2022)
+    # Pin MSVC jobs to VS 2022 until libz-ng-sys/cmake supports the VS 2026 image.
+    runs-on: windows-2022
     timeout-minutes: 30
     steps:
       - name: Checkout

@@ -88,21 +88,17 @@ impl<'a> JssgExecutionService<'a> {
             .bundle_path
             .as_ref()
             .unwrap_or(&self.engine.workflow_run_config().execution.bundle_path);
-        let js_file_path = effective_bundle_path.join(&request.js_ast_grep.js_file);
+        let js_file_path = crate::utils::resolve_workflow_path_within_root(
+            effective_bundle_path,
+            &request.js_ast_grep.js_file,
+            "js-ast-grep.js_file",
+        )?;
 
-        let target_path = if let Some(base_path) = &request.js_ast_grep.base_path {
-            self.engine
-                .workflow_run_config()
-                .execution
-                .target_path
-                .join(base_path)
-        } else {
-            self.engine
-                .workflow_run_config()
-                .execution
-                .target_path
-                .clone()
-        };
+        let target_path = crate::utils::resolve_optional_workflow_path_within_root(
+            &self.engine.workflow_run_config().execution.target_path,
+            request.js_ast_grep.base_path.as_deref(),
+            "js-ast-grep.base_path",
+        )?;
 
         if let Some(pre_run_callback) = self
             .engine
@@ -182,12 +178,19 @@ impl<'a> JssgExecutionService<'a> {
             .as_ref()
             .and_then(|m| m.get("_meta_files"))
             .and_then(butterflow_models::variable::value_to_string_vec)
-            .map(|files| {
+            .map(|files| -> Result<Vec<PathBuf>> {
                 files
                     .into_iter()
-                    .map(|file| target_path.join(file))
+                    .map(|file| {
+                        crate::utils::resolve_workflow_path_within_root(
+                            &target_path,
+                            &file,
+                            "matrix._meta_files",
+                        )
+                    })
                     .collect()
-            });
+            })
+            .transpose()?;
 
         let config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),
@@ -301,7 +304,14 @@ impl<'a> JssgExecutionService<'a> {
                     let root = detailed
                         .root
                         .as_ref()
-                        .map(PathBuf::from)
+                        .map(|root| {
+                            crate::utils::resolve_workflow_path_within_root(
+                                target_path,
+                                root,
+                                "js-ast-grep.semantic_analysis.root",
+                            )
+                        })
+                        .transpose()?
                         .unwrap_or_else(|| target_path.to_path_buf());
                     Some(Arc::new(LazySemanticProvider::workspace_scope(root)))
                 }

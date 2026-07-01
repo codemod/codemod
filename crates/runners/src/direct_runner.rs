@@ -255,6 +255,7 @@ impl Runner for DirectRunner {
             let mut cmd = Command::new(&script_path);
 
             // Add environment variables
+            cmd.env_clear();
             for (key, value) in env {
                 cmd.env(key, value);
             }
@@ -286,6 +287,7 @@ impl Runner for DirectRunner {
             cmd.arg(shell_arg).arg(command);
 
             // Add environment variables
+            cmd.env_clear();
             for (key, value) in env {
                 cmd.env(key, value);
             }

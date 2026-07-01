@@ -3,6 +3,7 @@ use crate::utils::package_validation::{
     detect_package_behavior_shape, expected_workflow_paths, validate_package_behavior_structure,
     validate_skill_behavior, PackageBehaviorShape,
 };
+use crate::utils::path_safety::resolve_relative_path_within_root;
 use crate::utils::rolldown_bundler::{RolldownBundler, RolldownBundlerConfig};
 use anyhow::{anyhow, Result};
 use butterflow_core::utils::validate_workflow;
@@ -166,7 +167,15 @@ fn find_js_files_in_workflow(workflow: &Workflow, package_path: &Path) -> Result
     for node in &workflow.nodes {
         for step in &node.steps {
             if let StepAction::JSAstGrep(js_step) = &step.action {
-                let js_file_path = package_path.join(&js_step.js_file);
+                let js_file_path =
+                    resolve_relative_path_within_root(package_path, &js_step.js_file).ok_or_else(
+                        || {
+                            anyhow!(
+                                "JS file referenced in workflow must be package-relative and stay within the package root: {}",
+                                js_step.js_file
+                            )
+                        },
+                    )?;
                 if !js_file_path.exists() {
                     return Err(anyhow!(
                         "JS file referenced in workflow not found: {}",
@@ -188,7 +197,11 @@ fn find_js_files_in_workflow(workflow: &Workflow, package_path: &Path) -> Result
 
 /// Bundle a JavaScript file and return the bundled code
 async fn bundle_js_file(package_path: &Path, js_file: &str) -> Result<String> {
-    let js_file_path = package_path.join(js_file);
+    let js_file_path = resolve_relative_path_within_root(package_path, js_file).ok_or_else(|| {
+        anyhow!(
+            "Cannot publish: JS file path must be package-relative and stay within the package root: {js_file}"
+        )
+    })?;
 
     debug!("Bundling JS file: {}", js_file_path.display());
 
@@ -1022,6 +1035,17 @@ export default function transform() {
         assert!(message.contains("Cannot publish"));
         assert!(message.contains("transform.js"));
         assert!(message.contains("@nodejs/codemod-utils"));
+    }
+
+    #[tokio::test]
+    async fn publish_bundle_rejects_js_file_path_traversal() {
+        let temp_dir = tempdir().unwrap();
+        let error = bundle_js_file(temp_dir.path(), "../outside.js")
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("Cannot publish"));
+        assert!(message.contains("package root"));
     }
 
     #[tokio::test]

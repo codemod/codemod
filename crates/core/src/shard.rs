@@ -55,11 +55,12 @@ pub fn evaluate_builtin_shards(
     let method = resolved_method;
 
     // Resolve target relative to the working directory; defaults to target_path itself
-    let search_base = match shard_config.target.as_deref() {
-        Some(target) if Path::new(target).is_absolute() => PathBuf::from(target),
-        Some(target) => target_path.join(target),
-        None => target_path.to_path_buf(),
-    };
+    let search_base = crate::utils::resolve_optional_workflow_path_within_root(
+        target_path,
+        shard_config.target.as_deref(),
+        "shard.target",
+    )
+    .map_err(|error| error.to_string())?;
 
     if !search_base.exists() {
         return Err(format!(
@@ -348,6 +349,9 @@ pub fn collect_files_with_pattern(
     base_path: &Path,
     file_pattern: &str,
 ) -> Result<Vec<PathBuf>, String> {
+    crate::utils::validate_workflow_glob_pattern(file_pattern, "shard.file_pattern")
+        .map_err(|error| error.to_string())?;
+
     let mut override_builder = OverrideBuilder::new(base_path);
     override_builder
         .add(file_pattern)
@@ -754,6 +758,7 @@ fn sanitize_team_name(team: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use butterflow_models::step::{BuiltinShardMethod, ShardMethod};
 
     // ── bin_pack_files ──────────────────────────────────────────────
 
@@ -816,6 +821,39 @@ mod tests {
         assert_eq!(parse_chunk_index("shard-5"), Some(5));
         assert_eq!(parse_chunk_index("org-frontend-team-1"), Some(1));
         assert_eq!(parse_chunk_index("no-number-here"), None);
+    }
+
+    #[test]
+    fn collect_files_with_pattern_rejects_parent_traversal_globs() {
+        let error = collect_files_with_pattern(Path::new("/repo"), "../**/*.ts").unwrap_err();
+        assert!(error.contains("shard.file_pattern"));
+        assert!(error.contains("workspace root"));
+    }
+
+    #[test]
+    fn evaluate_builtin_shards_rejects_absolute_target() {
+        let shard = UseShard {
+            method: ShardMethod::Builtin(BuiltinShardMethod {
+                r#type: BuiltinShardType::Directory,
+                max_files_per_shard: serde_json::json!(10),
+                min_shard_size: None,
+            }),
+            target: Some("/tmp".to_string()),
+            output_state: "shards".to_string(),
+            file_pattern: Some("**/*.ts".to_string()),
+            js_ast_grep: None,
+        };
+        let method = ResolvedBuiltinShardMethod {
+            r#type: BuiltinShardType::Directory,
+            max_files_per_shard: 10,
+            min_shard_size: None,
+        };
+
+        let error =
+            evaluate_builtin_shards(&shard, Path::new("/repo"), None, None, &method).unwrap_err();
+
+        assert!(error.contains("shard.target"));
+        assert!(error.contains("workspace root"));
     }
 
     // ── incremental evaluation ────────────────────────────────────

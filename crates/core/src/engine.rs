@@ -212,6 +212,29 @@ pub(crate) struct PreparedStepExecution {
     pub(crate) state_input_path: PathBuf,
 }
 
+const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &["LLM_API_KEY"];
+
+fn should_filter_platform_child_env_for_backend(backend: Option<&str>) -> bool {
+    backend == Some("cloud")
+}
+
+fn should_filter_platform_child_env() -> bool {
+    let backend = std::env::var("BUTTERFLOW_STATE_BACKEND").ok();
+    should_filter_platform_child_env_for_backend(backend.as_deref())
+}
+
+fn parent_env_for_child_processes() -> HashMap<String, String> {
+    let mut env: HashMap<String, String> = std::env::vars().collect();
+
+    if should_filter_platform_child_env() {
+        for key in PLATFORM_CHILD_ENV_DENYLIST {
+            env.remove(*key);
+        }
+    }
+
+    env
+}
+
 pub const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
 
 type ProgressHeartbeatCallback = Arc<dyn Fn() + Send + Sync>;
@@ -534,6 +557,9 @@ pub(crate) fn resolve_optional_glob_list(
         return Ok(None);
     };
     let resolved = resolve_string_list(items, params, state, matrix_values, None, task_context)?;
+    for glob in &resolved {
+        crate::utils::validate_workflow_glob_pattern(glob, "glob pattern")?;
+    }
     Ok(if resolved.is_empty() {
         None
     } else {
@@ -2637,7 +2663,11 @@ impl Engine {
         let bundle_path = self.workflow_run_config.execution.bundle_path.clone();
         let progress_callback = self.workflow_run_config.execution.progress_callback.clone();
 
-        let config_path = bundle_path.join(&ast_grep.config_file);
+        let config_path = crate::utils::resolve_workflow_path_within_root(
+            &bundle_path,
+            &ast_grep.config_file,
+            "ast-grep.config_file",
+        )?;
 
         if !config_path.exists() {
             let message = format!("AST grep config file not found: {}", config_path.display());
@@ -2669,6 +2699,14 @@ impl Engine {
         }
 
         let config_path_clone = config_path.clone();
+        let base_path = ast_grep
+            .base_path
+            .as_deref()
+            .map(|base_path| {
+                crate::utils::validate_workflow_relative_path(base_path, "ast-grep.base_path")?;
+                Ok::<PathBuf, Error>(PathBuf::from(base_path.trim()))
+            })
+            .transpose()?;
 
         let scan_result = with_combined_scan(
             &config_path_clone.to_string_lossy(),
@@ -2680,7 +2718,7 @@ impl Engine {
                     pre_run_callback: None,
                     progress_callback: self.workflow_run_config.execution.progress_callback.clone(),
                     target_path: Some(self.workflow_run_config.execution.target_path.clone()),
-                    base_path: ast_grep.base_path.as_deref().map(PathBuf::from),
+                    base_path: base_path.clone(),
                     include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
                     explicit_files: None,
                     exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
@@ -3720,7 +3758,11 @@ impl Engine {
         use codemod_sandbox::utils::project_discovery::find_tsconfig;
 
         let effective_bundle_path = &self.workflow_run_config.execution.bundle_path;
-        let func_path = effective_bundle_path.join(&func.function);
+        let func_path = crate::utils::resolve_workflow_path_within_root(
+            effective_bundle_path,
+            &func.function,
+            "shard.method.function",
+        )?;
 
         if !func_path.exists() {
             return Err(Error::Runtime(format!(
@@ -3733,12 +3775,13 @@ impl Engine {
         let files: Vec<String> = if let Some(eligible) = eligible_files {
             eligible.to_vec()
         } else if let Some(file_pattern) = &shard_config.file_pattern {
+            crate::utils::validate_workflow_glob_pattern(file_pattern, "shard.file_pattern")?;
             let target = shard_config.target.as_deref().unwrap_or(".");
-            let search_base = if Path::new(target).is_absolute() {
-                PathBuf::from(target)
-            } else {
-                target_path.join(target)
-            };
+            let search_base = crate::utils::resolve_workflow_path_within_root(
+                target_path,
+                target,
+                "shard.target",
+            )?;
             let found = collect_files_with_pattern(&search_base, file_pattern)
                 .map_err(|e| Error::Runtime(format!("Failed to collect files: {e}")))?;
             found
@@ -3933,8 +3976,9 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
     ) -> Result<PreparedStepExecution> {
-        // Start with a copy of the parent process's environment
-        let mut env: HashMap<String, String> = std::env::vars().collect();
+        // Start with the parent process environment, minus platform runtime secrets that
+        // should not be inherited by arbitrary workflow shell commands.
+        let mut env = parent_env_for_child_processes();
 
         // Set npm_config_yes for non-interactive mode (auto-accept package installations)
         if self.workflow_run_config.interaction.no_interactive {
@@ -4159,6 +4203,59 @@ mod tests {
 
         std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
         assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
+    }
+
+    #[test]
+    fn platform_child_env_filter_requires_cloud_backend() {
+        assert!(should_filter_platform_child_env_for_backend(Some("cloud")));
+        assert!(!should_filter_platform_child_env_for_backend(None));
+        assert!(!should_filter_platform_child_env_for_backend(Some("local")));
+    }
+
+    #[test]
+    #[serial]
+    fn parent_env_filters_cloud_only_secrets_for_cloud_backend() {
+        let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
+        let _token_guard = EnvVarGuard::unset("BUTTERFLOW_API_AUTH_TOKEN");
+        let _llm_guard = EnvVarGuard::unset("LLM_API_KEY");
+        let _git_askpass_guard = EnvVarGuard::unset("GIT_ASKPASS");
+        let _http_proxy_guard = EnvVarGuard::unset("HTTP_PROXY");
+
+        std::env::set_var("BUTTERFLOW_API_AUTH_TOKEN", "local-token");
+        std::env::set_var("LLM_API_KEY", "local-llm-key");
+
+        let local_env = parent_env_for_child_processes();
+        assert_eq!(
+            local_env
+                .get("BUTTERFLOW_API_AUTH_TOKEN")
+                .map(String::as_str),
+            Some("local-token")
+        );
+        assert_eq!(
+            local_env.get("LLM_API_KEY").map(String::as_str),
+            Some("local-llm-key")
+        );
+
+        std::env::set_var("BUTTERFLOW_STATE_BACKEND", "cloud");
+        std::env::set_var("GIT_ASKPASS", "/tmp/codemod-git-askpass");
+        std::env::set_var("HTTP_PROXY", "http://proxy.example");
+
+        let cloud_env = parent_env_for_child_processes();
+        assert_eq!(
+            cloud_env
+                .get("BUTTERFLOW_API_AUTH_TOKEN")
+                .map(String::as_str),
+            Some("local-token")
+        );
+        assert!(!cloud_env.contains_key("LLM_API_KEY"));
+        assert_eq!(
+            cloud_env.get("GIT_ASKPASS").map(String::as_str),
+            Some("/tmp/codemod-git-askpass")
+        );
+        assert_eq!(
+            cloud_env.get("HTTP_PROXY").map(String::as_str),
+            Some("http://proxy.example")
+        );
     }
 
     #[test]
