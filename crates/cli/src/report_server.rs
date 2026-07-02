@@ -523,32 +523,12 @@ async fn handle_feedback_agent_stream(
                     let _ = send_stream_event(
                         &mut sender,
                         serde_json::json!({
-                            "type": "status",
-                            "message": "Submitting anonymous feedback...",
+                            "type": "done",
+                            "message": message,
+                            "agent": agent_value,
                         }),
                     )
                     .await;
-                    match submit_report_feedback(FEEDBACK_CATEGORY.to_string(), message.clone())
-                        .await
-                    {
-                        Ok(body) => {
-                            let value = serde_json::from_str::<serde_json::Value>(&body)
-                                .unwrap_or_else(|_| serde_json::json!({ "submitted": true }));
-                            let _ = send_stream_event(
-                                &mut sender,
-                                serde_json::json!({
-                                    "type": "done",
-                                    "message": message,
-                                    "result": value,
-                                    "agent": agent_value,
-                                }),
-                            )
-                            .await;
-                        }
-                        Err(error) => {
-                            let _ = send_stream_error(&mut sender, error).await;
-                        }
-                    }
                 }
                 Err(error) => {
                     let _ = send_stream_error(&mut sender, error).await;

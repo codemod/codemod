@@ -30,7 +30,7 @@ interface FeedbackStatus {
   selectedAgent: AgentOption | null;
 }
 
-type FeedbackState = "idle" | "loading" | "submitting" | "submitted" | "error";
+type FeedbackState = "idle" | "loading" | "drafting" | "submitting" | "submitted" | "error";
 type FeedbackMode = "choice" | "manual";
 
 type FeedbackStreamEvent =
@@ -91,7 +91,7 @@ export function FeedbackButton() {
     ? (supportedAgents.find((agent) => agent.canonical === preferredAgent) ?? null)
     : (status?.selectedAgent ?? supportedAgents[0] ?? null);
   const autoAgent =
-    state === "submitting" || state === "submitted"
+    state === "drafting" || state === "submitting" || state === "submitted"
       ? (activeAgent ?? selectedAgentOption)
       : selectedAgentOption;
   const autoAgentLabel = autoAgent?.label ?? "an available agent";
@@ -101,12 +101,7 @@ export function FeedbackButton() {
     state === "submitted" && message
       ? message
       : [agentLog.join("\n"), liveDraft].filter(Boolean).join("\n\n") || ACTIVITY_PLACEHOLDER;
-  const hasAgentDraft = activityContent !== ACTIVITY_PLACEHOLDER;
-
-  const showDraftCard =
-    (state === "idle" && activityContent !== ACTIVITY_PLACEHOLDER) ||
-    state === "submitting" ||
-    state === "submitted";
+  const showDraftCard = state === "drafting";
 
   async function fetchStatus() {
     setState("loading");
@@ -168,8 +163,8 @@ export function FeedbackButton() {
     }
   }
 
-  async function submitAgentFeedback() {
-    setState("submitting");
+  async function draftWithAgent() {
+    setState("drafting");
     setErrorMsg("");
     setMessage("");
     setLiveDraft("");
@@ -187,9 +182,8 @@ export function FeedbackButton() {
       if (!resp.body) throw new Error("Feedback stream was not returned");
 
       await readFeedbackStream(resp.body);
-      setState("submitted");
     } catch (e: any) {
-      setErrorMsg(e.message || "Failed to submit feedback");
+      setErrorMsg(e.message || "Failed to draft feedback");
       setState("error");
     }
   }
@@ -243,7 +237,10 @@ export function FeedbackButton() {
     if (event.type === "done") {
       if (event.agent) setActiveAgent(event.agent);
       setMessage(event.message || "");
-      setAgentLog((current) => [...current, "Feedback submitted."]);
+      setMode("manual");
+      setState("idle");
+      setAgentLog([]);
+      setLiveDraft("");
       return;
     }
 
@@ -252,13 +249,13 @@ export function FeedbackButton() {
     }
   }
 
-  function switchToManualMode() {
+  function startManualFeedback() {
     setMode("manual");
-    if (!message && activityContent && activityContent !== ACTIVITY_PLACEHOLDER) {
-      setMessage(activityContent);
-    }
+    setMessage("");
     setState("idle");
     setErrorMsg("");
+    setAgentLog([]);
+    setLiveDraft("");
   }
 
   return (
@@ -272,7 +269,11 @@ export function FeedbackButton() {
         <DialogContent className="max-w-md gap-4 p-5">
           <DialogHeader>
             <DialogTitle>
-              {mode === "manual" ? "Write your own feedback" : "How did this codemod perform?"}
+              {mode === "manual"
+                ? message.trim()
+                  ? "Review and submit feedback"
+                  : "Write your own feedback"
+                : "How did this codemod perform?"}
             </DialogTitle>
             <DialogDescription className="sr-only">
               Submit codemod performance feedback.
@@ -311,7 +312,7 @@ export function FeedbackButton() {
                   </div>
                 </div>
 
-                <Button variant="outline" onClick={() => setOpen(false)}>
+                <Button variant="outline" size="xl" onClick={() => setOpen(false)}>
                   Done
                 </Button>
               </div>
@@ -324,9 +325,8 @@ export function FeedbackButton() {
                 )}
 
                 <p className="text-sm leading-relaxed text-muted-foreground">
-                  {hasAgentDraft
-                    ? `${autoAgentLabel} reviewed your changes and drafted feedback below. Send it as-is or edit before submitting.`
-                    : `${autoAgentLabel} can review your changes and draft anonymous feedback below.`}
+                  Have your agent review these changes and draft anonymized feedback to help improve
+                  this codemod. You can edit it before submitting.
                 </p>
 
                 <Select
@@ -374,9 +374,7 @@ export function FeedbackButton() {
                 </Select>
 
                 {showDraftCard && (
-                  <div
-                    className={`space-y-2 rounded-lg border border-border/60 bg-card p-3${state === "submitting" ? " animate-pulse" : ""}`}
-                  >
+                  <div className="space-y-2 rounded-lg border border-border/60 bg-card p-3 animate-pulse">
                     <p className="text-[10.5px] font-medium tracking-widest text-muted-foreground/60 uppercase">
                       Draft feedback
                     </p>
@@ -384,7 +382,7 @@ export function FeedbackButton() {
                     <div className="flex w-fit items-center gap-1.5 rounded-full border border-success/20 bg-success-muted px-2.5 py-0.5">
                       <EyeOff className="size-3 text-success-text" />
                       <span className="text-[11px] font-medium text-success-text">
-                        Sent anonymously
+                        Anonymized draft
                       </span>
                     </div>
                   </div>
@@ -394,25 +392,21 @@ export function FeedbackButton() {
                   <Button
                     variant="default"
                     size="xl"
-                    onClick={submitAgentFeedback}
-                    disabled={!canAutoSubmit || state === "submitting"}
+                    onClick={draftWithAgent}
+                    disabled={!canAutoSubmit || state === "drafting"}
                     className="flex-1"
                   >
-                    {state === "submitting" ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Send className="size-3.5" />
-                    )}
-                    {state === "submitting" ? "Sending..." : "Send feedback"}
+                    {state === "drafting" && <Loader2 className="size-3.5 animate-spin" />}
+                    {state === "drafting" ? "Drafting..." : "Draft with AI"}
                   </Button>
                   <Button
                     variant="outline"
                     size="xl"
-                    onClick={switchToManualMode}
-                    disabled={state === "submitting"}
+                    onClick={startManualFeedback}
+                    disabled={state === "drafting"}
                   >
                     <Pencil className="size-3.5" />
-                    Edit
+                    Write Feedback
                   </Button>
                 </div>
               </div>
@@ -424,6 +418,15 @@ export function FeedbackButton() {
                   {errorMsg}
                 </p>
               )}
+
+              {activeAgent && message.trim() ? (
+                <div className="flex w-fit items-center gap-1.5 rounded-full border border-success/20 bg-success-muted px-2.5 py-0.5">
+                  <EyeOff className="size-3 text-success-text" />
+                  <span className="text-[11px] font-medium text-success-text">
+                    Anonymized draft from {activeAgent.label} — edit before submitting
+                  </span>
+                </div>
+              ) : null}
 
               <textarea
                 value={message}
@@ -446,6 +449,10 @@ export function FeedbackButton() {
                   onClick={() => {
                     setMode("choice");
                     setErrorMsg("");
+                    setMessage("");
+                    setActiveAgent(null);
+                    setAgentLog([]);
+                    setLiveDraft("");
                   }}
                   size="xl"
                   disabled={state === "submitting"}
