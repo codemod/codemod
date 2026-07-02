@@ -260,7 +260,7 @@ export function FeedbackButton() {
 
   return (
     <>
-      <Button variant="outline" onClick={handleOpenDialog}>
+      <Button onClick={handleOpenDialog}>
         <MessageSquare className="size-4" />
         Feedback
       </Button>
@@ -304,10 +304,12 @@ export function FeedbackButton() {
                     What was sent
                   </p>
                   <p className="text-sm leading-relaxed text-foreground/50">{message}</p>
-                  <div className="flex w-fit items-center gap-1.5 rounded-full border border-success/15 bg-success-subtle px-2.5 py-0.5 opacity-70">
+                  <div className="flex w-fit items-center gap-1.5 rounded-full border border-success/15 bg-success-subtle px-2.5 py-0.5">
                     <EyeOff className="size-3 text-success-text" />
                     <span className="text-[11px] font-medium text-success-text">
-                      Sent anonymously via {autoAgentLabel}
+                      {activeAgent
+                        ? `Sent anonymously via ${activeAgent.label}`
+                        : "Sent anonymously"}
                     </span>
                   </div>
                 </div>
