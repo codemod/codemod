@@ -5,6 +5,36 @@ icon: 'scroll'
 mode: "center"
 ---
 
+<Update label="June 2026">
+- **Global Chat follow-ups are smoother**: Global Chat now offers concise next-action choices after codemod generation, so you can continue into an Insights dashboard, migration campaign, or another follow-up without being routed through registry pages. Client-side tool output handling is also more reliable, especially when a conversation triggers navigation, code execution, or multiple tool results in sequence.
+
+- **Insights dashboards are more flexible and transparent**:
+  - Query results can now group by directory for ast-grep and JSSG sources, with configurable depth
+  - Indexing progress now shows clearer fetching, indexing, and multi-codebase status
+  - Timeseries widgets handle earlier date ranges and indexed history more reliably
+  - Query editor deletion, empty-dashboard saves, table overflow, long paths, and truncated metric labels were polished
+
+- **Multi-repo campaigns are easier to manage**: Campaigns created for multiple repositories now persist a parent campaign group with one child campaign per repository. You can review each repository campaign from the group page, apply the same campaign to additional repositories later, and reuse repository groups across campaign creation, Insights, Automations, and repository selectors.
+
+- **Organization settings and egress controls**: Organization settings now have a fuller structure for overview, billing, integrations, members, security, SSO, egress policies, values, and repository groups. Admins can define organization and project egress allowlists, and workflow runs now enforce those allowlists through isolated worker networking and authenticated proxy controls.
+
+- **Registry bundles and package discovery**:
+  - Registry packages can now expose bundle relationships, including parent bundles and child codemods, through the UI and APIs
+  - Bundle-aware package metadata extraction improves how workflow-based packages are represented
+  - Registry cards, filters, sort controls, package pages, loading states, and Open Graph previews received usability polish
+
+- **Focused Studio experience**: Codemod Studio now focuses on the ast-grep editing, testing, sharing, and publishing workflow after removing the experimental Studio AI panel. Studio sessions also have creation quotas to protect platform reliability, and the editor layout, footer, AST tree, matches panel, and mobile behavior received cleanup.
+
+- **Security and account protection**:
+  - Logout now revokes API session access immediately instead of relying on cached session cookies
+  - SAML SSO callbacks now handle Better Auth verification IDs correctly
+  - API key creation enforces future expiration dates, rejects disabled keys, and adds creation quotas
+  - Dashboard, campaign, and Studio session creation now have abuse-protection limits
+  - App and website content security policies were tightened, including stricter frame ancestor handling
+
+- **Admin generation and website polish**: ARC gained prompt-driven idea generation, prompt-to-implementation flow, SonarCloud as a scrape source, mining/reporting codemod support, and more resilient implementation jobs. The website home animation copy, Clients section, CTA links, logo loading, and responsive layout were also refined.
+</Update>
+
 <Update label="May 2026">
 - **Codemod Builder in Global Chat**: Global Chat can now help turn repeatable migration requests into generated codemod packages, publish to the registry, iterate on source-available generated packages, and hand off to campaign creation when appropriate. It also gained page-aware suggestions, repository mentions, directive chips, chat history improvements, and codebase tools for file search, AST search, dependency lookup, and indexed repository context.
 
