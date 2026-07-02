@@ -495,6 +495,24 @@ npx codemod workflow list [-l <LIMIT>]
   Number of workflow runs to show. (default: 10)
 </ResponseField>
 
+**`workflow tui`**
+
+Browse workflow runs in an interactive terminal UI.
+
+```bash
+npx codemod workflow tui [-i <ID>] [-l <LIMIT>]
+```
+
+Use this when you want to inspect recent runs, attach directly to a known run, or navigate workflow execution state without calling `workflow list` and `workflow status` separately.
+
+<ResponseField name="-i, --id <ID>" type="string">
+  Existing workflow run ID to open directly.
+</ResponseField>
+
+<ResponseField name="-l, --limit <LIMIT>" type="number">
+  Number of recent workflow runs to show in the browser view. (default: 20)
+</ResponseField>
+
 **`workflow cancel`**
 
 Cancel a workflow run.
@@ -686,6 +704,44 @@ npx codemod jssg test <codemod_file> [options]
 
 <ResponseField name="--watch" type="boolean">
   Enable watch mode to automatically re-run tests when files change.
+</ResponseField>
+
+**`jssg list-applicable`**
+
+List files in a target directory that match a codemod's exported selector.
+
+```bash
+npx codemod jssg list-applicable <codemod_file> --language <LANG> [-t <target_directory>] [--max-threads <N>] [--allow-fs] [--allow-fetch] [--allow-child-process]
+```
+
+This command evaluates the codemod's selector and prints each matching file as `[Applicable] <path>`. It is useful for checking selector coverage before running the transform.
+
+<ResponseField name="codemod_file" type="string" required>
+  Path to the JS ast-grep (jssg) codemod file (JS/TS).
+</ResponseField>
+
+<ResponseField name="-t, --target <PATH>" type="string">
+  Directory to scan. Defaults to the current working directory.
+</ResponseField>
+
+<ResponseField name="--language <LANG>" type="string" required>
+  Target language used to parse the codemod selector and candidate files.
+</ResponseField>
+
+<ResponseField name="--max-threads <N>" type="number">
+  Maximum number of concurrent threads to use.
+</ResponseField>
+
+<ResponseField name="--allow-fs" type="boolean">
+  Allow filesystem capability access while loading selector logic.
+</ResponseField>
+
+<ResponseField name="--allow-fetch" type="boolean">
+  Allow network fetch capability access while loading selector logic.
+</ResponseField>
+
+<ResponseField name="--allow-child-process" type="boolean">
+  Allow child process capability access while loading selector logic.
 </ResponseField>
 
 <AccordionGroup>
