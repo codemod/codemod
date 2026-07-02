@@ -40,7 +40,7 @@ type FeedbackStreamEvent =
   | { type: "done"; message: string; agent?: AgentOption }
   | { type: "error"; error: string };
 
-const ACTIVITY_PLACEHOLDER = "Agent activity will appear here while auto-submit runs.";
+const ACTIVITY_PLACEHOLDER = "Agent activity will appear here while the draft is prepared.";
 const MAX_FEEDBACK_MESSAGE_LEN = 2500;
 
 function AgentOptionDisplay({
