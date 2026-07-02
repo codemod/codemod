@@ -42,6 +42,32 @@ type FeedbackStreamEvent =
 
 const ACTIVITY_PLACEHOLDER = "Agent activity will appear here while the draft is prepared.";
 const MAX_FEEDBACK_MESSAGE_LEN = 2500;
+const SUPPORTED_AGENT_ORDER = ["claude-code", "codex", "opencode", "goose"];
+
+function getSupportedAgents(agents: AgentOption[] | undefined): AgentOption[] {
+  return (
+    agents
+      ?.filter((agent) => agent.available && SUPPORTED_AGENT_ORDER.includes(agent.canonical))
+      .sort(
+        (a, b) =>
+          SUPPORTED_AGENT_ORDER.indexOf(a.canonical) -
+          SUPPORTED_AGENT_ORDER.indexOf(b.canonical),
+      ) ?? []
+  );
+}
+
+function resolvePreferredAgentCanonical(current: string, status: FeedbackStatus): string {
+  const supportedAgents = getSupportedAgents(status.agents);
+  const supportedCanonicals = new Set(supportedAgents.map((agent) => agent.canonical));
+
+  if (current && supportedCanonicals.has(current)) {
+    return current;
+  }
+  if (status.selectedAgent?.canonical && supportedCanonicals.has(status.selectedAgent.canonical)) {
+    return status.selectedAgent.canonical;
+  }
+  return supportedAgents[0]?.canonical ?? "";
+}
 
 function AgentOptionDisplay({
   agent,
@@ -79,17 +105,12 @@ export function FeedbackButton() {
   const [activeAgent, setActiveAgent] = useState<AgentOption | null>(null);
   const [liveDraft, setLiveDraft] = useState("");
 
-  const supportedAgentOrder = ["claude-code", "codex", "opencode", "goose"];
-  const supportedAgents =
-    status?.agents
-      .filter((agent) => agent.available && supportedAgentOrder.includes(agent.canonical))
-      .sort(
-        (a, b) =>
-          supportedAgentOrder.indexOf(a.canonical) - supportedAgentOrder.indexOf(b.canonical),
-      ) ?? [];
-  const selectedAgentOption = preferredAgent
-    ? (supportedAgents.find((agent) => agent.canonical === preferredAgent) ?? null)
-    : (status?.selectedAgent ?? supportedAgents[0] ?? null);
+  const supportedAgents = getSupportedAgents(status?.agents);
+  const selectedAgentOption =
+    supportedAgents.find((agent) => agent.canonical === preferredAgent) ??
+    supportedAgents.find((agent) => agent.canonical === status?.selectedAgent?.canonical) ??
+    supportedAgents[0] ??
+    null;
   const autoAgent =
     state === "drafting" || state === "submitting" || state === "submitted"
       ? (activeAgent ?? selectedAgentOption)
@@ -101,7 +122,8 @@ export function FeedbackButton() {
     state === "submitted" && message
       ? message
       : [agentLog.join("\n"), liveDraft].filter(Boolean).join("\n\n") || ACTIVITY_PLACEHOLDER;
-  const showDraftCard = state === "drafting";
+  const hasAgentDraft = agentLog.length > 0 || liveDraft.length > 0;
+  const showDraftCard = state === "drafting" || (state === "error" && hasAgentDraft);
 
   async function fetchStatus() {
     setState("loading");
@@ -110,17 +132,7 @@ export function FeedbackButton() {
       if (!resp.ok) throw new Error("Failed to load feedback status");
       const data = await resp.json();
       setStatus(data);
-      setPreferredAgent(
-        (current) =>
-          current ||
-          data.selectedAgent?.canonical ||
-          supportedAgentOrder.find((canonical) =>
-            data.agents?.some(
-              (agent: AgentOption) => agent.canonical === canonical && agent.available,
-            ),
-          ) ||
-          "",
-      );
+      setPreferredAgent((current) => resolvePreferredAgentCanonical(current, data));
       setState("idle");
     } catch (e: any) {
       setErrorMsg(e.message || "Failed to load feedback status");
@@ -376,7 +388,9 @@ export function FeedbackButton() {
                 </Select>
 
                 {showDraftCard && (
-                  <div className="space-y-2 rounded-lg border border-border/60 bg-card p-3 animate-pulse">
+                  <div
+                    className={`space-y-2 rounded-lg border border-border/60 bg-card p-3${state === "drafting" ? " animate-pulse" : ""}`}
+                  >
                     <p className="text-[10.5px] font-medium tracking-widest text-muted-foreground/60 uppercase">
                       Draft feedback
                     </p>
