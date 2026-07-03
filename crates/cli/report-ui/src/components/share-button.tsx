@@ -132,7 +132,7 @@ export function ShareButton({ report: _report }: ShareButtonProps) {
 
   return (
     <>
-      <Button onClick={handleOpenDialog}>
+      <Button variant="outline" onClick={handleOpenDialog}>
         <Upload className="size-4" />
         Share
       </Button>
