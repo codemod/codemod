@@ -50,8 +50,7 @@ function getSupportedAgents(agents: AgentOption[] | undefined): AgentOption[] {
       ?.filter((agent) => agent.available && SUPPORTED_AGENT_ORDER.includes(agent.canonical))
       .sort(
         (a, b) =>
-          SUPPORTED_AGENT_ORDER.indexOf(a.canonical) -
-          SUPPORTED_AGENT_ORDER.indexOf(b.canonical),
+          SUPPORTED_AGENT_ORDER.indexOf(a.canonical) - SUPPORTED_AGENT_ORDER.indexOf(b.canonical),
       ) ?? []
   );
 }
@@ -339,8 +338,8 @@ export function FeedbackButton() {
                 )}
 
                 <p className="text-sm leading-relaxed text-muted-foreground">
-                  Have your agent review these changes and draft anonymized feedback to help improve
-                  this codemod. You can edit it before submitting.
+                  Have your agent review the changes and draft anonymized feedback to help improve
+                  this codemod, or submit feedback manually.
                 </p>
 
                 <Select
@@ -413,7 +412,7 @@ export function FeedbackButton() {
                     className="flex-1"
                   >
                     {state === "drafting" && <Loader2 className="size-3.5 animate-spin" />}
-                    {state === "drafting" ? "Drafting..." : "Draft with AI"}
+                    {state === "drafting" ? "Drafting..." : "Submit AI-Generated Feedback"}
                   </Button>
                   <Button
                     variant="outline"
@@ -422,7 +421,7 @@ export function FeedbackButton() {
                     disabled={state === "drafting"}
                   >
                     <Pencil className="size-3.5" />
-                    Write Feedback
+                    Write Manual Feedback
                   </Button>
                 </div>
               </div>
