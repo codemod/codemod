@@ -52,8 +52,8 @@ export function App() {
       data={report}
       actions={
         <div className="flex flex-wrap items-center gap-2">
-          <FeedbackButton />
           <ShareButton report={report} />
+          <FeedbackButton />
         </div>
       }
     />
