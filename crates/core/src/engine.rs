@@ -3496,6 +3496,18 @@ impl Engine {
         use butterflow_models::step::ShardMethod;
 
         let target_path = self.workflow_run_config.execution.target_path.clone();
+        let mut resolved_shard_config = shard_config.clone();
+        if let Some(target) = &shard_config.target {
+            resolved_shard_config.target = Some(resolve_string_with_expression(
+                target,
+                params,
+                state,
+                task.matrix_values.as_ref(),
+                None,
+                task_expr_ctx,
+            )?);
+        }
+        let shard_config = &resolved_shard_config;
 
         // If a js-ast-grep config is set, pre-scan to find only files with matches
         let eligible_files = if let Some(js_ast_grep) = &shard_config.js_ast_grep {
@@ -4143,7 +4155,11 @@ mod tests {
         InstallSkillExecutionRequest, InstallSkillExecutor, SelectionPrompt, SelectionPromptOption,
     };
     use anyhow::Result as AnyhowResult;
-    use butterflow_models::step::{SemanticAnalysisConfig, SemanticAnalysisMode};
+    use butterflow_models::step::{
+        BuiltinShardMethod, BuiltinShardType, SemanticAnalysisConfig, SemanticAnalysisMode,
+        ShardMethod, UseShard,
+    };
+    use butterflow_state::mock_adapter::MockStateAdapter;
     use serial_test::serial;
     use std::sync::Arc;
     use tokio::sync::mpsc;
@@ -4261,6 +4277,85 @@ mod tests {
         );
 
         assert_eq!(eligible, vec!["src/changed.ts"]);
+    }
+
+    #[tokio::test]
+    async fn shard_step_resolves_target_expression() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+        std::fs::create_dir_all(temp_path.join("packages/app")).unwrap();
+        std::fs::write(temp_path.join("packages/app/one.ts"), "const one = 1;\n").unwrap();
+        std::fs::write(temp_path.join("packages/app/two.ts"), "const two = 2;\n").unwrap();
+
+        let workflow_run_id = Uuid::new_v4();
+        let config = WorkflowRunConfig {
+            execution: crate::config::WorkflowExecutionSettings {
+                target_path: temp_path.to_path_buf(),
+                ..WorkflowRunConfig::default().execution
+            },
+            ..WorkflowRunConfig::default()
+        };
+        let engine = Engine::with_state_adapter(Box::new(MockStateAdapter::new()), config);
+        let task = Task::new(workflow_run_id, "shard-node".to_string(), false);
+        let params = HashMap::from([(
+            "shardingDirectoryTarget".to_string(),
+            serde_json::json!("packages/app"),
+        )]);
+        let shard_config = UseShard {
+            method: ShardMethod::Builtin(BuiltinShardMethod {
+                r#type: BuiltinShardType::Directory,
+                max_files_per_shard: serde_json::json!(1),
+                min_shard_size: None,
+            }),
+            target: Some("${{ params.shardingDirectoryTarget }}".to_string()),
+            output_state: "shards".to_string(),
+            file_pattern: Some("**/*.ts".to_string()),
+            js_ast_grep: None,
+        };
+
+        let result = engine
+            .execute_shard_step(
+                &shard_config,
+                &task,
+                &params,
+                &HashMap::new(),
+                None,
+                &StructuredLogger::default(),
+            )
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "shard target expressions should resolve before path validation: {result:?}"
+        );
+
+        let state = engine
+            .state_adapter
+            .lock()
+            .await
+            .get_state(workflow_run_id)
+            .await
+            .unwrap();
+        let shards = state
+            .get("shards")
+            .and_then(serde_json::Value::as_array)
+            .expect("shard step should write shards to state");
+        let shard_files = shards
+            .iter()
+            .flat_map(|shard| {
+                shard
+                    .get("_meta_files")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            shard_files,
+            vec!["packages/app/one.ts", "packages/app/two.ts"]
+        );
     }
 
     #[test]
