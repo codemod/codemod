@@ -4,9 +4,10 @@
 //! the llrt fs module is used instead and this curated module is not
 //! registered — see `in_memory_engine.rs` for the wiring.
 
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use rquickjs::{
     module::{Declarations, Exports, ModuleDef},
@@ -14,7 +15,7 @@ use rquickjs::{
     Ctx, Error, Exception, IntoJs, JsLifetime, Object, Result, TypedArray, Value,
 };
 use vfs::error::VfsErrorKind;
-use vfs::{VfsError, VfsFileType, VfsPath};
+use vfs::{VfsError, VfsFileType, VfsMetadata, VfsPath};
 
 /// Fallback resolver invoked when a read targets a path that is inside the
 /// curated sandbox's `target_dir` but isn't present in the backing VFS.
@@ -26,6 +27,14 @@ use vfs::{VfsError, VfsFileType, VfsPath};
 /// infrastructure failure and surfaces as `EIO`.
 pub trait FileFetcher: Send + Sync {
     fn fetch(&self, path: &str) -> std::result::Result<Option<Vec<u8>>, String>;
+
+    fn metadata(&self, _path: &str) -> std::result::Result<Option<VfsMetadata>, String> {
+        Ok(None)
+    }
+
+    fn read_dir(&self, _path: &str) -> std::result::Result<Option<Vec<String>>, String> {
+        Ok(None)
+    }
 }
 
 /// Stored in rquickjs userdata so module methods can look up the backing
@@ -44,6 +53,9 @@ pub struct CuratedFsConfig {
     /// subsequent reads (including from other workers sharing `root`) are
     /// pure memory hits.
     pub fetcher: Option<Arc<dyn FileFetcher>>,
+    /// Paths deleted from the writable VFS layer. This prevents fetcher-backed
+    /// reads from rehydrating a file that dry-run code has already unlinked.
+    pub deleted_paths: Arc<Mutex<HashSet<String>>>,
     /// When set, indicates that `root` maps 1:1 to real-disk paths and gives
     /// the host-filesystem path that corresponds to [`Self::target_dir`]. The
     /// resolver uses this to additionally reject any requested path that
@@ -65,6 +77,7 @@ impl CuratedFsConfig {
             target_dir: target_dir.into(),
             root,
             fetcher: None,
+            deleted_paths: Arc::new(Mutex::new(HashSet::new())),
             physical_target_dir: None,
         }
     }
@@ -88,12 +101,7 @@ impl CuratedFsConfig {
     }
 
     fn normalized_target(&self) -> String {
-        let trimmed = self.target_dir.trim_end_matches('/');
-        if trimmed.is_empty() {
-            "/".to_string()
-        } else {
-            trimmed.to_string()
-        }
+        normalize_virtual_absolute_path(&self.target_dir)
     }
 
     /// Resolve an incoming path against [`Self::target_dir`]. Relative paths
@@ -104,14 +112,15 @@ impl CuratedFsConfig {
     /// can't escape via `target_dir/link-to-outside/...`).
     fn resolve(&self, input: &str) -> std::result::Result<(String, VfsPath), FsErrorKind> {
         let target = self.normalized_target();
-        let raw = if input.starts_with('/') {
-            input.to_string()
+        let input = normalize_virtual_path(input);
+        let raw = if is_absolute_path(&input) {
+            input
         } else if target == "/" {
             format!("/{input}")
         } else {
             format!("{target}/{input}")
         };
-        let normalized = normalize_path(&raw);
+        let normalized = normalize_virtual_absolute_path(&raw);
         let within_target = normalized == target
             || (target == "/" && normalized.starts_with('/'))
             || normalized.starts_with(&format!("{target}/"));
@@ -161,6 +170,36 @@ fn check_no_symlink_escape(
         }
     }
     Ok(())
+}
+
+fn normalize_virtual_path(input: &str) -> String {
+    let path = input.replace('\\', "/");
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
+        format!("{}{}", path[..1].to_ascii_uppercase(), &path[1..])
+    } else {
+        path
+    }
+}
+
+fn has_windows_drive_prefix(input: &str) -> bool {
+    let bytes = input.as_bytes();
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
+}
+
+fn is_absolute_path(input: &str) -> bool {
+    input.starts_with('/') || has_windows_drive_prefix(input)
+}
+
+pub(super) fn normalize_virtual_absolute_path(input: &str) -> String {
+    let input = normalize_virtual_path(input);
+    if has_windows_drive_prefix(&input) {
+        normalize_path(&format!("/{input}"))
+    } else if input.starts_with('/') {
+        normalize_path(&input)
+    } else {
+        normalize_path(&format!("/{input}"))
+    }
 }
 
 /// Normalize a POSIX-style path: strip `.` segments, resolve `..` against
@@ -320,6 +359,15 @@ fn read_bytes_via_vfs_or_fetcher(
     normalized: &str,
     vfs_path: &VfsPath,
 ) -> Result<Vec<u8>> {
+    if is_deleted(cfg, normalized) {
+        return Err(throw_fs(
+            ctx,
+            FsErrorKind::NotFound {
+                path: normalized.to_string(),
+            },
+            "open",
+        ));
+    }
     match vfs_path.open_file() {
         Ok(mut file) => {
             let mut bytes = Vec::new();
@@ -387,6 +435,115 @@ fn read_bytes_via_vfs_or_fetcher(
     }
 }
 
+fn is_deleted(cfg: &CuratedFsConfig, normalized: &str) -> bool {
+    cfg.deleted_paths
+        .lock()
+        .map(|paths| paths.contains(normalized))
+        .unwrap_or(false)
+}
+
+fn mark_deleted(cfg: &CuratedFsConfig, normalized: &str) {
+    if let Ok(mut paths) = cfg.deleted_paths.lock() {
+        paths.insert(normalized.to_string());
+    }
+}
+
+fn clear_deleted(cfg: &CuratedFsConfig, normalized: &str) {
+    if let Ok(mut paths) = cfg.deleted_paths.lock() {
+        paths.remove(normalized);
+    }
+}
+
+fn hydrate_file_from_fetcher(
+    ctx: &Ctx<'_>,
+    cfg: &CuratedFsConfig,
+    normalized: &str,
+    vfs_path: &VfsPath,
+    syscall: &str,
+) -> Result<bool> {
+    if is_deleted(cfg, normalized) {
+        return Ok(false);
+    }
+    let Some(fetcher) = &cfg.fetcher else {
+        return Ok(false);
+    };
+    match fetcher.fetch(normalized) {
+        Ok(Some(bytes)) => {
+            if let Some(parent) = parent_of(normalized) {
+                if let Ok(parent_vfs) = cfg.root.join(parent.trim_start_matches('/')) {
+                    let _ = parent_vfs.create_dir_all();
+                }
+            }
+            let mut file = vfs_path
+                .create_file()
+                .map_err(|e| throw_fs(ctx, map_vfs_err(e, normalized), syscall))?;
+            file.write_all(&bytes).map_err(|e| {
+                throw_fs(
+                    ctx,
+                    FsErrorKind::Io {
+                        message: e.to_string(),
+                        path: normalized.to_string(),
+                    },
+                    syscall,
+                )
+            })?;
+            Ok(true)
+        }
+        Ok(None) => Ok(false),
+        Err(message) => Err(throw_fs(
+            ctx,
+            FsErrorKind::Io {
+                message,
+                path: normalized.to_string(),
+            },
+            syscall,
+        )),
+    }
+}
+
+fn hydrate_metadata_from_fetcher(
+    ctx: &Ctx<'_>,
+    cfg: &CuratedFsConfig,
+    normalized: &str,
+    vfs_path: &VfsPath,
+    syscall: &str,
+) -> Result<Option<VfsMetadata>> {
+    if is_deleted(cfg, normalized) {
+        return Ok(None);
+    }
+    let Some(fetcher) = &cfg.fetcher else {
+        return Ok(None);
+    };
+    match fetcher.metadata(normalized) {
+        Ok(Some(meta)) if matches!(meta.file_type, VfsFileType::File) => {
+            if hydrate_file_from_fetcher(ctx, cfg, normalized, vfs_path, syscall)? {
+                vfs_path
+                    .metadata()
+                    .map(Some)
+                    .map_err(|e| throw_fs(ctx, map_vfs_err(e, normalized), syscall))
+            } else {
+                Ok(Some(meta))
+            }
+        }
+        Ok(Some(meta)) if matches!(meta.file_type, VfsFileType::Directory) => {
+            vfs_path
+                .create_dir_all()
+                .map_err(|e| throw_fs(ctx, map_vfs_err(e, normalized), syscall))?;
+            Ok(Some(meta))
+        }
+        Ok(Some(meta)) => Ok(Some(meta)),
+        Ok(None) => Ok(None),
+        Err(message) => Err(throw_fs(
+            ctx,
+            FsErrorKind::Io {
+                message,
+                path: normalized.to_string(),
+            },
+            syscall,
+        )),
+    }
+}
+
 fn read_file_sync_impl<'js>(
     ctx: &Ctx<'js>,
     path: &str,
@@ -422,6 +579,7 @@ fn read_file_sync<'js>(
 fn write_file_sync_impl(ctx: &Ctx<'_>, path: &str, data: String) -> Result<()> {
     let cfg = config(ctx)?;
     let (normalized, vfs_path) = cfg.resolve(path).map_err(|e| throw_fs(ctx, e, "open"))?;
+    clear_deleted(&cfg, &normalized);
     if let Some(parent) = parent_of(&normalized) {
         let parent_vfs = cfg.root.join(parent.trim_start_matches('/')).map_err(|_| {
             throw_fs(
@@ -463,13 +621,23 @@ fn write_file_sync(
 
 fn exists_sync(ctx: Ctx<'_>, path: String) -> Result<bool> {
     let cfg = config(&ctx)?;
-    let (_, vfs_path) = match cfg.resolve(&path) {
+    let (normalized, vfs_path) = match cfg.resolve(&path) {
         Ok(p) => p,
         // Paths outside target_dir are reported as non-existent rather than
         // throwing — matches Node's `existsSync` which never throws.
         Err(_) => return Ok(false),
     };
-    Ok(vfs_path.exists().unwrap_or(false))
+    if is_deleted(&cfg, &normalized) {
+        return Ok(false);
+    }
+    if vfs_path.exists().unwrap_or(false) {
+        return Ok(true);
+    }
+    match hydrate_metadata_from_fetcher(&ctx, &cfg, &normalized, &vfs_path, "stat") {
+        Ok(Some(_)) => Ok(true),
+        Ok(None) => Ok(false),
+        Err(_) => Ok(false),
+    }
 }
 
 fn readdir_sync(ctx: Ctx<'_>, path: String, _options: Opt<Value<'_>>) -> Result<Vec<String>> {
@@ -479,6 +647,19 @@ fn readdir_sync(ctx: Ctx<'_>, path: String, _options: Opt<Value<'_>>) -> Result<
         .map_err(|e| throw_fs(&ctx, e, "scandir"))?;
     let iter = vfs_path
         .read_dir()
+        .or_else(|err| {
+            if matches!(err.kind(), VfsErrorKind::FileNotFound) {
+                if let Some(fetcher) = &cfg.fetcher {
+                    if let Ok(Some(meta)) = fetcher.metadata(&normalized) {
+                        if !matches!(meta.file_type, VfsFileType::Directory) {
+                            return Err(err);
+                        }
+                        let _ = vfs_path.create_dir_all();
+                    }
+                }
+            }
+            vfs_path.read_dir()
+        })
         .map_err(|e| throw_fs(&ctx, map_vfs_err(e, &normalized), "scandir"))?;
     let prefix = if normalized.ends_with('/') {
         normalized.clone()
@@ -491,13 +672,39 @@ fn readdir_sync(ctx: Ctx<'_>, path: String, _options: Opt<Value<'_>>) -> Result<
             s.strip_prefix(&prefix).unwrap_or(&s).to_string()
         })
         .collect();
+    if let Some(fetcher) = &cfg.fetcher {
+        match fetcher.read_dir(&normalized) {
+            Ok(Some(fetched_entries)) => entries.extend(fetched_entries),
+            Ok(None) => {}
+            Err(message) => {
+                return Err(throw_fs(
+                    &ctx,
+                    FsErrorKind::Io {
+                        message,
+                        path: normalized.clone(),
+                    },
+                    "scandir",
+                ));
+            }
+        }
+    }
+    entries.retain(|entry| {
+        let child = if normalized.ends_with('/') {
+            format!("{normalized}{entry}")
+        } else {
+            format!("{normalized}/{entry}")
+        };
+        !is_deleted(&cfg, &child)
+    });
     entries.sort();
+    entries.dedup();
     Ok(entries)
 }
 
 fn mkdir_sync(ctx: Ctx<'_>, path: String, options: Opt<Value<'_>>) -> Result<()> {
     let cfg = config(&ctx)?;
     let (normalized, vfs_path) = cfg.resolve(&path).map_err(|e| throw_fs(&ctx, e, "mkdir"))?;
+    clear_deleted(&cfg, &normalized);
     let recursive = recursive_from_options(options);
     let result = if recursive {
         vfs_path.create_dir_all()
@@ -511,9 +718,23 @@ fn mkdir_sync(ctx: Ctx<'_>, path: String, options: Opt<Value<'_>>) -> Result<()>
 fn stat_sync<'js>(ctx: Ctx<'js>, path: String) -> Result<Object<'js>> {
     let cfg = config(&ctx)?;
     let (normalized, vfs_path) = cfg.resolve(&path).map_err(|e| throw_fs(&ctx, e, "stat"))?;
-    let meta = vfs_path
-        .metadata()
-        .map_err(|e| throw_fs(&ctx, map_vfs_err(e, &normalized), "stat"))?;
+    let meta = match vfs_path.metadata() {
+        Ok(meta) => meta,
+        Err(err) if matches!(err.kind(), VfsErrorKind::FileNotFound) => {
+            hydrate_metadata_from_fetcher(&ctx, &cfg, &normalized, &vfs_path, "stat")?.ok_or_else(
+                || {
+                    throw_fs(
+                        &ctx,
+                        FsErrorKind::NotFound {
+                            path: normalized.clone(),
+                        },
+                        "stat",
+                    )
+                },
+            )?
+        }
+        Err(err) => return Err(throw_fs(&ctx, map_vfs_err(err, &normalized), "stat")),
+    };
     stats_object(&ctx, meta.file_type, meta.len)
 }
 
@@ -522,9 +743,21 @@ fn unlink_sync(ctx: Ctx<'_>, path: String) -> Result<()> {
     let (normalized, vfs_path) = cfg
         .resolve(&path)
         .map_err(|e| throw_fs(&ctx, e, "unlink"))?;
+    if !vfs_path.exists().unwrap_or(false)
+        && !hydrate_file_from_fetcher(&ctx, &cfg, &normalized, &vfs_path, "unlink")?
+    {
+        return Err(throw_fs(
+            &ctx,
+            FsErrorKind::NotFound {
+                path: normalized.clone(),
+            },
+            "unlink",
+        ));
+    }
     vfs_path
         .remove_file()
         .map_err(|e| throw_fs(&ctx, map_vfs_err(e, &normalized), "unlink"))?;
+    mark_deleted(&cfg, &normalized);
     Ok(())
 }
 
@@ -726,6 +959,51 @@ mod tests {
         assert_eq!(normalize_path("/app/src/../src/foo.ts"), "/app/src/foo.ts");
         assert_eq!(normalize_path("/app/../etc/passwd"), "/etc/passwd");
         assert_eq!(normalize_path("/app//src///foo.ts"), "/app/src/foo.ts");
+    }
+
+    #[test]
+    fn resolve_accepts_windows_style_paths_under_windows_target() {
+        let cfg = CuratedFsConfig::new(r"C:\repo", MemoryFS::new().into());
+
+        let (normalized, _) = cfg.resolve(r"C:\repo\src\foo.cs").unwrap();
+        assert_eq!(normalized, "/C:/repo/src/foo.cs");
+
+        let (normalized, _) = cfg.resolve("src\\foo.cs").unwrap();
+        assert_eq!(normalized, "/C:/repo/src/foo.cs");
+
+        let (normalized, _) = cfg.resolve("c:/repo/src/foo.cs").unwrap();
+        assert_eq!(normalized, "/C:/repo/src/foo.cs");
+    }
+
+    #[test]
+    fn resolve_rejects_windows_style_paths_outside_windows_target() {
+        let cfg = CuratedFsConfig::new(r"C:\repo", MemoryFS::new().into());
+
+        match cfg.resolve(r"C:\outside\secret.txt") {
+            Err(FsErrorKind::AccessDenied { path }) => {
+                assert_eq!(path, "/C:/outside/secret.txt");
+            }
+            other => panic!("expected AccessDenied, got {other:?}"),
+        }
+
+        match cfg.resolve(r"C:\repo\..\outside\secret.txt") {
+            Err(FsErrorKind::AccessDenied { path }) => {
+                assert_eq!(path, "/C:/outside/secret.txt");
+            }
+            other => panic!("expected AccessDenied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalize_virtual_absolute_path_handles_windows_drive_paths() {
+        assert_eq!(
+            normalize_virtual_absolute_path(r"c:\repo\src\..\foo.cs"),
+            "/C:/repo/foo.cs"
+        );
+        assert_eq!(
+            normalize_virtual_absolute_path("C:/repo//src/./foo.cs"),
+            "/C:/repo/src/foo.cs"
+        );
     }
 
     /// When `physical_target_dir` is set, traversing a symlink — even one
