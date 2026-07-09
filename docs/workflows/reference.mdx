@@ -555,6 +555,12 @@ steps:
   Step-level environment variables applied to the process environment.
 </ParamField>
 
+<Info>
+Shell steps inherit the parent process environment by default, in addition to any step-level `env`
+values. This includes inherited LLM settings such as `LLM_API_KEY` and `LLM_BASE_URL` when you run
+the workflow from an environment that already defines them.
+</Info>
+
 ### Shard Step
 
 Evaluates file shards and writes results to workflow state for use with [matrix strategies](#matrix-strategy). Supports built-in grouping algorithms (directory, codeowner) and custom shard functions.
