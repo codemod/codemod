@@ -101,7 +101,7 @@ impl CuratedFsConfig {
     }
 
     fn normalized_target(&self) -> String {
-        normalize_absolute_path(&self.target_dir)
+        normalize_virtual_absolute_path(&self.target_dir)
     }
 
     /// Resolve an incoming path against [`Self::target_dir`]. Relative paths
@@ -112,7 +112,7 @@ impl CuratedFsConfig {
     /// can't escape via `target_dir/link-to-outside/...`).
     fn resolve(&self, input: &str) -> std::result::Result<(String, VfsPath), FsErrorKind> {
         let target = self.normalized_target();
-        let input = to_posix_path(input);
+        let input = normalize_virtual_path(input);
         let raw = if is_absolute_path(&input) {
             input
         } else if target == "/" {
@@ -120,7 +120,7 @@ impl CuratedFsConfig {
         } else {
             format!("{target}/{input}")
         };
-        let normalized = normalize_absolute_path(&raw);
+        let normalized = normalize_virtual_absolute_path(&raw);
         let within_target = normalized == target
             || (target == "/" && normalized.starts_with('/'))
             || normalized.starts_with(&format!("{target}/"));
@@ -172,7 +172,7 @@ fn check_no_symlink_escape(
     Ok(())
 }
 
-fn to_posix_path(input: &str) -> String {
+fn normalize_virtual_path(input: &str) -> String {
     let path = input.replace('\\', "/");
     let bytes = path.as_bytes();
     if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
@@ -191,8 +191,8 @@ fn is_absolute_path(input: &str) -> bool {
     input.starts_with('/') || has_windows_drive_prefix(input)
 }
 
-fn normalize_absolute_path(input: &str) -> String {
-    let input = to_posix_path(input);
+pub(super) fn normalize_virtual_absolute_path(input: &str) -> String {
+    let input = normalize_virtual_path(input);
     if has_windows_drive_prefix(&input) {
         normalize_path(&format!("/{input}"))
     } else if input.starts_with('/') {
@@ -995,13 +995,13 @@ mod tests {
     }
 
     #[test]
-    fn normalize_absolute_path_handles_windows_drive_paths() {
+    fn normalize_virtual_absolute_path_handles_windows_drive_paths() {
         assert_eq!(
-            normalize_absolute_path(r"c:\repo\src\..\foo.cs"),
+            normalize_virtual_absolute_path(r"c:\repo\src\..\foo.cs"),
             "/C:/repo/foo.cs"
         );
         assert_eq!(
-            normalize_absolute_path("C:/repo//src/./foo.cs"),
+            normalize_virtual_absolute_path("C:/repo//src/./foo.cs"),
             "/C:/repo/src/foo.cs"
         );
     }

@@ -1,5 +1,8 @@
 use super::codemod_lang::CodemodLang;
-use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule, FileFetcher};
+use super::curated_fs::{
+    normalize_virtual_absolute_path, CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule,
+    FileFetcher,
+};
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use super::transform_helpers::{
     build_transform_options, process_transform_result, ModificationCheck,
@@ -253,18 +256,6 @@ struct DryRunDiskFetcher {
     target_directory: PathBuf,
 }
 
-fn dry_run_virtual_path(path: &str) -> String {
-    let path = path.replace('\\', "/");
-    let bytes = path.as_bytes();
-    let has_windows_drive_prefix =
-        bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/';
-    if has_windows_drive_prefix {
-        format!("/{}{}", path[..1].to_ascii_uppercase(), &path[1..])
-    } else {
-        path
-    }
-}
-
 impl FileFetcher for DryRunDiskFetcher {
     fn fetch(&self, path: &str) -> std::result::Result<Option<Vec<u8>>, String> {
         let candidate = self.candidate(path);
@@ -313,8 +304,8 @@ impl FileFetcher for DryRunDiskFetcher {
 
 impl DryRunDiskFetcher {
     fn candidate(&self, path: &str) -> PathBuf {
-        let path = dry_run_virtual_path(path);
-        let target = dry_run_virtual_path(&self.target_directory.to_string_lossy());
+        let path = normalize_virtual_absolute_path(path);
+        let target = normalize_virtual_absolute_path(&self.target_directory.to_string_lossy());
         let relative = path
             .strip_prefix(&target)
             .unwrap_or(&path)
@@ -332,7 +323,7 @@ fn seed_dry_run_current_file(
     let file_path = file_path
         .canonicalize()
         .unwrap_or_else(|_| file_path.to_path_buf());
-    let relative = dry_run_virtual_path(&file_path.to_string_lossy());
+    let relative = normalize_virtual_absolute_path(&file_path.to_string_lossy());
     if let Some(parent) = Path::new(&relative).parent() {
         let parent = parent.to_string_lossy();
         if !parent.is_empty() {
@@ -1128,13 +1119,13 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_virtual_path_normalizes_windows_drive_paths() {
+    fn dry_run_uses_curated_fs_virtual_path_normalization() {
         assert_eq!(
-            dry_run_virtual_path(r"c:\repo\src\foo.cs"),
+            normalize_virtual_absolute_path(r"c:\repo\src\foo.cs"),
             "/C:/repo/src/foo.cs"
         );
         assert_eq!(
-            dry_run_virtual_path("C:/repo/src/foo.cs"),
+            normalize_virtual_absolute_path("C:/repo/src/foo.cs"),
             "/C:/repo/src/foo.cs"
         );
     }
