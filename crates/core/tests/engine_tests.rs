@@ -1560,6 +1560,61 @@ if [ "${LLM_API_KEY:-}" = "local-llm-key" ]; then echo "LOCAL_LLM_ENV_VISIBLE"; 
     );
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+#[serial]
+async fn test_run_script_preserves_platform_inherited_llm_env() {
+    let _backend_guard = EnvVarGuard::set("BUTTERFLOW_STATE_BACKEND", "cloud");
+    let _llm_key_guard = EnvVarGuard::set("LLM_API_KEY", "platform-llm-key");
+    let _llm_base_url_guard = EnvVarGuard::set("LLM_BASE_URL", "http://platform-llm.example/v1");
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_single_run_script_workflow(
+        r#"
+if [ "${LLM_API_KEY:-}" = "platform-llm-key" ]; then echo "PLATFORM_LLM_KEY_VISIBLE"; else echo "PLATFORM_LLM_KEY_MISSING"; fi
+if [ "${LLM_BASE_URL:-}" = "http://platform-llm.example/v1" ]; then echo "PLATFORM_LLM_BASE_URL_VISIBLE"; else echo "PLATFORM_LLM_BASE_URL_MISSING"; fi
+"#
+        .to_string(),
+    );
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let status = wait_for_task_status(&engine, workflow_run_id, "shell-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "shell-node")
+        .expect("shell-node task should exist");
+
+    let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("PLATFORM_LLM_KEY_VISIBLE"),
+        "platform inherited LLM_API_KEY should be preserved for shell commands, got: {logs}"
+    );
+    assert!(
+        logs.contains("PLATFORM_LLM_BASE_URL_VISIBLE"),
+        "platform inherited LLM_BASE_URL should be preserved for shell commands, got: {logs}"
+    );
+    assert!(
+        !logs.contains("PLATFORM_LLM_KEY_MISSING"),
+        "platform inherited LLM_API_KEY should not be filtered, got: {logs}"
+    );
+    assert!(
+        !logs.contains("PLATFORM_LLM_BASE_URL_MISSING"),
+        "platform inherited LLM_BASE_URL should not be filtered, got: {logs}"
+    );
+}
+
 #[tokio::test]
 async fn test_run_script_approval_callback_receives_command_to_be_executed() {
     let observed_commands = Arc::new(Mutex::new(Vec::<String>::new()));
