@@ -62,7 +62,12 @@ Use the `codemod search` command to find packages:
 ```bash
 # Search for packages
 npx codemod search [query]
+
+# Inspect registry metadata coverage in machine-readable output
+npx codemod search react --format json
 ```
+
+When you use `--format json` or `--format yaml`, the CLI also returns `metadata_coverage` and `threshold_route_preview` summaries so you can audit package discoverability quality or feed the results into automation.
 
 Learn more about search options in the [CLI Reference](/cli#codemod-search).
 

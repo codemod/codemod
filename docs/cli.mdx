@@ -978,6 +978,10 @@ npx codemod search [OPTIONS] [QUERY]
 
 <ResponseField name="--format <FORMAT>" type="string">
   Output format (default: table). Possible values: table, json, yaml
+
+  JSON and YAML output include two extra summary fields in addition to `total` and `packages`:
+  - `metadata_coverage`: summarizes how completely the matched packages populate discoverability metadata such as descriptions, categories, frameworks, and languages.
+  - `threshold_route_preview`: shows the CLI's suitability routing preview for the current result set.
 </ResponseField>
 
 <Accordion title="Examples">
@@ -997,6 +1001,32 @@ npx codemod search [OPTIONS] [QUERY]
 
   ```bash
   npx codemod search --format json next
+  ```
+
+  Example JSON shape:
+
+  ```json
+  {
+    "total": 2,
+    "packages": [
+      {
+        "name": "react-18-19",
+        "metadata_coverage": {
+          "has_description": true,
+          "has_category": true,
+          "has_frameworks": true,
+          "has_languages": true
+        }
+      }
+    ],
+    "metadata_coverage": {
+      "description_coverage": 1.0,
+      "category_coverage": 1.0,
+      "framework_coverage": 0.5,
+      "language_coverage": 1.0
+    },
+    "threshold_route_preview": "registry"
+  }
   ```
 </Accordion>
 
