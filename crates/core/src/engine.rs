@@ -212,7 +212,7 @@ pub(crate) struct PreparedStepExecution {
     pub(crate) state_input_path: PathBuf,
 }
 
-const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &["LLM_API_KEY"];
+const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &[];
 
 fn should_filter_platform_child_env_for_backend(backend: Option<&str>) -> bool {
     backend == Some("cloud")
@@ -4214,15 +4214,17 @@ mod tests {
 
     #[test]
     #[serial]
-    fn parent_env_filters_cloud_only_secrets_for_cloud_backend() {
+    fn parent_env_preserves_llm_env_for_cloud_backend() {
         let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
         let _token_guard = EnvVarGuard::unset("BUTTERFLOW_API_AUTH_TOKEN");
         let _llm_guard = EnvVarGuard::unset("LLM_API_KEY");
+        let _llm_base_url_guard = EnvVarGuard::unset("LLM_BASE_URL");
         let _git_askpass_guard = EnvVarGuard::unset("GIT_ASKPASS");
         let _http_proxy_guard = EnvVarGuard::unset("HTTP_PROXY");
 
         std::env::set_var("BUTTERFLOW_API_AUTH_TOKEN", "local-token");
         std::env::set_var("LLM_API_KEY", "local-llm-key");
+        std::env::set_var("LLM_BASE_URL", "http://local-llm.example/v1");
 
         let local_env = parent_env_for_child_processes();
         assert_eq!(
@@ -4234,6 +4236,10 @@ mod tests {
         assert_eq!(
             local_env.get("LLM_API_KEY").map(String::as_str),
             Some("local-llm-key")
+        );
+        assert_eq!(
+            local_env.get("LLM_BASE_URL").map(String::as_str),
+            Some("http://local-llm.example/v1")
         );
 
         std::env::set_var("BUTTERFLOW_STATE_BACKEND", "cloud");
@@ -4247,7 +4253,14 @@ mod tests {
                 .map(String::as_str),
             Some("local-token")
         );
-        assert!(!cloud_env.contains_key("LLM_API_KEY"));
+        assert_eq!(
+            cloud_env.get("LLM_API_KEY").map(String::as_str),
+            Some("local-llm-key")
+        );
+        assert_eq!(
+            cloud_env.get("LLM_BASE_URL").map(String::as_str),
+            Some("http://local-llm.example/v1")
+        );
         assert_eq!(
             cloud_env.get("GIT_ASKPASS").map(String::as_str),
             Some("/tmp/codemod-git-askpass")
