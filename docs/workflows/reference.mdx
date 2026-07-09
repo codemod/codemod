@@ -529,6 +529,10 @@ You can aggregate multiple codemods by adding multiple `codemod` steps in the sa
 
 Runs shell commands on the host for setup, cleanup, or external tools.
 
+<Warning>
+Shell command steps are a privileged escape hatch. Depending on the run surface, Codemod may require explicit approval before executing a `run` step.
+</Warning>
+
 ```yaml
 steps:
   - name: Install dependencies
@@ -554,6 +558,10 @@ steps:
 <ParamField path="env" type="object">
   Step-level environment variables applied to the process environment.
 </ParamField>
+
+<Info>
+During interactive workflow runs, Codemod can show the fully resolved shell command and require confirmation before it executes. This applies after variable interpolation, so review the exact command that will run.
+</Info>
 
 ### Shard Step
 
