@@ -113,6 +113,14 @@ When working with AI assistants through Codemod MCP, follow these guidelines for
 
 Codemod AI and MCP can submit short anonymous platform feedback when the user has explicitly consented. Agents must ask before enabling or submitting feedback.
 
+If you launch the MCP server directly instead of using `npx codemod ai`, record consent during server startup:
+
+```bash
+npx codemod mcp --allow-feedback
+```
+
+This opt-in is stored for the current OS user and lets Codemod MCP submit the same category-based anonymous feedback used by the CLI AI flows.
+
 After the user consents, submit categorized feedback with:
 
 ```bash
