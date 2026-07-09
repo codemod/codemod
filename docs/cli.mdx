@@ -507,6 +507,22 @@ npx codemod workflow cancel -i <ID>
   Workflow run ID.
 </ResponseField>
 
+**`workflow tui`**
+
+Browse and interact with workflow runs in the terminal.
+
+```bash
+npx codemod workflow tui [-i <ID>] [-l <LIMIT>]
+```
+
+<ResponseField name="-i, --id <ID>" type="string">
+  Open the TUI focused on a specific workflow run.
+</ResponseField>
+
+<ResponseField name="-l, --limit <LIMIT>" type="number">
+  Number of workflow runs to load in the TUI list. (default: 20)
+</ResponseField>
+
 ### `codemod jssg`
 
 Run [jssg (JS ast-grep)](/jssg/intro) transforms directly without a workflow.
@@ -687,6 +703,20 @@ npx codemod jssg test <codemod_file> [options]
 <ResponseField name="--watch" type="boolean">
   Enable watch mode to automatically re-run tests when files change.
 </ResponseField>
+
+**`jssg exec`**
+
+Execute a JavaScript or TypeScript file directly in the Codemod sandbox.
+
+```bash
+npx codemod jssg exec <js_file>
+```
+
+<ResponseField name="js_file" type="string" required>
+  Path to the JavaScript or TypeScript file to execute.
+</ResponseField>
+
+Use this command when you want to run a sandboxed script directly rather than apply a codemod over a target directory.
 
 <AccordionGroup>
   <Accordion title="When should I define a workflow instead?">
@@ -999,6 +1029,26 @@ npx codemod search [OPTIONS] [QUERY]
   npx codemod search --format json next
   ```
 </Accordion>
+
+### `codemod mcp`
+
+Start the Codemod MCP server over stdio.
+
+```bash
+npx codemod mcp [--usage-log <PATH>] [--allow-feedback]
+```
+
+<ResponseField name="--usage-log <PATH>" type="string">
+  Write MCP usage events to a file for local debugging.
+</ResponseField>
+
+<ResponseField name="--allow-feedback" type="boolean">
+  Opt in this OS user to anonymous Codemod AI and MCP feedback collection before the server starts.
+</ResponseField>
+
+<Info>
+  This command is typically launched by an MCP client configuration rather than run manually in an interactive shell.
+</Info>
 
 ### `codemod cache`
 
