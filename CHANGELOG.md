@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [codemod-cli@1.12.8] - 2026-07-09
+
+### 🚀 Features
+
+- Add agent icons and enhance feedback button UI (#2294)
+
+### 📚 Documentation
+
+- May 2026 updates (#2243)
+- June 2026 updates (#2296)
+
+### ⚙️ Miscellaneous Tasks
+
+- *(bump)* Bump codemod crates version to v1.12.8 (#2300)
+
+### Fix
+
+- *(cli)* Dry run sandbox fs writes (#2278)
 ## [codemod-cli@1.12.7] - 2026-06-27
 
 ### 🐛 Bug Fixes
