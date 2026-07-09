@@ -27,6 +27,7 @@ The `options` object provides execution context:
 - `options.params?: Record<string, string>` — user parameters defined in the workflow. Drive behavior switches, defaults, and environment‑specific choices.
 - `options.matches?: any[]` — pre‑filtered nodes from the exported selector (if any). Use to skip broad queries inside the transform.
 - `options.matrixValues?: Record<string, unknown>` — values from matrix strategy execution. Use for sharding, multi‑variant runs, or team‑scoped processing.
+- `options.dryRun: boolean` — whether the current execution is running in preview mode. Use it when you need different logging or reporting behavior for dry runs.
 - `options.targetDir: string` — absolute target directory for the current run. Use it when you need the root path for resolving sibling files or reporting paths.
 
 ```ts
@@ -38,6 +39,7 @@ const codemod: Codemod<TSX> = async (root, options) => {
   const params = options.params;
   const preFilteredMatches = options.matches; // may be undefined if no selector
   const matrix = options.matrixValues; // undefined without matrix strategy
+  const isDryRun = options.dryRun;
   const targetDir = options.targetDir;
   return null;
 };
@@ -51,6 +53,10 @@ export default codemod;
 
 <Info>
 When you only need a stable repo-relative path for the current file, prefer `root.relativeFilename()` over manually stripping `options.targetDir`.
+</Info>
+
+<Info>
+In `dryRun` mode, sandboxed filesystem operations still run against the in-memory preview filesystem. That means `fs.writeFileSync`, `fs.unlinkSync`, and parser-backed writes to files under `options.targetDir` can affect the preview result without mutating files on disk.
 </Info>
 
 ## Dynamic Parsing
