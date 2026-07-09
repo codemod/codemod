@@ -212,27 +212,8 @@ pub(crate) struct PreparedStepExecution {
     pub(crate) state_input_path: PathBuf,
 }
 
-const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &[];
-
-fn should_filter_platform_child_env_for_backend(backend: Option<&str>) -> bool {
-    backend == Some("cloud")
-}
-
-fn should_filter_platform_child_env() -> bool {
-    let backend = std::env::var("BUTTERFLOW_STATE_BACKEND").ok();
-    should_filter_platform_child_env_for_backend(backend.as_deref())
-}
-
 fn parent_env_for_child_processes() -> HashMap<String, String> {
-    let mut env: HashMap<String, String> = std::env::vars().collect();
-
-    if should_filter_platform_child_env() {
-        for key in PLATFORM_CHILD_ENV_DENYLIST {
-            env.remove(*key);
-        }
-    }
-
-    env
+    std::env::vars().collect()
 }
 
 pub const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
@@ -3976,8 +3957,6 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
     ) -> Result<PreparedStepExecution> {
-        // Start with the parent process environment, minus platform runtime secrets that
-        // should not be inherited by arbitrary workflow shell commands.
         let mut env = parent_env_for_child_processes();
 
         // Set npm_config_yes for non-interactive mode (auto-accept package installations)
@@ -4203,13 +4182,6 @@ mod tests {
 
         std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
         assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
-    }
-
-    #[test]
-    fn platform_child_env_filter_requires_cloud_backend() {
-        assert!(should_filter_platform_child_env_for_backend(Some("cloud")));
-        assert!(!should_filter_platform_child_env_for_backend(None));
-        assert!(!should_filter_platform_child_env_for_backend(Some("local")));
     }
 
     #[test]
