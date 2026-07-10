@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -4995,6 +4995,98 @@ export default function (
         message.contains("Failed to process one.ts")
             || message.contains("Failed to process two.ts"),
         "expected first file failure to be reported, got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_js_ast_grep_step_checks_capabilities_before_selector_extraction() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+    let marker_path = temp_path.join("selector-ran-before-approval.txt");
+    let marker_literal =
+        serde_json::to_string(&marker_path.to_string_lossy()).expect("marker path literal");
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        &format!(
+            r#"
+import {{ writeFileSync }} from "node:fs";
+
+writeFileSync({marker_literal}, "selector initialized before approval");
+
+export function getSelector() {{
+  return {{ rule: {{ pattern: "let $A = $B" }} }};
+}}
+
+export default function transform(ast) {{
+  return ast;
+}}
+"#
+        ),
+    );
+
+    create_test_file(temp_path, "src/one.ts", "let first = 1;\n");
+
+    let callback_count = Arc::new(AtomicUsize::new(0));
+    let callback_count_for_closure = Arc::clone(&callback_count);
+    let capabilities_security_callback = Arc::new(
+        move |_config: &butterflow_core::execution::CodemodExecutionConfig| {
+            callback_count_for_closure.fetch_add(1, Ordering::SeqCst);
+            Err(anyhow::anyhow!("denied for test"))
+        },
+    );
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            None,
+            "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.ts".to_string()]),
+                exclude: None,
+                max_threads: Some(2),
+                dry_run: Some(false),
+                language: Some("typescript".to_string()),
+                capabilities: Some(vec!["fs".to_string()]),
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: Some(vec![LlrtSupportedModules::Fs]),
+                capabilities_security_callback: Some(capabilities_security_callback),
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    let error = result.expect_err("capability denial should fail before selector extraction");
+    assert!(
+        error.to_string().contains("Pre-run check failed"),
+        "expected pre-run denial, got: {error}"
+    );
+    assert_eq!(callback_count.load(Ordering::SeqCst), 1);
+    assert!(
+        !marker_path.exists(),
+        "selector extraction should not run before capability approval"
     );
 }
 
