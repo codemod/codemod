@@ -704,6 +704,52 @@ npx codemod jssg test <codemod_file> [options]
   </Accordion>
 </AccordionGroup>
 
+**`jssg list-applicable`**
+
+Scan a target tree and print only the files that match the codemod's selector.
+
+Use this command when you want to preview where a JSSG codemod would apply before you run it.
+
+```bash
+npx codemod jssg list-applicable <codemod_file> [--target <directory>] --language <LANG> [options]
+```
+
+<ResponseField name="codemod_file" type="string" required>
+  Path to the JS ast-grep (jssg) codemod file (JS/TS).
+</ResponseField>
+
+<ResponseField name="--target, -t <PATH>" type="string">
+  Target directory to scan. Defaults to the current working directory.
+</ResponseField>
+
+<ResponseField name="--language <LANG>" type="string" required>
+  Target language used to extract the selector and scan files.
+</ResponseField>
+
+<ResponseField name="--max-threads <N>" type="number">
+  Maximum number of concurrent threads to use while scanning.
+</ResponseField>
+
+<ResponseField name="--allow-fs" type="boolean">
+  Allow filesystem access while evaluating the codemod selector.
+</ResponseField>
+
+<ResponseField name="--allow-fetch" type="boolean">
+  Allow network access while evaluating the codemod selector.
+</ResponseField>
+
+<ResponseField name="--allow-child-process" type="boolean">
+  Allow child process access while evaluating the codemod selector.
+</ResponseField>
+
+Example output:
+
+```text
+[Applicable] src/components/button.tsx
+[Applicable] src/components/input.tsx
+✨ Done in 0.148s
+```
+
 ---
 
 ### `codemod init`
