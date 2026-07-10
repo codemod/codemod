@@ -5819,6 +5819,100 @@ export default function transform(root) {
     );
 }
 
+/// Regression guard: shard `_meta_files` are stored relative to the workflow
+/// target root. A downstream js-ast-grep step may still set `base_path`, but
+/// that must not make the engine resolve `src/in_shard.js` as
+/// `src/src/in_shard.js` and silently skip the file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_matrix_meta_files_are_target_relative_with_base_path() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(root) {
+  const rootNode = root.root();
+  const nodes = rootNode.findAll({
+    rule: { pattern: 'var $X = $Y' },
+  });
+  const edits = nodes.map((node) => {
+    const x = node.getMatch('X').text();
+    const y = node.getMatch('Y').text();
+    return node.replace(`const ${x} = ${y}`);
+  });
+  return rootNode.commitEdits(edits);
+}
+"#,
+    );
+
+    create_test_file(temp_path, "src/in_shard.js", "var x = 1;\n");
+    create_test_file(temp_path, "src/out_of_shard.js", "var y = 2;\n");
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+
+    let mut matrix = HashMap::new();
+    matrix.insert("_meta_files".to_string(), json!(["src/in_shard.js"]));
+
+    let result = engine
+        .execute_js_ast_grep_step(
+            "matrix-meta-files-base-path".to_string(),
+            None,
+            "matrix-step".to_string(),
+            "matrix-step".to_string(),
+            None,
+            None,
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.js".to_string()]),
+                exclude: None,
+                max_threads: Some(1),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            Some(matrix),
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "matrix _meta_files with base_path should execute successfully: {result:?}"
+    );
+
+    let in_shard = std::fs::read_to_string(temp_path.join("src/in_shard.js")).unwrap();
+    let out_of_shard = std::fs::read_to_string(temp_path.join("src/out_of_shard.js")).unwrap();
+
+    assert!(
+        in_shard.contains("const x"),
+        "target-relative matrix `_meta_files` should be transformed even with base_path: {in_shard}"
+    );
+    assert!(
+        out_of_shard.contains("var y"),
+        "files outside matrix `_meta_files` should remain untouched: {out_of_shard}"
+    );
+}
+
 #[tokio::test]
 async fn test_execute_js_ast_grep_step_with_gitignore() {
     let temp_dir = TempDir::new().unwrap();

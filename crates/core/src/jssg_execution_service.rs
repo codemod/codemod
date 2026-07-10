@@ -155,6 +155,7 @@ impl<'a> JssgExecutionService<'a> {
         let empty_state = HashMap::new();
         let resolved_params_ref = request.params.as_ref().unwrap_or(&empty_params);
         let resolved_state_ref = request.initial_state.unwrap_or(&empty_state);
+        let meta_files = auto_meta_files_include(resolved_state_ref, request.matrix_input.as_ref());
 
         let resolved_include = resolve_optional_glob_list(
             &request.js_ast_grep.include,
@@ -163,7 +164,7 @@ impl<'a> JssgExecutionService<'a> {
             request.matrix_input.as_ref(),
             request.task_expr_ctx,
         )?
-        .or_else(|| auto_meta_files_include(resolved_state_ref, request.matrix_input.as_ref()));
+        .or_else(|| meta_files.clone());
 
         let resolved_exclude = resolve_optional_glob_list(
             &request.js_ast_grep.exclude,
@@ -173,17 +174,13 @@ impl<'a> JssgExecutionService<'a> {
             request.task_expr_ctx,
         )?;
 
-        let explicit_files = request
-            .matrix_input
-            .as_ref()
-            .and_then(|m| m.get("_meta_files"))
-            .and_then(butterflow_models::variable::value_to_string_vec)
+        let explicit_files = meta_files
             .map(|files| -> Result<Vec<PathBuf>> {
                 files
                     .into_iter()
                     .map(|file| {
                         crate::utils::resolve_workflow_path_within_root(
-                            &target_path,
+                            &self.engine.workflow_run_config().execution.target_path,
                             &file,
                             "matrix._meta_files",
                         )
