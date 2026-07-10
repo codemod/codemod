@@ -575,15 +575,15 @@ jssg is the **primary transformation engine** for Codemod. These commands let yo
 Run a JS ast-grep (jssg) codemod.
 
 ```bash
-npx codemod jssg run <codemod_file> <target_directory> [options]
+npx codemod jssg run <codemod_file> [--target <target_directory>] [options]
 ```
 
 <ResponseField name="codemod_file" type="string" required>
   Path to the JS ast-grep (jssg) codemod file (JS/TS).
 </ResponseField>
 
-<ResponseField name="target_directory" type="string" required>
-  Directory to apply the codemod to.
+<ResponseField name="--target <TARGET_DIRECTORY>, -t <TARGET_DIRECTORY>" type="string">
+  Directory to apply the codemod to. Defaults to the current working directory when omitted.
 </ResponseField>
 
 <ResponseField name="--language <LANG>" type="string" required>
@@ -609,6 +609,19 @@ npx codemod jssg run <codemod_file> <target_directory> [options]
 <ResponseField name="--dry-run" type="boolean">
   Perform a dry-run to see the changes without applying them.
 </ResponseField>
+
+<Accordion title="Examples">
+  ```bash
+  # Run against the current directory
+  npx codemod jssg run ./scripts/codemod.ts --language tsx
+
+  # Run against a specific target directory
+  npx codemod jssg run ./scripts/codemod.ts --target ./src --language tsx
+
+  # Preview changes without writing files
+  npx codemod jssg run ./scripts/codemod.ts --target ./src --language tsx --dry-run
+  ```
+</Accordion>
 
 **`jssg test`**
 
