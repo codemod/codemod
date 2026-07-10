@@ -36,9 +36,9 @@ use crate::{
     engine::{
         auto_meta_files_include, await_js_ast_grep_execution_task, block_on_runtime_handle,
         build_js_ast_grep_idle_timeout_message, finish_unit_progress, format_runtime_event_log,
-        format_runtime_failure_message, js_ast_grep_idle_timeout, record_output_progress,
-        record_unit_progress, resolve_optional_glob_list, CapabilitiesData, Engine, StepPhase,
-        StepProgressState,
+        format_runtime_failure_message, js_ast_grep_idle_timeout,
+        merge_capability_strings_for_interaction, record_output_progress, record_unit_progress,
+        resolve_optional_glob_list, CapabilitiesData, Engine, StepPhase, StepProgressState,
     },
     execution::{CodemodExecutionConfig, PreRunCallback},
     progress_output::{
@@ -188,8 +188,24 @@ impl<'a> JssgExecutionService<'a> {
                     .collect()
             })
             .transpose()?;
+        let run_capabilities = request
+            .capabilities_data
+            .capabilities
+            .as_ref()
+            .map(|capabilities| capabilities.iter().copied().collect());
+        let effective_capabilities = merge_capability_strings_for_interaction(
+            &run_capabilities,
+            request
+                .js_ast_grep
+                .capabilities
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .map(String::as_str),
+            self.engine.workflow_run_config().interaction.no_interactive,
+        );
 
-        let config = CodemodExecutionConfig {
+        let mut config = CodemodExecutionConfig {
             pre_run_callback: Some(pre_run_callback),
             progress_callback: self
                 .engine
@@ -210,12 +226,14 @@ impl<'a> JssgExecutionService<'a> {
                 .clone()
                 .unwrap_or("typescript".to_string())]),
             threads: request.js_ast_grep.max_threads,
-            capabilities: request
-                .capabilities_data
-                .capabilities
-                .as_ref()
-                .map(|v| v.clone().into_iter().collect()),
+            capabilities: effective_capabilities.clone(),
         };
+
+        if let Some(pre_run_callback) = &config.pre_run_callback {
+            (pre_run_callback.callback)(target_path.as_path(), !config.dry_run, &config)
+                .map_err(|error| Error::Other(format!("Pre-run check failed: {error}")))?;
+        }
+        config.pre_run_callback = None;
 
         let language = if let Some(lang_str) = &request.js_ast_grep.language {
             lang_str
@@ -231,11 +249,7 @@ impl<'a> JssgExecutionService<'a> {
             script_path: &js_file_path,
             language,
             resolver: Arc::clone(&resolver),
-            capabilities: request
-                .capabilities_data
-                .capabilities
-                .as_ref()
-                .map(|v| v.clone().into_iter().collect()),
+            capabilities: effective_capabilities,
             target_directory: Some(&target_path),
         })
         .await

@@ -1,6 +1,7 @@
 use butterflow_models::schema::resolve_values_with_default;
 use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
 use futures_util::FutureExt;
+use serde::Deserialize;
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -75,6 +76,7 @@ use butterflow_runners::{OutputCallback, Runner};
 use butterflow_scheduler::Scheduler;
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
+use codemod_llrt_capabilities::module_builder::UNSAFE_MODULES;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::MetricsContext;
 
@@ -621,6 +623,87 @@ impl Default for Engine {
 pub struct CapabilitiesData {
     pub capabilities: Option<Vec<LlrtSupportedModules>>,
     pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
+}
+
+#[derive(Deserialize)]
+struct CodemodManifestCapabilities {
+    capabilities: Option<Vec<String>>,
+}
+
+pub(crate) fn merge_capabilities(
+    base: &Option<HashSet<LlrtSupportedModules>>,
+    additional: impl IntoIterator<Item = LlrtSupportedModules>,
+) -> Option<HashSet<LlrtSupportedModules>> {
+    let mut merged = base.clone().unwrap_or_default();
+    merged.extend(additional);
+    (!merged.is_empty()).then_some(merged)
+}
+
+fn noninteractive_capability_allowed(
+    base: &Option<HashSet<LlrtSupportedModules>>,
+    capability: LlrtSupportedModules,
+    no_interactive: bool,
+) -> bool {
+    if !no_interactive || !UNSAFE_MODULES.contains(&capability) {
+        return true;
+    }
+
+    base.as_ref()
+        .is_some_and(|capabilities| capabilities.contains(&capability))
+}
+
+pub(crate) fn merge_capabilities_for_interaction(
+    base: &Option<HashSet<LlrtSupportedModules>>,
+    additional: impl IntoIterator<Item = LlrtSupportedModules>,
+    no_interactive: bool,
+) -> Option<HashSet<LlrtSupportedModules>> {
+    merge_capabilities(
+        base,
+        additional.into_iter().filter(|capability| {
+            noninteractive_capability_allowed(base, *capability, no_interactive)
+        }),
+    )
+}
+
+pub(crate) fn parse_capability_strings<'a>(
+    additional: impl IntoIterator<Item = &'a str>,
+) -> Vec<LlrtSupportedModules> {
+    additional
+        .into_iter()
+        .filter_map(|capability| capability.parse().ok())
+        .collect()
+}
+
+pub(crate) fn merge_capability_strings_for_interaction<'a>(
+    base: &Option<HashSet<LlrtSupportedModules>>,
+    additional: impl IntoIterator<Item = &'a str>,
+    no_interactive: bool,
+) -> Option<HashSet<LlrtSupportedModules>> {
+    merge_capabilities_for_interaction(base, parse_capability_strings(additional), no_interactive)
+}
+
+fn load_manifest_capabilities(package_dir: &Path) -> Result<Vec<LlrtSupportedModules>> {
+    let manifest_path = package_dir.join("codemod.yaml");
+    let manifest_content = std::fs::read_to_string(&manifest_path).map_err(|error| {
+        Error::Other(format!(
+            "Failed to read codemod manifest '{}': {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let manifest: CodemodManifestCapabilities =
+        serde_yaml::from_str(&manifest_content).map_err(|error| {
+            Error::Other(format!(
+                "Failed to parse codemod manifest '{}': {error}",
+                manifest_path.display()
+            ))
+        })?;
+
+    Ok(manifest
+        .capabilities
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|capability| capability.parse().ok())
+        .collect())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3408,6 +3491,11 @@ impl Engine {
             resolved_package.spec.name,
             codemod_params.len()
         );
+        let codemod_capabilities = merge_capabilities_for_interaction(
+            capabilities,
+            load_manifest_capabilities(&resolved_package.package_dir)?,
+            self.workflow_run_config.interaction.no_interactive,
+        );
         let nested_progress_task_id = format!(
             "{}:{}",
             task.id,
@@ -3468,7 +3556,7 @@ impl Engine {
                         workflow: codemod_workflow,
                         bundle_path: &codemod_bundle_path,
                         dependency_chain,
-                        capabilities,
+                        capabilities: &codemod_capabilities,
                         task_expr_ctx: Some(&codemod_task_expr_ctx),
                         progress_task_id: Some(&nested_progress_task_id),
                         logger,
@@ -4163,6 +4251,105 @@ mod tests {
     use serial_test::serial;
     use std::sync::Arc;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn nested_manifest_capabilities_merge_with_parent_capabilities() {
+        let package_dir = tempfile::tempdir().expect("package dir");
+        std::fs::write(
+            package_dir.path().join("codemod.yaml"),
+            r#"
+schema_version: 1.0.0
+name: child
+version: 1.0.0
+description: child
+author: test
+capabilities:
+  - fs
+  - child_process
+"#,
+        )
+        .expect("manifest");
+
+        let parent = Some([LlrtSupportedModules::Fetch].into_iter().collect());
+        let merged = merge_capabilities(
+            &parent,
+            load_manifest_capabilities(package_dir.path()).expect("capabilities"),
+        )
+        .expect("merged capabilities");
+
+        assert!(merged.contains(&LlrtSupportedModules::Fetch));
+        assert!(merged.contains(&LlrtSupportedModules::Fs));
+        assert!(merged.contains(&LlrtSupportedModules::ChildProcess));
+    }
+
+    #[test]
+    fn nested_manifest_without_capabilities_preserves_parent_capabilities() {
+        let package_dir = tempfile::tempdir().expect("package dir");
+        std::fs::write(
+            package_dir.path().join("codemod.yaml"),
+            r#"
+schema_version: 1.0.0
+name: child
+version: 1.0.0
+description: child
+author: test
+"#,
+        )
+        .expect("manifest");
+
+        let parent = Some([LlrtSupportedModules::Fetch].into_iter().collect());
+        let merged = merge_capabilities(
+            &parent,
+            load_manifest_capabilities(package_dir.path()).expect("capabilities"),
+        )
+        .expect("merged capabilities");
+
+        assert_eq!(merged.len(), 1);
+        assert!(merged.contains(&LlrtSupportedModules::Fetch));
+    }
+
+    #[test]
+    fn js_ast_grep_step_capabilities_merge_with_run_capabilities() {
+        let run_capabilities = Some([LlrtSupportedModules::Fetch].into_iter().collect());
+        let step_capabilities = ["fs", "child_process", "unknown"];
+        let merged = merge_capabilities(
+            &run_capabilities,
+            parse_capability_strings(step_capabilities),
+        )
+        .expect("merged capabilities");
+
+        assert!(merged.contains(&LlrtSupportedModules::Fetch));
+        assert!(merged.contains(&LlrtSupportedModules::Fs));
+        assert!(merged.contains(&LlrtSupportedModules::ChildProcess));
+        assert_eq!(merged.len(), 3);
+    }
+
+    #[test]
+    fn noninteractive_merge_filters_new_unsafe_capabilities() {
+        let run_capabilities = Some([LlrtSupportedModules::Fetch].into_iter().collect());
+        let step_capabilities = ["fs", "child_process"];
+        let merged =
+            merge_capability_strings_for_interaction(&run_capabilities, step_capabilities, true)
+                .expect("merged capabilities");
+
+        assert!(merged.contains(&LlrtSupportedModules::Fetch));
+        assert!(!merged.contains(&LlrtSupportedModules::Fs));
+        assert!(!merged.contains(&LlrtSupportedModules::ChildProcess));
+        assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn noninteractive_merge_keeps_preapproved_unsafe_capabilities() {
+        let run_capabilities = Some([LlrtSupportedModules::Fs].into_iter().collect());
+        let step_capabilities = ["fs", "child_process"];
+        let merged =
+            merge_capability_strings_for_interaction(&run_capabilities, step_capabilities, true)
+                .expect("merged capabilities");
+
+        assert!(merged.contains(&LlrtSupportedModules::Fs));
+        assert!(!merged.contains(&LlrtSupportedModules::ChildProcess));
+        assert_eq!(merged.len(), 1);
+    }
 
     struct EnvVarGuard {
         key: &'static str,
