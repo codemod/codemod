@@ -214,6 +214,10 @@ pub(crate) struct PreparedStepExecution {
     pub(crate) state_input_path: PathBuf,
 }
 
+fn parent_env_for_child_processes() -> HashMap<String, String> {
+    std::env::vars().collect()
+}
+
 pub const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
 
 type ProgressHeartbeatCallback = Arc<dyn Fn() + Send + Sync>;
@@ -536,6 +540,9 @@ pub(crate) fn resolve_optional_glob_list(
         return Ok(None);
     };
     let resolved = resolve_string_list(items, params, state, matrix_values, None, task_context)?;
+    for glob in &resolved {
+        crate::utils::validate_workflow_glob_pattern(glob, "glob pattern")?;
+    }
     Ok(if resolved.is_empty() {
         None
     } else {
@@ -2720,7 +2727,11 @@ impl Engine {
         let bundle_path = self.workflow_run_config.execution.bundle_path.clone();
         let progress_callback = self.workflow_run_config.execution.progress_callback.clone();
 
-        let config_path = bundle_path.join(&ast_grep.config_file);
+        let config_path = crate::utils::resolve_workflow_path_within_root(
+            &bundle_path,
+            &ast_grep.config_file,
+            "ast-grep.config_file",
+        )?;
 
         if !config_path.exists() {
             let message = format!("AST grep config file not found: {}", config_path.display());
@@ -2752,6 +2763,14 @@ impl Engine {
         }
 
         let config_path_clone = config_path.clone();
+        let base_path = ast_grep
+            .base_path
+            .as_deref()
+            .map(|base_path| {
+                crate::utils::validate_workflow_relative_path(base_path, "ast-grep.base_path")?;
+                Ok::<PathBuf, Error>(PathBuf::from(base_path.trim()))
+            })
+            .transpose()?;
 
         let scan_result = with_combined_scan(
             &config_path_clone.to_string_lossy(),
@@ -2763,7 +2782,7 @@ impl Engine {
                     pre_run_callback: None,
                     progress_callback: self.workflow_run_config.execution.progress_callback.clone(),
                     target_path: Some(self.workflow_run_config.execution.target_path.clone()),
-                    base_path: ast_grep.base_path.as_deref().map(PathBuf::from),
+                    base_path: base_path.clone(),
                     include_globs: ast_grep.include.as_deref().map(|v| v.to_vec()),
                     explicit_files: None,
                     exclude_globs: ast_grep.exclude.as_deref().map(|v| v.to_vec()),
@@ -3565,6 +3584,18 @@ impl Engine {
         use butterflow_models::step::ShardMethod;
 
         let target_path = self.workflow_run_config.execution.target_path.clone();
+        let mut resolved_shard_config = shard_config.clone();
+        if let Some(target) = &shard_config.target {
+            resolved_shard_config.target = Some(resolve_string_with_expression(
+                target,
+                params,
+                state,
+                task.matrix_values.as_ref(),
+                None,
+                task_expr_ctx,
+            )?);
+        }
+        let shard_config = &resolved_shard_config;
 
         // If a js-ast-grep config is set, pre-scan to find only files with matches
         let eligible_files = if let Some(js_ast_grep) = &shard_config.js_ast_grep {
@@ -3808,7 +3839,11 @@ impl Engine {
         use codemod_sandbox::utils::project_discovery::find_tsconfig;
 
         let effective_bundle_path = &self.workflow_run_config.execution.bundle_path;
-        let func_path = effective_bundle_path.join(&func.function);
+        let func_path = crate::utils::resolve_workflow_path_within_root(
+            effective_bundle_path,
+            &func.function,
+            "shard.method.function",
+        )?;
 
         if !func_path.exists() {
             return Err(Error::Runtime(format!(
@@ -3821,12 +3856,13 @@ impl Engine {
         let files: Vec<String> = if let Some(eligible) = eligible_files {
             eligible.to_vec()
         } else if let Some(file_pattern) = &shard_config.file_pattern {
+            crate::utils::validate_workflow_glob_pattern(file_pattern, "shard.file_pattern")?;
             let target = shard_config.target.as_deref().unwrap_or(".");
-            let search_base = if Path::new(target).is_absolute() {
-                PathBuf::from(target)
-            } else {
-                target_path.join(target)
-            };
+            let search_base = crate::utils::resolve_workflow_path_within_root(
+                target_path,
+                target,
+                "shard.target",
+            )?;
             let found = collect_files_with_pattern(&search_base, file_pattern)
                 .map_err(|e| Error::Runtime(format!("Failed to collect files: {e}")))?;
             found
@@ -4021,8 +4057,7 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
     ) -> Result<PreparedStepExecution> {
-        // Start with a copy of the parent process's environment
-        let mut env: HashMap<String, String> = std::env::vars().collect();
+        let mut env = parent_env_for_child_processes();
 
         // Set npm_config_yes for non-interactive mode (auto-accept package installations)
         if self.workflow_run_config.interaction.no_interactive {
@@ -4208,7 +4243,11 @@ mod tests {
         InstallSkillExecutionRequest, InstallSkillExecutor, SelectionPrompt, SelectionPromptOption,
     };
     use anyhow::Result as AnyhowResult;
-    use butterflow_models::step::{SemanticAnalysisConfig, SemanticAnalysisMode};
+    use butterflow_models::step::{
+        BuiltinShardMethod, BuiltinShardType, SemanticAnalysisConfig, SemanticAnalysisMode,
+        ShardMethod, UseShard,
+    };
+    use butterflow_state::mock_adapter::MockStateAdapter;
     use serial_test::serial;
     use std::sync::Arc;
     use tokio::sync::mpsc;
@@ -4349,6 +4388,65 @@ author: test
     }
 
     #[test]
+    #[serial]
+    fn parent_env_preserves_llm_env_for_cloud_backend() {
+        let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
+        let _token_guard = EnvVarGuard::unset("BUTTERFLOW_API_AUTH_TOKEN");
+        let _llm_guard = EnvVarGuard::unset("LLM_API_KEY");
+        let _llm_base_url_guard = EnvVarGuard::unset("LLM_BASE_URL");
+        let _git_askpass_guard = EnvVarGuard::unset("GIT_ASKPASS");
+        let _http_proxy_guard = EnvVarGuard::unset("HTTP_PROXY");
+
+        std::env::set_var("BUTTERFLOW_API_AUTH_TOKEN", "local-token");
+        std::env::set_var("LLM_API_KEY", "local-llm-key");
+        std::env::set_var("LLM_BASE_URL", "http://local-llm.example/v1");
+
+        let local_env = parent_env_for_child_processes();
+        assert_eq!(
+            local_env
+                .get("BUTTERFLOW_API_AUTH_TOKEN")
+                .map(String::as_str),
+            Some("local-token")
+        );
+        assert_eq!(
+            local_env.get("LLM_API_KEY").map(String::as_str),
+            Some("local-llm-key")
+        );
+        assert_eq!(
+            local_env.get("LLM_BASE_URL").map(String::as_str),
+            Some("http://local-llm.example/v1")
+        );
+
+        std::env::set_var("BUTTERFLOW_STATE_BACKEND", "cloud");
+        std::env::set_var("GIT_ASKPASS", "/tmp/codemod-git-askpass");
+        std::env::set_var("HTTP_PROXY", "http://proxy.example");
+
+        let cloud_env = parent_env_for_child_processes();
+        assert_eq!(
+            cloud_env
+                .get("BUTTERFLOW_API_AUTH_TOKEN")
+                .map(String::as_str),
+            Some("local-token")
+        );
+        assert_eq!(
+            cloud_env.get("LLM_API_KEY").map(String::as_str),
+            Some("local-llm-key")
+        );
+        assert_eq!(
+            cloud_env.get("LLM_BASE_URL").map(String::as_str),
+            Some("http://local-llm.example/v1")
+        );
+        assert_eq!(
+            cloud_env.get("GIT_ASKPASS").map(String::as_str),
+            Some("/tmp/codemod-git-askpass")
+        );
+        assert_eq!(
+            cloud_env.get("HTTP_PROXY").map(String::as_str),
+            Some("http://proxy.example")
+        );
+    }
+
+    #[test]
     fn shard_scan_falls_back_to_selector_matches_when_dry_run_finds_no_edits() {
         let eligible = select_shard_scan_eligible_files(
             Vec::new(),
@@ -4366,6 +4464,85 @@ author: test
         );
 
         assert_eq!(eligible, vec!["src/changed.ts"]);
+    }
+
+    #[tokio::test]
+    async fn shard_step_resolves_target_expression() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+        std::fs::create_dir_all(temp_path.join("packages/app")).unwrap();
+        std::fs::write(temp_path.join("packages/app/one.ts"), "const one = 1;\n").unwrap();
+        std::fs::write(temp_path.join("packages/app/two.ts"), "const two = 2;\n").unwrap();
+
+        let workflow_run_id = Uuid::new_v4();
+        let config = WorkflowRunConfig {
+            execution: crate::config::WorkflowExecutionSettings {
+                target_path: temp_path.to_path_buf(),
+                ..WorkflowRunConfig::default().execution
+            },
+            ..WorkflowRunConfig::default()
+        };
+        let engine = Engine::with_state_adapter(Box::new(MockStateAdapter::new()), config);
+        let task = Task::new(workflow_run_id, "shard-node".to_string(), false);
+        let params = HashMap::from([(
+            "shardingDirectoryTarget".to_string(),
+            serde_json::json!("packages/app"),
+        )]);
+        let shard_config = UseShard {
+            method: ShardMethod::Builtin(BuiltinShardMethod {
+                r#type: BuiltinShardType::Directory,
+                max_files_per_shard: serde_json::json!(1),
+                min_shard_size: None,
+            }),
+            target: Some("${{ params.shardingDirectoryTarget }}".to_string()),
+            output_state: "shards".to_string(),
+            file_pattern: Some("**/*.ts".to_string()),
+            js_ast_grep: None,
+        };
+
+        let result = engine
+            .execute_shard_step(
+                &shard_config,
+                &task,
+                &params,
+                &HashMap::new(),
+                None,
+                &StructuredLogger::default(),
+            )
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "shard target expressions should resolve before path validation: {result:?}"
+        );
+
+        let state = engine
+            .state_adapter
+            .lock()
+            .await
+            .get_state(workflow_run_id)
+            .await
+            .unwrap();
+        let shards = state
+            .get("shards")
+            .and_then(serde_json::Value::as_array)
+            .expect("shard step should write shards to state");
+        let shard_files = shards
+            .iter()
+            .flat_map(|shard| {
+                shard
+                    .get("_meta_files")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            shard_files,
+            vec!["packages/app/one.ts", "packages/app/two.ts"]
+        );
     }
 
     #[test]

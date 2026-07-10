@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { ReportViewer } from "@codemod.com/report-ui";
 import type { ExecutionReport } from "@codemod.com/report-ui";
+import { FeedbackButton } from "./components/feedback-button";
 import { ShareButton } from "./components/share-button";
 
 export function App() {
@@ -46,5 +47,15 @@ export function App() {
     );
   }
 
-  return <ReportViewer data={report} actions={<ShareButton report={report} />} />;
+  return (
+    <ReportViewer
+      data={report}
+      actions={
+        <div className="flex flex-wrap items-center gap-2">
+          <ShareButton report={report} />
+          <FeedbackButton />
+        </div>
+      }
+    />
+  );
 }

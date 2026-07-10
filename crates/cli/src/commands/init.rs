@@ -1141,7 +1141,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
   }},
   "devDependencies": {{
     "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^7.0.0"
   }}
 }}"#,
         config.name,
