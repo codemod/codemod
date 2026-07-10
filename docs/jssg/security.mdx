@@ -139,6 +139,10 @@ capabilities:
   Only request capabilities your codemod actually needs. Adding `fs` here **removes the target_dir guard** — the codemod can now read and write anywhere on disk. If you only need files in the repo, don't list it.
 </Warning>
 
+<Info>
+  When a workflow step runs a nested registry codemod, Codemod merges capabilities from the current run and the nested package's `codemod.yaml`. A child package can request additional capabilities it needs, and a parent package or CLI flags can still grant broader access for the full run.
+</Info>
+
 ### Capability names
 
 Use these exact strings in the `capabilities` array:

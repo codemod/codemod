@@ -356,6 +356,8 @@ Array of capabilities required by this codemod for accessing sensitive operation
 - `fetch` - Network requests (global `fetch`)
 - `child_process` - Process spawning (`child_process`)
 
+For nested codemods, these package-level capabilities are additive. If package `A` runs package `B`, Codemod evaluates the child package's `capabilities` together with any capabilities already granted by the parent package or CLI flags.
+
 <Warning>
 Only enable capabilities your codemod actually needs. Each capability increases security risk for untrusted codemods.
 </Warning>
