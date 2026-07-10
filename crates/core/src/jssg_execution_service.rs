@@ -155,6 +155,7 @@ impl<'a> JssgExecutionService<'a> {
         let empty_state = HashMap::new();
         let resolved_params_ref = request.params.as_ref().unwrap_or(&empty_params);
         let resolved_state_ref = request.initial_state.unwrap_or(&empty_state);
+        let meta_files = auto_meta_files_include(resolved_state_ref, request.matrix_input.as_ref());
 
         let resolved_include = resolve_optional_glob_list(
             &request.js_ast_grep.include,
@@ -163,7 +164,7 @@ impl<'a> JssgExecutionService<'a> {
             request.matrix_input.as_ref(),
             request.task_expr_ctx,
         )?
-        .or_else(|| auto_meta_files_include(resolved_state_ref, request.matrix_input.as_ref()));
+        .or_else(|| meta_files.clone());
 
         let resolved_exclude = resolve_optional_glob_list(
             &request.js_ast_grep.exclude,
@@ -173,17 +174,13 @@ impl<'a> JssgExecutionService<'a> {
             request.task_expr_ctx,
         )?;
 
-        let explicit_files = request
-            .matrix_input
-            .as_ref()
-            .and_then(|m| m.get("_meta_files"))
-            .and_then(butterflow_models::variable::value_to_string_vec)
+        let explicit_files = meta_files
             .map(|files| -> Result<Vec<PathBuf>> {
                 files
                     .into_iter()
                     .map(|file| {
                         crate::utils::resolve_workflow_path_within_root(
-                            &target_path,
+                            &self.engine.workflow_run_config().execution.target_path,
                             &file,
                             "matrix._meta_files",
                         )
@@ -672,6 +669,7 @@ impl<'a> JssgExecutionService<'a> {
                     let runtime_event_task_id = task_log_task_id;
                     let runtime_event_run_id = workflow_run_id;
                     let progress_tx_for_runtime_events = progress_tx_for_closure.clone();
+                    let logger_for_runtime_events = logger.clone();
                     let runtime_event_callback: RuntimeEventCallback =
                         Arc::new(move |event| match event.kind {
                             RuntimeEventKind::SetCurrentUnit => {
@@ -719,6 +717,16 @@ impl<'a> JssgExecutionService<'a> {
                                         runtime_unit.clone(),
                                         message.clone(),
                                     );
+                                    let log_line = format!("{runtime_unit}\n{message}");
+                                    match event.kind {
+                                        RuntimeEventKind::Warn => {
+                                            slog!(logger_for_runtime_events, warn, "{}", log_line);
+                                        }
+                                        RuntimeEventKind::Progress => {
+                                            slog!(logger_for_runtime_events, info, "{}", log_line);
+                                        }
+                                        RuntimeEventKind::SetCurrentUnit => {}
+                                    }
                                 }
                                 if let (Some(task_id), Some(run_id), Some(message)) =
                                     (runtime_event_task_id, runtime_event_run_id, formatted_log)
