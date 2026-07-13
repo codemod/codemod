@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [codemod-cli@1.12.12] - 2026-07-10
+
+### 🐛 Bug Fixes
+
+- *(cli)* Nested codemod capabilities (#2315)
+
+### ⚙️ Miscellaneous Tasks
+
+- *(bump)* Bump codemod crates version to v1.12.12 (#2323)
+
 ## [codemod-cli@1.12.11] - 2026-07-10
 
 ### 🚀 Features
