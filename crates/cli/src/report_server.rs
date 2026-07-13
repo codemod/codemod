@@ -574,7 +574,7 @@ fn validate_feedback_request_headers(headers: &HeaderMap) -> Result<()> {
         .unwrap_or("");
     let media_type = content_type.split(';').next().map(str::trim).unwrap_or("");
     if !media_type.eq_ignore_ascii_case("application/json") {
-        anyhow::bail!("Feedback agent requests must use application/json.");
+        anyhow::bail!("Feedback requests must use application/json.");
     }
 
     let Some(origin) = headers.get(ORIGIN) else {
@@ -589,7 +589,7 @@ fn validate_feedback_request_headers(headers: &HeaderMap) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Missing Host header."))?;
 
     if origin != format!("http://{host}") {
-        anyhow::bail!("Feedback agent requests must come from the report UI origin.");
+        anyhow::bail!("Feedback requests must come from the report UI origin.");
     }
 
     Ok(())

@@ -26,6 +26,10 @@ pub fn registry_package_url(registry_base: &str, package_path: &str) -> String {
 }
 
 /// Whether a published registry package should deep-link to its package page.
+///
+/// Deep-links when access is `public`, `pro`, missing, or blank (legacy/unspecified packages
+/// are treated like public). Only explicit non-public values (e.g. `private` or unknown) stay
+/// on the registry homepage.
 pub fn links_to_registry_package_page(access: Option<&str>) -> bool {
     match access.map(|value| value.trim().to_ascii_lowercase()) {
         None => true,
@@ -38,8 +42,9 @@ pub fn links_to_registry_package_page(access: Option<&str>) -> bool {
 
 /// Resolve the URL the report UI Registry button should open.
 ///
-/// Prefers a package page for public/pro packages when a non-empty package path is available.
-/// Otherwise always returns the registry homepage. Never panics and never returns an empty string.
+/// Prefers a package page when a non-empty package path is available and access allows
+/// deep-linking (`public`/`pro`, or missing/blank). Otherwise returns the registry homepage.
+/// Never panics and never returns an empty string.
 pub fn resolve_registry_link_url(
     registry_base: &str,
     package_path: Option<&str>,
@@ -117,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_or_blank_access_falls_back_safely() {
+    fn unknown_access_falls_back_to_home_while_blank_access_deep_links() {
         assert_eq!(
             resolve_registry_link_url(
                 "https://app.codemod.com",
@@ -126,8 +131,13 @@ mod tests {
             ),
             "https://app.codemod.com/registry"
         );
+        // Missing/blank access is treated like public (legacy packages omit the field).
         assert_eq!(
             resolve_registry_link_url("https://app.codemod.com", Some("debarrel"), Some("  ")),
+            "https://app.codemod.com/registry/debarrel"
+        );
+        assert_eq!(
+            resolve_registry_link_url("https://app.codemod.com", Some("debarrel"), None),
             "https://app.codemod.com/registry/debarrel"
         );
     }
