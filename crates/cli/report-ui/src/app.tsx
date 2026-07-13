@@ -58,7 +58,7 @@ export function App() {
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <ShareButton report={report} />
-          {report.registryLinkUrl ? <RegistryButton url={report.registryLinkUrl} /> : null}
+          <RegistryButton url={report.registryLinkUrl} />
           <FeedbackButton />
         </div>
       }
