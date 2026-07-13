@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -20,7 +20,7 @@ use butterflow_core::engine::{
     select_shard_scan_eligible_files, CapabilitiesData, Engine, StepPhase, StepProgressState,
     UnitProgressState, JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT,
 };
-use butterflow_core::structured_log::StructuredLogger;
+use butterflow_core::structured_log::{OutputFormat, StructuredLogger};
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowSession};
 use butterflow_core::{
     Node, Runtime, RuntimeType, Step, Task, TaskStatus, Template, Workflow, WorkflowRun,
@@ -1463,6 +1463,155 @@ async fn test_run_script_does_not_persist_command_notice_in_task_logs() {
     assert!(
         !logs.contains("⏺ Shell Step"),
         "task logs should not persist the text-mode step heading, got: {logs}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+#[serial]
+async fn test_run_script_allows_explicit_step_env_for_filtered_names() {
+    let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
+    let _llm_key_guard = EnvVarGuard::set("LLM_API_KEY", "platform-llm-key");
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let mut workflow = create_single_run_script_workflow(
+        r#"
+if [ "${LLM_API_KEY:-}" = "step-llm-key" ]; then echo "STEP_LLM_ENV_VISIBLE"; else echo "STEP_LLM_ENV_MISSING"; fi
+"#
+        .to_string(),
+    );
+    workflow.nodes[0].steps[0].env = Some(HashMap::from([(
+        "LLM_API_KEY".to_string(),
+        "step-llm-key".to_string(),
+    )]));
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let status = wait_for_task_status(&engine, workflow_run_id, "shell-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "shell-node")
+        .expect("shell-node task should exist");
+
+    let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("STEP_LLM_ENV_VISIBLE"),
+        "explicit step env should override inherited platform filtering, got: {logs}"
+    );
+    assert!(
+        !logs.contains("STEP_LLM_ENV_MISSING"),
+        "explicit step env should be passed to shell commands, got: {logs}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+#[serial]
+async fn test_run_script_preserves_local_inherited_llm_key_without_platform_context() {
+    let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
+    let _llm_key_guard = EnvVarGuard::set("LLM_API_KEY", "local-llm-key");
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_single_run_script_workflow(
+        r#"
+if [ "${LLM_API_KEY:-}" = "local-llm-key" ]; then echo "LOCAL_LLM_ENV_VISIBLE"; else echo "LOCAL_LLM_ENV_MISSING"; fi
+"#
+        .to_string(),
+    );
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let status = wait_for_task_status(&engine, workflow_run_id, "shell-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "shell-node")
+        .expect("shell-node task should exist");
+
+    let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("LOCAL_LLM_ENV_VISIBLE"),
+        "local inherited LLM_API_KEY should be preserved outside platform context, got: {logs}"
+    );
+    assert!(
+        !logs.contains("LOCAL_LLM_ENV_MISSING"),
+        "local inherited LLM_API_KEY should remain available to shell commands, got: {logs}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+#[serial]
+async fn test_run_script_preserves_platform_inherited_llm_env() {
+    let _backend_guard = EnvVarGuard::set("BUTTERFLOW_STATE_BACKEND", "cloud");
+    let _llm_key_guard = EnvVarGuard::set("LLM_API_KEY", "platform-llm-key");
+    let _llm_base_url_guard = EnvVarGuard::set("LLM_BASE_URL", "http://platform-llm.example/v1");
+
+    let state_adapter = Box::new(MockStateAdapter::new());
+    let engine = Engine::with_state_adapter(state_adapter, WorkflowRunConfig::default());
+
+    let workflow = create_single_run_script_workflow(
+        r#"
+if [ "${LLM_API_KEY:-}" = "platform-llm-key" ]; then echo "PLATFORM_LLM_KEY_VISIBLE"; else echo "PLATFORM_LLM_KEY_MISSING"; fi
+if [ "${LLM_BASE_URL:-}" = "http://platform-llm.example/v1" ]; then echo "PLATFORM_LLM_BASE_URL_VISIBLE"; else echo "PLATFORM_LLM_BASE_URL_MISSING"; fi
+"#
+        .to_string(),
+    );
+
+    let workflow_run_id = engine
+        .run_workflow(workflow, HashMap::new(), None, None)
+        .await
+        .unwrap();
+
+    let status = wait_for_task_status(&engine, workflow_run_id, "shell-node", |status| {
+        matches!(status, TaskStatus::Completed | TaskStatus::Failed)
+    })
+    .await;
+    assert_eq!(status, TaskStatus::Completed);
+
+    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
+    let task = tasks
+        .iter()
+        .find(|task| task.node_id == "shell-node")
+        .expect("shell-node task should exist");
+
+    let logs = task.logs.join("\n");
+    assert!(
+        logs.contains("PLATFORM_LLM_KEY_VISIBLE"),
+        "platform inherited LLM_API_KEY should be preserved for shell commands, got: {logs}"
+    );
+    assert!(
+        logs.contains("PLATFORM_LLM_BASE_URL_VISIBLE"),
+        "platform inherited LLM_BASE_URL should be preserved for shell commands, got: {logs}"
+    );
+    assert!(
+        !logs.contains("PLATFORM_LLM_KEY_MISSING"),
+        "platform inherited LLM_API_KEY should not be filtered, got: {logs}"
+    );
+    assert!(
+        !logs.contains("PLATFORM_LLM_BASE_URL_MISSING"),
+        "platform inherited LLM_BASE_URL should not be filtered, got: {logs}"
     );
 }
 
@@ -4754,6 +4903,80 @@ function helper() {
 }
 
 #[tokio::test]
+async fn test_js_ast_grep_console_logs_are_structured_logs() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(root) {
+  console.log("runtime console output");
+  return root.root().text();
+}
+"#,
+    );
+
+    create_test_file(temp_path, "src/app.js", "const value = 1;\n");
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let logger = StructuredLogger::new(OutputFormat::Text);
+
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            None,
+            "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.js".to_string()]),
+                exclude: None,
+                max_threads: Some(1),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &logger,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "JS AST grep step should execute successfully: {result:?}"
+    );
+
+    let logs = logger.drain_logs();
+    assert!(
+        logs.iter()
+            .any(|log| log.contains("runtime console output")),
+        "runtime console output should be captured as a structured log: {logs:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_execute_js_ast_grep_step_with_typescript() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();
@@ -4995,6 +5218,98 @@ export default function (
         message.contains("Failed to process one.ts")
             || message.contains("Failed to process two.ts"),
         "expected first file failure to be reported, got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_js_ast_grep_step_checks_capabilities_before_selector_extraction() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+    let marker_path = temp_path.join("selector-ran-before-approval.txt");
+    let marker_literal =
+        serde_json::to_string(&marker_path.to_string_lossy()).expect("marker path literal");
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        &format!(
+            r#"
+import {{ writeFileSync }} from "node:fs";
+
+writeFileSync({marker_literal}, "selector initialized before approval");
+
+export function getSelector() {{
+  return {{ rule: {{ pattern: "let $A = $B" }} }};
+}}
+
+export default function transform(ast) {{
+  return ast;
+}}
+"#
+        ),
+    );
+
+    create_test_file(temp_path, "src/one.ts", "let first = 1;\n");
+
+    let callback_count = Arc::new(AtomicUsize::new(0));
+    let callback_count_for_closure = Arc::clone(&callback_count);
+    let capabilities_security_callback = Arc::new(
+        move |_config: &butterflow_core::execution::CodemodExecutionConfig| {
+            callback_count_for_closure.fetch_add(1, Ordering::SeqCst);
+            Err(anyhow::anyhow!("denied for test"))
+        },
+    );
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            None,
+            "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.ts".to_string()]),
+                exclude: None,
+                max_threads: Some(2),
+                dry_run: Some(false),
+                language: Some("typescript".to_string()),
+                capabilities: Some(vec!["fs".to_string()]),
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: Some(vec![LlrtSupportedModules::Fs]),
+                capabilities_security_callback: Some(capabilities_security_callback),
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    let error = result.expect_err("capability denial should fail before selector extraction");
+    assert!(
+        error.to_string().contains("Pre-run check failed"),
+        "expected pre-run denial, got: {error}"
+    );
+    assert_eq!(callback_count.load(Ordering::SeqCst), 1);
+    assert!(
+        !marker_path.exists(),
+        "selector extraction should not run before capability approval"
     );
 }
 
@@ -5667,6 +5982,100 @@ export default function transform(root) {
     assert!(
         out_of_shard.contains("var y"),
         "matrix `_meta_files` must take precedence over the workflow's include glob: {out_of_shard}"
+    );
+}
+
+/// Regression guard: shard `_meta_files` are stored relative to the workflow
+/// target root. A downstream js-ast-grep step may still set `base_path`, but
+/// that must not make the engine resolve `src/in_shard.js` as
+/// `src/src/in_shard.js` and silently skip the file.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_matrix_meta_files_are_target_relative_with_base_path() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(root) {
+  const rootNode = root.root();
+  const nodes = rootNode.findAll({
+    rule: { pattern: 'var $X = $Y' },
+  });
+  const edits = nodes.map((node) => {
+    const x = node.getMatch('X').text();
+    const y = node.getMatch('Y').text();
+    return node.replace(`const ${x} = ${y}`);
+  });
+  return rootNode.commitEdits(edits);
+}
+"#,
+    );
+
+    create_test_file(temp_path, "src/in_shard.js", "var x = 1;\n");
+    create_test_file(temp_path, "src/out_of_shard.js", "var y = 2;\n");
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+
+    let mut matrix = HashMap::new();
+    matrix.insert("_meta_files".to_string(), json!(["src/in_shard.js"]));
+
+    let result = engine
+        .execute_js_ast_grep_step(
+            "matrix-meta-files-base-path".to_string(),
+            None,
+            "matrix-step".to_string(),
+            "matrix-step".to_string(),
+            None,
+            None,
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.js".to_string()]),
+                exclude: None,
+                max_threads: Some(1),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            Some(matrix),
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "matrix _meta_files with base_path should execute successfully: {result:?}"
+    );
+
+    let in_shard = std::fs::read_to_string(temp_path.join("src/in_shard.js")).unwrap();
+    let out_of_shard = std::fs::read_to_string(temp_path.join("src/out_of_shard.js")).unwrap();
+
+    assert!(
+        in_shard.contains("const x"),
+        "target-relative matrix `_meta_files` should be transformed even with base_path: {in_shard}"
+    );
+    assert!(
+        out_of_shard.contains("var y"),
+        "files outside matrix `_meta_files` should remain untouched: {out_of_shard}"
     );
 }
 

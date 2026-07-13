@@ -28,7 +28,8 @@ use crate::{
     sandbox::engine::codemod_lang::CodemodLang,
     sandbox::engine::{
         execution_engine::{
-            validate_path_within_target, FileChange, JssgExecutionContext, JssgFileChanges,
+            validate_path_within_target, DryRunExecutionFlag, FileChange, JssgExecutionContext,
+            JssgFileChanges,
         },
         transform_helpers::{build_transform_options, process_transform_result, ModificationCheck},
         ExecutionModeFlag,
@@ -195,6 +196,10 @@ fn jssg_transform_rjs<'js>(
         .map(|c| c.params.clone())
         .unwrap_or_default();
     let matrix_values = exec_ctx.as_ref().and_then(|c| c.matrix_values.clone());
+    let dry_run = ctx
+        .userdata::<DryRunExecutionFlag>()
+        .map(|flag| flag.0)
+        .unwrap_or(false);
 
     let file_path = std::path::Path::new(&path_to_file);
 
@@ -239,7 +244,7 @@ fn jssg_transform_rjs<'js>(
         &lang_str,
         matrix_values,
         None,
-        false,
+        dry_run,
         &target_dir,
     )
     .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to build options: {e}")))?;
