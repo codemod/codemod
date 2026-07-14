@@ -1299,10 +1299,7 @@ export default function transform() {
                 }))
             }
 
-            fn read_dir(
-                &self,
-                path: &str,
-            ) -> std::result::Result<Option<Vec<String>>, String> {
+            fn read_dir(&self, path: &str) -> std::result::Result<Option<Vec<String>>, String> {
                 if path == "/app" {
                     Ok(Some(vec![
                         "main.ts".to_string(),
