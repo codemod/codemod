@@ -51,14 +51,14 @@ export function App() {
       </div>
     );
   }
-
+  const registryLinkUrl = report.registryLinkUrl;
   return (
     <ReportViewer
       data={report}
       actions={
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {registryLinkUrl ? <RegistryButton url={registryLinkUrl} /> : null}
           <ShareButton report={report} />
-          <RegistryButton url={report.registryLinkUrl} />
           <FeedbackButton />
         </div>
       }

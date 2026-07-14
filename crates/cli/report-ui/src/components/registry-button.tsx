@@ -1,5 +1,4 @@
-import { Button } from "@codemod.com/report-ui";
-import { ExternalLink } from "lucide-react";
+import { SquareArrowOutUpRight } from "lucide-react";
 
 const FALLBACK_REGISTRY_HOME = "https://app.codemod.com/registry";
 
@@ -29,13 +28,14 @@ export function RegistryButton({ url }: RegistryButtonProps) {
   const href = resolveRegistryHref(url);
 
   return (
-    <Button
-      variant="outline"
-      nativeButton={false}
-      render={<a href={href} target="_blank" rel="noopener noreferrer" />}
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-2 text-sm px-1.5 hover:text-foreground transition-colors hover:underline text-muted-foreground"
     >
-      <ExternalLink className="size-4" />
-      Registry
-    </Button>
+      View in Registry
+      <SquareArrowOutUpRight className="size-3.5" />
+    </a>
   );
 }
