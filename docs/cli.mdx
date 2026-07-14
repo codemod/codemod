@@ -316,6 +316,19 @@ Example machine-readable failure (`--format json`):
 }
 ```
 
+### `codemod mcp`
+
+Start the Codemod MCP server over stdio for editors and coding agents that support the Model Context Protocol.
+
+```bash
+npx codemod mcp [--usage-log <path>] [--allow-feedback]
+```
+
+- `--usage-log <path>` writes MCP usage events to a local file for debugging.
+- `--allow-feedback` records consent for this OS user so Codemod MCP can submit short anonymous platform feedback.
+
+Use this command when you want to wire Codemod into an MCP client manually instead of using `npx codemod ai` to bootstrap the integration.
+
 ### `codemod workflow`
 
 Manage and execute [Codemod packages](/package-structure).
