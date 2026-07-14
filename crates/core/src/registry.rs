@@ -151,11 +151,19 @@ pub struct PackageSpec {
 }
 
 #[derive(Debug, Clone)]
+pub struct RegistryPackageMetadata {
+    pub registry_base_url: String,
+    pub package_web_path: String,
+    pub access: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ResolvedPackage {
     pub spec: PackageSpec,
     pub version: String,
     pub package_dir: PathBuf,
     pub dry_run_only: bool,
+    pub registry_metadata: Option<RegistryPackageMetadata>,
 }
 
 #[derive(Clone)]
@@ -253,11 +261,18 @@ impl RegistryClient {
         // Validate package structure
         validate_package_structure(&package_dir)?;
 
+        let package_web_path = registry_package_web_path(&resolved_package_spec);
+
         Ok(ResolvedPackage {
             spec: package_spec,
             version,
             package_dir,
             dry_run_only,
+            registry_metadata: Some(RegistryPackageMetadata {
+                registry_base_url: registry.to_string(),
+                package_web_path,
+                access: package_info.access.clone(),
+            }),
         })
     }
 
@@ -295,6 +310,7 @@ impl RegistryClient {
             version: "local".to_string(),
             package_dir: path,
             dry_run_only: false,
+            registry_metadata: None,
         })
     }
 
@@ -657,6 +673,14 @@ fn normalize_scope(scope: &str) -> String {
         scope.to_string()
     } else {
         format!("@{scope}")
+    }
+}
+
+pub fn registry_package_web_path(spec: &PackageSpec) -> String {
+    if let Some(scope) = &spec.scope {
+        format!("{scope}/{}", spec.name)
+    } else {
+        spec.name.clone()
     }
 }
 
