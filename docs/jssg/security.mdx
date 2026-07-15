@@ -21,7 +21,7 @@ Unlike `fetch` and `child_process`, the `fs` module is **always available** but 
   <Card title="Inside target_dir" icon="folder-open">
     **Allowed by default**
 
-    `readFileSync`, `writeFileSync`, `readdirSync` (including `{ withFileTypes: true }` Dirents), `mkdirSync`, `statSync`, `existsSync`, `accessSync`, `unlinkSync`, and their `fs/promises` equivalents all work.
+    `readFileSync`, `writeFileSync`, `readdirSync`, `mkdirSync`, `statSync`, `existsSync`, `accessSync`, `unlinkSync`, and their `fs/promises` equivalents all work. When you pass `{ withFileTypes: true }` to `readdirSync` or `fs.promises.readdir`, the sandboxed `fs` returns Node-style `Dirent` objects instead of plain strings.
   </Card>
   <Card title="Outside target_dir" icon="shield-halved">
     **Rejected with `EACCES`**
