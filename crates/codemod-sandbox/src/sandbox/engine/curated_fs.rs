@@ -347,6 +347,24 @@ fn recursive_from_options<'js>(options: Opt<Value<'js>>) -> bool {
     }
 }
 
+fn with_file_types_from_options<'js>(options: &Opt<Value<'js>>) -> bool {
+    match &options.0 {
+        Some(value) => value
+            .as_object()
+            .and_then(|obj| obj.get::<_, Option<bool>>("withFileTypes").ok().flatten())
+            .unwrap_or(false),
+        None => false,
+    }
+}
+
+fn child_normalized(parent: &str, entry: &str) -> String {
+    if parent.ends_with('/') {
+        format!("{parent}{entry}")
+    } else {
+        format!("{parent}/{entry}")
+    }
+}
+
 // ---------- sync ops ----------
 
 /// Read raw bytes for `normalized` from `cfg`'s VFS, falling back to
@@ -640,11 +658,38 @@ fn exists_sync(ctx: Ctx<'_>, path: String) -> Result<bool> {
     }
 }
 
-fn readdir_sync(ctx: Ctx<'_>, path: String, _options: Opt<Value<'_>>) -> Result<Vec<String>> {
+/// Node-compatible `fs.accessSync`: succeeds when the path exists inside the
+/// sandbox, throws `ENOENT` when missing, and throws `EACCES` when outside
+/// `target_dir`. Mode bits are accepted and ignored — curated sandbox access
+/// does not model Unix permission bits.
+fn access_sync(ctx: Ctx<'_>, path: String, _mode: Opt<Value<'_>>) -> Result<()> {
     let cfg = config(&ctx)?;
     let (normalized, vfs_path) = cfg
         .resolve(&path)
-        .map_err(|e| throw_fs(&ctx, e, "scandir"))?;
+        .map_err(|e| throw_fs(&ctx, e, "access"))?;
+    if is_deleted(&cfg, &normalized) {
+        return Err(throw_fs(
+            &ctx,
+            FsErrorKind::NotFound { path: normalized },
+            "access",
+        ));
+    }
+    if vfs_path.exists().unwrap_or(false) {
+        return Ok(());
+    }
+    match hydrate_metadata_from_fetcher(&ctx, &cfg, &normalized, &vfs_path, "access")? {
+        Some(_) => Ok(()),
+        None => Err(throw_fs(
+            &ctx,
+            FsErrorKind::NotFound { path: normalized },
+            "access",
+        )),
+    }
+}
+
+fn list_directory_entries(ctx: &Ctx<'_>, path: &str) -> Result<(String, Vec<String>)> {
+    let cfg = config(ctx)?;
+    let (normalized, vfs_path) = cfg.resolve(path).map_err(|e| throw_fs(ctx, e, "scandir"))?;
     let iter = vfs_path
         .read_dir()
         .or_else(|err| {
@@ -660,7 +705,7 @@ fn readdir_sync(ctx: Ctx<'_>, path: String, _options: Opt<Value<'_>>) -> Result<
             }
             vfs_path.read_dir()
         })
-        .map_err(|e| throw_fs(&ctx, map_vfs_err(e, &normalized), "scandir"))?;
+        .map_err(|e| throw_fs(ctx, map_vfs_err(e, &normalized), "scandir"))?;
     let prefix = if normalized.ends_with('/') {
         normalized.clone()
     } else {
@@ -678,7 +723,7 @@ fn readdir_sync(ctx: Ctx<'_>, path: String, _options: Opt<Value<'_>>) -> Result<
             Ok(None) => {}
             Err(message) => {
                 return Err(throw_fs(
-                    &ctx,
+                    ctx,
                     FsErrorKind::Io {
                         message,
                         path: normalized.clone(),
@@ -688,17 +733,95 @@ fn readdir_sync(ctx: Ctx<'_>, path: String, _options: Opt<Value<'_>>) -> Result<
             }
         }
     }
-    entries.retain(|entry| {
-        let child = if normalized.ends_with('/') {
-            format!("{normalized}{entry}")
-        } else {
-            format!("{normalized}/{entry}")
-        };
-        !is_deleted(&cfg, &child)
-    });
+    entries.retain(|entry| !is_deleted(&cfg, &child_normalized(&normalized, entry)));
     entries.sort();
     entries.dedup();
-    Ok(entries)
+    Ok((normalized, entries))
+}
+
+fn resolve_entry_file_type(
+    ctx: &Ctx<'_>,
+    cfg: &CuratedFsConfig,
+    child_path: &str,
+) -> Result<VfsFileType> {
+    let (_, child_vfs) = cfg
+        .resolve(child_path)
+        .map_err(|e| throw_fs(ctx, e, "scandir"))?;
+    match child_vfs.metadata() {
+        Ok(meta) => Ok(meta.file_type),
+        Err(err) if matches!(err.kind(), VfsErrorKind::FileNotFound) => {
+            match hydrate_metadata_from_fetcher(ctx, cfg, child_path, &child_vfs, "scandir")? {
+                Some(meta) => Ok(meta.file_type),
+                // Entry came from readdir but metadata is unavailable — treat
+                // as a file so callers still get a usable Dirent rather than
+                // failing the whole scan.
+                None => Ok(VfsFileType::File),
+            }
+        }
+        Err(err) => Err(throw_fs(ctx, map_vfs_err(err, child_path), "scandir")),
+    }
+}
+
+fn dirent_object<'js>(
+    ctx: &Ctx<'js>,
+    name: &str,
+    parent_path: &str,
+    file_type: VfsFileType,
+) -> Result<Object<'js>> {
+    let obj = Object::new(ctx.clone())?;
+    obj.set("name", name)?;
+    obj.set("parentPath", parent_path)?;
+    // Older Node exposed `path` as an alias of parentPath; LLRT's type surface
+    // still mentions parentPath as the supported field, but setting `path`
+    // keeps Node-flavored walkers compatible.
+    obj.set("path", parent_path)?;
+
+    let is_file = matches!(file_type, VfsFileType::File);
+    let is_dir = matches!(file_type, VfsFileType::Directory);
+    obj.set(
+        "isFile",
+        rquickjs::Function::new(ctx.clone(), move || is_file)?,
+    )?;
+    obj.set(
+        "isDirectory",
+        rquickjs::Function::new(ctx.clone(), move || is_dir)?,
+    )?;
+    // Curated VFS only models plain files and directories.
+    obj.set(
+        "isBlockDevice",
+        rquickjs::Function::new(ctx.clone(), || false)?,
+    )?;
+    obj.set(
+        "isCharacterDevice",
+        rquickjs::Function::new(ctx.clone(), || false)?,
+    )?;
+    obj.set(
+        "isSymbolicLink",
+        rquickjs::Function::new(ctx.clone(), || false)?,
+    )?;
+    obj.set("isFIFO", rquickjs::Function::new(ctx.clone(), || false)?)?;
+    obj.set("isSocket", rquickjs::Function::new(ctx.clone(), || false)?)?;
+    Ok(obj)
+}
+
+fn readdir_sync<'js>(ctx: Ctx<'js>, path: String, options: Opt<Value<'js>>) -> Result<Value<'js>> {
+    let with_file_types = with_file_types_from_options(&options);
+    let (normalized, entries) = list_directory_entries(&ctx, &path)?;
+    let arr = rquickjs::Array::new(ctx.clone())?;
+    if with_file_types {
+        let cfg = config(&ctx)?;
+        for (index, name) in entries.iter().enumerate() {
+            let child = child_normalized(&normalized, name);
+            let file_type = resolve_entry_file_type(&ctx, &cfg, &child)?;
+            let dirent = dirent_object(&ctx, name, &normalized, file_type)?;
+            arr.set(index, dirent)?;
+        }
+    } else {
+        for (index, name) in entries.into_iter().enumerate() {
+            arr.set(index, name)?;
+        }
+    }
+    Ok(arr.into_value())
 }
 
 fn mkdir_sync(ctx: Ctx<'_>, path: String, options: Opt<Value<'_>>) -> Result<()> {
@@ -806,7 +929,11 @@ async fn write_file(
     write_file_sync_impl(&ctx, &path, data)
 }
 
-async fn readdir_async(ctx: Ctx<'_>, path: String, options: Opt<Value<'_>>) -> Result<Vec<String>> {
+async fn readdir_async<'js>(
+    ctx: Ctx<'js>,
+    path: String,
+    options: Opt<Value<'js>>,
+) -> Result<Value<'js>> {
     readdir_sync(ctx, path, options)
 }
 
@@ -832,6 +959,7 @@ impl ModuleDef for CuratedFsModule {
         declare.declare("readFileSync")?;
         declare.declare("writeFileSync")?;
         declare.declare("existsSync")?;
+        declare.declare("accessSync")?;
         declare.declare("readdirSync")?;
         declare.declare("mkdirSync")?;
         declare.declare("statSync")?;
@@ -852,6 +980,7 @@ impl ModuleDef for CuratedFsModule {
         default.set("readFileSync", Func::from(read_file_sync))?;
         default.set("writeFileSync", Func::from(write_file_sync))?;
         default.set("existsSync", Func::from(exists_sync))?;
+        default.set("accessSync", Func::from(access_sync))?;
         default.set("readdirSync", Func::from(readdir_sync))?;
         default.set("mkdirSync", Func::from(mkdir_sync))?;
         default.set("statSync", Func::from(stat_sync))?;
@@ -861,6 +990,7 @@ impl ModuleDef for CuratedFsModule {
         exports.export("readFileSync", Func::from(read_file_sync))?;
         exports.export("writeFileSync", Func::from(write_file_sync))?;
         exports.export("existsSync", Func::from(exists_sync))?;
+        exports.export("accessSync", Func::from(access_sync))?;
         exports.export("readdirSync", Func::from(readdir_sync))?;
         exports.export("mkdirSync", Func::from(mkdir_sync))?;
         exports.export("statSync", Func::from(stat_sync))?;

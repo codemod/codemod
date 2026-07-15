@@ -731,6 +731,57 @@ export default function transform(root) {
         root
     }
 
+    /// Execute a curated-fs transform and return its primary modified content.
+    fn run_fs_sandbox_transform(
+        codemod_source: &str,
+        files: &[(&str, &str)],
+        fetcher: Option<Arc<dyn crate::sandbox::engine::curated_fs::FileFetcher>>,
+    ) -> String {
+        let temp_dir = TempDir::new().expect("tempdir");
+        fs::write(temp_dir.path().join("fs_compat_codemod.js"), codemod_source)
+            .expect("write codemod");
+
+        let root = build_memory_fs_with_files(files);
+        let fs_sandbox = FsSandbox {
+            target_dir: "/app".to_string(),
+            root,
+            fetcher,
+        };
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = files
+            .iter()
+            .find(|(path, _)| *path == "/app/main.ts")
+            .map(|(_, body)| *body)
+            .unwrap_or("const x = 1;");
+        let ast = AstGrep::new(content, js_lang());
+        let result = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source,
+            language: js_lang(),
+            ast,
+            original_sha256: Some(compute_sha256(content)),
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/main.ts"),
+            target_directory: "/app",
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: Some(fs_sandbox),
+        });
+        match result {
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => modified.content,
+                other => panic!("Expected modified result, got: {other:?}"),
+            },
+            Err(e) => panic!("Expected success, got error: {e:?}"),
+        }
+    }
+
     /// Curated fs must expose allowed files to the sandbox while rejecting
     /// paths that escape `target_dir`.
     #[test]
@@ -889,6 +940,395 @@ export default function transform(root) {
             },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
+    }
+
+    /// `readdirSync(path, { withFileTypes: true })` must return Dirent-like
+    /// objects with a defined `name` and working `isDirectory`/`isFile`
+    /// predicates. Returning bare strings (the previous curated-fs behaviour)
+    /// makes Node-style walkers crash on `entry.name.startsWith(...)`.
+    #[test]
+    fn test_fs_sandbox_readdir_with_file_types_returns_dirents() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+
+        let codemod_content = r#"
+import fs from "fs";
+export default function transform(root) {
+  const plain = fs.readdirSync("/app");
+  const entries = fs.readdirSync("/app", { withFileTypes: true });
+  const mapped = entries
+    .map((entry) => {
+      const kind = entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other";
+      return entry.name + ":" + kind + ":" + typeof entry.name;
+    })
+    .sort()
+    .join(",");
+  let accessOk = false;
+  try {
+    fs.accessSync("/app/nested/child.ts");
+    accessOk = true;
+  } catch {
+    accessOk = false;
+  }
+  let accessMissing = "none";
+  try {
+    fs.accessSync("/app/missing.ts");
+  } catch (e) {
+    accessMissing = e.code;
+  }
+  return [
+    "plain=" + plain.sort().join(","),
+    "dirents=" + mapped,
+    "accessOk=" + accessOk,
+    "accessMissing=" + accessMissing,
+  ].join(";");
+}
+        "#
+        .trim();
+
+        fs::write(
+            temp_dir.path().join("fs_dirent_codemod.js"),
+            codemod_content,
+        )
+        .expect("Failed to write codemod file");
+
+        let root = build_memory_fs_with_files(&[
+            ("/app/main.ts", "const x = 1;"),
+            ("/app/nested/child.ts", "export const y = 2;"),
+            ("/app/readme.md", "# hi"),
+        ]);
+        let fs_sandbox = FsSandbox {
+            target_dir: "/app".to_string(),
+            root: root.clone(),
+            fetcher: None,
+        };
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = "const x = 1;";
+        let ast = AstGrep::new(content, js_lang());
+
+        let result = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast,
+            original_sha256: Some(compute_sha256(content)),
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/main.ts"),
+            target_directory: "/app",
+            semantic_provider: None,
+            metrics_context: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: Some(fs_sandbox),
+        });
+
+        match result {
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert_eq!(
+                        modified.content,
+                        "plain=main.ts,nested,readme.md;dirents=main.ts:file:string,nested:dir:string,readme.md:file:string;accessOk=true;accessMissing=ENOENT",
+                    );
+                }
+                other => panic!("Expected modified result, got: {:?}", other),
+            },
+            Err(e) => panic!("Expected success, got error: {:?}", e),
+        }
+    }
+
+    /// Registry packages such as `@codemod/java-*` and
+    /// `dotnet-packagereference-migrate` treat bare `readdirSync` results as
+    /// strings (`localeCompare`, `for...of`, `.join`, `endsWith`). Returning
+    /// Dirents by default would break them.
+    #[test]
+    fn test_fs_sandbox_readdir_default_remains_string_array() {
+        let content = run_fs_sandbox_transform(
+            r#"
+import { readdirSync } from "fs";
+export default function transform() {
+  const plain = readdirSync("/app");
+  const explicitFalse = readdirSync("/app", { withFileTypes: false });
+  const names = [];
+  for (const entry of plain) {
+    names.push(typeof entry + ":" + entry);
+  }
+  return [
+    "join=" + plain.slice().sort().join("|"),
+    "sorted=" + plain.slice().sort((a, b) => a.localeCompare(b)).join("|"),
+    "types=" + names.sort().join("|"),
+    "falseMode=" + explicitFalse.every((e) => typeof e === "string"),
+    "array=" + Array.isArray(plain),
+  ].join(";");
+}
+            "#
+            .trim(),
+            &[
+                ("/app/main.ts", "const x = 1;"),
+                ("/app/B.ts", "export const b = 1;"),
+                ("/app/a.ts", "export const a = 1;"),
+            ],
+            None,
+        );
+        assert_eq!(
+            content,
+            "join=B.ts|a.ts|main.ts;sorted=B.ts|a.ts|main.ts;types=string:B.ts|string:a.ts|string:main.ts;falseMode=true;array=true",
+        );
+    }
+
+    /// Mirrors debarrel / js-dependency-mining walkers that call
+    /// `readdirSync(..., { withFileTypes: true })` and rely on `entry.name`,
+    /// `entry.name.startsWith`, and recursive `isDirectory()`/`isFile()`.
+    #[test]
+    fn test_fs_sandbox_readdir_dirent_walker_skips_and_recurses() {
+        let content = run_fs_sandbox_transform(
+            r#"
+import fs from "fs";
+import path from "path";
+export default function transform() {
+  const files = [];
+  function walk(dir) {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && entry.name.endsWith(".ts")) files.push(entry.name);
+    }
+  }
+  walk("/app");
+  return files.sort().join(",");
+}
+            "#
+            .trim(),
+            &[
+                ("/app/main.ts", "const x = 1;"),
+                ("/app/pkg/index.ts", "export {};"),
+                ("/app/node_modules/lib/index.ts", "export {};"),
+                ("/app/.hidden/secret.ts", "export {};"),
+                ("/app/readme.md", "# hi"),
+            ],
+            None,
+        );
+        assert_eq!(content, "index.ts,main.ts");
+    }
+
+    /// `accessSync` must stay Node-shaped for debarrel-style `fileExists`
+    /// helpers: succeed for present paths, accept ignored mode bits, throw
+    /// `ENOENT` for missing paths, and throw `EACCES` outside target_dir.
+    #[test]
+    fn test_fs_sandbox_access_sync_node_error_codes() {
+        let content = run_fs_sandbox_transform(
+            r#"
+import fs from "fs";
+export default function transform() {
+  fs.accessSync("/app/main.ts");
+  fs.accessSync("/app/main.ts", 0);
+  let missing = "none";
+  try {
+    fs.accessSync("/app/nope.ts");
+  } catch (e) {
+    missing = e.code;
+  }
+  let outside = "none";
+  try {
+    fs.accessSync("/etc/passwd");
+  } catch (e) {
+    outside = e.code;
+  }
+  const existsOk = fs.existsSync("/app/main.ts");
+  const existsMissing = fs.existsSync("/app/nope.ts");
+  const existsOutside = fs.existsSync("/etc/passwd");
+  return [
+    "missing=" + missing,
+    "outside=" + outside,
+    "existsOk=" + existsOk,
+    "existsMissing=" + existsMissing,
+    "existsOutside=" + existsOutside,
+  ].join(";");
+}
+            "#
+            .trim(),
+            &[("/app/main.ts", "const x = 1;")],
+            None,
+        );
+        assert_eq!(
+            content,
+            "missing=ENOENT;outside=EACCES;existsOk=true;existsMissing=false;existsOutside=false",
+        );
+    }
+
+    /// Unlinked paths must disappear from both string and Dirent listings,
+    /// matching dry-run semantics where deleted_paths suppresses rehydration.
+    #[test]
+    fn test_fs_sandbox_readdir_excludes_unlinked_entries() {
+        let content = run_fs_sandbox_transform(
+            r#"
+import fs from "fs";
+export default function transform() {
+  fs.unlinkSync("/app/gone.ts");
+  const plain = fs.readdirSync("/app").sort().join(",");
+  const dirents = fs
+    .readdirSync("/app", { withFileTypes: true })
+    .map((e) => e.name + ":" + (e.isFile() ? "file" : "dir"))
+    .sort()
+    .join(",");
+  let accessGone = "none";
+  try {
+    fs.accessSync("/app/gone.ts");
+  } catch (e) {
+    accessGone = e.code;
+  }
+  return ["plain=" + plain, "dirents=" + dirents, "accessGone=" + accessGone].join(";");
+}
+            "#
+            .trim(),
+            &[
+                ("/app/main.ts", "const x = 1;"),
+                ("/app/gone.ts", "export {};"),
+                ("/app/keep.ts", "export {};"),
+            ],
+            None,
+        );
+        assert_eq!(
+            content,
+            "plain=keep.ts,main.ts;dirents=keep.ts:file,main.ts:file;accessGone=ENOENT",
+        );
+    }
+
+    /// Empty directories and async `fs.promises.readdir` must keep the same
+    /// string/Dirent contract as the sync API.
+    #[test]
+    fn test_fs_sandbox_promises_readdir_and_empty_dir() {
+        let content = run_fs_sandbox_transform(
+            r#"
+import fs from "fs";
+export default async function transform() {
+  fs.mkdirSync("/app/empty", { recursive: true });
+  const emptyPlain = await fs.promises.readdir("/app/empty");
+  const emptyDirents = await fs.promises.readdir("/app/empty", { withFileTypes: true });
+  const rootDirents = await fs.promises.readdir("/app", { withFileTypes: true });
+  const rootPlain = await fs.promises.readdir("/app");
+  return [
+    "emptyPlainLen=" + emptyPlain.length,
+    "emptyDirentsLen=" + emptyDirents.length,
+    "rootPlainAllStrings=" + rootPlain.every((e) => typeof e === "string"),
+    "root=" + rootDirents
+      .map((e) => e.name + ":" + (e.isDirectory() ? "dir" : "file"))
+      .sort()
+      .join(","),
+  ].join(";");
+}
+            "#
+            .trim(),
+            &[("/app/main.ts", "const x = 1;")],
+            None,
+        );
+        assert_eq!(
+            content,
+            "emptyPlainLen=0;emptyDirentsLen=0;rootPlainAllStrings=true;root=empty:dir,main.ts:file",
+        );
+    }
+
+    /// Dirent predicates beyond isFile/isDirectory must be callable (Node
+    /// Dirent surface). Walkers sometimes call these unconditionally.
+    #[test]
+    fn test_fs_sandbox_dirent_predicate_surface() {
+        let content = run_fs_sandbox_transform(
+            r#"
+import fs from "fs";
+export default function transform() {
+  const [entry] = fs.readdirSync("/app", { withFileTypes: true });
+  return [
+    "name=" + entry.name,
+    "parentPath=" + entry.parentPath,
+    "path=" + entry.path,
+    "isFile=" + entry.isFile(),
+    "isDirectory=" + entry.isDirectory(),
+    "isSymbolicLink=" + entry.isSymbolicLink(),
+    "isBlockDevice=" + entry.isBlockDevice(),
+    "isCharacterDevice=" + entry.isCharacterDevice(),
+    "isFIFO=" + entry.isFIFO(),
+    "isSocket=" + entry.isSocket(),
+  ].join(";");
+}
+            "#
+            .trim(),
+            &[("/app/main.ts", "const x = 1;")],
+            None,
+        );
+        assert_eq!(
+            content,
+            "name=main.ts;parentPath=/app;path=/app;isFile=true;isDirectory=false;isSymbolicLink=false;isBlockDevice=false;isCharacterDevice=false;isFIFO=false;isSocket=false",
+        );
+    }
+
+    /// Dry-run / fetcher-backed listings must still produce typed Dirents when
+    /// the VFS miss is filled by `FileFetcher::read_dir` + `metadata`.
+    #[test]
+    fn test_fs_sandbox_readdir_with_file_types_via_fetcher() {
+        struct ListingFetcher;
+
+        impl crate::sandbox::engine::curated_fs::FileFetcher for ListingFetcher {
+            fn fetch(&self, _path: &str) -> std::result::Result<Option<Vec<u8>>, String> {
+                Ok(None)
+            }
+
+            fn metadata(
+                &self,
+                path: &str,
+            ) -> std::result::Result<Option<vfs::VfsMetadata>, String> {
+                Ok(Some(vfs::VfsMetadata {
+                    file_type: if path.ends_with("/pkg") || path == "/app/pkg" {
+                        vfs::VfsFileType::Directory
+                    } else {
+                        vfs::VfsFileType::File
+                    },
+                    len: 0,
+                    created: None,
+                    modified: None,
+                    accessed: None,
+                }))
+            }
+
+            fn read_dir(&self, path: &str) -> std::result::Result<Option<Vec<String>>, String> {
+                if path == "/app" {
+                    Ok(Some(vec![
+                        "main.ts".to_string(),
+                        "pkg".to_string(),
+                        "extra.ts".to_string(),
+                    ]))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+
+        let content = run_fs_sandbox_transform(
+            r#"
+import fs from "fs";
+export default function transform() {
+  const entries = fs.readdirSync("/app", { withFileTypes: true });
+  return entries
+    .map((e) => e.name + ":" + (e.isDirectory() ? "dir" : e.isFile() ? "file" : "other"))
+    .sort()
+    .join(",");
+}
+            "#
+            .trim(),
+            // Seed only main.ts in the VFS; pkg + extra.ts come from the fetcher listing.
+            &[("/app/main.ts", "const x = 1;")],
+            Some(Arc::new(ListingFetcher)),
+        );
+        assert_eq!(content, "extra.ts:file,main.ts:file,pkg:dir");
     }
 
     /// Mirror pg_ast_grep's batch flow: run the same fs-using codemod across
