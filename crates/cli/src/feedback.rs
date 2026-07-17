@@ -21,6 +21,13 @@ pub fn feedback_endpoint(registry_url: &str) -> String {
     )
 }
 
+fn env_registry_url() -> Option<String> {
+    std::env::var("CODEMOD_REGISTRY_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 pub fn persist_feedback_consent_if_requested(allow_feedback: bool) -> Result<()> {
     if allow_feedback {
         persist_feedback_consent()?;
@@ -40,14 +47,14 @@ pub fn anonymous_feedback_client(source: &'static str) -> Result<Option<Anonymou
     }
 
     let storage = TokenStorage::new()?;
-    let env: HashMap<String, String> = std::env::vars().collect();
-    let config = storage.load_config_with_env(Some(&env))?;
+    let config = storage.load_config()?;
     if !config.anonymous_feedback.enabled {
         return Ok(None);
     }
+    let registry_url = env_registry_url().unwrap_or_else(|| config.default_registry.clone());
 
     Ok(AnonymousFeedbackClient::new(
-        feedback_endpoint(&config.default_registry),
+        feedback_endpoint(&registry_url),
         source,
         CLI_VERSION.to_string(),
         config.anonymous_feedback.consented_at.clone(),
@@ -85,7 +92,30 @@ pub async fn submit_anonymous_feedback(category: String, message: String) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::feedback_endpoint;
+    use super::{env_registry_url, feedback_endpoint};
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(original) = &self.original {
+                std::env::set_var(self.key, original);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     #[test]
     fn feedback_endpoint_uses_registry_api_path() {
@@ -93,5 +123,15 @@ mod tests {
             feedback_endpoint("https://app.codemod.com/"),
             "https://app.codemod.com/api/v1/ai/feedback"
         );
+    }
+
+    #[test]
+    fn env_registry_url_trims_and_ignores_empty_values() {
+        let _registry_url_guard =
+            EnvVarGuard::set("CODEMOD_REGISTRY_URL", " http://localhost:3000 ");
+        assert_eq!(env_registry_url().as_deref(), Some("http://localhost:3000"));
+
+        std::env::set_var("CODEMOD_REGISTRY_URL", " ");
+        assert_eq!(env_registry_url(), None);
     }
 }

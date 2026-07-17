@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use butterflow_core::registry::RegistryConfig;
 use dirs::config_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -7,6 +6,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::auth::types::{AuthTokens, UserInfo};
+
+const DEFAULT_REGISTRY_URL: &str = "https://app.codemod.com";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -18,7 +19,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self::with_default_registry(RegistryConfig::default().default_registry.to_string())
+        Self::with_default_registry(DEFAULT_REGISTRY_URL.to_string())
     }
 }
 
@@ -106,7 +107,7 @@ impl TokenStorage {
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty())
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| RegistryConfig::default().default_registry);
+                .unwrap_or_else(|| DEFAULT_REGISTRY_URL.to_string());
             return Ok(Config::with_default_registry(default_registry));
         }
 
@@ -131,8 +132,7 @@ impl TokenStorage {
     }
 
     pub fn enable_anonymous_feedback(&self) -> Result<Config> {
-        let env: HashMap<String, String> = std::env::vars().collect();
-        let mut config = self.load_config_with_env(Some(&env))?;
+        let mut config = self.load_config()?;
         let consented_at = config
             .anonymous_feedback
             .consented_at
@@ -225,6 +225,29 @@ mod tests {
     use super::TokenStorage;
     use std::fs;
 
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(original) = &self.original {
+                std::env::set_var(self.key, original);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     #[test]
     fn missing_feedback_config_defaults_to_disabled() {
         let temp_dir = tempfile::tempdir().expect("expected temp dir");
@@ -262,6 +285,27 @@ mod tests {
         assert_eq!(
             reloaded.anonymous_feedback.consented_at,
             config.anonymous_feedback.consented_at
+        );
+    }
+
+    #[test]
+    fn enable_anonymous_feedback_does_not_persist_registry_env_override() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        let _registry_url_guard = EnvVarGuard::set("CODEMOD_REGISTRY_URL", "http://localhost:3000");
+
+        let config = storage
+            .enable_anonymous_feedback()
+            .expect("expected feedback consent write");
+
+        assert_eq!(config.default_registry, "https://app.codemod.com");
+        assert_eq!(
+            storage
+                .load_config()
+                .expect("expected config reload")
+                .default_registry,
+            "https://app.codemod.com"
         );
     }
 
