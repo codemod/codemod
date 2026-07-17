@@ -38,6 +38,19 @@ This is the main setup path for the AI-native CLI experience. It installs Codemo
   }
   ```
 
+  If you want to record anonymous Codemod AI and MCP feedback consent for this OS user during manual setup, add `--allow-feedback` to the server args:
+
+  ```json
+  {
+    "mcpServers": {
+      "codemod": {
+        "command": "npx",
+        "args": ["codemod@latest", "mcp", "--allow-feedback"]
+      }
+    }
+  }
+  ```
+
   For Cursor IDE:
   - Open Cursor Settings
   - Navigate to **MCP & Integrations**
@@ -75,6 +88,19 @@ The Codemod MCP server provides these guidance resources for AI assistants:
 For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code.
 
 When registry discovery does not find an exact package, agents should scaffold with direct `codemod init`. In non-interactive flows, agents should pass only values supplied by the user or task and rely on the CLI defaults/auth-derived author handling for optional metadata.
+
+If you want to inspect the MCP-backed guidance surface from the terminal without connecting a client, use the CLI mirrors:
+
+```bash
+# List MCP-equivalent resources
+npx codemod ai resources
+
+# Read one resource by name or URI
+npx codemod ai resource codemod-cli-instructions
+
+# Search across docs-backed resources
+npx codemod ai docs semantic analysis
+```
 
 ## Why use Codemod MCP?
 
