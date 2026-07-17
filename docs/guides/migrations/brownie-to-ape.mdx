@@ -1,0 +1,217 @@
+---
+title: "Brownie to ApeWorx Ape Migration"
+---
+
+[Brownie](https://eth-brownie.readthedocs.io/) was the dominant Python framework for Ethereum smart-contract development from 2019, and was officially deprecated in 2023 in favor of [ApeWorx Ape](https://docs.apeworx.io/). Migrating a real Brownie project means rewriting 50–200 mechanical patterns by hand:
+
+1. **Imports rearranged.** `from brownie import accounts, network, chain` becomes `from ape import accounts, networks, chain` (note `network` → `networks`). Constants like `ZERO_ADDRESS` move to `ape.utils`.
+2. **Transaction kwargs change shape.** `Contract.deploy(arg, {"from": x, "value": v})` becomes `Contract.deploy(arg, sender=x, value=v)`. The dict-of-strings form becomes positional kwargs, and `"from"` becomes `sender` (Python reserved word).
+3. **Time/block control reverses.** `chain.sleep(60)` becomes `chain.pending_timestamp += 60`. `chain.mine(N)` becomes `chain.mine(num_blocks=N)`.
+4. **Exception classes renamed.** `exceptions.VirtualMachineError` becomes `exceptions.ContractLogicError`.
+5. **Test infrastructure differs.** Brownie's `def isolate(fn_isolation): pass` fixture is unnecessary in Ape (`chain.isolate()` is built-in). Event access changes: `tx.events["Transfer"].values()` → `list(tx.decode_logs(token.Transfer))`.
+
+For more details, see the [official Ape migration documentation](https://docs.apeworx.io/ape/latest/userguides/brownie-migration.html).
+
+This codemod automates 80–95% of the migration with zero false positives, using AST-based transforms via [ast-grep](https://github.com/ast-grep/ast-grep) on Tree-sitter Python.
+
+## Getting started
+
+<CardGroup cols={2}>
+<Card
+    title="Ape Brownie Migration Guide"
+    icon="book"
+    href="https://docs.apeworx.io/ape/latest/userguides/brownie-migration.html"
+>
+    Official ApeWorx documentation for migrating from Brownie.
+</Card>
+<Card
+    title="brownie-to-ape Codemod"
+    icon="cauldron"
+    href="https://app.codemod.com/registry/@pugarhuda/brownie-to-ape"
+>
+    Run the codemod to automate the migration.
+</Card>
+</CardGroup>
+
+## Migration Steps
+
+<Steps>
+    <Step title="Run the codemod">
+    Run the Brownie to Ape migration codemod against your Brownie project:
+
+    ```bash
+    npx codemod @pugarhuda/brownie-to-ape -t /path/to/your/brownie/project
+    ```
+
+    This codemod automates **17 deterministic transform passes** with explicit FP guards:
+
+    | Pass | What it does |
+    |------|-------------|
+    | **import-rewrite** | `from brownie import …` → `from ape import …` with `network` → `networks` rename, constants moved to `ape.utils` |
+    | **bare-import** | `import brownie` → `import ape` (only when `brownie.<attr>` is also rewritten) |
+    | **attribute-access** | `brownie.accounts/project/chain/...` → `ape.accounts/...` (skips inside dicts) |
+    | **tx-dict-to-kwargs** | `Contract.deploy({"from": x, "value": v})` → `Contract.deploy(sender=x, value=v)` |
+    | **chain.mine** | `chain.mine(5)` → `chain.mine(num_blocks=5)` |
+    | **chain.sleep** | `chain.sleep(60)` (statement) → `chain.pending_timestamp += 60` |
+    | **Wei conversion** | `Wei("1 ether")` → `convert("1 ether", int)` with auto-import |
+    | **exceptions** | `exceptions.VirtualMachineError` → `exceptions.ContractLogicError` |
+    | **show-active** | `network.show_active()` → `networks.active_provider.network.name` |
+    | **isolate fixture** | Detects Brownie's `def isolate(fn_isolation): pass` and inserts a TODO to remove |
+    | **accounts.add** | Inline TODO with the recommended Ape pattern (preserves user-supplied private key) |
+    | **interface.X** | Inline TODO for `interface.IERC20(addr)` (Ape uses `Contract(addr)`) |
+    | **Web3.toWei / fromWei** | Inline TODO for `convert(...)` migration |
+    | **accounts.at force=True** | `accounts.at(addr, force=True)` → `accounts.impersonate_account(addr)` |
+    | **events** | `tx.events[…].args.X` → `tx.events[…].X` field-rename pass |
+    | **chain.id** | Bidirectional `chain.id` ↔ `networks.provider.chain_id` |
+    | **fixup** | Residual `brownie` references → top-of-file TODO |
+
+    </Step>
+    <Step title="Migrate the YAML config">
+    The codemod ships a Python helper to translate `brownie-config.yaml` → `ape-config.yaml`:
+
+    ```bash
+    git clone https://github.com/PugarHuda/brownie-to-ape
+    python brownie-to-ape/scripts/migrate_config.py /path/to/your/project
+    ```
+
+    Translates `dependencies`, `compiler.solc`, network configs, and `dotenv` settings; emits a TODO for any unrecognized keys.
+    </Step>
+    <Step title="Apply AI/manual cleanup">
+    The codemod auto-flags patterns it cannot safely rewrite with `# TODO(brownie-to-ape):` comments. Review each TODO — typically 1–6 per repo — and apply the suggested fix. Common patterns:
+
+    - **Contract artifacts:** `Token.deploy(...)` → `project.Token.deploy(...)` (the codemod cannot infer contract names without project schema introspection)
+    - **Numeric scientific notation:** `1e21` → `int(1e21)` (Ape rejects float for token amounts)
+    - **Event-log access:** `tx.events["Transfer"].values()` → `list(tx.decode_logs(token.Transfer))`
+    - **Reserved-keyword field access:** `log.from` is a `SyntaxError` — use `getattr(log, "from")` instead
+    </Step>
+    <Step title="Verify the migration">
+    After the codemod and AI/manual fixes:
+
+    ```bash
+    pip install eth-ape
+    ape plugins install solidity --yes
+    ape compile
+    ape test --network ::test
+    ```
+
+    Expected outcome on the reference repo `brownie-mix/token-mix`: `38 passed, 0 failed in 5.40s` ([reproducible passing log](https://github.com/PugarHuda/brownie-to-ape/blob/main/docs/ape-verify-token-mix.log)).
+    </Step>
+</Steps>
+
+## Before & After
+
+### Imports
+
+```python
+# Before (Brownie)
+from brownie import accounts, network, chain, ZERO_ADDRESS, Token
+
+# After (Ape)
+from ape import accounts, networks, chain
+from ape.utils import ZERO_ADDRESS
+# TODO(brownie-to-ape): no direct Ape equivalent for: Token
+```
+
+### Transaction kwargs
+
+```python
+# Before (Brownie)
+tx = Token.deploy("Test", 18, {"from": accounts[0], "value": 1e18})
+
+# After (Ape)
+tx = project.Token.deploy("Test", 18, sender=accounts[0], value=int(1e18))
+```
+
+### Network detection
+
+```python
+# Before (Brownie)
+if network.show_active() == "mainnet":
+    ...
+
+# After (Ape)
+if networks.active_provider.network.name == "mainnet":
+    ...
+```
+
+### Time and blocks
+
+```python
+# Before (Brownie)
+chain.sleep(60)
+chain.mine(5)
+
+# After (Ape)
+chain.pending_timestamp += 60
+chain.mine(num_blocks=5)
+```
+
+### Exceptions and reverts
+
+```python
+# Before (Brownie)
+from brownie.exceptions import VirtualMachineError
+with brownie.reverts("only-owner"):
+    contract.adminAction({"from": accounts[1]})
+
+# After (Ape)
+from ape.exceptions import ContractLogicError
+with ape.reverts("only-owner"):
+    contract.adminAction(sender=accounts[1])
+```
+
+## Real-world validation
+
+Validated on **5 OSS Brownie projects** with **0 false positives**:
+
+| Repo | Files modified | Patterns | FP | TODOs |
+|------|----------------|----------|----|----|
+| [brownie-mix/token-mix](https://github.com/brownie-mix/token-mix) | 4/5 .py | ~62 | 0 | 1 contract + 1 isolate |
+| [PatrickAlphaC/brownie_fund_me](https://github.com/PatrickAlphaC/brownie_fund_me) | 5/6 .py | ~21 | 0 | 4 contract + 1 accounts.add |
+| [PatrickAlphaC/smartcontract-lottery](https://github.com/PatrickAlphaC/smartcontract-lottery) | 5/7 .py | ~30 | 0 | 5 contract + 1 isolate |
+| [PatrickAlphaC/aave_brownie_py_freecode](https://github.com/PatrickAlphaC/aave_brownie_py_freecode) | 4/5 .py | ~24 | 0 | 1 interface drop + 5 inline interface TODOs |
+| [yearn/brownie-strategy-mix](https://github.com/yearn/brownie-strategy-mix) | 4/7 .py | ~33 | 0 | 4 contract + web3 preserve |
+
+**End-to-end verified on `brownie-mix/token-mix`:** `ape compile` succeeds (solc 0.6.12, 2 contracts) and `ape test --network ::test` returns **38 passed, 0 failed in 5.40s** after the codemod plus ~30 LOC of AI/manual cleanup. See the [step-by-step AI walkthrough](https://github.com/PugarHuda/brownie-to-ape/blob/main/demo/ai-step-demo.md).
+
+## Key features
+
+- **17-pass deterministic transform** with explicit FP guards and AST containment checks
+- **Zero false positives** audited across 5 OSS projects + 90 fixture-based snapshot tests (15+ explicit negative-case fixtures)
+- **250 total tests:** 90 jssg fixture + 125 Vitest (helper unit + property + QA) + 35 pytest (config translator + Hypothesis property-based fuzzer)
+- **Stryker mutation-testing baseline** on critical helpers
+- **YAML config translator** for `brownie-config.yaml` → `ape-config.yaml`
+- **Bahasa Indonesia translation** of the README
+
+## Resources
+
+<CardGroup cols={2}>
+<Card
+    title="GitHub Repository"
+    icon="github"
+    href="https://github.com/PugarHuda/brownie-to-ape"
+>
+    Source code, fixtures, and CI.
+</Card>
+<Card
+    title="Case Study"
+    icon="book-open"
+    href="https://github.com/PugarHuda/brownie-to-ape/blob/main/CASE_STUDY.md"
+>
+    Detailed migration write-up with diffs.
+</Card>
+<Card
+    title="Live Demo"
+    icon="play"
+    href="https://pugarhuda.github.io/brownie-to-ape/"
+>
+    Interactive demo with embedded asciinema cast.
+</Card>
+<Card
+    title="AI-step Walkthrough"
+    icon="robot"
+    href="https://github.com/PugarHuda/brownie-to-ape/blob/main/demo/ai-step-demo.md"
+>
+    End-to-end token-mix migration with AI cleanup.
+</Card>
+</CardGroup>
