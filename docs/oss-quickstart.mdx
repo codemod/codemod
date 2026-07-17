@@ -23,7 +23,19 @@ Create a dedicated folder or repo for your codemod work, then scaffold a starter
 npx codemod init
 ```
 
-The starter package gives your agent a concrete structure to refine or replace while keeping the workflow, tests, and publishing flow in place.
+By default, this creates a workflow package. This is the right starting point for most codemods because it gives your agent a concrete structure to refine or replace while keeping the workflow, tests, and publishing flow in place.
+
+If you are authoring an agent-facing skill package instead of a runnable transform, use one of these variants:
+
+```bash
+# Skill-only package
+npx codemod init --skill
+
+# Workflow package that also installs an authored skill
+npx codemod init --with-skill
+```
+
+Use `--skill` when the package's main purpose is to install authored guidance into a supported harness. Use `--with-skill` when you want both executable workflow steps and installable skill content in the same package.
 
 Once the package is scaffolded, you can ask your AI agent to help you build codemods for things like framework upgrades, design system migrations, i18n work, code-mining tasks, and more.
 
@@ -60,6 +72,8 @@ You will end up with a [Codemod package](/package-structure):
     </Tree.Folder>
   </Tree.Folder>
 </Tree>
+
+If you scaffold with `--skill` or `--with-skill`, the package also includes authored skill files under `agents/skill/<skill-name>/`, and `workflow.yaml` contains an `install-skill` step.
 
 <CodeGroup>
 
