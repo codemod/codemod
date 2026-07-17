@@ -41,7 +41,7 @@ pub trait TelemetrySender: Send + Sync + 'static {
 }
 
 pub struct PostHogSender {
-    client: Arc<posthog_rs::Client>,
+    client: OnceCell<Arc<posthog_rs::Client>>,
     options: TelemetrySenderOptions,
 }
 
@@ -49,11 +49,17 @@ pub const POSTHOG_API_KEY: &str = env!("POSTHOG_API_KEY");
 
 impl PostHogSender {
     pub async fn new(options: TelemetrySenderOptions) -> Self {
-        let client = posthog_rs::client(POSTHOG_API_KEY).await;
         Self {
-            client: Arc::new(client),
+            client: OnceCell::new(),
             options,
         }
+    }
+
+    async fn get_client(&self) -> Arc<posthog_rs::Client> {
+        self.client
+            .get_or_init(|| async { Arc::new(posthog_rs::client(POSTHOG_API_KEY).await) })
+            .await
+            .clone()
     }
 }
 
@@ -64,6 +70,7 @@ impl TelemetrySender for PostHogSender {
         event: BaseEvent,
         options_override: Option<PartialTelemetrySenderOptions>,
     ) {
+        let client = self.get_client().await;
         let distinct_id = options_override
             .as_ref()
             .and_then(|o| o.distinct_id.clone())
@@ -85,7 +92,7 @@ impl TelemetrySender for PostHogSender {
             }
         }
 
-        if let Err(e) = self.client.capture(posthog_event).await {
+        if let Err(e) = client.capture(posthog_event).await {
             eprintln!("Failed to send PostHog event: {e}");
         }
     }
@@ -95,8 +102,8 @@ impl TelemetrySender for PostHogSender {
             let _ = RUNTIME_HANDLE.set(handle);
         }
 
-        let client = self.client.clone();
         let options = self.options.clone();
+        let client_cell = self.client.clone();
 
         panic::set_hook(Box::new(move |panic_info| {
             let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
@@ -121,10 +128,14 @@ impl TelemetrySender for PostHogSender {
             };
 
             if let Some(handle) = RUNTIME_HANDLE.get() {
-                let client = client.clone();
                 let options = options.clone();
+                let client_cell = client_cell.clone();
 
                 handle.spawn(async move {
+                    let client = client_cell
+                        .get_or_init(|| async { Arc::new(posthog_rs::client(POSTHOG_API_KEY).await) })
+                        .await;
+
                     let mut posthog_event = posthog_rs::Event::new(
                         format!("codemod.{}.cliPanic", options.cloud_role),
                         options.distinct_id.clone(),
