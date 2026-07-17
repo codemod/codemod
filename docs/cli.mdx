@@ -507,6 +507,20 @@ npx codemod workflow cancel -i <ID>
   Workflow run ID.
 </ResponseField>
 
+**`workflow tui`**
+
+Browse and interact with workflow runs in an interactive terminal UI.
+
+```bash
+npx codemod workflow tui
+```
+
+Use this command when you want to inspect runs, review progress, and trigger available workflow actions without copying run IDs into separate commands.
+
+<Warning>
+  `workflow tui` requires an interactive terminal. Use `workflow list`, `workflow status`, `workflow resume`, or `workflow cancel` in CI and other non-interactive environments.
+</Warning>
+
 ### `codemod jssg`
 
 Run [jssg (JS ast-grep)](/jssg/intro) transforms directly without a workflow.
@@ -703,6 +717,90 @@ npx codemod jssg test <codemod_file> [options]
     - It's built for speed and simplicity, making ast-grep codemods a first-class experience.
   </Accordion>
 </AccordionGroup>
+
+**`jssg list-applicable`**
+
+List files in a target directory that match a codemod's selector without applying changes.
+
+```bash
+npx codemod jssg list-applicable <codemod_file> --language <LANG> [--target <PATH>] [options]
+```
+
+<ResponseField name="codemod_file" type="string" required>
+  Path to the JS/TS codemod file whose selector should be evaluated.
+</ResponseField>
+
+<ResponseField name="--language <LANG>" type="string" required>
+  Language to scan.
+</ResponseField>
+
+<ResponseField name="-t, --target <PATH>" type="string">
+  Directory to scan. Defaults to the current working directory.
+</ResponseField>
+
+<ResponseField name="--max-threads <N>" type="number">
+  Maximum number of concurrent threads to use.
+</ResponseField>
+
+<ResponseField name="--allow-fs" type="boolean">
+  Allow filesystem access while evaluating the codemod.
+</ResponseField>
+
+<ResponseField name="--allow-fetch" type="boolean">
+  Allow network fetch access while evaluating the codemod.
+</ResponseField>
+
+<ResponseField name="--allow-child-process" type="boolean">
+  Allow child process execution while evaluating the codemod.
+</ResponseField>
+
+<Info>
+  `jssg list-applicable` is useful when you want to preview selector coverage, estimate blast radius, or debug why a codemod does or does not match files before running `jssg run`.
+</Info>
+
+**`jssg exec`**
+
+Execute a standalone JavaScript or TypeScript file inside the Codemod sandbox.
+
+```bash
+npx codemod jssg exec <script>
+```
+
+<ResponseField name="script" type="string" required>
+  Path to the JavaScript or TypeScript file to execute.
+</ResponseField>
+
+<Info>
+  Use `jssg exec` for utility scripts that need the same sandboxed module resolution and workflow state integration as jssg transforms, but are not themselves run as file-to-file codemods.
+</Info>
+
+**`jssg bundle`**
+
+Bundle a JavaScript or TypeScript entry file and its dependencies.
+
+```bash
+npx codemod jssg bundle <entry_path> [--output <FILE>] [--base-dir <DIR>] [--source-maps] [--verbose]
+```
+
+<ResponseField name="entry_path" type="string" required>
+  Path to the entry JavaScript or TypeScript file to bundle.
+</ResponseField>
+
+<ResponseField name="-o, --output <FILE>" type="string">
+  Output file path. If you omit it, the bundle is written to stdout.
+</ResponseField>
+
+<ResponseField name="--base-dir <DIR>" type="string">
+  Base directory for module resolution. Defaults to the entry file's directory.
+</ResponseField>
+
+<ResponseField name="--source-maps" type="boolean">
+  Generate source maps for the bundle.
+</ResponseField>
+
+<ResponseField name="-v, --verbose" type="boolean">
+  Print bundling progress and output details.
+</ResponseField>
 
 ---
 
