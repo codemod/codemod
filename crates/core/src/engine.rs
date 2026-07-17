@@ -1597,6 +1597,51 @@ impl Engine {
         Ok(())
     }
 
+    /// Mark an awaiting task as failed on behalf of an external caller (e.g.
+    /// an agent driving the run through MCP) without executing its steps.
+    pub async fn fail_task(
+        &self,
+        workflow_run_id: Uuid,
+        task_id: Uuid,
+        error_message: String,
+    ) -> Result<()> {
+        let task = self.state_adapter.lock().await.get_task(task_id).await?;
+
+        if task.workflow_run_id != workflow_run_id {
+            return Err(Error::Other(format!(
+                "Task {task_id} does not belong to workflow run {workflow_run_id}"
+            )));
+        }
+
+        if task.status != TaskStatus::AwaitingTrigger {
+            return Err(Error::Other(format!(
+                "Task {task_id} is not awaiting trigger (status: {:?})",
+                task.status
+            )));
+        }
+
+        self.task_state_service
+            .mark_failed(task_id, error_message)
+            .await?;
+
+        if let Some(master_task_id) = task.master_task_id {
+            self.task_state_service
+                .update_matrix_master_status(master_task_id)
+                .await?;
+        }
+
+        // Mark the workflow running before the executor re-evaluates it, so
+        // callers polling for a settled status don't observe the stale
+        // pre-failure AwaitingTrigger state as final.
+        self.task_state_service
+            .mark_workflow_running(workflow_run_id)
+            .await?;
+
+        self.spawn_workflow_executor(workflow_run_id);
+
+        Ok(())
+    }
+
     /// Trigger all awaiting tasks in a workflow run
     pub async fn trigger_all(&self, workflow_run_id: Uuid) -> Result<bool> {
         // TODO: Do we need this?
@@ -2094,13 +2139,11 @@ impl Engine {
             let any_running = tasks_after_status_updates
                 .iter()
                 .any(|t| t.status == TaskStatus::Running);
-            let any_pending = tasks_after_status_updates
-                .iter()
-                .any(|t| t.status == TaskStatus::Pending);
-
             // If there are tasks awaiting trigger and no runnable tasks and no running tasks,
-            // then we need to pause the workflow and wait for manual triggers
-            if awaiting_trigger && runnable_tasks.is_empty() && !any_running && !any_pending {
+            // then we need to pause the workflow and wait for manual triggers. Pending tasks
+            // don't keep the workflow running here: with nothing runnable and nothing running,
+            // they are blocked behind the awaiting tasks and can only progress after a trigger.
+            if awaiting_trigger && runnable_tasks.is_empty() && !any_running {
                 self.task_state_service()
                     .mark_workflow_awaiting_trigger(workflow_run_id)
                     .await?;
@@ -2112,6 +2155,28 @@ impl Engine {
                 );
 
                 // Exit the execution loop, will be resumed when triggers are received
+                break;
+            }
+
+            // A failed task with nothing runnable, running, or awaiting a trigger
+            // means the remaining pending tasks are permanently blocked by the
+            // failure. Record the workflow as failed instead of waiting forever.
+            // Failed tasks can still be re-triggered via resume, which marks the
+            // workflow running again.
+            let any_failed = tasks_after_status_updates
+                .iter()
+                .any(|t| t.status == TaskStatus::Failed);
+            if any_failed && runnable_tasks.is_empty() && !any_running && !awaiting_trigger {
+                self.task_state_service()
+                    .mark_workflow_failed(workflow_run_id)
+                    .await?;
+
+                slog!(
+                    &self.structured_logger,
+                    info,
+                    "Workflow run {workflow_run_id} is blocked by failed tasks; marking it failed"
+                );
+
                 break;
             }
 
@@ -4039,6 +4104,19 @@ impl Engine {
                 .canonicalize()?
                 .to_str()
                 .expect("File path should be valid UTF-8")
+                .to_string(),
+        );
+
+        // Expose the run's target path so shell steps don't have to assume
+        // the process working directory matches it (it doesn't for MCP-driven
+        // runs or `--target` CLI runs).
+        env.insert(
+            String::from("CODEMOD_TARGET"),
+            self.workflow_run_config
+                .execution
+                .target_path
+                .to_str()
+                .unwrap_or("")
                 .to_string(),
         );
 
