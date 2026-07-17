@@ -72,6 +72,16 @@ The Codemod MCP server provides these guidance resources for AI assistants:
 - **`codemod-maintainer-monorepo-instructions`** - Maintainer guidance for codemod monorepos and version-hop workspaces
 - **`sharding-instructions`** - Docs-backed sharding guidance
 
+You can inspect the same MCP-equivalent resources from the CLI:
+
+```bash
+# List available resources
+npx codemod ai resources
+
+# Read one resource by name or URI
+npx codemod ai resource codemod-cli-instructions
+```
+
 For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code.
 
 When registry discovery does not find an exact package, agents should scaffold with direct `codemod init`. In non-interactive flows, agents should pass only values supplied by the user or task and rely on the CLI defaults/auth-derived author handling for optional metadata.
