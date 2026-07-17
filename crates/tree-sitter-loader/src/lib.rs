@@ -162,6 +162,31 @@ fn cached_parser_has_symbol(path: &Path, symbol: &str) -> bool {
     })
 }
 
+fn download_parser(url: &'static str) -> Result<Vec<u8>, LoaderError> {
+    std::thread::Builder::new()
+        .name("tree-sitter-parser-download".to_string())
+        .spawn(move || {
+            let response = reqwest::blocking::get(url)
+                .map_err(|e| LoaderError::Download(format!("HTTP request failed: {e}")))?;
+
+            if !response.status().is_success() {
+                return Err(LoaderError::Download(format!(
+                    "HTTP {} for {}",
+                    response.status(),
+                    url
+                )));
+            }
+
+            response
+                .bytes()
+                .map(|bytes| bytes.to_vec())
+                .map_err(|e| LoaderError::Download(format!("Failed to read response body: {e}")))
+        })
+        .map_err(|e| LoaderError::Download(format!("Failed to spawn download thread: {e}")))?
+        .join()
+        .map_err(|_| LoaderError::Download("download thread panicked".to_string()))?
+}
+
 fn ensure_parser_cached(
     def: &DynamicLanguageDefinition,
     cache_dir: &Path,
@@ -208,22 +233,17 @@ fn ensure_parser_cached(
     log::info!("Downloading tree-sitter parser for {} ...", def.name);
     std::fs::create_dir_all(&parser_dir)?;
 
-    let response = reqwest::blocking::get(url)
-        .map_err(|e| LoaderError::Download(format!("HTTP request failed: {e}")))?;
+    let bytes = download_parser(url)?;
+    std::fs::write(&cached_path, &bytes)?;
 
-    if !response.status().is_success() {
+    if !cached_parser_has_symbol(&cached_path, def.symbol) {
+        let _ = std::fs::remove_file(&cached_path);
         return Err(LoaderError::Download(format!(
-            "HTTP {} for {}",
-            response.status(),
-            url
+            "Downloaded parser for {} does not export {}",
+            def.name, def.symbol
         )));
     }
 
-    let bytes = response
-        .bytes()
-        .map_err(|e| LoaderError::Download(format!("Failed to read response body: {e}")))?;
-
-    std::fs::write(&cached_path, &bytes)?;
     log::info!(
         "Downloaded {} parser to {:?} ({} bytes)",
         def.name,
