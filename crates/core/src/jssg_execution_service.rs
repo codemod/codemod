@@ -1043,10 +1043,8 @@ impl<'a> JssgExecutionService<'a> {
                                         .files_modified
                                         .fetch_add(1, Ordering::Relaxed);
 
-                                    if let Some(callback) = &engine
-                                        .workflow_run_config()
-                                        .output
-                                        .dry_run_callback
+                                    if let Some(callback) =
+                                        &engine.workflow_run_config().output.dry_run_callback
                                     {
                                         callback(DryRunChange {
                                             file_path: file_path.to_path_buf(),

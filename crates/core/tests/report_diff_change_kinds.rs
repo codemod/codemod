@@ -19,7 +19,9 @@ use butterflow_core::diff::ChangeKind;
 use butterflow_core::engine::Engine;
 use butterflow_core::{Node, Runtime, RuntimeType, Workflow, WorkflowStatus};
 use butterflow_models::node::NodeType;
-use butterflow_models::step::{SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseJSAstGrep};
+use butterflow_models::step::{
+    SemanticAnalysisConfig, SemanticAnalysisMode, StepAction, UseJSAstGrep,
+};
 use butterflow_models::Step;
 use butterflow_state::mock_adapter::MockStateAdapter;
 use std::collections::HashMap;
@@ -113,10 +115,7 @@ fn build_workflow(
     }
 }
 
-async fn run_and_collect(
-    temp_path: &Path,
-    workflow: Workflow,
-) -> Vec<DryRunChange> {
+async fn run_and_collect(temp_path: &Path, workflow: Workflow) -> Vec<DryRunChange> {
     let collected: Arc<Mutex<Vec<DryRunChange>>> = Arc::new(Mutex::new(Vec::new()));
     let collected_for_cb = collected.clone();
 
@@ -131,7 +130,12 @@ async fn run_and_collect(
     let engine = Engine::with_state_adapter(state_adapter, config);
 
     let run_id = engine
-        .run_workflow(workflow, HashMap::new(), Some(temp_path.to_path_buf()), None)
+        .run_workflow(
+            workflow,
+            HashMap::new(),
+            Some(temp_path.to_path_buf()),
+            None,
+        )
         .await
         .unwrap();
 
@@ -172,12 +176,23 @@ export default function transform(root) {
     // trivia bug that previously made this report as falsely modified.
     create_test_file(temp_path, "c.js", "\nconst z = 3;\n");
 
-    let workflow = build_workflow("codemod.js", None, None, Some(vec!["codemod.js".to_string()]));
+    let workflow = build_workflow(
+        "codemod.js",
+        None,
+        None,
+        Some(vec!["codemod.js".to_string()]),
+    );
     let changes = run_and_collect(temp_path, workflow).await;
 
     let touched: Vec<_> = changes
         .iter()
-        .map(|c| c.file_path.file_name().unwrap().to_string_lossy().to_string())
+        .map(|c| {
+            c.file_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        })
         .collect();
 
     assert!(
@@ -193,9 +208,18 @@ export default function transform(root) {
         "codemod.js itself is not a transform target and should never appear, got: {touched:?}"
     );
 
-    assert_eq!(fs::read_to_string(temp_path.join("a.js")).unwrap(), "const x = 1\n");
-    assert_eq!(fs::read_to_string(temp_path.join("b.js")).unwrap(), "const y = 2;\n");
-    assert_eq!(fs::read_to_string(temp_path.join("c.js")).unwrap(), "\nconst z = 3;\n");
+    assert_eq!(
+        fs::read_to_string(temp_path.join("a.js")).unwrap(),
+        "const x = 1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(temp_path.join("b.js")).unwrap(),
+        "const y = 2;\n"
+    );
+    assert_eq!(
+        fs::read_to_string(temp_path.join("c.js")).unwrap(),
+        "\nconst z = 3;\n"
+    );
 }
 
 /// A file whose content genuinely changes must be reported once, with
@@ -223,21 +247,33 @@ export default function transform(root) {
     );
     create_test_file(temp_path, "a.js", "var x = 1;\n");
 
-    let workflow = build_workflow("codemod.js", None, None, Some(vec!["codemod.js".to_string()]));
+    let workflow = build_workflow(
+        "codemod.js",
+        None,
+        None,
+        Some(vec!["codemod.js".to_string()]),
+    );
     let changes = run_and_collect(temp_path, workflow).await;
 
     let a_changes: Vec<_> = changes
         .iter()
         .filter(|c| c.file_path.file_name().unwrap() == "a.js")
         .collect();
-    assert_eq!(a_changes.len(), 1, "expected exactly one change for a.js, got {a_changes:?}");
+    assert_eq!(
+        a_changes.len(),
+        1,
+        "expected exactly one change for a.js, got {a_changes:?}"
+    );
     let change = a_changes[0];
     assert_eq!(change.kind, ChangeKind::Modified);
     assert!(change.new_path.is_none());
     assert_eq!(change.original_content, "var x = 1;\n");
     assert_eq!(change.new_content, "const x = 1\n");
 
-    assert_eq!(fs::read_to_string(temp_path.join("a.js")).unwrap(), "const x = 1\n");
+    assert_eq!(
+        fs::read_to_string(temp_path.join("a.js")).unwrap(),
+        "const x = 1\n"
+    );
 }
 
 /// A file removed by the codemod (via the sandboxed `fs` module) must be
@@ -263,7 +299,12 @@ export default function transform(root) {
     );
     create_test_file(temp_path, "doomed.js", "var x = 1;\n");
 
-    let workflow = build_workflow("codemod.js", None, None, Some(vec!["codemod.js".to_string()]));
+    let workflow = build_workflow(
+        "codemod.js",
+        None,
+        None,
+        Some(vec!["codemod.js".to_string()]),
+    );
     let changes = run_and_collect(temp_path, workflow).await;
 
     let doomed_changes: Vec<_> = changes
@@ -359,7 +400,12 @@ export default function transform(root) {
     );
     create_test_file(temp_path, "settings.js", "module.exports = {};\n");
 
-    let workflow = build_workflow("codemod.js", None, None, Some(vec!["codemod.js".to_string()]));
+    let workflow = build_workflow(
+        "codemod.js",
+        None,
+        None,
+        Some(vec!["codemod.js".to_string()]),
+    );
     let changes = run_and_collect(temp_path, workflow).await;
     let canonical_temp_path = fs::canonicalize(temp_path).unwrap();
 
@@ -409,10 +455,19 @@ export default function transform(root) {
     );
     create_test_file(temp_path, "legacy.js", "var x = 1;\n");
 
-    let workflow = build_workflow("codemod.js", None, None, Some(vec!["codemod.js".to_string()]));
+    let workflow = build_workflow(
+        "codemod.js",
+        None,
+        None,
+        Some(vec!["codemod.js".to_string()]),
+    );
     let changes = run_and_collect(temp_path, workflow).await;
 
-    assert_eq!(changes.len(), 1, "expected exactly one change event, got {changes:?}");
+    assert_eq!(
+        changes.len(),
+        1,
+        "expected exactly one change event, got {changes:?}"
+    );
     let change = &changes[0];
     assert_eq!(change.kind, ChangeKind::Renamed);
     assert_eq!(change.original_content, "var x = 1;\n");

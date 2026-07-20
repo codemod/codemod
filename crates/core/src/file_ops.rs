@@ -33,9 +33,7 @@ impl AsyncFileWriter {
                 let result = match operation.path.parent() {
                     Some(parent) if !parent.as_os_str().is_empty() => {
                         match tokio::fs::create_dir_all(parent).await {
-                            Ok(()) => {
-                                tokio::fs::write(&operation.path, &operation.content).await
-                            }
+                            Ok(()) => tokio::fs::write(&operation.path, &operation.content).await,
                             Err(e) => Err(e),
                         }
                     }

@@ -608,7 +608,10 @@ mod tests {
 
         assert_eq!(report_diffs.consolidated.len(), 1);
         assert_eq!(report_diffs.consolidated[0].path, "eslint.config.cjs");
-        assert_eq!(report_diffs.consolidated[0].kind, crate::diff::ChangeKind::Renamed);
+        assert_eq!(
+            report_diffs.consolidated[0].kind,
+            crate::diff::ChangeKind::Renamed
+        );
         assert_eq!(
             report_diffs.consolidated[0].old_path.as_deref(),
             Some(".eslintrc")
@@ -650,7 +653,10 @@ mod tests {
         let report_diffs = convert_diffs(&diffs, "/tmp/repo");
 
         assert_eq!(report_diffs.consolidated.len(), 1);
-        assert_eq!(report_diffs.consolidated[0].kind, crate::diff::ChangeKind::Added);
+        assert_eq!(
+            report_diffs.consolidated[0].kind,
+            crate::diff::ChangeKind::Added
+        );
     }
 
     #[test]

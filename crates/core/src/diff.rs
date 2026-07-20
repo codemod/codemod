@@ -432,7 +432,9 @@ mod tests {
         assert_eq!(result.kind, ChangeKind::Renamed);
         assert_eq!(result.old_path.as_deref(), Some("old/name.ts"));
         assert_eq!(result.path, "new/name.ts");
-        assert!(result.diff_text.contains("Renamed: old/name.ts -> new/name.ts"));
+        assert!(result
+            .diff_text
+            .contains("Renamed: old/name.ts -> new/name.ts"));
     }
 
     #[test]
