@@ -26,7 +26,19 @@ impl AsyncFileWriter {
 
         tokio::spawn(async move {
             while let Some(operation) = receiver.recv().await {
-                let result = tokio::fs::write(&operation.path, &operation.content).await;
+                // Moving/renaming a file into a not-yet-existing subdirectory
+                // (e.g. via `root.rename()`) would otherwise fail silently
+                // here, since this write only ever logs its error rather
+                // than surfacing it as a hard failure.
+                let result = match operation.path.parent() {
+                    Some(parent) if !parent.as_os_str().is_empty() => {
+                        match tokio::fs::create_dir_all(parent).await {
+                            Ok(()) => tokio::fs::write(&operation.path, &operation.content).await,
+                            Err(e) => Err(e),
+                        }
+                    }
+                    _ => tokio::fs::write(&operation.path, &operation.content).await,
+                };
                 let _ = operation.sender.send(result);
             }
         });
