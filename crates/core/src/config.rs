@@ -12,6 +12,7 @@ use thiserror::Error;
 
 use crate::{
     ai_handoff::AgentOption,
+    diff::ChangeKind,
     execution::{CodemodExecutionConfig, ProgressCallback},
     registry::RegistryClient,
     structured_log::OutputFormat,
@@ -29,7 +30,8 @@ pub type AgentSelectionCallback = Arc<dyn Fn(&[AgentOption]) -> Option<String> +
 /// Info about a file that would be modified in dry-run mode
 #[derive(Clone, Debug)]
 pub struct DryRunChange {
-    /// Path to the file that would be modified
+    /// Path to the file that would be modified. For renames/moves this is
+    /// the *original* path; see `new_path` for the destination.
     pub file_path: PathBuf,
     /// Original content of the file
     pub original_content: String,
@@ -43,6 +45,11 @@ pub struct DryRunChange {
     pub parent_step_id: Option<String>,
     /// Parent step name used for report grouping
     pub parent_step_name: Option<String>,
+    /// What kind of filesystem change this represents.
+    pub kind: ChangeKind,
+    /// For renames/moves, the destination path (`file_path` holds the
+    /// original path in that case).
+    pub new_path: Option<PathBuf>,
 }
 
 /// Callback type for reporting dry-run changes
