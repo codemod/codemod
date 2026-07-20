@@ -31,8 +31,15 @@ pub fn create_silent_diff_collector(collector: Arc<Mutex<Vec<FileDiff>>>) -> Dry
             color: false,
             ..DiffConfig::default()
         };
+        // For renames/moves, `file_path` is the original location and
+        // `new_path` is the destination; the diff should be reported at the
+        // destination path with `old_path` set for the report to display.
+        let (diff_path, old_path) = match &change.new_path {
+            Some(new_path) => (new_path.clone(), Some(change.file_path.clone())),
+            None => (change.file_path.clone(), None),
+        };
         let diff = generate_unified_diff(
-            &change.file_path,
+            &diff_path,
             &change.original_content,
             &change.new_content,
             &config,
@@ -41,6 +48,8 @@ pub fn create_silent_diff_collector(collector: Arc<Mutex<Vec<FileDiff>>>) -> Dry
                 step_name: change.step_name,
                 parent_step_id: change.parent_step_id,
                 parent_step_name: change.parent_step_name,
+                kind: change.kind,
+                old_path,
             },
         );
         if let Ok(mut diffs) = collector.lock() {

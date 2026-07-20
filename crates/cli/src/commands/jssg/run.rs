@@ -284,6 +284,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                         if let ExecutionResult::Modified(ref modified) = change_result {
                             let write_path = modified.rename_to.as_deref().unwrap_or(change_path);
                             if !config.dry_run {
+                                // Renaming into a not-yet-existing subdirectory would
+                                // otherwise fail here.
+                                if let Some(parent) = write_path.parent() {
+                                    let _ = tokio::fs::create_dir_all(parent).await;
+                                }
                                 if let Err(e) =
                                     tokio::fs::write(write_path, &modified.content).await
                                 {

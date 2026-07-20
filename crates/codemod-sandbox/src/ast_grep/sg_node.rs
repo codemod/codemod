@@ -109,7 +109,11 @@ impl<'js> SgRootRjs<'js> {
     }
 
     pub fn source(&self) -> Result<String> {
-        Ok(self.inner.grep.root().text().to_string())
+        // Use the document's full source rather than the root node's own text.
+        // Some grammars exclude leading/trailing trivia (e.g. a blank line
+        // before the first statement) from the top-level node's range, so
+        // `root().text()` can silently differ from the actual file content.
+        Ok(self.inner.grep.source().to_string())
     }
 
     /// Write content to this file.
@@ -807,25 +811,34 @@ impl<'js> SgNodeRjs<'js> {
         let mut sorted_edits = edits.clone();
         sorted_edits.sort_by_key(|edit| edit.start_pos);
 
-        let mut new_content = String::new();
-        let old_content = self.inner_node.text();
+        // `JsEdit::start_pos`/`end_pos` are absolute byte offsets into the
+        // whole document (see `replace()`, which uses `inner_node.range()`
+        // directly). Reconstruction must therefore be based on the full
+        // document source rather than the text of the node `commitEdits`
+        // happens to be called on: some grammars exclude leading/trailing
+        // trivia (e.g. a blank line before the first statement) from a
+        // node's own range, so using that node's text as the base would
+        // silently drop bytes that exist in the real file — producing a
+        // result that differs from the original content even when zero
+        // edits were applied.
+        let source = self.root.grep.source();
 
-        let offset = self.inner_node.range().start;
-        let mut start = 0;
+        let mut new_content = String::with_capacity(source.len());
+        let mut start = 0usize;
 
         for edit in sorted_edits {
-            let pos = edit.start_pos as usize - offset;
+            let pos = edit.start_pos as usize;
             // Skip overlapping edits
             if start > pos {
                 continue;
             }
-            new_content.push_str(&old_content[start..pos]);
+            new_content.push_str(&source[start..pos]);
             new_content.push_str(&edit.inserted_text);
-            start = edit.end_pos as usize - offset;
+            start = edit.end_pos as usize;
         }
 
         // Add trailing content
-        new_content.push_str(&old_content[start..]);
+        new_content.push_str(&source[start..]);
         Ok(new_content)
     }
 

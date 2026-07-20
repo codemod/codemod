@@ -1399,6 +1399,8 @@ mod tests {
                 deletions: 2,
                 step_id: Some("step-a".to_string()),
                 step_name: Some("Private step".to_string()),
+                kind: butterflow_core::diff::ChangeKind::Modified,
+                old_path: None,
             }],
             diff_groups: vec![ReportDiffGroup {
                 step_id: Some("step-a".to_string()),
