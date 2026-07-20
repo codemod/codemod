@@ -33,6 +33,7 @@ use uuid::Uuid;
 
 use crate::{
     config::DryRunChange,
+    diff::ChangeKind,
     engine::{
         auto_meta_files_include, await_js_ast_grep_execution_task, block_on_runtime_handle,
         build_js_ast_grep_idle_timeout_message, finish_unit_progress, format_runtime_event_log,
@@ -831,6 +832,25 @@ impl<'a> JssgExecutionService<'a> {
                                     ExecutionResult::Modified(ref modified) => {
                                         let write_path =
                                             modified.rename_to.as_deref().unwrap_or(change_path);
+                                        let is_rename = modified.rename_to.is_some()
+                                            && write_path != change_path;
+                                        // Evaluated before any write happens below, so this
+                                        // reflects the file's real pre-change state.
+                                        let existed_before =
+                                            change_path == file_path || change_path.exists();
+                                        let kind = if is_rename {
+                                            ChangeKind::Renamed
+                                        } else if !existed_before {
+                                            ChangeKind::Added
+                                        } else {
+                                            ChangeKind::Modified
+                                        };
+                                        let new_path = if is_rename {
+                                            Some(write_path.to_path_buf())
+                                        } else {
+                                            None
+                                        };
+
                                         if config.dry_run {
                                             engine
                                                 .execution_stats
@@ -856,6 +876,8 @@ impl<'a> JssgExecutionService<'a> {
                                                     step_name: Some(step_name.clone()),
                                                     parent_step_id: report_step_id.clone(),
                                                     parent_step_name: report_step_name.clone(),
+                                                    kind,
+                                                    new_path: new_path.clone(),
                                                 });
                                             }
 
@@ -885,6 +907,8 @@ impl<'a> JssgExecutionService<'a> {
                                                     step_name: Some(step_name.clone()),
                                                     parent_step_id: report_step_id.clone(),
                                                     parent_step_name: report_step_name.clone(),
+                                                    kind,
+                                                    new_path: new_path.clone(),
                                                 });
                                             }
 
@@ -911,9 +935,7 @@ impl<'a> JssgExecutionService<'a> {
                                                     .files_with_errors
                                                     .fetch_add(1, Ordering::Relaxed);
                                             } else {
-                                                if modified.rename_to.is_some()
-                                                    && write_path != change_path
-                                                {
+                                                if is_rename {
                                                     if let Ok(mut deletions) =
                                                         deferred_deletions_clone.lock()
                                                     {
@@ -989,6 +1011,55 @@ impl<'a> JssgExecutionService<'a> {
                                         .execution_stats
                                         .files_unmodified
                                         .fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+
+                            // A codemod can remove the file it's processing directly
+                            // (e.g. via the `fs` capability's `unlinkSync`) without
+                            // returning a `Modified`/rename result. That path doesn't
+                            // go through `apply_change` at all, so without this check
+                            // the deletion would be entirely invisible to stats and the
+                            // report. Renames already account for the source path's
+                            // removal via `deferred_deletions`, so they're excluded here
+                            // to avoid double-reporting.
+                            if !config.dry_run {
+                                let primary_is_rename = matches!(
+                                    &primary,
+                                    ExecutionResult::Modified(modified)
+                                        if modified.rename_to.is_some()
+                                );
+                                if !primary_is_rename && !file_path.exists() {
+                                    if matches!(
+                                        &primary,
+                                        ExecutionResult::Unmodified | ExecutionResult::Skipped
+                                    ) {
+                                        engine
+                                            .execution_stats
+                                            .files_unmodified
+                                            .fetch_sub(1, Ordering::Relaxed);
+                                    }
+                                    engine
+                                        .execution_stats
+                                        .files_modified
+                                        .fetch_add(1, Ordering::Relaxed);
+
+                                    if let Some(callback) =
+                                        &engine.workflow_run_config().output.dry_run_callback
+                                    {
+                                        callback(DryRunChange {
+                                            file_path: file_path.to_path_buf(),
+                                            original_content: content.clone(),
+                                            new_content: String::new(),
+                                            step_id: Some(step_id.clone()),
+                                            step_name: Some(step_name.clone()),
+                                            parent_step_id: report_step_id.clone(),
+                                            parent_step_name: report_step_name.clone(),
+                                            kind: ChangeKind::Deleted,
+                                            new_path: None,
+                                        });
+                                    }
+
+                                    slog!(logger, debug, "Deleted file: {}", file_path.display());
                                 }
                             }
 

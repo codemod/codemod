@@ -3,6 +3,8 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::diff::ChangeKind;
+
 /// Statistics about the codemod execution
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +37,13 @@ pub struct ReportFileDiff {
     pub step_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_name: Option<String>,
+    /// The kind of change this entry represents. Defaults to `Modified` so
+    /// older reports without this field still deserialize correctly.
+    #[serde(default)]
+    pub kind: ChangeKind,
+    /// Original path, present only when `kind` is `Renamed`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub old_path: Option<String>,
 }
 
 /// A group of file diffs produced by a specific step
@@ -187,6 +196,8 @@ impl ExecutionReport {
                         deletions: d.deletions,
                         step_id: None,
                         step_name: None,
+                        kind: d.kind,
+                        old_path: d.old_path,
                     })
                     .collect();
                 stripped.diff_groups = Vec::new();
@@ -229,6 +240,10 @@ pub fn convert_diffs(diffs: &[crate::diff::FileDiff], target_path: &str) -> Repo
 
     for diff in diffs {
         let rel = normalize_report_diff_path(Path::new(&diff.path), base);
+        let old_path_rel = diff
+            .old_path
+            .as_deref()
+            .map(|old| normalize_report_diff_path(Path::new(old), base));
         let report_diff = ReportFileDiff {
             path: rel.clone(),
             diff_text: Some(diff.diff_text.clone()),
@@ -236,6 +251,8 @@ pub fn convert_diffs(diffs: &[crate::diff::FileDiff], target_path: &str) -> Repo
             deletions: diff.deletions,
             step_id: diff.step_id.clone(),
             step_name: diff.step_name.clone(),
+            kind: diff.kind,
+            old_path: old_path_rel,
         };
 
         if let Some(&index) = consolidated_index.get(&rel) {
@@ -250,6 +267,12 @@ pub fn convert_diffs(diffs: &[crate::diff::FileDiff], target_path: &str) -> Repo
                     .as_deref()
                     .or(report_diff.step_id.as_deref()),
             ));
+            let (merged_kind, merged_old_path) = merge_change_kind(
+                (existing.kind, existing.old_path.clone()),
+                (report_diff.kind, report_diff.old_path.clone()),
+            );
+            existing.kind = merged_kind;
+            existing.old_path = merged_old_path;
         } else {
             consolidated_index.insert(rel.clone(), consolidated.len());
             consolidated.push(ReportFileDiff {
@@ -318,6 +341,31 @@ fn merge_diff_text(existing: Option<&str>, next: Option<&str>, step_label: Optio
     match existing {
         Some(existing) if !existing.is_empty() => format!("{existing}\n\n{next_text}"),
         _ => next_text,
+    }
+}
+
+/// Reconciles the change kind for a file that was touched by multiple steps.
+///
+/// Structural changes are more informative than a plain modification, so a
+/// later `Modified` entry never downgrades an earlier `Added`/`Renamed`, and a
+/// `Deleted` entry (the file's final, terminal state) always wins.
+fn merge_change_kind(
+    existing: (ChangeKind, Option<String>),
+    next: (ChangeKind, Option<String>),
+) -> (ChangeKind, Option<String>) {
+    fn priority(kind: ChangeKind) -> u8 {
+        match kind {
+            ChangeKind::Deleted => 3,
+            ChangeKind::Added => 2,
+            ChangeKind::Renamed => 1,
+            ChangeKind::Modified => 0,
+        }
+    }
+
+    if priority(next.0) >= priority(existing.0) {
+        next
+    } else {
+        existing
     }
 }
 
@@ -391,6 +439,8 @@ mod tests {
             step_name: None,
             parent_step_id: None,
             parent_step_name: None,
+            kind: crate::diff::ChangeKind::Modified,
+            old_path: None,
         }];
 
         let report_diffs = convert_diffs(&diffs, "/tmp/repo");
@@ -409,6 +459,8 @@ mod tests {
             step_name: None,
             parent_step_id: None,
             parent_step_name: None,
+            kind: crate::diff::ChangeKind::Modified,
+            old_path: None,
         }];
 
         let report_diffs = convert_diffs(&diffs, "/Users/me/backstage");
@@ -427,6 +479,8 @@ mod tests {
                 step_name: Some("First Step".to_string()),
                 parent_step_id: None,
                 parent_step_name: None,
+                kind: crate::diff::ChangeKind::Modified,
+                old_path: None,
             },
             FileDiff {
                 path: "/tmp/repo/src/app.ts".to_string(),
@@ -437,6 +491,8 @@ mod tests {
                 step_name: Some("Second Step".to_string()),
                 parent_step_id: None,
                 parent_step_name: None,
+                kind: crate::diff::ChangeKind::Modified,
+                old_path: None,
             },
         ];
 
@@ -467,6 +523,8 @@ mod tests {
                 step_name: Some("First Step".to_string()),
                 parent_step_id: None,
                 parent_step_name: None,
+                kind: crate::diff::ChangeKind::Modified,
+                old_path: None,
             },
             FileDiff {
                 path: "/tmp/repo/src/app.ts".to_string(),
@@ -477,6 +535,8 @@ mod tests {
                 step_name: Some("Second Step".to_string()),
                 parent_step_id: None,
                 parent_step_name: None,
+                kind: crate::diff::ChangeKind::Modified,
+                old_path: None,
             },
         ];
 
@@ -501,6 +561,8 @@ mod tests {
                 step_name: Some("Nested Step One".to_string()),
                 parent_step_id: Some("codemod-1".to_string()),
                 parent_step_name: Some("Outer Codemod".to_string()),
+                kind: crate::diff::ChangeKind::Modified,
+                old_path: None,
             },
             FileDiff {
                 path: "/tmp/repo/src/other.ts".to_string(),
@@ -511,6 +573,8 @@ mod tests {
                 step_name: Some("Nested Step Two".to_string()),
                 parent_step_id: Some("codemod-1".to_string()),
                 parent_step_name: Some("Outer Codemod".to_string()),
+                kind: crate::diff::ChangeKind::Modified,
+                old_path: None,
             },
         ];
 
@@ -523,6 +587,76 @@ mod tests {
         );
         assert_eq!(report_diffs.by_step[0].step_name, "Outer Codemod");
         assert_eq!(report_diffs.by_step[0].diffs.len(), 2);
+    }
+
+    #[test]
+    fn convert_diffs_relativizes_rename_old_path() {
+        let diffs = vec![FileDiff {
+            path: "/tmp/repo/eslint.config.cjs".to_string(),
+            diff_text: "Renamed: .eslintrc -> eslint.config.cjs".to_string(),
+            additions: 0,
+            deletions: 0,
+            step_id: None,
+            step_name: None,
+            parent_step_id: None,
+            parent_step_name: None,
+            kind: crate::diff::ChangeKind::Renamed,
+            old_path: Some("/tmp/repo/.eslintrc".to_string()),
+        }];
+
+        let report_diffs = convert_diffs(&diffs, "/tmp/repo");
+
+        assert_eq!(report_diffs.consolidated.len(), 1);
+        assert_eq!(report_diffs.consolidated[0].path, "eslint.config.cjs");
+        assert_eq!(
+            report_diffs.consolidated[0].kind,
+            crate::diff::ChangeKind::Renamed
+        );
+        assert_eq!(
+            report_diffs.consolidated[0].old_path.as_deref(),
+            Some(".eslintrc")
+        );
+    }
+
+    #[test]
+    fn convert_diffs_does_not_downgrade_added_to_modified_on_merge() {
+        // A file created by one step and further edited by a later step is
+        // still net-new; the merged entry should stay `Added`, not fall back
+        // to `Modified` just because the later diff didn't carry a kind.
+        let diffs = vec![
+            FileDiff {
+                path: "/tmp/repo/new.ts".to_string(),
+                diff_text: "@@ created".to_string(),
+                additions: 3,
+                deletions: 0,
+                step_id: Some("step-1".to_string()),
+                step_name: Some("Create".to_string()),
+                parent_step_id: None,
+                parent_step_name: None,
+                kind: crate::diff::ChangeKind::Added,
+                old_path: None,
+            },
+            FileDiff {
+                path: "/tmp/repo/new.ts".to_string(),
+                diff_text: "@@ tweaked".to_string(),
+                additions: 1,
+                deletions: 1,
+                step_id: Some("step-2".to_string()),
+                step_name: Some("Tweak".to_string()),
+                parent_step_id: None,
+                parent_step_name: None,
+                kind: crate::diff::ChangeKind::Modified,
+                old_path: None,
+            },
+        ];
+
+        let report_diffs = convert_diffs(&diffs, "/tmp/repo");
+
+        assert_eq!(report_diffs.consolidated.len(), 1);
+        assert_eq!(
+            report_diffs.consolidated[0].kind,
+            crate::diff::ChangeKind::Added
+        );
     }
 
     #[test]
@@ -557,6 +691,8 @@ mod tests {
                     deletions: 1,
                     step_id: None,
                     step_name: None,
+                    kind: crate::diff::ChangeKind::Modified,
+                    old_path: None,
                 }],
                 by_step: vec![ReportDiffGroup {
                     step_id: None,
