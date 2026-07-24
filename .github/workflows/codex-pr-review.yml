@@ -75,10 +75,12 @@ jobs:
           install_command: pnpm install --frozen-lockfile
           working_directory: .
           codex_effort: high
-          sandbox: workspace-write
+          permission_profile: ":workspace"
           review_focus: |
             Focus on:
             - correctness bugs
             - behavioral regressions
             - missing tests or missing edge-case coverage
             - security issues
+          extra_prompt: |
+            Follow any repository-specific review guidance files when present.
