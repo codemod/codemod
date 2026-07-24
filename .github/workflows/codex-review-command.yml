@@ -34,12 +34,16 @@ jobs:
               return;
             }
 
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: comment.id,
-              content: "eyes",
-            });
+            try {
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: comment.id,
+                content: "eyes",
+              });
+            } catch (error) {
+              core.warning(`Could not add acknowledgement reaction: ${error.message}`);
+            }
 
       # The sync workflow replaces @main; pin it manually when copying this template elsewhere.
       - uses: codemod/codex-review-action@0808e160dab04ad659fdd49cd160a18df4bfd1a8
