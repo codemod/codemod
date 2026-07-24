@@ -23,6 +23,24 @@ jobs:
       pull-requests: write
       issues: write
     steps:
+      - name: Acknowledge command
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const comment = context.payload.comment;
+            if (String(comment?.body || "") !== "/codex-review") {
+              core.setFailed("The comment did not contain the exact /codex-review command");
+              return;
+            }
+
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: comment.id,
+              content: "eyes",
+            });
+
       # The sync workflow replaces @main; pin it manually when copying this template elsewhere.
       - uses: codemod/codex-review-action@0808e160dab04ad659fdd49cd160a18df4bfd1a8
         with:
