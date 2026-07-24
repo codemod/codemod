@@ -12,11 +12,45 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  codex-review:
+  resolve-pr:
     if: >-
       github.event.issue.pull_request &&
       github.event.comment.body == '/codex-review' &&
       contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      head_repo_full_name: ${{ steps.resolve.outputs.head_repo_full_name }}
+      is_draft: ${{ steps.resolve.outputs.is_draft }}
+    steps:
+      - name: Resolve pull request context
+        id: resolve
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const prNumber = Number(context.payload.issue?.number);
+            if (!Number.isFinite(prNumber)) {
+              core.setFailed("/codex-review requires a pull request number");
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            core.setOutput("pr_number", String(pr.number));
+            core.setOutput("head_repo_full_name", pr.head.repo?.full_name || "");
+            core.setOutput("is_draft", String(Boolean(pr.draft)));
+
+  codex-review:
+    needs: resolve-pr
+    if: ${{ !fromJSON(needs.resolve-pr.outputs.is_draft) && needs.resolve-pr.outputs.head_repo_full_name == github.repository }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,7 +83,7 @@ jobs:
       - uses: codemod/codex-review-action@0808e160dab04ad659fdd49cd160a18df4bfd1a8
         with:
           github_token: ${{ github.token }}
-          pr_number: ${{ github.event.issue.number }}
+          pr_number: ${{ needs.resolve-pr.outputs.pr_number }}
           codex_model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
           azure_openai_api_key: ${{ secrets.AZURE_OPENAI_API_KEY }}
           azure_openai_responses_endpoint: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
