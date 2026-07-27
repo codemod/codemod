@@ -1,0 +1,103 @@
+# Managed downstream by codemod/codex-review-action.
+# Make repository-specific changes in the source template, not in the generated copy.
+name: Codex Review Command
+
+on:
+  issue_comment:
+    types:
+      - created
+
+concurrency:
+  group: codex-review-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-pr:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/codex-review' &&
+      contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      head_repo_full_name: ${{ steps.resolve.outputs.head_repo_full_name }}
+      is_draft: ${{ steps.resolve.outputs.is_draft }}
+    steps:
+      - name: Resolve pull request context
+        id: resolve
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const prNumber = Number(context.payload.issue?.number);
+            if (!Number.isFinite(prNumber)) {
+              core.setFailed("/codex-review requires a pull request number");
+              return;
+            }
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+
+            core.setOutput("pr_number", String(pr.number));
+            core.setOutput("head_repo_full_name", pr.head.repo?.full_name || "");
+            core.setOutput("is_draft", String(Boolean(pr.draft)));
+
+  codex-review:
+    needs: resolve-pr
+    if: ${{ !fromJSON(needs.resolve-pr.outputs.is_draft) && needs.resolve-pr.outputs.head_repo_full_name == github.repository }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Acknowledge command
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const comment = context.payload.comment;
+            if (String(comment?.body || "") !== "/codex-review") {
+              core.setFailed("The comment did not contain the exact /codex-review command");
+              return;
+            }
+
+            try {
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: comment.id,
+                content: "eyes",
+              });
+            } catch (error) {
+              core.warning(`Could not add acknowledgement reaction: ${error.message}`);
+            }
+
+      # The sync workflow replaces @main; pin it manually when copying this template elsewhere.
+      - uses: codemod/codex-review-action@0808e160dab04ad659fdd49cd160a18df4bfd1a8
+        with:
+          github_token: ${{ github.token }}
+          pr_number: ${{ needs.resolve-pr.outputs.pr_number }}
+          codex_model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
+          azure_openai_api_key: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          azure_openai_responses_endpoint: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
+          node_version: "24"
+          pnpm_version: "10.19.0"
+          install_command: pnpm install --frozen-lockfile
+          working_directory: .
+          codex_effort: high
+          permission_profile: ":workspace"
+          review_focus: |
+            Focus on:
+            - correctness bugs
+            - behavioral regressions
+            - missing tests or missing edge-case coverage
+            - security issues
+          extra_prompt: |
+            Follow any repository-specific review guidance files when present.
