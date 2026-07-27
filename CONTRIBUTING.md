@@ -283,11 +283,24 @@ docs: update CLI reference with new commands
    - Fill out the PR template
    - Link any related issues
    - Describe what changes you made and why
+   - Call out any docs updates that are required in the PR template's **Documentation to Update** section
 
 3. **Respond to feedback**:
-   - Address review comments
-   - Make requested changes
-   - Keep the discussion constructive
+    - Address review comments
+    - Make requested changes
+    - Keep the discussion constructive
+
+### Maintainer Review Command
+
+Maintainers and repository members can trigger an additional Codex review on a pull request by commenting:
+
+```text
+/codex-review
+```
+
+Use this command when you want to re-run Codex review after pushing updates or when a pull request needs an extra pass.
+
+This command only runs for non-draft pull requests whose head branch lives in this repository. It does not run for pull requests from forks.
 
 4. **Sign the CLA**: You'll be asked to sign our Contributor License Agreement when you create your first PR.
 
