@@ -26,6 +26,7 @@ use testing_utils::{
     TransformationResult,
 };
 
+use crate::commands::TelemetrySenderExt;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 
@@ -145,7 +146,7 @@ async fn send_failure_event(
     error_message: &str,
 ) {
     telemetry
-        .send_event(
+        .send_event_logged(
             BaseEvent {
                 kind: "failedToExecuteCommand".to_string(),
                 properties: HashMap::from([

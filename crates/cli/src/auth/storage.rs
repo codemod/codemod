@@ -4,6 +4,7 @@ use dirs::config_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
 use crate::auth::types::{AuthTokens, UserInfo};
@@ -206,6 +207,56 @@ impl TokenStorage {
         self.load_auth(registry)
     }
 
+    pub fn get_or_create_anonymous_telemetry_id(&self) -> Result<String> {
+        let telemetry_id_path = self.config_dir.join("telemetry_id");
+        match fs::read_to_string(&telemetry_id_path) {
+            Ok(stored_id) => {
+                let stored_id = stored_id.trim();
+                if !stored_id.is_empty() {
+                    return Ok(stored_id.to_string());
+                }
+                anyhow::bail!("Stored telemetry id is empty: {telemetry_id_path:?}");
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("Failed to read telemetry id: {telemetry_id_path:?}")
+                });
+            }
+        }
+
+        let telemetry_id = uuid::Uuid::new_v4().to_string();
+        let mut temporary_id = tempfile::NamedTempFile::new_in(&self.config_dir)
+            .context("Failed to create temporary telemetry id file")?;
+        temporary_id
+            .write_all(telemetry_id.as_bytes())
+            .context("Failed to write temporary telemetry id")?;
+        temporary_id
+            .as_file()
+            .sync_all()
+            .context("Failed to persist temporary telemetry id")?;
+
+        match temporary_id.persist_noclobber(&telemetry_id_path) {
+            Ok(_) => Ok(telemetry_id),
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let stored_id = fs::read_to_string(&telemetry_id_path).with_context(|| {
+                    format!(
+                        "Failed to read concurrently created telemetry id: {telemetry_id_path:?}"
+                    )
+                })?;
+                let stored_id = stored_id.trim();
+                if stored_id.is_empty() {
+                    anyhow::bail!(
+                        "Concurrently created telemetry id is empty: {telemetry_id_path:?}"
+                    );
+                }
+                Ok(stored_id.to_string())
+            }
+            Err(error) => Err(error.error)
+                .with_context(|| format!("Failed to persist telemetry id: {telemetry_id_path:?}")),
+        }
+    }
+
     fn get_auth_path(&self, registry: &str) -> PathBuf {
         let auth_dir = self.config_dir.join("auth");
         let filename = format!("{}.json", Self::sanitize_registry_name(registry));
@@ -223,7 +274,9 @@ impl TokenStorage {
 #[cfg(test)]
 mod tests {
     use super::TokenStorage;
+    use std::collections::HashSet;
     use std::fs;
+    use std::sync::{Arc, Barrier};
 
     #[test]
     fn missing_feedback_config_defaults_to_disabled() {
@@ -292,5 +345,52 @@ mod tests {
             config.anonymous_feedback.consented_at.as_deref(),
             Some("2026-06-09T12:00:00Z")
         );
+    }
+
+    #[test]
+    fn anonymous_telemetry_id_is_stable_across_cli_invocations() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        let first_storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        let first_id = first_storage
+            .get_or_create_anonymous_telemetry_id()
+            .expect("expected telemetry id");
+
+        let second_storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        let second_id = second_storage
+            .get_or_create_anonymous_telemetry_id()
+            .expect("expected persisted telemetry id");
+
+        assert_eq!(first_id, second_id);
+        assert!(uuid::Uuid::parse_str(&first_id).is_ok());
+    }
+
+    #[test]
+    fn concurrent_anonymous_telemetry_id_initialization_uses_one_id() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        let config_dir = Arc::new(temp_dir.path().to_path_buf());
+        let barrier = Arc::new(Barrier::new(8));
+        let handles = (0..8)
+            .map(|_| {
+                let config_dir = Arc::clone(&config_dir);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let storage = TokenStorage::with_config_dir(config_dir.as_ref().clone())
+                        .expect("storage");
+                    barrier.wait();
+                    storage
+                        .get_or_create_anonymous_telemetry_id()
+                        .expect("expected telemetry id")
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let ids = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("telemetry id thread"))
+            .collect::<HashSet<_>>();
+
+        assert_eq!(ids.len(), 1);
     }
 }

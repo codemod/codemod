@@ -10,6 +10,7 @@ use crate::commands::harness_adapter::{
 use crate::commands::output::{
     exit_adapter_error, format_output_path, prompt_for_overwrite_confirmation,
 };
+use crate::commands::TelemetrySenderExt;
 use crate::feedback;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::{bail, Result};
@@ -503,7 +504,7 @@ async fn send_ai_install_event(
         };
 
     telemetry
-        .send_event(
+        .send_event_logged(
             BaseEvent {
                 kind: event_kind.to_string(),
                 properties: HashMap::from([
@@ -600,7 +601,7 @@ async fn send_ai_list_event(
     warnings_count: usize,
 ) {
     telemetry
-        .send_event(
+        .send_event_logged(
             BaseEvent {
                 kind: "aiSkillsListed".to_string(),
                 properties: HashMap::from([

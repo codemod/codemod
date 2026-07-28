@@ -1,3 +1,4 @@
+use crate::commands::TelemetrySenderExt;
 use crate::engine::create_progress_callback;
 use crate::engine::create_registry_client;
 use crate::utils::resolve_capabilities::resolve_capabilities;
@@ -460,7 +461,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let execution_id = generate_execution_id();
 
     telemetry
-        .send_event(
+        .send_event_logged(
             BaseEvent {
                 kind: "localJssgExecuted".to_string(),
                 properties: HashMap::from([
