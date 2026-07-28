@@ -102,14 +102,11 @@ pub(super) async fn send_event(telemetry: &TelemetrySenderMutex, event: BaseEven
     telemetry.send_event_logged(event, None).await;
 }
 
-pub(super) fn spawn_started_event(
-    telemetry: TelemetrySenderMutex,
+pub(super) async fn send_started_event(
+    telemetry: &TelemetrySenderMutex,
     run_telemetry: &CodemodRunTelemetry,
-) -> tokio::task::JoinHandle<()> {
-    let event = run_telemetry.started_event();
-    tokio::spawn(async move {
-        send_event(&telemetry, event).await;
-    })
+) {
+    send_event(telemetry, run_telemetry.started_event()).await;
 }
 
 pub(super) async fn send_completed_event(

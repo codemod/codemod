@@ -15,6 +15,7 @@ async-trait.workspace = true
 chrono.workspace = true
 posthog-rs = { version = "0.21", default-features = false, features = ["async-client"] }
 serde.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

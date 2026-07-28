@@ -427,13 +427,18 @@ async fn run_cli() -> Result<()> {
                     })
             });
 
-            Arc::new(Box::new(
-                PostHogSender::new(TelemetrySenderOptions {
-                    distinct_id,
-                    cloud_role: "CLI".to_string(),
-                })
-                .await,
-            ))
+            match PostHogSender::new(TelemetrySenderOptions {
+                distinct_id,
+                cloud_role: "CLI".to_string(),
+            })
+            .await
+            {
+                Ok(sender) => Arc::new(Box::new(sender)),
+                Err(error) => {
+                    log::debug!("Failed to initialize telemetry: {error}");
+                    Arc::new(Box::new(NullSender {}))
+                }
+            }
         };
 
     telemetry_sender.initialize_panic_telemetry().await;

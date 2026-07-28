@@ -29,7 +29,20 @@ pub struct BaseEvent {
 }
 
 static RUNTIME_HANDLE: OnceCell<tokio::runtime::Handle> = OnceCell::const_new();
-pub type TelemetryError = posthog_rs::Error;
+const REQUEST_TIMEOUT_SECONDS: u64 = 2;
+const MAX_CAPTURE_ATTEMPTS: u32 = 3;
+const RETRY_INITIAL_BACKOFF_MS: u64 = 100;
+const RETRY_MAX_BACKOFF_MS: u64 = 200;
+
+#[derive(Debug, thiserror::Error)]
+pub enum TelemetryError {
+    #[error(transparent)]
+    PostHog(#[from] posthog_rs::Error),
+    #[error("PostHog client configuration is invalid: {0}")]
+    Configuration(String),
+    #[error("PostHog accepted the request without submitting the event")]
+    NoEventSubmitted,
+}
 
 #[async_trait]
 pub trait TelemetrySender: Send + Sync + 'static {
@@ -58,9 +71,30 @@ pub struct PostHogSender {
 pub const POSTHOG_API_KEY: &str = env!("POSTHOG_API_KEY");
 
 impl PostHogSender {
-    pub async fn new(options: TelemetrySenderOptions) -> Self {
-        let client = posthog_rs::client(POSTHOG_API_KEY).await;
-        Self::with_client(options, client)
+    pub async fn new(options: TelemetrySenderOptions) -> Result<Self, TelemetryError> {
+        Self::new_with_api_key(options, POSTHOG_API_KEY).await
+    }
+
+    async fn new_with_api_key(
+        options: TelemetrySenderOptions,
+        api_key: &str,
+    ) -> Result<Self, TelemetryError> {
+        if api_key.trim().is_empty() {
+            return Err(TelemetryError::Configuration(
+                "POSTHOG_API_KEY is empty".to_string(),
+            ));
+        }
+
+        let client_options = posthog_rs::ClientOptionsBuilder::default()
+            .api_key(api_key.to_string())
+            .request_timeout_seconds(REQUEST_TIMEOUT_SECONDS)
+            .max_capture_attempts(MAX_CAPTURE_ATTEMPTS)
+            .retry_initial_backoff_ms(RETRY_INITIAL_BACKOFF_MS)
+            .retry_max_backoff_ms(RETRY_MAX_BACKOFF_MS)
+            .build()
+            .map_err(|error| TelemetryError::Configuration(error.to_string()))?;
+        let client = posthog_rs::client(client_options).await;
+        Ok(Self::with_client(options, client))
     }
 
     fn with_client(options: TelemetrySenderOptions, client: posthog_rs::Client) -> Self {
@@ -103,7 +137,10 @@ impl TelemetrySender for PostHogSender {
             posthog_event.insert_prop(key, value)?;
         }
 
-        self.client.capture_immediate(posthog_event).await?;
+        let summary = self.client.capture_immediate(posthog_event).await?;
+        if summary.submitted() != 1 {
+            return Err(TelemetryError::NoEventSubmitted);
+        }
         Ok(())
     }
 
@@ -311,7 +348,10 @@ mod tests {
             .await
             .expect_err("non-success response should be reported");
 
-        assert!(matches!(error, posthog_rs::Error::BadRequest(_)));
+        assert!(matches!(
+            error,
+            TelemetryError::PostHog(posthog_rs::Error::BadRequest(_))
+        ));
         server.await.expect("telemetry server should finish");
     }
 
@@ -362,5 +402,48 @@ mod tests {
         assert!(error.to_string().contains("504"));
         let requests = server.await.expect("telemetry server should finish");
         assert_eq!(requests.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn empty_api_key_is_rejected_instead_of_disabling_delivery() {
+        let result = PostHogSender::new_with_api_key(
+            TelemetrySenderOptions {
+                distinct_id: "installation-123".to_string(),
+                cloud_role: "CLI".to_string(),
+            },
+            " ",
+        )
+        .await;
+
+        assert!(matches!(result, Err(TelemetryError::Configuration(_))));
+    }
+
+    #[tokio::test]
+    async fn disabled_client_is_not_reported_as_successful_delivery() {
+        let client_options = posthog_rs::ClientOptionsBuilder::default()
+            .api_key(" ".to_string())
+            .build()
+            .expect("expected valid disabled-client options");
+        let client = posthog_rs::client(client_options).await;
+        let sender = PostHogSender::with_client(
+            TelemetrySenderOptions {
+                distinct_id: "installation-123".to_string(),
+                cloud_role: "CLI".to_string(),
+            },
+            client,
+        );
+
+        let error = sender
+            .try_send_event(
+                BaseEvent {
+                    kind: "codemodRunStarted".to_string(),
+                    properties: HashMap::new(),
+                },
+                None,
+            )
+            .await
+            .expect_err("disabled client should not report successful delivery");
+
+        assert!(matches!(error, TelemetryError::NoEventSubmitted));
     }
 }

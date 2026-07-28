@@ -1,6 +1,6 @@
 use crate::commands::run_telemetry::{
-    send_completed_event, send_event as send_telemetry_event, send_success_events,
-    spawn_started_event, CodemodRunOutcome, CodemodRunTelemetry,
+    send_completed_event, send_event as send_telemetry_event, send_started_event,
+    send_success_events, CodemodRunOutcome, CodemodRunTelemetry,
 };
 use crate::engine::{create_engine, create_registry_client};
 use crate::pro_dry_run::{
@@ -320,7 +320,7 @@ pub async fn handler(
     // Always collect diffs so report output remains available for interactive flows.
     let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
 
-    let started = std::time::Instant::now();
+    let setup_started = std::time::Instant::now();
     let output_format = args.format;
 
     // Run workflow using the extracted workflow runner
@@ -364,11 +364,12 @@ pub async fn handler(
         selected_workflow_name.clone(),
         dry_run,
     );
-    let started_delivery = spawn_started_event(telemetry.clone(), &run_telemetry);
+    let setup_duration = setup_started.elapsed();
+    send_started_event(&telemetry, &run_telemetry).await;
 
+    let execution_started = std::time::Instant::now();
     let run_result = run_workflow(&mut engine, config).await;
-    let duration_ms = started.elapsed().as_millis();
-    let _ = started_delivery.await;
+    let duration_ms = (setup_duration + execution_started.elapsed()).as_millis();
 
     if let Err(e) = run_result {
         let error_msg = format!("Workflow execution failed: {}", e);
