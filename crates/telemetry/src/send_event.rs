@@ -1,13 +1,13 @@
 use async_trait::async_trait;
 use chrono::Utc;
+use posthog_rs;
 use serde::Serialize;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::env;
 use std::panic;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::OnceCell;
-use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct TelemetrySenderOptions {
@@ -29,20 +29,7 @@ pub struct BaseEvent {
 }
 
 static RUNTIME_HANDLE: OnceCell<tokio::runtime::Handle> = OnceCell::const_new();
-const POSTHOG_CAPTURE_URL: &str = "https://us.i.posthog.com/i/v0/e/";
-const MAX_CAPTURE_ATTEMPTS: usize = 3;
-const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
-
-#[derive(Debug, thiserror::Error)]
-pub enum TelemetryError {
-    #[error("PostHog request failed: {0}")]
-    Connection(String),
-    #[error("PostHog rejected the event with HTTP {status}: {body}")]
-    Rejected { status: u16, body: String },
-    #[error("PostHog delivery timed out")]
-    Timeout,
-}
+pub type TelemetryError = posthog_rs::Error;
 
 #[async_trait]
 pub trait TelemetrySender: Send + Sync + 'static {
@@ -56,80 +43,23 @@ pub trait TelemetrySender: Send + Sync + 'static {
 
 #[derive(Clone)]
 pub struct PostHogSender {
-    client: reqwest::Client,
-    capture_url: String,
+    client: Arc<posthog_rs::Client>,
     options: TelemetrySenderOptions,
 }
 
 pub const POSTHOG_API_KEY: &str = env!("POSTHOG_API_KEY");
 
-#[derive(Serialize)]
-struct PostHogCapture {
-    api_key: &'static str,
-    uuid: Uuid,
-    event: String,
-    distinct_id: String,
-    properties: HashMap<String, Value>,
-}
-
 impl PostHogSender {
     pub async fn new(options: TelemetrySenderOptions) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .expect("static PostHog HTTP client options should be valid");
-        Self::with_client(options, client, POSTHOG_CAPTURE_URL.to_string())
+        let client = posthog_rs::client(POSTHOG_API_KEY).await;
+        Self::with_client(options, client)
     }
 
-    fn with_client(
-        options: TelemetrySenderOptions,
-        client: reqwest::Client,
-        capture_url: String,
-    ) -> Self {
+    fn with_client(options: TelemetrySenderOptions, client: posthog_rs::Client) -> Self {
         Self {
-            client,
-            capture_url,
+            client: Arc::new(client),
             options,
         }
-    }
-
-    async fn capture(&self, event: PostHogCapture) -> Result<(), TelemetryError> {
-        tokio::time::timeout(CAPTURE_TIMEOUT, self.capture_with_retries(event))
-            .await
-            .map_err(|_| TelemetryError::Timeout)?
-    }
-
-    async fn capture_with_retries(&self, event: PostHogCapture) -> Result<(), TelemetryError> {
-        let mut backoff = Duration::from_millis(100);
-
-        for attempt in 1..=MAX_CAPTURE_ATTEMPTS {
-            let response = self
-                .client
-                .post(&self.capture_url)
-                .json(&event)
-                .send()
-                .await;
-            match response {
-                Ok(response) if response.status().is_success() => return Ok(()),
-                Ok(response) => {
-                    let status = response.status().as_u16();
-                    let retryable = matches!(status, 408 | 429 | 500 | 502 | 503 | 504);
-                    let body = response.text().await.unwrap_or_default();
-                    if !retryable || attempt == MAX_CAPTURE_ATTEMPTS {
-                        return Err(TelemetryError::Rejected { status, body });
-                    }
-                }
-                Err(error) if attempt == MAX_CAPTURE_ATTEMPTS => {
-                    return Err(TelemetryError::Connection(error.to_string()));
-                }
-                Err(_) => {}
-            }
-
-            tokio::time::sleep(backoff).await;
-            backoff *= 2;
-        }
-
-        unreachable!("capture attempt loop always returns on its final attempt")
     }
 }
 
@@ -150,25 +80,15 @@ impl TelemetrySender for PostHogSender {
             .and_then(|o| o.cloud_role.clone())
             .unwrap_or_else(|| self.options.cloud_role.clone());
 
-        let mut properties = event
-            .properties
-            .into_iter()
-            .map(|(key, value)| (key, Value::String(value)))
-            .collect::<HashMap<_, _>>();
-        properties.insert("cloudRole".to_string(), Value::String(cloud_role.clone()));
-        properties.insert(
-            "$lib".to_string(),
-            Value::String("codemod-rust-cli".to_string()),
-        );
+        let mut posthog_event =
+            posthog_rs::Event::new(format!("codemod.{cloud_role}.{}", event.kind), distinct_id);
 
-        self.capture(PostHogCapture {
-            api_key: POSTHOG_API_KEY,
-            uuid: Uuid::new_v4(),
-            event: format!("codemod.{cloud_role}.{}", event.kind),
-            distinct_id,
-            properties,
-        })
-        .await
+        for (key, value) in event.properties {
+            posthog_event.insert_prop(key, value)?;
+        }
+
+        self.client.capture_immediate(posthog_event).await?;
+        Ok(())
     }
 
     async fn initialize_panic_telemetry(&self) {
@@ -305,10 +225,16 @@ mod tests {
             requests
         });
 
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(1))
+        let client_options = posthog_rs::ClientOptionsBuilder::default()
+            .api_key("test-key".to_string())
+            .host(format!("http://{address}"))
+            .request_timeout_seconds(1)
+            .max_capture_attempts(3)
+            .retry_initial_backoff_ms(1)
+            .retry_max_backoff_ms(2)
             .build()
-            .expect("build test HTTP client");
+            .expect("build test PostHog client options");
+        let client = posthog_rs::client(client_options).await;
         (
             PostHogSender::with_client(
                 TelemetrySenderOptions {
@@ -316,14 +242,13 @@ mod tests {
                     cloud_role: "CLI".to_string(),
                 },
                 client,
-                format!("http://{address}/i/v0/e/"),
             ),
             server,
         )
     }
 
     #[tokio::test]
-    async fn send_event_includes_stable_identity_and_cloud_role() {
+    async fn send_event_includes_stable_identity_and_event_name() {
         let (sender, server) = test_sender(vec!["200 OK"]).await;
 
         sender
@@ -346,12 +271,13 @@ mod tests {
             .split_once("\r\n\r\n")
             .map(|(_, body)| body)
             .expect("request should contain a body");
-        let payload: Value = serde_json::from_str(body).expect("request body should be JSON");
+        let payload: serde_json::Value =
+            serde_json::from_str(body).expect("request body should be JSON");
+        let event = &payload["batch"][0];
 
-        assert_eq!(payload["distinct_id"], "installation-123");
-        assert!(payload.get("$distinct_id").is_none());
-        assert_eq!(payload["properties"]["cloudRole"], "CLI");
-        assert_eq!(payload["event"], "codemod.CLI.codemodRunStarted");
+        assert_eq!(event["distinct_id"], "installation-123");
+        assert!(event.get("$distinct_id").is_none());
+        assert_eq!(event["event"], "codemod.CLI.codemodRunStarted");
     }
 
     #[tokio::test]
@@ -369,7 +295,7 @@ mod tests {
             .await
             .expect_err("non-success response should be reported");
 
-        assert!(error.to_string().contains("400"));
+        assert!(matches!(error, posthog_rs::Error::BadRequest(_)));
         server.await.expect("telemetry server should finish");
     }
 
