@@ -95,7 +95,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         return Err(anyhow!("Failed to publish package"));
     }
 
-    telemetry
+    let _ = telemetry
         .send_event(
             BaseEvent {
                 kind: "codemodPublished".to_string(),

@@ -1083,7 +1083,6 @@ dependencies = [
  "open",
  "percent-encoding",
  "portable-pty",
- "posthog-rs",
  "rand 0.8.5",
  "ratatui",
  "regex",
@@ -1231,9 +1230,12 @@ version = "1.12.13"
 dependencies = [
  "async-trait",
  "chrono",
- "posthog-rs",
+ "reqwest 0.12.23",
  "serde",
+ "serde_json",
+ "thiserror 2.0.16",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -5843,21 +5845,6 @@ dependencies = [
  "shell-words",
  "winapi",
  "winreg 0.10.1",
-]
-
-[[package]]
-name = "posthog-rs"
-version = "0.3.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "610d236077c94c96194b0d2b40989bda4bf8faf60e15a0da6ef8ffd4c78f6c1c"
-dependencies = [
- "chrono",
- "derive_builder",
- "reqwest 0.11.27",
- "semver",
- "serde",
- "serde_json",
- "uuid",
 ]
 
 [[package]]

@@ -418,9 +418,14 @@ async fn run_cli() -> Result<()> {
 
             let auth = storage.get_auth_for_registry(&config.default_registry)?;
 
-            let distinct_id = auth
-                .map(|auth| auth.user.id)
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let distinct_id = auth.map(|auth| auth.user.id).unwrap_or_else(|| {
+                storage
+                    .get_or_create_anonymous_telemetry_id()
+                    .unwrap_or_else(|error| {
+                        log::debug!("Failed to persist anonymous telemetry id: {error}");
+                        uuid::Uuid::new_v4().to_string()
+                    })
+            });
 
             Arc::new(Box::new(
                 PostHogSender::new(TelemetrySenderOptions {

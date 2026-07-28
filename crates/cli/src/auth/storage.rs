@@ -206,6 +206,29 @@ impl TokenStorage {
         self.load_auth(registry)
     }
 
+    pub fn get_or_create_anonymous_telemetry_id(&self) -> Result<String> {
+        let telemetry_id_path = self.config_dir.join("telemetry_id");
+        match fs::read_to_string(&telemetry_id_path) {
+            Ok(stored_id) => {
+                let stored_id = stored_id.trim();
+                if !stored_id.is_empty() {
+                    return Ok(stored_id.to_string());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("Failed to read telemetry id: {telemetry_id_path:?}")
+                });
+            }
+        }
+
+        let telemetry_id = uuid::Uuid::new_v4().to_string();
+        fs::write(&telemetry_id_path, &telemetry_id)
+            .with_context(|| format!("Failed to write telemetry id: {telemetry_id_path:?}"))?;
+        Ok(telemetry_id)
+    }
+
     fn get_auth_path(&self, registry: &str) -> PathBuf {
         let auth_dir = self.config_dir.join("auth");
         let filename = format!("{}.json", Self::sanitize_registry_name(registry));
@@ -292,5 +315,24 @@ mod tests {
             config.anonymous_feedback.consented_at.as_deref(),
             Some("2026-06-09T12:00:00Z")
         );
+    }
+
+    #[test]
+    fn anonymous_telemetry_id_is_stable_across_cli_invocations() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        let first_storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        let first_id = first_storage
+            .get_or_create_anonymous_telemetry_id()
+            .expect("expected telemetry id");
+
+        let second_storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        let second_id = second_storage
+            .get_or_create_anonymous_telemetry_id()
+            .expect("expected persisted telemetry id");
+
+        assert_eq!(first_id, second_id);
+        assert!(uuid::Uuid::parse_str(&first_id).is_ok());
     }
 }

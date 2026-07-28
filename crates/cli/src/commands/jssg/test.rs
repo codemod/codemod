@@ -144,7 +144,7 @@ async fn send_failure_event(
     error_category: &str,
     error_message: &str,
 ) {
-    telemetry
+    let _ = telemetry
         .send_event(
             BaseEvent {
                 kind: "failedToExecuteCommand".to_string(),

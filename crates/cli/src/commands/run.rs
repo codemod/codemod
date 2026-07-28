@@ -1,3 +1,7 @@
+use crate::commands::run_telemetry::{
+    send_completed_event, send_event as send_telemetry_event, send_started_event,
+    send_success_events, CodemodRunOutcome, CodemodRunTelemetry,
+};
 use crate::engine::{create_engine, create_registry_client};
 use crate::pro_dry_run::{
     apply_pro_dry_run_execution_settings, notify_pro_dry_run_required, ProDryRunReason,
@@ -11,7 +15,7 @@ use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use anyhow::{anyhow, Result};
 use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
-use butterflow_core::registry::RegistryError;
+use butterflow_core::registry::{RegistryError, RegistryPackageMetadata};
 use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
 use butterflow_core::structured_log::OutputFormat;
 use butterflow_core::utils::generate_execution_id;
@@ -30,6 +34,15 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 const WORKFLOW_FILE_NAME: &str = "workflow.yaml";
+
+fn telemetry_codemod_name(
+    registry_metadata: Option<&RegistryPackageMetadata>,
+    requested_name: &str,
+) -> String {
+    registry_metadata
+        .map(|metadata| metadata.package_web_path.clone())
+        .unwrap_or_else(|| requested_name.to_string())
+}
 
 fn format_file_count(count: usize) -> String {
     if count == 1 {
@@ -154,25 +167,24 @@ async fn send_failure_event(
     codemod_name: &str,
     error_message: &str,
 ) {
-    telemetry
-        .send_event(
-            BaseEvent {
-                kind: "failedToExecuteCommand".to_string(),
-                properties: HashMap::from([
-                    ("codemodName".to_string(), codemod_name.to_string()),
-                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
-                    (
-                        "commandName".to_string(),
-                        "codemod.executeCodemod".to_string(),
-                    ),
-                    ("os".to_string(), std::env::consts::OS.to_string()),
-                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
-                    ("errorMessage".to_string(), error_message.to_string()),
-                ]),
-            },
-            None,
-        )
-        .await;
+    send_telemetry_event(
+        telemetry,
+        BaseEvent {
+            kind: "failedToExecuteCommand".to_string(),
+            properties: HashMap::from([
+                ("codemodName".to_string(), codemod_name.to_string()),
+                ("cliVersion".to_string(), CLI_VERSION.to_string()),
+                (
+                    "commandName".to_string(),
+                    "codemod.executeCodemod".to_string(),
+                ),
+                ("os".to_string(), std::env::consts::OS.to_string()),
+                ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                ("errorMessage".to_string(), error_message.to_string()),
+            ]),
+        },
+    )
+    .await;
 }
 
 pub async fn handler(
@@ -228,6 +240,8 @@ pub async fn handler(
         args.package,
         resolved_package.package_dir.display()
     );
+    let canonical_codemod_name =
+        telemetry_codemod_name(resolved_package.registry_metadata.as_ref(), &args.package);
 
     println!(
         "{} 🏁 Running codemod: {}",
@@ -252,14 +266,14 @@ pub async fn handler(
         Ok(selected) => selected,
         Err(error) => {
             let error_msg = error.to_string();
-            send_failure_event(&telemetry, &args.package, &error_msg).await;
+            send_failure_event(&telemetry, &canonical_codemod_name, &error_msg).await;
             return Err(error);
         }
     };
     if !workflow_path.exists() {
         let error = missing_workflow_error(&args.package, &workflow_path);
         let error_msg = error.to_string();
-        send_failure_event(&telemetry, &args.package, &error_msg).await;
+        send_failure_event(&telemetry, &canonical_codemod_name, &error_msg).await;
         return Err(error);
     }
 
@@ -306,8 +320,6 @@ pub async fn handler(
     // Always collect diffs so report output remains available for interactive flows.
     let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
 
-    let started = std::time::Instant::now();
-
     let output_format = args.format;
 
     // Run workflow using the extracted workflow runner
@@ -329,7 +341,7 @@ pub async fn handler(
     )?;
 
     // Set the package name so it's stored on the WorkflowRun
-    engine.set_name(Some(args.package.clone()));
+    engine.set_name(Some(canonical_codemod_name.clone()));
     apply_package_run_mode_to_config(engine.workflow_run_config_mut(), auto_launch_tui);
     if auto_launch_tui {
         engine.set_quiet(true);
@@ -344,19 +356,39 @@ pub async fn handler(
         apply_pro_dry_run_execution_settings(&mut config);
     }
 
+    let run_telemetry = CodemodRunTelemetry::new(
+        canonical_codemod_name.clone(),
+        resolved_package.version.clone(),
+        generate_execution_id(),
+        selected_workflow_name.clone(),
+        dry_run,
+    );
+    send_started_event(&telemetry, &run_telemetry).await;
+
+    let started = std::time::Instant::now();
     let run_result = run_workflow(&mut engine, config).await;
 
     if let Err(e) = run_result {
+        let error_msg = format!("Workflow execution failed: {}", e);
+        let duration_ms = started.elapsed().as_millis();
+        send_completed_event(
+            &telemetry,
+            &run_telemetry,
+            CodemodRunOutcome::Failed {
+                error_message: error_msg.clone(),
+            },
+            duration_ms,
+        )
+        .await;
         // Clean up cached pro codemod on failure too
         if resolved_package.dry_run_only {
             let _ = std::fs::remove_dir_all(&resolved_package.package_dir);
         }
-        let error_msg = format!("Workflow execution failed: {}", e);
-        send_failure_event(&telemetry, &args.package, &error_msg).await;
+        send_failure_event(&telemetry, &canonical_codemod_name, &error_msg).await;
         return Err(e);
     }
 
-    let duration_ms = started.elapsed().as_millis() as f64;
+    let duration_ms = started.elapsed().as_millis();
 
     let metrics_data = engine.metrics_context.get_all();
 
@@ -364,6 +396,19 @@ pub async fn handler(
     let files_modified = stats.files_modified.load(Ordering::Relaxed);
     let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
     let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
+
+    send_success_events(
+        &telemetry,
+        &run_telemetry,
+        CodemodRunOutcome::Succeeded {
+            files_modified,
+            files_unmodified,
+            files_with_errors,
+        },
+        files_modified,
+        duration_ms,
+    )
+    .await;
 
     if dry_run {
         print_dry_run_summary(files_modified, files_unmodified, files_with_errors);
@@ -390,7 +435,7 @@ pub async fn handler(
         let report = ExecutionReport::build(
             args.package.clone(),
             Some(resolved_package.version.clone()),
-            duration_ms,
+            duration_ms as f64,
             dry_run,
             target_path.display().to_string(),
             CLI_VERSION.to_string(),
@@ -411,29 +456,6 @@ pub async fn handler(
     } else {
         crate::utils::metrics::print_metrics(&metrics_data);
     }
-
-    let execution_id = generate_execution_id();
-
-    let mut executed_props = HashMap::from([
-        ("codemodName".to_string(), args.package.clone()),
-        ("executionId".to_string(), execution_id.clone()),
-        ("fileCount".to_string(), files_modified.to_string()),
-        ("cliVersion".to_string(), CLI_VERSION.to_string()),
-        ("os".to_string(), std::env::consts::OS.to_string()),
-        ("arch".to_string(), std::env::consts::ARCH.to_string()),
-    ]);
-    if let Some(name) = &selected_workflow_name {
-        executed_props.insert("workflowName".to_string(), name.clone());
-    }
-    telemetry
-        .send_event(
-            BaseEvent {
-                kind: "codemodExecuted".to_string(),
-                properties: executed_props,
-            },
-            None,
-        )
-        .await;
 
     if resolved_package.dry_run_only {
         if let Err(e) = std::fs::remove_dir_all(&resolved_package.package_dir) {
@@ -1061,5 +1083,19 @@ mod tests {
         let workflow = workflow_with_manual_step();
         let auto_launch_tui = should_auto_launch_package_run_tui(false, true, &workflow);
         assert!(!auto_launch_tui);
+    }
+
+    #[test]
+    fn telemetry_uses_canonical_registry_name_instead_of_requested_alias() {
+        let metadata = RegistryPackageMetadata {
+            registry_base_url: "https://app.codemod.com".to_string(),
+            package_web_path: "@codemod/react/19/migration-recipe".to_string(),
+            access: Some("public".to_string()),
+        };
+
+        assert_eq!(
+            telemetry_codemod_name(Some(&metadata), "@alias/react-migration@1.2.3"),
+            "@codemod/react/19/migration-recipe"
+        );
     }
 }

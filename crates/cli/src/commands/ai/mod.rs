@@ -502,7 +502,7 @@ async fn send_ai_install_event(
             "unknown"
         };
 
-    telemetry
+    let _ = telemetry
         .send_event(
             BaseEvent {
                 kind: event_kind.to_string(),
@@ -599,7 +599,7 @@ async fn send_ai_list_event(
     listed_count: usize,
     warnings_count: usize,
 ) {
-    telemetry
+    let _ = telemetry
         .send_event(
             BaseEvent {
                 kind: "aiSkillsListed".to_string(),

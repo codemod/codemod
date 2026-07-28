@@ -524,7 +524,7 @@ async fn send_package_skill_install_event(
         warnings_count,
     } = input;
 
-    telemetry
+    let _ = telemetry
         .send_event(
             BaseEvent {
                 kind: "packageSkillInstalled".to_string(),

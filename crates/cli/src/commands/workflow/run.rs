@@ -260,7 +260,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     }
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
-    telemetry
+    let _ = telemetry
         .send_event(
             BaseEvent {
                 kind: "localWorkflowExecuted".to_string(),
