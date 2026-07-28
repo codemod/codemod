@@ -104,6 +104,7 @@ jobs:
         run: test -f crates/cli/report-ui/dist/index.html
 
       - name: Verify telemetry configuration
+        shell: bash
         run: |
           if [[ ! "${POSTHOG_API_KEY}" =~ [^[:space:]] ]]; then
             echo "::error::POSTHOG_API_KEY must be configured for release builds"
