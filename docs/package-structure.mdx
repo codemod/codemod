@@ -87,7 +87,10 @@ version: "0.1.0"
 description: "Transform legacy patterns to modern syntax"
 author: "Your Name <you@example.com>"
 license: "MIT"
-workflow: "workflow.yaml"
+workflows:
+  - name: main
+    path: workflow.yaml
+    default: true
 repository: "https://github.com/username/codemod-repo"
 category: "migration"
 
@@ -101,7 +104,11 @@ registry:
   visibility: "public"
 ```
 
-For skill-only packages, keep `workflow: "workflow.yaml"` and define `install-skill` steps in that workflow; authored skill content lives under `agents/skill/<skill-name>/`.
+`codemod init` now scaffolds packages with the `workflows:` array by default, even when there is only one workflow. That keeps the generated package ready for future variants without restructuring `codemod.yaml` later.
+
+For skill-only packages, the generated package still points at `workflow.yaml` through a single `workflows` entry and defines `install-skill` steps in that workflow; authored skill content lives under `agents/skill/<skill-name>/`.
+
+You can still author `workflow: "workflow.yaml"` manually for a single-workflow package. The CLI accepts either shape as long as you set exactly one of `workflow` or `workflows`.
 
 ### Multiple workflows per package
 
