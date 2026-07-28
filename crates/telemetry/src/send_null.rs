@@ -1,6 +1,4 @@
-use crate::send_event::{
-    BaseEvent, PartialTelemetrySenderOptions, TelemetryError, TelemetrySender,
-};
+use crate::send_event::{BaseEvent, PartialTelemetrySenderOptions, TelemetrySender};
 use async_trait::async_trait;
 
 pub struct NullSender;
@@ -11,8 +9,7 @@ impl TelemetrySender for NullSender {
         &self,
         _event: BaseEvent,
         _options_override: Option<PartialTelemetrySenderOptions>,
-    ) -> Result<(), TelemetryError> {
-        Ok(())
+    ) {
     }
     async fn initialize_panic_telemetry(&self) {
         // Do nothing

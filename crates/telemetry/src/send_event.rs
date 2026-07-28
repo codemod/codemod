@@ -37,7 +37,15 @@ pub trait TelemetrySender: Send + Sync + 'static {
         &self,
         event: BaseEvent,
         options_override: Option<PartialTelemetrySenderOptions>,
-    ) -> Result<(), TelemetryError>;
+    );
+    async fn try_send_event(
+        &self,
+        event: BaseEvent,
+        options_override: Option<PartialTelemetrySenderOptions>,
+    ) -> Result<(), TelemetryError> {
+        self.send_event(event, options_override).await;
+        Ok(())
+    }
     async fn initialize_panic_telemetry(&self);
 }
 
@@ -66,6 +74,14 @@ impl PostHogSender {
 #[async_trait]
 impl TelemetrySender for PostHogSender {
     async fn send_event(
+        &self,
+        event: BaseEvent,
+        options_override: Option<PartialTelemetrySenderOptions>,
+    ) {
+        let _ = self.try_send_event(event, options_override).await;
+    }
+
+    async fn try_send_event(
         &self,
         event: BaseEvent,
         options_override: Option<PartialTelemetrySenderOptions>,
@@ -138,7 +154,7 @@ impl TelemetrySender for PostHogSender {
 
                     let _ = tokio::time::timeout(
                         Duration::from_secs(5),
-                        sender.send_event(
+                        sender.try_send_event(
                             BaseEvent {
                                 kind: "cliPanic".to_string(),
                                 properties,
@@ -252,7 +268,7 @@ mod tests {
         let (sender, server) = test_sender(vec!["200 OK"]).await;
 
         sender
-            .send_event(
+            .try_send_event(
                 BaseEvent {
                     kind: "codemodRunStarted".to_string(),
                     properties: HashMap::from([(
@@ -285,7 +301,7 @@ mod tests {
         let (sender, server) = test_sender(vec!["400 Bad Request"]).await;
 
         let error = sender
-            .send_event(
+            .try_send_event(
                 BaseEvent {
                     kind: "codemodRunStarted".to_string(),
                     properties: HashMap::new(),
@@ -309,7 +325,7 @@ mod tests {
         .await;
 
         sender
-            .send_event(
+            .try_send_event(
                 BaseEvent {
                     kind: "codemodRunStarted".to_string(),
                     properties: HashMap::new(),
@@ -333,7 +349,7 @@ mod tests {
         .await;
 
         let error = sender
-            .send_event(
+            .try_send_event(
                 BaseEvent {
                     kind: "codemodRunStarted".to_string(),
                     properties: HashMap::new(),

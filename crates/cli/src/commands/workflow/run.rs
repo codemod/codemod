@@ -16,6 +16,7 @@ use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 use std::sync::atomic::Ordering;
 
+use crate::commands::TelemetrySenderExt;
 use crate::engine::{create_engine, create_registry_client};
 use crate::pro_dry_run::{
     apply_pro_dry_run_execution_settings, notify_pro_dry_run_required, ProDryRunReason,
@@ -260,8 +261,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     }
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
-    let _ = telemetry
-        .send_event(
+    telemetry
+        .send_event_logged(
             BaseEvent {
                 kind: "localWorkflowExecuted".to_string(),
                 properties: HashMap::from([

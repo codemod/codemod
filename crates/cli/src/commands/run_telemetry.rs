@@ -1,6 +1,6 @@
+use crate::commands::TelemetrySenderExt;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use codemod_telemetry::send_event::BaseEvent;
-use log::debug;
 use std::collections::HashMap;
 
 pub(super) struct CodemodRunTelemetry {
@@ -99,16 +99,17 @@ impl CodemodRunTelemetry {
 }
 
 pub(super) async fn send_event(telemetry: &TelemetrySenderMutex, event: BaseEvent) {
-    if let Err(error) = telemetry.send_event(event, None).await {
-        debug!("Failed to deliver telemetry event: {error}");
-    }
+    telemetry.send_event_logged(event, None).await;
 }
 
-pub(super) async fn send_started_event(
-    telemetry: &TelemetrySenderMutex,
+pub(super) fn spawn_started_event(
+    telemetry: TelemetrySenderMutex,
     run_telemetry: &CodemodRunTelemetry,
-) {
-    send_event(telemetry, run_telemetry.started_event()).await;
+) -> tokio::task::JoinHandle<()> {
+    let event = run_telemetry.started_event();
+    tokio::spawn(async move {
+        send_event(&telemetry, event).await;
+    })
 }
 
 pub(super) async fn send_completed_event(
@@ -143,9 +144,7 @@ pub(super) async fn send_success_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codemod_telemetry::send_event::{
-        PartialTelemetrySenderOptions, TelemetryError, TelemetrySender,
-    };
+    use codemod_telemetry::send_event::{PartialTelemetrySenderOptions, TelemetrySender};
     use std::sync::{Arc, Mutex};
 
     struct RecordingTelemetrySender {
@@ -158,9 +157,8 @@ mod tests {
             &self,
             event: BaseEvent,
             _options_override: Option<PartialTelemetrySenderOptions>,
-        ) -> Result<(), TelemetryError> {
+        ) {
             self.events.lock().expect("events lock").push(event.kind);
-            Ok(())
         }
 
         async fn initialize_panic_telemetry(&self) {}
