@@ -28,6 +28,15 @@ npx codemod login
 
 # Verify authentication
 npx codemod whoami
+
+# Inspect token scopes and expiry
+npx codemod whoami --detailed
+
+# Log out from the default registry
+npx codemod logout
+
+# Log out from every configured registry and clear cached packages
+npx codemod logout --all
 ```
 
 After logging in, you can publish packages:
@@ -41,6 +50,13 @@ npx codemod publish
 - Local development and testing
 - Quick one-off publishes
 - When you prefer browser-based authentication
+
+### Session management
+
+- `npx codemod whoami` shows the currently authenticated user for the default registry.
+- `npx codemod whoami --detailed` also shows token type, scopes, refresh-token availability, and expiry when present.
+- `npx codemod logout` removes the saved auth session for the default registry.
+- `npx codemod logout --all` signs you out of every configured registry and clears the local package cache.
 
 ## Trusted Publishers
 
