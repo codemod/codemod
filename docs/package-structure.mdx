@@ -61,6 +61,30 @@ Codemod packages use a workflow-first model and can be:
 
 Use `codemod init` to scaffold a workflow package, `codemod init --skill` for a skill package, or `codemod init --with-skill` for a package that ships both. Skill-only scaffolds cannot also set `--project-type`.
 
+For workflow scaffolds, `codemod init` can now generate starter codemods for these target languages:
+
+- `typescript`
+- `python`
+- `rust`
+- `go`
+- `java`
+- `html`
+- `xml`
+- `css`
+- `kotlin`
+- `angular`
+- `csharp`
+- `cpp`
+- `c`
+- `php`
+- `ruby`
+- `elixir`
+- `json`
+- `yaml`
+- `toml`
+
+These language selections update the generated starter script, fixture files, and YAML ast-grep config templates to match the chosen target.
+
 `codemod publish` and `codemod workflow validate -w <package-root>` validate the package shape automatically: workflow packages run workflow checks, skill packages run skill structure/frontmatter/reference checks, and combined packages run both.
 
 `install-skill` is a workflow step type. Interactive runs can trigger it like any other awaiting step. Non-interactive runs skip it by default unless `--install-skill` is passed.
