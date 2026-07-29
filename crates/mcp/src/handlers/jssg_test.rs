@@ -316,6 +316,7 @@ impl JssgTestHandler {
                         capabilities: capabilities.clone(),
                         semantic_provider: None,
                         metrics_context: Some(metrics_context),
+                        llm_request_handler: None,
                         shared_state_context: None,
                         runtime_event_callback: None,
                         cancellation_flag: None,

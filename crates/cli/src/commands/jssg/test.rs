@@ -362,6 +362,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     capabilities,
                     semantic_provider,
                     metrics_context: Some(metrics_context.clone()),
+                    llm_request_handler: None,
                     shared_state_context: None,
                     runtime_event_callback: Some(runtime_event_callback),
                     cancellation_flag: None,

@@ -9,6 +9,7 @@ use super::transform_helpers::{
 };
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
+use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
 use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
@@ -237,6 +238,8 @@ pub struct JssgExecutionOptions<'a, R> {
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
     /// Optional metrics context for tracking metrics across execution
     pub metrics_context: Option<MetricsContext>,
+    /// Optional engine-owned LLM request handler exposed through codemod:llm
+    pub llm_request_handler: Option<LlmRequestHandler>,
     /// Optional shared state context for cross-thread state communication
     pub shared_state_context: Option<SharedStateContext>,
     /// Optional runtime event callback for codemod:runtime hook emissions
@@ -422,6 +425,10 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
 
+    // Add LlmModule (engine-owned model access)
+    built_in_resolver = built_in_resolver.add_name("codemod:llm");
+    built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+
     // Add RuntimeModule (progress/failure hooks)
     built_in_resolver = built_in_resolver.add_name("codemod:runtime");
     built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
@@ -454,6 +461,7 @@ where
 
     // Capture metrics context and shared state context for use inside async block
     let metrics_context = options.metrics_context.clone();
+    let llm_runtime_context = LlmRuntimeContext::new(options.llm_request_handler.clone());
     let shared_state_context = options.shared_state_context.clone();
     let runtime_hooks_context = RuntimeHooksContext::new(
         options.runtime_event_callback.clone(),
@@ -509,6 +517,12 @@ where
                 },
             })?;
         }
+
+        ctx.store_userdata(llm_runtime_context.clone()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store LlmRuntimeContext: {:?}", e),
+            },
+        })?;
 
         // Always store a SharedStateContext so codemod:workflow functions work
         ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
@@ -1186,6 +1200,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1209,6 +1224,87 @@ function example() {
             },
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
+    }
+
+    #[tokio::test]
+    async fn test_codemod_llm_delegates_generation_to_engine_handler() {
+        let codemod_content = r#"
+import { generate } from "codemod:llm";
+
+export default async function transform() {
+  const response = await generate({
+    prompt: "Generate an identifier",
+    systemPrompt: "Return JSON",
+    outputSchema: {
+      type: "object",
+      properties: { identifier: { type: "string" } },
+      required: ["identifier"],
+      additionalProperties: false,
+    },
+    maxTokens: 128,
+  });
+  return response.output;
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured_requests = Arc::clone(&requests);
+        let handler: LlmRequestHandler = Arc::new(move |request| {
+            captured_requests
+                .lock()
+                .expect("request capture should lock")
+                .push(request);
+            Box::pin(async {
+                Ok(crate::llm::LlmResponse {
+                    output: "{\"identifier\":\"welcomeTitle\"}".to_string(),
+                })
+            })
+        });
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "const value = true;",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            llm_request_handler: Some(handler),
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: Path::new("."),
+        };
+
+        let output = execute_codemod_with_quickjs(options)
+            .await
+            .expect("LLM-backed codemod should succeed");
+        match output.primary {
+            ExecutionResult::Modified(modified) => {
+                assert_eq!(modified.content, "{\"identifier\":\"welcomeTitle\"}");
+            }
+            other => panic!("Expected modified result, got: {other:?}"),
+        }
+
+        let requests = requests.lock().expect("request capture should lock");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].prompt, "Generate an identifier");
+        assert_eq!(requests[0].system_prompt.as_deref(), Some("Return JSON"));
+        assert_eq!(requests[0].max_tokens, Some(128));
+        assert_eq!(
+            requests[0]
+                .output_schema
+                .as_ref()
+                .and_then(|schema| schema["properties"]["identifier"]["type"].as_str()),
+            Some("string")
+        );
     }
 
     #[tokio::test]
@@ -1267,6 +1363,7 @@ export default function transform(root, options) {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1342,6 +1439,7 @@ export default function transform(root, options) {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1404,6 +1502,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1456,6 +1555,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1508,6 +1608,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1552,6 +1653,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1601,6 +1703,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1711,6 +1814,7 @@ function example() {
             capabilities: None,
             semantic_provider: None,
             metrics_context: Some(metrics_ctx.clone()),
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1790,6 +1894,7 @@ export default function transform(root) {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: Some(runtime_event_callback),
             cancellation_flag: None,
@@ -1837,6 +1942,7 @@ export default function transform(root) {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1884,6 +1990,7 @@ export default function transform(root) {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1931,6 +2038,7 @@ export default async function transform(root) {
             capabilities: None,
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,

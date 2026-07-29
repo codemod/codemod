@@ -11,6 +11,7 @@ rust-version.workspace = true
 
 [dependencies]
 rig-core = { version = "0.31.0", features = ["derive"] }
+schemars = "1"
 rmcp = { version = "0.13", features = ["client", "transport-child-process"] }
 tree-sitter = "0.25"
 tree-sitter-rust = "0.24"

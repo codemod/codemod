@@ -1,5 +1,6 @@
 use butterflow_models::schema::resolve_values_with_default;
 use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
+use codemod_ai::llm::{generate as generate_llm, GenerateRequest};
 use futures_util::FutureExt;
 use serde::Deserialize;
 use std::any::Any;
@@ -33,6 +34,7 @@ use crate::execution::{CodemodExecutionConfig, ProgressCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
 use crate::jssg_execution_service::{JssgExecutionRequest, JssgExecutionService};
+use crate::llm_usage::LlmUsageContext;
 use crate::managed_git_service::{ManagedGitService, WorktreeCleanup};
 use crate::nested_codemod_service::NestedCodemodService;
 use crate::progress_output::{
@@ -45,6 +47,7 @@ use crate::task_state_service::TaskStateService;
 use crate::utils::validate_workflow;
 use crate::workflow_runtime::{publish_event, WorkflowEvent};
 use chrono::Utc;
+use codemod_sandbox::llm::{LlmRequestHandler, LlmResponse};
 use codemod_sandbox::sandbox::engine::CodemodOutput;
 use codemod_sandbox::sandbox::runtime_module::{
     RuntimeEvent, RuntimeEventKind, RuntimeFailure, RuntimeFailureKind,
@@ -586,6 +589,9 @@ pub struct Engine {
     /// Metrics context for tracking metrics across all JSSG steps
     pub metrics_context: MetricsContext,
 
+    /// Provider-reported usage from engine-owned nested LLM calls
+    pub llm_usage_context: LlmUsageContext,
+
     /// Async file writer for batched I/O operations
     file_writer: Arc<AsyncFileWriter>,
 
@@ -1050,6 +1056,7 @@ impl Engine {
             workflow_run_config: WorkflowRunConfig::default(),
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
+            llm_usage_context: LlmUsageContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
             scheduler_wake_notify,
@@ -1078,6 +1085,7 @@ impl Engine {
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
+            llm_usage_context: LlmUsageContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
             scheduler_wake_notify,
@@ -1094,6 +1102,68 @@ impl Engine {
 
     pub(crate) fn workflow_run_config(&self) -> &WorkflowRunConfig {
         &self.workflow_run_config
+    }
+
+    pub(crate) fn llm_request_handler(&self) -> LlmRequestHandler {
+        let usage_context = self.llm_usage_context.clone();
+        let provider = std::env::var("LLM_PROVIDER")
+            .unwrap_or_else(|_| "openai".to_string())
+            .trim()
+            .to_ascii_lowercase();
+        let model = std::env::var("LLM_MODEL").unwrap_or_default();
+        let endpoint = std::env::var("LLM_BASE_URL").unwrap_or_else(|_| match provider.as_str() {
+            "anthropic" => "https://api.anthropic.com".to_string(),
+            _ => "https://api.openai.com/v1".to_string(),
+        });
+        let api_key = std::env::var("LLM_API_KEY").unwrap_or_default();
+
+        Arc::new(move |request| {
+            let usage_context = usage_context.clone();
+            let provider = provider.clone();
+            let model = model.clone();
+            let endpoint = endpoint.clone();
+            let api_key = api_key.clone();
+
+            Box::pin(async move {
+                if api_key.trim().is_empty() {
+                    usage_context.record_error(&provider, &model);
+                    return Err("Engine LLM client requires LLM_API_KEY".to_string());
+                }
+                if model.trim().is_empty() {
+                    usage_context.record_error(&provider, &model);
+                    return Err("Engine LLM client requires LLM_MODEL".to_string());
+                }
+
+                let result = generate_llm(GenerateRequest {
+                    endpoint,
+                    api_key,
+                    model: model.clone(),
+                    provider: provider.clone(),
+                    system_prompt: request.system_prompt,
+                    prompt: request.prompt,
+                    output_schema: request.output_schema,
+                    max_tokens: request.max_tokens,
+                })
+                .await;
+
+                match result {
+                    Ok(response) => {
+                        usage_context.record_success(
+                            &response.provider,
+                            &response.model,
+                            response.usage,
+                        );
+                        Ok(LlmResponse {
+                            output: response.output,
+                        })
+                    }
+                    Err(error) => {
+                        usage_context.record_error(&provider, &model);
+                        Err(error.to_string())
+                    }
+                }
+            })
+        })
     }
 
     pub(crate) fn state_adapter(&self) -> Arc<Mutex<Box<dyn StateAdapter>>> {
@@ -1127,6 +1197,7 @@ impl Engine {
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
+            llm_usage_context: LlmUsageContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
             scheduler_wake_notify,
@@ -4227,6 +4298,7 @@ impl Clone for Engine {
             workflow_run_config: self.workflow_run_config.clone(),
             execution_stats: Arc::clone(&self.execution_stats),
             metrics_context: self.metrics_context.clone(),
+            llm_usage_context: self.llm_usage_context.clone(),
             file_writer: Arc::clone(&self.file_writer),
             task_completion_notify: Arc::clone(&self.task_completion_notify),
             scheduler_wake_notify: Arc::clone(&self.scheduler_wake_notify),

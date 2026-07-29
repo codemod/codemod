@@ -256,6 +256,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 capabilities: capabilities_for_closure.clone(),
                 semantic_provider: semantic_provider.clone(),
                 metrics_context: Some(metrics_context_clone.clone()),
+                llm_request_handler: None,
                 shared_state_context: Some(shared_state_context_clone.clone()),
                 runtime_event_callback: Some(runtime_event_callback),
                 cancellation_flag: None,

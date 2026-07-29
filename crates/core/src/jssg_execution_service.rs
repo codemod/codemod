@@ -455,6 +455,7 @@ impl<'a> JssgExecutionService<'a> {
             SharedStateContext::new()
         };
         let metrics_context_clone = metrics_context.clone();
+        let llm_request_handler = self.engine.llm_request_handler();
         let shared_state_context_clone = shared_state_context.clone();
         let logger = request.logger.clone();
         let modified_files_collector_clone = request.modified_files_collector.clone();
@@ -769,6 +770,7 @@ impl<'a> JssgExecutionService<'a> {
                         let capabilities_owned = config.capabilities.clone();
                         let semantic_provider_owned = semantic_provider.clone();
                         let metrics_context_owned = metrics_context_clone.clone();
+                        let llm_request_handler_owned = llm_request_handler.clone();
                         let shared_state_context_owned = shared_state_context_clone.clone();
                         let target_path_owned = target_path.clone();
                         let idle_timed_out = Arc::clone(&idle_timed_out_for_closure);
@@ -790,6 +792,7 @@ impl<'a> JssgExecutionService<'a> {
                                         capabilities: capabilities_owned,
                                         semantic_provider: semantic_provider_owned,
                                         metrics_context: Some(metrics_context_owned),
+                                        llm_request_handler: Some(llm_request_handler_owned),
                                         shared_state_context: Some(shared_state_context_owned),
                                         runtime_event_callback: Some(runtime_event_callback),
                                         cancellation_flag: Some(cancellation_flag_for_execution),

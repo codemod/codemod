@@ -1132,6 +1132,7 @@ dependencies = [
  "rig-core",
  "rmcp 0.13.0",
  "rusqlite",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",

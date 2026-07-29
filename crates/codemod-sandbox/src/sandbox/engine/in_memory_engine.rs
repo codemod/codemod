@@ -7,6 +7,7 @@ use super::transform_helpers::{
 };
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
+use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
 use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver};
@@ -97,6 +98,8 @@ pub struct InMemoryExecutionOptions<'a, R> {
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
     /// Optional metrics context for tracking metrics across execution
     pub metrics_context: Option<MetricsContext>,
+    /// Optional engine-owned LLM request handler exposed through codemod:llm
+    pub llm_request_handler: Option<LlmRequestHandler>,
     /// Optional shared state context for cross-thread state communication
     pub shared_state_context: Option<SharedStateContext>,
     /// Execution timeout in milliseconds (default: 200ms)
@@ -210,6 +213,9 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
 
+    built_in_resolver = built_in_resolver.add_name("codemod:llm");
+    built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+
     built_in_resolver = built_in_resolver.add_name("codemod:workflow");
     built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
 
@@ -243,6 +249,7 @@ where
 
     // Capture metrics context and shared state context for use inside async block
     let metrics_context = options.metrics_context.clone();
+    let llm_runtime_context = LlmRuntimeContext::new(options.llm_request_handler.clone());
     let shared_state_context = options.shared_state_context.clone();
     let process_sandbox = options.process_sandbox.clone();
     let fs_sandbox = options.fs_sandbox.clone();
@@ -257,6 +264,12 @@ where
                 },
             })?;
         }
+
+        ctx.store_userdata(llm_runtime_context.clone()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store LlmRuntimeContext: {:?}", e),
+            },
+        })?;
 
         // Always store a SharedStateContext so codemod:workflow functions work
         ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
@@ -500,6 +513,7 @@ export default function transform(root) {
             target_directory: ".",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: Some(50), // 50ms timeout for faster test
             memory_limit: None,
@@ -560,6 +574,7 @@ export default function transform(root) {
             target_directory: ".",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
@@ -616,6 +631,7 @@ export default function transform(root, options) {
             target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
@@ -690,6 +706,7 @@ export default function transform(root) {
             target_directory: ".",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
@@ -767,6 +784,7 @@ export default function transform(root) {
             target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
@@ -843,6 +861,7 @@ export default function transform(root) {
             target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
@@ -920,6 +939,7 @@ export default function transform(root) {
             target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1019,6 +1039,7 @@ export default function transform(root) {
             target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1385,6 +1406,7 @@ export default function transform(root) {
                 target_directory: "/app",
                 semantic_provider: None,
                 metrics_context: None,
+                llm_request_handler: None,
                 shared_state_context: None,
                 timeout_ms: None,
                 memory_limit: None,
@@ -1456,6 +1478,7 @@ export default function transform(root) {
             target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1564,6 +1587,7 @@ export default function transform(root) {
             target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1655,6 +1679,7 @@ export default function transform(root) {
             target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1723,6 +1748,7 @@ export default function transform(root) {
             target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1761,6 +1787,7 @@ export default function transform(root) {
             target_directory: "/app",
             semantic_provider: None,
             metrics_context: None,
+            llm_request_handler: None,
             shared_state_context: None,
             timeout_ms: None,
             memory_limit: None,

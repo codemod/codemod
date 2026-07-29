@@ -2,6 +2,7 @@ use super::codemod_lang::CodemodLang;
 use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::AstGrepModule;
+use crate::llm::{LlmModule, LlmRuntimeContext};
 use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
@@ -112,6 +113,9 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
 
+    built_in_resolver = built_in_resolver.add_name("codemod:llm");
+    built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+
     // Register the curated `fs` / `fs/promises` modules when applicable.
     if curated_fs_target.is_some() {
         built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
@@ -166,6 +170,12 @@ where
             .map_err(|e| ExecutionError::Runtime {
                 source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                     message: format!("Failed to store MetricsContext: {:?}", e),
+                },
+            })?;
+        ctx.store_userdata(LlmRuntimeContext::default())
+            .map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to store LlmRuntimeContext: {:?}", e),
                 },
             })?;
 
