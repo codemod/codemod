@@ -433,8 +433,15 @@ fn handle_feedback_status() -> Result<String> {
 
 /// Handle manual feedback submission from the report UI
 async fn handle_feedback_submit(req: Request<Body>) -> Result<String> {
+    validate_feedback_request_headers(req.headers())?;
+
     let body_bytes = to_bytes(req.into_body()).await?;
-    let submit_req: FeedbackSubmitRequest = serde_json::from_slice(&body_bytes)?;
+    if body_bytes.is_empty() {
+        anyhow::bail!("Feedback requests must include a JSON body.");
+    }
+
+    let submit_req: FeedbackSubmitRequest = serde_json::from_slice(&body_bytes)
+        .map_err(|error| anyhow::anyhow!("Invalid feedback request JSON: {error}"))?;
     submit_report_feedback(submit_req.category, submit_req.message).await
 }
 
@@ -549,7 +556,7 @@ async fn handle_feedback_agent_stream(
 }
 
 async fn parse_feedback_agent_request(req: Request<Body>) -> Result<FeedbackAgentRequest> {
-    validate_feedback_agent_request_headers(req.headers())?;
+    validate_feedback_request_headers(req.headers())?;
 
     let body_bytes = to_bytes(req.into_body()).await?;
     if body_bytes.is_empty() {
@@ -560,14 +567,14 @@ async fn parse_feedback_agent_request(req: Request<Body>) -> Result<FeedbackAgen
         .map_err(|error| anyhow::anyhow!("Invalid feedback agent request JSON: {error}"))
 }
 
-fn validate_feedback_agent_request_headers(headers: &HeaderMap) -> Result<()> {
+fn validate_feedback_request_headers(headers: &HeaderMap) -> Result<()> {
     let content_type = headers
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("");
     let media_type = content_type.split(';').next().map(str::trim).unwrap_or("");
     if !media_type.eq_ignore_ascii_case("application/json") {
-        anyhow::bail!("Feedback agent requests must use application/json.");
+        anyhow::bail!("Feedback requests must use application/json.");
     }
 
     let Some(origin) = headers.get(ORIGIN) else {
@@ -582,7 +589,7 @@ fn validate_feedback_agent_request_headers(headers: &HeaderMap) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Missing Host header."))?;
 
     if origin != format!("http://{host}") {
-        anyhow::bail!("Feedback agent requests must come from the report UI origin.");
+        anyhow::bail!("Feedback requests must come from the report UI origin.");
     }
 
     Ok(())
@@ -1400,6 +1407,7 @@ mod tests {
                 deletions: 2,
                 diffs: Vec::new(),
             }],
+            registry_link_url: None,
         }
     }
 
@@ -1474,24 +1482,24 @@ mod tests {
     }
 
     #[test]
-    fn feedback_agent_headers_require_json_content_type() {
+    fn feedback_request_headers_require_json_content_type() {
         let headers = HeaderMap::new();
 
-        assert!(validate_feedback_agent_request_headers(&headers).is_err());
+        assert!(validate_feedback_request_headers(&headers).is_err());
     }
 
     #[test]
-    fn feedback_agent_headers_reject_cross_origin_requests() {
+    fn feedback_request_headers_reject_cross_origin_requests() {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
         headers.insert(HOST, "127.0.0.1:4321".parse().unwrap());
         headers.insert(ORIGIN, "https://example.com".parse().unwrap());
 
-        assert!(validate_feedback_agent_request_headers(&headers).is_err());
+        assert!(validate_feedback_request_headers(&headers).is_err());
     }
 
     #[test]
-    fn feedback_agent_headers_allow_report_ui_origin() {
+    fn feedback_request_headers_allow_report_ui_origin() {
         let mut headers = HeaderMap::new();
         headers.insert(
             CONTENT_TYPE,
@@ -1500,6 +1508,6 @@ mod tests {
         headers.insert(HOST, "127.0.0.1:4321".parse().unwrap());
         headers.insert(ORIGIN, "http://127.0.0.1:4321".parse().unwrap());
 
-        validate_feedback_agent_request_headers(&headers).expect("valid feedback agent headers");
+        validate_feedback_request_headers(&headers).expect("valid feedback request headers");
     }
 }

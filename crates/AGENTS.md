@@ -22,6 +22,7 @@ workspace dependencies from the root `Cargo.toml` over adding direct versions in
 
 - Targeted crate: `cargo test -p <crate-name>`
 - Workspace: `cargo test`
-- Format: `cargo fmt --check`
+- Format: `cargo fmt --check` (also enforced by husky when `.rs` / Cargo files are staged;
+  CI "Rust Format" uses the same command on stable rustfmt)
 - Lint: `cargo clippy --tests --no-deps -- -D warnings`
 - If workflow models or schemas changed: `cargo xtask schema`, then inspect `git status --short`.

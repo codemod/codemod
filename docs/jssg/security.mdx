@@ -21,7 +21,7 @@ Unlike `fetch` and `child_process`, the `fs` module is **always available** but 
   <Card title="Inside target_dir" icon="folder-open">
     **Allowed by default**
 
-    `readFileSync`, `writeFileSync`, `readdirSync`, `mkdirSync`, `statSync`, `existsSync`, `unlinkSync`, and their `fs/promises` equivalents all work.
+    `readFileSync`, `writeFileSync`, `readdirSync` (including `{ withFileTypes: true }` Dirents), `mkdirSync`, `statSync`, `existsSync`, `accessSync`, `unlinkSync`, and their `fs/promises` equivalents all work.
   </Card>
   <Card title="Outside target_dir" icon="shield-halved">
     **Rejected with `EACCES`**

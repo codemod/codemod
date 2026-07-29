@@ -12,6 +12,7 @@ pub(crate) mod managed_git_service;
 pub(crate) mod nested_codemod_service;
 pub(crate) mod progress_output;
 pub mod registry;
+pub mod registry_link;
 pub mod report;
 pub mod shard;
 pub(crate) mod step_executor;

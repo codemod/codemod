@@ -3,4 +3,8 @@ tab_spaces = 4
 edition = "2021"
 newline_style = "Unix"
 use_field_init_shorthand = true
-ignore = ["submodules/**"]
+
+# Note: rustfmt's `ignore = [...]` is nightly-only. CI and rust-toolchain.toml
+# pin stable, so that option was a no-op warning and is intentionally omitted.
+# Submodule crates are kept out of `cargo fmt` via Cargo workspace membership
+# (`exclude` in Cargo.toml) rather than rustfmt ignore lists.

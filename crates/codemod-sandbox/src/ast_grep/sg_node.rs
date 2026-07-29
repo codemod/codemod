@@ -203,6 +203,14 @@ impl<'js> SgRootRjs<'js> {
                 }
             }
 
+            let dry_run = ctx
+                .userdata::<crate::sandbox::engine::execution_engine::DryRunExecutionFlag>()
+                .map(|flag| flag.0)
+                .unwrap_or(false);
+            if dry_run {
+                return Ok(());
+            }
+
             let path = std::path::Path::new(file_path);
             std::fs::write(path, &content).map_err(|e| {
                 Exception::throw_message(

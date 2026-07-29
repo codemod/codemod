@@ -99,7 +99,7 @@ importers:
         specifier: ^4.3.0
         version: 4.7.0(rolldown-vite@7.3.1(@types/node@22.16.0)(esbuild@0.27.2)(jiti@2.6.1)(terser@5.44.1)(tsx@4.21.0))
       typescript:
-        specifier: ^5.7.0
+        specifier: 'catalog:'
         version: 5.9.3
       vite:
         specifier: npm:rolldown-vite@latest
@@ -151,8 +151,8 @@ importers:
         specifier: workspace:*
         version: link:../tsconfig
       typescript:
-        specifier: 5.5.4
-        version: 5.5.4
+        specifier: 'catalog:'
+        version: 5.9.3
 
   packages/jssg-utils:
     devDependencies:
@@ -2434,11 +2434,6 @@ packages:
   type-fest@0.20.2:
     resolution: {integrity: sha512-Ne+eE4r0/iWnpAxD852z3A+N0Bt5RN//NjJwRd2VFHEmrywxf5vsZlh4R6lixl6B+wz/8d+maTSAkN1FIkI3LQ==}
     engines: {node: '>=10'}
-
-  typescript@5.5.4:
-    resolution: {integrity: sha512-Mtq29sKDAEYP7aljRgtPOpTvOfbwRWlS6dPRzwjdE+C0R4brX/GUyhHSecbHMFLNBLcJIPt9nl9yG5TZ1weH+Q==}
-    engines: {node: '>=14.17'}
-    hasBin: true
 
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
@@ -4738,8 +4733,6 @@ snapshots:
   type-detect@4.0.8: {}
 
   type-fest@0.20.2: {}
-
-  typescript@5.5.4: {}
 
   typescript@5.9.3: {}
 

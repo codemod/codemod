@@ -1,6 +1,7 @@
 use butterflow_models::schema::resolve_values_with_default;
 use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
 use futures_util::FutureExt;
+use serde::Deserialize;
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -75,6 +76,7 @@ use butterflow_runners::{OutputCallback, Runner};
 use butterflow_scheduler::Scheduler;
 use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
+use codemod_llrt_capabilities::module_builder::UNSAFE_MODULES;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::MetricsContext;
 
@@ -212,27 +214,8 @@ pub(crate) struct PreparedStepExecution {
     pub(crate) state_input_path: PathBuf,
 }
 
-const PLATFORM_CHILD_ENV_DENYLIST: &[&str] = &["LLM_API_KEY"];
-
-fn should_filter_platform_child_env_for_backend(backend: Option<&str>) -> bool {
-    backend == Some("cloud")
-}
-
-fn should_filter_platform_child_env() -> bool {
-    let backend = std::env::var("BUTTERFLOW_STATE_BACKEND").ok();
-    should_filter_platform_child_env_for_backend(backend.as_deref())
-}
-
 fn parent_env_for_child_processes() -> HashMap<String, String> {
-    let mut env: HashMap<String, String> = std::env::vars().collect();
-
-    if should_filter_platform_child_env() {
-        for key in PLATFORM_CHILD_ENV_DENYLIST {
-            env.remove(*key);
-        }
-    }
-
-    env
+    std::env::vars().collect()
 }
 
 pub const JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
@@ -640,6 +623,87 @@ impl Default for Engine {
 pub struct CapabilitiesData {
     pub capabilities: Option<Vec<LlrtSupportedModules>>,
     pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
+}
+
+#[derive(Deserialize)]
+struct CodemodManifestCapabilities {
+    capabilities: Option<Vec<String>>,
+}
+
+pub(crate) fn merge_capabilities(
+    base: &Option<HashSet<LlrtSupportedModules>>,
+    additional: impl IntoIterator<Item = LlrtSupportedModules>,
+) -> Option<HashSet<LlrtSupportedModules>> {
+    let mut merged = base.clone().unwrap_or_default();
+    merged.extend(additional);
+    (!merged.is_empty()).then_some(merged)
+}
+
+fn noninteractive_capability_allowed(
+    base: &Option<HashSet<LlrtSupportedModules>>,
+    capability: LlrtSupportedModules,
+    no_interactive: bool,
+) -> bool {
+    if !no_interactive || !UNSAFE_MODULES.contains(&capability) {
+        return true;
+    }
+
+    base.as_ref()
+        .is_some_and(|capabilities| capabilities.contains(&capability))
+}
+
+pub(crate) fn merge_capabilities_for_interaction(
+    base: &Option<HashSet<LlrtSupportedModules>>,
+    additional: impl IntoIterator<Item = LlrtSupportedModules>,
+    no_interactive: bool,
+) -> Option<HashSet<LlrtSupportedModules>> {
+    merge_capabilities(
+        base,
+        additional.into_iter().filter(|capability| {
+            noninteractive_capability_allowed(base, *capability, no_interactive)
+        }),
+    )
+}
+
+pub(crate) fn parse_capability_strings<'a>(
+    additional: impl IntoIterator<Item = &'a str>,
+) -> Vec<LlrtSupportedModules> {
+    additional
+        .into_iter()
+        .filter_map(|capability| capability.parse().ok())
+        .collect()
+}
+
+pub(crate) fn merge_capability_strings_for_interaction<'a>(
+    base: &Option<HashSet<LlrtSupportedModules>>,
+    additional: impl IntoIterator<Item = &'a str>,
+    no_interactive: bool,
+) -> Option<HashSet<LlrtSupportedModules>> {
+    merge_capabilities_for_interaction(base, parse_capability_strings(additional), no_interactive)
+}
+
+fn load_manifest_capabilities(package_dir: &Path) -> Result<Vec<LlrtSupportedModules>> {
+    let manifest_path = package_dir.join("codemod.yaml");
+    let manifest_content = std::fs::read_to_string(&manifest_path).map_err(|error| {
+        Error::Other(format!(
+            "Failed to read codemod manifest '{}': {error}",
+            manifest_path.display()
+        ))
+    })?;
+    let manifest: CodemodManifestCapabilities =
+        serde_yaml::from_str(&manifest_content).map_err(|error| {
+            Error::Other(format!(
+                "Failed to parse codemod manifest '{}': {error}",
+                manifest_path.display()
+            ))
+        })?;
+
+    Ok(manifest
+        .capabilities
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|capability| capability.parse().ok())
+        .collect())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3427,6 +3491,11 @@ impl Engine {
             resolved_package.spec.name,
             codemod_params.len()
         );
+        let codemod_capabilities = merge_capabilities_for_interaction(
+            capabilities,
+            load_manifest_capabilities(&resolved_package.package_dir)?,
+            self.workflow_run_config.interaction.no_interactive,
+        );
         let nested_progress_task_id = format!(
             "{}:{}",
             task.id,
@@ -3487,7 +3556,7 @@ impl Engine {
                         workflow: codemod_workflow,
                         bundle_path: &codemod_bundle_path,
                         dependency_chain,
-                        capabilities,
+                        capabilities: &codemod_capabilities,
                         task_expr_ctx: Some(&codemod_task_expr_ctx),
                         progress_task_id: Some(&nested_progress_task_id),
                         logger,
@@ -3515,6 +3584,18 @@ impl Engine {
         use butterflow_models::step::ShardMethod;
 
         let target_path = self.workflow_run_config.execution.target_path.clone();
+        let mut resolved_shard_config = shard_config.clone();
+        if let Some(target) = &shard_config.target {
+            resolved_shard_config.target = Some(resolve_string_with_expression(
+                target,
+                params,
+                state,
+                task.matrix_values.as_ref(),
+                None,
+                task_expr_ctx,
+            )?);
+        }
+        let shard_config = &resolved_shard_config;
 
         // If a js-ast-grep config is set, pre-scan to find only files with matches
         let eligible_files = if let Some(js_ast_grep) = &shard_config.js_ast_grep {
@@ -3976,8 +4057,6 @@ impl Engine {
         state: &HashMap<String, serde_json::Value>,
         bundle_path: &Option<PathBuf>,
     ) -> Result<PreparedStepExecution> {
-        // Start with the parent process environment, minus platform runtime secrets that
-        // should not be inherited by arbitrary workflow shell commands.
         let mut env = parent_env_for_child_processes();
 
         // Set npm_config_yes for non-interactive mode (auto-accept package installations)
@@ -4164,10 +4243,113 @@ mod tests {
         InstallSkillExecutionRequest, InstallSkillExecutor, SelectionPrompt, SelectionPromptOption,
     };
     use anyhow::Result as AnyhowResult;
-    use butterflow_models::step::{SemanticAnalysisConfig, SemanticAnalysisMode};
+    use butterflow_models::step::{
+        BuiltinShardMethod, BuiltinShardType, SemanticAnalysisConfig, SemanticAnalysisMode,
+        ShardMethod, UseShard,
+    };
+    use butterflow_state::mock_adapter::MockStateAdapter;
     use serial_test::serial;
     use std::sync::Arc;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn nested_manifest_capabilities_merge_with_parent_capabilities() {
+        let package_dir = tempfile::tempdir().expect("package dir");
+        std::fs::write(
+            package_dir.path().join("codemod.yaml"),
+            r#"
+schema_version: 1.0.0
+name: child
+version: 1.0.0
+description: child
+author: test
+capabilities:
+  - fs
+  - child_process
+"#,
+        )
+        .expect("manifest");
+
+        let parent = Some([LlrtSupportedModules::Fetch].into_iter().collect());
+        let merged = merge_capabilities(
+            &parent,
+            load_manifest_capabilities(package_dir.path()).expect("capabilities"),
+        )
+        .expect("merged capabilities");
+
+        assert!(merged.contains(&LlrtSupportedModules::Fetch));
+        assert!(merged.contains(&LlrtSupportedModules::Fs));
+        assert!(merged.contains(&LlrtSupportedModules::ChildProcess));
+    }
+
+    #[test]
+    fn nested_manifest_without_capabilities_preserves_parent_capabilities() {
+        let package_dir = tempfile::tempdir().expect("package dir");
+        std::fs::write(
+            package_dir.path().join("codemod.yaml"),
+            r#"
+schema_version: 1.0.0
+name: child
+version: 1.0.0
+description: child
+author: test
+"#,
+        )
+        .expect("manifest");
+
+        let parent = Some([LlrtSupportedModules::Fetch].into_iter().collect());
+        let merged = merge_capabilities(
+            &parent,
+            load_manifest_capabilities(package_dir.path()).expect("capabilities"),
+        )
+        .expect("merged capabilities");
+
+        assert_eq!(merged.len(), 1);
+        assert!(merged.contains(&LlrtSupportedModules::Fetch));
+    }
+
+    #[test]
+    fn js_ast_grep_step_capabilities_merge_with_run_capabilities() {
+        let run_capabilities = Some([LlrtSupportedModules::Fetch].into_iter().collect());
+        let step_capabilities = ["fs", "child_process", "unknown"];
+        let merged = merge_capabilities(
+            &run_capabilities,
+            parse_capability_strings(step_capabilities),
+        )
+        .expect("merged capabilities");
+
+        assert!(merged.contains(&LlrtSupportedModules::Fetch));
+        assert!(merged.contains(&LlrtSupportedModules::Fs));
+        assert!(merged.contains(&LlrtSupportedModules::ChildProcess));
+        assert_eq!(merged.len(), 3);
+    }
+
+    #[test]
+    fn noninteractive_merge_filters_new_unsafe_capabilities() {
+        let run_capabilities = Some([LlrtSupportedModules::Fetch].into_iter().collect());
+        let step_capabilities = ["fs", "child_process"];
+        let merged =
+            merge_capability_strings_for_interaction(&run_capabilities, step_capabilities, true)
+                .expect("merged capabilities");
+
+        assert!(merged.contains(&LlrtSupportedModules::Fetch));
+        assert!(!merged.contains(&LlrtSupportedModules::Fs));
+        assert!(!merged.contains(&LlrtSupportedModules::ChildProcess));
+        assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn noninteractive_merge_keeps_preapproved_unsafe_capabilities() {
+        let run_capabilities = Some([LlrtSupportedModules::Fs].into_iter().collect());
+        let step_capabilities = ["fs", "child_process"];
+        let merged =
+            merge_capability_strings_for_interaction(&run_capabilities, step_capabilities, true)
+                .expect("merged capabilities");
+
+        assert!(merged.contains(&LlrtSupportedModules::Fs));
+        assert!(!merged.contains(&LlrtSupportedModules::ChildProcess));
+        assert_eq!(merged.len(), 1);
+    }
 
     struct EnvVarGuard {
         key: &'static str,
@@ -4206,23 +4388,18 @@ mod tests {
     }
 
     #[test]
-    fn platform_child_env_filter_requires_cloud_backend() {
-        assert!(should_filter_platform_child_env_for_backend(Some("cloud")));
-        assert!(!should_filter_platform_child_env_for_backend(None));
-        assert!(!should_filter_platform_child_env_for_backend(Some("local")));
-    }
-
-    #[test]
     #[serial]
-    fn parent_env_filters_cloud_only_secrets_for_cloud_backend() {
+    fn parent_env_preserves_llm_env_for_cloud_backend() {
         let _backend_guard = EnvVarGuard::unset("BUTTERFLOW_STATE_BACKEND");
         let _token_guard = EnvVarGuard::unset("BUTTERFLOW_API_AUTH_TOKEN");
         let _llm_guard = EnvVarGuard::unset("LLM_API_KEY");
+        let _llm_base_url_guard = EnvVarGuard::unset("LLM_BASE_URL");
         let _git_askpass_guard = EnvVarGuard::unset("GIT_ASKPASS");
         let _http_proxy_guard = EnvVarGuard::unset("HTTP_PROXY");
 
         std::env::set_var("BUTTERFLOW_API_AUTH_TOKEN", "local-token");
         std::env::set_var("LLM_API_KEY", "local-llm-key");
+        std::env::set_var("LLM_BASE_URL", "http://local-llm.example/v1");
 
         let local_env = parent_env_for_child_processes();
         assert_eq!(
@@ -4234,6 +4411,10 @@ mod tests {
         assert_eq!(
             local_env.get("LLM_API_KEY").map(String::as_str),
             Some("local-llm-key")
+        );
+        assert_eq!(
+            local_env.get("LLM_BASE_URL").map(String::as_str),
+            Some("http://local-llm.example/v1")
         );
 
         std::env::set_var("BUTTERFLOW_STATE_BACKEND", "cloud");
@@ -4247,7 +4428,14 @@ mod tests {
                 .map(String::as_str),
             Some("local-token")
         );
-        assert!(!cloud_env.contains_key("LLM_API_KEY"));
+        assert_eq!(
+            cloud_env.get("LLM_API_KEY").map(String::as_str),
+            Some("local-llm-key")
+        );
+        assert_eq!(
+            cloud_env.get("LLM_BASE_URL").map(String::as_str),
+            Some("http://local-llm.example/v1")
+        );
         assert_eq!(
             cloud_env.get("GIT_ASKPASS").map(String::as_str),
             Some("/tmp/codemod-git-askpass")
@@ -4276,6 +4464,85 @@ mod tests {
         );
 
         assert_eq!(eligible, vec!["src/changed.ts"]);
+    }
+
+    #[tokio::test]
+    async fn shard_step_resolves_target_expression() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+        std::fs::create_dir_all(temp_path.join("packages/app")).unwrap();
+        std::fs::write(temp_path.join("packages/app/one.ts"), "const one = 1;\n").unwrap();
+        std::fs::write(temp_path.join("packages/app/two.ts"), "const two = 2;\n").unwrap();
+
+        let workflow_run_id = Uuid::new_v4();
+        let config = WorkflowRunConfig {
+            execution: crate::config::WorkflowExecutionSettings {
+                target_path: temp_path.to_path_buf(),
+                ..WorkflowRunConfig::default().execution
+            },
+            ..WorkflowRunConfig::default()
+        };
+        let engine = Engine::with_state_adapter(Box::new(MockStateAdapter::new()), config);
+        let task = Task::new(workflow_run_id, "shard-node".to_string(), false);
+        let params = HashMap::from([(
+            "shardingDirectoryTarget".to_string(),
+            serde_json::json!("packages/app"),
+        )]);
+        let shard_config = UseShard {
+            method: ShardMethod::Builtin(BuiltinShardMethod {
+                r#type: BuiltinShardType::Directory,
+                max_files_per_shard: serde_json::json!(1),
+                min_shard_size: None,
+            }),
+            target: Some("${{ params.shardingDirectoryTarget }}".to_string()),
+            output_state: "shards".to_string(),
+            file_pattern: Some("**/*.ts".to_string()),
+            js_ast_grep: None,
+        };
+
+        let result = engine
+            .execute_shard_step(
+                &shard_config,
+                &task,
+                &params,
+                &HashMap::new(),
+                None,
+                &StructuredLogger::default(),
+            )
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "shard target expressions should resolve before path validation: {result:?}"
+        );
+
+        let state = engine
+            .state_adapter
+            .lock()
+            .await
+            .get_state(workflow_run_id)
+            .await
+            .unwrap();
+        let shards = state
+            .get("shards")
+            .and_then(serde_json::Value::as_array)
+            .expect("shard step should write shards to state");
+        let shard_files = shards
+            .iter()
+            .flat_map(|shard| {
+                shard
+                    .get("_meta_files")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            shard_files,
+            vec!["packages/app/one.ts", "packages/app/two.ts"]
+        );
     }
 
     #[test]

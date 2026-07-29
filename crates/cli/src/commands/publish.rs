@@ -29,6 +29,7 @@ use crate::utils::package_validation::DEFAULT_WORKFLOW_FILE_NAME;
 use crate::utils::skill_layout::expected_authored_skill_file;
 
 use crate::auth::TokenStorage;
+use crate::commands::TelemetrySenderExt;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use codemod_telemetry::send_event::BaseEvent;
 
@@ -96,7 +97,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     }
 
     telemetry
-        .send_event(
+        .send_event_logged(
             BaseEvent {
                 kind: "codemodPublished".to_string(),
                 properties: HashMap::from([

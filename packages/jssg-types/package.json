@@ -52,6 +52,6 @@
   },
   "devDependencies": {
     "@codemod.com/tsconfig": "workspace:*",
-    "typescript": "5.5.4"
+    "typescript": "catalog:"
   }
 }

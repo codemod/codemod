@@ -1,2 +1,8 @@
 pnpm lint
 pnpm format
+
+# Match CI's "Rust Format" job. Pre-commit previously only ran JS oxlint/oxfmt,
+# so Rust formatting drift slipped through until GitHub Actions failed.
+if git diff --cached --name-only --diff-filter=ACMR | grep -Eq '\.rs$|^(Cargo\.toml|Cargo\.lock|rustfmt\.toml|rust-toolchain\.toml)$'; then
+  cargo fmt --check
+fi

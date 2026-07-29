@@ -29,6 +29,8 @@
     "lint:fix": "oxlint --fix",
     "format:fix": "oxfmt --write",
     "format": "oxfmt --check",
+    "format:rust": "cargo fmt --check",
+    "format:rust:fix": "cargo fmt",
     "prepare": "husky"
   },
   "lint-staged": {

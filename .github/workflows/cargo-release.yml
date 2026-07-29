@@ -103,6 +103,16 @@ jobs:
       - name: Verify report UI build
         run: test -f crates/cli/report-ui/dist/index.html
 
+      - name: Verify telemetry configuration
+        shell: bash
+        run: |
+          if [[ ! "${POSTHOG_API_KEY}" =~ [^[:space:]] ]]; then
+            echo "::error::POSTHOG_API_KEY must be configured for release builds"
+            exit 1
+          fi
+        env:
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+
       - name: Build
         run: |
           cargo build --release -p codemod --target ${{ matrix.target }}

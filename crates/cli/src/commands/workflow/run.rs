@@ -16,6 +16,7 @@ use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 use std::sync::atomic::Ordering;
 
+use crate::commands::TelemetrySenderExt;
 use crate::engine::{create_engine, create_registry_client};
 use crate::pro_dry_run::{
     apply_pro_dry_run_execution_settings, notify_pro_dry_run_required, ProDryRunReason,
@@ -234,6 +235,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             .map(|c| c.lock().unwrap().clone())
             .unwrap_or_default();
 
+        let registry_client = create_registry_client(None)?;
         let report = ExecutionReport::build(
             args.workflow.clone(),
             None,
@@ -246,7 +248,12 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             files_with_errors,
             convert_metrics(&metrics_data),
             convert_diffs(&collected_diffs, &target_path.display().to_string()),
-        );
+        )
+        .with_registry_link_url(Some(
+            crate::utils::registry_link::registry_link_url_for_local_run(
+                &registry_client.config.default_registry,
+            ),
+        ));
 
         crate::report_server::serve_report(report).await?;
     } else {
@@ -255,7 +262,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
     telemetry
-        .send_event(
+        .send_event_logged(
             BaseEvent {
                 kind: "localWorkflowExecuted".to_string(),
                 properties: HashMap::from([

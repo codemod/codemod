@@ -6,6 +6,7 @@ use crate::commands::harness_adapter::{
     InstallScope, InstalledSkill, OutputFormat, SkillPackageInstallSpec,
 };
 use crate::commands::output::{format_output_path, prompt_for_overwrite_confirmation};
+use crate::commands::TelemetrySenderExt;
 use crate::engine::create_registry_client_with_env;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
@@ -525,7 +526,7 @@ async fn send_package_skill_install_event(
     } = input;
 
     telemetry
-        .send_event(
+        .send_event_logged(
             BaseEvent {
                 kind: "packageSkillInstalled".to_string(),
                 properties: HashMap::from([

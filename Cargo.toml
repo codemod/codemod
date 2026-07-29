@@ -32,7 +32,7 @@ repository = "https://github.com/codemod/codemod"
 homepage = "https://github.com/codemod/codemod"
 license = "Apache-2.0"
 rust-version = "1.76"
-version = "1.12.7"
+version = "1.12.15"
 edition = "2021"
 
 [workspace.dependencies]
@@ -106,15 +106,15 @@ walkdir = "2.4"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 
-wasm-bindgen = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-cli-support = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-futures = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-js-sys = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
+wasm-bindgen = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-cli-support = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-futures = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+js-sys = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
 
 [patch.crates-io]
-wasm-bindgen = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-futures = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-macro = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-shared = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-macro-support = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-js-sys = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
+wasm-bindgen = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-futures = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-macro = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-shared = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-macro-support = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+js-sys = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }

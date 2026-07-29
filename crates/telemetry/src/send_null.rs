@@ -10,7 +10,6 @@ impl TelemetrySender for NullSender {
         _event: BaseEvent,
         _options_override: Option<PartialTelemetrySenderOptions>,
     ) {
-        // Do nothing
     }
     async fn initialize_panic_telemetry(&self) {
         // Do nothing
