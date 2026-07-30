@@ -1,5 +1,11 @@
 # @codemod.com/jssg-types
 
+## 1.6.3
+
+### Patch Changes
+
+- 2c17368: Add types for the engine-owned `codemod:llm` runtime module.
+
 ## 1.6.2
 
 ### Patch Changes
