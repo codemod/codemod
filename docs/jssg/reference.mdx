@@ -27,7 +27,7 @@ JSSG is a JavaScript runtime similar to Node.js with most Node globals/modules (
 
 Built-in codemod modules:
 - `codemod:ast-grep` — parsing, traversal, pattern matching
-- `codemod:llm` — engine-backed text generation for codemods that declare the `fetch` capability
+- `codemod:llm` — engine-owned text generation for codemods that declare the `fetch` capability
 - `codemod:workflow` — shared state and workflow integration
 - `codemod:metrics` — metrics collection across files
 - `codemod:runtime` — progress, warning, cancellation, and explicit failure hooks
@@ -930,6 +930,56 @@ function helper(node: SgNode<TSX>): Edit | null {
 <Info>
 Language kinds and editor IntelliSense are available via [codemod:ast-grep/langs/*](https://github.com/codemod/codemod/tree/main/packages/jssg-types/src/langs). E.g., `import { TSX } from "codemod:ast-grep/langs/tsx"`.
 </Info>
+
+## LLM Generation
+
+```ts
+import generate, { type LlmRequest, type LlmResponse } from "codemod:llm";
+```
+
+Use `codemod:llm` when your codemod needs engine-provided text generation. The engine owns provider credentials, model selection, and usage accounting.
+
+### Types
+
+<ParamField path="LlmRequest" type="object">
+  Request payload for `generate(...)`.
+</ParamField>
+
+<ParamField path="prompt" type="string" required>
+  The user prompt sent to the engine-owned LLM client.
+</ParamField>
+
+<ParamField path="systemPrompt" type="string">
+  Optional system instructions applied before the prompt.
+</ParamField>
+
+<ParamField path="outputSchema" type="Record&lt;string, unknown&gt; | boolean">
+  Optional structured-output schema hint forwarded to the engine.
+</ParamField>
+
+<ParamField path="maxTokens" type="number">
+  Optional maximum token budget for the generation request.
+</ParamField>
+
+<ParamField path="LlmResponse" type="object">
+  Response returned by `generate(...)`.
+</ParamField>
+
+<ParamField path="output" type="string" required>
+  Generated text returned by the engine-owned LLM client.
+</ParamField>
+
+### Functions
+
+<ParamField path="generate(request)" type="(request: LlmRequest) => Promise&lt;LlmResponse&gt;">
+  Generates text through the engine-owned LLM client.
+</ParamField>
+
+### Notes
+
+- Your codemod must declare the `fetch` capability before `codemod:llm` can be used.
+- Provider credentials and model selection come from the engine, not from your codemod.
+- Provider-reported usage is recorded by the engine automatically.
 
 ## Runtime Hooks
 
