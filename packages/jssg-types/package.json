@@ -26,6 +26,10 @@
       "types": "./src/langs/*.d.ts",
       "default": "./src/langs/*.d.ts"
     },
+    "./llm": {
+      "types": "./src/llm.d.ts",
+      "default": "./src/llm.d.ts"
+    },
     "./main": {
       "types": "./src/main.d.ts",
       "default": "./src/main.d.ts"

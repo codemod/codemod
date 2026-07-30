@@ -237,6 +237,7 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         capabilities: None,
         semantic_provider: provider,
         metrics_context: None,
+        llm_request_handler: None,
         shared_state_context: None,
         runtime_event_callback: None,
         cancellation_flag: None,

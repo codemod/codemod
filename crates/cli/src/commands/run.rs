@@ -33,6 +33,8 @@ use std::process::Command as ProcessCommand;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
+mod llm_usage;
+
 const WORKFLOW_FILE_NAME: &str = "workflow.yaml";
 
 fn telemetry_codemod_name(
@@ -147,6 +149,10 @@ pub struct Command {
     /// Output format: "text" (default) or "jsonl" for structured logging
     #[arg(long, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
+
+    /// Write provider-reported nested LLM usage JSON to this path
+    #[arg(long, value_name = "PATH")]
+    llm_usage_output: Option<PathBuf>,
 
     /// Name of the workflow to run when the package defines multiple workflows
     #[arg(long, value_name = "NAME")]
@@ -370,9 +376,21 @@ pub async fn handler(
     let execution_started = std::time::Instant::now();
     let run_result = run_workflow(&mut engine, config).await;
     let duration_ms = (setup_duration + execution_started.elapsed()).as_millis();
+    let llm_usage_records = engine.llm_usage_context.get_all();
+    let llm_usage_output_error = match args.llm_usage_output.as_deref() {
+        Some(path) => llm_usage::write_llm_usage_output(path, &llm_usage_records),
+        None => Ok(()),
+    }
+    .err();
 
     if let Err(e) = run_result {
-        let error_msg = format!("Workflow execution failed: {}", e);
+        let error_msg = match llm_usage_output_error.as_ref() {
+            None => format!("Workflow execution failed: {e}"),
+            Some(usage_error) => format!(
+                "Workflow execution failed: {e}; additionally failed to write LLM usage: \
+                 {usage_error}"
+            ),
+        };
         send_completed_event(
             &telemetry,
             &run_telemetry,
@@ -387,7 +405,28 @@ pub async fn handler(
             let _ = std::fs::remove_dir_all(&resolved_package.package_dir);
         }
         send_failure_event(&telemetry, &canonical_codemod_name, &error_msg).await;
-        return Err(e);
+        return match llm_usage_output_error {
+            Some(_) => Err(anyhow!(error_msg)),
+            None => Err(e),
+        };
+    }
+
+    if let Some(usage_error) = llm_usage_output_error {
+        let error_msg = format!("Workflow completed but failed to write LLM usage: {usage_error}");
+        send_completed_event(
+            &telemetry,
+            &run_telemetry,
+            CodemodRunOutcome::Failed {
+                error_message: error_msg.clone(),
+            },
+            duration_ms,
+        )
+        .await;
+        if resolved_package.dry_run_only {
+            let _ = std::fs::remove_dir_all(&resolved_package.package_dir);
+        }
+        send_failure_event(&telemetry, &canonical_codemod_name, &error_msg).await;
+        return Err(anyhow!(error_msg));
     }
 
     let metrics_data = engine.metrics_context.get_all();

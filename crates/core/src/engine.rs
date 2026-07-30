@@ -1,5 +1,6 @@
 use butterflow_models::schema::resolve_values_with_default;
 use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
+use codemod_ai::llm::{generate as generate_llm, GenerateError, GenerateRequest, GenerateResponse};
 use futures_util::FutureExt;
 use serde::Deserialize;
 use std::any::Any;
@@ -33,6 +34,7 @@ use crate::execution::{CodemodExecutionConfig, ProgressCallback};
 use crate::execution_stats::ExecutionStats;
 use crate::file_ops::AsyncFileWriter;
 use crate::jssg_execution_service::{JssgExecutionRequest, JssgExecutionService};
+use crate::llm_usage::LlmUsageContext;
 use crate::managed_git_service::{ManagedGitService, WorktreeCleanup};
 use crate::nested_codemod_service::NestedCodemodService;
 use crate::progress_output::{
@@ -45,6 +47,7 @@ use crate::task_state_service::TaskStateService;
 use crate::utils::validate_workflow;
 use crate::workflow_runtime::{publish_event, WorkflowEvent};
 use chrono::Utc;
+use codemod_sandbox::llm::{LlmRequestHandler, LlmResponse};
 use codemod_sandbox::sandbox::engine::CodemodOutput;
 use codemod_sandbox::sandbox::runtime_module::{
     RuntimeEvent, RuntimeEventKind, RuntimeFailure, RuntimeFailureKind,
@@ -586,6 +589,9 @@ pub struct Engine {
     /// Metrics context for tracking metrics across all JSSG steps
     pub metrics_context: MetricsContext,
 
+    /// Provider-reported usage from engine-owned nested LLM calls
+    pub llm_usage_context: LlmUsageContext,
+
     /// Async file writer for batched I/O operations
     file_writer: Arc<AsyncFileWriter>,
 
@@ -617,6 +623,26 @@ pub struct CodemodDependency {
 impl Default for Engine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn record_llm_result(
+    usage_context: &LlmUsageContext,
+    configured_provider: &str,
+    configured_model: &str,
+    result: std::result::Result<GenerateResponse, GenerateError>,
+) -> std::result::Result<LlmResponse, String> {
+    match result {
+        Ok(response) => {
+            usage_context.record_success(&response.provider, &response.model, response.usage);
+            Ok(LlmResponse {
+                output: response.output,
+            })
+        }
+        Err(error) => {
+            usage_context.record_error(configured_provider, configured_model);
+            Err(error.to_string())
+        }
     }
 }
 
@@ -1050,6 +1076,7 @@ impl Engine {
             workflow_run_config: WorkflowRunConfig::default(),
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
+            llm_usage_context: LlmUsageContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
             scheduler_wake_notify,
@@ -1078,6 +1105,7 @@ impl Engine {
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
+            llm_usage_context: LlmUsageContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
             scheduler_wake_notify,
@@ -1094,6 +1122,53 @@ impl Engine {
 
     pub(crate) fn workflow_run_config(&self) -> &WorkflowRunConfig {
         &self.workflow_run_config
+    }
+
+    pub(crate) fn llm_request_handler(&self) -> LlmRequestHandler {
+        let usage_context = self.llm_usage_context.clone();
+        let provider = std::env::var("LLM_PROVIDER")
+            .unwrap_or_else(|_| "openai".to_string())
+            .trim()
+            .to_ascii_lowercase();
+        let model = std::env::var("LLM_MODEL").unwrap_or_default();
+        let endpoint = std::env::var("LLM_BASE_URL").unwrap_or_else(|_| match provider.as_str() {
+            "anthropic" => "https://api.anthropic.com".to_string(),
+            _ => "https://api.openai.com/v1".to_string(),
+        });
+        let api_key = std::env::var("LLM_API_KEY").unwrap_or_default();
+
+        Arc::new(move |request| {
+            let usage_context = usage_context.clone();
+            let provider = provider.clone();
+            let model = model.clone();
+            let endpoint = endpoint.clone();
+            let api_key = api_key.clone();
+
+            Box::pin(async move {
+                if api_key.trim().is_empty() {
+                    usage_context.record_error(&provider, &model);
+                    return Err("Engine LLM client requires LLM_API_KEY".to_string());
+                }
+                if model.trim().is_empty() {
+                    usage_context.record_error(&provider, &model);
+                    return Err("Engine LLM client requires LLM_MODEL".to_string());
+                }
+
+                let result = generate_llm(GenerateRequest {
+                    endpoint,
+                    api_key,
+                    model: model.clone(),
+                    provider: provider.clone(),
+                    system_prompt: request.system_prompt,
+                    prompt: request.prompt,
+                    output_schema: request.output_schema,
+                    max_tokens: request.max_tokens,
+                })
+                .await;
+
+                record_llm_result(&usage_context, &provider, &model, result)
+            })
+        })
     }
 
     pub(crate) fn state_adapter(&self) -> Arc<Mutex<Box<dyn StateAdapter>>> {
@@ -1127,6 +1202,7 @@ impl Engine {
             workflow_run_config,
             execution_stats: Arc::new(ExecutionStats::default()),
             metrics_context: MetricsContext::new(),
+            llm_usage_context: LlmUsageContext::new(),
             file_writer: Arc::new(AsyncFileWriter::new()),
             task_completion_notify: Arc::new(Notify::new()),
             scheduler_wake_notify,
@@ -4227,6 +4303,7 @@ impl Clone for Engine {
             workflow_run_config: self.workflow_run_config.clone(),
             execution_stats: Arc::clone(&self.execution_stats),
             metrics_context: self.metrics_context.clone(),
+            llm_usage_context: self.llm_usage_context.clone(),
             file_writer: Arc::clone(&self.file_writer),
             task_completion_notify: Arc::clone(&self.task_completion_notify),
             scheduler_wake_notify: Arc::clone(&self.scheduler_wake_notify),
@@ -4349,6 +4426,46 @@ author: test
         assert!(merged.contains(&LlrtSupportedModules::Fs));
         assert!(!merged.contains(&LlrtSupportedModules::ChildProcess));
         assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn openai_compatible_success_and_error_share_one_provider_name() {
+        let usage_context = LlmUsageContext::new();
+
+        let response = record_llm_result(
+            &usage_context,
+            "openai_compatible",
+            "compatible-model",
+            Ok(GenerateResponse {
+                output: "welcomeTitle".to_string(),
+                provider: "openai_compatible".to_string(),
+                model: "compatible-model".to_string(),
+                usage: Some(codemod_ai::llm::TokenUsage {
+                    uncached_input_tokens: Some(10),
+                    cache_read_input_tokens: None,
+                    cache_write_input_tokens: None,
+                    output_tokens: Some(2),
+                    reasoning_tokens: None,
+                    total_tokens: Some(12),
+                }),
+            }),
+        )
+        .expect("successful response should be returned");
+        assert_eq!(response.output, "welcomeTitle");
+
+        record_llm_result(
+            &usage_context,
+            "openai_compatible",
+            "compatible-model",
+            Err(GenerateError::Request("rate limited".to_string())),
+        )
+        .expect_err("provider error should be returned");
+
+        let records = usage_context.get_all();
+        assert_eq!(records.len(), 2);
+        assert!(records
+            .iter()
+            .all(|record| record.provider == "openai_compatible"));
     }
 
     struct EnvVarGuard {
