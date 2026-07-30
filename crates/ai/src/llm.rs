@@ -77,7 +77,10 @@ fn output_schema(value: Option<Value>) -> Result<Option<schemars::Schema>, Gener
         .transpose()
 }
 
-async fn generate_openai(request: GenerateRequest) -> Result<GenerateResponse, GenerateError> {
+async fn generate_openai(
+    request: GenerateRequest,
+    provider: String,
+) -> Result<GenerateResponse, GenerateError> {
     use rig::providers::openai;
 
     let client: openai::Client = openai::Client::builder()
@@ -121,7 +124,7 @@ async fn generate_openai(request: GenerateRequest) -> Result<GenerateResponse, G
 
     Ok(GenerateResponse {
         output,
-        provider: "openai".to_string(),
+        provider,
         model,
         usage,
     })
@@ -174,8 +177,9 @@ async fn generate_anthropic(request: GenerateRequest) -> Result<GenerateResponse
 }
 
 pub async fn generate(request: GenerateRequest) -> Result<GenerateResponse, GenerateError> {
-    match request.provider.trim().to_ascii_lowercase().as_str() {
-        "openai" | "openai_compatible" => generate_openai(request).await,
+    let provider = request.provider.trim().to_ascii_lowercase();
+    match provider.as_str() {
+        "openai" | "openai_compatible" => generate_openai(request, provider).await,
         "anthropic" => generate_anthropic(request).await,
         provider => Err(GenerateError::UnsupportedProvider(provider.to_string())),
     }
@@ -328,6 +332,42 @@ mod tests {
                 total_tokens: Some(120),
             })
         );
+    }
+
+    #[tokio::test]
+    async fn preserves_openai_compatible_provider_name() {
+        let (endpoint, server) = serve_once(json!({
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "error": null,
+            "incomplete_details": null,
+            "instructions": null,
+            "max_output_tokens": 128,
+            "model": "compatible-model",
+            "usage": null,
+            "output": [{
+                "type": "message",
+                "id": "msg_test",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{
+                    "type": "output_text",
+                    "text": "welcomeTitle"
+                }]
+            }],
+            "tools": []
+        }))
+        .await;
+
+        let response = generate(request(" OpenAI_Compatible ", endpoint))
+            .await
+            .expect("OpenAI-compatible response should succeed");
+        server.await.expect("mock server should finish");
+
+        assert_eq!(response.provider, "openai_compatible");
+        assert_eq!(response.model, "compatible-model");
     }
 
     #[tokio::test]

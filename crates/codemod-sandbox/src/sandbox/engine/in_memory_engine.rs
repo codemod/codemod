@@ -213,8 +213,12 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
 
-    built_in_resolver = built_in_resolver.add_name("codemod:llm");
-    built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+    // In-memory callers have no capability set; supplying the engine-owned
+    // handler is their explicit authorization to expose model access.
+    if options.llm_request_handler.is_some() {
+        built_in_resolver = built_in_resolver.add_name("codemod:llm");
+        built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+    }
 
     built_in_resolver = built_in_resolver.add_name("codemod:workflow");
     built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);

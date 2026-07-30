@@ -1,6 +1,6 @@
 use butterflow_models::schema::resolve_values_with_default;
 use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
-use codemod_ai::llm::{generate as generate_llm, GenerateRequest};
+use codemod_ai::llm::{generate as generate_llm, GenerateError, GenerateRequest, GenerateResponse};
 use futures_util::FutureExt;
 use serde::Deserialize;
 use std::any::Any;
@@ -626,6 +626,26 @@ impl Default for Engine {
     }
 }
 
+fn record_llm_result(
+    usage_context: &LlmUsageContext,
+    configured_provider: &str,
+    configured_model: &str,
+    result: std::result::Result<GenerateResponse, GenerateError>,
+) -> std::result::Result<LlmResponse, String> {
+    match result {
+        Ok(response) => {
+            usage_context.record_success(&response.provider, &response.model, response.usage);
+            Ok(LlmResponse {
+                output: response.output,
+            })
+        }
+        Err(error) => {
+            usage_context.record_error(configured_provider, configured_model);
+            Err(error.to_string())
+        }
+    }
+}
+
 pub struct CapabilitiesData {
     pub capabilities: Option<Vec<LlrtSupportedModules>>,
     pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
@@ -1146,22 +1166,7 @@ impl Engine {
                 })
                 .await;
 
-                match result {
-                    Ok(response) => {
-                        usage_context.record_success(
-                            &response.provider,
-                            &response.model,
-                            response.usage,
-                        );
-                        Ok(LlmResponse {
-                            output: response.output,
-                        })
-                    }
-                    Err(error) => {
-                        usage_context.record_error(&provider, &model);
-                        Err(error.to_string())
-                    }
-                }
+                record_llm_result(&usage_context, &provider, &model, result)
             })
         })
     }
@@ -4421,6 +4426,46 @@ author: test
         assert!(merged.contains(&LlrtSupportedModules::Fs));
         assert!(!merged.contains(&LlrtSupportedModules::ChildProcess));
         assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn openai_compatible_success_and_error_share_one_provider_name() {
+        let usage_context = LlmUsageContext::new();
+
+        let response = record_llm_result(
+            &usage_context,
+            "openai_compatible",
+            "compatible-model",
+            Ok(GenerateResponse {
+                output: "welcomeTitle".to_string(),
+                provider: "openai_compatible".to_string(),
+                model: "compatible-model".to_string(),
+                usage: Some(codemod_ai::llm::TokenUsage {
+                    uncached_input_tokens: Some(10),
+                    cache_read_input_tokens: None,
+                    cache_write_input_tokens: None,
+                    output_tokens: Some(2),
+                    reasoning_tokens: None,
+                    total_tokens: Some(12),
+                }),
+            }),
+        )
+        .expect("successful response should be returned");
+        assert_eq!(response.output, "welcomeTitle");
+
+        record_llm_result(
+            &usage_context,
+            "openai_compatible",
+            "compatible-model",
+            Err(GenerateError::Request("rate limited".to_string())),
+        )
+        .expect_err("provider error should be returned");
+
+        let records = usage_context.get_all();
+        assert_eq!(records.len(), 2);
+        assert!(records
+            .iter()
+            .all(|record| record.provider == "openai_compatible"));
     }
 
     struct EnvVarGuard {

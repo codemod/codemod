@@ -65,6 +65,10 @@ where
     // Track whether the caller opted into llrt's real-disk fs capability
     // so we know whether to install the curated fs below instead.
     let mut fs_capability_enabled = false;
+    let llm_capability_enabled = options
+        .capabilities
+        .as_ref()
+        .is_some_and(|capabilities| capabilities.contains(&LlrtSupportedModules::Fetch));
 
     // Set up built-in modules
     let mut module_builder = LlrtModuleBuilder::build();
@@ -113,8 +117,10 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
 
-    built_in_resolver = built_in_resolver.add_name("codemod:llm");
-    built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+    if llm_capability_enabled {
+        built_in_resolver = built_in_resolver.add_name("codemod:llm");
+        built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+    }
 
     // Register the curated `fs` / `fs/promises` modules when applicable.
     if curated_fs_target.is_some() {

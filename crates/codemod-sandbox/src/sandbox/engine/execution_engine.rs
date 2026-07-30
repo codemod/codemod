@@ -380,6 +380,10 @@ where
     // Track whether the caller opted into llrt's real-disk fs capability
     // so we know whether to install the curated fs below instead.
     let mut fs_capability_enabled = false;
+    let llm_capability_enabled = options
+        .capabilities
+        .as_ref()
+        .is_some_and(|capabilities| capabilities.contains(&LlrtSupportedModules::Fetch));
 
     // Set up built-in modules
     let mut module_builder = LlrtModuleBuilder::build();
@@ -425,9 +429,12 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
 
-    // Add LlmModule (engine-owned model access)
-    built_in_resolver = built_in_resolver.add_name("codemod:llm");
-    built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+    // Engine-owned model access can make network requests, so expose it only
+    // when the caller explicitly grants the fetch capability.
+    if llm_capability_enabled {
+        built_in_resolver = built_in_resolver.add_name("codemod:llm");
+        built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+    }
 
     // Add RuntimeModule (progress/failure hooks)
     built_in_resolver = built_in_resolver.add_name("codemod:runtime");
@@ -461,7 +468,11 @@ where
 
     // Capture metrics context and shared state context for use inside async block
     let metrics_context = options.metrics_context.clone();
-    let llm_runtime_context = LlmRuntimeContext::new(options.llm_request_handler.clone());
+    let llm_runtime_context = LlmRuntimeContext::new(
+        llm_capability_enabled
+            .then(|| options.llm_request_handler.clone())
+            .flatten(),
+    );
     let shared_state_context = options.shared_state_context.clone();
     let runtime_hooks_context = RuntimeHooksContext::new(
         options.runtime_event_callback.clone(),
@@ -1271,7 +1282,7 @@ export default async function transform() {
             selector_config: None,
             params: None,
             matrix_values: None,
-            capabilities: None,
+            capabilities: Some([LlrtSupportedModules::Fetch].into_iter().collect()),
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: Some(handler),
@@ -1305,6 +1316,62 @@ export default async function transform() {
                 .and_then(|schema| schema["properties"]["identifier"]["type"].as_str()),
             Some("string")
         );
+    }
+
+    #[tokio::test]
+    async fn test_codemod_llm_is_unavailable_without_fetch_capability() {
+        let codemod_content = r#"
+import { generate } from "codemod:llm";
+
+export default async function transform() {
+  return (await generate({ prompt: "Send source code" })).output;
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured_requests = Arc::clone(&requests);
+        let handler: LlmRequestHandler = Arc::new(move |request| {
+            captured_requests
+                .lock()
+                .expect("request capture should lock")
+                .push(request);
+            Box::pin(async {
+                Ok(crate::llm::LlmResponse {
+                    output: "unexpected".to_string(),
+                })
+            })
+        });
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "const secret = true;",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            llm_request_handler: Some(handler),
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: Path::new("."),
+        };
+
+        let error = execute_codemod_with_quickjs(options)
+            .await
+            .expect_err("codemod:llm should not resolve without fetch capability");
+        assert!(format!("{error:?}").contains("codemod:llm"));
+        assert!(requests
+            .lock()
+            .expect("request capture should lock")
+            .is_empty());
     }
 
     #[tokio::test]

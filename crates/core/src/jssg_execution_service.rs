@@ -13,6 +13,7 @@ use butterflow_models::{
     DiffOperation, FieldDiff, Result, StateDiff, TaskExpressionContext,
 };
 use chrono::Utc;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::{
     engine::{
         codemod_lang::CodemodLang, execution_engine::execute_codemod_with_quickjs,
@@ -455,7 +456,11 @@ impl<'a> JssgExecutionService<'a> {
             SharedStateContext::new()
         };
         let metrics_context_clone = metrics_context.clone();
-        let llm_request_handler = self.engine.llm_request_handler();
+        let llm_request_handler = config
+            .capabilities
+            .as_ref()
+            .is_some_and(|capabilities| capabilities.contains(&LlrtSupportedModules::Fetch))
+            .then(|| self.engine.llm_request_handler());
         let shared_state_context_clone = shared_state_context.clone();
         let logger = request.logger.clone();
         let modified_files_collector_clone = request.modified_files_collector.clone();
@@ -792,7 +797,7 @@ impl<'a> JssgExecutionService<'a> {
                                         capabilities: capabilities_owned,
                                         semantic_provider: semantic_provider_owned,
                                         metrics_context: Some(metrics_context_owned),
-                                        llm_request_handler: Some(llm_request_handler_owned),
+                                        llm_request_handler: llm_request_handler_owned,
                                         shared_state_context: Some(shared_state_context_owned),
                                         runtime_event_callback: Some(runtime_event_callback),
                                         cancellation_flag: Some(cancellation_flag_for_execution),
