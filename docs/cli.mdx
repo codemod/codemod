@@ -399,6 +399,22 @@ npx codemod <package-name>
   Errors out if the name doesn't match any declared workflow, or if the source path is a workflow file (rather than a package directory) — in that case the file IS the workflow.
 </ResponseField>
 
+<ResponseField name="--llm-usage-output <PATH>" type="string">
+  Write provider-reported nested LLM usage for the current package run to a JSON file.
+
+  This output is only populated for LLM requests made by nested codemods during `npx codemod <package-name>` or other package-run flows. The file contains aggregated request counts by provider, model, outcome, and token-usage bucket, and it does not include prompts, API keys, or other request payload data.
+
+  ```bash
+  # Capture nested LLM usage while running a registry package
+  npx codemod @org/my-package --llm-usage-output ./artifacts/llm-usage.json
+
+  # Capture nested LLM usage for a local package run
+  npx codemod workflow run -w ./my-codemod --llm-usage-output ./artifacts/llm-usage.json
+  ```
+
+  The CLI creates parent directories as needed and overwrites the file with the current run's data.
+</ResponseField>
+
 **`workflow resume`**
 
 Resume a paused workflow.
