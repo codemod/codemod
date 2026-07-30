@@ -12,6 +12,7 @@ pub const CODEMOD_RUNTIME_MODULES: &[&str] = &[
     "codemod:workflow",
     "codemod:metrics",
     "codemod:runtime",
+    "codemod:llm",
 ];
 
 const LLRT_RUNTIME_MODULES: &[&str] = &[

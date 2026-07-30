@@ -1059,8 +1059,9 @@ import { format } from "node:util";
 import path from "path";
 import { readFile } from "fs/promises";
 import { parse } from "codemod:ast-grep";
+import { generate } from "codemod:llm";
 export default function transform() {
-  return [format("%s", "ok"), path.sep, readFile, parse];
+  return [format("%s", "ok"), path.sep, readFile, parse, generate];
 }
 "#,
         )
@@ -1074,5 +1075,6 @@ export default function transform() {
         assert!(bundled.contains("path"));
         assert!(bundled.contains("fs/promises"));
         assert!(bundled.contains("codemod:ast-grep"));
+        assert!(bundled.contains("codemod:llm"));
     }
 }
