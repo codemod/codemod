@@ -50,12 +50,27 @@ This is the main setup path for the AI-native CLI experience. It installs Codemo
 
 ## Available tools
 
-The Codemod MCP server provides these operational tools for AI assistants:
+Codemod exposes a small set of MCP tools directly through the MCP server, and mirrors the same surfaces through `npx codemod ai` for harnesses or environments where direct MCP access is unavailable.
+
+Core MCP tools for AI assistants:
 
 - **`dump_ast`** - Dump AST nodes in an AI-friendly format for given source code and language
 - **`get_node_types`** - Get compressed tree-sitter node types for specific programming languages
 - **`run_jssg_tests`** - Run tests for JSSG codemods with test cases
 - **`validate_codemod_package`** - Validate whether a codemod package is still a starter scaffold or incomplete
+
+CLI mirrors for inspection and debugging:
+
+- **`npx codemod ai dump-ast`** - Inspect AST output for a file or stdin
+- **`npx codemod ai node-types`** - Print supported tree-sitter node types for a language
+- **`npx codemod ai tools`** / **`npx codemod ai tool <name>`** - List tool names or inspect one tool's JSON schema
+- **`npx codemod ai call <name>`** - Call an MCP-equivalent tool directly with JSON input
+- **`npx codemod ai resources`** / **`npx codemod ai resource <uri-or-name>`** - List and read MCP-equivalent docs resources from the CLI
+- **`npx codemod ai docs [query...]`** - List, read, or search docs-backed Codemod resources from the CLI
+
+<Tip>
+  Use the CLI mirrors when you need to inspect available tools and resources from a terminal, validate JSON input schemas before wiring an agent, or troubleshoot a harness setup without opening the MCP client directly.
+</Tip>
 
 ## Available resources
 
