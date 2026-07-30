@@ -27,9 +27,12 @@ JSSG is a JavaScript runtime similar to Node.js with most Node globals/modules (
 
 Built-in codemod modules:
 - `codemod:ast-grep` — parsing, traversal, pattern matching
+- `codemod:llm` — engine-backed text generation for codemods that declare the `fetch` capability
 - `codemod:workflow` — shared state and workflow integration
 - `codemod:metrics` — metrics collection across files
 - `codemod:runtime` — progress, warning, cancellation, and explicit failure hooks
+
+`codemod:llm` is also supported when you publish a codemod package, so published JSSG codemods can keep importing it without bundling errors.
 
 ## Transform Function
 
