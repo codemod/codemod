@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::commands::run_telemetry::{nested_codemod_run_observer, persisted_workflow_root_name};
 use crate::engine::create_engine;
 use crate::utils::path_safety::normalize_target_path;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
@@ -116,7 +117,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .parse()
         .map_err(|e: String| anyhow::anyhow!(e))?;
 
-    let (engine, _) = create_engine(
+    let (mut engine, _) = create_engine(
         workflow_file_path,
         target_path,
         args.dry_run,
@@ -131,8 +132,22 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         output_format,
         None,
         None,
-        Some(crate::commands::package_skill::create_install_skill_executor(telemetry)),
+        Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
     )?;
+    let workflow_run = engine
+        .get_workflow_run(args.id)
+        .await
+        .context("Failed to load persisted workflow run")?;
+    let root_codemod_name = persisted_workflow_root_name(&workflow_run);
+    engine
+        .workflow_run_config_mut()
+        .execution
+        .nested_codemod_run_observer = Some(nested_codemod_run_observer(
+        telemetry,
+        args.id.to_string(),
+        root_codemod_name,
+        args.dry_run,
+    ));
 
     let tracked_task_ids = if args.trigger_all {
         engine

@@ -16,6 +16,7 @@ use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 use std::sync::atomic::Ordering;
 
+use crate::commands::run_telemetry::nested_codemod_run_observer;
 use crate::commands::TelemetrySenderExt;
 use crate::engine::{create_engine, create_registry_client};
 use crate::pro_dry_run::{
@@ -155,6 +156,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .and_then(|value| value.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| args.workflow.clone());
+    let execution_id = generate_execution_id();
     let workflow_definition = utils::parse_workflow_file(&workflow_file_path).context(format!(
         "Failed to parse workflow file: {}",
         workflow_file_path.display()
@@ -204,7 +206,16 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
     )?;
 
-    engine.set_name(Some(workflow_label));
+    engine.set_name(Some(workflow_label.clone()));
+    engine
+        .workflow_run_config_mut()
+        .execution
+        .nested_codemod_run_observer = Some(nested_codemod_run_observer(
+        telemetry.clone(),
+        execution_id.clone(),
+        workflow_label,
+        dry_run,
+    ));
     apply_workflow_run_mode_to_config(engine.workflow_run_config_mut(), auto_launch_tui);
     if pro_dry_run_required {
         apply_pro_dry_run_execution_settings(engine.workflow_run_config_mut());
@@ -266,7 +277,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             BaseEvent {
                 kind: "localWorkflowExecuted".to_string(),
                 properties: HashMap::from([
-                    ("executionId".to_string(), generate_execution_id()),
+                    ("executionId".to_string(), execution_id),
                     ("runTimeSeconds".to_string(), seconds.to_string()),
                     ("dirtyRun".to_string(), args.allow_dirty.to_string()),
                     ("dryRun".to_string(), dry_run.to_string()),

@@ -464,7 +464,7 @@ async fn run_cli() -> Result<()> {
                 commands::workflow::cancel::handler(args).await?;
             }
             WorkflowCommands::Tui(args) => {
-                commands::workflow::tui::handler(args).await?;
+                commands::workflow::tui::handler(args, telemetry_sender.clone()).await?;
             }
         },
         Some(Commands::Jssg(args)) => match &args.command {

@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::engine::create_engine;
 use crate::tui::run_workflow_tui;
+use crate::TelemetrySenderMutex;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -16,7 +17,7 @@ pub struct Command {
     pub limit: usize,
 }
 
-pub async fn handler(args: &Command) -> Result<()> {
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
     let (engine, _) = create_engine(
         Default::default(),
         Default::default(),
@@ -34,5 +35,5 @@ pub async fn handler(args: &Command) -> Result<()> {
         None,
     )?;
 
-    run_workflow_tui(engine, args.id, args.limit).await
+    run_workflow_tui(engine, telemetry, args.id, args.limit).await
 }
