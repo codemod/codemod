@@ -36,6 +36,7 @@ use crate::file_ops::AsyncFileWriter;
 use crate::jssg_execution_service::{JssgExecutionRequest, JssgExecutionService};
 use crate::llm_usage::LlmUsageContext;
 use crate::managed_git_service::{ManagedGitService, WorktreeCleanup};
+use crate::nested_codemod_run::{observe_nested_codemod_run, NestedCodemodRun};
 use crate::nested_codemod_service::NestedCodemodService;
 use crate::progress_output::{
     append_buffered_diagnostic, append_buffered_log, flush_buffered_execution_output,
@@ -3473,21 +3474,46 @@ impl Engine {
             resolved.package.package_dir.display()
         );
 
-        self.run_codemod_workflow_with_chain(
-            &resolved.package,
-            &resolved.workflow,
-            codemod,
-            report_step_name,
-            report_step_id,
-            step_env,
-            node,
-            task,
-            params,
-            state,
-            bundle_path,
-            &resolved.dependency_chain,
-            capabilities,
-            logger,
+        let run = NestedCodemodRun {
+            codemod_name: resolved
+                .package
+                .registry_metadata
+                .as_ref()
+                .map(|metadata| metadata.package_web_path.clone())
+                .unwrap_or_else(|| codemod.source.clone()),
+            package_version: resolved.package.version.clone(),
+            execution_id: Uuid::new_v4().to_string(),
+            dependency_path: resolved
+                .dependency_chain
+                .iter()
+                .map(|dependency| dependency.source.clone())
+                .collect(),
+        };
+        let observer = self
+            .workflow_run_config
+            .execution
+            .nested_codemod_run_observer
+            .clone();
+
+        observe_nested_codemod_run(
+            observer.as_ref(),
+            run,
+            self.run_codemod_workflow_with_chain(
+                &resolved.package,
+                &resolved.workflow,
+                codemod,
+                report_step_name,
+                report_step_id,
+                step_env,
+                node,
+                task,
+                params,
+                state,
+                bundle_path,
+                &resolved.dependency_chain,
+                capabilities,
+                logger,
+            ),
         )
         .await
     }
