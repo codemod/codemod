@@ -4316,7 +4316,16 @@ fn registry_nested_codemod_run(
         execution_id: Uuid::new_v4().to_string(),
         dependency_path: dependency_chain
             .iter()
-            .map(|dependency| dependency.source.clone())
+            .map(|dependency| {
+                if dependency.source.starts_with("./")
+                    || dependency.source.starts_with("../")
+                    || dependency.source.starts_with("/")
+                {
+                    "<local>".to_string()
+                } else {
+                    dependency.source.clone()
+                }
+            })
             .collect(),
     })
 }
@@ -4378,6 +4387,15 @@ mod tests {
                 source: "@codemod/child-a".to_string(),
             },
             CodemodDependency {
+                source: "/Users/example/private/absolute-child".to_string(),
+            },
+            CodemodDependency {
+                source: "./private/relative-child".to_string(),
+            },
+            CodemodDependency {
+                source: "../private/sibling-child".to_string(),
+            },
+            CodemodDependency {
                 source: "@alias/child-b".to_string(),
             },
         ];
@@ -4393,8 +4411,19 @@ mod tests {
         assert_eq!(run.package_version, "1.2.3");
         assert_eq!(
             run.dependency_path,
-            vec!["@codemod/child-a", "@alias/child-b"]
+            vec![
+                "@codemod/child-a",
+                "<local>",
+                "<local>",
+                "<local>",
+                "@alias/child-b"
+            ]
         );
+        assert_eq!(run.dependency_path.len(), dependency_chain.len());
+        assert!(!run
+            .dependency_path
+            .iter()
+            .any(|segment| segment.contains("private")));
         assert!(registry_nested_codemod_run(&resolved_package(None), &dependency_chain).is_none());
     }
 

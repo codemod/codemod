@@ -24,7 +24,7 @@ use ratatui::Terminal;
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
-use crate::commands::nested_codemod_run_observer;
+use crate::commands::{nested_codemod_run_observer, persisted_workflow_root_name};
 use crate::tui::app::{ApprovalPrompt, Screen, TuiState};
 use crate::tui::event::AppEvent;
 use crate::TelemetrySenderMutex;
@@ -810,14 +810,7 @@ async fn attach_run(
 
     if let Some(telemetry) = telemetry {
         let workflow_run = engine.get_workflow_run(run_id).await?;
-        let root_codemod_name = workflow_run
-            .bundle_path
-            .as_deref()
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("workflow:{run_id}"));
-        let dry_run = engine.workflow_run_config_mut().execution.dry_run;
+        let root_codemod_name = persisted_workflow_root_name(&workflow_run);
         engine
             .workflow_run_config_mut()
             .execution
@@ -825,7 +818,7 @@ async fn attach_run(
             telemetry.clone(),
             run_id.to_string(),
             root_codemod_name,
-            dry_run,
+            None,
         ));
     }
 

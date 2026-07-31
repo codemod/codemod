@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::commands::run_telemetry::nested_codemod_run_observer;
+use crate::commands::run_telemetry::{nested_codemod_run_observer, persisted_workflow_root_name};
 use crate::engine::create_engine;
 use crate::utils::path_safety::normalize_target_path;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
@@ -134,13 +134,18 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         None,
         Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
     )?;
+    let workflow_run = engine
+        .get_workflow_run(args.id)
+        .await
+        .context("Failed to load persisted workflow run")?;
+    let root_codemod_name = persisted_workflow_root_name(&workflow_run);
     engine
         .workflow_run_config_mut()
         .execution
         .nested_codemod_run_observer = Some(nested_codemod_run_observer(
         telemetry,
         args.id.to_string(),
-        args.workflow.clone(),
+        root_codemod_name,
         args.dry_run,
     ));
 

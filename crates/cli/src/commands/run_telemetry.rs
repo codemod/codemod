@@ -3,6 +3,7 @@ use crate::{TelemetrySenderMutex, CLI_VERSION};
 use butterflow_core::nested_codemod_run::{
     NestedCodemodRun, NestedCodemodRunEvent, NestedCodemodRunObserver, NestedCodemodRunOutcome,
 };
+use butterflow_models::WorkflowRun;
 use codemod_telemetry::send_event::BaseEvent;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ pub(super) struct CodemodRunTelemetry {
     package_version: String,
     execution_id: String,
     workflow_name: Option<String>,
-    dry_run: bool,
+    dry_run: Option<bool>,
     nested: Option<NestedRunProperties>,
 }
 
@@ -47,7 +48,7 @@ impl CodemodRunTelemetry {
             package_version,
             execution_id,
             workflow_name,
-            dry_run,
+            dry_run: Some(dry_run),
             nested: None,
         }
     }
@@ -56,7 +57,7 @@ impl CodemodRunTelemetry {
         run: &NestedCodemodRun,
         root_execution_id: String,
         root_codemod_name: String,
-        dry_run: bool,
+        dry_run: Option<bool>,
     ) -> Self {
         Self {
             codemod_name: run.codemod_name.clone(),
@@ -89,12 +90,14 @@ impl CodemodRunTelemetry {
             ("codemodName".to_string(), self.codemod_name.clone()),
             ("packageVersion".to_string(), self.package_version.clone()),
             ("executionId".to_string(), self.execution_id.clone()),
-            ("dryRun".to_string(), self.dry_run.to_string()),
             ("cliVersion".to_string(), CLI_VERSION.to_string()),
             ("os".to_string(), std::env::consts::OS.to_string()),
             ("arch".to_string(), std::env::consts::ARCH.to_string()),
             ("isNested".to_string(), self.nested.is_some().to_string()),
         ]);
+        if let Some(dry_run) = self.dry_run {
+            properties.insert("dryRun".to_string(), dry_run.to_string());
+        }
         if let Some(workflow_name) = &self.workflow_name {
             properties.insert("workflowName".to_string(), workflow_name.clone());
         }
@@ -231,21 +234,40 @@ pub(crate) fn nested_codemod_run_observer(
     telemetry: TelemetrySenderMutex,
     root_execution_id: String,
     root_codemod_name: String,
-    dry_run: bool,
+    dry_run: impl Into<Option<bool>>,
 ) -> Arc<dyn NestedCodemodRunObserver> {
     Arc::new(NestedCodemodTelemetryObserver {
         telemetry,
         root_execution_id,
         root_codemod_name,
-        dry_run,
+        dry_run: dry_run.into(),
     })
+}
+
+pub(crate) fn persisted_workflow_root_name(workflow_run: &WorkflowRun) -> String {
+    workflow_run
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            workflow_run
+                .bundle_path
+                .as_deref()
+                .and_then(|path| path.file_name())
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| format!("workflow:{}", workflow_run.id))
 }
 
 struct NestedCodemodTelemetryObserver {
     telemetry: TelemetrySenderMutex,
     root_execution_id: String,
     root_codemod_name: String,
-    dry_run: bool,
+    dry_run: Option<bool>,
 }
 
 impl NestedCodemodTelemetryObserver {
@@ -295,8 +317,12 @@ impl NestedCodemodRunObserver for NestedCodemodTelemetryObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use butterflow_models::{workflow::Workflow, WorkflowStatus};
+    use chrono::Utc;
     use codemod_telemetry::send_event::{PartialTelemetrySenderOptions, TelemetrySender};
+    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
+    use uuid::Uuid;
 
     struct RecordingTelemetrySender {
         events: Arc<Mutex<Vec<String>>>,
@@ -470,6 +496,54 @@ mod tests {
         }
     }
 
+    fn persisted_workflow_run(
+        id: Uuid,
+        name: Option<&str>,
+        bundle_path: Option<&str>,
+    ) -> WorkflowRun {
+        WorkflowRun {
+            id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            tasks: vec![],
+            started_at: Utc::now(),
+            ended_at: None,
+            bundle_path: bundle_path.map(PathBuf::from),
+            capabilities: None,
+            name: name.map(str::to_owned),
+            target_path: None,
+        }
+    }
+
+    #[test]
+    fn persisted_workflow_name_uses_name_then_bundle_basename_then_id() {
+        let run_id = Uuid::new_v4();
+
+        let named = persisted_workflow_run(
+            run_id,
+            Some("  persisted migration  "),
+            Some("/private/source/bundle-name"),
+        );
+        assert_eq!(persisted_workflow_root_name(&named), "persisted migration");
+
+        let bundled =
+            persisted_workflow_run(run_id, Some("   "), Some("/private/source/bundle-name"));
+        assert_eq!(persisted_workflow_root_name(&bundled), "bundle-name");
+
+        let anonymous = persisted_workflow_run(run_id, None, None);
+        assert_eq!(
+            persisted_workflow_root_name(&anonymous),
+            format!("workflow:{run_id}")
+        );
+    }
+
     #[test]
     fn direct_child_uses_root_codemod_as_parent() {
         let mut run = nested_run();
@@ -478,7 +552,7 @@ mod tests {
             &run,
             "root-execution".to_string(),
             "@codemod/root".to_string(),
-            false,
+            Some(false),
         )
         .started_event();
 
@@ -493,6 +567,37 @@ mod tests {
             event.properties.get("dependencyDepth").map(String::as_str),
             Some("1")
         );
+    }
+
+    #[tokio::test]
+    async fn nested_run_omits_dry_run_when_attach_context_is_unknown() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sender: TelemetrySenderMutex = Arc::new(Box::new(RecordingEventSender {
+            events: Arc::clone(&events),
+        }));
+        let observer = nested_codemod_run_observer(
+            sender,
+            "root-execution".to_string(),
+            "@codemod/root".to_string(),
+            None,
+        );
+
+        observer
+            .record(NestedCodemodRunEvent::Started(nested_run()))
+            .await;
+        observer
+            .record(NestedCodemodRunEvent::Completed {
+                run: nested_run(),
+                outcome: NestedCodemodRunOutcome::Succeeded,
+                duration_ms: 10,
+            })
+            .await;
+
+        let events = events.lock().expect("events lock");
+        assert_eq!(events.len(), 3);
+        assert!(events
+            .iter()
+            .all(|event| !event.properties.contains_key("dryRun")));
     }
 
     #[tokio::test]
