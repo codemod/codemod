@@ -1071,3 +1071,33 @@ npx codemod cache prune [--max-age <MAX_AGE>] [--dry-run]
 <ResponseField name="--dry-run" type="boolean">
   Dry run - show what would be removed.
 </ResponseField>
+
+### `codemod mcp`
+
+Start the Codemod MCP (Model Context Protocol) server over stdio.
+
+```bash
+npx codemod mcp [options]
+```
+
+Use this command when you want to wire Codemod into an MCP-compatible client manually. Most users should prefer `npx codemod ai`, which installs the MCP entry and related Codemod skill files for supported harnesses.
+
+<ResponseField name="--usage-log <PATH>" type="string">
+  Write MCP usage events to a local file for debugging.
+</ResponseField>
+
+<ResponseField name="--allow-feedback" type="boolean">
+  Opt in this OS user to anonymous Codemod AI and MCP feedback before starting the server.
+
+  This records feedback consent in the user-wide Codemod config. It does not submit feedback by itself.
+</ResponseField>
+
+<Accordion title="Example">
+  ```bash
+  # Start the MCP server directly
+  npx codemod mcp
+
+  # Start the server and log usage events for debugging
+  npx codemod mcp --usage-log ./codemod-mcp-usage.log
+  ```
+</Accordion>
