@@ -36,6 +36,7 @@ use crate::file_ops::AsyncFileWriter;
 use crate::jssg_execution_service::{JssgExecutionRequest, JssgExecutionService};
 use crate::llm_usage::LlmUsageContext;
 use crate::managed_git_service::{ManagedGitService, WorktreeCleanup};
+use crate::nested_codemod_run::{observe_nested_codemod_run, NestedCodemodRun};
 use crate::nested_codemod_service::NestedCodemodService;
 use crate::progress_output::{
     append_buffered_diagnostic, append_buffered_log, flush_buffered_execution_output,
@@ -3473,7 +3474,13 @@ impl Engine {
             resolved.package.package_dir.display()
         );
 
-        self.run_codemod_workflow_with_chain(
+        let run = registry_nested_codemod_run(&resolved.package, &resolved.dependency_chain);
+        let observer = self
+            .workflow_run_config
+            .execution
+            .nested_codemod_run_observer
+            .clone();
+        let operation = self.run_codemod_workflow_with_chain(
             &resolved.package,
             &resolved.workflow,
             codemod,
@@ -3488,8 +3495,12 @@ impl Engine {
             &resolved.dependency_chain,
             capabilities,
             logger,
-        )
-        .await
+        );
+
+        match run {
+            Some(run) => observe_nested_codemod_run(observer.as_ref(), run, operation).await,
+            None => operation.await,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4294,6 +4305,22 @@ impl Engine {
     }
 }
 
+fn registry_nested_codemod_run(
+    package: &ResolvedPackage,
+    dependency_chain: &[CodemodDependency],
+) -> Option<NestedCodemodRun> {
+    let metadata = package.registry_metadata.as_ref()?;
+    Some(NestedCodemodRun {
+        codemod_name: metadata.package_web_path.clone(),
+        package_version: package.version.clone(),
+        execution_id: Uuid::new_v4().to_string(),
+        dependency_path: dependency_chain
+            .iter()
+            .map(|dependency| dependency.source.clone())
+            .collect(),
+    })
+}
+
 impl Clone for Engine {
     fn clone(&self) -> Self {
         Self {
@@ -4319,6 +4346,7 @@ mod tests {
     use crate::config::{
         InstallSkillExecutionRequest, InstallSkillExecutor, SelectionPrompt, SelectionPromptOption,
     };
+    use crate::registry::{PackageSpec, RegistryPackageMetadata};
     use anyhow::Result as AnyhowResult;
     use butterflow_models::step::{
         BuiltinShardMethod, BuiltinShardType, SemanticAnalysisConfig, SemanticAnalysisMode,
@@ -4328,6 +4356,47 @@ mod tests {
     use serial_test::serial;
     use std::sync::Arc;
     use tokio::sync::mpsc;
+
+    fn resolved_package(registry_metadata: Option<RegistryPackageMetadata>) -> ResolvedPackage {
+        ResolvedPackage {
+            spec: PackageSpec {
+                scope: None,
+                name: "child".to_string(),
+                version: Some("1.2.3".to_string()),
+            },
+            version: "1.2.3".to_string(),
+            package_dir: PathBuf::from("/tmp/child"),
+            dry_run_only: false,
+            registry_metadata,
+        }
+    }
+
+    #[test]
+    fn nested_run_is_created_only_for_registry_packages() {
+        let dependency_chain = vec![
+            CodemodDependency {
+                source: "@codemod/child-a".to_string(),
+            },
+            CodemodDependency {
+                source: "@alias/child-b".to_string(),
+            },
+        ];
+        let registry_package = resolved_package(Some(RegistryPackageMetadata {
+            registry_base_url: "https://app.codemod.com".to_string(),
+            package_web_path: "@codemod/child-b".to_string(),
+            access: Some("public".to_string()),
+        }));
+
+        let run = registry_nested_codemod_run(&registry_package, &dependency_chain)
+            .expect("registry package run");
+        assert_eq!(run.codemod_name, "@codemod/child-b");
+        assert_eq!(run.package_version, "1.2.3");
+        assert_eq!(
+            run.dependency_path,
+            vec!["@codemod/child-a", "@alias/child-b"]
+        );
+        assert!(registry_nested_codemod_run(&resolved_package(None), &dependency_chain).is_none());
+    }
 
     #[test]
     fn nested_manifest_capabilities_merge_with_parent_capabilities() {

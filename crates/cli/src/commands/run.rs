@@ -1,6 +1,6 @@
 use crate::commands::run_telemetry::{
     send_completed_event, send_event as send_telemetry_event, send_started_event,
-    send_success_events, CodemodRunOutcome, CodemodRunTelemetry,
+    send_success_events, CodemodRunOutcome, CodemodRunStats, CodemodRunTelemetry,
 };
 use crate::engine::{create_engine, create_registry_client};
 use crate::pro_dry_run::{
@@ -370,6 +370,10 @@ pub async fn handler(
         selected_workflow_name.clone(),
         dry_run,
     );
+    engine
+        .workflow_run_config_mut()
+        .execution
+        .nested_codemod_run_observer = Some(run_telemetry.nested_observer(telemetry.clone()));
     let setup_duration = setup_started.elapsed();
     send_started_event(&telemetry, &run_telemetry).await;
 
@@ -439,12 +443,11 @@ pub async fn handler(
     send_success_events(
         &telemetry,
         &run_telemetry,
-        CodemodRunOutcome::Succeeded {
+        Some(CodemodRunStats {
             files_modified,
             files_unmodified,
             files_with_errors,
-        },
-        files_modified,
+        }),
         duration_ms,
     )
     .await;

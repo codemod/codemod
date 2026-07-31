@@ -16,6 +16,7 @@ pub mod package_skill;
 pub mod publish;
 pub mod run;
 mod run_telemetry;
+pub(crate) use run_telemetry::nested_codemod_run_observer;
 pub mod search;
 pub mod unpublish;
 pub mod whoami;

@@ -24,8 +24,10 @@ use ratatui::Terminal;
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
+use crate::commands::nested_codemod_run_observer;
 use crate::tui::app::{ApprovalPrompt, Screen, TuiState};
 use crate::tui::event::AppEvent;
+use crate::TelemetrySenderMutex;
 
 struct TerminalGuard;
 
@@ -225,6 +227,7 @@ pub(crate) fn create_tui_progress_callback(workflow_run_id: Uuid) -> ProgressCal
 
 pub async fn run_workflow_tui(
     mut engine: Engine,
+    telemetry: TelemetrySenderMutex,
     run_id: Option<Uuid>,
     limit: usize,
 ) -> Result<()> {
@@ -245,11 +248,19 @@ pub async fn run_workflow_tui(
     let mut perf_counters = TuiPerfCounters::from_env();
 
     if let Some(run_id) = run_id {
-        attach_run(&mut engine, run_id, &mut state, &mut runtime).await?;
+        attach_run(
+            &mut engine,
+            Some(&telemetry),
+            run_id,
+            &mut state,
+            &mut runtime,
+        )
+        .await?;
     }
 
     let result = run_tui_loop(
         &mut engine,
+        Some(&telemetry),
         &mut terminal,
         &mut state,
         limit,
@@ -294,6 +305,7 @@ pub async fn run_workflow_tui_with_session(
 
     let result = run_tui_loop(
         &mut engine,
+        None,
         &mut terminal,
         &mut state,
         limit,
@@ -416,6 +428,7 @@ async fn wait_for_next_wake(
 
 async fn run_tui_loop(
     engine: &mut Engine,
+    telemetry: Option<&TelemetrySenderMutex>,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut TuiState,
     limit: usize,
@@ -631,7 +644,7 @@ async fn run_tui_loop(
                         }
                         KeyCode::Enter => {
                             if let Some(run_id) = state.selected_run_id() {
-                                attach_run(engine, run_id, state, runtime).await?;
+                                attach_run(engine, telemetry, run_id, state, runtime).await?;
                             }
                         }
                         _ => {}
@@ -763,6 +776,7 @@ fn spawn_command(
 
 async fn attach_run(
     engine: &mut Engine,
+    telemetry: Option<&TelemetrySenderMutex>,
     run_id: Uuid,
     state: &mut TuiState,
     runtime: &mut TuiRuntime,
@@ -792,6 +806,27 @@ async fn attach_run(
         runtime.receiver = None;
         runtime.session = None;
         state.clear_approvals();
+    }
+
+    if let Some(telemetry) = telemetry {
+        let workflow_run = engine.get_workflow_run(run_id).await?;
+        let root_codemod_name = workflow_run
+            .bundle_path
+            .as_deref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("workflow:{run_id}"));
+        let dry_run = engine.workflow_run_config_mut().execution.dry_run;
+        engine
+            .workflow_run_config_mut()
+            .execution
+            .nested_codemod_run_observer = Some(nested_codemod_run_observer(
+            telemetry.clone(),
+            run_id.to_string(),
+            root_codemod_name,
+            dry_run,
+        ));
     }
 
     let session = WorkflowSession::attach(engine.clone(), run_id);

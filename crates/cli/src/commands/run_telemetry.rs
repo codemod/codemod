@@ -1,7 +1,11 @@
 use crate::commands::TelemetrySenderExt;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
+use butterflow_core::nested_codemod_run::{
+    NestedCodemodRun, NestedCodemodRunEvent, NestedCodemodRunObserver, NestedCodemodRunOutcome,
+};
 use codemod_telemetry::send_event::BaseEvent;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub(super) struct CodemodRunTelemetry {
     codemod_name: String,
@@ -9,17 +13,25 @@ pub(super) struct CodemodRunTelemetry {
     execution_id: String,
     workflow_name: Option<String>,
     dry_run: bool,
+    nested: Option<NestedRunProperties>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct CodemodRunStats {
+    pub(super) files_modified: usize,
+    pub(super) files_unmodified: usize,
+    pub(super) files_with_errors: usize,
 }
 
 pub(super) enum CodemodRunOutcome {
-    Succeeded {
-        files_modified: usize,
-        files_unmodified: usize,
-        files_with_errors: usize,
-    },
-    Failed {
-        error_message: String,
-    },
+    Succeeded { stats: Option<CodemodRunStats> },
+    Failed { error_message: String },
+}
+
+struct NestedRunProperties {
+    root_execution_id: String,
+    root_codemod_name: String,
+    dependency_path: Vec<String>,
 }
 
 impl CodemodRunTelemetry {
@@ -36,7 +48,40 @@ impl CodemodRunTelemetry {
             execution_id,
             workflow_name,
             dry_run,
+            nested: None,
         }
+    }
+
+    fn for_nested(
+        run: &NestedCodemodRun,
+        root_execution_id: String,
+        root_codemod_name: String,
+        dry_run: bool,
+    ) -> Self {
+        Self {
+            codemod_name: run.codemod_name.clone(),
+            package_version: run.package_version.clone(),
+            execution_id: run.execution_id.clone(),
+            workflow_name: None,
+            dry_run,
+            nested: Some(NestedRunProperties {
+                root_execution_id,
+                root_codemod_name,
+                dependency_path: run.dependency_path.clone(),
+            }),
+        }
+    }
+
+    pub(super) fn nested_observer(
+        &self,
+        telemetry: TelemetrySenderMutex,
+    ) -> Arc<dyn NestedCodemodRunObserver> {
+        nested_codemod_run_observer(
+            telemetry,
+            self.execution_id.clone(),
+            self.codemod_name.clone(),
+            self.dry_run,
+        )
     }
 
     fn common_properties(&self) -> HashMap<String, String> {
@@ -48,9 +93,36 @@ impl CodemodRunTelemetry {
             ("cliVersion".to_string(), CLI_VERSION.to_string()),
             ("os".to_string(), std::env::consts::OS.to_string()),
             ("arch".to_string(), std::env::consts::ARCH.to_string()),
+            ("isNested".to_string(), self.nested.is_some().to_string()),
         ]);
         if let Some(workflow_name) = &self.workflow_name {
             properties.insert("workflowName".to_string(), workflow_name.clone());
+        }
+        if let Some(nested) = &self.nested {
+            properties.insert(
+                "rootExecutionId".to_string(),
+                nested.root_execution_id.clone(),
+            );
+            properties.insert(
+                "rootCodemodName".to_string(),
+                nested.root_codemod_name.clone(),
+            );
+            properties.insert(
+                "dependencyDepth".to_string(),
+                nested.dependency_path.len().to_string(),
+            );
+            properties.insert(
+                "dependencyPath".to_string(),
+                nested.dependency_path.join(" > "),
+            );
+            let parent_codemod_name = nested
+                .dependency_path
+                .iter()
+                .rev()
+                .nth(1)
+                .cloned()
+                .unwrap_or_else(|| nested.root_codemod_name.clone());
+            properties.insert("parentCodemodName".to_string(), parent_codemod_name);
         }
         properties
     }
@@ -66,15 +138,22 @@ impl CodemodRunTelemetry {
         let mut properties = self.common_properties();
         properties.insert("durationMs".to_string(), duration_ms.to_string());
         match outcome {
-            CodemodRunOutcome::Succeeded {
-                files_modified,
-                files_unmodified,
-                files_with_errors,
-            } => {
+            CodemodRunOutcome::Succeeded { stats } => {
                 properties.insert("outcome".to_string(), "succeeded".to_string());
-                properties.insert("filesModified".to_string(), files_modified.to_string());
-                properties.insert("filesUnmodified".to_string(), files_unmodified.to_string());
-                properties.insert("filesWithErrors".to_string(), files_with_errors.to_string());
+                if let Some(stats) = stats {
+                    properties.insert(
+                        "filesModified".to_string(),
+                        stats.files_modified.to_string(),
+                    );
+                    properties.insert(
+                        "filesUnmodified".to_string(),
+                        stats.files_unmodified.to_string(),
+                    );
+                    properties.insert(
+                        "filesWithErrors".to_string(),
+                        stats.files_with_errors.to_string(),
+                    );
+                }
             }
             CodemodRunOutcome::Failed { error_message } => {
                 properties.insert("outcome".to_string(), "failed".to_string());
@@ -87,9 +166,15 @@ impl CodemodRunTelemetry {
         }
     }
 
-    fn legacy_executed_event(&self, files_modified: usize, duration_ms: u128) -> BaseEvent {
+    fn legacy_executed_event(
+        &self,
+        stats: Option<CodemodRunStats>,
+        duration_ms: u128,
+    ) -> BaseEvent {
         let mut properties = self.common_properties();
-        properties.insert("fileCount".to_string(), files_modified.to_string());
+        if let Some(stats) = stats {
+            properties.insert("fileCount".to_string(), stats.files_modified.to_string());
+        }
         properties.insert("durationMs".to_string(), duration_ms.to_string());
         BaseEvent {
             kind: "codemodExecuted".to_string(),
@@ -125,17 +210,86 @@ pub(super) async fn send_completed_event(
 pub(super) async fn send_success_events(
     telemetry: &TelemetrySenderMutex,
     run_telemetry: &CodemodRunTelemetry,
-    outcome: CodemodRunOutcome,
-    files_modified: usize,
+    stats: Option<CodemodRunStats>,
     duration_ms: u128,
 ) {
     tokio::join!(
         send_event(
             telemetry,
-            run_telemetry.legacy_executed_event(files_modified, duration_ms),
+            run_telemetry.legacy_executed_event(stats, duration_ms),
         ),
-        send_completed_event(telemetry, run_telemetry, outcome, duration_ms),
+        send_completed_event(
+            telemetry,
+            run_telemetry,
+            CodemodRunOutcome::Succeeded { stats },
+            duration_ms,
+        ),
     );
+}
+
+pub(crate) fn nested_codemod_run_observer(
+    telemetry: TelemetrySenderMutex,
+    root_execution_id: String,
+    root_codemod_name: String,
+    dry_run: bool,
+) -> Arc<dyn NestedCodemodRunObserver> {
+    Arc::new(NestedCodemodTelemetryObserver {
+        telemetry,
+        root_execution_id,
+        root_codemod_name,
+        dry_run,
+    })
+}
+
+struct NestedCodemodTelemetryObserver {
+    telemetry: TelemetrySenderMutex,
+    root_execution_id: String,
+    root_codemod_name: String,
+    dry_run: bool,
+}
+
+impl NestedCodemodTelemetryObserver {
+    fn run_telemetry(&self, run: &NestedCodemodRun) -> CodemodRunTelemetry {
+        CodemodRunTelemetry::for_nested(
+            run,
+            self.root_execution_id.clone(),
+            self.root_codemod_name.clone(),
+            self.dry_run,
+        )
+    }
+}
+
+#[async_trait::async_trait]
+impl NestedCodemodRunObserver for NestedCodemodTelemetryObserver {
+    async fn record(&self, event: NestedCodemodRunEvent) {
+        match event {
+            NestedCodemodRunEvent::Started(run) => {
+                send_started_event(&self.telemetry, &self.run_telemetry(&run)).await;
+            }
+            NestedCodemodRunEvent::Completed {
+                run,
+                outcome,
+                duration_ms,
+            } => {
+                let run_telemetry = self.run_telemetry(&run);
+                match outcome {
+                    NestedCodemodRunOutcome::Succeeded => {
+                        send_success_events(&self.telemetry, &run_telemetry, None, duration_ms)
+                            .await;
+                    }
+                    NestedCodemodRunOutcome::Failed { error_message } => {
+                        send_completed_event(
+                            &self.telemetry,
+                            &run_telemetry,
+                            CodemodRunOutcome::Failed { error_message },
+                            duration_ms,
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -174,9 +328,11 @@ mod tests {
         let started = telemetry.started_event();
         let completed = telemetry.completed_event(
             CodemodRunOutcome::Succeeded {
-                files_modified: 4,
-                files_unmodified: 2,
-                files_with_errors: 0,
+                stats: Some(CodemodRunStats {
+                    files_modified: 4,
+                    files_unmodified: 2,
+                    files_with_errors: 0,
+                }),
             },
             1250,
         );
@@ -201,6 +357,10 @@ mod tests {
             assert_eq!(
                 event.properties.get("dryRun").map(String::as_str),
                 Some("true")
+            );
+            assert_eq!(
+                event.properties.get("isNested").map(String::as_str),
+                Some("false")
             );
         }
         assert_eq!(started.kind, "codemodRunStarted");
@@ -254,12 +414,11 @@ mod tests {
         send_success_events(
             &sender,
             &telemetry,
-            CodemodRunOutcome::Succeeded {
+            Some(CodemodRunStats {
                 files_modified: 1,
                 files_unmodified: 0,
                 files_with_errors: 0,
-            },
-            1,
+            }),
             10,
         )
         .await;
@@ -280,5 +439,197 @@ mod tests {
                 .expect("telemetry event");
             assert!(position < report_position);
         }
+    }
+
+    struct RecordingEventSender {
+        events: Arc<Mutex<Vec<BaseEvent>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TelemetrySender for RecordingEventSender {
+        async fn send_event(
+            &self,
+            event: BaseEvent,
+            _options_override: Option<PartialTelemetrySenderOptions>,
+        ) {
+            self.events.lock().expect("events lock").push(event);
+        }
+
+        async fn initialize_panic_telemetry(&self) {}
+    }
+
+    fn nested_run() -> NestedCodemodRun {
+        NestedCodemodRun {
+            codemod_name: "@codemod/child-b".to_string(),
+            package_version: "2.0.0".to_string(),
+            execution_id: "child-execution".to_string(),
+            dependency_path: vec![
+                "@codemod/child-a".to_string(),
+                "@codemod/child-b".to_string(),
+            ],
+        }
+    }
+
+    #[test]
+    fn direct_child_uses_root_codemod_as_parent() {
+        let mut run = nested_run();
+        run.dependency_path = vec!["@codemod/child-b".to_string()];
+        let event = CodemodRunTelemetry::for_nested(
+            &run,
+            "root-execution".to_string(),
+            "@codemod/root".to_string(),
+            false,
+        )
+        .started_event();
+
+        assert_eq!(
+            event
+                .properties
+                .get("parentCodemodName")
+                .map(String::as_str),
+            Some("@codemod/root")
+        );
+        assert_eq!(
+            event.properties.get("dependencyDepth").map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_success_emits_correlated_run_events_without_invented_file_counts() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sender: TelemetrySenderMutex = Arc::new(Box::new(RecordingEventSender {
+            events: Arc::clone(&events),
+        }));
+        let observer = nested_codemod_run_observer(
+            sender,
+            "root-execution".to_string(),
+            "@codemod/root".to_string(),
+            true,
+        );
+        let run = nested_run();
+
+        observer
+            .record(NestedCodemodRunEvent::Started(run.clone()))
+            .await;
+        observer
+            .record(NestedCodemodRunEvent::Completed {
+                run,
+                outcome: NestedCodemodRunOutcome::Succeeded,
+                duration_ms: 250,
+            })
+            .await;
+
+        let events = events.lock().expect("events lock");
+        assert_eq!(events.len(), 3);
+        for kind in [
+            "codemodRunStarted",
+            "codemodExecuted",
+            "codemodRunCompleted",
+        ] {
+            let event = events
+                .iter()
+                .find(|event| event.kind == kind)
+                .expect("nested telemetry event");
+            assert_eq!(
+                event.properties.get("codemodName").map(String::as_str),
+                Some("@codemod/child-b")
+            );
+            assert_eq!(
+                event.properties.get("executionId").map(String::as_str),
+                Some("child-execution")
+            );
+            assert_eq!(
+                event.properties.get("isNested").map(String::as_str),
+                Some("true")
+            );
+            assert_eq!(
+                event.properties.get("rootExecutionId").map(String::as_str),
+                Some("root-execution")
+            );
+            assert_eq!(
+                event.properties.get("rootCodemodName").map(String::as_str),
+                Some("@codemod/root")
+            );
+            assert_eq!(
+                event
+                    .properties
+                    .get("parentCodemodName")
+                    .map(String::as_str),
+                Some("@codemod/child-a")
+            );
+            assert_eq!(
+                event.properties.get("dependencyDepth").map(String::as_str),
+                Some("2")
+            );
+            assert_eq!(
+                event.properties.get("dependencyPath").map(String::as_str),
+                Some("@codemod/child-a > @codemod/child-b")
+            );
+            assert_eq!(
+                event.properties.get("dryRun").map(String::as_str),
+                Some("true")
+            );
+        }
+
+        let executed = events
+            .iter()
+            .find(|event| event.kind == "codemodExecuted")
+            .expect("legacy nested event");
+        assert!(!executed.properties.contains_key("fileCount"));
+
+        let completed = events
+            .iter()
+            .find(|event| event.kind == "codemodRunCompleted")
+            .expect("nested completion event");
+        assert_eq!(
+            completed.properties.get("outcome").map(String::as_str),
+            Some("succeeded")
+        );
+        assert!(!completed.properties.contains_key("filesModified"));
+    }
+
+    #[tokio::test]
+    async fn nested_failure_emits_failed_completion_without_legacy_success_event() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sender: TelemetrySenderMutex = Arc::new(Box::new(RecordingEventSender {
+            events: Arc::clone(&events),
+        }));
+        let observer = nested_codemod_run_observer(
+            sender,
+            "root-execution".to_string(),
+            "@codemod/root".to_string(),
+            false,
+        );
+        let run = nested_run();
+
+        observer
+            .record(NestedCodemodRunEvent::Started(run.clone()))
+            .await;
+        observer
+            .record(NestedCodemodRunEvent::Completed {
+                run,
+                outcome: NestedCodemodRunOutcome::Failed {
+                    error_message: "child failed".to_string(),
+                },
+                duration_ms: 50,
+            })
+            .await;
+
+        let events = events.lock().expect("events lock");
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| event.kind != "codemodExecuted"));
+        let completed = events
+            .iter()
+            .find(|event| event.kind == "codemodRunCompleted")
+            .expect("nested completion event");
+        assert_eq!(
+            completed.properties.get("outcome").map(String::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            completed.properties.get("errorMessage").map(String::as_str),
+            Some("child failed")
+        );
     }
 }
