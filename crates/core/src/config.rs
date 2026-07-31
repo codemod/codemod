@@ -13,6 +13,7 @@ use thiserror::Error;
 use crate::{
     ai_handoff::AgentOption,
     execution::{CodemodExecutionConfig, ProgressCallback},
+    nested_codemod_run::NestedCodemodRunObserver,
     registry::RegistryClient,
     structured_log::OutputFormat,
 };
@@ -159,6 +160,7 @@ pub struct WorkflowExecutionSettings {
     pub pre_run_callback: Arc<Option<PreRunCallback>>,
     pub dry_run: bool,
     pub registry_client: RegistryClient,
+    pub nested_codemod_run_observer: Option<Arc<dyn NestedCodemodRunObserver>>,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
     pub capabilities_security_callback: Option<CapabilitiesSecurityCallback>,
     /// Auto-trigger manual steps instead of waiting for user input (used by pro codemod dry-run)
@@ -183,6 +185,7 @@ impl Default for WorkflowExecutionSettings {
             pre_run_callback: Arc::new(None),
             dry_run: false,
             registry_client: RegistryClient::default(),
+            nested_codemod_run_observer: None,
             capabilities: None,
             capabilities_security_callback: None,
             auto_trigger_manual_steps: false,
