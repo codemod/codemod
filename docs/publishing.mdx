@@ -14,9 +14,9 @@ Codemod supports three authentication methods for publishing:
 |--------|----------|------------------|-------|
 | [Interactive Login](#interactive-login) | Local development | None | None |
 | [API Keys](#api-keys) | CI/CD pipelines, automation | Yes (`CODEMOD_API_KEY`) | Create key in UI |
-| [Trusted Publishers](#trusted-publishers) | GitHub Actions, secure CI/CD | None (uses OIDC) | None for org scopes* |
+| [Trusted Publishers](#trusted-publishers) | GitHub Actions, secure CI/CD | None (uses OIDC) | Verify the organization scope once* |
 
-<sub>* If your GitHub organization name matches your package scope, trusted publishing works automatically with zero configuration. See [Organization Scopes](#organization-scopes-zero-configuration).</sub>
+<sub>* Verifying an organization scope is only part of setup. Some packages also require adding a Trusted Publisher entry in the UI (for example, unscoped packages or when the GitHub org doesn't match the package scope). See [Organization Scopes](#organization-scopes) and [Individual Packages (Manual Configuration)](#individual-packages-manual-configuration).</sub>
 
 ## Interactive Login
 
@@ -57,35 +57,82 @@ Trusted publishers enable **passwordless publishing** from GitHub Actions using 
 - **Fine-grained control**: Restrict publishing by repository, workflow, environment, or git ref
 - **Short-lived tokens**: Tokens expire in ~5 minutes, limiting exposure
 
-### Organization Scopes (Zero Configuration)
+### Organization Scopes
 
 <Note>
-  **This is the recommended approach for organizations.** If your GitHub organization name matches your package scope, trusted publishing works automatically with no UI configuration needed.
+  Before anyone can publish a package such as `@my-org/my-codemod`, Codemod must verify that the matching GitHub organization owns the `@my-org` scope. GitHub Actions OIDC authenticates later publishes, but it does not skip this initial verification.
 </Note>
 
-For packages under an organization scope (e.g., `@my-org/my-codemod`), trusted publishers work **automatically** when:
+Choose one of these setup methods:
 
-1. Your GitHub organization name matches the package scope (e.g., GitHub org `my-org` → scope `@my-org`)
-2. You've linked your GitHub organization (see [setup steps](#linking-your-github-organization) below)
+- **Connect GitHub (recommended):** Install the Codemod GitHub App for the complete platform experience, including repositories, campaigns, and automations.
+- **Verify a public repository:** Prove ownership without granting the GitHub App access. This creates a registry-only organization for publishing packages.
 
-Any repository in your GitHub organization can then publish packages under your scope, including new packages and updates to existing ones.
+<img
+  src="/images/publishing/organization-setup-dark.png"
+  alt="Create organization page showing Connect GitHub and public repository verification options"
+  className="hidden dark:block mx-auto"
+/>
+<img
+  src="/images/publishing/organization-setup-light.png"
+  alt="Create organization page showing Connect GitHub and public repository verification options"
+  className="block dark:hidden mx-auto"
+/>
 
 #### Linking Your GitHub Organization
 
-To enable automatic trusted publishing for your organization scope, you need to install the Codemod GitHub App:
+For full access to Codemod, connect the GitHub organization that matches your package scope:
 
 <Steps>
   <Step title="Install the Codemod GitHub App">
-    1. Install the [Codemod GitHub App](https://github.com/apps/codemod) and select your GitHub organization (requires org admin permissions)
-    2. Grant access to at least one repository
+    Install the [Codemod GitHub App](https://github.com/apps/codemod), select your GitHub organization, and grant access to at least one repository. This requires GitHub organization admin permissions.
   </Step>
   
   <Step title="Sign in to Codemod">
-    Go to [Codemod platform](https://app.codemod.com) and sign in with GitHub. Your organization will be automatically linked.
+    Go to the [Codemod platform](https://app.codemod.com), sign in with GitHub, and select **Connect GitHub** on the organization creation page. Your organization will be linked after GitHub confirms the installation.
   </Step>
 </Steps>
 
-Once linked, anyone who can trigger GitHub Actions workflows (e.g., via push, release, or `workflow_dispatch`) in your organization's repositories can publish codemods under that scope. The publisher identity in Codemod's system is tied to the user who installed the GitHub App.
+Once linked, anyone who can trigger a GitHub Actions workflow in the organization can publish packages under the matching scope using OIDC.
+
+#### Verifying With a Public Repository
+
+Use repository verification when you only need the Codemod Registry and do not want to install the GitHub App yet.
+
+<Steps>
+  <Step title="Choose a public repository">
+    Choose a public, non-fork, active repository whose GitHub owner exactly matches your package scope. For example, the repository owner must be `nodejs` to claim `@nodejs`. You must specify the repository; Codemod does not scan the organization's repositories.
+
+    We recommend hosting your codemod source code in this same repository so it serves both as the ownership proof and the source repository.
+  </Step>
+
+  <Step title="Request a verification code">
+    On the organization creation page, enter the GitHub organization name and repository name, then select **Verify with a public repository**.
+  </Step>
+
+  <Step title="Add the verification file">
+    Add the displayed code to `.codemod/verification` on the repository's default branch. Commit and push the file publicly.
+  </Step>
+
+  <Step title="Complete verification">
+    Return to Codemod and select **Verify now**. Codemod checks the specified repository, creates the registry-only organization, switches to it, and refreshes the page.
+  </Step>
+</Steps>
+
+<img
+  src="/images/publishing/repository-verification-dark.png"
+  alt="Repository verification instructions with the verification file path and code"
+  className="hidden dark:block mx-auto"
+/>
+<img
+  src="/images/publishing/repository-verification-light.png"
+  alt="Repository verification instructions with the verification file path and code"
+  className="block dark:hidden mx-auto"
+/>
+
+The requesting Codemod user becomes the owner of the registry-only organization. Registry and API key features remain available, while repository-backed features ask you to install the GitHub App. You can install it later to unlock the full platform for the same organization.
+
+For publishes authenticated with an API key or interactive login, Codemod checks that the verification file is still present and valid. A publish authenticated by GitHub Actions OIDC does not repeat that file check, because the OIDC token proves the workflow belongs to the matching GitHub organization. The initial scope verification is always required.
 
 #### Complete GitHub Actions Workflow
 
@@ -279,7 +326,7 @@ jobs:
     - Repository name (exact match)
     - Any configured restrictions (workflow path, environment, ref pattern)
     
-    **For organization scopes:** Ensure the GitHub App is installed on at least one repository in your organization and you've signed in to Codemod with a GitHub account that has access to the organization.
+    **For organization scopes:** Ensure the scope was initially verified either through the GitHub App or a public repository. If you used repository verification, confirm `.codemod/verification` remains on the specified repository's default branch for publishes that do not use GitHub Actions OIDC.
   </Accordion>
 
   <Accordion title="Permission denied">
@@ -365,11 +412,11 @@ jobs:
 | New package publish | Yes | Yes | Yes* |
 | Token lifetime | Long-lived | Long-lived | ~5 minutes |
 | Rotation needed | No | Recommended | No |
-| UI configuration | None | Create key | None for org scopes** |
+| UI configuration | None | Create key | Verify org scope once** |
 
 <sub>* Trusted publishers can publish new packages when using a matching organization scope.</sub>
 
-<sub>** Organization scopes that match your GitHub org name require no configuration in Codemod platform. Individual packages require adding a trusted publisher in the UI.</sub>
+<sub>** Organization scopes must first be verified through the GitHub App or a public repository. Individual packages require adding a trusted publisher in the UI.</sub>
 
 ## Best Practices
 
