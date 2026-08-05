@@ -737,7 +737,7 @@ You'll also be prompted to create a GitHub Actions publishing workflow. This gen
 - **Single codemod repo**: Triggers on `v*` tags (e.g., `v1.0.0`)
 - **Monorepo**: Triggers on `*@v*` tags (e.g., `my-codemod@v1.0.0`) and extracts the codemod name
 
-Both workflows use [trusted publishers](/publishing#trusted-publishers) with OIDC for secure, passwordless publishing.
+Both workflows use [trusted publishers](/publishing#trusted-publishers) with OIDC for secure, passwordless publishing. Before the workflow can publish packages under an organization scope, you must first verify that scope through the GitHub App or a public repository as described in the publishing guide.
 
 [See the publishing guide](/publishing#complete-github-actions-workflow) for detailed workflow examples.
 
