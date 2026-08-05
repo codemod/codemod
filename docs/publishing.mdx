@@ -16,7 +16,7 @@ Codemod supports three authentication methods for publishing:
 | [API Keys](#api-keys) | CI/CD pipelines, automation | Yes (`CODEMOD_API_KEY`) | Create key in UI |
 | [Trusted Publishers](#trusted-publishers) | GitHub Actions, secure CI/CD | None (uses OIDC) | Verify the organization scope once* |
 
-<sub>* A GitHub organization scope can be verified by connecting the Codemod GitHub App or by adding a verification file to a public repository. See [Organization Scopes](#organization-scopes).</sub>
+<sub>* Verifying an organization scope is only part of setup. Some packages also require adding a Trusted Publisher entry in the UI (for example, unscoped packages or when the GitHub org doesn't match the package scope). See [Organization Scopes](#organization-scopes) and [Individual Packages (Manual Configuration)](#individual-packages-manual-configuration).</sub>
 
 ## Interactive Login
 
