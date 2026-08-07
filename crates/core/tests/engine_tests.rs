@@ -1933,29 +1933,17 @@ async fn test_template_workflow() {
         .await
         .unwrap();
 
-    // Allow some time for the workflow to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Get the workflow run
-    let workflow_run = engine.get_workflow_run(workflow_run_id).await.unwrap();
-
-    // Check that the workflow run is running or completed
+    let status = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::Running || status == WorkflowStatus::Completed
+    })
+    .await;
     assert!(
-        workflow_run.status == WorkflowStatus::Running
-            || workflow_run.status == WorkflowStatus::Completed
+        status == WorkflowStatus::Running || status == WorkflowStatus::Completed,
+        "unexpected workflow status: {status:?}"
     );
 
-    // Get the tasks
-    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // There should be at least 1 task
-    assert!(!tasks.is_empty());
-
-    // Check that the task for node1 exists
-    let node1_task = tasks.iter().find(|t| t.node_id == "node1").unwrap();
-
-    // Print the task status for debugging
-    println!("Node1 task status: {:?}", node1_task.status);
+    let node1_status = wait_for_task_status(&engine, workflow_run_id, "node1", |_| true).await;
+    println!("Node1 task status: {node1_status:?}");
 }
 
 // Test for trigger_all method
