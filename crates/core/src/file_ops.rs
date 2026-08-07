@@ -121,4 +121,20 @@ mod tests {
         assert_eq!(decoded.content, "café");
         assert!(decoded.decoded_from.is_some());
     }
+
+    #[test]
+    fn decode_source_bytes_handles_utf16le_bom() {
+        // UTF-16LE BOM + "ab"
+        let decoded = decode_source_bytes(&[0xFF, 0xFE, b'a', 0, b'b', 0]);
+        assert_eq!(decoded.content, "ab");
+        assert_eq!(decoded.decoded_from, Some("UTF-16LE"));
+    }
+
+    #[test]
+    fn decode_source_bytes_handles_utf16be_bom() {
+        // UTF-16BE BOM + "ab"
+        let decoded = decode_source_bytes(&[0xFE, 0xFF, 0, b'a', 0, b'b']);
+        assert_eq!(decoded.content, "ab");
+        assert_eq!(decoded.decoded_from, Some("UTF-16BE"));
+    }
 }

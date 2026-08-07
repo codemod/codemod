@@ -866,7 +866,8 @@ impl<'a> JssgExecutionService<'a> {
                                                 let original = if change_path == file_path {
                                                     content.clone()
                                                 } else {
-                                                    std::fs::read_to_string(change_path)
+                                                    read_source_file(change_path)
+                                                        .map(|decoded| decoded.content)
                                                         .unwrap_or_default()
                                                 };
                                                 callback(DryRunChange {
@@ -895,7 +896,8 @@ impl<'a> JssgExecutionService<'a> {
                                                 let original = if change_path == file_path {
                                                     content.clone()
                                                 } else {
-                                                    std::fs::read_to_string(change_path)
+                                                    read_source_file(change_path)
+                                                        .map(|decoded| decoded.content)
                                                         .unwrap_or_default()
                                                 };
                                                 callback(DryRunChange {
