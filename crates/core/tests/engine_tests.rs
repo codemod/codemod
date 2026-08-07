@@ -5386,6 +5386,93 @@ export default function transform(ast) {
 }
 
 #[tokio::test]
+async fn test_execute_js_ast_grep_step_decodes_non_utf8_files() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(ast) {
+  // Read-only mining style: touch the AST API, return no edits.
+  void ast.filename();
+  return null;
+}
+"#,
+    );
+
+    create_test_file(temp_path, "src/good.js", "var good = 1;\n");
+    let legacy_path = temp_path.join("src/legacy.js");
+    fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+    // Windows-1252: `var good = "café";\n` where é is byte 0xE9 (invalid UTF-8 alone).
+    let legacy_bytes = [
+        b'v', b'a', b'r', b' ', b'g', b'o', b'o', b'd', b' ', b'=', b' ', b'"', b'c', b'a', b'f',
+        0xE9, b'"', b';', b'\n',
+    ];
+    fs::write(&legacy_path, legacy_bytes).unwrap();
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            None,
+            "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.js".to_string()]),
+                exclude: None,
+                max_threads: Some(1),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "legacy-encoded files should decode and parse instead of failing: {result:?}"
+    );
+    assert_eq!(
+        fs::read(&legacy_path).unwrap(),
+        legacy_bytes,
+        "unmodified legacy files must keep their original on-disk encoding"
+    );
+    assert_eq!(
+        engine
+            .execution_stats
+            .files_with_errors
+            .load(Ordering::Relaxed),
+        0,
+        "decoded legacy files must not count as errors"
+    );
+}
+
+#[tokio::test]
 async fn test_execute_js_ast_grep_step_fails_when_all_files_fail() {
     let temp_dir = TempDir::new().unwrap();
     let temp_path = temp_dir.path();

@@ -42,6 +42,7 @@ use crate::{
         resolve_optional_glob_list, CapabilitiesData, Engine, StepPhase, StepProgressState,
     },
     execution::{CodemodExecutionConfig, PreRunCallback},
+    file_ops::read_source_file,
     progress_output::{
         append_buffered_diagnostic, append_buffered_log, flush_buffered_execution_output,
         BufferedExecutionOutput,
@@ -362,8 +363,8 @@ impl<'a> JssgExecutionService<'a> {
 
         for file_path in &target_files {
             if file_path.is_file() {
-                if let Ok(content) = std::fs::read_to_string(file_path) {
-                    if let Err(e) = provider.notify_file_processed(file_path, &content) {
+                if let Ok(decoded) = read_source_file(file_path) {
+                    if let Err(e) = provider.notify_file_processed(file_path, &decoded.content) {
                         slog!(
                             logger,
                             debug,
@@ -610,8 +611,8 @@ impl<'a> JssgExecutionService<'a> {
                     );
                     Self::signal_progress(&progress_tx_for_closure);
 
-                    let content = match std::fs::read_to_string(file_path) {
-                        Ok(content) => content,
+                    let decoded = match read_source_file(file_path) {
+                        Ok(decoded) => decoded,
                         Err(e) => {
                             slog!(
                                 logger,
@@ -661,6 +662,18 @@ impl<'a> JssgExecutionService<'a> {
                             return;
                         }
                     };
+                    if let Some(encoding) = decoded.decoded_from {
+                        let decode_message = format!(
+                            "Decoded non-UTF-8 source as {encoding} for analysis (writes UTF-8 only if modified): {relative_path}"
+                        );
+                        slog!(logger, warn, "{}", decode_message);
+                        append_buffered_log(
+                            &buffered_execution_output_for_closure,
+                            relative_path.clone(),
+                            decode_message,
+                        );
+                    }
+                    let content = decoded.content;
                     record_unit_progress(
                         &progress_state_for_closure,
                         &relative_path,
