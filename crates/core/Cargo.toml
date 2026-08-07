@@ -45,6 +45,8 @@ language-core = { workspace = true }
 anyhow.workspace = true
 similar = "2.6.0"
 sha2 = "0.10"
+encoding_rs = { workspace = true }
+chardetng = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

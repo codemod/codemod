@@ -1933,29 +1933,17 @@ async fn test_template_workflow() {
         .await
         .unwrap();
 
-    // Allow some time for the workflow to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    // Get the workflow run
-    let workflow_run = engine.get_workflow_run(workflow_run_id).await.unwrap();
-
-    // Check that the workflow run is running or completed
+    let status = wait_for_workflow_status(&engine, workflow_run_id, |status| {
+        status == WorkflowStatus::Running || status == WorkflowStatus::Completed
+    })
+    .await;
     assert!(
-        workflow_run.status == WorkflowStatus::Running
-            || workflow_run.status == WorkflowStatus::Completed
+        status == WorkflowStatus::Running || status == WorkflowStatus::Completed,
+        "unexpected workflow status: {status:?}"
     );
 
-    // Get the tasks
-    let tasks = engine.get_tasks(workflow_run_id).await.unwrap();
-
-    // There should be at least 1 task
-    assert!(!tasks.is_empty());
-
-    // Check that the task for node1 exists
-    let node1_task = tasks.iter().find(|t| t.node_id == "node1").unwrap();
-
-    // Print the task status for debugging
-    println!("Node1 task status: {:?}", node1_task.status);
+    let node1_status = wait_for_task_status(&engine, workflow_run_id, "node1", |_| true).await;
+    println!("Node1 task status: {node1_status:?}");
 }
 
 // Test for trigger_all method
@@ -5382,6 +5370,93 @@ export default function transform(ast) {
     assert_eq!(
         fs::read_to_string(temp_path.join("src/good.js")).unwrap(),
         "var good = 1;\n"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_js_ast_grep_step_decodes_non_utf8_files() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(ast) {
+  // Read-only mining style: touch the AST API, return no edits.
+  void ast.filename();
+  return null;
+}
+"#,
+    );
+
+    create_test_file(temp_path, "src/good.js", "var good = 1;\n");
+    let legacy_path = temp_path.join("src/legacy.js");
+    fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+    // Windows-1252: `var good = "café";\n` where é is byte 0xE9 (invalid UTF-8 alone).
+    let legacy_bytes = [
+        b'v', b'a', b'r', b' ', b'g', b'o', b'o', b'd', b' ', b'=', b' ', b'"', b'c', b'a', b'f',
+        0xE9, b'"', b';', b'\n',
+    ];
+    fs::write(&legacy_path, legacy_bytes).unwrap();
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+    let result = engine
+        .execute_js_ast_grep_step(
+            "test-node".to_string(),
+            None,
+            "test-step".to_string(),
+            "test-step".to_string(),
+            None,
+            None,
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: Some("src".to_string()),
+                include: Some(vec!["**/*.js".to_string()]),
+                exclude: None,
+                max_threads: Some(1),
+                dry_run: Some(false),
+                language: Some("javascript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "legacy-encoded files should decode and parse instead of failing: {result:?}"
+    );
+    assert_eq!(
+        fs::read(&legacy_path).unwrap(),
+        legacy_bytes,
+        "unmodified legacy files must keep their original on-disk encoding"
+    );
+    assert_eq!(
+        engine
+            .execution_stats
+            .files_with_errors
+            .load(Ordering::Relaxed),
+        0,
+        "decoded legacy files must not count as errors"
     );
 }
 
