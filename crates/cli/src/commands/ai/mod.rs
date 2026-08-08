@@ -300,8 +300,8 @@ async fn handle_feedback_command(command: &FeedbackCommand) -> Result<()> {
         bail!("Feedback message cannot be empty.");
     }
 
-    if message.len() > 4000 {
-        bail!("Feedback message must be 4000 characters or fewer.");
+    if message.chars().count() > 40000 {
+        bail!("Feedback message must be 40000 characters or fewer.");
     }
 
     let consented_at = feedback::persist_feedback_consent()?;
