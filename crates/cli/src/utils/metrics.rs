@@ -1,5 +1,6 @@
 use codemod_sandbox::MetricsData;
 use inquire::Confirm;
+use std::cmp::Reverse;
 
 /// Count the total number of metric entries across all metric names
 fn count_metric_entries(metrics: &MetricsData) -> usize {
@@ -61,7 +62,7 @@ pub fn print_metrics(metrics: &MetricsData) {
     for (metric_name, entries) in metrics_with_values {
         println!("  {}:", metric_name);
         let mut sorted_entries: Vec<_> = entries.iter().collect();
-        sorted_entries.sort_by(|a, b| b.count.cmp(&a.count));
+        sorted_entries.sort_by_key(|entry| Reverse(entry.count));
         for entry in sorted_entries {
             if entry.cardinality.is_empty() {
                 // No cardinality dimensions, just show the count

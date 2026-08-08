@@ -29,19 +29,23 @@ pub struct BaseEvent {
 }
 
 static RUNTIME_HANDLE: OnceCell<tokio::runtime::Handle> = OnceCell::const_new();
-const REQUEST_TIMEOUT_SECONDS: u64 = 2;
-const MAX_CAPTURE_ATTEMPTS: u32 = 3;
-const RETRY_INITIAL_BACKOFF_MS: u64 = 100;
-const RETRY_MAX_BACKOFF_MS: u64 = 200;
+pub(crate) const REQUEST_TIMEOUT_SECONDS: u64 = 2;
+pub(crate) const MAX_CAPTURE_ATTEMPTS: u32 = 3;
+pub(crate) const RETRY_INITIAL_BACKOFF_MS: u64 = 100;
+pub(crate) const RETRY_MAX_BACKOFF_MS: u64 = 200;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TelemetryError {
     #[error(transparent)]
     PostHog(#[from] posthog_rs::Error),
-    #[error("PostHog client configuration is invalid: {0}")]
+    #[error("Telemetry client configuration is invalid: {0}")]
     Configuration(String),
     #[error("PostHog accepted the request without submitting the event")]
     NoEventSubmitted,
+    #[error("Scarf request failed: {0}")]
+    Scarf(String),
+    #[error("Scarf responded with status {0}")]
+    ScarfStatus(u16),
 }
 
 #[async_trait]
@@ -145,11 +149,20 @@ impl TelemetrySender for PostHogSender {
     }
 
     async fn initialize_panic_telemetry(&self) {
+        install_panic_hook(self.clone());
+    }
+}
+
+/// Installs a panic hook that reports the panic through `sender` before
+/// resuming the unwind. Shared by every sender implementation.
+pub fn install_panic_hook<S>(sender: S)
+where
+    S: TelemetrySender + Clone,
+{
+    {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let _ = RUNTIME_HANDLE.set(handle);
         }
-
-        let sender = self.clone();
 
         panic::set_hook(Box::new(move |panic_info| {
             let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
@@ -217,10 +230,51 @@ impl TelemetrySender for PostHogSender {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_support {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
+
+    /// A single-threaded HTTP server that answers `statuses` in order and
+    /// records every raw request it received.
+    pub(crate) struct TestServer {
+        address: std::net::SocketAddr,
+        handle: tokio::task::JoinHandle<Vec<String>>,
+    }
+
+    impl TestServer {
+        pub(crate) async fn start(statuses: Vec<&'static str>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind telemetry test server");
+            let address = listener.local_addr().expect("telemetry test address");
+            let handle = tokio::spawn(async move {
+                let mut requests = Vec::new();
+                for status in statuses {
+                    let (mut stream, _) =
+                        listener.accept().await.expect("accept telemetry request");
+                    let request = read_request(&mut stream).await;
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write telemetry response");
+                    requests.push(request);
+                }
+                requests
+            });
+            Self { address, handle }
+        }
+
+        pub(crate) fn base_url(&self) -> String {
+            format!("http://{}", self.address)
+        }
+
+        pub(crate) async fn finish(self) -> Vec<String> {
+            self.handle.await.expect("telemetry server should finish")
+        }
+    }
 
     async fn read_request(stream: &mut TcpStream) -> String {
         let mut request = Vec::new();
@@ -253,34 +307,19 @@ mod tests {
             }
         }
     }
+}
 
-    async fn test_sender(
-        statuses: Vec<&'static str>,
-    ) -> (PostHogSender, tokio::task::JoinHandle<Vec<String>>) {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind telemetry test server");
-        let address = listener.local_addr().expect("telemetry test address");
-        let server = tokio::spawn(async move {
-            let mut requests = Vec::new();
-            for status in statuses {
-                let (mut stream, _) = listener.accept().await.expect("accept telemetry request");
-                let request = read_request(&mut stream).await;
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
-                );
-                stream
-                    .write_all(response.as_bytes())
-                    .await
-                    .expect("write telemetry response");
-                requests.push(request);
-            }
-            requests
-        });
+#[cfg(test)]
+mod tests {
+    use super::test_support::TestServer;
+    use super::*;
+
+    async fn test_sender(statuses: Vec<&'static str>) -> (PostHogSender, TestServer) {
+        let server = TestServer::start(statuses).await;
 
         let client_options = posthog_rs::ClientOptionsBuilder::default()
             .api_key("test-key".to_string())
-            .host(format!("http://{address}"))
+            .host(server.base_url())
             .request_timeout_seconds(1)
             .max_capture_attempts(3)
             .retry_initial_backoff_ms(1)
@@ -318,7 +357,7 @@ mod tests {
             .await
             .expect("event should be accepted");
 
-        let requests = server.await.expect("telemetry server should finish");
+        let requests = server.finish().await;
         let request = &requests[0];
         let body = request
             .split_once("\r\n\r\n")
@@ -352,7 +391,7 @@ mod tests {
             error,
             TelemetryError::PostHog(posthog_rs::Error::BadRequest(_))
         ));
-        server.await.expect("telemetry server should finish");
+        server.finish().await;
     }
 
     #[tokio::test]
@@ -375,7 +414,7 @@ mod tests {
             .await
             .expect("event should succeed after retries");
 
-        let requests = server.await.expect("telemetry server should finish");
+        let requests = server.finish().await;
         assert_eq!(requests.len(), 3);
     }
 
@@ -400,7 +439,7 @@ mod tests {
             .expect_err("exhausted retries should be reported");
 
         assert!(error.to_string().contains("504"));
-        let requests = server.await.expect("telemetry server should finish");
+        let requests = server.finish().await;
         assert_eq!(requests.len(), 3);
     }
 
