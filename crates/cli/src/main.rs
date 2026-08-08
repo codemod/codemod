@@ -26,8 +26,10 @@ mod workflow_runner;
 use crate::auth::TokenStorage;
 use ascii_art::print_ascii_art;
 use codemod_telemetry::{
+    send_composite::CompositeSender,
     send_event::{PostHogSender, TelemetrySender, TelemetrySenderOptions},
     send_null::NullSender,
+    send_scarf::ScarfSender,
 };
 
 pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -427,17 +429,32 @@ async fn run_cli() -> Result<()> {
                     })
             });
 
-            match PostHogSender::new(TelemetrySenderOptions {
+            let options = TelemetrySenderOptions {
                 distinct_id,
                 cloud_role: "CLI".to_string(),
-            })
-            .await
-            {
-                Ok(sender) => Arc::new(Box::new(sender)),
-                Err(error) => {
-                    log::debug!("Failed to initialize telemetry: {error}");
-                    Arc::new(Box::new(NullSender {}))
+            };
+
+            let posthog = PostHogSender::new(options.clone())
+                .await
+                .inspect_err(|error| log::debug!("Failed to initialize PostHog telemetry: {error}"))
+                .ok();
+            let scarf = ScarfSender::new(options)
+                .inspect_err(|error| log::debug!("Failed to initialize Scarf telemetry: {error}"))
+                .ok();
+
+            // PostHog is the primary backend; Scarf is best-effort alongside it.
+            // If PostHog fails to initialize (e.g. builds without an API key),
+            // telemetry stays fully disabled rather than falling back to Scarf alone.
+            match posthog {
+                Some(posthog) => {
+                    let mut sender = CompositeSender::new(Arc::new(posthog));
+                    if let Some(scarf) = scarf {
+                        sender = sender.with_secondary(Arc::new(scarf));
+                    }
+                    let sender: Box<dyn TelemetrySender + Send + Sync> = Box::new(sender);
+                    Arc::new(sender)
                 }
+                None => Arc::new(Box::new(NullSender {})),
             }
         };
 

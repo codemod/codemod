@@ -1241,7 +1241,10 @@ version = "1.13.18"
 dependencies = [
  "async-trait",
  "chrono",
+ "futures",
+ "log",
  "posthog-rs",
+ "reqwest 0.12.23",
  "serde",
  "serde_json",
  "thiserror 2.0.16",

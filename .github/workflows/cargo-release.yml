@@ -48,7 +48,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.89.0
+          toolchain: 1.97.1
           components: rustfmt, clippy
           targets: ${{ matrix.target }}
 
@@ -118,6 +118,8 @@ jobs:
           cargo build --release -p codemod --target ${{ matrix.target }}
         env:
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          # Optional override; falls back to the default Scarf gateway when unset.
+          SCARF_GATEWAY_URL: ${{ vars.SCARF_GATEWAY_URL }}
 
       - name: Chmod binary
         run: |
