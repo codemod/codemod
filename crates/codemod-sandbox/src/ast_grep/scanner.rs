@@ -67,7 +67,7 @@ where
         }
 
         // Sort edits by position in reverse order (end to start)
-        edit_infos.sort_by(|a, b| b.0.cmp(&a.0));
+        edit_infos.sort_by_key(|edit| std::cmp::Reverse(edit.0));
 
         // Apply edits to content using a proper offset-tracking approach
         if !edit_infos.is_empty() {
