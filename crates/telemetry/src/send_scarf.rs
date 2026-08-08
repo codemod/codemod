@@ -8,7 +8,8 @@ use crate::send_event::{
 };
 
 /// Scarf gateway base URL, e.g. `https://codemod.gateway.scarf.sh/telemetry`.
-/// Events are sent as `{base}/{cloud_role}/{kind}?<properties>`.
+/// Events are POSTed to `{base}/{cloud_role}/{kind}` with properties as a
+/// JSON body.
 pub const SCARF_GATEWAY_URL: &str = env!("SCARF_GATEWAY_URL");
 
 #[derive(Clone)]
@@ -124,9 +125,13 @@ impl TelemetrySender for ScarfSender {
 
         let url = self.request_url(&cloud_role, &event.kind);
 
-        // Event properties win over the defaults; Scarf would otherwise receive
-        // the same key twice for events that already carry `os`/`arch`/version.
-        let mut query: Vec<(String, String)> = event.properties.into_iter().collect();
+        // Event properties can carry sensitive values (e.g. `errorMessage`),
+        // so they travel in the request body rather than the URL, which is
+        // far more likely to be logged by intermediaries and gateways.
+        //
+        // Properties win over the defaults; Scarf would otherwise receive the
+        // same key twice for events that already carry `os`/`arch`/version.
+        let mut body = event.properties;
         let defaults = [
             ("distinctId", distinct_id.as_str()),
             ("cliVersion", env!("CARGO_PKG_VERSION")),
@@ -134,16 +139,15 @@ impl TelemetrySender for ScarfSender {
             ("arch", std::env::consts::ARCH),
         ];
         for (key, value) in defaults {
-            if !query.iter().any(|(existing, _)| existing == key) {
-                query.push((key.to_string(), value.to_string()));
-            }
+            body.entry(key.to_string())
+                .or_insert_with(|| value.to_string());
         }
 
         let mut backoff = Duration::from_millis(RETRY_INITIAL_BACKOFF_MS);
         let mut last_error = None;
 
         for attempt in 1..=MAX_CAPTURE_ATTEMPTS {
-            match self.client.get(&url).query(&query).send().await {
+            match self.client.post(&url).json(&body).send().await {
                 Ok(response) if response.status().is_success() => {
                     log::debug!("Scarf accepted event {url}");
                     return Ok(());
@@ -192,7 +196,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_event_encodes_event_in_path_and_properties_in_query() {
+    async fn send_event_encodes_event_in_path_and_properties_in_body() {
         let server = TestServer::start(vec!["200 OK"]).await;
 
         sender(&server.base_url())
@@ -210,18 +214,23 @@ mod tests {
             .expect("event should be accepted");
 
         let requests = server.finish().await;
-        let request_line = requests[0]
-            .lines()
-            .next()
-            .expect("request line")
-            .to_string();
+        let request = &requests[0];
+        let request_line = request.lines().next().expect("request line").to_string();
 
         assert!(
-            request_line.starts_with("GET /CLI/codemodRunStarted?"),
+            request_line.starts_with("POST /CLI/codemodRunStarted "),
             "unexpected request line: {request_line}"
         );
-        assert!(request_line.contains("distinctId=installation-123"));
-        assert!(request_line.contains("codemodName=%40codemod%2Freact%2F19%2Fmigration-recipe"));
+
+        let body = request
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .expect("request should contain a body");
+        let payload: serde_json::Value =
+            serde_json::from_str(body).expect("request body should be JSON");
+
+        assert_eq!(payload["distinctId"], "installation-123");
+        assert_eq!(payload["codemodName"], "@codemod/react/19/migration-recipe");
     }
 
     #[tokio::test]
@@ -287,14 +296,15 @@ mod tests {
             .expect("event should be accepted");
 
         let requests = server.finish().await;
-        let request_line = requests[0]
-            .lines()
-            .next()
-            .expect("request line")
-            .to_string();
+        let request = &requests[0];
+        let body = request
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .expect("request should contain a body");
+        let payload: serde_json::Value =
+            serde_json::from_str(body).expect("request body should be JSON");
 
-        assert!(request_line.contains("os=reported-os"), "{request_line}");
-        assert_eq!(request_line.matches("os=").count(), 1, "{request_line}");
+        assert_eq!(payload["os"], "reported-os");
     }
 
     #[tokio::test]

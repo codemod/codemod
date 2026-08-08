@@ -443,8 +443,10 @@ async fn run_cli() -> Result<()> {
                 .ok();
 
             // PostHog is the primary backend; Scarf is best-effort alongside it.
-            match (posthog, scarf) {
-                (Some(posthog), scarf) => {
+            // If PostHog fails to initialize (e.g. builds without an API key),
+            // telemetry stays fully disabled rather than falling back to Scarf alone.
+            match posthog {
+                Some(posthog) => {
                     let mut sender = CompositeSender::new(Arc::new(posthog));
                     if let Some(scarf) = scarf {
                         sender = sender.with_secondary(Arc::new(scarf));
@@ -452,8 +454,7 @@ async fn run_cli() -> Result<()> {
                     let sender: Box<dyn TelemetrySender + Send + Sync> = Box::new(sender);
                     Arc::new(sender)
                 }
-                (None, Some(scarf)) => Arc::new(Box::new(scarf)),
-                (None, None) => Arc::new(Box::new(NullSender {})),
+                None => Arc::new(Box::new(NullSender {})),
             }
         };
 

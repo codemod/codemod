@@ -46,23 +46,21 @@ impl TelemetrySender for CompositeSender {
         event: BaseEvent,
         options_override: Option<PartialTelemetrySenderOptions>,
     ) -> Result<(), TelemetryError> {
-        let secondaries = futures::future::join_all(self.secondary.iter().map(|sender| {
+        // Secondaries are detached rather than awaited: they may retry/back
+        // off internally, and a degraded secondary must not add latency to
+        // the caller once the primary backend has already responded.
+        for secondary in &self.secondary {
+            let secondary = Arc::clone(secondary);
             let event = event.clone();
             let options_override = options_override.clone();
-            async move { sender.try_send_event(event, options_override).await }
-        }));
-
-        let (primary, secondaries) = futures::future::join(
-            self.primary.try_send_event(event, options_override),
-            secondaries,
-        )
-        .await;
-
-        for error in secondaries.into_iter().filter_map(Result::err) {
-            log::debug!("Secondary telemetry backend failed: {error}");
+            tokio::spawn(async move {
+                if let Err(error) = secondary.try_send_event(event, options_override).await {
+                    log::debug!("Secondary telemetry backend failed: {error}");
+                }
+            });
         }
 
-        primary
+        self.primary.try_send_event(event, options_override).await
     }
 
     async fn initialize_panic_telemetry(&self) {
@@ -77,6 +75,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::sync::Mutex;
+    use std::time::Duration;
 
     struct RecordingSender {
         result: Option<TelemetryError>,
@@ -124,6 +123,19 @@ mod tests {
         }
     }
 
+    /// Secondaries are detached, so their delivery happens on a spawned task
+    /// after `try_send_event` already returned; poll briefly instead of
+    /// asserting on it immediately.
+    async fn wait_until_seen(sender: &RecordingSender, count: usize) {
+        for _ in 0..200 {
+            if sender.seen.lock().unwrap().len() >= count {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("secondary did not observe the expected event in time");
+    }
+
     #[tokio::test]
     async fn every_backend_receives_the_event() {
         let primary = RecordingSender::new(None);
@@ -136,7 +148,7 @@ mod tests {
             .expect("event should be accepted");
 
         assert_eq!(primary.seen.lock().unwrap().len(), 1);
-        assert_eq!(secondary.seen.lock().unwrap().len(), 1);
+        wait_until_seen(&secondary, 1).await;
     }
 
     #[tokio::test]
@@ -150,7 +162,7 @@ mod tests {
             .await
             .expect("a failing secondary must not fail the send");
 
-        assert_eq!(secondary.seen.lock().unwrap().len(), 1);
+        wait_until_seen(&secondary, 1).await;
     }
 
     #[tokio::test]
@@ -164,6 +176,6 @@ mod tests {
             .await
             .expect_err("primary failure should be reported");
 
-        assert_eq!(secondary.seen.lock().unwrap().len(), 1);
+        wait_until_seen(&secondary, 1).await;
     }
 }

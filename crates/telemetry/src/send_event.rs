@@ -153,80 +153,76 @@ impl TelemetrySender for PostHogSender {
     }
 }
 
-/// Installs a panic hook that reports the panic through `sender` before
-/// resuming the unwind. Shared by every sender implementation.
+/// Installs a panic hook that reports the panic through `sender` and then
+/// defers to whatever hook was previously installed (Rust's default hook by
+/// default), so the standard panic message and any other hooks still run.
+/// Shared by every sender implementation.
 pub fn install_panic_hook<S>(sender: S)
 where
     S: TelemetrySender + Clone,
 {
-    {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let _ = RUNTIME_HANDLE.set(handle);
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let _ = RUNTIME_HANDLE.set(handle);
+    }
+
+    let previous_hook = panic::take_hook();
+
+    panic::set_hook(Box::new(move |panic_info| {
+        let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+
+        let panic_message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic occurred".to_string()
+        };
+
+        let location = if let Some(location) = panic_info.location() {
+            format!(
+                "{}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            )
+        } else {
+            "Unknown location".to_string()
+        };
+
+        if let Some(handle) = RUNTIME_HANDLE.get() {
+            let sender = sender.clone();
+
+            handle.spawn(async move {
+                let properties = HashMap::from([
+                    ("timestamp".to_string(), timestamp),
+                    ("message".to_string(), panic_message),
+                    ("location".to_string(), location),
+                    (
+                        "cliVersion".to_string(),
+                        env!("CARGO_PKG_VERSION").to_string(),
+                    ),
+                    ("os".to_string(), std::env::consts::OS.to_string()),
+                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                ]);
+
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    sender.try_send_event(
+                        BaseEvent {
+                            kind: "cliPanic".to_string(),
+                            properties,
+                        },
+                        None,
+                    ),
+                )
+                .await;
+            });
+
+            std::thread::sleep(Duration::from_millis(100));
         }
 
-        panic::set_hook(Box::new(move |panic_info| {
-            let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
-
-            let panic_message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "Unknown panic occurred".to_string()
-            };
-
-            let location = if let Some(location) = panic_info.location() {
-                format!(
-                    "{}:{}:{}",
-                    location.file(),
-                    location.line(),
-                    location.column()
-                )
-            } else {
-                "Unknown location".to_string()
-            };
-
-            if let Some(handle) = RUNTIME_HANDLE.get() {
-                let sender = sender.clone();
-
-                handle.spawn(async move {
-                    let properties = HashMap::from([
-                        ("timestamp".to_string(), timestamp),
-                        ("message".to_string(), panic_message),
-                        ("location".to_string(), location),
-                        (
-                            "cliVersion".to_string(),
-                            env!("CARGO_PKG_VERSION").to_string(),
-                        ),
-                        ("os".to_string(), std::env::consts::OS.to_string()),
-                        ("arch".to_string(), std::env::consts::ARCH.to_string()),
-                    ]);
-
-                    let _ = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        sender.try_send_event(
-                            BaseEvent {
-                                kind: "cliPanic".to_string(),
-                                properties,
-                            },
-                            None,
-                        ),
-                    )
-                    .await;
-                });
-
-                std::thread::sleep(Duration::from_millis(100));
-            }
-
-            if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-                std::panic::resume_unwind(Box::new(*s));
-            } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
-                std::panic::resume_unwind(Box::new(s.clone()));
-            } else {
-                std::panic::resume_unwind(Box::new("Unknown panic"));
-            }
-        }));
-    }
+        previous_hook(panic_info);
+    }));
 }
 
 #[cfg(test)]

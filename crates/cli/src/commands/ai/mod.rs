@@ -300,7 +300,7 @@ async fn handle_feedback_command(command: &FeedbackCommand) -> Result<()> {
         bail!("Feedback message cannot be empty.");
     }
 
-    if message.len() > 40000 {
+    if message.chars().count() > 40000 {
         bail!("Feedback message must be 40000 characters or fewer.");
     }
 
