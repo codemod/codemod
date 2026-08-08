@@ -1721,10 +1721,21 @@ async fn test_get_workflow_status() {
         .await
         .unwrap();
 
-    // Allow some time for the workflow to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    let status = engine.get_workflow_status(workflow_run_id).await.unwrap();
+    // Poll instead of a single fixed sleep: under a loaded test run the
+    // workflow can still be Pending after a short sleep, which made this
+    // test flaky.
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    let status = loop {
+        let status = engine.get_workflow_status(workflow_run_id).await.unwrap();
+        if status == WorkflowStatus::Running || status == WorkflowStatus::Completed {
+            break status;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "workflow did not reach Running/Completed in time, last status: {status:?}"
+        );
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    };
 
     // The workflow should be running or completed
     assert!(status == WorkflowStatus::Running || status == WorkflowStatus::Completed);
