@@ -1,13 +1,10 @@
 use codemod_llrt_capabilities::module_builder::UNSAFE_MODULES;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use std::{
-    collections::HashSet,
-    fs,
-    io::{self, BufRead, BufReader, IsTerminal, Write},
-    path::PathBuf,
-};
+use inquire::Confirm;
+use std::{collections::HashSet, fs, path::PathBuf};
 
 use crate::utils::{ancestor_search::find_in_ancestors, manifest::CodemodManifest};
+use console::style;
 
 pub(crate) struct ResolveCapabilitiesArgs {
     pub allow_fs: bool,
@@ -78,156 +75,90 @@ pub(crate) fn prompt_capabilities(
         // In non-interactive mode, strip unsafe capabilities that were not
         // explicitly granted via CLI flags to avoid implicitly granting
         // dangerous permissions in CI/headless environments.
-        let unsafe_set: HashSet<LlrtSupportedModules> = UNSAFE_MODULES.iter().copied().collect();
-        return capabilities
-            .into_iter()
-            .filter(|c| !unsafe_set.contains(c) || cli_granted.contains(c))
-            .collect();
+        return filter_unapproved_unsafe_capabilities(capabilities, cli_granted);
     }
 
     let unsafe_set: HashSet<LlrtSupportedModules> = UNSAFE_MODULES.iter().copied().collect();
-    let unsafe_requested: Vec<LlrtSupportedModules> = capabilities
+    let mut unsafe_requested: Vec<LlrtSupportedModules> = capabilities
         .iter()
         .filter(|c| unsafe_set.contains(c) && !cli_granted.contains(c))
         .copied()
         .collect();
+    unsafe_requested.sort_by_key(|capability| capability_name(*capability));
 
     if unsafe_requested.is_empty() {
         return capabilities;
     }
 
-    reset_terminal_for_prompt();
-
     eprintln!();
-    eprintln!("  This codemod requests the following permissions:");
+    eprintln!(
+        "  {} {}",
+        style("⚠").yellow().bold(),
+        style("Permission request").yellow().bold(),
+    );
+    eprintln!(
+        "  {}",
+        style("This codemod needs access to sensitive runtime capabilities.").dim()
+    );
     eprintln!();
-    for cap in &unsafe_requested {
-        let desc = match cap {
-            LlrtSupportedModules::Fs => "File system access (read/write files)",
-            LlrtSupportedModules::Fetch => "Network access (HTTP requests)",
-            LlrtSupportedModules::ChildProcess => "Run shell commands (child processes)",
-            _ => "Unknown capability",
-        };
-        eprintln!("   - {:?} -- {}", cap, desc);
+    for capability in &unsafe_requested {
+        eprintln!(
+            "  {} {} {}",
+            style("•").yellow(),
+            style(format!("{:<16}", capability_name(*capability)))
+                .cyan()
+                .bold(),
+            style(capability_description(*capability)).dim(),
+        );
     }
     eprintln!();
+    eprintln!(
+        "  {}",
+        style("This access applies only to the current run.").dim()
+    );
 
-    let answer = prompt_yes_no(
-        "Grant these permissions? (Y/n): ",
-        true,
-        "Deny to run without these capabilities (codemod may fail)",
-    )
-    .unwrap_or(false);
+    let answer = Confirm::new("Grant permissions?")
+        .with_default(true)
+        .with_help_message("Choose no to continue without them; the codemod may fail")
+        .prompt()
+        .unwrap_or(false);
 
     if answer {
         capabilities
     } else {
         // Strip the denied unsafe capabilities, keep safe ones + CLI-granted ones
-        capabilities
-            .into_iter()
-            .filter(|c| !unsafe_set.contains(c) || cli_granted.contains(c))
-            .collect()
+        filter_unapproved_unsafe_capabilities(capabilities, cli_granted)
     }
 }
 
-fn prompt_yes_no(prompt: &str, default_yes: bool, help: &str) -> io::Result<bool> {
-    let mut input = open_prompt_reader()?;
-    let mut stderr = io::stderr().lock();
-    prompt_yes_no_with_io(prompt, default_yes, help, &mut input, &mut stderr)
-}
-
-fn prompt_yes_no_with_io<R: BufRead, W: Write>(
-    prompt: &str,
-    default_yes: bool,
-    help: &str,
-    input: &mut R,
-    output: &mut W,
-) -> io::Result<bool> {
-    loop {
-        writeln!(output, "  [{help}]")?;
-        write!(output, "  {prompt}")?;
-        output.flush()?;
-
-        let mut answer = String::new();
-        let bytes_read = input.read_line(&mut answer)?;
-        if bytes_read == 0 {
-            writeln!(output)?;
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "terminal prompt closed before a response was provided",
-            ));
-        }
-
-        let answer = answer.trim().to_ascii_lowercase();
-
-        let accepted = match answer.as_str() {
-            "" => Some(default_yes),
-            "y" | "yes" => Some(true),
-            "n" | "no" => Some(false),
-            _ => None,
-        };
-
-        match accepted {
-            Some(value) => {
-                writeln!(output)?;
-                return Ok(value);
-            }
-            None => {
-                writeln!(output, "  Please answer y or n.")?;
-                writeln!(output)?;
-            }
-        }
+fn capability_name(capability: LlrtSupportedModules) -> &'static str {
+    match capability {
+        LlrtSupportedModules::Fs => "fs",
+        LlrtSupportedModules::Fetch => "fetch",
+        LlrtSupportedModules::ChildProcess => "child_process",
+        _ => "unknown",
     }
 }
 
-fn open_prompt_reader() -> io::Result<Box<dyn BufRead>> {
-    #[cfg(unix)]
-    {
-        if let Ok(tty) = fs::OpenOptions::new().read(true).open("/dev/tty") {
-            return Ok(Box::new(BufReader::new(tty)));
-        }
+fn capability_description(capability: LlrtSupportedModules) -> &'static str {
+    match capability {
+        LlrtSupportedModules::Fs => "Read and write files",
+        LlrtSupportedModules::Fetch => "Make HTTP requests",
+        LlrtSupportedModules::ChildProcess => "Run shell commands and child processes",
+        _ => "Sensitive runtime access",
     }
-
-    #[cfg(windows)]
-    {
-        if let Ok(tty) = fs::OpenOptions::new().read(true).open("CONIN$") {
-            return Ok(Box::new(BufReader::new(tty)));
-        }
-    }
-
-    let stdin = io::stdin();
-    if stdin.is_terminal() {
-        return Ok(Box::new(BufReader::new(stdin)));
-    }
-
-    Err(io::Error::new(
-        io::ErrorKind::UnexpectedEof,
-        "interactive prompt is unavailable because stdin is not a terminal",
-    ))
 }
 
-fn reset_terminal_for_prompt() {
-    #[cfg(unix)]
-    {
-        use crossterm::event::{DisableBracketedPaste, DisableFocusChange, DisableMouseCapture};
-        use crossterm::execute;
-        use crossterm::terminal::{disable_raw_mode, LeaveAlternateScreen};
-
-        let _ = disable_raw_mode();
-        if let Ok(mut tty) = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/tty")
-        {
-            let _ = execute!(
-                tty,
-                DisableFocusChange,
-                DisableBracketedPaste,
-                DisableMouseCapture,
-                LeaveAlternateScreen
-            );
-        }
-    }
+fn filter_unapproved_unsafe_capabilities(
+    capabilities: HashSet<LlrtSupportedModules>,
+    cli_granted: &HashSet<LlrtSupportedModules>,
+) -> HashSet<LlrtSupportedModules> {
+    capabilities
+        .into_iter()
+        .filter(|capability| {
+            !UNSAFE_MODULES.contains(capability) || cli_granted.contains(capability)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -235,38 +166,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prompt_yes_no_accepts_explicit_default_line() {
-        let mut input = io::Cursor::new(b"\n");
-        let mut output = Vec::new();
+    fn denied_child_process_capability_is_not_enabled() {
+        let capabilities = [
+            LlrtSupportedModules::ChildProcess,
+            LlrtSupportedModules::Assert,
+        ]
+        .into_iter()
+        .collect();
 
-        let accepted = prompt_yes_no_with_io(
-            "Grant these permissions? (Y/n): ",
-            true,
-            "help",
-            &mut input,
-            &mut output,
-        )
-        .unwrap();
+        let filtered = filter_unapproved_unsafe_capabilities(capabilities, &HashSet::new());
 
-        assert!(accepted);
-        let rendered = String::from_utf8(output).unwrap();
-        assert!(rendered.contains("Grant these permissions?"));
-    }
-
-    #[test]
-    fn prompt_yes_no_rejects_eof_without_approving() {
-        let mut input = io::Cursor::new(Vec::<u8>::new());
-        let mut output = Vec::new();
-
-        let error = prompt_yes_no_with_io(
-            "Grant these permissions? (Y/n): ",
-            true,
-            "help",
-            &mut input,
-            &mut output,
-        )
-        .unwrap_err();
-
-        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        assert!(!filtered.contains(&LlrtSupportedModules::ChildProcess));
+        assert!(filtered.contains(&LlrtSupportedModules::Assert));
     }
 }
