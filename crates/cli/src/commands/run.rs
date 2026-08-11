@@ -335,7 +335,8 @@ pub async fn handler(
     if args.allow_child_process {
         cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::ChildProcess);
     }
-    let capabilities = prompt_capabilities(capabilities, &cli_granted, args.no_interactive);
+    let capabilities =
+        prompt_capabilities(capabilities, &cli_granted, args.no_interactive, dry_run);
 
     // Always collect diffs so report output remains available for interactive flows.
     let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));

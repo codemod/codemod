@@ -70,6 +70,7 @@ pub(crate) fn prompt_capabilities(
     capabilities: HashSet<LlrtSupportedModules>,
     cli_granted: &HashSet<LlrtSupportedModules>,
     no_interactive: bool,
+    dry_run: bool,
 ) -> HashSet<LlrtSupportedModules> {
     if no_interactive {
         // In non-interactive mode, strip unsafe capabilities that were not
@@ -116,6 +117,10 @@ pub(crate) fn prompt_capabilities(
         "  {}",
         style("This access applies only to the current run.").dim()
     );
+    if let Some(warning) = capability_dry_run_warning(dry_run) {
+        eprintln!();
+        eprintln!("  {}", style(warning).yellow().bold());
+    }
 
     let answer = Confirm::new("Grant permissions?")
         .with_default(true)
@@ -129,6 +134,12 @@ pub(crate) fn prompt_capabilities(
         // Strip the denied unsafe capabilities, keep safe ones + CLI-granted ones
         filter_unapproved_unsafe_capabilities(capabilities, cli_granted)
     }
+}
+
+fn capability_dry_run_warning(dry_run: bool) -> Option<&'static str> {
+    dry_run.then_some(
+        "Dry-run warning: These capabilities may not respect dry-run protections and could perform destructive actions.",
+    )
 }
 
 fn capability_name(capability: LlrtSupportedModules) -> &'static str {
@@ -178,5 +189,16 @@ mod tests {
 
         assert!(!filtered.contains(&LlrtSupportedModules::ChildProcess));
         assert!(filtered.contains(&LlrtSupportedModules::Assert));
+    }
+
+    #[test]
+    fn dry_run_capability_warning_is_only_shown_in_dry_run_mode() {
+        assert_eq!(
+            capability_dry_run_warning(true),
+            Some(
+                "Dry-run warning: These capabilities may not respect dry-run protections and could perform destructive actions."
+            )
+        );
+        assert_eq!(capability_dry_run_warning(false), None);
     }
 }

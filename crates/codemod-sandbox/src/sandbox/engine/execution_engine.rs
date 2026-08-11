@@ -398,10 +398,12 @@ where
                     fs_capability_enabled = true;
                 }
                 LlrtSupportedModules::Fs => {}
-                LlrtSupportedModules::ChildProcess if !options.dry_run => {
+                // Unlike unrestricted fs, child_process is controlled by an
+                // explicit capability grant. Dry-run must not silently revoke
+                // a permission the caller already approved.
+                LlrtSupportedModules::ChildProcess => {
                     module_builder.enable_child_process();
                 }
-                LlrtSupportedModules::ChildProcess => {}
                 _ => {}
             }
         }
@@ -1474,6 +1476,44 @@ export default function transform(root, options) {
             fs::read_to_string(&sibling_path).expect("root.write target should remain on disk"),
             "export const sibling = 1;"
         );
+    }
+
+    #[tokio::test]
+    async fn test_dry_run_enables_explicitly_granted_child_process_capability() {
+        let codemod_content = r#"
+import { spawn } from "child_process";
+
+export default function transform() {
+  return spawn ? null : null;
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "const value = true;",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: Some([LlrtSupportedModules::ChildProcess].into_iter().collect()),
+            semantic_provider: None,
+            metrics_context: None,
+            llm_request_handler: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: true,
+            target_directory: temp_dir.path(),
+        };
+
+        execute_codemod_with_quickjs(options)
+            .await
+            .expect("an explicitly granted capability should remain enabled in dry-run mode");
     }
 
     #[tokio::test]
