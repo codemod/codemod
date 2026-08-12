@@ -9,7 +9,7 @@ use anyhow::{anyhow, Result};
 use butterflow_core::utils::validate_workflow;
 use butterflow_core::Workflow;
 use butterflow_models::step::StepAction;
-use clap::{Args, ValueEnum};
+use clap::Args;
 use codemod_llrt_capabilities::module_builder::supported_runtime_external_modules;
 use console::style;
 use log::{debug, info, warn};
@@ -33,30 +33,14 @@ use crate::commands::TelemetrySenderExt;
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use codemod_telemetry::send_event::BaseEvent;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-pub enum PublishTag {
-    #[default]
-    Latest,
-    CodemodBuilder,
-}
-
-impl PublishTag {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Latest => "latest",
-            Self::CodemodBuilder => "codemod-builder",
-        }
-    }
-}
-
 #[derive(Args, Debug)]
 pub struct Command {
     /// Path to codemod directory
     path: Option<PathBuf>,
 
     /// Release channel to update
-    #[arg(long, value_enum, default_value = "latest")]
-    tag: PublishTag,
+    #[arg(long, default_value = "latest")]
+    tag: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -115,7 +99,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         &bundle_path,
         &manifest,
         &access_token,
-        args.tag,
+        &args.tag,
     )
     .await?;
 
@@ -513,7 +497,7 @@ async fn upload_package(
     bundle_path: &Path,
     manifest: &CodemodManifest,
     access_token: &str,
-    tag: PublishTag,
+    tag: &str,
 ) -> Result<PublishResponse> {
     let client = reqwest::Client::new();
 
@@ -542,7 +526,7 @@ async fn upload_package(
                 .mime_str("application/gzip")?,
         )
         .text("manifest", manifest_json)
-        .text("tag", tag.as_str());
+        .text("tag", tag.to_owned());
 
     debug!("Uploading to: {url}");
 
@@ -674,21 +658,21 @@ mod tests {
     fn publish_defaults_to_latest_tag() {
         let args = PublishArgs::try_parse_from(["publish"]).unwrap();
 
-        assert_eq!(args.command.tag, PublishTag::Latest);
+        assert_eq!(args.command.tag, "latest");
     }
 
     #[test]
     fn publish_accepts_builder_tag() {
         let args = PublishArgs::try_parse_from(["publish", "--tag", "codemod-builder"]).unwrap();
 
-        assert_eq!(args.command.tag, PublishTag::CodemodBuilder);
+        assert_eq!(args.command.tag, "codemod-builder");
     }
 
     #[test]
-    fn publish_rejects_unknown_tag() {
-        let error = PublishArgs::try_parse_from(["publish", "--tag", "preview"]).unwrap_err();
+    fn publish_accepts_arbitrary_tag() {
+        let args = PublishArgs::try_parse_from(["publish", "--tag", "preview"]).unwrap();
 
-        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+        assert_eq!(args.command.tag, "preview");
     }
 
     #[test]
@@ -752,7 +736,7 @@ mod tests {
             &bundle_path,
             &manifest,
             "token",
-            PublishTag::CodemodBuilder,
+            "codemod-builder",
         )
         .await
         .unwrap();
