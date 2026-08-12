@@ -712,16 +712,34 @@ fn determine_version(spec: &PackageSpec, package_info: &PackageInfo) -> Result<S
             }
         }
 
+        if selector == "latest" {
+            if let Some(version) = package_info
+                .latest_version
+                .as_ref()
+                .filter(|version| package_info.versions.contains_key(*version))
+            {
+                return Ok(version.clone());
+            }
+        }
+
         return Err(RegistryError::VersionNotFound {
             version: selector.clone(),
             package: format_package_spec(spec),
         });
     }
 
-    package_info
+    if let Some(version) = package_info
         .dist_tags
         .get("latest")
-        .or(package_info.latest_version.as_ref())
+        .filter(|version| package_info.versions.contains_key(*version))
+    {
+        return Ok(version.clone());
+    }
+
+    package_info
+        .latest_version
+        .as_ref()
+        .filter(|version| package_info.versions.contains_key(*version))
         .cloned()
         .ok_or_else(|| RegistryError::NoVersionAvailable {
             package: format_package_spec(spec),
@@ -838,6 +856,34 @@ mod tests {
         };
         let mut package_info = package_info_with_dist_tags();
         package_info.latest_version = Some("0.9.0".to_string());
+
+        assert_eq!(determine_version(&spec, &package_info).unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn determine_version_resolves_explicit_latest_from_legacy_projection() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: Some("latest".to_string()),
+        };
+        let mut package_info = package_info_with_dist_tags();
+        package_info.dist_tags.clear();
+
+        assert_eq!(determine_version(&spec, &package_info).unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn determine_version_ignores_stale_latest_dist_tag() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: None,
+        };
+        let mut package_info = package_info_with_dist_tags();
+        package_info
+            .dist_tags
+            .insert("latest".to_string(), "2.0.0".to_string());
 
         assert_eq!(determine_version(&spec, &package_info).unwrap(), "1.0.0");
     }
