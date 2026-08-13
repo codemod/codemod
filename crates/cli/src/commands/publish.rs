@@ -579,7 +579,7 @@ fn calculate_package_size(package_path: &Path) -> Result<u64> {
 const MAX_PACKAGE_NAME_LENGTH: usize = 50;
 const PACKAGE_NAME_PATTERN: &str = r"^(@[A-Za-z0-9\-_.]+/)?[A-Za-z0-9\-_]+$";
 
-fn validate_package_name(name: &str) -> Result<()> {
+pub(crate) fn validate_package_name(name: &str) -> Result<()> {
     let mut reasons = Vec::new();
 
     if name.is_empty() {
