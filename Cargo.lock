@@ -10192,6 +10192,7 @@ dependencies = [
  "log",
  "object 0.32.2",
  "reqwest 0.12.23",
+ "tempfile",
  "thiserror 2.0.16",
 ]
 

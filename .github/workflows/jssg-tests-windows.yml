@@ -11,6 +11,7 @@ on:
       - "crates/cli/src/utils/rolldown_bundler.rs"
       - "crates/cli/src/main.rs"
       - "crates/cli/Cargo.toml"
+      - "crates/tree-sitter-loader/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/jssg-tests-windows.yml"
@@ -24,6 +25,7 @@ on:
       - "crates/cli/src/utils/rolldown_bundler.rs"
       - "crates/cli/src/main.rs"
       - "crates/cli/Cargo.toml"
+      - "crates/tree-sitter-loader/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/jssg-tests-windows.yml"
@@ -56,6 +58,12 @@ jobs:
           cargo test -p codemod commands::jssg::test::tests -- --nocapture *>&1 | Tee-Object -FilePath jssg-test.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p codemod utils::rolldown_bundler::tests -- --nocapture *>&1 | Tee-Object -Append -FilePath jssg-test.log
+          exit $LASTEXITCODE
+
+      - name: Run Windows dynamic parser tests
+        shell: pwsh
+        run: |
+          cargo test -p tree-sitter-loader -- --nocapture *>&1 | Tee-Object -Append -FilePath jssg-test.log
           exit $LASTEXITCODE
 
       - name: Upload test log

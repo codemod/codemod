@@ -154,11 +154,23 @@ fn cached_parser_has_symbol(path: &Path, symbol: &str) -> bool {
     };
 
     let underscored = format!("_{symbol}");
+    let matches_symbol = |name: &[u8]| name == symbol.as_bytes() || name == underscored.as_bytes();
+
+    // Stripped PE DLLs generally expose parser entry points only through the
+    // export table, while ELF and Mach-O artifacts may retain regular symbols.
+    // Check both representations so valid Windows parsers are not repeatedly
+    // treated as corrupt and replaced while another process has them loaded.
+    if file
+        .exports()
+        .is_ok_and(|exports| exports.iter().any(|export| matches_symbol(export.name())))
+    {
+        return true;
+    }
 
     file.symbols().any(|candidate| {
         candidate
             .name()
-            .is_ok_and(|name| name == symbol || name == underscored)
+            .is_ok_and(|name| matches_symbol(name.as_bytes()))
     })
 }
 
@@ -234,27 +246,50 @@ fn ensure_parser_cached(
     Ok(cached_path)
 }
 
-/// Register all dynamic language parsers, downloading any that are missing.
-///
-/// This should be called once before using dynamic languages.
-/// Returns Ok(()) if all parsers were registered successfully.
-pub fn register_all() -> Result<(), LoaderError> {
-    let cache_dir = get_cache_dir()?;
-    let definitions = get_definitions();
-
+fn prepare_registrations(
+    definitions: &[DynamicLanguageDefinition],
+    cache_dir: &Path,
+) -> Result<Vec<Registration>, LoaderError> {
     let mut registrations = Vec::new();
+    let mut failures = Vec::new();
 
     for def in definitions {
-        let lib_path = ensure_parser_cached(def, &cache_dir)?;
-        registrations.push(Registration {
-            lang_name: def.name.to_string(),
-            lib_path,
-            symbol: def.symbol.to_string(),
-            meta_var_char: None,
-            expando_char: Some(def.expando_char),
-            extensions: def.extensions.iter().map(|s| s.to_string()).collect(),
-        });
+        match ensure_parser_cached(def, cache_dir) {
+            Ok(lib_path) => registrations.push(Registration {
+                lang_name: def.name.to_string(),
+                lib_path,
+                symbol: def.symbol.to_string(),
+                meta_var_char: None,
+                expando_char: Some(def.expando_char),
+                extensions: def.extensions.iter().map(|s| s.to_string()).collect(),
+            }),
+            Err(error) => {
+                log::warn!(
+                    "Dynamic parser {} is unavailable and will be skipped: {error}",
+                    def.name
+                );
+                failures.push(format!("{}: {error}", def.name));
+            }
+        }
     }
+
+    if registrations.is_empty() {
+        return Err(LoaderError::Register(format!(
+            "No dynamic parsers are available: {}",
+            failures.join("; ")
+        )));
+    }
+
+    Ok(registrations)
+}
+
+/// Register available dynamic language parsers, downloading any that are missing.
+///
+/// This should be called once before using dynamic languages. A failure to prepare
+/// one parser does not prevent unrelated parsers from being registered.
+pub fn register_all() -> Result<(), LoaderError> {
+    let cache_dir = get_cache_dir()?;
+    let registrations = prepare_registrations(get_definitions(), &cache_dir)?;
 
     unsafe {
         DynamicLang::register(registrations).map_err(|e| LoaderError::Register(format!("{e}")))?;
@@ -283,5 +318,97 @@ pub fn init() -> Result<(), LoaderError> {
         Err(LoaderError::Register(msg.clone()))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::*;
+
+    const LESS_URL: &str = parser_url!(
+        "tree-sitter-less",
+        "945f52c94250309073a96bbfbc5bcd57ff2bde49",
+        "win32-x64.dll"
+    );
+    const XML_URL: &str = parser_url!(
+        "tree-sitter-xml",
+        "4b64dd3a03ec002258d6268d712fd93716d6ab57",
+        "win32-x64.dll"
+    );
+
+    static BAD_URLS: &[(&str, &str, &str)] = &[("windows", "x86_64", LESS_URL)];
+    static GOOD_URLS: &[(&str, &str, &str)] = &[("windows", "x86_64", XML_URL)];
+
+    fn download_fixture(url: &str) -> Vec<u8> {
+        reqwest::blocking::get(url)
+            .expect("download Windows parser fixture")
+            .error_for_status()
+            .expect("download successful Windows parser fixture")
+            .bytes()
+            .expect("read Windows parser fixture")
+            .to_vec()
+    }
+
+    #[test]
+    fn locked_invalid_cache_entry_does_not_disable_unrelated_parser() {
+        let cache = tempfile::tempdir().expect("create parser cache");
+        let less_dir = cache.path().join("less");
+        let xml_dir = cache.path().join("xml");
+        std::fs::create_dir_all(&less_dir).expect("create less cache directory");
+        std::fs::create_dir_all(&xml_dir).expect("create xml cache directory");
+
+        let less_bytes = download_fixture(LESS_URL);
+        let xml_bytes = download_fixture(XML_URL);
+        let less_path = less_dir.join("less.dll");
+        let xml_path = xml_dir.join("xml.dll");
+        std::fs::write(&less_path, &less_bytes).expect("cache less parser fixture");
+        std::fs::write(&xml_path, &xml_bytes).expect("cache XML parser fixture");
+
+        assert!(
+            cached_parser_has_symbol(&less_path, "tree_sitter_less"),
+            "the parser symbol is stored in the PE export table"
+        );
+        assert!(cached_parser_has_symbol(&xml_path, "tree_sitter_xml"));
+
+        // DynamicLang retains the library handle, reproducing the Windows image
+        // lock held by another long-lived codemod process.
+        unsafe {
+            DynamicLang::register(vec![Registration {
+                lang_name: "loaded-less".to_string(),
+                lib_path: less_path,
+                symbol: "tree_sitter_less".to_string(),
+                meta_var_char: None,
+                expando_char: Some('_'),
+                extensions: vec!["loaded-less".to_string()],
+            }])
+            .expect("load and pin less parser fixture");
+        }
+
+        let definitions = [
+            DynamicLanguageDefinition {
+                name: "less",
+                symbol: "tree_sitter_missing",
+                extensions: &["less"],
+                expando_char: '_',
+                urls: BAD_URLS,
+            },
+            DynamicLanguageDefinition {
+                name: "xml",
+                symbol: "tree_sitter_xml",
+                extensions: &["xml"],
+                expando_char: '_',
+                urls: GOOD_URLS,
+            },
+        ];
+
+        let registrations = prepare_registrations(&definitions, cache.path())
+            .expect("prepare the unrelated parser despite the locked cache entry");
+
+        assert_eq!(registrations.len(), 1);
+        assert_eq!(registrations[0].lang_name, "xml");
+
+        // Windows cannot remove a directory containing a loaded DLL. Leave this
+        // process-scoped temporary cache for the runner to clean up after exit.
+        std::mem::forget(cache);
     }
 }
