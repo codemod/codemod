@@ -47,4 +47,4 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run dynamic parser tests
-        run: cargo test -p tree-sitter-loader -- --nocapture
+        run: cargo test -p tree-sitter-loader -- --ignored --nocapture

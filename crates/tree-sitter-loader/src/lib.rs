@@ -14,6 +14,8 @@ pub enum LoaderError {
     NoCacheDir,
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Cached parser is locked: {0}")]
+    LockedCache(#[source] std::io::Error),
     #[error("Unsupported platform: os={os}, arch={arch}")]
     UnsupportedPlatform { os: String, arch: String },
 }
@@ -210,7 +212,12 @@ fn ensure_parser_cached(
                 cached_path,
                 def.symbol
             );
-            std::fs::remove_file(&cached_path)?;
+            if let Err(error) = std::fs::remove_file(&cached_path) {
+                if cfg!(target_os = "windows") && error.raw_os_error() == Some(5) {
+                    return Err(LoaderError::LockedCache(error));
+                }
+                return Err(LoaderError::Io(error));
+            }
         } else {
             log::debug!("Parser {} already cached at {:?}", def.name, cached_path);
             return Ok(cached_path);
@@ -263,13 +270,14 @@ fn prepare_registrations(
                 expando_char: Some(def.expando_char),
                 extensions: def.extensions.iter().map(|s| s.to_string()).collect(),
             }),
-            Err(error) => {
+            Err(error @ LoaderError::LockedCache(_)) => {
                 log::warn!(
                     "Dynamic parser {} is unavailable and will be skipped: {error}",
                     def.name
                 );
                 failures.push(format!("{}: {error}", def.name));
             }
+            Err(error) => return Err(error),
         }
     }
 
@@ -326,6 +334,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preparation_propagates_non_locking_failures() {
+        let cache = tempfile::tempdir().expect("create parser cache");
+        let definition = DynamicLanguageDefinition {
+            name: "unavailable",
+            symbol: "tree_sitter_unavailable",
+            extensions: &["unavailable"],
+            expando_char: '_',
+            urls: &[],
+        };
+
+        let error = match prepare_registrations(&[definition], cache.path()) {
+            Ok(_) => panic!("non-locking parser failures must propagate"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, LoaderError::UnsupportedPlatform { .. }));
+    }
+
+    #[test]
+    #[ignore = "downloads published parser artifacts"]
     fn published_parsers_export_expected_symbols() {
         let cache = tempfile::tempdir().expect("create parser cache");
         let registrations = prepare_registrations(get_definitions(), cache.path())
@@ -372,6 +400,7 @@ mod tests {
         }
 
         #[test]
+        #[ignore = "downloads published parser artifacts"]
         fn locked_invalid_cache_entry_does_not_disable_unrelated_parser() {
             let cache = tempfile::tempdir().expect("create parser cache");
             let less_dir = cache.path().join("less");
