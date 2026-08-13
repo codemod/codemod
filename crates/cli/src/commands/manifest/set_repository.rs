@@ -82,7 +82,11 @@ fn normalize_repository_url(input: &str) -> Result<String> {
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         bail!("Repository URL must be an HTTP(S) URL with a host");
     }
-    if !parsed.username().is_empty() || parsed.password().is_some() {
+    let authority = trimmed
+        .split_once("://")
+        .map(|(_, remainder)| remainder.split(['/', '?', '#']).next().unwrap_or_default())
+        .unwrap_or_default();
+    if authority.contains('@') || !parsed.username().is_empty() || parsed.password().is_some() {
         bail!("Repository URL must not contain credentials");
     }
     if parsed.query().is_some() || parsed.fragment().is_some() {
@@ -285,6 +289,7 @@ mod tests {
     fn rejects_unsafe_repository_urls() {
         assert!(normalize_repository_url("git@github.com:acme/repo.git").is_err());
         assert!(normalize_repository_url("https://token@github.com/acme/repo").is_err());
+        assert!(normalize_repository_url("https://@github.com/acme/repo").is_err());
         assert!(normalize_repository_url("https://github.com/acme/repo?token=secret").is_err());
     }
 }
