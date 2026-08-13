@@ -321,94 +321,117 @@ pub fn init() -> Result<(), LoaderError> {
     }
 }
 
-#[cfg(all(test, target_os = "windows"))]
-mod windows_tests {
+#[cfg(test)]
+mod tests {
     use super::*;
 
-    const LESS_URL: &str = parser_url!(
-        "tree-sitter-less",
-        "945f52c94250309073a96bbfbc5bcd57ff2bde49",
-        "win32-x64.dll"
-    );
-    const XML_URL: &str = parser_url!(
-        "tree-sitter-xml",
-        "4b64dd3a03ec002258d6268d712fd93716d6ab57",
-        "win32-x64.dll"
-    );
+    #[test]
+    fn published_parsers_export_expected_symbols() {
+        let cache = tempfile::tempdir().expect("create parser cache");
+        let registrations = prepare_registrations(get_definitions(), cache.path())
+            .expect("download and validate published parsers");
 
-    static BAD_URLS: &[(&str, &str, &str)] = &[("windows", "x86_64", LESS_URL)];
-    static GOOD_URLS: &[(&str, &str, &str)] = &[("windows", "x86_64", XML_URL)];
+        let registered_names = registrations
+            .iter()
+            .map(|registration| registration.lang_name.as_str())
+            .collect::<Vec<_>>();
+        let expected_names = get_definitions()
+            .iter()
+            .map(|definition| definition.name)
+            .collect::<Vec<_>>();
 
-    fn download_fixture(url: &str) -> Vec<u8> {
-        reqwest::blocking::get(url)
-            .expect("download Windows parser fixture")
-            .error_for_status()
-            .expect("download successful Windows parser fixture")
-            .bytes()
-            .expect("read Windows parser fixture")
-            .to_vec()
+        assert_eq!(registered_names, expected_names);
     }
 
-    #[test]
-    fn locked_invalid_cache_entry_does_not_disable_unrelated_parser() {
-        let cache = tempfile::tempdir().expect("create parser cache");
-        let less_dir = cache.path().join("less");
-        let xml_dir = cache.path().join("xml");
-        std::fs::create_dir_all(&less_dir).expect("create less cache directory");
-        std::fs::create_dir_all(&xml_dir).expect("create xml cache directory");
+    #[cfg(target_os = "windows")]
+    mod windows {
+        use super::*;
 
-        let less_bytes = download_fixture(LESS_URL);
-        let xml_bytes = download_fixture(XML_URL);
-        let less_path = less_dir.join("less.dll");
-        let xml_path = xml_dir.join("xml.dll");
-        std::fs::write(&less_path, &less_bytes).expect("cache less parser fixture");
-        std::fs::write(&xml_path, &xml_bytes).expect("cache XML parser fixture");
-
-        assert!(
-            cached_parser_has_symbol(&less_path, "tree_sitter_less"),
-            "the parser symbol is stored in the PE export table"
+        const LESS_URL: &str = parser_url!(
+            "tree-sitter-less",
+            "945f52c94250309073a96bbfbc5bcd57ff2bde49",
+            "win32-x64.dll"
         );
-        assert!(cached_parser_has_symbol(&xml_path, "tree_sitter_xml"));
+        const XML_URL: &str = parser_url!(
+            "tree-sitter-xml",
+            "4b64dd3a03ec002258d6268d712fd93716d6ab57",
+            "win32-x64.dll"
+        );
 
-        // DynamicLang retains the library handle, reproducing the Windows image
-        // lock held by another long-lived codemod process.
-        unsafe {
-            DynamicLang::register(vec![Registration {
-                lang_name: "loaded-less".to_string(),
-                lib_path: less_path,
-                symbol: "tree_sitter_less".to_string(),
-                meta_var_char: None,
-                expando_char: Some('_'),
-                extensions: vec!["loaded-less".to_string()],
-            }])
-            .expect("load and pin less parser fixture");
+        static BAD_URLS: &[(&str, &str, &str)] = &[("windows", "x86_64", LESS_URL)];
+        static GOOD_URLS: &[(&str, &str, &str)] = &[("windows", "x86_64", XML_URL)];
+
+        fn download_fixture(url: &str) -> Vec<u8> {
+            reqwest::blocking::get(url)
+                .expect("download Windows parser fixture")
+                .error_for_status()
+                .expect("download successful Windows parser fixture")
+                .bytes()
+                .expect("read Windows parser fixture")
+                .to_vec()
         }
 
-        let definitions = [
-            DynamicLanguageDefinition {
-                name: "less",
-                symbol: "tree_sitter_missing",
-                extensions: &["less"],
-                expando_char: '_',
-                urls: BAD_URLS,
-            },
-            DynamicLanguageDefinition {
-                name: "xml",
-                symbol: "tree_sitter_xml",
-                extensions: &["xml"],
-                expando_char: '_',
-                urls: GOOD_URLS,
-            },
-        ];
+        #[test]
+        fn locked_invalid_cache_entry_does_not_disable_unrelated_parser() {
+            let cache = tempfile::tempdir().expect("create parser cache");
+            let less_dir = cache.path().join("less");
+            let xml_dir = cache.path().join("xml");
+            std::fs::create_dir_all(&less_dir).expect("create less cache directory");
+            std::fs::create_dir_all(&xml_dir).expect("create xml cache directory");
 
-        let registrations = prepare_registrations(&definitions, cache.path())
-            .expect("prepare the unrelated parser despite the locked cache entry");
+            let less_bytes = download_fixture(LESS_URL);
+            let xml_bytes = download_fixture(XML_URL);
+            let less_path = less_dir.join("less.dll");
+            let xml_path = xml_dir.join("xml.dll");
+            std::fs::write(&less_path, &less_bytes).expect("cache less parser fixture");
+            std::fs::write(&xml_path, &xml_bytes).expect("cache XML parser fixture");
 
-        assert_eq!(registrations.len(), 1);
-        assert_eq!(registrations[0].lang_name, "xml");
+            assert!(
+                cached_parser_has_symbol(&less_path, "tree_sitter_less"),
+                "the parser symbol is stored in the PE export table"
+            );
+            assert!(cached_parser_has_symbol(&xml_path, "tree_sitter_xml"));
 
-        // Windows cannot remove a directory containing a loaded DLL. Leave this
-        // process-scoped temporary cache for the runner to clean up after exit.
-        std::mem::forget(cache);
+            // DynamicLang retains the library handle, reproducing the Windows image
+            // lock held by another long-lived codemod process.
+            unsafe {
+                DynamicLang::register(vec![Registration {
+                    lang_name: "loaded-less".to_string(),
+                    lib_path: less_path,
+                    symbol: "tree_sitter_less".to_string(),
+                    meta_var_char: None,
+                    expando_char: Some('_'),
+                    extensions: vec!["loaded-less".to_string()],
+                }])
+                .expect("load and pin less parser fixture");
+            }
+
+            let definitions = [
+                DynamicLanguageDefinition {
+                    name: "less",
+                    symbol: "tree_sitter_missing",
+                    extensions: &["less"],
+                    expando_char: '_',
+                    urls: BAD_URLS,
+                },
+                DynamicLanguageDefinition {
+                    name: "xml",
+                    symbol: "tree_sitter_xml",
+                    extensions: &["xml"],
+                    expando_char: '_',
+                    urls: GOOD_URLS,
+                },
+            ];
+
+            let registrations = prepare_registrations(&definitions, cache.path())
+                .expect("prepare the unrelated parser despite the locked cache entry");
+
+            assert_eq!(registrations.len(), 1);
+            assert_eq!(registrations[0].lang_name, "xml");
+
+            // Windows cannot remove a directory containing a loaded DLL. Leave this
+            // process-scoped temporary cache for the runner to clean up after exit.
+            std::mem::forget(cache);
+        }
     }
 }

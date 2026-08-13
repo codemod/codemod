@@ -13,5 +13,5 @@ object = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 
-[target.'cfg(windows)'.dev-dependencies]
+[dev-dependencies]
 tempfile = { workspace = true }

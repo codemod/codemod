@@ -1,0 +1,50 @@
+name: Dynamic parser tests
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "crates/tree-sitter-loader/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/dynamic-parser-tests.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "crates/tree-sitter-loader/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/dynamic-parser-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dynamic-parser-tests:
+    name: Dynamic parser tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-14
+          - windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run dynamic parser tests
+        run: cargo test -p tree-sitter-loader -- --nocapture
