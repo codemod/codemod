@@ -20,7 +20,7 @@ pub(crate) struct CodemodManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) copyright: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) repository: Option<String>,
+    pub(crate) repository: Option<RepositoryMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) homepage: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,6 +48,20 @@ pub(crate) struct CodemodManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) validation: Option<ValidationConfig>,
     pub(crate) capabilities: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub(crate) enum RepositoryMetadata {
+    Url(String),
+    Structured(RepositoryConfig),
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RepositoryConfig {
+    pub(crate) url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) directory: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

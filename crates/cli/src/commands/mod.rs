@@ -10,6 +10,7 @@ pub mod init;
 pub mod jssg;
 pub mod login;
 pub mod logout;
+pub mod manifest;
 pub mod mcp;
 pub mod output;
 pub mod package_skill;
