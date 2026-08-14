@@ -1,16 +1,19 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, ValueEnum};
+use regex::{Captures, Regex};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use super::set_repository::normalize_repository_directory;
 use crate::commands::publish::validate_package_name;
 
 const WORKFLOW_TEMPLATE: &str = include_str!("../../templates/common/publish-builder.yml");
 const WORKFLOW_DIRECTORY: &str = ".github/workflows";
+static WORKFLOW_PLACEHOLDER: OnceLock<Regex> = OnceLock::new();
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -137,23 +140,40 @@ fn render_workflow(
         .map(|path| format!("{path}/**"))
         .unwrap_or_else(|| "**".to_string());
 
-    WORKFLOW_TEMPLATE
-        .replace("__PACKAGE_NAME__", package_name)
-        .replace("__DEFAULT_BRANCH__", &yaml_string(default_branch))
-        .replace("__PACKAGE_PATH_GLOB__", &yaml_string(&path_glob))
-        .replace("__PACKAGE_HASH__", hash)
-        .replace("__PACKAGE_JSON_PATH__", &yaml_string(&package_json))
-        .replace("__PACKAGE_DIRECTORY__", &yaml_string(directory))
+    WORKFLOW_PLACEHOLDER
+        .get_or_init(|| {
+            Regex::new(
+                r"__(?:PACKAGE_NAME|DEFAULT_BRANCH|PACKAGE_PATH_GLOB|PACKAGE_HASH|PACKAGE_JSON_PATH|PACKAGE_DIRECTORY)__",
+            )
+            .expect("workflow placeholder regex is valid")
+        })
+        .replace_all(
+            WORKFLOW_TEMPLATE,
+            |captures: &Captures<'_>| match &captures[0] {
+                "__PACKAGE_NAME__" => package_name.to_string(),
+                "__DEFAULT_BRANCH__" => yaml_string(default_branch),
+                "__PACKAGE_PATH_GLOB__" => yaml_string(&path_glob),
+                "__PACKAGE_HASH__" => hash.to_string(),
+                "__PACKAGE_JSON_PATH__" => yaml_string(&package_json),
+                "__PACKAGE_DIRECTORY__" => yaml_string(directory),
+                placeholder => unreachable!("unrecognized workflow placeholder: {placeholder}"),
+            },
+        )
+        .into_owned()
 }
 
 fn write_managed_workflow(path: &Path, package_name: &str, content: &[u8]) -> Result<bool> {
     let marker = format!("# Managed by Codemod Builder for {package_name}.");
-    if let Ok(existing) = fs::read(path) {
-        if existing == content {
-            return Ok(false);
-        }
-        if !existing.starts_with(marker.as_bytes()) {
+    match fs::read(path) {
+        Ok(existing) if existing == content => return Ok(false),
+        Ok(existing) if !existing.starts_with(marker.as_bytes()) => {
             bail!("Refusing to replace unmanaged workflow {}", path.display());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("Failed to read existing workflow {}", path.display()));
         }
     }
 
@@ -223,6 +243,21 @@ mod tests {
     }
 
     #[test]
+    fn renders_placeholder_like_values_without_cascading_replacements() {
+        let content = render_workflow(
+            "__PACKAGE_HASH__",
+            Some("codemods/__DEFAULT_BRANCH__"),
+            "__PACKAGE_DIRECTORY__",
+            "12345678",
+        );
+
+        assert!(content.contains("# Managed by Codemod Builder for __PACKAGE_HASH__."));
+        assert!(content.contains("branches:\n      - \"__PACKAGE_DIRECTORY__\""));
+        assert!(content.contains("PACKAGE_JSON: \"codemods/__DEFAULT_BRANCH__/package.json\""));
+        assert!(content.contains("path: \"codemods/__DEFAULT_BRANCH__\""));
+    }
+
+    #[test]
     fn workflow_paths_are_stable_and_package_specific() {
         let first_hash = package_hash("@acme/rename-foo");
         let first = workflow_path("@acme/rename-foo", &first_hash);
@@ -246,6 +281,19 @@ mod tests {
         assert!(!write_managed_workflow(&path, "rename-foo", content).unwrap());
         fs::write(&path, "user workflow\n").unwrap();
         assert!(write_managed_workflow(&path, "rename-foo", content).is_err());
+    }
+
+    #[test]
+    fn managed_writes_propagate_existing_workflow_read_errors() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join(".github/workflows/publish.yml");
+        fs::create_dir_all(&path).unwrap();
+
+        let error = write_managed_workflow(&path, "rename-foo", b"workflow\n").unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Failed to read existing workflow"));
     }
 
     #[test]
