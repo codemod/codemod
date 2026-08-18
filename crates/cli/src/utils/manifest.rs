@@ -20,7 +20,7 @@ pub(crate) struct CodemodManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) copyright: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) repository: Option<String>,
+    pub(crate) repository: Option<RepositoryMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) homepage: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,6 +48,20 @@ pub(crate) struct CodemodManifest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) validation: Option<ValidationConfig>,
     pub(crate) capabilities: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub(crate) enum RepositoryMetadata {
+    Url(String),
+    Structured(RepositoryConfig),
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RepositoryConfig {
+    pub(crate) url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) directory: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -348,6 +362,12 @@ pub(crate) fn is_safe_relative_path(path: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn manifest_with_repository(repository: &str) -> String {
+        format!(
+            "schema_version: '1.0'\nname: example\nversion: 0.1.0\ndescription: Example\nauthor: Codemod\nrepository: {repository}\n"
+        )
+    }
+
     fn empty_manifest() -> CodemodManifest {
         CodemodManifest {
             schema_version: "1.0".to_string(),
@@ -373,6 +393,43 @@ mod tests {
             validation: None,
             capabilities: None,
         }
+    }
+
+    #[test]
+    fn legacy_repository_url_deserializes_and_round_trips() {
+        let manifest: CodemodManifest = serde_yaml::from_str(&manifest_with_repository(
+            "https://github.com/acme/codemods",
+        ))
+        .unwrap();
+        assert_eq!(
+            manifest.repository,
+            Some(RepositoryMetadata::Url(
+                "https://github.com/acme/codemods".to_string()
+            ))
+        );
+
+        let serialized = serde_yaml::to_string(&manifest).unwrap();
+        let round_trip: CodemodManifest = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(round_trip.repository, manifest.repository);
+    }
+
+    #[test]
+    fn structured_repository_deserializes_and_round_trips() {
+        let manifest: CodemodManifest = serde_yaml::from_str(&manifest_with_repository(
+            "\n  url: https://github.com/acme/codemods\n  directory: codemods/rename-foo",
+        ))
+        .unwrap();
+        assert_eq!(
+            manifest.repository,
+            Some(RepositoryMetadata::Structured(RepositoryConfig {
+                url: "https://github.com/acme/codemods".to_string(),
+                directory: Some("codemods/rename-foo".to_string()),
+            }))
+        );
+
+        let serialized = serde_yaml::to_string(&manifest).unwrap();
+        let round_trip: CodemodManifest = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(round_trip.repository, manifest.repository);
     }
 
     #[test]

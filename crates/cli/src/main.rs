@@ -80,6 +80,9 @@ enum Commands {
     /// Publish a workflow
     Publish(commands::publish::Command),
 
+    /// Manage codemod package manifests
+    Manifest(commands::manifest::Command),
+
     /// Search for packages in the registry
     Search(commands::search::Command),
 
@@ -174,6 +177,7 @@ fn is_package_name(arg: &str) -> bool {
         "logout",
         "whoami",
         "publish",
+        "manifest",
         "search",
         "run",
         "unpublish",
@@ -516,6 +520,9 @@ async fn run_cli() -> Result<()> {
         }
         Some(Commands::Publish(args)) => {
             commands::publish::handler(args, telemetry_sender.clone()).await?;
+        }
+        Some(Commands::Manifest(args)) => {
+            commands::manifest::handler(args)?;
         }
         Some(Commands::Search(args)) => {
             commands::search::handler(args).await?;
