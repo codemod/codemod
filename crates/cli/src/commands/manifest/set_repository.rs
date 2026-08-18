@@ -96,7 +96,7 @@ fn normalize_repository_url(input: &str) -> Result<String> {
     Ok(trimmed.trim_end_matches('/').to_string())
 }
 
-fn normalize_repository_directory(input: &str) -> Result<Option<String>> {
+pub(super) fn normalize_repository_directory(input: &str) -> Result<Option<String>> {
     let trimmed = input.trim();
     if trimmed.is_empty() || trimmed == "." {
         return Ok(None);
