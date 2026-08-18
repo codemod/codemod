@@ -37,6 +37,10 @@ use codemod_telemetry::send_event::BaseEvent;
 pub struct Command {
     /// Path to codemod directory
     path: Option<PathBuf>,
+
+    /// Release channel to update
+    #[arg(long, default_value = "latest")]
+    tag: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -90,7 +94,14 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     };
 
     // Upload package
-    let response = upload_package(&registry_url, &bundle_path, &manifest, &access_token).await?;
+    let response = upload_package(
+        &registry_url,
+        &bundle_path,
+        &manifest,
+        &access_token,
+        &args.tag,
+    )
+    .await?;
 
     if !response.success {
         return Err(anyhow!("Failed to publish package"));
@@ -307,7 +318,7 @@ fn validate_common_package_metadata(package_path: &Path, manifest: &CodemodManif
     // Validate version format (semver)
     if !is_valid_semver(&manifest.version) {
         return Err(anyhow!(
-            "Invalid version: {}. Must be valid semantic version (x.y.z).",
+            "Invalid version: {}. Must be a valid semantic version.",
             manifest.version
         ));
     }
@@ -486,6 +497,7 @@ async fn upload_package(
     bundle_path: &Path,
     manifest: &CodemodManifest,
     access_token: &str,
+    tag: &str,
 ) -> Result<PublishResponse> {
     let client = reqwest::Client::new();
 
@@ -513,7 +525,8 @@ async fn upload_package(
                 .file_name(format!("{}-{}.tar.gz", manifest.name, manifest.version))
                 .mime_str("application/gzip")?,
         )
-        .text("manifest", manifest_json);
+        .text("manifest", manifest_json)
+        .text("tag", tag.to_owned());
 
     debug!("Uploading to: {url}");
 
@@ -601,17 +614,7 @@ fn validate_package_name(name: &str) -> Result<()> {
 }
 
 fn is_valid_semver(version: &str) -> bool {
-    // Basic semver validation (x.y.z format)
-    let parts: Vec<&str> = version.split('.').collect();
-    if parts.len() != 3 {
-        return false;
-    }
-
-    parts.iter().all(|part| {
-        part.chars().all(|c| c.is_ascii_digit())
-            && !part.is_empty()
-            && (*part == "0" || !part.starts_with('0'))
-    })
+    semver::Version::parse(version).is_ok()
 }
 
 fn format_package_name(package: &PublishedPackage) -> String {
@@ -637,7 +640,114 @@ fn get_stored_auth_token(storage: &TokenStorage, registry_url: &str) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+    use hyper::service::{make_service_fn, service_fn};
+    use hyper::{Body, Response, Server};
+    use std::convert::Infallible;
+    use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
+    use tokio::sync::oneshot;
+
+    #[derive(Debug, Parser)]
+    struct PublishArgs {
+        #[command(flatten)]
+        command: Command,
+    }
+
+    #[test]
+    fn publish_defaults_to_latest_tag() {
+        let args = PublishArgs::try_parse_from(["publish"]).unwrap();
+
+        assert_eq!(args.command.tag, "latest");
+    }
+
+    #[test]
+    fn publish_accepts_builder_tag() {
+        let args = PublishArgs::try_parse_from(["publish", "--tag", "codemod-builder"]).unwrap();
+
+        assert_eq!(args.command.tag, "codemod-builder");
+    }
+
+    #[test]
+    fn publish_accepts_arbitrary_tag() {
+        let args = PublishArgs::try_parse_from(["publish", "--tag", "preview"]).unwrap();
+
+        assert_eq!(args.command.tag, "preview");
+    }
+
+    #[test]
+    fn semver_validation_accepts_prereleases_and_build_metadata() {
+        assert!(is_valid_semver("0.0.1-codemod-builder.1"));
+        assert!(is_valid_semver("1.2.3-rc.1+build.42"));
+    }
+
+    #[test]
+    fn semver_validation_rejects_invalid_versions() {
+        assert!(!is_valid_semver("1.2"));
+        assert!(!is_valid_semver("01.2.3"));
+        assert!(!is_valid_semver("1.2.3-codemod_builder.1"));
+    }
+
+    #[tokio::test]
+    async fn upload_sends_requested_dist_tag() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let (body_sender, body_receiver) = oneshot::channel();
+        let body_sender = Arc::new(Mutex::new(Some(body_sender)));
+
+        let make_service = make_service_fn(move |_| {
+            let body_sender = Arc::clone(&body_sender);
+            async move {
+                Ok::<_, Infallible>(service_fn(move |request| {
+                    let body_sender = Arc::clone(&body_sender);
+                    async move {
+                        let body = hyper::body::to_bytes(request.into_body()).await.unwrap();
+                        if let Some(sender) = body_sender.lock().unwrap().take() {
+                            let _ = sender.send(body.to_vec());
+                        }
+
+                        let response = serde_json::json!({
+                            "success": true,
+                            "package": {
+                                "id": "pkg_1",
+                                "name": "example",
+                                "version": "0.0.1-codemod-builder.1",
+                                "scope": null,
+                                "published_at": "2026-08-12T00:00:00.000Z"
+                            }
+                        });
+                        Ok::<_, Infallible>(Response::new(Body::from(response.to_string())))
+                    }
+                }))
+            }
+        });
+        let server = Server::from_tcp(listener).unwrap().serve(make_service);
+        let server_handle = tokio::spawn(server);
+
+        let temp_dir = tempdir().unwrap();
+        let bundle_path = temp_dir.path().join("example.tar.gz");
+        fs::write(&bundle_path, b"bundle").unwrap();
+        let mut manifest = manifest_with(DEFAULT_WORKFLOW_FILE_NAME, "example");
+        manifest.version = "0.0.1-codemod-builder.1".to_string();
+
+        let response = upload_package(
+            &format!("http://{address}"),
+            &bundle_path,
+            &manifest,
+            "token",
+            "codemod-builder",
+        )
+        .await
+        .unwrap();
+        assert!(response.success);
+
+        let request_body = body_receiver.await.unwrap();
+        let request_body = String::from_utf8_lossy(&request_body);
+        assert!(request_body.contains("name=\"tag\"\r\n\r\ncodemod-builder\r\n"));
+
+        server_handle.abort();
+    }
 
     fn create_authored_skill_bundle(package_path: &Path, package_name: &str) {
         let skill_file = expected_authored_skill_file(package_path, package_name);

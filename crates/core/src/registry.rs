@@ -120,6 +120,8 @@ struct PackageInfo {
     scope: Option<String>,
     is_legacy: bool,
     latest_version: Option<String>,
+    #[serde(default)]
+    dist_tags: HashMap<String, String>,
     versions: HashMap<String, PackageVersion>,
     #[serde(default)]
     access: Option<String>,
@@ -699,22 +701,49 @@ pub fn format_package_spec(spec: &PackageSpec) -> String {
 }
 
 fn determine_version(spec: &PackageSpec, package_info: &PackageInfo) -> Result<String> {
-    if let Some(version) = &spec.version {
-        if package_info.versions.contains_key(version) {
-            Ok(version.clone())
-        } else {
-            Err(RegistryError::VersionNotFound {
-                version: version.clone(),
-                package: format_package_spec(spec),
-            })
+    if let Some(selector) = &spec.version {
+        if package_info.versions.contains_key(selector) {
+            return Ok(selector.clone());
         }
-    } else if let Some(latest) = &package_info.latest_version {
-        Ok(latest.clone())
-    } else {
-        Err(RegistryError::NoVersionAvailable {
+
+        if let Some(version) = package_info.dist_tags.get(selector) {
+            if package_info.versions.contains_key(version) {
+                return Ok(version.clone());
+            }
+        }
+
+        if selector == "latest" {
+            if let Some(version) = package_info
+                .latest_version
+                .as_ref()
+                .filter(|version| package_info.versions.contains_key(*version))
+            {
+                return Ok(version.clone());
+            }
+        }
+
+        return Err(RegistryError::VersionNotFound {
+            version: selector.clone(),
+            package: format_package_spec(spec),
+        });
+    }
+
+    if let Some(version) = package_info
+        .dist_tags
+        .get("latest")
+        .filter(|version| package_info.versions.contains_key(*version))
+    {
+        return Ok(version.clone());
+    }
+
+    package_info
+        .latest_version
+        .as_ref()
+        .filter(|version| package_info.versions.contains_key(*version))
+        .cloned()
+        .ok_or_else(|| RegistryError::NoVersionAvailable {
             package: format_package_spec(spec),
         })
-    }
 }
 
 fn is_package_cached(package_dir: &Path) -> Result<bool> {
@@ -778,6 +807,86 @@ mod tests {
     use std::io::{Cursor, Write};
     use std::sync::Mutex;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn parse_package_spec_accepts_builder_tag() {
+        let spec = parse_package_spec("@codemod/example@codemod-builder").unwrap();
+
+        assert_eq!(spec.scope.as_deref(), Some("@codemod"));
+        assert_eq!(spec.name, "example");
+        assert_eq!(spec.version.as_deref(), Some("codemod-builder"));
+    }
+
+    #[test]
+    fn determine_version_resolves_builder_tag() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: Some("codemod-builder".to_string()),
+        };
+        let package_info = package_info_with_dist_tags();
+
+        assert_eq!(
+            determine_version(&spec, &package_info).unwrap(),
+            "0.0.1-codemod-builder.1"
+        );
+    }
+
+    #[test]
+    fn determine_version_accepts_exact_prerelease() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: Some("0.0.1-codemod-builder.1".to_string()),
+        };
+        let package_info = package_info_with_dist_tags();
+
+        assert_eq!(
+            determine_version(&spec, &package_info).unwrap(),
+            "0.0.1-codemod-builder.1"
+        );
+    }
+
+    #[test]
+    fn determine_version_defaults_to_latest_dist_tag() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: None,
+        };
+        let mut package_info = package_info_with_dist_tags();
+        package_info.latest_version = Some("0.9.0".to_string());
+
+        assert_eq!(determine_version(&spec, &package_info).unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn determine_version_resolves_explicit_latest_from_legacy_projection() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: Some("latest".to_string()),
+        };
+        let mut package_info = package_info_with_dist_tags();
+        package_info.dist_tags.clear();
+
+        assert_eq!(determine_version(&spec, &package_info).unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn determine_version_ignores_stale_latest_dist_tag() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: None,
+        };
+        let mut package_info = package_info_with_dist_tags();
+        package_info
+            .dist_tags
+            .insert("latest".to_string(), "2.0.0".to_string());
+
+        assert_eq!(determine_version(&spec, &package_info).unwrap(), "1.0.0");
+    }
 
     #[tokio::test]
     async fn resolve_package_downloads_from_resolved_unscoped_package_info_path() {
@@ -963,6 +1072,35 @@ mod tests {
             }
         })
         .to_string()
+    }
+
+    fn package_info_with_dist_tags() -> PackageInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": "pkg_1",
+            "name": "example",
+            "scope": "@codemod",
+            "is_legacy": false,
+            "latest_version": "1.0.0",
+            "dist_tags": {
+                "latest": "1.0.0",
+                "codemod-builder": "0.0.1-codemod-builder.1"
+            },
+            "versions": {
+                "1.0.0": {
+                    "version": "1.0.0",
+                    "description": null,
+                    "checksum": "sha256:latest",
+                    "size": 1
+                },
+                "0.0.1-codemod-builder.1": {
+                    "version": "0.0.1-codemod-builder.1",
+                    "description": null,
+                    "checksum": "sha256:builder",
+                    "size": 1
+                }
+            }
+        }))
+        .unwrap()
     }
 
     fn package_archive() -> Vec<u8> {

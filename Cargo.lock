@@ -1101,6 +1101,7 @@ dependencies = [
  "rolldown",
  "rustls 0.21.12",
  "semantic-factory",
+ "semver",
  "serde",
  "serde_json",
  "serde_json_canonicalizer",
