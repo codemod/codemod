@@ -45,9 +45,15 @@ importers:
       '@codemod.com/cli-linux-arm64-gnu':
         specifier: 0.0.0
         version: 0.0.0
+      '@codemod.com/cli-linux-arm64-musl':
+        specifier: workspace:0.0.0
+        version: link:platforms/linux-arm64-musl
       '@codemod.com/cli-linux-x64-gnu':
         specifier: 0.0.0
         version: 0.0.0
+      '@codemod.com/cli-linux-x64-musl':
+        specifier: workspace:0.0.0
+        version: link:platforms/linux-x64-musl
       '@codemod.com/cli-win32-x64-msvc':
         specifier: 0.0.0
         version: 0.0.0
@@ -58,7 +64,11 @@ importers:
 
   crates/cli/npm/platforms/linux-arm64-gnu: {}
 
+  crates/cli/npm/platforms/linux-arm64-musl: {}
+
   crates/cli/npm/platforms/linux-x64-gnu: {}
+
+  crates/cli/npm/platforms/linux-x64-musl: {}
 
   crates/cli/npm/platforms/win32-x64-msvc: {}
 

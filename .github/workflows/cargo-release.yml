@@ -26,9 +26,15 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             binary_name: codemod-linux-x86_64-gnu
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            binary_name: codemod-linux-x86_64-musl
           - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
             binary_name: codemod-linux-aarch64-gnu
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-musl
+            binary_name: codemod-linux-aarch64-musl
           - os: macos-latest
             target: aarch64-apple-darwin
             binary_name: codemod-darwin-aarch64
@@ -71,10 +77,14 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Install dependencies (Linux only)
-        if: matrix.os == 'ubuntu-22.04' || (matrix.os == 'self-hosted' && matrix.target == 'aarch64-unknown-linux-gnu')
+        if: startsWith(matrix.target, 'x86_64-unknown-linux') || startsWith(matrix.target, 'aarch64-unknown-linux')
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config build-essential libssl-dev
+
+      - name: Install musl toolchain (Linux musl only)
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get install -y musl-tools
 
       - name: Install GNU coreutils (macOS only)
         if: matrix.os == 'macos-latest'
@@ -255,12 +265,14 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: |
             x86_64-unknown-linux-gnu/*
+            x86_64-unknown-linux-musl/*
             aarch64-apple-darwin/*
             x86_64-apple-darwin/*
             x86_64-pc-windows-msvc/*
             i686-pc-windows-msvc/*
             aarch64-pc-windows-msvc/*
             aarch64-unknown-linux-gnu/*
+            aarch64-unknown-linux-musl/*
           generate_release_notes: true
 
   release_npm:
@@ -308,14 +320,18 @@ jobs:
           mkdir -p crates/cli/npm/platforms/darwin-arm64
           mkdir -p crates/cli/npm/platforms/darwin-x64  
           mkdir -p crates/cli/npm/platforms/linux-x64-gnu
+          mkdir -p crates/cli/npm/platforms/linux-x64-musl
           mkdir -p crates/cli/npm/platforms/linux-arm64-gnu
+          mkdir -p crates/cli/npm/platforms/linux-arm64-musl
           mkdir -p crates/cli/npm/platforms/win32-x64-msvc
 
           # Copy binaries to platform packages
           cp artifacts/aarch64-apple-darwin/codemod-darwin-aarch64 crates/cli/npm/platforms/darwin-arm64/codemod
           cp artifacts/x86_64-apple-darwin/codemod-darwin-x86_64 crates/cli/npm/platforms/darwin-x64/codemod
           cp artifacts/x86_64-unknown-linux-gnu/codemod-linux-x86_64-gnu crates/cli/npm/platforms/linux-x64-gnu/codemod
+          cp artifacts/x86_64-unknown-linux-musl/codemod-linux-x86_64-musl crates/cli/npm/platforms/linux-x64-musl/codemod
           cp artifacts/aarch64-unknown-linux-gnu/codemod-linux-aarch64-gnu crates/cli/npm/platforms/linux-arm64-gnu/codemod
+          cp artifacts/aarch64-unknown-linux-musl/codemod-linux-aarch64-musl crates/cli/npm/platforms/linux-arm64-musl/codemod
           cp artifacts/x86_64-pc-windows-msvc/codemod-windows-x86_64.exe crates/cli/npm/platforms/win32-x64-msvc/codemod.exe
 
           # Make binaries executable
@@ -333,6 +349,7 @@ jobs:
 
           # Update optional dependencies versions in main package
           sed -i 's/"@codemod\.com\/cli-\([^"]*\)": "0\.0\.0"/"@codemod.com\/cli-\1": "${{ steps.version.outputs.version }}"/g' crates/cli/npm/package.json
+          sed -i 's/"@codemod\.com\/cli-\([^"]*\)": "workspace:0\.0\.0"/"@codemod.com\/cli-\1": "${{ steps.version.outputs.version }}"/g' crates/cli/npm/package.json
 
       - name: Publish platform packages
         run: |
