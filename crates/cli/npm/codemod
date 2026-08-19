@@ -7,8 +7,11 @@ const path = require("path");
 const binaryName = process.platform === "win32" ? "codemod.exe" : "codemod";
 const CODEMOD_BOOTSTRAPPED_ENV = "CODEMOD_BOOTSTRAPPED";
 
-function detectPackageName() {
-  const { platform, arch } = process;
+function detectPackageName({
+  platform = process.platform,
+  arch = process.arch,
+  libcFamily,
+} = {}) {
 
   switch (platform) {
     case "darwin":
@@ -20,9 +23,10 @@ function detectPackageName() {
       }
       break;
     case "linux": {
-      const { family, MUSL } = require("detect-libc");
+      const { familySync, MUSL } = require("detect-libc");
+      const detectedLibcFamily = libcFamily ?? familySync();
       const libcSuffix =
-        family === MUSL ? "musl" : arch === "arm" ? "gnueabihf" : "gnu";
+        detectedLibcFamily === MUSL ? "musl" : arch === "arm" ? "gnueabihf" : "gnu";
       if (arch === "x64") {
         return `@codemod.com/cli-linux-x64-${libcSuffix}`;
       }
@@ -234,6 +238,7 @@ if (require.main === module) {
 
 module.exports = {
   CODEMOD_BOOTSTRAPPED_ENV,
+  detectPackageName,
   latestBootstrapArgs,
   npmExecutable,
   shouldBootstrapLatestNoCommand,
