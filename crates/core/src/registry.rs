@@ -736,9 +736,17 @@ fn determine_version(spec: &PackageSpec, package_info: &PackageInfo) -> Result<S
         return Ok(version.clone());
     }
 
-    package_info
+    if let Some(version) = package_info
         .latest_version
         .as_ref()
+        .filter(|version| package_info.versions.contains_key(*version))
+    {
+        return Ok(version.clone());
+    }
+
+    package_info
+        .dist_tags
+        .get("codemod-builder")
         .filter(|version| package_info.versions.contains_key(*version))
         .cloned()
         .ok_or_else(|| RegistryError::NoVersionAvailable {
@@ -886,6 +894,23 @@ mod tests {
             .insert("latest".to_string(), "2.0.0".to_string());
 
         assert_eq!(determine_version(&spec, &package_info).unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn determine_version_defaults_to_builder_tag_without_latest_release() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: None,
+        };
+        let mut package_info = package_info_with_dist_tags();
+        package_info.dist_tags.remove("latest");
+        package_info.latest_version = None;
+
+        assert_eq!(
+            determine_version(&spec, &package_info).unwrap(),
+            "0.0.1-codemod-builder.1"
+        );
     }
 
     #[tokio::test]
