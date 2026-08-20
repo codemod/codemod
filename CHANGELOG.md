@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [codemod-cli@1.15.2] - 2026-08-19
+
+### 🐛 Bug Fixes
+
+- *(cli)* Publish musl native packages (#2393)
+
+### ⚙️ Miscellaneous Tasks
+
+- *(bump)* Bump codemod crates version to v1.15.2 (#2394)
 ## [codemod-cli@1.15.1] - 2026-08-18
 
 ### ⚙️ Miscellaneous Tasks
