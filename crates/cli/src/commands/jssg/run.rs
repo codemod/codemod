@@ -8,6 +8,7 @@ use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
 use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
+use butterflow_core::file_ops::{decode_source_bytes, read_source_file};
 use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
@@ -189,8 +190,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             let target_files: Vec<PathBuf> = config.collect_files();
             for file_path in &target_files {
                 if file_path.is_file() {
-                    if let Ok(content) = std::fs::read_to_string(file_path) {
-                        let _ = provider.notify_file_processed(file_path, &content);
+                    if let Ok(decoded) = read_source_file(file_path) {
+                        let _ = provider.notify_file_processed(file_path, &decoded.content);
                     }
                 }
             }
@@ -235,9 +236,19 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         // Use a tokio runtime to handle the async execution within the sync callback
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            // Read file content
-            let content = match tokio::fs::read_to_string(&file_path).await {
-                Ok(content) => content,
+            // Read file content, decoding legacy encodings when needed.
+            let content = match tokio::fs::read(&file_path).await {
+                Ok(bytes) => {
+                    let decoded = decode_source_bytes(&bytes);
+                    if let Some(encoding) = decoded.decoded_from {
+                        warn!(
+                            "Decoded non-UTF-8 file {} as {} for analysis",
+                            file_path.display(),
+                            encoding
+                        );
+                    }
+                    decoded.content
+                }
                 Err(e) => {
                     warn!("Failed to read file {}: {}", file_path.display(), e);
                     return;
@@ -340,9 +351,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                                 let original = if change_path == file_path {
                                     content.clone()
                                 } else {
-                                    tokio::fs::read_to_string(change_path)
-                                        .await
-                                        .unwrap_or_default()
+                                    match tokio::fs::read(change_path).await {
+                                        Ok(bytes) => decode_source_bytes(&bytes).content,
+                                        Err(_) => String::new(),
+                                    }
                                 };
                                 let diff = generate_unified_diff(
                                     change_path,
