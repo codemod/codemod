@@ -2,6 +2,18 @@ name: TUI Perf
 
 on:
   pull_request:
+    paths:
+      - "crates/cli/**"
+      - "crates/core/**"
+      - "crates/state/**"
+      - "crates/runners/**"
+      - "crates/models/**"
+      - "crates/codemod-sandbox/**"
+      - "crates/scheduler/**"
+      - "scripts/compare_tui_perf.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/tui-perf.yml"
   workflow_dispatch:
     inputs:
       pr_number:
