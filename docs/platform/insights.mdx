@@ -178,6 +178,23 @@ Variables can be edited from the dashboard view. Widgets that reference a variab
   Template variables are especially useful for dashboards you reuse across repositories, teams, or migration phases.
 </Tip>
 
+## Dashboard templates
+
+When you publish a package with JSSG steps to the [Codemod Registry](/platform/registry), Codemod attaches a default Insights dashboard template. People who start an Insights dashboard from your package get that template.
+
+You can replace the default with a dashboard you built. If the package is published by an organization, any organization member with developer or admin privileges can update the template.
+
+### Update a package template
+
+<Steps>
+  <Step title="Build a package-backed dashboard">
+    Create or open an Insights dashboard. Add query-backed widgets that use only your published package. For a bundle, widgets can also be powered by the bundle's child packages. You can optionally include Notes widgets.
+  </Step>
+  <Step title="Save it as the package template">
+    When the dashboard looks right, click the three-dot menu next to the dashboard name and select **Update package template**.
+  </Step>
+</Steps>
+
 ## Next steps
 
 <CardGroup cols={2}>
