@@ -719,7 +719,7 @@ where
     .await
 }
 
-fn map_transform_execution_error(
+pub(super) fn map_transform_execution_error(
     runtime_hooks_context: &RuntimeHooksContext,
     error: impl std::fmt::Display,
 ) -> ExecutionError {
