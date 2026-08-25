@@ -1,6 +1,6 @@
 use super::codemod_lang::CodemodLang;
 use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule, FileFetcher};
-use super::execution_engine::{CodemodOutput, ExecutionResult};
+use super::execution_engine::{map_transform_execution_error, CodemodOutput, ExecutionResult};
 use super::quickjs_adapters::QuickJSResolver;
 use super::transform_helpers::{
     build_transform_options, process_transform_result, ModificationCheck,
@@ -346,14 +346,15 @@ where
                     },
                 })?;
 
-            let (evaluated, _) = module
+            let (evaluated, eval_value) = module
                 .eval()
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: e.to_string(),
-                },
-            })?;
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
+
+            maybe_promise(eval_value.into())
+                .await
+                .catch(&ctx)
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
             while ctx.execute_pending_job() {}
 
@@ -434,21 +435,14 @@ where
                     },
                 })?;
 
-            let result_obj_promise = func.call((parsed_content, run_options_qjs)).catch(&ctx).map_err(|e| {
-                ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
-                }
-            })?;
+            let result_obj_promise = func
+                .call((parsed_content, run_options_qjs))
+                .catch(&ctx)
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
             let result_obj = maybe_promise(result_obj_promise)
                 .await
                 .catch(&ctx)
-                .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
-                })?;
+                .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
             process_transform_result(
                 &result_obj,
@@ -477,6 +471,7 @@ mod tests {
     use super::*;
     use crate::sandbox::errors::RuntimeError;
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
+    use crate::sandbox::runtime_module::RuntimeFailureKind;
     use ast_grep_language::SupportLang;
     use sha2::{Digest, Sha256};
     use std::fs;
@@ -491,6 +486,50 @@ mod tests {
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
         hasher.finalize().into()
+    }
+
+    fn execute_runtime_codemod(codemod_content: &str) -> Result<CodemodOutput, ExecutionError> {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = "const x = 1;";
+        let ast = AstGrep::new(content, js_lang());
+
+        execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast,
+            original_sha256: Some(compute_sha256(content)),
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/src/example.js"),
+            target_directory: "/app/",
+            semantic_provider: None,
+            metrics_context: None,
+            llm_request_handler: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: None,
+        })
+    }
+
+    fn assert_runtime_hook_error(
+        result: Result<CodemodOutput, ExecutionError>,
+        expected_kind: RuntimeFailureKind,
+        expected_message: &str,
+        expected_meta: &str,
+    ) {
+        match result {
+            Err(ExecutionError::RuntimeHook { source }) => {
+                assert_eq!(source.kind, expected_kind);
+                assert_eq!(source.message, expected_message);
+                assert_eq!(source.meta.as_deref(), Some(expected_meta));
+            }
+            other => panic!("Expected runtime hook error, got: {other:?}"),
+        }
     }
 
     #[test]
@@ -611,7 +650,6 @@ export default function transform(root) {
 
     #[test]
     fn test_execute_codemod_sync_supports_runtime_module() {
-        let temp_dir = TempDir::new().expect("Failed to create temp directory");
         let codemod_content = r#"
 import runtime, { isCanceled, progress, setCurrentUnit, warn } from "codemod:runtime";
 
@@ -630,35 +668,76 @@ export default function transform(root) {
         "#
         .trim();
 
-        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
-        let content = "const x = 1;";
-        let ast = AstGrep::new(content, js_lang());
-
-        let result = execute_codemod_sync(InMemoryExecutionOptions {
-            codemod_source: codemod_content,
-            language: js_lang(),
-            ast,
-            original_sha256: Some(compute_sha256(content)),
-            resolver: Some(resolver),
-            selector_config: None,
-            params: None,
-            matrix_values: None,
-            file_path: Some("/app/src/example.js"),
-            target_directory: "/app/",
-            semantic_provider: None,
-            metrics_context: None,
-            llm_request_handler: None,
-            shared_state_context: None,
-            timeout_ms: None,
-            memory_limit: None,
-            process_sandbox: None,
-            fs_sandbox: None,
-        });
+        let result = execute_runtime_codemod(codemod_content);
 
         match result {
             Ok(output) => assert!(matches!(output.primary, ExecutionResult::Unmodified)),
             Err(error) => panic!("Expected runtime module import to succeed, got: {error:?}"),
         }
+    }
+
+    #[test]
+    fn test_execute_codemod_sync_maps_fail_step_from_transform_call() {
+        let result = execute_runtime_codemod(
+            r#"
+import runtime from "codemod:runtime";
+
+export default function transform() {
+  runtime.failStep("Step failed", { code: "step_failed" });
+}
+            "#
+            .trim(),
+        );
+
+        assert_runtime_hook_error(
+            result,
+            RuntimeFailureKind::Step,
+            "Step failed",
+            r#"{"code":"step_failed"}"#,
+        );
+    }
+
+    #[test]
+    fn test_execute_codemod_sync_maps_fail_step_from_module_evaluation() {
+        let result = execute_runtime_codemod(
+            r#"
+import runtime from "codemod:runtime";
+
+runtime.failStep("Initialization failed", { code: "init_failed" });
+
+export default function transform() {}
+            "#
+            .trim(),
+        );
+
+        assert_runtime_hook_error(
+            result,
+            RuntimeFailureKind::Step,
+            "Initialization failed",
+            r#"{"code":"init_failed"}"#,
+        );
+    }
+
+    #[test]
+    fn test_execute_codemod_sync_maps_fail_file_from_transform_promise() {
+        let result = execute_runtime_codemod(
+            r#"
+import runtime from "codemod:runtime";
+
+export default async function transform() {
+  await Promise.resolve();
+  runtime.failFile("File failed", { file: "src/example.js" });
+}
+            "#
+            .trim(),
+        );
+
+        assert_runtime_hook_error(
+            result,
+            RuntimeFailureKind::File,
+            "File failed",
+            r#"{"file":"src/example.js"}"#,
+        );
     }
 
     #[test]
