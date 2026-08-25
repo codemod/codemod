@@ -11,6 +11,7 @@ use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
 use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver};
+use crate::sandbox::runtime_module::{RuntimeHooksContext, RuntimeModule};
 use crate::utils::quickjs_utils::maybe_promise;
 use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
 use ast_grep_config::RuleConfig;
@@ -213,6 +214,9 @@ where
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
 
+    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
+    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+
     // In-memory callers have no capability set; supplying the engine-owned
     // handler is their explicit authorization to expose model access.
     if options.llm_request_handler.is_some() {
@@ -255,6 +259,7 @@ where
     let metrics_context = options.metrics_context.clone();
     let llm_runtime_context = LlmRuntimeContext::new(options.llm_request_handler.clone());
     let shared_state_context = options.shared_state_context.clone();
+    let runtime_hooks_context = RuntimeHooksContext::default();
     let process_sandbox = options.process_sandbox.clone();
     let fs_sandbox = options.fs_sandbox.clone();
     let timeout_exceeded_check = Arc::clone(&timeout_exceeded);
@@ -279,6 +284,12 @@ where
         ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store SharedStateContext: {:?}", e),
+            },
+        })?;
+
+        ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store RuntimeHooksContext: {:?}", e),
             },
         })?;
 
@@ -595,6 +606,58 @@ export default function transform(root) {
                 other => panic!("Expected modified result, got: {:?}", other),
             },
             Err(e) => panic!("Expected success, got error: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_execute_codemod_sync_supports_runtime_module() {
+        let temp_dir = TempDir::new().expect("Failed to create temp directory");
+        let codemod_content = r#"
+import runtime, { isCanceled, progress, setCurrentUnit, warn } from "codemod:runtime";
+
+export default function transform(root) {
+  progress("started");
+  setCurrentUnit("src/example.js", { phase: "scan" });
+  warn("warning");
+  runtime.progress("still running");
+
+  if (isCanceled()) {
+    throw new Error("unexpected cancellation");
+  }
+
+  return root.root().text();
+}
+        "#
+        .trim();
+
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let content = "const x = 1;";
+        let ast = AstGrep::new(content, js_lang());
+
+        let result = execute_codemod_sync(InMemoryExecutionOptions {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast,
+            original_sha256: Some(compute_sha256(content)),
+            resolver: Some(resolver),
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: Some("/app/src/example.js"),
+            target_directory: "/app/",
+            semantic_provider: None,
+            metrics_context: None,
+            llm_request_handler: None,
+            shared_state_context: None,
+            timeout_ms: None,
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: None,
+        });
+
+        match result {
+            Ok(output) => assert!(matches!(output.primary, ExecutionResult::Unmodified)),
+            Err(error) => panic!("Expected runtime module import to succeed, got: {error:?}"),
         }
     }
 
