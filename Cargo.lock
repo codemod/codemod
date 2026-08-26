@@ -715,11 +715,13 @@ dependencies = [
  "butterflow-scheduler",
  "butterflow-state",
  "bytes",
+ "chardetng",
  "chrono",
  "codemod-ai",
  "codemod-llrt-capabilities",
  "codemod-sandbox",
  "dirs",
+ "encoding_rs",
  "flate2",
  "futures-util",
  "ignore",
@@ -966,6 +968,17 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
  "rand_core 0.10.0",
+]
+
+[[package]]
+name = "chardetng"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14b8f0b65b7b08ae3c8187e8d77174de20cb6777864c6b832d8ad365999cf1ea"
+dependencies = [
+ "cfg-if",
+ "encoding_rs",
+ "memchr",
 ]
 
 [[package]]
