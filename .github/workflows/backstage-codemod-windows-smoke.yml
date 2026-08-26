@@ -1,0 +1,151 @@
+name: Backstage codemod Windows smoke test
+
+on:
+  push:
+    branches:
+      - codex/backstage-windows-npx-smoke
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npx-backstage-codemod:
+    name: npx Backstage recipe (Windows 2022)
+    runs-on: windows-2022
+    timeout-minutes: 20
+
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Show tool versions
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+          npx --version
+
+      - name: Create temporary Yarn TypeScript and JavaScript workspace
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP "backstage-codemod-smoke-target"
+          New-Item -ItemType Directory -Force -Path "$target\packages\app\src" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$target\plugins\example\src" | Out-Null
+
+          @'
+          {
+            "name": "backstage-codemod-smoke-target",
+            "version": "1.0.0",
+            "private": true,
+            "packageManager": "yarn@4.4.1",
+            "workspaces": [
+              "packages/*",
+              "plugins/*"
+            ]
+          }
+          '@ | Set-Content -Encoding utf8 "$target\package.json"
+
+          @'
+          {
+            "name": "app",
+            "version": "1.0.0",
+            "private": true,
+            "type": "module"
+          }
+          '@ | Set-Content -Encoding utf8 "$target\packages\app\package.json"
+
+          @'
+          export interface CatalogEntity {
+            metadata: {
+              name: string;
+            };
+          }
+
+          export const entity: CatalogEntity = {
+            metadata: {
+              name: 'example-service',
+            },
+          };
+          '@ | Set-Content -Encoding utf8 "$target\packages\app\src\index.ts"
+
+          @'
+          {
+            "name": "example",
+            "version": "1.0.0",
+            "private": true,
+            "type": "commonjs"
+          }
+          '@ | Set-Content -Encoding utf8 "$target\plugins\example\package.json"
+
+          @'
+          function greet(name) {
+            return `Hello, ${name}!`;
+          }
+
+          module.exports = { greet };
+          '@ | Set-Content -Encoding utf8 "$target\plugins\example\src\index.js"
+
+          Push-Location $target
+          try {
+            corepack yarn --version
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+            corepack yarn install
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+            git init -b main
+            git config user.name "Codemod Windows Smoke Test"
+            git config user.email "codemod-smoke-test@example.com"
+            git add .
+            git commit -m "Create Yarn TypeScript and JavaScript fixture"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Run Backstage migration recipe through npx
+        shell: pwsh
+        env:
+          CI: "true"
+          NO_COLOR: "1"
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP "backstage-codemod-smoke-target"
+          $log = Join-Path $env:RUNNER_TEMP "backstage-codemod-smoke.log"
+
+          Push-Location $target
+          try {
+            npx codemod @backstage/v1-50-0-migration-recipe *>&1 | Tee-Object -FilePath $log
+            $exitCode = $LASTEXITCODE
+          } finally {
+            Pop-Location
+          }
+
+          exit $exitCode
+
+      - name: Show resulting changes
+        if: always()
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP "backstage-codemod-smoke-target"
+          Push-Location $target
+          try {
+            git status --short
+            git diff --stat
+            git diff
+          } finally {
+            Pop-Location
+          }
+
+      - name: Upload smoke-test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backstage-codemod-windows-smoke
+          path: |
+            ${{ runner.temp }}/backstage-codemod-smoke.log
+            ${{ runner.temp }}/backstage-codemod-smoke-target
+            !${{ runner.temp }}/backstage-codemod-smoke-target/.git/**
+          if-no-files-found: warn
