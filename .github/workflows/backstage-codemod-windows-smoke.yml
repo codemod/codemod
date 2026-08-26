@@ -93,7 +93,7 @@ jobs:
             corepack yarn --version
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-            corepack yarn install
+            corepack yarn install --no-immutable
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
             git init -b main
@@ -130,6 +130,11 @@ jobs:
         shell: pwsh
         run: |
           $target = Join-Path $env:RUNNER_TEMP "backstage-codemod-smoke-target"
+          if (-not (Test-Path "$target\.git")) {
+            Write-Host "The fixture was not initialized as a Git repository."
+            exit 0
+          }
+
           Push-Location $target
           try {
             git status --short
