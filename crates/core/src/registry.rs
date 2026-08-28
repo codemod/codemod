@@ -127,6 +127,10 @@ struct PackageInfo {
     access: Option<String>,
 }
 
+const PACKAGE_INFO_CACHE_CAPACITY: usize = 256;
+type PackageInfoCacheCell = Arc<tokio::sync::OnceCell<Arc<PackageInfo>>>;
+type PackageInfoCache = Arc<tokio::sync::Mutex<HashMap<String, PackageInfoCacheCell>>>;
+
 #[derive(Deserialize, Debug)]
 #[allow(dead_code)]
 struct PackageVersion {
@@ -174,6 +178,7 @@ pub struct RegistryClient {
     pub auth_provider: Option<Arc<dyn AuthProvider>>,
     client: reqwest::Client,
     package_locks: Arc<tokio::sync::Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>>,
+    package_info_cache: PackageInfoCache,
 }
 
 pub trait AuthProvider: Send + Sync {
@@ -187,6 +192,7 @@ impl RegistryClient {
             auth_provider,
             client: reqwest::Client::new(),
             package_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            package_info_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -229,7 +235,9 @@ impl RegistryClient {
         );
 
         // Get package information
-        let package_info = self.get_package_info(registry, &package_spec).await?;
+        let package_info = self
+            .get_package_info(registry, &package_spec, !force_download)
+            .await?;
 
         if package_info.is_legacy {
             return Err(RegistryError::LegacyPackage {
@@ -341,6 +349,69 @@ impl RegistryClient {
     }
 
     async fn get_package_info(
+        &self,
+        registry_url: &str,
+        spec: &PackageSpec,
+        use_cache: bool,
+    ) -> Result<Arc<PackageInfo>> {
+        let exact_version = spec
+            .version
+            .as_deref()
+            .filter(|version| semver::Version::parse(version).is_ok());
+
+        if !use_cache || exact_version.is_none() {
+            return self
+                .fetch_package_info(registry_url, spec)
+                .await
+                .map(Arc::new);
+        }
+
+        let cache_key = format!(
+            "{}|{}",
+            registry_url.trim_end_matches('/'),
+            format_package_spec(spec)
+        );
+        let cache_cell = self.package_info_cache_cell(cache_key).await;
+        let package_info = cache_cell
+            .get_or_try_init(|| async {
+                self.fetch_package_info(registry_url, spec)
+                    .await
+                    .map(Arc::new)
+            })
+            .await?;
+
+        Ok(Arc::clone(package_info))
+    }
+
+    async fn package_info_cache_cell(&self, cache_key: String) -> PackageInfoCacheCell {
+        let mut cache = self.package_info_cache.lock().await;
+        if let Some(cell) = cache.get(&cache_key) {
+            return Arc::clone(cell);
+        }
+
+        if cache.len() >= PACKAGE_INFO_CACHE_CAPACITY {
+            let completed_key = cache.iter().find_map(|(key, cell)| {
+                if cell.get().is_some() {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            });
+            if let Some(completed_key) = completed_key {
+                cache.remove(&completed_key);
+            }
+        }
+
+        let cell = Arc::new(tokio::sync::OnceCell::new());
+        // If every bounded entry is currently being fetched, leave this cell
+        // uncached instead of evicting an in-flight request.
+        if cache.len() < PACKAGE_INFO_CACHE_CAPACITY {
+            cache.insert(cache_key, Arc::clone(&cell));
+        }
+        cell
+    }
+
+    async fn fetch_package_info(
         &self,
         registry_url: &str,
         spec: &PackageSpec,
@@ -1007,6 +1078,159 @@ mod tests {
             "/api/v1/registry/packages/@codemod/canonical-package/download/1.0.0",
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn exact_version_package_info_is_singleflight_and_cached() {
+        let source = "@codemod/example@1.0.0";
+        let info_path = "/api/v1/registry/packages/@codemod/example";
+        let download_path = "/api/v1/registry/packages/@codemod/example/download/1.0.0";
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let (registry_url, server) = spawn_registry_server(
+            info_path.to_string(),
+            package_info_response("example", Some("@codemod")),
+            download_path.to_string(),
+            package_archive(),
+            Arc::clone(&requests),
+        )
+        .await;
+        let cache_dir = tempfile::tempdir().expect("cache dir");
+        let client = RegistryClient::new(
+            RegistryConfig {
+                default_registry: registry_url.clone(),
+                cache_dir: cache_dir.path().to_path_buf(),
+            },
+            None,
+        );
+
+        let (first, second) = tokio::join!(
+            client.resolve_package(source, Some(&registry_url), false, None),
+            client.resolve_package(source, Some(&registry_url), false, None),
+        );
+        first.expect("first resolution");
+        second.expect("concurrent resolution");
+        client
+            .resolve_package(source, Some(&registry_url), false, None)
+            .await
+            .expect("cached resolution");
+
+        let package_info_requests = requests
+            .lock()
+            .expect("requests lock")
+            .iter()
+            .filter(|(method, path)| method == "GET" && path == info_path)
+            .count();
+        assert_eq!(package_info_requests, 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn moving_version_package_info_is_not_cached() {
+        let source = "@codemod/example@latest";
+        let info_path = "/api/v1/registry/packages/@codemod/example";
+        let download_path = "/api/v1/registry/packages/@codemod/example/download/1.0.0";
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let (registry_url, server) = spawn_registry_server(
+            info_path.to_string(),
+            package_info_response("example", Some("@codemod")),
+            download_path.to_string(),
+            package_archive(),
+            Arc::clone(&requests),
+        )
+        .await;
+        let cache_dir = tempfile::tempdir().expect("cache dir");
+        let client = RegistryClient::new(
+            RegistryConfig {
+                default_registry: registry_url.clone(),
+                cache_dir: cache_dir.path().to_path_buf(),
+            },
+            None,
+        );
+
+        client
+            .resolve_package(source, Some(&registry_url), false, None)
+            .await
+            .expect("first resolution");
+        client
+            .resolve_package(source, Some(&registry_url), false, None)
+            .await
+            .expect("second resolution");
+
+        let package_info_requests = requests
+            .lock()
+            .expect("requests lock")
+            .iter()
+            .filter(|(method, path)| method == "GET" && path == info_path)
+            .count();
+        assert_eq!(package_info_requests, 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn forced_resolutions_bypass_package_info_cache() {
+        let source = "@codemod/example@1.0.0";
+        let info_path = "/api/v1/registry/packages/@codemod/example";
+        let download_path = "/api/v1/registry/packages/@codemod/example/download/1.0.0";
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let (registry_url, server) = spawn_registry_server(
+            info_path.to_string(),
+            package_info_response("example", Some("@codemod")),
+            download_path.to_string(),
+            package_archive(),
+            Arc::clone(&requests),
+        )
+        .await;
+        let cache_dir = tempfile::tempdir().expect("cache dir");
+        let client = RegistryClient::new(
+            RegistryConfig {
+                default_registry: registry_url.clone(),
+                cache_dir: cache_dir.path().to_path_buf(),
+            },
+            None,
+        );
+
+        client
+            .resolve_package(source, Some(&registry_url), true, None)
+            .await
+            .expect("first forced resolution");
+        client
+            .resolve_package(source, Some(&registry_url), true, None)
+            .await
+            .expect("second forced resolution");
+
+        let package_info_requests = requests
+            .lock()
+            .expect("requests lock")
+            .iter()
+            .filter(|(method, path)| method == "GET" && path == info_path)
+            .count();
+        assert_eq!(package_info_requests, 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn package_info_cache_stays_bounded() {
+        let cache_dir = tempfile::tempdir().expect("cache dir");
+        let client = RegistryClient::new(
+            RegistryConfig {
+                default_registry: "https://example.com".to_string(),
+                cache_dir: cache_dir.path().to_path_buf(),
+            },
+            None,
+        );
+
+        for index in 0..=PACKAGE_INFO_CACHE_CAPACITY {
+            let cell = client
+                .package_info_cache_cell(format!("package-{index}"))
+                .await;
+            cell.set(Arc::new(package_info_with_dist_tags()))
+                .expect("cache cell should be empty");
+        }
+
+        assert_eq!(
+            client.package_info_cache.lock().await.len(),
+            PACKAGE_INFO_CACHE_CAPACITY
+        );
     }
 
     async fn assert_resolve_package_downloads_from_resolved_path(
