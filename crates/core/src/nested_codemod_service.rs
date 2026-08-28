@@ -1,5 +1,7 @@
 use butterflow_models::{Error, Result, Workflow};
+use futures_util::{stream, StreamExt};
 use log::warn;
+use std::collections::HashSet;
 
 use crate::{
     engine::CodemodDependency,
@@ -15,6 +17,8 @@ pub(crate) struct ResolvedNestedCodemod {
 pub(crate) struct NestedCodemodService<'a> {
     registry_client: &'a RegistryClient,
 }
+
+const PACKAGE_RESOLUTION_CONCURRENCY: usize = 4;
 
 impl<'a> NestedCodemodService<'a> {
     pub(crate) fn new(registry_client: &'a RegistryClient) -> Self {
@@ -84,28 +88,29 @@ impl<'a> NestedCodemodService<'a> {
         workflow: &Workflow,
         dependency_chain: &[CodemodDependency],
     ) -> Result<()> {
-        for node in &workflow.nodes {
-            for step in &node.steps {
-                if let butterflow_models::step::StepAction::Codemod(codemod) = &step.action {
-                    if Self::find_cycle_in_chain(&codemod.source, dependency_chain).is_some() {
-                        return Err(Self::format_cycle_error(
-                            "Codemod dependency cycle detected!",
-                            &codemod.source,
-                            dependency_chain,
-                            "This would cause infinite recursion during execution.",
-                        ));
-                    }
+        let sources = Self::unique_codemod_sources(workflow);
+        for source in &sources {
+            if Self::find_cycle_in_chain(source, dependency_chain).is_some() {
+                return Err(Self::format_cycle_error(
+                    "Codemod dependency cycle detected!",
+                    source,
+                    dependency_chain,
+                    "This would cause infinite recursion during execution.",
+                ));
+            }
+        }
 
-                    if let Err(error) = self
-                        .resolve_and_validate(&codemod.source, dependency_chain)
-                        .await
-                    {
-                        warn!(
-                            "Failed to validate codemod dependency {}: {}",
-                            codemod.source, error
-                        );
-                    }
-                }
+        let validations = stream::iter(sources.into_iter().map(|source| async move {
+            let result = self.resolve_and_validate(&source, dependency_chain).await;
+            (source, result)
+        }))
+        .buffer_unordered(PACKAGE_RESOLUTION_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+
+        for (source, result) in validations {
+            if let Err(error) = result {
+                warn!("Failed to validate codemod dependency {source}: {error}");
             }
         }
 
@@ -117,37 +122,62 @@ impl<'a> NestedCodemodService<'a> {
         workflow: &Workflow,
         dependency_chain: &[CodemodDependency],
     ) -> Result<Option<String>> {
+        let sources = Self::unique_codemod_sources(workflow);
+        let mut resolutions = stream::iter(sources.into_iter().enumerate().map(
+            |(index, source)| async move {
+                let result = self.resolve(&source, dependency_chain).await;
+                (index, source, result)
+            },
+        ))
+        .buffer_unordered(PACKAGE_RESOLUTION_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+        // Preserve workflow order so the reported dry-run-only dependency is
+        // deterministic even though package I/O completes out of order.
+        resolutions.sort_by_key(|(index, _, _)| *index);
+
+        for (_, source, result) in resolutions {
+            let resolved = match result {
+                Ok(resolved) => resolved,
+                Err(error) => {
+                    warn!(
+                        "Failed to inspect codemod dependency {source} for dry-run-only status: {error}"
+                    );
+                    continue;
+                }
+            };
+
+            if resolved.package.dry_run_only {
+                return Ok(Some(source));
+            }
+
+            if let Some(source) = Box::pin(
+                self.find_dry_run_only_dependency(&resolved.workflow, &resolved.dependency_chain),
+            )
+            .await?
+            {
+                return Ok(Some(source));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn unique_codemod_sources(workflow: &Workflow) -> Vec<String> {
+        let mut seen = HashSet::new();
+        let mut sources = Vec::new();
+
         for node in &workflow.nodes {
             for step in &node.steps {
                 if let butterflow_models::step::StepAction::Codemod(codemod) = &step.action {
-                    let resolved = match self.resolve(&codemod.source, dependency_chain).await {
-                        Ok(resolved) => resolved,
-                        Err(error) => {
-                            warn!(
-                                "Failed to inspect codemod dependency {} for dry-run-only status: {}",
-                                codemod.source, error
-                            );
-                            continue;
-                        }
-                    };
-
-                    if resolved.package.dry_run_only {
-                        return Ok(Some(codemod.source.clone()));
-                    }
-
-                    if let Some(source) = Box::pin(self.find_dry_run_only_dependency(
-                        &resolved.workflow,
-                        &resolved.dependency_chain,
-                    ))
-                    .await?
-                    {
-                        return Ok(Some(source));
+                    if seen.insert(codemod.source.clone()) {
+                        sources.push(codemod.source.clone());
                     }
                 }
             }
         }
 
-        Ok(None)
+        sources
     }
 
     async fn resolve_and_validate(
@@ -198,7 +228,15 @@ impl<'a> NestedCodemodService<'a> {
 mod tests {
     use super::*;
     use flate2::{write::GzEncoder, Compression};
-    use std::{collections::HashMap, io::Write, sync::Arc};
+    use std::{
+        collections::HashMap,
+        io::Write,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        time::Duration,
+    };
     use tokio::net::TcpListener;
 
     #[test]
@@ -301,15 +339,75 @@ mod tests {
         server.abort();
     }
 
+    #[tokio::test]
+    async fn validates_direct_bundle_dependencies_concurrently() {
+        let packages = HashMap::from([
+            (
+                "child-a".to_string(),
+                MockPackage {
+                    workflow: workflow_yaml_without_children(),
+                    dry_run_only: false,
+                },
+            ),
+            (
+                "child-b".to_string(),
+                MockPackage {
+                    workflow: workflow_yaml_without_children(),
+                    dry_run_only: false,
+                },
+            ),
+        ]);
+        let (registry_url, server, metrics) = spawn_registry_server_with_metrics(packages).await;
+        let cache_dir = tempfile::tempdir().expect("cache dir");
+        let registry_client = RegistryClient::new(
+            crate::registry::RegistryConfig {
+                default_registry: registry_url,
+                cache_dir: cache_dir.path().to_path_buf(),
+            },
+            None,
+        );
+        let workflow: Workflow =
+            serde_yaml::from_str(&workflow_yaml_with_children(&["child-a", "child-b"]))
+                .expect("workflow yaml");
+
+        NestedCodemodService::new(&registry_client)
+            .validate_workflow_dependencies(&workflow, &[])
+            .await
+            .expect("dependency validation should succeed");
+
+        assert!(
+            metrics.maximum_active_package_info.load(Ordering::SeqCst) >= 2,
+            "independent child package lookups should overlap"
+        );
+        server.abort();
+    }
+
     #[derive(Clone)]
     struct MockPackage {
         workflow: String,
         dry_run_only: bool,
     }
 
+    #[derive(Default)]
+    struct RegistryServerMetrics {
+        active_package_info: AtomicUsize,
+        maximum_active_package_info: AtomicUsize,
+    }
+
     async fn spawn_registry_server(
         packages: HashMap<String, MockPackage>,
     ) -> (String, tokio::task::JoinHandle<()>) {
+        let (registry_url, handle, _) = spawn_registry_server_with_metrics(packages).await;
+        (registry_url, handle)
+    }
+
+    async fn spawn_registry_server_with_metrics(
+        packages: HashMap<String, MockPackage>,
+    ) -> (
+        String,
+        tokio::task::JoinHandle<()>,
+        Arc<RegistryServerMetrics>,
+    ) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test registry");
@@ -317,6 +415,8 @@ mod tests {
         let registry_url = format!("http://{addr}");
         let packages = Arc::new(packages);
         let server_url = registry_url.clone();
+        let metrics = Arc::new(RegistryServerMetrics::default());
+        let server_metrics = Arc::clone(&metrics);
 
         let handle = tokio::spawn(async move {
             loop {
@@ -326,6 +426,7 @@ mod tests {
 
                 let packages = Arc::clone(&packages);
                 let server_url = server_url.clone();
+                let metrics = Arc::clone(&server_metrics);
                 tokio::spawn(async move {
                     let mut buffer = [0; 4096];
                     let Ok(size) = stream
@@ -342,6 +443,18 @@ mod tests {
                     let mut parts = request_line.split_whitespace();
                     let method = parts.next().unwrap_or_default();
                     let path = parts.next().unwrap_or_default();
+
+                    let is_package_info = method == "GET"
+                        && path.starts_with("/api/v1/registry/packages/")
+                        && !path.contains("/download/");
+                    if is_package_info {
+                        let active = metrics.active_package_info.fetch_add(1, Ordering::SeqCst) + 1;
+                        metrics
+                            .maximum_active_package_info
+                            .fetch_max(active, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        metrics.active_package_info.fetch_sub(1, Ordering::SeqCst);
+                    }
 
                     let (status, content_type, body) =
                         registry_response(method, path, &server_url, &packages).unwrap_or_else(
@@ -363,7 +476,7 @@ mod tests {
             }
         });
 
-        (registry_url, handle)
+        (registry_url, handle, metrics)
     }
 
     fn registry_response(

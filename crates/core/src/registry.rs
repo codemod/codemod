@@ -7,7 +7,7 @@ use serde_json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tempfile::TempDir;
 use thiserror::Error;
 use walkdir::WalkDir;
@@ -173,6 +173,7 @@ pub struct RegistryClient {
     pub config: RegistryConfig,
     pub auth_provider: Option<Arc<dyn AuthProvider>>,
     client: reqwest::Client,
+    package_locks: Arc<tokio::sync::Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>>,
 }
 
 pub trait AuthProvider: Send + Sync {
@@ -185,7 +186,24 @@ impl RegistryClient {
             config,
             auth_provider,
             client: reqwest::Client::new(),
+            package_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    async fn package_lock(&self, package_cache_dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.package_locks.lock().await;
+        // Completed resolutions leave only weak entries behind. Prune them
+        // opportunistically so a long-lived client does not retain every
+        // package path it has ever seen.
+        locks.retain(|_, lock| lock.strong_count() > 0);
+
+        if let Some(lock) = locks.get(package_cache_dir).and_then(Weak::upgrade) {
+            return lock;
+        }
+
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(package_cache_dir.to_path_buf(), Arc::downgrade(&lock));
+        lock
     }
 
     pub async fn resolve_package(
@@ -230,6 +248,12 @@ impl RegistryClient {
 
         // Get or create cache directory
         let package_cache_dir = self.get_package_cache_dir(&package_spec, &version)?;
+        // Parallel bundle resolution can discover the same transitive package
+        // through multiple branches. Serialize writes to that package's cache
+        // directory so concurrent downloads cannot remove or partially copy
+        // each other's extracted files.
+        let package_lock = self.package_lock(&package_cache_dir).await;
+        let _package_guard = package_lock.lock().await;
 
         // Check if package is cached and valid.
         let is_pro_package = package_info.access.as_deref() == Some("pro");
@@ -815,6 +839,42 @@ mod tests {
     use std::io::{Cursor, Write};
     use std::sync::Mutex;
     use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn package_locks_are_shared_while_live_and_pruned_after_use() {
+        let cache_dir = tempfile::tempdir().expect("cache dir");
+        let client = RegistryClient::new(
+            RegistryConfig {
+                default_registry: "https://example.invalid".to_string(),
+                cache_dir: cache_dir.path().to_path_buf(),
+            },
+            None,
+        );
+
+        let shared_path = cache_dir.path().join("shared");
+        let first = client.package_lock(&shared_path).await;
+        let second = client.package_lock(&shared_path).await;
+        assert!(Arc::ptr_eq(&first, &second));
+        drop(first);
+        drop(second);
+
+        for index in 0..100 {
+            let lock = client
+                .package_lock(&cache_dir.path().join(format!("package-{index}")))
+                .await;
+            drop(lock);
+        }
+
+        let live = client.package_lock(&cache_dir.path().join("live")).await;
+        let locks = client.package_locks.lock().await;
+        assert_eq!(locks.len(), 1);
+        assert!(locks
+            .get(&cache_dir.path().join("live"))
+            .and_then(Weak::upgrade)
+            .is_some());
+        drop(locks);
+        drop(live);
+    }
 
     #[test]
     fn parse_package_spec_accepts_builder_tag() {
