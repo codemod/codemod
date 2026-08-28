@@ -1,7 +1,8 @@
 mod ast_grep;
 pub mod capabilities;
+pub mod llm;
 pub mod metrics;
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 mod plugins;
 pub mod sandbox;
 pub mod utils;
@@ -13,8 +14,12 @@ pub use metrics::{MetricsContext, MetricsData};
 #[cfg(feature = "native")]
 pub use sandbox::engine::codemod_lang::CodemodLang;
 #[cfg(feature = "jssg-in-memory")]
+pub use sandbox::engine::curated_fs::FileFetcher;
+#[cfg(feature = "jssg-in-memory")]
 pub use sandbox::engine::{
-    execute_codemod_sync, CodemodOutput, ExecutionResult, InMemoryExecutionOptions,
+    execute_codemod_sync, CodemodOutput, ExecutionResult, FsSandbox, InMemoryExecutionOptions,
+    ProcessSandbox,
 };
 #[cfg(feature = "jssg-in-memory")]
 pub use sandbox::resolvers::{InMemoryLoader, InMemoryResolver};
+pub use workflow_global::SharedStateContext;

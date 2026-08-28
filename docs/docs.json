@@ -32,13 +32,48 @@
             "pages": ["introduction"]
           },
           {
+            "group": "Community",
+            "pages": [
+              "oss-quickstart",
+              "cli",
+              "package-structure",
+              {
+                "group": "Workflows",
+                "pages": [
+                  "workflows/introduction",
+                  "workflows/reference",
+                  "workflows/sharding",
+                  "workflows/ai-harness-rig"
+                ]
+              },
+              {
+                "group": "JSSG",
+                "pages": [
+                  "jssg/intro",
+                  "jssg/reference",
+                  "jssg/security",
+                  "jssg/semantic-analysis",
+                  "jssg/advanced",
+                  "jssg/utils",
+                  "jssg/testing",
+                  "jssg/metrics"
+                ]
+              },
+              "publishing",
+              "model-context-protocol",
+              "oss"
+            ]
+          },
+          {
             "group": "Enterprise",
             "pages": [
               "platform/quickstart",
-              "platform/campaigns",
+              "platform/codemod-wish",
               "platform/insights",
-              "platform/registry",
+              "platform/campaigns",
+              "platform/automations",
               "platform/codemod-studio",
+              "platform/registry",
               {
                 "icon": "plug",
                 "group": "Integrations",
@@ -49,37 +84,6 @@
                   "platform/saml"
                 ]
               }
-            ]
-          },
-          {
-            "group": "Community",
-            "pages": [
-              "oss-quickstart",
-              "cli",
-              "package-structure",
-              {
-                "group": "Workflows",
-                "pages": [
-                  "workflows/introduction",
-                  "workflows/reference"
-                ]
-              },
-              {
-                "group": "JSSG",
-                "pages": [
-                  "jssg/quickstart",
-                  "jssg/testing",
-                  "jssg/reference",
-                  "jssg/metrics",
-                  "jssg/semantic-analysis",
-                  "jssg/advanced",
-                  "jssg/utils",
-                  "jssg/security"
-                ]
-              },
-              "publishing",
-              "model-context-protocol",
-              "oss"
             ]
           },
           {
@@ -141,6 +145,10 @@
   },
   "redirects": [
     {
+      "source": "/jssg/quickstart",
+      "destination": "/jssg/intro"
+    },
+    {
       "source": "/more-resources/legal/telemetry-compliance",
       "destination": "https://codemod.com/telemetry-compliance"
     },
@@ -161,12 +169,28 @@
       "destination": "/platform/quickstart"
     },
     {
+      "source": "/codemod-wish",
+      "destination": "/platform/codemod-wish"
+    },
+    {
+      "source": "/wish",
+      "destination": "/platform/codemod-wish"
+    },
+    {
       "source": "/campaigns",
+      "destination": "/platform/campaigns"
+    },
+    {
+      "source": "/projects",
       "destination": "/platform/campaigns"
     },
     {
       "source": "/insights",
       "destination": "/platform/insights"
+    },
+    {
+      "source": "/automations",
+      "destination": "/platform/automations"
     },
     {
       "source": "/registry",
@@ -175,6 +199,14 @@
     {
       "source": "/codemod-studio",
       "destination": "/platform/codemod-studio"
+    },
+    {
+      "source": "/studio",
+      "destination": "/platform/codemod-studio"
+    },
+    {
+      "source": "/api-keys",
+      "destination": "/publishing#api-keys"
     },
     {
       "source": "/integrations/github",
@@ -283,6 +315,10 @@
   "integrations": {
     "ga4": {
       "measurementId": "G-RW6RM5EL6S"
+    },
+    "posthog": {
+      "apiKey": "phc_bepzsxPAHp9btvX6zdIBccNAc46YJKZ68B3d0wUORkC",
+      "sessionRecording": true
     }
   }
 }

@@ -1,13 +1,15 @@
 use anyhow::Result;
 use clap::Args;
-use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult, JssgExecutionOptions};
+use codemod_sandbox::metrics::MetricEntry;
+use codemod_sandbox::sandbox::engine::{CodemodOutput, JssgExecutionOptions};
 use codemod_sandbox::MetricsData;
+use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::CodemodLang;
@@ -19,11 +21,39 @@ use codemod_sandbox::{
     },
     utils::project_discovery::find_tsconfig,
 };
-use testing_utils::{TestOptions, TestRunner, TestSource, TransformOutput, TransformationResult};
+use testing_utils::{
+    map_execution_result, ExecutionRequest, ReporterType, TestOptions, TestRunner, TestSource,
+    TransformationResult,
+};
 
+use crate::commands::TelemetrySenderExt;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+use crate::{TelemetrySenderMutex, CLI_VERSION};
 
 use super::config::{ResolvedTestConfig, TestConfig};
+
+#[derive(Clone)]
+struct PendingMetricsSnapshot {
+    metrics_context: MetricsContext,
+    output_path: PathBuf,
+    snapshot_path: Option<PathBuf>,
+}
+
+struct SharedMetricsState {
+    metrics_context: MetricsContext,
+    remaining_entrypoints: usize,
+    skip_snapshot: bool,
+}
+
+impl SharedMetricsState {
+    fn new(entrypoint_count: usize) -> Self {
+        Self {
+            metrics_context: MetricsContext::new(),
+            remaining_entrypoints: entrypoint_count.max(1),
+            skip_snapshot: false,
+        }
+    }
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct Command {
@@ -91,9 +121,10 @@ pub struct Command {
     pub strictness: String,
 
     /// Enable workspace-wide semantic analysis for cross-file references.
-    /// Uses the provided path as workspace root.
+    /// For directory snapshot tests, the workspace root is automatically set
+    /// to the test fixture's temporary directory.
     #[arg(long)]
-    pub semantic_workspace: Option<PathBuf>,
+    pub semantic_workspace: bool,
 
     /// Allow fs access
     #[arg(long)]
@@ -108,7 +139,47 @@ pub struct Command {
     pub allow_child_process: bool,
 }
 
-pub async fn handler(args: &Command) -> Result<()> {
+async fn send_failure_event(
+    telemetry: &TelemetrySenderMutex,
+    codemod_file: &str,
+    error_category: &str,
+    error_message: &str,
+) {
+    telemetry
+        .send_event_logged(
+            BaseEvent {
+                kind: "failedToExecuteCommand".to_string(),
+                properties: HashMap::from([
+                    ("codemodName".to_string(), codemod_file.to_string()),
+                    ("cliVersion".to_string(), CLI_VERSION.to_string()),
+                    ("commandName".to_string(), "codemod.jssgTest".to_string()),
+                    ("os".to_string(), std::env::consts::OS.to_string()),
+                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                    ("errorCategory".to_string(), error_category.to_string()),
+                    ("errorMessage".to_string(), error_message.to_string()),
+                ]),
+            },
+            None,
+        )
+        .await;
+}
+
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    let result = handler_impl(args).await;
+    if let Err(error) = &result {
+        let (error_category, error_message) = classify_and_sanitize_error(&error.to_string());
+        send_failure_event(
+            &telemetry,
+            &args.codemod_file,
+            error_category,
+            &error_message,
+        )
+        .await;
+    }
+    result
+}
+
+async fn handler_impl(args: &Command) -> Result<()> {
     let codemod_path = Path::new(&args.codemod_file);
 
     if !codemod_path.exists() {
@@ -147,7 +218,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         max_threads: global_config.max_threads,
         fail_fast: global_config.fail_fast,
         watch: global_config.watch,
-        reporter: global_config.reporter,
+        reporter: global_config.reporter.clone(),
         timeout: std::time::Duration::from_secs(global_config.timeout),
         ignore_whitespace: global_config.ignore_whitespace,
         context_lines: global_config.context_lines,
@@ -155,6 +226,11 @@ pub async fn handler(args: &Command) -> Result<()> {
         strictness,
         language: global_config.language.clone(),
         expected_extension: global_config.expected_extension.clone(),
+    };
+    let runtime_event_output = if matches!(global_config.reporter, ReporterType::Json) {
+        super::RuntimeEventOutput::stderr()
+    } else {
+        super::RuntimeEventOutput::stdout()
     };
 
     let script_base_dir = codemod_path
@@ -180,35 +256,52 @@ pub async fn handler(args: &Command) -> Result<()> {
     let base_config_clone = base_config.clone();
     let args_clone = args.clone();
     let current_dir_clone = current_dir.clone();
+    let shared_metrics = Arc::new(Mutex::new(HashMap::<PathBuf, SharedMetricsState>::new()));
     let semantic_provider: Option<Arc<dyn SemanticProvider>> =
-        if let Some(workspace_root) = &args.semantic_workspace {
-            Some(Arc::new(LazySemanticProvider::workspace_scope(
-                workspace_root.clone(),
-            )))
-        } else {
-            Some(Arc::new(LazySemanticProvider::file_scope()))
-        };
+        Some(Arc::new(LazySemanticProvider::file_scope()));
     let update_snapshots = args.update_snapshots;
     let execution_fn = Box::new(
-        move |input_code: &str,
-              input_path: &Path,
-              capabilities: Option<HashSet<LlrtSupportedModules>>| {
+        move |request: ExecutionRequest, capabilities: Option<HashSet<LlrtSupportedModules>>| {
             let codemod_path = codemod_path_clone.clone();
             let resolver = resolver.clone();
-            let input_code = input_code.to_string();
-            let input_path = input_path.to_path_buf();
+            let input_code = request.input_code;
+            let input_path = request.input_path;
+            let logical_input_path = request.logical_input_path;
+            let workspace_root = request.workspace_root;
             let base_config = base_config_clone.clone();
             let args = args_clone.clone();
             let current_dir = current_dir_clone.clone();
             let semantic_provider = semantic_provider.clone();
+            let shared_metrics = shared_metrics.clone();
+            let runtime_event_output = runtime_event_output.clone();
 
             Box::pin(async move {
-                let test_case_dir = input_path.parent().unwrap_or(input_path.as_path());
+                let logical_input_path = logical_input_path.unwrap_or_else(|| input_path.clone());
+                let test_case_dir = logical_input_path
+                    .parent()
+                    .unwrap_or(logical_input_path.as_path());
+                let target_directory = workspace_root
+                    .clone()
+                    .unwrap_or_else(|| test_case_dir.to_path_buf());
+                let metrics_output_path = input_path
+                    .parent()
+                    .unwrap_or(input_path.as_path())
+                    .join("metrics.json");
                 let per_test_config =
-                    TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))?;
+                    match TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))
+                    {
+                        Ok(config) => config,
+                        Err(error) => return Err(error),
+                    };
 
-                let test_config =
-                    ResolvedTestConfig::resolve(&args, &base_config, Some(&per_test_config))?;
+                let test_config = match ResolvedTestConfig::resolve(
+                    &args,
+                    &base_config,
+                    Some(&per_test_config),
+                ) {
+                    Ok(config) => config,
+                    Err(error) => return Err(error),
+                };
 
                 let language_str = test_config
                     .language
@@ -218,7 +311,44 @@ pub async fn handler(args: &Command) -> Result<()> {
                     .parse()
                     .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
-                let metrics_context = MetricsContext::new();
+                let metrics_context = {
+                    let mut shared_metrics = shared_metrics
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("shared metrics lock poisoned"))?;
+                    shared_metrics
+                        .entry(metrics_output_path.clone())
+                        .or_insert_with(|| SharedMetricsState::new(request.entrypoint_count))
+                        .metrics_context
+                        .clone()
+                };
+
+                // For directory snapshot tests with --semantic-workspace,
+                // create a workspace-scoped provider using the temp dir
+                // and pre-index all files (matching jssg run behavior).
+                let semantic_provider = if test_config.semantic_workspace {
+                    if let Some(ref ws_root) = workspace_root {
+                        let provider: Arc<dyn SemanticProvider> =
+                            Arc::new(LazySemanticProvider::workspace_scope(ws_root.clone()));
+                        for entry in walkdir::WalkDir::new(ws_root)
+                            .into_iter()
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.file_type().is_file())
+                        {
+                            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                                let _ = provider.notify_file_processed(entry.path(), &content);
+                            }
+                        }
+                        Some(provider)
+                    } else {
+                        semantic_provider
+                    }
+                } else {
+                    semantic_provider
+                };
+                let runtime_event_buffer = super::RuntimeEventBuffer::new();
+                let runtime_event_callback = runtime_event_buffer.callback_for_title(
+                    super::display_path_title(&logical_input_path, Some(&current_dir)),
+                );
 
                 let options = JssgExecutionOptions {
                     script_path: &codemod_path,
@@ -232,60 +362,36 @@ pub async fn handler(args: &Command) -> Result<()> {
                     capabilities,
                     semantic_provider,
                     metrics_context: Some(metrics_context.clone()),
+                    llm_request_handler: None,
+                    shared_state_context: None,
+                    runtime_event_callback: Some(runtime_event_callback),
+                    cancellation_flag: None,
                     test_mode: true,
-                    target_directory: None,
+                    dry_run: false,
+                    target_directory: &target_directory,
                 };
-                let CodemodOutput { primary, .. } = execute_codemod_with_quickjs(options).await?;
+                let execution_result = execute_codemod_with_quickjs(options)
+                    .await
+                    .map(|CodemodOutput { primary, .. }| map_execution_result(primary, input_code))
+                    .map_err(anyhow::Error::from);
 
-                // Handle metrics snapshot
-                let metrics_data = metrics_context.get_all();
-                let metrics_path = test_case_dir.join("metrics.json");
+                let pending_snapshot = finish_metrics_collection(
+                    shared_metrics.as_ref(),
+                    &metrics_output_path,
+                    Some(test_case_dir.join("metrics.json")),
+                    execution_result.is_err(),
+                );
 
-                if !metrics_data.is_empty() {
-                    let actual_json = metrics_to_canonical_json(&metrics_data)?;
+                runtime_event_output.flush(&runtime_event_buffer);
 
-                    if metrics_path.exists() {
-                        let expected_json = std::fs::read_to_string(&metrics_path)?;
-                        if actual_json != expected_json {
-                            if update_snapshots {
-                                std::fs::write(&metrics_path, &actual_json)?;
-                            } else {
-                                anyhow::bail!(
-                                    "Metrics mismatch:\n--- expected\n+++ actual\n{}",
-                                    generate_metrics_diff(&expected_json, &actual_json)
-                                );
-                            }
-                        }
-                    } else {
-                        std::fs::write(&metrics_path, &actual_json)?;
+                if let Some(snapshot) = pending_snapshot? {
+                    if workspace_root.is_some() {
+                        write_metrics_output(&snapshot)?;
                     }
-                } else if metrics_path.exists() {
-                    // Codemod produced no metrics but a snapshot exists — stale snapshot
-                    if update_snapshots {
-                        std::fs::remove_file(&metrics_path)?;
-                    } else {
-                        anyhow::bail!(
-                            "Metrics snapshot exists at {} but codemod produced no metrics. \
-                             Run with --update-snapshots to remove the stale snapshot.",
-                            metrics_path.display()
-                        );
-                    }
+                    handle_metrics_snapshot(&snapshot, update_snapshots)?;
                 }
 
-                match primary {
-                    ExecutionResult::Modified(modified) => {
-                        Ok(TransformationResult::Success(TransformOutput {
-                            content: modified.content,
-                            rename_to: modified.rename_to,
-                        }))
-                    }
-                    ExecutionResult::Unmodified | ExecutionResult::Skipped => {
-                        Ok(TransformationResult::Success(TransformOutput {
-                            content: input_code,
-                            rename_to: None,
-                        }))
-                    }
-                }
+                execution_result
             })
                 as Pin<
                     Box<
@@ -313,15 +419,172 @@ pub async fn handler(args: &Command) -> Result<()> {
     Ok(())
 }
 
+fn finish_metrics_collection(
+    shared_metrics: &Mutex<HashMap<PathBuf, SharedMetricsState>>,
+    metrics_output_path: &Path,
+    snapshot_path: Option<PathBuf>,
+    should_skip_snapshot: bool,
+) -> Result<Option<PendingMetricsSnapshot>> {
+    let mut shared_metrics = shared_metrics
+        .lock()
+        .map_err(|_| anyhow::anyhow!("shared metrics lock poisoned"))?;
+
+    let Some(state) = shared_metrics.get_mut(metrics_output_path) else {
+        return Ok(None);
+    };
+
+    state.skip_snapshot |= should_skip_snapshot;
+    state.remaining_entrypoints = state.remaining_entrypoints.saturating_sub(1);
+
+    if state.remaining_entrypoints > 0 {
+        return Ok(None);
+    }
+
+    let state = shared_metrics
+        .remove(metrics_output_path)
+        .expect("metrics state should exist when finalizing");
+
+    if state.skip_snapshot {
+        return Ok(None);
+    }
+
+    Ok(Some(PendingMetricsSnapshot {
+        metrics_context: state.metrics_context,
+        output_path: metrics_output_path.to_path_buf(),
+        snapshot_path,
+    }))
+}
+
+fn handle_metrics_snapshot(
+    snapshot: &PendingMetricsSnapshot,
+    update_snapshots: bool,
+) -> Result<()> {
+    let metrics_data = snapshot.metrics_context.get_all();
+    let metrics_path = snapshot
+        .snapshot_path
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("snapshot path missing for single-file metrics"))?;
+
+    if !metrics_data.is_empty() {
+        let actual_json = metrics_to_canonical_json(&metrics_data)?;
+
+        if metrics_path.exists() {
+            let expected_json = std::fs::read_to_string(metrics_path)?;
+            let normalized_expected_json = normalize_line_endings(&expected_json);
+            let normalized_actual_json = normalize_line_endings(&actual_json);
+
+            if normalized_actual_json != normalized_expected_json {
+                if update_snapshots {
+                    std::fs::write(metrics_path, &actual_json)?;
+                } else {
+                    anyhow::bail!(
+                        "Metrics mismatch:\n--- expected\n+++ actual\n{}",
+                        generate_metrics_diff(&normalized_expected_json, &normalized_actual_json)
+                    );
+                }
+            }
+        } else {
+            std::fs::write(metrics_path, &actual_json)?;
+        }
+    } else if metrics_path.exists() {
+        if update_snapshots {
+            std::fs::remove_file(metrics_path)?;
+        } else {
+            anyhow::bail!(
+                "Metrics snapshot exists at {} but codemod produced no metrics. \
+                 Run with --update-snapshots to remove the stale snapshot.",
+                metrics_path.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn write_metrics_output(snapshot: &PendingMetricsSnapshot) -> Result<()> {
+    let metrics_data = snapshot.metrics_context.get_all();
+
+    if !metrics_data.is_empty() {
+        let actual_json = metrics_to_canonical_json(&metrics_data)?;
+        std::fs::write(&snapshot.output_path, actual_json)?;
+    } else if snapshot.output_path.exists() {
+        std::fs::remove_file(&snapshot.output_path)?;
+    }
+
+    Ok(())
+}
+
+fn normalize_line_endings(content: &str) -> String {
+    content.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn classify_and_sanitize_error(error_message: &str) -> (&'static str, String) {
+    if error_message.contains("Metrics mismatch:") {
+        return ("metrics_mismatch", "Metrics snapshot mismatch".to_string());
+    }
+
+    if error_message.contains("Metrics snapshot exists at") {
+        return (
+            "stale_metrics_snapshot",
+            "Stale metrics snapshot".to_string(),
+        );
+    }
+
+    if error_message.contains("Codemod file '") && error_message.contains(" does not exist") {
+        return (
+            "codemod_not_found",
+            "Codemod file does not exist".to_string(),
+        );
+    }
+
+    let first_line = error_message
+        .split('\n')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .replace('\r', "");
+    let sanitized = truncate_with_ellipsis(&first_line, 200);
+    ("command_error", sanitized)
+}
+
+fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
+    let char_count = input.chars().count();
+    if char_count <= max_chars {
+        return input.to_string();
+    }
+
+    let truncated: String = input.chars().take(max_chars).collect();
+    format!("{truncated}...")
+}
+
 /// Serialize MetricsData to a canonical JSON string using RFC 8785 (JCS).
 /// Deterministic regardless of HashMap iteration order.
 fn metrics_to_canonical_json(metrics: &MetricsData) -> Result<String> {
-    let json_value = serde_json::to_value(metrics)?;
+    let normalized_metrics = normalize_metrics_data(metrics);
+    let json_value = serde_json::to_value(normalized_metrics)?;
     let canonical = String::from_utf8(serde_json_canonicalizer::to_vec(&json_value)?)?;
     // Re-parse and pretty-print the canonicalized JSON
     let reparsed: serde_json::Value = serde_json::from_str(&canonical)?;
     let pretty = serde_json::to_string_pretty(&reparsed)?;
     Ok(pretty)
+}
+
+fn normalize_metrics_data(metrics: &MetricsData) -> MetricsData {
+    let mut normalized = metrics.clone();
+    for entries in normalized.values_mut() {
+        entries.sort_by_key(metric_entry_sort_key);
+    }
+    normalized
+}
+
+fn metric_entry_sort_key(entry: &MetricEntry) -> (Vec<(String, String)>, u64) {
+    let mut cardinality_pairs: Vec<(String, String)> = entry
+        .cardinality
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    cardinality_pairs.sort();
+    (cardinality_pairs, entry.count)
 }
 
 fn generate_metrics_diff(expected: &str, actual: &str) -> String {
@@ -345,4 +608,201 @@ fn generate_metrics_diff(expected: &str, actual: &str) -> String {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        classify_and_sanitize_error, finish_metrics_collection, generate_metrics_diff,
+        handle_metrics_snapshot, metric_entry_sort_key, metrics_to_canonical_json,
+        normalize_line_endings, write_metrics_output, PendingMetricsSnapshot, SharedMetricsState,
+    };
+    use codemod_sandbox::metrics::Cardinality;
+    use codemod_sandbox::metrics::MetricEntry;
+    use codemod_sandbox::{MetricsContext, MetricsData};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    #[test]
+    fn normalize_line_endings_converts_crlf_to_lf() {
+        let input = "{\r\n  \"moment-to-temporal\": []\r\n}\r\n";
+        let expected = "{\n  \"moment-to-temporal\": []\n}\n";
+        assert_eq!(normalize_line_endings(input), expected);
+    }
+
+    #[test]
+    fn metrics_diff_ignores_line_ending_only_changes() {
+        let expected = "{\r\n  \"count\": 1\r\n}\r\n";
+        let actual = "{\n  \"count\": 1\n}\n";
+        let diff = generate_metrics_diff(
+            &normalize_line_endings(expected),
+            &normalize_line_endings(actual),
+        );
+        assert!(
+            diff.is_empty(),
+            "expected no diff for line-ending-only changes, got: {diff}"
+        );
+    }
+
+    #[test]
+    fn metrics_diff_reports_actual_content_changes() {
+        let expected = "{\r\n  \"count\": 1\r\n}\r\n";
+        let actual = "{\n  \"count\": 2\n}\n";
+        let diff = generate_metrics_diff(
+            &normalize_line_endings(expected),
+            &normalize_line_endings(actual),
+        );
+        assert!(
+            diff.contains("-  \"count\": 1"),
+            "expected removed line in diff, got: {diff}"
+        );
+        assert!(
+            diff.contains("+  \"count\": 2"),
+            "expected inserted line in diff, got: {diff}"
+        );
+    }
+
+    #[test]
+    fn metric_entry_sort_key_sorts_cardinality_pairs() {
+        let entry = MetricEntry {
+            cardinality: HashMap::from([
+                ("to".to_string(), "b".to_string()),
+                ("from".to_string(), "a".to_string()),
+            ]),
+            count: 2,
+        };
+
+        let key = metric_entry_sort_key(&entry);
+        assert_eq!(
+            key,
+            (
+                vec![
+                    ("from".to_string(), "a".to_string()),
+                    ("to".to_string(), "b".to_string())
+                ],
+                2
+            )
+        );
+    }
+
+    #[test]
+    fn metrics_canonical_json_ignores_entry_order() {
+        let entry_a = MetricEntry {
+            cardinality: HashMap::from([
+                ("from".to_string(), "Cold App Start".to_string()),
+                ("to".to_string(), "Cold Start".to_string()),
+            ]),
+            count: 1,
+        };
+        let entry_b = MetricEntry {
+            cardinality: HashMap::from([
+                ("from".to_string(), "Warm App Start".to_string()),
+                ("to".to_string(), "Warm Start".to_string()),
+            ]),
+            count: 1,
+        };
+
+        let metrics_a: MetricsData = HashMap::from([(
+            "rename-metric".to_string(),
+            vec![entry_a.clone(), entry_b.clone()],
+        )]);
+        let metrics_b: MetricsData =
+            HashMap::from([("rename-metric".to_string(), vec![entry_b, entry_a])]);
+
+        let canonical_a = metrics_to_canonical_json(&metrics_a).unwrap();
+        let canonical_b = metrics_to_canonical_json(&metrics_b).unwrap();
+
+        assert_eq!(canonical_a, canonical_b);
+    }
+
+    #[test]
+    fn error_classification_redacts_metrics_diff_payload() {
+        let input = "Metrics mismatch:\n--- expected\n+++ actual\n-{\"code\":\"secret\"}";
+        let (category, message) = classify_and_sanitize_error(input);
+        assert_eq!(category, "metrics_mismatch");
+        assert_eq!(message, "Metrics snapshot mismatch");
+    }
+
+    #[test]
+    fn error_classification_truncates_generic_errors() {
+        let long_message = "x".repeat(260);
+        let (category, message) = classify_and_sanitize_error(&long_message);
+        assert_eq!(category, "command_error");
+        assert_eq!(message.len(), 203);
+        assert!(message.ends_with("..."));
+    }
+
+    #[test]
+    fn directory_metrics_snapshot_finalizes_once_after_last_entrypoint() {
+        let fixture_root = PathBuf::from("/tmp/fixture");
+        let shared_metrics = Mutex::new(HashMap::from([(
+            fixture_root.clone(),
+            SharedMetricsState::new(2),
+        )]));
+
+        let metrics_context = {
+            let shared_metrics = shared_metrics.lock().unwrap();
+            shared_metrics
+                .get(&fixture_root)
+                .unwrap()
+                .metrics_context
+                .clone()
+        };
+        metrics_context.increment("rename-metric", Cardinality::new(Vec::new()), 1);
+
+        let first = finish_metrics_collection(&shared_metrics, &fixture_root, None, false).unwrap();
+        assert!(first.is_none());
+
+        let second =
+            finish_metrics_collection(&shared_metrics, &fixture_root, None, false).unwrap();
+        let snapshot = second.expect("expected final snapshot on last entrypoint");
+        assert_eq!(snapshot.output_path, fixture_root);
+        assert!(snapshot.snapshot_path.is_none());
+        assert_eq!(snapshot.metrics_context.get("rename-metric")[0].count, 1);
+        assert!(shared_metrics.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn handle_metrics_snapshot_writes_metrics_json() {
+        let tempdir = tempdir().unwrap();
+        let metrics_path = tempdir.path().join("metrics.json");
+        let metrics_context = MetricsContext::new();
+        metrics_context.increment("rename-metric", Cardinality::new(Vec::new()), 2);
+
+        handle_metrics_snapshot(
+            &PendingMetricsSnapshot {
+                metrics_context,
+                output_path: metrics_path.clone(),
+                snapshot_path: Some(metrics_path.clone()),
+            },
+            false,
+        )
+        .unwrap();
+
+        let written = std::fs::read_to_string(metrics_path).unwrap();
+        assert!(written.contains("\"rename-metric\""));
+        assert!(written.contains("\"count\": 2"));
+    }
+
+    #[test]
+    fn write_metrics_output_writes_aggregated_workspace_file() {
+        let tempdir = tempdir().unwrap();
+        let metrics_path = tempdir.path().join("src").join("metrics.json");
+        std::fs::create_dir_all(metrics_path.parent().unwrap()).unwrap();
+        let metrics_context = MetricsContext::new();
+        metrics_context.increment("rename-metric", Cardinality::new(Vec::new()), 2);
+
+        write_metrics_output(&PendingMetricsSnapshot {
+            metrics_context,
+            output_path: metrics_path.clone(),
+            snapshot_path: None,
+        })
+        .unwrap();
+
+        let written = std::fs::read_to_string(metrics_path).unwrap();
+        assert!(written.contains("\"rename-metric\""));
+        assert!(written.contains("\"count\": 2"));
+    }
 }

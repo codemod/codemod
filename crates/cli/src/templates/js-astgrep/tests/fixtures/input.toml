@@ -1,0 +1,6 @@
+[project]
+name = "example"
+version = "0.1.0"
+
+[tool.codemod]
+package-manager = "npm@10.0.0"

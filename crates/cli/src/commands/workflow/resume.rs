@@ -1,13 +1,16 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::commands::run_telemetry::{nested_codemod_run_observer, persisted_workflow_root_name};
 use crate::engine::create_engine;
+use crate::utils::path_safety::normalize_target_path;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
 use crate::workflow_runner::resolve_workflow_source;
+use crate::TelemetrySenderMutex;
 use anyhow::{Context, Result};
 use butterflow_models::{Task, TaskStatus, WorkflowStatus};
 use clap::Args;
-use log::error;
+use log::{error, info};
 use tabled::settings::{object::Columns, Alignment, Modify, Style};
 use tabled::Table;
 use uuid::Uuid;
@@ -59,14 +62,27 @@ pub struct Command {
     /// No interactive mode
     #[arg(long)]
     no_interactive: bool,
+
+    /// Execute install-skill steps when running in non-interactive mode
+    #[arg(long)]
+    install_skill: bool,
+
+    /// Output format: "text" (default) or "jsonl" for structured logging
+    #[arg(long, default_value = "text")]
+    format: String,
+
+    /// Exit once the triggered tasks reach a terminal state.
+    #[arg(long, hide = true)]
+    exit_when_triggered_tasks_finish: bool,
 }
 
 /// Resume a workflow
-pub async fn handler(args: &Command) -> Result<()> {
-    let target_path = args
-        .target_path
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    let target_path = normalize_target_path(
+        args.target_path
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap()),
+    )?;
 
     let (workflow_file_path, _) = resolve_workflow_source(&args.workflow)?;
 
@@ -85,8 +101,23 @@ pub async fn handler(args: &Command) -> Result<()> {
         "Resuming workflow {} with capabilities: {:?}",
         args.id, capabilities
     );
+    info!(
+        "workflow resume invoked: workflow={}, id={}, target={}, trigger_all={}, task_count={}, dry_run={}, no_interactive={}",
+        args.workflow,
+        args.id,
+        target_path.display(),
+        args.trigger_all,
+        args.task.len(),
+        args.dry_run,
+        args.no_interactive
+    );
 
-    let (engine, _) = create_engine(
+    let output_format: butterflow_core::structured_log::OutputFormat = args
+        .format
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
+
+    let (mut engine, _) = create_engine(
         workflow_file_path,
         target_path,
         args.dry_run,
@@ -96,10 +127,43 @@ pub async fn handler(args: &Command) -> Result<()> {
         None,
         Some(capabilities),
         args.no_interactive,
-        false,
+        None,
+        args.no_interactive && !args.install_skill,
+        output_format,
+        None,
+        None,
+        Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
     )?;
+    let workflow_run = engine
+        .get_workflow_run(args.id)
+        .await
+        .context("Failed to load persisted workflow run")?;
+    let root_codemod_name = persisted_workflow_root_name(&workflow_run);
+    engine
+        .workflow_run_config_mut()
+        .execution
+        .nested_codemod_run_observer = Some(nested_codemod_run_observer(
+        telemetry,
+        args.id.to_string(),
+        root_codemod_name,
+        args.dry_run,
+    ));
+
+    let tracked_task_ids = if args.trigger_all {
+        engine
+            .get_tasks(args.id)
+            .await
+            .context("Failed to load tasks before trigger-all")?
+            .into_iter()
+            .filter(|task| !task.is_master && task.status == TaskStatus::AwaitingTrigger)
+            .map(|task| task.id)
+            .collect::<Vec<_>>()
+    } else {
+        args.task.clone()
+    };
 
     if args.trigger_all {
+        info!("Triggering all awaiting tasks for workflow {}", args.id);
         // Trigger all awaiting tasks
         let triggered = engine
             .trigger_all(args.id)
@@ -112,6 +176,10 @@ pub async fn handler(args: &Command) -> Result<()> {
 
         println!("Triggered all awaiting tasks");
     } else if !args.task.is_empty() {
+        info!(
+            "Triggering specific tasks for workflow {}: {:?}",
+            args.id, args.task
+        );
         // Trigger specific tasks
         engine
             .resume_workflow(args.id, args.task.to_vec())
@@ -124,9 +192,12 @@ pub async fn handler(args: &Command) -> Result<()> {
         return Ok(());
     }
 
-    // Wait for workflow to complete or pause again
+    if args.exit_when_triggered_tasks_finish {
+        wait_for_triggered_tasks(&engine, args.id, &tracked_task_ids).await?;
+        return Ok(());
+    }
+
     loop {
-        // Get workflow status
         let status = engine
             .get_workflow_status(args.id)
             .await
@@ -179,6 +250,50 @@ pub async fn handler(args: &Command) -> Result<()> {
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             }
         }
+    }
+
+    Ok(())
+}
+
+fn is_terminal_task_status(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::Completed | TaskStatus::Failed | TaskStatus::WontDo
+    )
+}
+
+async fn wait_for_triggered_tasks(
+    engine: &butterflow_core::engine::Engine,
+    workflow_run_id: Uuid,
+    tracked_task_ids: &[Uuid],
+) -> Result<()> {
+    if tracked_task_ids.is_empty() {
+        return Ok(());
+    }
+
+    loop {
+        let tasks = engine
+            .get_tasks(workflow_run_id)
+            .await
+            .context("Failed to get tasks while waiting for triggered tasks")?;
+        let tracked_tasks = tasks
+            .iter()
+            .filter(|task| tracked_task_ids.contains(&task.id))
+            .collect::<Vec<_>>();
+
+        if tracked_tasks.len() == tracked_task_ids.len()
+            && tracked_tasks
+                .iter()
+                .all(|task| is_terminal_task_status(task.status))
+        {
+            info!(
+                "All triggered tasks reached terminal state for workflow {}: {:?}",
+                workflow_run_id, tracked_task_ids
+            );
+            break;
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
     Ok(())

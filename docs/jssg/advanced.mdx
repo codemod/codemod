@@ -9,14 +9,14 @@ This guide covers advanced JSSG features that enable you to build more sophistic
 Every JSSG codemod must export a default function with this exact signature:
 
 ```ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = async (root, options) => {
+const codemod: Codemod<TSX> = async (root, options) => {
   // Your transformation logic
 };
 
-export default transform;
+export default codemod;
 ```
 
 ### Transform Options
@@ -27,24 +27,30 @@ The `options` object provides execution context:
 - `options.params?: Record<string, string>` — user parameters defined in the workflow. Drive behavior switches, defaults, and environment‑specific choices.
 - `options.matches?: any[]` — pre‑filtered nodes from the exported selector (if any). Use to skip broad queries inside the transform.
 - `options.matrixValues?: Record<string, unknown>` — values from matrix strategy execution. Use for sharding, multi‑variant runs, or team‑scoped processing.
+- `options.targetDir: string` — absolute target directory for the current run. Use it when you need the root path for resolving sibling files or reporting paths.
 
 ```ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = async (root, options) => {
+const codemod: Codemod<TSX> = async (root, options) => {
   const lang = options.language;
   const params = options.params;
   const preFilteredMatches = options.matches; // may be undefined if no selector
   const matrix = options.matrixValues; // undefined without matrix strategy
+  const targetDir = options.targetDir;
   return null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 <Info>
 `options.matches` contains nodes that matched your selector (when `getSelector` is exported). Use them to short‑circuit or to avoid recomputing broad queries.
+</Info>
+
+<Info>
+When you only need a stable repo-relative path for the current file, prefer `root.relativeFilename()` over manually stripping `options.targetDir`.
 </Info>
 
 ## Dynamic Parsing
@@ -54,10 +60,11 @@ Dynamic parsing allows you to parse and analyze different types of code within a
 Use dynamic parsing when your codemod needs to analyze multiple languages or when you're working with template literals containing different syntax.
 
 ```ts
-import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import { parseAsync } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   // Find all styled-component template literals
   const styledComponents = root.root().findAll({
     rule: { pattern: "styled.$COMPONENT`$ARG`" }
@@ -101,7 +108,7 @@ const transform: Transform<TSX> = async (root) => {
   return null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 ### Return Semantics
@@ -110,6 +117,33 @@ export default transform;
 - **`null`**: No changes needed  
 - **`undefined`**: Same as null
 - **Other types**: Runtime error
+
+## Parser-Backed Edits
+
+Use AST-selected edits whenever the target file type has a JSSG parser. That includes source languages plus structured config formats such as JSON, YAML, XML, and TOML.
+
+```ts
+import type { Codemod, Edit } from "codemod:ast-grep";
+import type Toml from "codemod:ast-grep/langs/toml";
+
+const codemod: Codemod<Toml> = async (root) => {
+  const rootNode = root.root();
+  const edits = rootNode
+    .findAll({
+      rule: {
+        kind: "pair",
+        has: { kind: "bare_key", regex: "^package-manager$" },
+      },
+    })
+    .map((node) => node.replace('package-manager = "pnpm@9.0.0"'));
+
+  return edits.length > 0 ? rootNode.commitEdits(edits as Edit[]) : null;
+};
+
+export default codemod;
+```
+
+Avoid using JSSG as a file walker while doing the actual transform with `fs`, `root.source().replace(...)`, or full-source `.split(...)`/`.join(...)` logic. Raw text rewriting is a fallback for unsupported plain-text formats or rare cases where no parser or structured library exists.
 
 ## Parameters and Configuration
 
@@ -123,10 +157,10 @@ You can access parameters via `options.params`.
 
 <CodeGroup>
 ```ts codemod.ts
-import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = async (root, options) => {
+const codemod: Codemod<TSX> = async (root, options) => {
   // Access user-configured parameters
   const library = options.params?.library || "next-intl";
   const shardingMethod = options.params?.shardingMethod || "directory";
@@ -138,7 +172,7 @@ const transform: Transform<TSX> = async (root, options) => {
   }
 };
 
-export default transform;
+export default codemod;
 ```
 
 ```yaml workflow.yaml
@@ -177,7 +211,7 @@ params:
 
 <Tip>
 How to pass params when executing your workflow:
-<a href="/cli#param-param-key-value">Passing parameters (--param)</a>.
+<a href="/cli#codemod-workflow">Passing parameters (--param)</a>.
 </Tip>
 
 ## Matrix Strategy Integration
@@ -195,10 +229,10 @@ Matrix values are particularly useful for:
 Access matrix values via `options.matrixValues`:
 
 ```ts
-import type { parseAsync, GetParser, Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";    
 
-const transform: Transform<TSX> = async (root, options) => {
+const codemod: Codemod<TSX> = async (root, options) => {
   // Access matrix values passed from the workflow (if matrix strategy is used)
   const team = (options.matrixValues as any)?.team;
   const shardId = (options.matrixValues as any)?.shardId;
@@ -218,7 +252,7 @@ const transform: Transform<TSX> = async (root, options) => {
   return null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 <Info>
@@ -276,56 +310,234 @@ If the selector finds no matches in a file, your transform is not invoked for th
 
 ## State Management
 
-State conveys execution context and progress signals across runs (e.g., total files, current progress) to coordinate large migrations.
+The `codemod:workflow` module provides shared state that is accessible across all parallel file executions within a step, and can be persisted across workflow steps.
 
-### Persistent State Across Runs
-
-JSSG codemods can leverage persistent state for large-scale migrations:
+### API Reference
 
 ```ts
-import type { Transform } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import { setState, getState, unsetState, acquireLock } from "codemod:workflow";
+```
 
-const transform: Transform<TSX> = async (root, options) => {
-  const filePath = root.filename();
-  
-  // Access current state
-  // The following meta properties are example placeholders.
-  // In a real migration, _meta_progress and _meta_total_files should be set and updated
-  // by your orchestration logic or JSSG's state management system.
-  // They are used here to illustrate how you might track progress across files.
-  const currentProgress = options.matrixValues?._meta_progress || 0;
-  const totalFiles = options.matrixValues?._meta_total_files || 0;
-  
-  // Update progress
-  const newProgress = currentProgress + 1;
-  console.log(`Progress: ${newProgress}/${totalFiles} files processed`);
-  
-  // Use state for coordination
-  if (newProgress % 100 === 0) {
-    console.log(`Checkpoint: ${newProgress} files completed`);
+<ParamField path="setState" type="<T>(name: string, value: T, persist?: boolean) => void">
+  Sets a named state value. Values are stored as native JavaScript objects (no manual JSON serialization needed). When `persist` is `true` (the default), the value is saved at the end of the execution batch and available to subsequent workflow steps.
+</ParamField>
+
+<ParamField path="getState" type="<T>(name: string) => T | undefined">
+  Gets a named state value, or `undefined` if it doesn't exist.
+</ParamField>
+
+<ParamField path="unsetState" type="(name: string) => void">
+  Removes a named state value. If the key was persisted, a removal is propagated to persistent storage.
+</ParamField>
+
+<ParamField path="acquireLock" type="(name: string) => () => void">
+  Acquires a named mutex lock. Returns a `release` function that **must** be called when done. While held, other threads' `getState`, `setState`, and `unsetState` calls on the same key block until released.
+</ParamField>
+
+### Basic Usage
+
+State is shared across all files processed in parallel within a single step:
+
+```ts codemod.ts
+import type { Codemod } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import { setState, getState, acquireLock } from "codemod:workflow";
+
+const codemod: Codemod<TSX> = async (root) => {
+  const rootNode = root.root();
+  const imports = rootNode.findAll({ rule: { kind: "import_statement" } });
+
+  // Safely accumulate results across parallel file executions
+  const release = acquireLock("results");
+  try {
+    const results = getState<string[]>("importedFiles") ?? [];
+    results.push(root.filename());
+    setState("importedFiles", results);
+  } finally {
+    release();
+  }
+
+  return null;
+};
+
+export default codemod;
+```
+
+### When to Use Locks
+
+Use `acquireLock` when you need to read-modify-write shared state from parallel threads. Without it, concurrent `getState` → `setState` sequences can overwrite each other:
+
+```ts
+// Without lock — RACE CONDITION:
+// Thread A reads count=0, Thread B reads count=0,
+// both write count=1 instead of count=2
+const count = getState<number>("count") ?? 0;
+setState("count", count + 1);
+
+// With lock — SAFE:
+const release = acquireLock("count");
+try {
+  const count = getState<number>("count") ?? 0;
+  setState("count", count + 1);
+} finally {
+  release();
+}
+```
+
+<Warning>
+Always call `release()` in a `finally` block. Failing to release a lock will block all other threads waiting on that key.
+</Warning>
+
+<Info>
+Simple `setState` calls that don't depend on the current value (e.g., `setState("status", "done")`) don't need locking — they are individually atomic.
+</Info>
+
+### Persisting State Across Workflow Steps
+
+State set with `persist: true` (the default) is automatically saved after a `js-ast-grep` step completes. Subsequent steps in the same workflow node can read this state:
+
+<CodeGroup>
+```yaml workflow.yaml
+nodes:
+  - id: analyze
+    steps:
+      - name: "Scan files"
+        js-ast-grep:
+          js_file: scripts/scan.ts
+          language: "tsx"
+      - name: "Process results"
+        run: |
+          codemod jssg exec $CODEMOD_PATH/scripts/process.ts
+```
+
+```ts scripts/scan.ts
+import type { Codemod } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import { setState, getState, acquireLock } from "codemod:workflow";
+
+const codemod: Codemod<TSX> = async (root) => {
+  // Collect file paths that match criteria
+  const release = acquireLock("files");
+  try {
+    const files = getState<string[]>("filesToProcess") ?? [];
+    files.push(root.filename());
+    setState("filesToProcess", files); // persisted by default
+  } finally {
+    release();
+  }
+  return null;
+};
+
+export default codemod;
+```
+
+```ts scripts/process.ts
+import { getState } from "codemod:workflow";
+
+// This runs in a subsequent "run" step via jssg exec.
+// State from the previous js-ast-grep step is available.
+const files = getState<string[]>("filesToProcess") ?? [];
+console.log(`Processing ${files.length} files`);
+```
+</CodeGroup>
+
+### Transient State
+
+Pass `persist: false` to keep state only for the current step execution (useful for in-memory coordination that doesn't need to survive across steps):
+
+```ts
+setState("processingQueue", queue, false); // not persisted
+```
+
+## Runtime Hooks
+
+The `codemod:runtime` module lets a codemod send structured execution signals to the engine without relying on `console.log` parsing.
+
+```ts
+import runtime from "codemod:runtime";
+```
+
+Use runtime hooks when you want to:
+- show meaningful progress in workflow task logs
+- warn without failing the task
+- improve watchdog diagnostics by naming the active unit or file
+- fail the current step explicitly instead of returning a generic exception
+- stop cooperatively when the task has been canceled
+
+### API Reference
+
+<ParamField path="progress" type="(message: string, meta?: RuntimeMeta) => void">
+  Emits a structured progress event. Progress updates appear in task logs and refresh the step heartbeat so long-running transforms can prove they are still alive.
+</ParamField>
+
+<ParamField path="warn" type="(message: string, meta?: RuntimeMeta) => void">
+  Emits a non-fatal warning event. Warnings are appended to task logs but do not change task state.
+</ParamField>
+
+<ParamField path="setCurrentUnit" type="(unitId: string, meta?: RuntimeMeta) => void">
+  Overrides the current logical execution unit for diagnostics. For file-based transforms, this is usually the relative file path.
+</ParamField>
+
+<ParamField path="failFile" type="(message: string, meta?: RuntimeMeta) => never">
+  Fails the current file or unit immediately. The runtime currently treats this as terminal for the running task.
+</ParamField>
+
+<ParamField path="failStep" type="(message: string, meta?: RuntimeMeta) => never">
+  Fails the current step immediately. This is always terminal for the running task.
+</ParamField>
+
+<ParamField path="isCanceled" type="() => boolean">
+  Returns `true` if the current task has been canceled. Use it to stop long-running work cooperatively.
+</ParamField>
+
+### Example: Report progress and fail explicitly
+
+```ts codemod.ts
+import type { Codemod } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import runtime from "codemod:runtime";
+
+const codemod: Codemod<TSX> = async (root) => {
+  const relativeFile = root.filename();
+
+  runtime.setCurrentUnit(relativeFile);
+  runtime.progress("Scanning file");
+
+  try {
+    // Your transform logic here
+    runtime.progress("Generating translation keys", { file: relativeFile });
+    return null;
+  } catch (error) {
+    runtime.failStep(`Transform failed for ${relativeFile}`, {
+      file: relativeFile,
+      cause: error instanceof Error ? error.message : String(error),
+    });
   }
 };
 
-export default transform;
+export default codemod;
 ```
 
-### Common State Use Cases
+### When to use hooks vs exceptions
 
-- **Sharding**: Distribute files across multiple workers
-- **Progress tracking**: Monitor migration progress
-- **Coordination**: Coordinate between parallel tasks
-- **Resume capability**: Resume interrupted migrations
+- Use `runtime.progress(...)` and `runtime.warn(...)` for structured observability.
+- Use `runtime.failStep(...)` when the codemod has decided the task should stop immediately.
+- Plain thrown errors still fail the task if they escape the codemod, but hooks give better logs and clearer intent.
+- The engine's idle timeout is only a backstop for silent hangs. Hooks are the preferred way to report semantic failures.
+
+<Warning>
+`codemod:runtime` requires a runtime version that supports runtime hooks. If a codemod must run in mixed-version environments, prefer a dynamic import with a clear upgrade error message when the module is unavailable.
+</Warning>
 
 ## Multi-Repo Orchestration
 
 Use multi-repo orchestration when your codemod must coordinate changes across multiple repositories—such as updating shared libraries, enforcing consistency, or applying repo-specific logic. This approach streamlines large-scale migrations and ensures changes are applied uniformly.
 
 ```ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = async (root, options) => {
+const codemod: Codemod<TSX> = async (root, options) => {
   const filePath = root.filename();
   const repoName = options.matrixValues?.repo_name;
   
@@ -337,7 +549,7 @@ const transform: Transform<TSX> = async (root, options) => {
   }
 };
 
-export default transform;
+export default codemod;
 ```
 
 ## Multi-File Transforms
@@ -350,18 +562,18 @@ Use `jssgTransform()` to apply a transform function to another file from within 
 
 ```ts
 import { jssgTransform } from "codemod:ast-grep";
-import type { Transform, Edit } from "codemod:ast-grep";
+import type { Codemod, Edit } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import type CSS from "codemod:ast-grep/langs/css";
 
-const migrateStyles: Transform<CSS> = async (root) => {
+const migrateStyles: Codemod<CSS> = async (root) => {
   // Rename the file from .less to .css
   root.rename(root.filename().replace('.less', '.css'));
   // Optionally transform the content
   return transformedContent;
 };
 
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const edits: Edit[] = [];
 
@@ -386,7 +598,7 @@ const transform: Transform<TSX> = async (root) => {
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 <Info>
@@ -398,7 +610,7 @@ export default transform;
 Use `root.rename(newPath)` to rename the file currently being processed. This is useful for file extension conversions (`.js` → `.ts`, `.less` → `.css`, `.cjs` → `.mjs`).
 
 ```ts
-const transform: Transform<CSS> = async (root) => {
+const codemod: Codemod<CSS> = async (root) => {
   // Rename .less → .css
   root.rename(root.filename().replace('.less', '.css'));
 
@@ -498,8 +710,8 @@ Use `stopBy` to bound relational searches (e.g., to immediate neighbors or the e
 
 ### Consistent Patterns
 
-1. **Use `const transform: Transform<TSX> = async (root, options) => {}` with `export default transform`**
-2. **Import proper types** - use `Transform`, `GetSelector`, and language-specific types from `codemod:ast-grep`
+1. **Use `const codemod: Codemod<TSX> = async (root, options) => {}` with `export default codemod`**
+2. **Import proper types** - use `Codemod`, `GetSelector`, and language-specific types from `codemod:ast-grep`
 3. **Handle edge cases** - always check for null/undefined values and use try-catch for async operations
 4. **Use early returns** - skip processing when possible, especially for sharding
 5. **Batch operations** - collect edits before committing

@@ -1,6 +1,6 @@
 {
   "name": "@codemod.com/jssg-types",
-  "version": "1.4.1",
+  "version": "1.6.3",
   "private": false,
   "description": "Comprehensive types package for ast-grep integrations and codemod development",
   "keywords": [
@@ -26,6 +26,10 @@
       "types": "./src/langs/*.d.ts",
       "default": "./src/langs/*.d.ts"
     },
+    "./llm": {
+      "types": "./src/llm.d.ts",
+      "default": "./src/llm.d.ts"
+    },
     "./main": {
       "types": "./src/main.d.ts",
       "default": "./src/main.d.ts"
@@ -33,6 +37,10 @@
     "./metrics": {
       "types": "./src/metrics.d.ts",
       "default": "./src/metrics.d.ts"
+    },
+    "./runtime": {
+      "types": "./src/runtime.d.ts",
+      "default": "./src/runtime.d.ts"
     },
     "./workflow": {
       "types": "./src/workflow.d.ts",
@@ -48,6 +56,6 @@
   },
   "devDependencies": {
     "@codemod.com/tsconfig": "workspace:*",
-    "typescript": "5.5.4"
+    "typescript": "catalog:"
   }
 }

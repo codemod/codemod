@@ -1,6 +1,7 @@
-import type { Edit, SgRoot } from "codemod:ast-grep";
+import type { Codemod, Edit } from "codemod:ast-grep";
+import type Yaml from "codemod:ast-grep/langs/yaml";
 
-async function transform(root: SgRoot): Promise<string | null> {
+const codemod: Codemod<Yaml> = async (root) => {
   const rootNode = root.root();
 
   // Find version field with value '2' or '2.x'
@@ -104,4 +105,4 @@ async function transform(root: SgRoot): Promise<string | null> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

@@ -1,6 +1,7 @@
-import type { Edit, SgRoot } from "codemod:ast-grep";
+import type { Codemod, Edit } from "codemod:ast-grep";
+import type Json from "codemod:ast-grep/langs/json";
 
-async function transform(root: SgRoot): Promise<string | null> {
+const codemod: Codemod<Json> = async (root) => {
   const rootNode = root.root();
   
   // Find all string keys (property names)
@@ -48,4 +49,4 @@ async function transform(root: SgRoot): Promise<string | null> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

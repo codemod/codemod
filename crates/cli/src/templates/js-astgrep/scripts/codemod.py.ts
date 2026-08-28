@@ -1,7 +1,7 @@
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type Python from "codemod:ast-grep/langs/python";
 
-const transform: Transform<Python> = async (root) => {
+const codemod: Codemod<Python> = async (root) => {
   const rootNode = root.root();
 
   // Find all Python 2-style exception handlers (using comma instead of 'as')
@@ -24,4 +24,4 @@ const transform: Transform<Python> = async (root) => {
   return newSource;
 };
 
-export default transform;
+export default codemod;

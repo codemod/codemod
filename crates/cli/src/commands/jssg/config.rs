@@ -27,6 +27,9 @@ pub struct TestConfig {
     /// Expected file extension after rename (e.g., ".mjs", ".css").
     /// If set, tests verify the codemod's rename() target ends with this extension.
     pub expected_extension: Option<String>,
+
+    /// Enable workspace-wide semantic analysis for this test suite.
+    pub semantic_workspace: Option<bool>,
 }
 
 /// Merged configuration from CLI args and config files
@@ -40,6 +43,7 @@ pub struct ResolvedTestConfig {
     pub expect_errors: Vec<String>,
     pub params: Option<HashMap<String, serde_json::Value>>,
     pub expected_extension: Option<String>,
+    pub semantic_workspace: bool,
 
     // Global-only options (CLI args only)
     pub filter: Option<String>,
@@ -158,6 +162,9 @@ impl TestConfig {
         if other.expected_extension.is_some() {
             self.expected_extension = other.expected_extension;
         }
+        if other.semantic_workspace.is_some() {
+            self.semantic_workspace = other.semantic_workspace;
+        }
     }
 }
 
@@ -211,6 +218,11 @@ impl ResolvedTestConfig {
         };
         let params = merged_config.params.clone();
         let expected_extension = merged_config.expected_extension.clone();
+        let semantic_workspace = if cli_args.semantic_workspace {
+            true
+        } else {
+            merged_config.semantic_workspace.unwrap_or(false)
+        };
 
         Ok(Self {
             language,
@@ -228,6 +240,7 @@ impl ResolvedTestConfig {
             context_lines,
             params,
             expected_extension,
+            semantic_workspace,
         })
     }
 }

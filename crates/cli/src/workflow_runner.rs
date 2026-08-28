@@ -2,66 +2,189 @@ use anyhow::{Context, Result};
 use butterflow_core::config::WorkflowRunConfig;
 use butterflow_core::engine::Engine;
 use butterflow_core::utils;
-use butterflow_models::{Task, TaskStatus, WorkflowStatus};
-use log::{error, info};
+use butterflow_models::node::NodeType;
+use butterflow_models::task::TaskErrorDetails;
+use butterflow_models::trigger::TriggerType;
+use butterflow_models::{Task, TaskStatus, Workflow, WorkflowStatus};
+use log::info;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
+use crate::tui::{create_tui_progress_callback, run_workflow_tui_with_session};
+use butterflow_core::workflow_runtime::WorkflowSession;
+use console::style;
+
+#[derive(Debug, thiserror::Error)]
+#[error("Workflow failed")]
+pub(crate) struct WorkflowFailureAlreadyReported;
+
+pub fn workflow_has_manual_steps(workflow: &Workflow) -> bool {
+    workflow.nodes.iter().any(node_requires_manual_tui)
+}
+
+fn node_requires_manual_tui(node: &butterflow_models::Node) -> bool {
+    node_has_manual_gate(node) && !is_pull_request_only_manual_publish_node(node)
+}
+
+fn node_has_manual_gate(node: &butterflow_models::Node) -> bool {
+    node.r#type == NodeType::Manual
+        || node
+            .trigger
+            .as_ref()
+            .is_some_and(|trigger| trigger.r#type == TriggerType::Manual)
+}
+
+fn is_pull_request_only_manual_publish_node(node: &butterflow_models::Node) -> bool {
+    node.steps.is_empty() && node.pull_request.is_some()
+}
+
 /// Run a workflow with the given configuration
-pub async fn run_workflow(engine: &Engine, config: WorkflowRunConfig) -> Result<(String, f64)> {
+pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Result<(String, f64)> {
     // Parse workflow file
     let workflow = utils::parse_workflow_file(engine.get_workflow_file_path()).context(format!(
         "Failed to parse workflow file: {}",
         engine.get_workflow_file_path().display()
     ))?;
+    let auto_launch_tui = !config.interaction.no_interactive
+        && !config.execution.dry_run
+        && workflow_has_manual_steps(&workflow);
 
     let started = std::time::Instant::now();
+    let progress_reports_errors = config.execution.progress_callback.as_ref().is_some();
 
     // Run workflow
-    let workflow_run_id = engine
-        .run_workflow(
+    let workflow_run_id = if auto_launch_tui {
+        let workflow_run_id = Uuid::new_v4();
+        engine.set_progress_callback(Arc::new(Some(create_tui_progress_callback(
+            workflow_run_id,
+        ))));
+        let session = WorkflowSession::start_workflow_with_id(
+            engine.clone(),
+            workflow_run_id,
             workflow,
-            config.params,
-            Some(config.bundle_path),
-            config.capabilities.as_ref(),
+            config.execution.params,
+            Some(config.execution.bundle_path),
+            config.execution.capabilities.as_ref(),
         )
         .await
         .context("Failed to run workflow")?;
+        println!(
+            "{} {}",
+            style("Workflow started").cyan(),
+            style(workflow_run_id).dim()
+        );
+        run_workflow_tui_with_session(engine.clone(), session, 20).await?;
+        workflow_run_id
+    } else {
+        let workflow_run_id = engine
+            .run_workflow(
+                workflow,
+                config.execution.params,
+                Some(config.execution.bundle_path),
+                config.execution.capabilities.as_ref(),
+            )
+            .await
+            .context("Failed to run workflow")?;
+        println!(
+            "{} {}",
+            style("Workflow started").cyan(),
+            style(workflow_run_id).dim()
+        );
+        workflow_run_id
+    };
 
-    println!("💥 Workflow started with ID: {workflow_run_id}");
-
-    if config.wait_for_completion {
-        wait_for_workflow_completion(engine, workflow_run_id.to_string()).await?;
+    if !auto_launch_tui && config.execution.wait_for_completion {
+        wait_for_workflow_completion(
+            engine,
+            workflow_run_id.to_string(),
+            config.interaction.no_interactive,
+            progress_reports_errors,
+        )
+        .await?;
     }
 
-    let seconds = started.elapsed().as_millis() as f64 / 1000.0;
-    println!("✨ Done in {seconds:.3}s");
-
-    Ok((workflow_run_id.to_string(), seconds))
+    Ok((workflow_run_id.to_string(), started.elapsed().as_secs_f64()))
 }
 
 /// Wait for workflow to complete or pause
-pub async fn wait_for_workflow_completion(engine: &Engine, workflow_run_id: String) -> Result<()> {
+pub async fn wait_for_workflow_completion(
+    engine: &Engine,
+    workflow_run_id: String,
+    emit_heartbeat: bool,
+    progress_reports_errors: bool,
+) -> Result<()> {
+    let workflow_run_uuid = workflow_run_id.parse::<Uuid>()?;
+    let wait_started = Instant::now();
+    let mut last_heartbeat = Instant::now();
+
     loop {
         // Get workflow status
         let status = engine
-            .get_workflow_status(workflow_run_id.clone().parse::<Uuid>()?)
+            .get_workflow_status(workflow_run_uuid)
             .await
             .context("Failed to get workflow status")?;
 
         match status {
             WorkflowStatus::Completed => {
+                println!(
+                    "{} {}",
+                    style("Workflow completed").green(),
+                    style(format!("in {:.1}s", wait_started.elapsed().as_secs_f64())).dim()
+                );
                 info!("Workflow completed successfully");
                 break;
             }
             WorkflowStatus::Failed => {
-                error!("Workflow failed");
+                let tasks = engine
+                    .get_tasks(workflow_run_uuid)
+                    .await
+                    .context("Failed to get tasks")?;
+                let summary = summarize_tasks(&tasks);
+                if progress_reports_errors && failed_workflow_error_was_reported_in_progress(&tasks)
+                {
+                    println!(
+                        "{} {}{}",
+                        style("Workflow failed").red(),
+                        style(format!(
+                            "after {:.1}s",
+                            wait_started.elapsed().as_secs_f64()
+                        ))
+                        .dim(),
+                        style(format_summary_suffix(&summary)).dim()
+                    );
+                    return Err(WorkflowFailureAlreadyReported.into());
+                } else if let Some(error) = failed_workflow_error(&tasks) {
+                    crate::diagnostics::render_anyhow_error(&error);
+                    println!(
+                        "{} {}{}",
+                        style("Workflow failed").red(),
+                        style(format!(
+                            "after {:.1}s",
+                            wait_started.elapsed().as_secs_f64()
+                        ))
+                        .dim(),
+                        style(format_summary_suffix(&summary)).dim()
+                    );
+                    return Err(WorkflowFailureAlreadyReported.into());
+                }
+                println!(
+                    "{} {}{}",
+                    style("Workflow failed").red(),
+                    style(format!(
+                        "after {:.1}s",
+                        wait_started.elapsed().as_secs_f64()
+                    ))
+                    .dim(),
+                    style(format_summary_suffix(&summary)).dim()
+                );
                 return Err(anyhow::anyhow!("Workflow failed"));
             }
             WorkflowStatus::AwaitingTrigger => {
                 // Get tasks awaiting trigger
                 let tasks = engine
-                    .get_tasks(workflow_run_id.clone().parse::<Uuid>()?)
+                    .get_tasks(workflow_run_uuid)
                     .await
                     .context("Failed to get tasks")?;
 
@@ -87,10 +210,27 @@ pub async fn wait_for_workflow_completion(engine: &Engine, workflow_run_id: Stri
                 break;
             }
             WorkflowStatus::Running => {
+                if emit_heartbeat && last_heartbeat.elapsed() >= Duration::from_secs(15) {
+                    let tasks = engine
+                        .get_tasks(workflow_run_uuid)
+                        .await
+                        .context("Failed to get tasks")?;
+                    let summary = summarize_tasks(&tasks);
+                    println!(
+                        "⏳ Workflow still running ({:.0}s elapsed{})",
+                        wait_started.elapsed().as_secs_f64(),
+                        format_summary_suffix(&summary)
+                    );
+                    last_heartbeat = Instant::now();
+                }
                 // Still running, wait a bit before checking again
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
             WorkflowStatus::Canceled => {
+                println!(
+                    "🛑 Workflow was canceled after {:.1}s",
+                    wait_started.elapsed().as_secs_f64()
+                );
                 info!("Workflow was canceled");
                 break;
             }
@@ -104,9 +244,266 @@ pub async fn wait_for_workflow_completion(engine: &Engine, workflow_run_id: Stri
     Ok(())
 }
 
+fn failed_workflow_error(tasks: &[Task]) -> Option<anyhow::Error> {
+    tasks
+        .iter()
+        .find(|task| task.status == TaskStatus::Failed)
+        .and_then(failed_task_error)
+}
+
+fn failed_workflow_error_was_reported_in_progress(tasks: &[Task]) -> bool {
+    tasks
+        .iter()
+        .find(|task| task.status == TaskStatus::Failed)
+        .is_some_and(task_error_was_reported_in_progress)
+}
+
+fn task_error_was_reported_in_progress(task: &Task) -> bool {
+    let Some(error) = task.error.as_deref() else {
+        return false;
+    };
+
+    let cleaned = strip_error_prefixes(error);
+    error.contains("Failed to process ") && is_javascript_runtime_error(&cleaned)
+}
+
+fn failed_task_error(task: &Task) -> Option<anyhow::Error> {
+    if let Some(TaskErrorDetails::ShellCommand {
+        command,
+        exit_code,
+        output,
+    }) = &task.error_details
+    {
+        return Some(
+            crate::diagnostics::ShellCommandFailure {
+                command: command.clone(),
+                exit_code: *exit_code,
+                output: output.clone(),
+            }
+            .into(),
+        );
+    }
+
+    if let Some(TaskErrorDetails::AstGrep { message, help }) = &task.error_details {
+        return Some(
+            crate::diagnostics::AstGrepFailure {
+                message: message.clone(),
+                help: help.clone(),
+            }
+            .into(),
+        );
+    }
+
+    task.error
+        .as_ref()
+        .map(|error| strip_error_prefixes(error))
+        .filter(|error| !error.trim().is_empty())
+        .or_else(|| {
+            task.logs
+                .iter()
+                .rev()
+                .find(|line| is_error_log_line(line))
+                .map(|line| strip_error_prefixes(line))
+        })
+        .map(anyhow::Error::msg)
+}
+
+fn is_error_log_line(line: &str) -> bool {
+    line.contains("Error:")
+        || line.contains("error:")
+        || line.contains("failed")
+        || line.contains("Failed")
+        || line.contains("AST grep config file not found")
+        || line.contains("Config error:")
+        || line.contains("Language error:")
+}
+
+fn is_javascript_runtime_error(message: &str) -> bool {
+    message.contains("JavaScript execution failed:")
+        || message.contains("Error:")
+        || message.contains("TypeError:")
+        || message.contains("ReferenceError:")
+        || message.contains("SyntaxError:")
+        || message.contains("RangeError:")
+}
+
+fn strip_error_prefixes(message: &str) -> String {
+    let mut cleaned = message.trim().to_string();
+
+    loop {
+        let before = cleaned.clone();
+        let mut current = cleaned.as_str().trim();
+
+        if let Some((_, rest)) = current.split_once(" failed: ") {
+            current = rest.trim();
+        }
+
+        for prefix in [
+            "Step execution error: ",
+            "Runtime error ",
+            "JavaScript execution failed: ",
+        ] {
+            if let Some(rest) = current.strip_prefix(prefix) {
+                current = rest.trim();
+            }
+        }
+
+        if let Some(rest) = current.strip_prefix("Failed to process ") {
+            if let Some((_, error)) = rest.split_once(": ") {
+                current = error.trim();
+            }
+        }
+
+        cleaned = current.to_string();
+        if cleaned == before {
+            break;
+        }
+    }
+
+    cleaned
+}
+
+#[cfg(test)]
+mod failure_message_tests {
+    use super::*;
+
+    #[test]
+    fn strips_workflow_step_and_runtime_prefixes_from_js_errors() {
+        let message = strip_error_prefixes(
+            "Step Scan typescript files and apply fixes failed: Step execution error: Failed to process codemod.ts: Runtime error JavaScript execution failed: Error: Test error\n    at codemod (/tmp/codemod.ts:16:13)",
+        );
+
+        assert_eq!(
+            message,
+            "Error: Test error\n    at codemod (/tmp/codemod.ts:16:13)"
+        );
+    }
+
+    #[test]
+    fn detects_failed_task_error_reported_through_progress_diagnostics() {
+        let mut task = Task::new(Uuid::new_v4(), "node".to_string(), false);
+        task.status = TaskStatus::Failed;
+        task.error = Some(
+            "Step Scan failed: Step execution error: Failed to process app.ts: Runtime error JavaScript execution failed: Error: error is not defined\n    at transform (/tmp/codemod.ts:19:2)"
+                .to_string(),
+        );
+        task.logs.push(
+            "Failed to process app.ts: Runtime error JavaScript execution failed: Error: error is not defined\n    at transform (/tmp/codemod.ts:19:2)"
+                .to_string(),
+        );
+
+        assert!(task_error_was_reported_in_progress(&task));
+    }
+
+    #[test]
+    fn detects_failed_task_error_reported_through_progress_without_persisted_log() {
+        let mut task = Task::new(Uuid::new_v4(), "node".to_string(), false);
+        task.status = TaskStatus::Failed;
+        task.error = Some(
+            "Step Scan failed: Step execution error: Failed to process app.ts: Runtime error JavaScript execution failed: Error: error is not defined\n    at transform (/tmp/codemod.ts:19:2)"
+                .to_string(),
+        );
+
+        assert!(task_error_was_reported_in_progress(&task));
+    }
+}
+
+#[derive(Default)]
+struct TaskSummary {
+    running: usize,
+    pending: usize,
+    awaiting_trigger: usize,
+    blocked: usize,
+    completed: usize,
+    failed: usize,
+    wont_do: usize,
+    active_nodes: Vec<String>,
+}
+
+fn summarize_tasks(tasks: &[Task]) -> TaskSummary {
+    let mut summary = TaskSummary::default();
+
+    for task in tasks {
+        match task.status {
+            TaskStatus::Running => {
+                summary.running += 1;
+                summary.active_nodes.push(task.node_id.clone());
+            }
+            TaskStatus::Pending => summary.pending += 1,
+            TaskStatus::AwaitingTrigger => summary.awaiting_trigger += 1,
+            TaskStatus::Blocked => summary.blocked += 1,
+            TaskStatus::Completed => summary.completed += 1,
+            TaskStatus::Failed => summary.failed += 1,
+            TaskStatus::WontDo => summary.wont_do += 1,
+        }
+    }
+
+    summary.active_nodes.sort();
+    summary.active_nodes.dedup();
+    summary
+}
+
+fn format_summary_suffix(summary: &TaskSummary) -> String {
+    let mut parts = Vec::new();
+
+    if summary.running > 0 {
+        parts.push(format!("{} running", summary.running));
+    }
+    if summary.pending > 0 {
+        parts.push(format!("{} pending", summary.pending));
+    }
+    if summary.awaiting_trigger > 0 {
+        parts.push(format!("{} awaiting trigger", summary.awaiting_trigger));
+    }
+    if summary.blocked > 0 {
+        parts.push(format!("{} blocked", summary.blocked));
+    }
+    if summary.completed > 0 {
+        parts.push(format!("{} completed", summary.completed));
+    }
+    if summary.failed > 0 {
+        parts.push(format!("{} failed", summary.failed));
+    }
+    if summary.wont_do > 0 {
+        parts.push(format!("{} skipped", summary.wont_do));
+    }
+
+    if !summary.active_nodes.is_empty() {
+        let preview = summary
+            .active_nodes
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let remainder = summary.active_nodes.len().saturating_sub(3);
+        if remainder > 0 {
+            parts.push(format!("active nodes: {preview} (+{remainder} more)"));
+        } else {
+            parts.push(format!("active nodes: {preview}"));
+        }
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("; {}", parts.join(", "))
+    }
+}
+
 /// Resolves the workflow source string into the actual workflow file path
 /// and the bundle's root directory path.
 pub fn resolve_workflow_source(source: &str) -> Result<(PathBuf, PathBuf)> {
+    resolve_workflow_source_with_name(source, None)
+}
+
+/// Same as [`resolve_workflow_source`] but, when `source` is a directory and
+/// contains a `codemod.yaml`, honors that manifest's workflow declaration(s)
+/// and lets the caller pick a workflow by name.
+pub fn resolve_workflow_source_with_name(
+    source: &str,
+    workflow_name: Option<&str>,
+) -> Result<(PathBuf, PathBuf)> {
     let path = PathBuf::from(source);
 
     if !path.exists() {
@@ -122,6 +519,68 @@ pub fn resolve_workflow_source(source: &str) -> Result<(PathBuf, PathBuf)> {
             "Failed to get absolute path for bundle directory: {}",
             path.display()
         ))?;
+
+        let manifest_path = bundle_path.join("codemod.yaml");
+        let manifest = if manifest_path.is_file() {
+            let manifest_content = std::fs::read_to_string(&manifest_path).context(format!(
+                "Failed to read manifest {}",
+                manifest_path.display()
+            ))?;
+            match serde_yaml::from_str::<crate::utils::manifest::CodemodManifest>(&manifest_content)
+            {
+                Ok(m) => Some(m),
+                Err(error) => {
+                    if workflow_name.is_some() {
+                        return Err(anyhow::anyhow!(
+                            "Failed to parse manifest {}: {error}",
+                            manifest_path.display()
+                        ));
+                    }
+                    log::warn!(
+                        "Ignoring unparseable codemod.yaml at {}: {error}",
+                        manifest_path.display()
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        if let Some(manifest) = manifest {
+            match manifest.find_workflow(workflow_name) {
+                Ok(entry) => {
+                    let workflow_file_path = bundle_path.join(&entry.path);
+                    if workflow_file_path.is_file() {
+                        return Ok((workflow_file_path, bundle_path));
+                    }
+                    if workflow_name.is_some() {
+                        return Err(anyhow::anyhow!(
+                            "Workflow `{}` declared in codemod.yaml is missing at {}",
+                            entry.name,
+                            workflow_file_path.display()
+                        ));
+                    }
+                    log::warn!(
+                        "Workflow `{}` declared in codemod.yaml is missing at {}; falling back to default workflow discovery",
+                        entry.name,
+                        workflow_file_path.display()
+                    );
+                }
+                Err(error) => {
+                    if workflow_name.is_some() {
+                        return Err(error);
+                    }
+                    log::warn!("{error}");
+                }
+            }
+        } else if workflow_name.is_some() {
+            return Err(anyhow::anyhow!(
+                "Cannot select a named workflow without a codemod.yaml in {}",
+                bundle_path.display()
+            ));
+        }
+
         // Look for default workflow files within the directory
         let default_files = [
             "workflow.yaml",
@@ -147,6 +606,12 @@ pub fn resolve_workflow_source(source: &str) -> Result<(PathBuf, PathBuf)> {
             )),
         }
     } else if path.is_file() {
+        if workflow_name.is_some() {
+            return Err(anyhow::anyhow!(
+                "Cannot select a named workflow when the source points at a workflow file: {}",
+                source
+            ));
+        }
         let workflow_file_path = path.canonicalize().context(format!(
             "Failed to get absolute path for workflow file: {}",
             path.display()
@@ -161,5 +626,342 @@ pub fn resolve_workflow_source(source: &str) -> Result<(PathBuf, PathBuf)> {
             "Workflow source path is neither a file nor a directory: {}",
             source
         ))
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::{
+        format_summary_suffix, node_requires_manual_tui, resolve_workflow_source_with_name,
+        summarize_tasks, workflow_has_manual_steps,
+    };
+    use butterflow_models::node::NodeType;
+    use butterflow_models::step::{PullRequestConfig, Step, StepAction};
+    use butterflow_models::{Node, Task, TaskStatus, Workflow};
+    use std::collections::HashMap;
+    use std::fs;
+    use tempfile::tempdir;
+    use uuid::Uuid;
+
+    fn task(node_id: &str, status: TaskStatus) -> Task {
+        Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: Uuid::new_v4(),
+            node_id: node_id.to_string(),
+            status,
+            is_master: false,
+            master_task_id: None,
+            matrix_values: None,
+            started_at: None,
+            ended_at: None,
+            error: None,
+            error_details: None,
+            logs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn summarize_tasks_tracks_counts_and_active_nodes() {
+        let summary = summarize_tasks(&[
+            task("scan-js", TaskStatus::Running),
+            task("scan-js", TaskStatus::Running),
+            task("apply-fix", TaskStatus::Pending),
+            task("manual-review", TaskStatus::AwaitingTrigger),
+            task("publish", TaskStatus::Blocked),
+            task("cleanup", TaskStatus::Completed),
+            task("report", TaskStatus::Failed),
+            task("noop", TaskStatus::WontDo),
+        ]);
+
+        assert_eq!(summary.running, 2);
+        assert_eq!(summary.pending, 1);
+        assert_eq!(summary.awaiting_trigger, 1);
+        assert_eq!(summary.blocked, 1);
+        assert_eq!(summary.completed, 1);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.wont_do, 1);
+        assert_eq!(summary.active_nodes, vec!["scan-js".to_string()]);
+    }
+
+    #[test]
+    fn format_summary_suffix_includes_active_node_preview() {
+        let summary = summarize_tasks(&[
+            task("a", TaskStatus::Running),
+            task("b", TaskStatus::Running),
+            task("c", TaskStatus::Running),
+            task("d", TaskStatus::Running),
+            task("pending", TaskStatus::Pending),
+        ]);
+
+        let suffix = format_summary_suffix(&summary);
+        assert!(suffix.contains("4 running"));
+        assert!(suffix.contains("1 pending"));
+        assert!(suffix.contains("active nodes: a, b, c (+1 more)"));
+    }
+
+    #[test]
+    fn manual_pull_request_only_node_does_not_require_tui() {
+        let workflow = Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![Node {
+                id: "publish".to_string(),
+                name: "Publish".to_string(),
+                description: None,
+                r#type: NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![],
+                env: HashMap::new(),
+                branch_name: Some("codemod-test".to_string()),
+                pull_request: Some(PullRequestConfig {
+                    title: "Test PR".to_string(),
+                    body: None,
+                    draft: Some(true),
+                    base: None,
+                }),
+            }],
+        };
+
+        assert!(!node_requires_manual_tui(&workflow.nodes[0]));
+        assert!(!workflow_has_manual_steps(&workflow));
+    }
+
+    #[test]
+    fn manual_node_with_steps_still_requires_tui() {
+        let workflow = Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![Node {
+                id: "review".to_string(),
+                name: "Review".to_string(),
+                description: None,
+                r#type: NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![Step {
+                    id: None,
+                    name: "noop".to_string(),
+                    action: StepAction::RunScript("echo hi".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: Some("codemod-test".to_string()),
+                pull_request: Some(PullRequestConfig {
+                    title: "Test PR".to_string(),
+                    body: None,
+                    draft: Some(true),
+                    base: None,
+                }),
+            }],
+        };
+
+        assert!(node_requires_manual_tui(&workflow.nodes[0]));
+        assert!(workflow_has_manual_steps(&workflow));
+    }
+
+    #[test]
+    fn manual_gate_without_steps_still_requires_tui_when_not_pr_only() {
+        let workflow = Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![Node {
+                id: "checkpoint".to_string(),
+                name: "Checkpoint".to_string(),
+                description: None,
+                r#type: NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![],
+                env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
+            }],
+        };
+
+        assert!(node_requires_manual_tui(&workflow.nodes[0]));
+        assert!(workflow_has_manual_steps(&workflow));
+    }
+
+    fn write_manifest(dir: &std::path::Path, body: &str) {
+        fs::write(dir.join("codemod.yaml"), body).unwrap();
+    }
+
+    fn write_workflow(dir: &std::path::Path, name: &str) {
+        fs::write(dir.join(name), "version: \"1\"\nnodes: []\n").unwrap();
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_picks_manifest_default() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"schema_version: "1.0"
+name: "demo"
+version: "0.1.0"
+description: "demo"
+author: "test"
+workflows:
+  - name: main
+    path: workflow.yaml
+    default: true
+  - name: sharded
+    path: workflows/sharded.yaml
+capabilities: []
+"#,
+        );
+        write_workflow(dir.path(), "workflow.yaml");
+        fs::create_dir_all(dir.path().join("workflows")).unwrap();
+        write_workflow(&dir.path().join("workflows"), "sharded.yaml");
+
+        let (file, bundle) =
+            resolve_workflow_source_with_name(dir.path().to_str().unwrap(), None).unwrap();
+        assert_eq!(file, bundle.join("workflow.yaml"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_resolves_named_workflow() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"schema_version: "1.0"
+name: "demo"
+version: "0.1.0"
+description: "demo"
+author: "test"
+workflows:
+  - name: main
+    path: workflow.yaml
+    default: true
+  - name: sharded
+    path: workflows/sharded.yaml
+capabilities: []
+"#,
+        );
+        write_workflow(dir.path(), "workflow.yaml");
+        fs::create_dir_all(dir.path().join("workflows")).unwrap();
+        write_workflow(&dir.path().join("workflows"), "sharded.yaml");
+
+        let (file, bundle) =
+            resolve_workflow_source_with_name(dir.path().to_str().unwrap(), Some("sharded"))
+                .unwrap();
+        assert_eq!(file, bundle.join("workflows/sharded.yaml"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_errors_on_unknown_name() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"schema_version: "1.0"
+name: "demo"
+version: "0.1.0"
+description: "demo"
+author: "test"
+workflow: workflow.yaml
+capabilities: []
+"#,
+        );
+        write_workflow(dir.path(), "workflow.yaml");
+
+        let err = resolve_workflow_source_with_name(dir.path().to_str().unwrap(), Some("missing"))
+            .unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("not found"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_errors_when_named_file_missing() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"schema_version: "1.0"
+name: "demo"
+version: "0.1.0"
+description: "demo"
+author: "test"
+workflows:
+  - name: sharded
+    path: workflows/sharded.yaml
+    default: true
+capabilities: []
+"#,
+        );
+
+        let err = resolve_workflow_source_with_name(dir.path().to_str().unwrap(), Some("sharded"))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("workflows/sharded.yaml") && msg.contains("missing"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_errors_for_named_workflow_without_manifest() {
+        let dir = tempdir().unwrap();
+        write_workflow(dir.path(), "workflow.yaml");
+
+        let err = resolve_workflow_source_with_name(dir.path().to_str().unwrap(), Some("anything"))
+            .unwrap_err();
+        assert!(err.to_string().contains("codemod.yaml"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_falls_back_when_manifest_unparseable() {
+        let dir = tempdir().unwrap();
+        // Corrupt the manifest with content that can't be parsed as
+        // CodemodManifest. With no name requested, the resolver should
+        // log a warning and continue to default workflow discovery.
+        fs::write(dir.path().join("codemod.yaml"), ":::not yaml:::").unwrap();
+        write_workflow(dir.path(), "workflow.yaml");
+
+        let (file, bundle) =
+            resolve_workflow_source_with_name(dir.path().to_str().unwrap(), None).unwrap();
+        assert_eq!(file, bundle.join("workflow.yaml"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_falls_back_when_manifest_workflow_missing_on_disk() {
+        let dir = tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            r#"schema_version: "1.0"
+name: "demo"
+version: "0.1.0"
+description: "demo"
+author: "test"
+workflow: nope.yaml
+capabilities: []
+"#,
+        );
+        // Manifest points at `nope.yaml` which doesn't exist, but a default
+        // `workflow.yaml` is present. With no name requested we should land
+        // on the default file rather than hard-failing.
+        write_workflow(dir.path(), "workflow.yaml");
+
+        let (file, bundle) =
+            resolve_workflow_source_with_name(dir.path().to_str().unwrap(), None).unwrap();
+        assert_eq!(file, bundle.join("workflow.yaml"));
+    }
+
+    #[test]
+    fn resolve_workflow_source_with_name_errors_for_named_workflow_when_manifest_is_invalid() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("codemod.yaml"), ":::not yaml:::").unwrap();
+        write_workflow(dir.path(), "workflow.yaml");
+
+        let err = resolve_workflow_source_with_name(dir.path().to_str().unwrap(), Some("main"))
+            .unwrap_err();
+        assert!(err.to_string().contains("Failed to parse manifest"));
     }
 }

@@ -4,19 +4,19 @@ use std::hash::{Hash, Hasher};
 
 use butterflow_models::variable::resolve_state_path;
 use log::{debug, warn};
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use serde::Serialize;
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use serde_wasm_bindgen::{from_value, to_value};
 use uuid::Uuid;
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use wasm_bindgen::prelude::*;
 
 use butterflow_models::node::NodeType;
 use butterflow_models::trigger::TriggerType;
 use butterflow_models::{Error, Result, Strategy, StrategyType, Task, TaskStatus, WorkflowRun};
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 #[wasm_bindgen(typescript_custom_section)]
 const MATRIX_TASK_CHANGES: &'static str = r#"
 type Uuid = string;
@@ -58,21 +58,21 @@ pub struct RunnableTaskChanges {
     pub runnable_tasks: Vec<Uuid>,
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 pub struct Scheduler {}
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 #[wasm_bindgen]
 pub struct Scheduler {}
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 impl Default for Scheduler {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 impl Scheduler {
     pub fn new() -> Self {
         Self {}
@@ -105,7 +105,7 @@ impl Scheduler {
     }
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 #[wasm_bindgen]
 impl Scheduler {
     // Expose constructor to WASM
@@ -325,7 +325,7 @@ impl Scheduler {
     ) -> Result<MatrixTaskChanges> {
         let mut new_tasks = Vec::new();
         let mut tasks_to_mark_wont_do = Vec::new();
-        let mut tasks_to_reset_to_pending = Vec::new();
+        let tasks_to_reset_to_pending = Vec::new();
         let mut master_tasks_to_update = Vec::new();
 
         for node in &workflow_run.workflow.nodes {
@@ -445,22 +445,9 @@ impl Scheduler {
                     }
                 }
 
-                // --- Identify Tasks to Reset to Pending ---
-                // When state changes (this function is called), existing tasks that are
-                // still valid (hash matches) but are in Failed state should be reset to
-                // Pending.
-                for (task_hash, task) in &existing_child_tasks_by_hash {
-                    if current_item_hashes.contains(task_hash) {
-                        // Task hash still matches current state - task is still valid
-                        if task.status == TaskStatus::Failed {
-                            debug!(
-                                "Need to reset task {} (hash: {}, matrix_values: {:?}) for node '{}' from Failed to Pending",
-                                task.id, task_hash, task.matrix_values, node.id
-                            );
-                            tasks_to_reset_to_pending.push(task.id);
-                        }
-                    }
-                }
+                // Note: we intentionally do NOT reset Failed tasks to Pending here.
+                // If a task failed, the user should explicitly retry it via the TUI or CLI.
+                // Recompilation only creates new tasks and marks removed ones as WontDo.
 
                 // --- Identify Tasks to Mark as WontDo ---
                 for (task_hash, task) in &existing_child_tasks_by_hash {

@@ -1,6 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
+import type CSS from "codemod:ast-grep/langs/css";
 
-async function transform(root: SgRoot): Promise<string> {
+const codemod: Codemod<CSS> = async (root) => {
   const rootNode = root.root();
 
   // Find vendor-prefixed properties that have standard equivalents
@@ -36,4 +37,4 @@ async function transform(root: SgRoot): Promise<string> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

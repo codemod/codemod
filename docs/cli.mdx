@@ -56,6 +56,266 @@ npx codemod publish
 
 Codemod CLI is accessible using the `npx codemod` command. The following commands and options are available:
 
+### `codemod ai`
+
+<Info>
+  In an interactive terminal, bare `npx codemod` opens a launcher. In npm-based usage, that launcher refreshes to the latest published CLI before prompting you to create a package or run one from the registry. In non-interactive contexts, the CLI prints next steps and exits with status `1`.
+</Info>
+
+Manage Master Codemod Skill (MCS) lifecycle for supported harnesses.
+
+**`ai`**
+
+Install the `codemod` MCS skill package, configure Codemod MCP, and install the universal `/codemod` entrypoint where the harness supports it.
+
+```bash
+npx codemod ai [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
+```
+
+Interactive prompts are enabled by default in TTY sessions. Use `--no-interactive` to skip prompts and use flags/defaults directly.
+
+Along with skill files, install writes or updates a Codemod MCP server entry:
+
+```json
+{
+  "mcpServers": {
+    "codemod": {
+      "command": "npx",
+      "args": ["codemod@latest", "mcp"]
+    }
+  }
+}
+```
+
+For Opencode, install writes `opencode.json` using the Opencode-specific `mcp` schema instead of `mcpServers`.
+
+MCP config paths by harness and scope:
+- `claude`: `./.mcp.json` (project), `~/.mcp.json` (user)
+- `goose`: `./.goose/mcp.json` (project), `~/.config/goose/mcp.json` (user)
+- `opencode`: `./opencode.json` (project), `~/.config/opencode/opencode.json` (user)
+- `cursor`: `./.cursor/mcp.json` (project), `~/.cursor/mcp.json` (user)
+- `codex` (CLI + macOS app): `./.codex/config.toml` (project), `~/.codex/config.toml` (user) under `[mcp_servers.codemod]`
+
+If a conflicting Codemod MCP entry already exists, re-run with `--force` to overwrite it. For Opencode, Codemod leaves any legacy `./.opencode/mcp.json` or `~/.opencode/mcp.json` file in place to avoid deleting unrelated MCP servers.
+
+`ai` also upserts a managed Codemod discovery section in harness discovery guides (project root for `--project`, home directory for `--user`) without duplicating entries:
+- `claude`: `CLAUDE.md`
+- `goose`: `AGENTS.md` and `.goosehints`
+- `cursor`: `AGENTS.md`
+- `opencode`: `AGENTS.md`
+- `codex`: `AGENTS.md`
+`ai` also installs `/codemod` where the harness has a native command or workflow file surface:
+- `claude`: `./.claude/commands/codemod.md` (project), `~/.claude/commands/codemod.md` (user)
+- `goose`: `~/.config/goose/recipes/codemod.yaml` + `~/.config/goose/config.yaml` registration (user only)
+- `opencode`: `./.opencode/commands/codemod.md` (project), `~/.config/opencode/commands/codemod.md` (user)
+- `cursor`: `./.cursor/commands/codemod.md` (project), `~/.cursor/commands/codemod.md` (user)
+The installed `/codemod` command routes by intent:
+- create, scaffold, or refine codemods -> codemod authoring flow
+- search, run, or apply existing codemods -> registry discovery and execution flow
+
+The generated Codemod skill package includes these authored files:
+- `SKILL.md`: the main skill instructions and Codemod-specific authoring and execution defaults
+- `agents/openai.yaml`: the Codemod agent interface definition used by compatible harnesses
+- `commands/codemod.md`: the `/codemod` command routing rules for harnesses with a native command surface
+
+The installed skill also points users to CLI fallbacks when MCP is unavailable or blocked. The main user-reproducible commands are:
+- `npx codemod ai docs`: list docs resources exposed through the CLI
+- `npx codemod ai docs <resource-id>`: read a specific docs resource such as `codemod-cli`, `codemod-creation-workflow`, or `codemod-troubleshooting`
+- `npx codemod ai dump-ast <file>` or `npx codemod ai dump-ast --`: inspect AST shape for a file or stdin
+- `npx codemod ai node-types <language>`: inspect tree-sitter node kinds for a language
+- `npx codemod ai call validate_codemod_package --input '{"package_path":"."}'`: validate whether a codemod package still contains starter scaffold markers or other package-surface issues
+- `npx codemod ai feedback --category <category> --message <message>`: submit short anonymous platform feedback after consent is recorded
+
+`ai` also wires a periodic, cooldown-protected update check trigger:
+- `claude`: `hooks.SessionStart` command in `./.claude/settings.json` (project) or `~/.claude/settings.json` (user)
+- `cursor`: `hooks.afterAgentResponse` command in `./.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (user)
+- `opencode`: plugin `codemod-periodic-update.js` in `./.opencode/plugins/` (project) or `~/.config/opencode/plugins/` (user), listening to `session.idle`
+- `goose`: managed `codemod-periodic-update` block in `./.goosehints` (project) or `~/.config/goose/.goosehints` (user) as fallback guidance
+- `codex`: `notify = ["sh", "<runner>"]` in `./.codex/config.toml` (project) or `~/.codex/config.toml` (user)
+Managed update policy is install-flag driven and shared by install-time reconciliation and periodic checks:
+- `--update-policy <manual|notify|auto-safe>` (default: `auto-safe`)
+- `--update-source <local|registry|URL>` (default: `registry`)
+- `--require-signed-manifest` or `--allow-unsigned-manifest` (optional override)
+  `--update-source` only accepts `local`, `registry`, or an absolute `http(s)` URL (legacy `registry:`/`url:` aliases are rejected).
+Periodic runs enforce signed manifest verification via `--require-signed-manifest` in the generated runner command.
+After install, restart or reload your harness session so newly installed skills and command entrypoints are picked up.
+
+**`ai feedback`**
+
+Submit short anonymous platform feedback for Codemod AI, MCP, JSSG, workflows, docs, CLI, registry, or related surfaces. The command records anonymous feedback consent in the user-wide Codemod config, including the timestamp at which this OS user allowed feedback submission.
+
+```bash
+npx codemod ai feedback --category <category> --message <message>
+```
+
+Recommended categories are `jssg`, `workflow`, `ai-docs`, `mcp`, `cli`, `registry`, `package-validation`, and `other`.
+
+Examples:
+
+```bash
+npx codemod ai feedback --category jssg --message "I wish JSSG had clearer examples for multi-file transforms."
+npx codemod ai feedback --category ai-docs --message "The docs resource for runtime capabilities should explain which Node APIs are unavailable."
+```
+
+Feedback is anonymous. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts in the message.
+
+**`ai update`**
+
+Run managed update reconciliation/apply through CLI (same policy engine used by periodic hooks).
+
+```bash
+npx codemod ai update [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|--user] [--force] [--no-interactive] [--update-policy <manual|notify|auto-safe>] [--update-source <local|registry|URL>] [--require-signed-manifest|--allow-unsigned-manifest] [--format <logs|table|json|yaml>]
+```
+
+If managed install state is missing, `ai update` automatically falls back to an install flow and then applies update reconciliation.
+
+`ai` performs internal skill validation checks during install flow.
+
+**`ai list`**
+
+List installed Codemod skills for a harness.
+
+```bash
+npx codemod ai list [--harness <claude|goose|opencode|cursor|codex|auto>] [--format <logs|table|json|yaml>]
+```
+
+Use this command to inspect which Codemod-managed skills are already installed for a given harness before running `codemod ai` again or troubleshooting harness setup.
+
+**`ai dump-ast`**
+
+Dump AST nodes for a source file or stdin using the same parser surface exposed through Codemod MCP.
+
+```bash
+npx codemod ai dump-ast [FILE] [--language <language>] [--json]
+```
+
+- Omit `FILE` or pass `-` to read from stdin.
+- If you do not pass `--language`, the CLI infers it from the file extension when possible and otherwise defaults to `tsx` for stdin.
+
+```bash
+# Parse a file and print AST text
+npx codemod ai dump-ast ./src/component.tsx
+
+# Parse stdin as TypeScript and emit JSON
+cat ./src/index.ts | npx codemod ai dump-ast - --language typescript --json
+```
+
+**`ai node-types`**
+
+Print tree-sitter node types for a supported language.
+
+```bash
+npx codemod ai node-types <language> [--json]
+```
+
+```bash
+npx codemod ai node-types tsx
+npx codemod ai node-types python --json
+```
+
+**`ai docs`**
+
+List, read, or search Codemod AI documentation resources from the CLI.
+
+```bash
+npx codemod ai docs [query...] [--json]
+```
+
+- Run without a query to list available docs-backed resources.
+- Pass a resource name or URI to read it.
+- Pass a search phrase to search across available resources.
+
+```bash
+# List available docs resources
+npx codemod ai docs
+
+# Read one resource by name
+npx codemod ai docs codemod-cli-instructions
+
+# Search across docs-backed resources
+npx codemod ai docs semantic analysis
+```
+
+**`ai tools` and `ai tool`**
+
+Inspect MCP-equivalent tools exposed by the CLI.
+
+```bash
+npx codemod ai tools [--json]
+npx codemod ai tool <name> [--json]
+```
+
+- `ai tools` lists available tool names and descriptions.
+- `ai tool <name>` prints metadata and the JSON input schema for a single tool.
+
+**`ai call`**
+
+Call an MCP-equivalent tool directly from the CLI with JSON input.
+
+```bash
+npx codemod ai call <name> [--input <JSON|@path|- >]
+```
+
+- Omit `--input` to pass an empty object (`{}`).
+- Use `--input @request.json` to load input from a file.
+- Use `--input -` to read JSON input from stdin.
+
+```bash
+npx codemod ai call dump_ast --input '{"language":"tsx","source":"const x = 1;"}'
+```
+
+**`ai resources` and `ai resource`**
+
+Inspect and read MCP-equivalent resources exposed by the CLI.
+
+```bash
+npx codemod ai resources [--json]
+npx codemod ai resource <uri-or-name> [--json]
+```
+
+- `ai resources` lists the available resource names and URIs.
+- `ai resource` reads one resource by URI or resource name.
+
+### Package skill install (prompted from package run)
+
+Install a package skill from registry metadata into harness skill paths.
+The installer copies the authored skill directory recursively from the package (`agents/skill/<skill-name>/`), including any additional files you add (for example extra `.md` references).
+This flow also updates managed Codemod discovery hints in harness discovery guides (`CLAUDE.md` for Claude, `AGENTS.md` and `.goosehints` for Goose, `AGENTS.md` for Cursor/OpenCode/Codex) without duplication, then prompts you to restart/reload the harness session.
+
+```bash
+npx codemod <package-id>
+```
+
+In interactive TTY sessions, `npx codemod <package-id>` prompts for harness/scope/overwrite when installable skill behavior is available.
+
+<Info>
+  Behavior-aware package runtime:
+
+  - **Workflow-only package**: `npx codemod <package-id>` runs the workflow behavior.
+  - **Skill-only package**: `npx codemod <package-id>` does not run a no-op workflow. It returns install guidance and, in interactive terminals, can prompt to install the skill.
+  - **Workflow + skill package**: `npx codemod <package-id>` runs workflow behavior and can optionally prompt to install skill behavior after run completion.
+  - **Multi-workflow package**: when the package's `codemod.yaml` declares multiple workflows under `workflows:`, the default workflow runs unless you pass `--workflow <name>`. In an interactive terminal with no flag, the CLI shows a picker.
+</Info>
+
+**AI-native error codes**
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `E_SKILL_PACKAGE_NOT_FOUND` | `27` | Unknown package id / unresolved package version |
+| `E_SKILL_PACKAGE_INSTALL_FAILED` | `28` | Registry resolution, metadata parse, or install write failure |
+
+Example machine-readable failure (`--format json`):
+
+```json
+{
+  "ok": false,
+  "code": "E_SKILL_PACKAGE_NOT_FOUND",
+  "exit_code": 27,
+  "message": "Unknown skill package id: jest-to-vitestx",
+  "hint": "Run `codemod search <migration> --format json` to locate a valid package id."
+}
+```
+
 ### `codemod workflow`
 
 Manage and execute [Codemod packages](/package-structure).
@@ -117,6 +377,44 @@ npx codemod <package-name>
   ```
 </ResponseField>
 
+<ResponseField name="--install-skill" type="boolean">
+  In non-interactive runs, execute `install-skill` workflow steps instead of skipping them by default.
+
+  ```bash
+  npx codemod workflow run -w workflow.yaml --no-interactive --install-skill
+  npx codemod <package-name> --no-interactive --install-skill
+  ```
+</ResponseField>
+
+<ResponseField name="--workflow-name <NAME>" type="string">
+  When the package directory's `codemod.yaml` declares multiple workflows under `workflows:`, pick which variant to run.
+
+  Without this flag, the entry marked `default: true` runs (or the first entry if none is flagged). When stdin/stdout are interactive and no flag is given, the CLI shows a picker.
+
+  ```bash
+  # Run a named workflow defined in the package's codemod.yaml
+  npx codemod workflow run -w ./my-codemod --workflow-name sharded
+  ```
+
+  Errors out if the name doesn't match any declared workflow, or if the source path is a workflow file (rather than a package directory) — in that case the file IS the workflow.
+</ResponseField>
+
+<ResponseField name="--llm-usage-output <PATH>" type="string">
+  Write provider-reported nested LLM usage for the current package run to a JSON file.
+
+  This output is only populated for LLM requests made by nested codemods during `npx codemod <package-name>` or other package-run flows. The file contains aggregated request counts by provider, model, outcome, and token-usage bucket, and it does not include prompts, API keys, or other request payload data.
+
+  ```bash
+  # Capture nested LLM usage while running a registry package
+  npx codemod @org/my-package --llm-usage-output ./artifacts/llm-usage.json
+
+  # Capture nested LLM usage for a local package run
+  npx codemod workflow run -w ./my-codemod --llm-usage-output ./artifacts/llm-usage.json
+  ```
+
+  The CLI creates parent directories as needed and overwrites the file with the current run's data.
+</ResponseField>
+
 **`workflow resume`**
 
 Resume a paused workflow.
@@ -137,6 +435,14 @@ npx codemod workflow resume -i <ID> [-t <TASK>] [--trigger-all]
   Trigger all awaiting tasks.
 </ResponseField>
 
+<ResponseField name="--install-skill" type="boolean">
+  In non-interactive resume runs, execute pending `install-skill` workflow steps instead of skipping them by default.
+
+  ```bash
+  npx codemod workflow resume -w workflow.yaml -i <ID> --trigger-all --no-interactive --install-skill
+  ```
+</ResponseField>
+
 **`workflow validate`**
 
 Validate a workflow file.
@@ -145,8 +451,14 @@ Validate a workflow file.
 npx codemod workflow validate -w <workflow.yaml>
 ```
 
+`workflow validate` is capability-aware for codemod packages:
+
+- **Workflow-only** package: validates workflow behavior.
+- **Skill-only** package: validates workflow `install-skill` behavior plus authored skill layout (`agents/skill/<skill-name>/...`).
+- **Workflow + skill** package: validates both executable workflow and authored skill behavior.
+
 <ResponseField name="-w, --workflow <FILE>" type="string" required>
-  Path to workflow file.
+  Path to workflow file or codemod package directory.
 </ResponseField>
 
 | Check                       | Ensures                                |
@@ -167,7 +479,7 @@ npx codemod workflow validate -w <workflow.yaml>
 </Info>
 
 <Accordion title="Validation vs. Logical Correctness">
-  The `workflow validate` command ensures your YAML is syntactically correct and follows the schema, but it cannot verify:
+  For workflow behavior, `workflow validate` ensures your YAML is syntactically correct and follows the schema, but it cannot verify:
 
   - **Logical correctness**: Whether your workflow does what you intend
   - **Runtime behavior**: How your workflow behaves with real data
@@ -213,7 +525,7 @@ npx codemod workflow cancel -i <ID>
 
 ### `codemod jssg`
 
-Run [jssg (JS ast-grep)](/jssg/quickstart) transforms directly without a workflow.
+Run [jssg (JS ast-grep)](/jssg/intro) transforms directly without a workflow.
 
 jssg is the **primary transformation engine** for Codemod. These commands let you test jssg transforms quickly during development.
 
@@ -231,7 +543,7 @@ jssg is the **primary transformation engine** for Codemod. These commands let yo
   For production, embed your jssg transform in a workflow using a `js-ast-grep` step. See [Workflow Reference: JSSG Step](/workflows/reference#jssg-step).
 </Tip>
 
-**Learn more**: [jssg documentation](/jssg/quickstart)
+**Learn more**: [jssg documentation](/jssg/intro)
 
 <Steps>
   <Step title="Write your codemod">
@@ -264,6 +576,8 @@ jssg is the **primary transformation engine** for Codemod. These commands let yo
       </Tree.Folder>
     </Tree>
 
+    Use the `input/` + `expected/` layout when the codemod creates or deletes files. The runner compares the whole directory snapshot but still reports results per file.
+
     Then run:
 
     ```bash
@@ -289,7 +603,7 @@ npx codemod jssg run <codemod_file> <target_directory> [options]
 </ResponseField>
 
 <ResponseField name="--language <LANG>" type="string" required>
-  Target language (e.g., `javascript`, `typescript`, `python`, `java`, `cpp`, `php`, `kotlin`, etc.).
+  Target language (e.g., `javascript`, `typescript`, `python`, `java`, `cpp`, `php`, `kotlin`, `json`, `yaml`, `xml`, `toml`, etc.).
 </ResponseField>
 
 <ResponseField name="--extensions <ext1,ext2>" type="string">
@@ -314,7 +628,7 @@ npx codemod jssg run <codemod_file> <target_directory> [options]
 
 **`jssg test`**
 
-Test a JS ast-grep(jssg) codemod using before/after fixtures.
+Test a JS ast-grep(jssg) codemod using before/after fixtures. Supports both single-file `input.*`/`expected.*` cases and directory snapshot fixtures using `input/` + `expected/`.
 
 ```bash
 npx codemod jssg test <codemod_file> [options]
@@ -325,15 +639,15 @@ npx codemod jssg test <codemod_file> [options]
 </ResponseField>
 
 <ResponseField name="--language" type="string" required>
-  Target language (e.g., `javascript`, `typescript`, `python`, `java`, `cpp`, `php`, `kotlin`, etc.).
+  Target language (e.g., `javascript`, `typescript`, `python`, `java`, `cpp`, `php`, `kotlin`, `json`, `yaml`, `xml`, `toml`, etc.).
 </ResponseField>
 
 <ResponseField name="--test-directory" type="string">
-  The directory containing your tests (default: `"tests"`).
+  The parent directory containing your test case subdirectories (default: `"tests"`). Do not pass a specific test case subdirectory — use `--filter` instead.
 </ResponseField>
 
 <ResponseField name="--filter" type="string">
-  A pattern to run only tests whose names match the filter.
+  A pattern to run only tests whose names match the filter. Single-file fixtures use the test case directory name. Directory snapshot fixtures are still reported per file, using names like `<fixture>_<relative-path>`.
 </ResponseField>
 
 <ResponseField name="--reporter" type="string">
@@ -379,7 +693,7 @@ npx codemod jssg test <codemod_file> [options]
 </ResponseField>
 
 <ResponseField name="--update-snapshots, -u" type="boolean">
-  Create or update the `expected` files with the output of the codemod. (`-u` is a shorthand for `--update-snapshots`)
+  Create or update the `expected` files with the output of the codemod. For directory snapshot fixtures, this also creates missing expected files and removes stale ones. (`-u` is a shorthand for `--update-snapshots`)
 </ResponseField>
 
 <ResponseField name="--expect-errors" type="string">
@@ -416,10 +730,12 @@ Initialize a new Codemod package project.
 npx codemod init [PATH] [options]
 ```
 
-When you run `codemod init` in interactive mode, you'll be prompted to create a GitHub Actions workflow for publishing. This creates `.github/workflows/publish.yml` with:
+In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`. If you select a workflow, you can optionally scaffold an agent skill.
 
-- **Single codemod repository**: Triggers on `v*` tags (e.g., `v1.0.0`)
-- **Monorepo setup**: Triggers on `*@v*` tags (e.g., `my-codemod@v1.0.0`) and extracts the codemod name from the tag
+You'll also be prompted to create a GitHub Actions publishing workflow. This generates `.github/workflows/publish.yml`:
+
+- **Single codemod repo**: Triggers on `v*` tags (e.g., `v1.0.0`)
+- **Monorepo**: Triggers on `*@v*` tags (e.g., `my-codemod@v1.0.0`) and extracts the codemod name
 
 Both workflows use [trusted publishers](/publishing#trusted-publishers) with OIDC for secure, passwordless publishing.
 
@@ -431,10 +747,15 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 
 <ResponseField name="--name <NAME>" type="string">
   Project name (defaults to directory name).
+
+  Required in `--no-interactive` mode when the project name cannot be derived from `[PATH]` (for example, when `[PATH]` is `.`, `..`, or another path without a final directory component).
 </ResponseField>
 
 <ResponseField name="--project-type <PROJECT_TYPE>" type="string">
-  Project type: `ast-grep-js`.
+  Workflow project type: `ast-grep-js` or `hybrid`.
+  Mutually exclusive with `--skill`.
+  
+  Required in `--no-interactive` mode for workflow packages.
 
   <Accordion title="More package types (advanced)">
     - `shell`: Shell script-based codemods
@@ -442,20 +763,56 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
   </Accordion>
 </ResponseField>
 
+<ResponseField name="--skill" type="boolean">
+  Scaffold a skill-only package with a workflow-first template (`workflow.yaml` contains `install-skill`) and authored files under `agents/skill/<skill-name>/`.
+
+  The generated `SKILL.md` uses the authored package skill markers:
+  - `codemod-compatibility: skill-package-v1`
+  - `codemod-skill-version: 0.1.0`
+  
+  Mutually exclusive with `--with-skill` and `--project-type`.
+</ResponseField>
+
+<ResponseField name="--with-skill" type="boolean">
+  Scaffold a workflow + skill package. This keeps executable workflow files, appends an `install-skill` node, and creates authored skill files under `agents/skill/<skill-name>/`.
+
+  The generated authored skill uses `skill-package-v1`, not the built-in `mcs-v1` core skill marker.
+  
+  Mutually exclusive with `--skill`.
+</ResponseField>
+
+<ResponseField name="--package-manager <PACKAGE_MANAGER>" type="string">
+  Package manager.
+  
+  Required in `--no-interactive` mode for `ast-grep-js`, `hybrid`, and `--workspace`.
+</ResponseField>
+
 <ResponseField name="--language <LANGUAGE>" type="string">
   Target language.
+
+  Required in `--no-interactive` mode.
 </ResponseField>
 
 <ResponseField name="--description <DESCRIPTION>" type="string">
   Project description.
+  
+  Required in `--no-interactive` mode.
 </ResponseField>
 
 <ResponseField name="--author <AUTHOR>" type="string">
   Author name and email.
+  
+  Required in `--no-interactive` mode.
 </ResponseField>
 
 <ResponseField name="--license <LICENSE>" type="string">
   License.
+  
+  Required in `--no-interactive` mode.
+</ResponseField>
+
+<ResponseField name="--git-repository-url <URL>" type="string">
+  Git repository URL stored as `repository` in `codemod.yaml`.
 </ResponseField>
 
 <ResponseField name="--private" type="boolean">
@@ -468,6 +825,7 @@ Both workflows use [trusted publishers](/publishing#trusted-publishers) with OID
 
 <ResponseField name="--no-interactive" type="boolean">
   Use defaults without prompts.
+  In this mode, pass the values that would normally come from prompts.
 </ResponseField>
 
 ### `codemod login`

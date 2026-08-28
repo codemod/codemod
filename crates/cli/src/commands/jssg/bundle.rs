@@ -66,6 +66,8 @@ impl Command {
             base_dir: Some(base_dir),
             output_path: self.output.clone(),
             source_maps: self.source_maps,
+            external_modules: Vec::new(),
+            fail_on_unresolved_imports: false,
         };
 
         // Create and run rolldown bundler
@@ -81,12 +83,9 @@ impl Command {
         }
 
         // Output the bundle
-        if self.output.is_some() {
+        if let Some(output_path) = &self.output {
             if self.verbose {
-                eprintln!(
-                    "💾 Bundle written to: {}",
-                    self.output.as_ref().unwrap().display()
-                );
+                eprintln!("💾 Bundle written to: {}", output_path.display());
             }
         } else {
             // Output to stdout

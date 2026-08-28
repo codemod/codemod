@@ -1,12 +1,91 @@
 use rand::Rng;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-use butterflow_models::step::StepAction;
+use butterflow_models::step::{SemanticAnalysisConfig, SemanticAnalysisMode, StepAction};
 use serde_yaml;
 
 use butterflow_models::{Error, Node, Result, Workflow};
+
+use crate::{
+    engine::CodemodDependency, nested_codemod_service::NestedCodemodService,
+    registry::RegistryClient,
+};
+
+fn has_parent_path_components(path: &Path) -> bool {
+    path.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        )
+    })
+}
+
+fn validate_relative_workflow_path_value<'a>(value: &'a str, field: &str) -> Result<&'a str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(Error::WorkflowValidation(format!(
+            "Workflow path field `{field}` must not be empty"
+        )));
+    }
+    if trimmed.as_bytes().contains(&0) {
+        return Err(Error::WorkflowValidation(format!(
+            "Workflow path field `{field}` must not contain null bytes"
+        )));
+    }
+
+    let path = Path::new(trimmed);
+    if path.is_absolute() || has_parent_path_components(path) {
+        return Err(Error::WorkflowValidation(format!(
+            "Workflow path field `{field}` must be relative and stay within the workspace root"
+        )));
+    }
+
+    Ok(trimmed)
+}
+
+pub(crate) fn validate_workflow_relative_path(value: &str, field: &str) -> Result<()> {
+    validate_relative_workflow_path_value(value, field).map(|_| ())
+}
+
+pub(crate) fn validate_workflow_glob_pattern(value: &str, field: &str) -> Result<()> {
+    let trimmed = value.trim();
+    let pattern = trimmed.trim_start_matches('!').trim();
+    validate_relative_workflow_path_value(pattern, field).map(|_| ())
+}
+
+pub(crate) fn validate_workflow_glob_patterns(
+    values: &Option<Vec<String>>,
+    field: &str,
+) -> Result<()> {
+    if let Some(values) = values {
+        for value in values {
+            validate_workflow_glob_pattern(value, field)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn resolve_workflow_path_within_root(
+    root: &Path,
+    value: &str,
+    field: &str,
+) -> Result<PathBuf> {
+    let relative = validate_relative_workflow_path_value(value, field)?;
+    Ok(root.join(relative))
+}
+
+pub(crate) fn resolve_optional_workflow_path_within_root(
+    root: &Path,
+    value: Option<&str>,
+    field: &str,
+) -> Result<PathBuf> {
+    match value {
+        Some(value) => resolve_workflow_path_within_root(root, value, field),
+        None => Ok(root.to_path_buf()),
+    }
+}
 
 /// Parse a workflow definition from a file
 pub fn parse_workflow_file<P: AsRef<Path>>(path: P) -> Result<Workflow> {
@@ -20,14 +99,29 @@ pub fn parse_workflow_file<P: AsRef<Path>>(path: P) -> Result<Workflow> {
             match serde_json::from_str::<Workflow>(&content) {
                 Ok(workflow) => Ok(workflow),
                 Err(json_err) => {
-                    // Both parsing attempts failed
-                    Err(Error::WorkflowValidation(format!(
-                        "Failed to parse workflow file. YAML error: {yaml_err}, JSON error: {json_err}"
-                    )))
+                    let yaml_location = yaml_err.location();
+                    Err(Error::WorkflowParse {
+                        path: path.as_ref().to_path_buf(),
+                        yaml_error: yaml_err.to_string().into_boxed_str(),
+                        yaml_line: yaml_location.as_ref().map(|location| location.line()),
+                        yaml_column: yaml_location.as_ref().map(|location| location.column()),
+                        json_error: json_err.to_string().into_boxed_str(),
+                        json_line: Some(json_err.line()),
+                        json_column: Some(json_err.column()),
+                    })
                 }
             }
         }
     }
+}
+
+pub async fn find_dry_run_only_codemod_dependency(
+    workflow: &Workflow,
+    registry_client: &RegistryClient,
+) -> Result<Option<String>> {
+    NestedCodemodService::new(registry_client)
+        .find_dry_run_only_dependency(workflow, &[] as &[CodemodDependency])
+        .await
 }
 
 /// Validate a workflow definition
@@ -80,7 +174,25 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                     )));
                 }
             } else if let StepAction::JSAstGrep(js_step) = &step.action {
-                let js_file_path = package_path.join(&js_step.js_file);
+                validate_workflow_relative_path(&js_step.js_file, "js-ast-grep.js_file")?;
+                validate_workflow_glob_patterns(&js_step.include, "js-ast-grep.include")?;
+                validate_workflow_glob_patterns(&js_step.exclude, "js-ast-grep.exclude")?;
+                if let Some(base_path) = &js_step.base_path {
+                    validate_workflow_relative_path(base_path, "js-ast-grep.base_path")?;
+                }
+                if let Some(SemanticAnalysisConfig::Detailed(detailed)) = &js_step.semantic_analysis
+                {
+                    if matches!(detailed.mode, SemanticAnalysisMode::Workspace) {
+                        if let Some(root) = &detailed.root {
+                            validate_workflow_relative_path(
+                                root,
+                                "js-ast-grep.semantic_analysis.root",
+                            )?;
+                        }
+                    }
+                }
+
+                let js_file_path = package_path.join(js_step.js_file.trim());
                 if !js_file_path.exists() {
                     return Err(Error::WorkflowValidation(format!(
                         "JS file referenced in workflow not found: {}",
@@ -88,12 +200,114 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                     )));
                 }
             } else if let StepAction::AstGrep(ast_step) = &step.action {
-                let ast_file_path = package_path.join(&ast_step.config_file);
+                validate_workflow_relative_path(&ast_step.config_file, "ast-grep.config_file")?;
+                validate_workflow_glob_patterns(&ast_step.include, "ast-grep.include")?;
+                validate_workflow_glob_patterns(&ast_step.exclude, "ast-grep.exclude")?;
+                if let Some(base_path) = &ast_step.base_path {
+                    validate_workflow_relative_path(base_path, "ast-grep.base_path")?;
+                }
+
+                let ast_file_path = package_path.join(ast_step.config_file.trim());
                 if !ast_file_path.exists() {
                     return Err(Error::WorkflowValidation(format!(
                         "AST file referenced in workflow not found: {}",
                         ast_file_path.display()
                     )));
+                }
+            } else if let StepAction::Shard(shard) = &step.action {
+                use butterflow_models::step::ShardMethod;
+                // Validate file discovery — shared across all methods
+                if shard.file_pattern.is_none() && shard.js_ast_grep.is_none() {
+                    return Err(Error::WorkflowValidation(format!(
+                        "Step '{}' in node '{}': shard step requires either 'file_pattern' or 'js-ast-grep'",
+                        step.name, node.id
+                    )));
+                }
+                if let Some(js_ast_grep) = &shard.js_ast_grep {
+                    validate_workflow_relative_path(
+                        &js_ast_grep.js_file,
+                        "shard.js-ast-grep.js_file",
+                    )?;
+                    validate_workflow_glob_patterns(
+                        &js_ast_grep.include,
+                        "shard.js-ast-grep.include",
+                    )?;
+                    validate_workflow_glob_patterns(
+                        &js_ast_grep.exclude,
+                        "shard.js-ast-grep.exclude",
+                    )?;
+                    if let Some(base_path) = &js_ast_grep.base_path {
+                        validate_workflow_relative_path(base_path, "shard.js-ast-grep.base_path")?;
+                    }
+
+                    let js_file_path = package_path.join(js_ast_grep.js_file.trim());
+                    if !js_file_path.exists() {
+                        return Err(Error::WorkflowValidation(format!(
+                            "JS file referenced in shard js-ast-grep not found: {}",
+                            js_file_path.display()
+                        )));
+                    }
+                }
+                match &shard.method {
+                    ShardMethod::Builtin(_) => {
+                        if shard.target.as_ref().map_or(true, |t| t.trim().is_empty()) {
+                            return Err(Error::WorkflowValidation(format!(
+                                "Step '{}' in node '{}': built-in shard method requires a non-empty 'target' field",
+                                step.name, node.id
+                            )));
+                        }
+                    }
+                    ShardMethod::Function(func) => {
+                        validate_workflow_relative_path(&func.function, "shard.method.function")?;
+                        let func_path = package_path.join(func.function.trim());
+                        if !func_path.exists() {
+                            return Err(Error::WorkflowValidation(format!(
+                                "Shard function referenced in workflow not found: {}",
+                                func_path.display()
+                            )));
+                        }
+                    }
+                }
+                if shard.output_state.trim().is_empty() {
+                    return Err(Error::WorkflowValidation(format!(
+                        "Step '{}' in node '{}': shard step requires non-empty 'output_state' field",
+                        step.name, node.id
+                    )));
+                }
+                if let Some(target) = &shard.target {
+                    validate_workflow_relative_path(target, "shard.target")?;
+                }
+                if let Some(file_pattern) = &shard.file_pattern {
+                    validate_workflow_glob_pattern(file_pattern, "shard.file_pattern")?;
+                }
+            } else if let StepAction::InstallSkill(install_skill) = &step.action {
+                if install_skill.package.trim().is_empty() {
+                    return Err(Error::WorkflowValidation(format!(
+                        "Step {} in node {} has invalid install-skill package value",
+                        step.name, node.id
+                    )));
+                }
+                if let Some(path) = &install_skill.path {
+                    let trimmed = path.trim();
+                    if trimmed.is_empty() {
+                        return Err(Error::WorkflowValidation(format!(
+                            "Step {} in node {} has invalid install-skill path value",
+                            step.name, node.id
+                        )));
+                    }
+                    let parsed_path = Path::new(trimmed);
+                    if parsed_path.is_absolute() {
+                        return Err(Error::WorkflowValidation(format!(
+                            "Step {} in node {} has invalid install-skill path value: absolute paths are not allowed",
+                            step.name, node.id
+                        )));
+                    }
+                    if has_parent_path_components(parsed_path) {
+                        return Err(Error::WorkflowValidation(format!(
+                            "Step {} in node {} has invalid install-skill path value: parent-directory traversal is not allowed",
+                            step.name, node.id
+                        )));
+                    }
                 }
             }
         }

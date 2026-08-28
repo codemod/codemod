@@ -106,7 +106,13 @@ impl LazySemanticProvider {
     }
 
     /// Get or create the underlying provider for the given language.
+    /// Returns None for unsupported languages without touching the OnceLock,
+    /// so unsupported files (json, yaml, etc.) remain no-ops and don't poison
+    /// the lock for subsequent supported files.
     fn get_or_init(&self, language: &str) -> Option<&Arc<dyn SemanticProvider>> {
+        if !SemanticFactory::supports_language(language) {
+            return None;
+        }
         self.inner
             .get_or_init(|| SemanticFactory::create(language, self.config.clone()))
             .as_ref()
@@ -330,6 +336,30 @@ mod tests {
         );
 
         // Now initialized
+        assert!(provider.inner.get().is_some());
+    }
+
+    #[test]
+    fn test_unsupported_file_first_does_not_poison_lock() {
+        let dir = TempDir::new().unwrap();
+        let json_path = dir.path().join("config.json");
+        let ts_path = dir.path().join("test.ts");
+        fs::write(&json_path, r#"{"key": "value"}"#).unwrap();
+        fs::write(&ts_path, "const x = 1;").unwrap();
+
+        let provider = LazySemanticProvider::file_scope();
+
+        // Process unsupported file first — should be a no-op
+        let result = provider.notify_file_processed(&json_path, r#"{"key": "value"}"#);
+        assert!(result.is_ok());
+        // OnceLock should NOT be initialized
+        assert!(provider.inner.get().is_none());
+
+        // Now process a supported file — should initialize the provider
+        let result =
+            provider.get_definition(&ts_path, ByteRange::new(6, 7), DefinitionOptions::default());
+        assert!(result.is_ok());
+        // OnceLock should now be initialized
         assert!(provider.inner.get().is_some());
     }
 }

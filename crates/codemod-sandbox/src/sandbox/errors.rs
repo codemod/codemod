@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
+use crate::sandbox::runtime_module::RuntimeFailure;
+
 #[derive(Debug, Error)]
 pub enum FsError {
     #[error("File not found: {path}")]
@@ -99,6 +101,12 @@ pub enum ExecutionError {
 
     #[error("No files found to process")]
     NoFilesFound,
+
+    #[error("{source}")]
+    RuntimeHook {
+        #[source]
+        source: RuntimeFailure,
+    },
 }
 
 // Convenience conversion implementations

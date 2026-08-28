@@ -141,13 +141,12 @@ impl FileSystem for MockFileSystem {
                 let relative_path = file_path.strip_prefix(path).unwrap();
 
                 // Check hidden files
-                if !options.include_hidden {
-                    if relative_path
+                if !options.include_hidden
+                    && relative_path
                         .components()
                         .any(|component| component.as_os_str().to_string_lossy().starts_with('.'))
-                    {
-                        continue;
-                    }
+                {
+                    continue;
                 }
 
                 // Check max depth

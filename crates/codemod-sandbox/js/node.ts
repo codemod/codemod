@@ -75,14 +75,14 @@ class NodeSandbox implements Sandbox {
     );
 
     const sandboxFactory = factory();
-    const { instance } = await WebAssembly.instantiate(wasmBytes, {
+    const { exports } = await WebAssembly.instantiate(wasmBytes, {
       "./codemod-sandbox_bg.js": sandboxFactory,
       wasi_snapshot_preview1: wasiInstance.wasiImport,
     });
 
-    sandboxFactory.__wbg_set_wasm(instance.exports);
+    sandboxFactory.__wbg_set_wasm(exports);
     // @ts-expect-error 2739
-    wasiInstance.start({ exports: instance.exports });
+    wasiInstance.start({ exports });
 
     if (typeof sandboxFactory.__wbindgen_init_externref_table === "function") {
       sandboxFactory.__wbindgen_init_externref_table();

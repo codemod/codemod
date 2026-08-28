@@ -1,6 +1,5 @@
 //! JavaScript semantic analysis integration tests.
 
-use super::fixtures::jssg_test;
 use ast_grep_language::SupportLang;
 use codemod_sandbox::CodemodLang;
 

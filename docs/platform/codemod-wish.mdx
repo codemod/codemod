@@ -1,0 +1,66 @@
+---
+title: 'Codemod Wish'
+sidebarTitle: 'Wish'
+icon: 'wand-magic-sparkles'
+tag: 'NEW'
+---
+
+Codemod Wish is the in-app Codemod AI assistant. It understands the page you are on and can help with Codemod workflows without requiring you to leave the app.
+
+Use Wish to inspect current platform state, ask follow-up questions, and start repeatable codebase work from the context you already have open.
+
+## What Wish can help with
+
+Wish can help with work across the Codemod platform:
+
+- **Campaigns**: review campaign progress, inspect failed or stuck tasks, and plan the next rollout step.
+- **Automations**: explain triggers and actions, identify missing guardrails, and help configure automation steps.
+- **Insights**: inspect dashboards, create widgets, and reason about migration readiness or adoption trends.
+- **Registry packages**: search for relevant codemods and inspect package details before applying them.
+- **Repositories**: use indexed repository context to search files, dependencies, and code patterns when repository access is available.
+- **Codemod creation**: turn repeatable transformations or analysis ideas into generated codemod packages.
+
+<Info>
+  Wish uses the current page as context. If you ask about a Campaign, Automation, or Insights dashboard while viewing it, Wish can use that page state to give more specific help.
+</Info>
+
+## Start a conversation
+
+<Steps>
+  <Step title="Open Wish">
+    Click **Ask Codemod Wish** in the bottom-right corner of the app. You can also use `Cmd+J` on macOS or `Ctrl+J` on Windows and Linux.
+  </Step>
+  <Step title="Ask from the current page">
+    Ask about the Campaign, Automation, Insights dashboard, Registry package, or repository context you are viewing.
+  </Step>
+  <Step title="Review suggested actions">
+    When Wish needs to navigate, create follow-up work, or choose between next steps, review the suggested action before continuing.
+  </Step>
+</Steps>
+
+## Build codemod packages
+
+For repeatable code transformations or reusable analysis, Wish can generate a codemod package and publish it to the registry.
+
+Generated packages are private by default unless you explicitly choose public visibility. When you are working in an organization, generated packages use that organization's registry scope.
+
+After a package is ready, Wish can continue with follow-up work such as creating a Campaign or building an Insights dashboard that uses the generated package.
+
+The same prompting guidance for [building better codemods in Studio](/platform/codemod-studio#tips-for-building-better-codemods) applies to Wish: keep the transformation focused, describe the intended behavior clearly, and include examples when they help.
+
+## Related docs
+
+<CardGroup cols={2}>
+  <Card title="Campaigns" icon="arrow-up-right-dots" href="/platform/campaigns">
+    Run codemods with automated PRs and centralized tracking.
+  </Card>
+  <Card title="Automations" icon="bolt" href="/platform/automations">
+    Create rules that react to events across your projects.
+  </Card>
+  <Card title="Insights" icon="chart-simple" href="/platform/insights">
+    Create dashboards for migration and codebase visibility.
+  </Card>
+  <Card title="Registry" icon="globe" href="/platform/registry">
+    Find and apply public, private, or pro codemod packages.
+  </Card>
+</CardGroup>

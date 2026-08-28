@@ -1,7 +1,9 @@
 use super::codemod_lang::CodemodLang;
+use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::AstGrepModule;
-use crate::metrics::MetricsModule;
+use crate::llm::{LlmModule, LlmRuntimeContext};
+use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::quickjs_utils::maybe_promise;
@@ -23,6 +25,12 @@ pub struct SelectorEngineOptions<'a, R> {
     pub language: CodemodLang,
     pub resolver: Arc<R>,
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
+    /// Directory that the curated `fs` module is constrained to. When
+    /// `Some` and the caller hasn't opted into the llrt `Fs` capability,
+    /// the codemod's `import "fs"` resolves to a [`CuratedFsModule`]
+    /// backed by `vfs::PhysicalFS` at disk root `/`, with reads/writes
+    /// prefix-checked against this path.
+    pub target_directory: Option<&'a Path>,
 }
 
 /// Extract a selector from a codemod module using QuickJS
@@ -54,6 +62,14 @@ where
         },
     })?;
 
+    // Track whether the caller opted into llrt's real-disk fs capability
+    // so we know whether to install the curated fs below instead.
+    let mut fs_capability_enabled = false;
+    let llm_capability_enabled = options
+        .capabilities
+        .as_ref()
+        .is_some_and(|capabilities| capabilities.contains(&LlrtSupportedModules::Fetch));
+
     // Set up built-in modules
     let mut module_builder = LlrtModuleBuilder::build();
     if let Some(capabilities) = options.capabilities {
@@ -64,6 +80,7 @@ where
                 }
                 LlrtSupportedModules::Fs => {
                     module_builder.enable_fs();
+                    fs_capability_enabled = true;
                 }
                 LlrtSupportedModules::ChildProcess => {
                     module_builder.enable_child_process();
@@ -72,6 +89,19 @@ where
             }
         }
     }
+
+    // If the caller provided a target_directory and didn't explicitly opt
+    // into llrt's unrestricted fs, install the curated fs. The script sees
+    // real on-disk paths; reads/writes outside `target_directory` are
+    // rejected with `EACCES`.
+    let curated_fs_target = if !fs_capability_enabled {
+        options
+            .target_directory
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
 
@@ -86,6 +116,19 @@ where
     // Add MetricsModule (metrics tracking)
     built_in_resolver = built_in_resolver.add_name("codemod:metrics");
     built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+
+    if llm_capability_enabled {
+        built_in_resolver = built_in_resolver.add_name("codemod:llm");
+        built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+    }
+
+    // Register the curated `fs` / `fs/promises` modules when applicable.
+    if curated_fs_target.is_some() {
+        built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
+        built_in_loader = built_in_loader
+            .with_module("fs", CuratedFsModule)
+            .with_module("fs/promises", CuratedFsPromisesModule);
+    }
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
@@ -113,6 +156,34 @@ where
                 message: format!("Failed to attach global modules: {e}"),
             },
         })?;
+
+        // Install the curated fs config (if applicable) before the codemod
+        // module evaluates so its first `import "fs"` resolves cleanly.
+        if let Some(target_dir) = curated_fs_target {
+            let physical_root: vfs::VfsPath = vfs::PhysicalFS::new(std::path::PathBuf::from("/")).into();
+            ctx.store_userdata(CuratedFsConfig::new(target_dir, physical_root))
+                .map_err(|e| ExecutionError::Runtime {
+                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                        message: format!("Failed to store CuratedFsConfig: {:?}", e),
+                    },
+                })?;
+        }
+
+        // Selector extraction may evaluate the codemod's full module graph.
+        // Install a disposable metrics context so modules that import
+        // `codemod:metrics` can initialize without requiring transform execution.
+        ctx.store_userdata(MetricsContext::new())
+            .map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to store MetricsContext: {:?}", e),
+                },
+            })?;
+        ctx.store_userdata(LlmRuntimeContext::default())
+            .map_err(|e| ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    message: format!("Failed to store LlmRuntimeContext: {:?}", e),
+                },
+            })?;
 
         let execution = async {
             let module = Module::declare(ctx.clone(), "__selector_extractor.js", js_code)
@@ -174,7 +245,7 @@ where
             // Call it and return value.
             let result_obj_promise = func.call(()).catch(&ctx).map_err(|e| {
                 ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
                         message: e.to_string(),
                     },
                 }
@@ -183,7 +254,7 @@ where
                 .await
                 .catch(&ctx)
                 .map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                    source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
                         message: e.to_string(),
                     },
                 })?;
@@ -228,4 +299,117 @@ where
         execution.await
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sandbox::engine::codemod_lang::CodemodLang;
+    use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn selector_extraction_propagates_get_selector_errors() {
+        let dir = tempdir().unwrap();
+        let script_path = dir.path().join("codemod.js");
+        std::fs::write(
+            &script_path,
+            r#"
+            export function getSelector() {
+                throw new Error("selector exploded");
+            }
+            export default function codemod() {}
+            "#,
+        )
+        .unwrap();
+
+        let resolver = Arc::new(OxcResolver::new(dir.path().to_path_buf(), None).unwrap());
+        let result = extract_selector_with_quickjs(SelectorEngineOptions {
+            script_path: &script_path,
+            language: "typescript".parse::<CodemodLang>().unwrap(),
+            resolver,
+            capabilities: None,
+            target_directory: Some(dir.path()),
+        })
+        .await;
+
+        let error = match result {
+            Ok(_) => panic!("selector errors should fail extraction"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("selector exploded"),
+            "expected selector error to propagate, got: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn selector_extraction_supports_const_arrow_get_selector_exports() {
+        let dir = tempdir().unwrap();
+        let script_path = dir.path().join("codemod.js");
+        std::fs::write(
+            &script_path,
+            r#"
+            export const getSelector = () => ({
+                rule: { kind: "string_fragment" },
+            });
+            export default function codemod() {}
+            "#,
+        )
+        .unwrap();
+
+        let resolver = Arc::new(OxcResolver::new(dir.path().to_path_buf(), None).unwrap());
+        let result = extract_selector_with_quickjs(SelectorEngineOptions {
+            script_path: &script_path,
+            language: "tsx".parse::<CodemodLang>().unwrap(),
+            resolver,
+            capabilities: None,
+            target_directory: Some(dir.path()),
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            result.is_some(),
+            "const arrow getSelector exports should be supported"
+        );
+    }
+
+    #[tokio::test]
+    async fn selector_extraction_supports_top_level_metrics_imports() {
+        let dir = tempdir().unwrap();
+        let script_path = dir.path().join("codemod.js");
+        std::fs::write(
+            &script_path,
+            r#"
+            import { useMetricAtom } from "codemod:metrics";
+
+            const selectorMetric = useMetricAtom("selector_metric");
+
+            export const getSelector = () => {
+                selectorMetric.increment();
+                return { rule: { kind: "string_fragment" } };
+            };
+            export default function codemod() {}
+            "#,
+        )
+        .unwrap();
+
+        let resolver = Arc::new(OxcResolver::new(dir.path().to_path_buf(), None).unwrap());
+        let result = extract_selector_with_quickjs(SelectorEngineOptions {
+            script_path: &script_path,
+            language: "tsx".parse::<CodemodLang>().unwrap(),
+            resolver,
+            capabilities: None,
+            target_directory: Some(dir.path()),
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            result.is_some(),
+            "selector extraction should support top-level metrics imports"
+        );
+    }
 }

@@ -1,7 +1,7 @@
-import type { SgRoot } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type CSharp from "codemod:ast-grep/langs/c_sharp";
 
-async function transform(root: SgRoot<CSharp>): Promise<string> {
+const codemod: Codemod<CSharp> = async (root) => {
   const rootNode = root.root();
 
   const nodes = rootNode.findAll({
@@ -22,4 +22,4 @@ async function transform(root: SgRoot<CSharp>): Promise<string> {
   return newSource;
 }
 
-export default transform;
+export default codemod;

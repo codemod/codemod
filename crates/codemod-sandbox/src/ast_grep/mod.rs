@@ -2,41 +2,44 @@ pub(crate) mod sg_node;
 mod types;
 mod utils;
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod wasm_lang;
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod wasm_utils;
 
 #[cfg(feature = "native")]
 pub mod native;
 
-#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
+#[cfg(all(
+    not(all(feature = "wasm", target_arch = "wasm32")),
+    not(feature = "native")
+))]
 use ast_grep_language::{LanguageExt, SupportLang};
 
 #[cfg(feature = "native")]
-use crate::sandbox::engine::codemod_lang::CodemodLang;
-#[cfg(feature = "native")]
 use ast_grep_core::tree_sitter::LanguageExt;
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use ast_grep_core::language::Language;
 
-use rquickjs::module::{Declarations, Exports, ModuleDef};
-use rquickjs::{prelude::Func, Class, Ctx, Exception, Object, Result};
 #[cfg(feature = "native")]
-use rquickjs::{Function, Value};
-
-use crate::sandbox::engine::execution_engine::{
-    validate_path_within_target, FileChange, JssgExecutionContext, JssgFileChanges,
+use crate::{
+    sandbox::engine::codemod_lang::CodemodLang,
+    sandbox::engine::{
+        execution_engine::{
+            validate_path_within_target, DryRunExecutionFlag, FileChange, JssgExecutionContext,
+            JssgFileChanges,
+        },
+        transform_helpers::{build_transform_options, process_transform_result, ModificationCheck},
+        ExecutionModeFlag,
+    },
+    utils::quickjs_utils::maybe_promise,
 };
-use crate::sandbox::engine::transform_helpers::{
-    build_transform_options, process_transform_result, ModificationCheck,
-};
-use crate::sandbox::engine::ExecutionModeFlag;
-use crate::utils::quickjs_utils::maybe_promise;
-use std::str::FromStr;
-use std::sync::Arc;
+use rquickjs::module::{Declarations, Exports, ModuleDef};
+use rquickjs::{prelude::Func, Class, Ctx, Exception, Function, Object, Result, Value};
+#[cfg(feature = "native")]
+use std::{str::FromStr, sync::Arc};
 
 use sg_node::{SgNodeRjs, SgRootRjs};
 
@@ -87,12 +90,12 @@ impl ModuleDef for AstGrepModule {
 }
 
 pub(crate) fn parse_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<'_>> {
-    SgRootRjs::try_new(lang, src, None)
+    SgRootRjs::try_new(lang, src, None, None)
         .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
 }
 
 fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<'_>> {
-    #[cfg(feature = "wasm")]
+    #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
     {
         if !wasm_lang::WasmLang::is_parser_initialized() {
             return Err(Exception::throw_message(&ctx, "Tree-sitter parser not initialized. Ensure setupParser() has completed before calling parseAsync."));
@@ -100,7 +103,7 @@ fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<
     }
 
     // Call the same implementation as parse_rjs since the async setup should be done by now
-    SgRootRjs::try_new(lang, src, None)
+    SgRootRjs::try_new(lang, src, None, None)
         .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
 }
 
@@ -108,13 +111,13 @@ fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<
 fn parse_file_rjs(ctx: Ctx<'_>, lang: String, file_path: String) -> Result<SgRootRjs<'_>> {
     let file_content = std::fs::read_to_string(file_path.clone())
         .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to read file: {e}")))?;
-    SgRootRjs::try_new(lang, file_content, Some(file_path))
+    SgRootRjs::try_new(lang, file_content, Some(file_path), None)
         .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
 }
 
 // Corresponds to the `kind` function in wasm/lib.rs
 // Takes lang: string, kind_name: string -> u16
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
     use std::str::FromStr;
 
@@ -126,7 +129,10 @@ fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
     Ok(kind)
 }
 
-#[cfg(all(not(feature = "wasm"), not(feature = "native")))]
+#[cfg(all(
+    not(all(feature = "wasm", target_arch = "wasm32")),
+    not(feature = "native")
+))]
 fn kind_rjs(ctx: Ctx<'_>, lang: String, kind_name: String) -> Result<u16> {
     use std::str::FromStr;
 
@@ -190,6 +196,10 @@ fn jssg_transform_rjs<'js>(
         .map(|c| c.params.clone())
         .unwrap_or_default();
     let matrix_values = exec_ctx.as_ref().and_then(|c| c.matrix_values.clone());
+    let dry_run = ctx
+        .userdata::<DryRunExecutionFlag>()
+        .map(|flag| flag.0)
+        .unwrap_or(false);
 
     let file_path = std::path::Path::new(&path_to_file);
 
@@ -205,8 +215,17 @@ fn jssg_transform_rjs<'js>(
     })?;
 
     // Parse with language and filename
-    let sg_root = SgRootRjs::try_new(language, content.clone(), Some(path_to_file.clone()))
-        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?;
+    let target_directory = ctx
+        .userdata::<crate::sandbox::engine::execution_engine::TargetDirectory>()
+        .map(|guard| guard.0.clone());
+
+    let sg_root = SgRootRjs::try_new(
+        language,
+        content.clone(),
+        Some(path_to_file.clone()),
+        target_directory.as_deref(),
+    )
+    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?;
 
     let sg_root_inner = Arc::clone(&sg_root.inner);
 
@@ -214,8 +233,21 @@ fn jssg_transform_rjs<'js>(
         .map(|l| l.to_string())
         .unwrap_or_default();
 
-    let run_options = build_transform_options(&ctx, params, &lang_str, matrix_values, None)
-        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to build options: {e}")))?;
+    let target_dir = target_directory
+        .as_ref()
+        .ok_or_else(|| Exception::throw_message(&ctx, "TargetDirectory not found in userdata"))?
+        .to_string_lossy()
+        .into_owned();
+    let run_options = build_transform_options(
+        &ctx,
+        params,
+        &lang_str,
+        matrix_values,
+        None,
+        dry_run,
+        &target_dir,
+    )
+    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to build options: {e}")))?;
 
     // Call the transform function
     let result_val: Value<'js> = transform_fn.call((sg_root, run_options))?;

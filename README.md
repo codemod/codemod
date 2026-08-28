@@ -29,25 +29,30 @@ This repo houses the **Codemod CLI** and its underlying **workflow engine** – 
 
 - [**Codemod CLI**](https://docs.codemod.com/cli) – Run, test, and publish codemods from your terminal or CI.
 - [**Workflows**](https://docs.codemod.com/workflows/quickstart) – Orchestrate multi-step migrations with YAML configuration, matrix strategies, and manual approval gates.
-- [**JSSG**](https://docs.codemod.com/jssg/quickstart) – JavaScript ast-grep: write powerful AST transformations in TypeScript with pattern matching and semantic analysis.
+- [**JSSG**](https://docs.codemod.com/jssg/intro) – JavaScript ast-grep: write powerful AST transformations in TypeScript with pattern matching and semantic analysis.
 - [**Codemod Registry**](https://go.codemod.com/registry) – Share or discover community codemods via `npx codemod publish` or `npx codemod search`.
 - [**Codemod MCP**](https://docs.codemod.com/model-context-protocol) – AI tools for code analysis, AST manipulation, and codemod creation in AI-powered IDEs.
 
 ## Getting Started
 
 ```bash
-# 1) Scaffold a new codemod project
+# 1) Open the interactive launcher
+npx codemod
+
+# 2) Scaffold a new codemod project
 npx codemod init my-codemod
 
-# 2) Test it locally
+# 3) Test it locally
 npx codemod workflow run -w my-codemod/workflow.yaml
 
-# 3) Publish it when you're ready
+# 4) Publish it when you're ready
 npx codemod publish my-codemod
 
-# 4) Run it from the Registry
+# 5) Run it from the Registry
 npx codemod @codemod/my-codemod
 ```
+
+In an interactive terminal, bare `npx codemod` opens a launcher for creating a package or running one from the registry. In non-interactive contexts, it prints next steps and exits with status `1`.
 
 See the full [CLI reference](https://docs.codemod.com/cli) for every command and option.
 
@@ -71,7 +76,7 @@ Help improve the CLI, workflow engine, and JSSG runtime. See the [contributing g
 Create codemods for framework upgrades, security patches, or common refactoring patterns. Published codemods help the entire community migrate faster.
 
 - [**Workflows quickstart**](https://docs.codemod.com/workflows/quickstart) – Scaffold your first codemod package
-- [**JSSG guide**](https://docs.codemod.com/jssg/quickstart) – Write AST transformations in JS/TS
+- [**JSSG guide**](https://docs.codemod.com/jssg/intro) – Write AST transformations in JS/TS
 - [**Publishing**](https://docs.codemod.com/publishing) – Share your contributions to Codemod Registry
 
 Looking for ideas? Spark a discussion in our [Slack community](https://go.codemod.com/community) or browse [Codemod Registry](https://go.codemod.com/registry) for codemods that could use improvements.

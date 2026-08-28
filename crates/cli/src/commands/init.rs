@@ -1,3 +1,6 @@
+use crate::utils::skill_layout::{
+    expected_authored_skill_relative_file, AGENTS_SKILL_ROOT_RELATIVE_PATH,
+};
 use anyhow::{anyhow, Result};
 use clap::Args;
 use console::{style, Emoji};
@@ -7,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 pub struct Command {
     /// Project directory name
     #[arg(value_name = "PATH")]
@@ -24,6 +27,14 @@ pub struct Command {
     /// Project type
     #[arg(long)]
     project_type: Option<ProjectType>,
+
+    /// Scaffold a skill-focused package with an install-skill workflow
+    #[arg(long, conflicts_with = "with_skill")]
+    skill: bool,
+
+    /// Also scaffold skill behavior alongside workflow files
+    #[arg(long, conflicts_with = "skill")]
+    with_skill: bool,
 
     /// Package manager
     #[arg(long)]
@@ -78,12 +89,37 @@ enum ProjectType {
     AstGrepYaml,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InteractiveCodemodType {
+    Jssg,
+    MultiStepWorkflow,
+    AgentSkill,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PackageBehavior {
+    WorkflowOnly,
+    SkillOnly,
+    WorkflowAndSkill,
+}
+
+impl PackageBehavior {
+    fn includes_workflow(self) -> bool {
+        matches!(self, Self::WorkflowOnly | Self::WorkflowAndSkill)
+    }
+
+    fn includes_skill(self) -> bool {
+        matches!(self, Self::SkillOnly | Self::WorkflowAndSkill)
+    }
+}
+
 struct ProjectConfig {
     name: String,
     description: String,
     author: String,
     license: String,
     project_type: ProjectType,
+    package_behavior: PackageBehavior,
     language: String,
     private: bool,
     package_manager: Option<String>,
@@ -94,16 +130,39 @@ struct ProjectConfig {
 
 // Template constants using include_str!
 const CODEMOD_TEMPLATE: &str = include_str!("../templates/codemod.yaml");
+const SKILL_CODEMOD_TEMPLATE: &str = include_str!("../templates/skill/codemod.yaml");
 const SHELL_WORKFLOW_TEMPLATE: &str = include_str!("../templates/shell/workflow.yaml");
 const JS_ASTGREP_WORKFLOW_TEMPLATE: &str = include_str!("../templates/js-astgrep/workflow.yaml");
 const ASTGREP_YAML_WORKFLOW_TEMPLATE: &str =
     include_str!("../templates/astgrep-yaml/workflow.yaml");
 const HYBRID_WORKFLOW_TEMPLATE: &str = include_str!("../templates/hybrid/workflow.yaml");
+const HYBRID_TOML_WORKFLOW_TEMPLATE: &str = include_str!("../templates/hybrid/workflow.toml.yaml");
+const SKILL_WORKFLOW_TEMPLATE: &str = include_str!("../templates/skill/workflow.yaml");
 const GITIGNORE_TEMPLATE: &str = include_str!("../templates/common/.gitignore");
 const README_TEMPLATE: &str = include_str!("../templates/common/README.md");
+const SKILL_README_TEMPLATE: &str = include_str!("../templates/skill/README.md");
+const WORKSPACE_SKILL_ROOT_README_TEMPLATE: &str =
+    include_str!("../templates/common/workspace-skill-root-README.md");
 const GITHUB_ACTION_TEMPLATE: &str = include_str!("../templates/common/publish.yml");
 const GITHUB_ACTION_WORKSPACE_TEMPLATE: &str =
     include_str!("../templates/common/publish-workspace.yml");
+const SKILL_TEMPLATE: &str = include_str!("../templates/skill/SKILL.md");
+const SKILL_REFERENCES_INDEX_TEMPLATE: &str =
+    include_str!("../templates/skill/references/index.md");
+const SKILL_REFERENCES_USAGE_TEMPLATE: &str =
+    include_str!("../templates/skill/references/usage.md");
+const INSTALL_SKILL_NODE_TEMPLATE: &str = r#"
+
+  - id: install-package-skill
+    name: Install Package Skill
+    type: automatic
+    steps:
+      - id: install-package-skill
+        name: Install package skill
+        install-skill:
+          package: "{name}"
+          path: "{skill_path}"
+"#;
 
 // Shell project templates
 const SHELL_SETUP_SCRIPT: &str = include_str!("../templates/shell/scripts/setup.sh");
@@ -123,6 +182,8 @@ const JS_APPLY_SCRIPT_FOR_JAVA: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.java.ts");
 const JS_APPLY_SCRIPT_FOR_HTML: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.html.ts");
+const JS_APPLY_SCRIPT_FOR_XML: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.xml.ts");
 const JS_APPLY_SCRIPT_FOR_CSS: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.css.ts");
 const JS_APPLY_SCRIPT_FOR_KOTLIN: &str =
@@ -144,6 +205,8 @@ const JS_APPLY_SCRIPT_FOR_JSON: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.json.ts");
 const JS_APPLY_SCRIPT_FOR_YAML: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.yaml.ts");
+const JS_APPLY_SCRIPT_FOR_TOML: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.toml.ts");
 const JS_TSCONFIG_TEMPLATE: &str = include_str!("../templates/js-astgrep/tsconfig.json");
 
 // fixtures
@@ -162,6 +225,8 @@ const JAVA_TEST_EXPECTED: &str =
 const HTML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.html");
 const HTML_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.html");
+const XML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.xml");
+const XML_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixtures/expected.xml");
 const CSS_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.css");
 const CSS_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixtures/expected.css");
 const KOTLIN_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.kt");
@@ -191,6 +256,9 @@ const JSON_TEST_EXPECTED: &str =
 const YAML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.yaml");
 const YAML_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.yaml");
+const TOML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.toml");
+const TOML_TEST_EXPECTED: &str =
+    include_str!("../templates/js-astgrep/tests/fixtures/expected.toml");
 
 // ast-grep YAML project templates
 const ASTGREP_PATTERNS_FOR_JAVASCRIPT: &str =
@@ -204,6 +272,8 @@ const ASTGREP_PATTERNS_FOR_JAVA: &str =
     include_str!("../templates/astgrep-yaml/rules/config.java.yml");
 const ASTGREP_PATTERNS_FOR_HTML: &str =
     include_str!("../templates/astgrep-yaml/rules/config.html.yml");
+const ASTGREP_PATTERNS_FOR_XML: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.xml.yml");
 const ASTGREP_PATTERNS_FOR_CSS: &str =
     include_str!("../templates/astgrep-yaml/rules/config.css.yml");
 const ASTGREP_PATTERNS_FOR_KOTLIN: &str =
@@ -285,33 +355,60 @@ pub fn handler(args: &Command) -> Result<()> {
     }
 
     let config = if args.no_interactive {
-        let project_type = args
-            .project_type
-            .clone()
-            .ok_or_else(|| anyhow!("Project type is required --project-type"))?;
-        let normalized_project_type = match project_type {
-            ProjectType::Shell | ProjectType::AstGrepYaml => {
-                println!(
-                    "{} Deprecated project type selected; scaffolding a Hybrid (Shell + YAML + jssg) package",
-                    style("ℹ").cyan(),
-                );
-                ProjectType::Hybrid
-            }
-            other => other,
+        let package_behavior = package_behavior_from_flags(args.skill, args.with_skill)?;
+        if package_behavior == PackageBehavior::SkillOnly && args.project_type.is_some() {
+            return Err(anyhow!(
+                "--project-type cannot be used with --skill. Remove --project-type for skill-only scaffolding."
+            ));
+        }
+
+        let project_type = if package_behavior.includes_workflow() {
+            let selected_project_type = args
+                .project_type
+                .clone()
+                .ok_or_else(|| anyhow!("Project type is required --project-type"))?;
+            normalize_project_type(selected_project_type)
+        } else {
+            // Skill-only packages do not scaffold workflow project assets.
+            ProjectType::AstGrepJs
         };
+
         let package_manager = match (
-            &normalized_project_type,
+            package_behavior,
+            &project_type,
             args.package_manager.clone(),
             args.workspace,
         ) {
-            (ProjectType::AstGrepJs, Some(pm), _) | (ProjectType::Hybrid, Some(pm), _) => Some(pm),
-            (_, Some(pm), true) => Some(pm), // Workspace mode always needs package manager
-            (ProjectType::AstGrepJs, None, _) | (ProjectType::Hybrid, None, _) => {
+            (
+                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
+                ProjectType::AstGrepJs,
+                Some(pm),
+                _,
+            )
+            | (
+                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
+                ProjectType::Hybrid,
+                Some(pm),
+                _,
+            )
+            | (_, _, Some(pm), true) => Some(pm),
+            (
+                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
+                ProjectType::AstGrepJs,
+                None,
+                _,
+            )
+            | (
+                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
+                ProjectType::Hybrid,
+                None,
+                _,
+            ) => {
                 return Err(anyhow!(
                     "--package-manager is required when --project-type is ast-grep-js or hybrid"
                 ));
             }
-            (_, None, true) => {
+            (_, _, None, true) => {
                 return Err(anyhow!(
                     "--package-manager is required when --workspace is enabled"
                 ));
@@ -332,7 +429,8 @@ pub fn handler(args: &Command) -> Result<()> {
                 .license
                 .clone()
                 .ok_or_else(|| anyhow!("License is required --license"))?,
-            project_type: normalized_project_type.clone(),
+            project_type,
+            package_behavior,
             language: args
                 .language
                 .clone()
@@ -379,6 +477,62 @@ fn get_codemod_dir_name(name: &str) -> String {
     }
 }
 
+fn codemod_scope(name: &str) -> Option<&str> {
+    let trimmed = name.trim();
+    if !trimmed.starts_with('@') {
+        return None;
+    }
+
+    let scope_end = trimmed.find('/')?;
+    Some(&trimmed[1..scope_end])
+}
+
+fn workspace_root_readme_title(name: &str) -> String {
+    codemod_scope(name)
+        .map(|scope| format!("# @{} Codemods", scope))
+        .unwrap_or_else(|| "# Organization Codemods".to_string())
+}
+
+fn workspace_root_readme_org_label(name: &str) -> String {
+    codemod_scope(name)
+        .map(|scope| format!("the `@{scope}` organization scope"))
+        .unwrap_or_else(|| "your organization".to_string())
+}
+
+fn workspace_root_readme_scope_guidance(name: &str) -> String {
+    codemod_scope(name)
+        .map(|scope| {
+            format!(
+                "Publish packages under the `@{scope}/*` scope so they stay grouped in the Codemod Registry."
+            )
+        })
+        .unwrap_or_else(|| {
+            "Reserve an organization scope in Codemod before publishing so your packages stay grouped in the Codemod Registry.".to_string()
+        })
+}
+
+fn normalize_project_type(selected: ProjectType) -> ProjectType {
+    match selected {
+        ProjectType::Shell | ProjectType::AstGrepYaml => {
+            println!(
+                "{} Deprecated project type selected; scaffolding a Hybrid (Shell + YAML + jssg) package",
+                style("ℹ").cyan(),
+            );
+            ProjectType::Hybrid
+        }
+        other => other,
+    }
+}
+
+fn package_behavior_from_flags(skill: bool, with_skill: bool) -> Result<PackageBehavior> {
+    match (skill, with_skill) {
+        (true, true) => Err(anyhow!("--skill and --with-skill cannot be used together")),
+        (true, false) => Ok(PackageBehavior::SkillOnly),
+        (false, true) => Ok(PackageBehavior::WorkflowAndSkill),
+        (false, false) => Ok(PackageBehavior::WorkflowOnly),
+    }
+}
+
 fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig> {
     println!(
         "{} {}",
@@ -387,11 +541,62 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
     );
     println!();
 
-    // Project type selection
-    let project_type = if let Some(pt) = &args.project_type {
-        pt.clone()
+    let (project_type, package_behavior) = if args.skill || args.with_skill {
+        let package_behavior = package_behavior_from_flags(args.skill, args.with_skill)?;
+        if package_behavior == PackageBehavior::SkillOnly && args.project_type.is_some() {
+            return Err(anyhow!(
+                "--project-type cannot be used with --skill. Remove --project-type for skill-only scaffolding."
+            ));
+        }
+        let project_type = if package_behavior.includes_workflow() {
+            if let Some(pt) = &args.project_type {
+                normalize_project_type(pt.clone())
+            } else {
+                select_project_type()?
+            }
+        } else {
+            ProjectType::AstGrepJs
+        };
+        (project_type, package_behavior)
+    } else if let Some(pt) = &args.project_type {
+        let project_type = normalize_project_type(pt.clone());
+        let with_skill = Confirm::new("Would you like to add an agent skill?")
+            .with_default(false)
+            .prompt()?;
+        let package_behavior = if with_skill {
+            PackageBehavior::WorkflowAndSkill
+        } else {
+            PackageBehavior::WorkflowOnly
+        };
+        (project_type, package_behavior)
     } else {
-        select_project_type()?
+        match select_interactive_codemod_type()? {
+            InteractiveCodemodType::AgentSkill => {
+                (ProjectType::AstGrepJs, PackageBehavior::SkillOnly)
+            }
+            InteractiveCodemodType::Jssg => {
+                let with_skill = Confirm::new("Would you like to add an agent skill?")
+                    .with_default(false)
+                    .prompt()?;
+                let package_behavior = if with_skill {
+                    PackageBehavior::WorkflowAndSkill
+                } else {
+                    PackageBehavior::WorkflowOnly
+                };
+                (ProjectType::AstGrepJs, package_behavior)
+            }
+            InteractiveCodemodType::MultiStepWorkflow => {
+                let with_skill = Confirm::new("Would you like to add an agent skill?")
+                    .with_default(false)
+                    .prompt()?;
+                let package_behavior = if with_skill {
+                    PackageBehavior::WorkflowAndSkill
+                } else {
+                    PackageBehavior::WorkflowOnly
+                };
+                (ProjectType::Hybrid, package_behavior)
+            }
+        }
     };
 
     // Language selection
@@ -460,19 +665,6 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
             .prompt()?
     };
 
-    let package_manager = if args.package_manager.is_some() {
-        args.package_manager.clone()
-    } else {
-        Some(
-            Select::new(
-                "Which package manager would you like to use?",
-                vec!["npm", "pnpm", "bun", "yarn"],
-            )
-            .prompt()?
-            .to_string(),
-        )
-    };
-
     let workspace = if args.workspace {
         true
     } else {
@@ -482,6 +674,24 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
                 "Organizes codemods in a 'codemods/' folder with shared workspace config",
             )
             .prompt()?
+    };
+
+    let requires_package_manager = (package_behavior.includes_workflow()
+        && matches!(project_type, ProjectType::AstGrepJs | ProjectType::Hybrid))
+        || workspace;
+    let package_manager = if args.package_manager.is_some() {
+        args.package_manager.clone()
+    } else if requires_package_manager {
+        Some(
+            Select::new(
+                "Which package manager would you like to use?",
+                vec!["npm", "pnpm", "bun", "yarn"],
+            )
+            .prompt()?
+            .to_string(),
+        )
+    } else {
+        None
     };
 
     let github_action = if args.github_action {
@@ -504,6 +714,7 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         author,
         license,
         project_type,
+        package_behavior,
         language,
         private,
         package_manager,
@@ -515,6 +726,26 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
         github_action,
         workspace,
     })
+}
+
+fn select_interactive_codemod_type() -> Result<InteractiveCodemodType> {
+    let options = vec![
+        "jssg codemod (covers most use cases)",
+        "multi-step workflow (shell command, YAML & jssg)",
+        "agent skill codemod",
+    ];
+
+    let selection =
+        Select::new("What type of codemod would you like to create?", options).prompt()?;
+
+    match selection {
+        "jssg codemod (covers most use cases)" => Ok(InteractiveCodemodType::Jssg),
+        "multi-step workflow (shell command, YAML & jssg)" => {
+            Ok(InteractiveCodemodType::MultiStepWorkflow)
+        }
+        "agent skill codemod" => Ok(InteractiveCodemodType::AgentSkill),
+        _ => Ok(InteractiveCodemodType::Jssg), // Default fallback
+    }
 }
 
 fn select_project_type() -> Result<ProjectType> {
@@ -541,6 +772,7 @@ fn select_language() -> Result<String> {
         "Go",
         "Java",
         "HTML",
+        "XML",
         "CSS",
         "Kotlin",
         "Angular",
@@ -552,6 +784,7 @@ fn select_language() -> Result<String> {
         "Elixir",
         "Json",
         "Yaml",
+        "Toml",
         "Other",
     ];
 
@@ -564,6 +797,7 @@ fn select_language() -> Result<String> {
         "Go" => "go",
         "Java" => "java",
         "HTML" => "html",
+        "XML" => "xml",
         "CSS" => "css",
         "Kotlin" => "kotlin",
         "Angular" => "angular",
@@ -575,6 +809,7 @@ fn select_language() -> Result<String> {
         "Elixir" => "elixir",
         "Json" => "json",
         "Yaml" => "yaml",
+        "Toml" => "toml",
         "Other" => {
             let custom = Text::new("Enter language name:").prompt()?;
             return Ok(custom);
@@ -592,15 +827,22 @@ fn create_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     // Create codemod.yaml
     create_manifest(project_path, config)?;
 
-    // Create workflow.yaml
+    // Always create workflow.yaml (workflow-first package model)
     create_workflow(project_path, config)?;
 
-    // Create project-specific structure
-    match config.project_type {
-        ProjectType::Shell => create_shell_project(project_path, config)?,
-        ProjectType::AstGrepJs => create_js_astgrep_project(project_path, config)?,
-        ProjectType::AstGrepYaml => create_astgrep_yaml_project(project_path, config)?,
-        ProjectType::Hybrid => create_hybrid_project(project_path, config)?,
+    // Create workflow project structure
+    if config.package_behavior.includes_workflow() {
+        match config.project_type {
+            ProjectType::Shell => create_shell_project(project_path, config)?,
+            ProjectType::AstGrepJs => create_js_astgrep_project(project_path, config)?,
+            ProjectType::AstGrepYaml => create_astgrep_yaml_project(project_path, config)?,
+            ProjectType::Hybrid => create_hybrid_project(project_path, config)?,
+        }
+    }
+
+    // Create skill assets if requested
+    if config.package_behavior.includes_skill() {
+        create_skill_project(project_path, config)?;
     }
 
     // Create common files
@@ -623,7 +865,13 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         String::new()
     };
 
-    let manifest_content = CODEMOD_TEMPLATE
+    let template = if config.package_behavior == PackageBehavior::SkillOnly {
+        SKILL_CODEMOD_TEMPLATE
+    } else {
+        CODEMOD_TEMPLATE
+    };
+
+    let manifest_content = template
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
         .replace("{author}", &config.author)
@@ -644,16 +892,71 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 }
 
 fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    let workflow_content = match config.project_type {
-        ProjectType::Shell => SHELL_WORKFLOW_TEMPLATE,
-        ProjectType::AstGrepJs => JS_ASTGREP_WORKFLOW_TEMPLATE,
-        ProjectType::AstGrepYaml => ASTGREP_YAML_WORKFLOW_TEMPLATE,
-        ProjectType::Hybrid => HYBRID_WORKFLOW_TEMPLATE,
+    let default_skill_path = expected_authored_skill_relative_file(&config.name);
+    let mut workflow_content = if config.package_behavior == PackageBehavior::SkillOnly {
+        SKILL_WORKFLOW_TEMPLATE
+            .replace("{name}", &config.name)
+            .replace("{skill_path}", &default_skill_path)
+    } else {
+        let template = if config.project_type == ProjectType::Hybrid && config.language == "toml" {
+            HYBRID_TOML_WORKFLOW_TEMPLATE
+        } else {
+            match config.project_type {
+                ProjectType::Shell => SHELL_WORKFLOW_TEMPLATE,
+                ProjectType::AstGrepJs => JS_ASTGREP_WORKFLOW_TEMPLATE,
+                ProjectType::AstGrepYaml => ASTGREP_YAML_WORKFLOW_TEMPLATE,
+                ProjectType::Hybrid => HYBRID_WORKFLOW_TEMPLATE,
+            }
+        };
+
+        template.replace("{language}", &config.language).replace(
+            "{include_patterns}",
+            &default_include_patterns(&config.language),
+        )
+    };
+
+    if config.package_behavior == PackageBehavior::WorkflowAndSkill {
+        workflow_content.push_str(
+            &INSTALL_SKILL_NODE_TEMPLATE
+                .replace("{name}", &config.name)
+                .replace("{skill_path}", &default_skill_path),
+        );
     }
-    .replace("{language}", &config.language);
 
     fs::write(project_path.join("workflow.yaml"), workflow_content)?;
     Ok(())
+}
+
+fn default_include_patterns(language: &str) -> String {
+    let patterns: &[&str] = match language {
+        "javascript" => &["**/*.{js,jsx,mjs,cjs}"],
+        "typescript" => &["**/*.{ts,tsx,mts,cts}"],
+        "python" => &["**/*.py"],
+        "rust" => &["**/*.rs"],
+        "go" => &["**/*.go"],
+        "java" => &["**/*.java"],
+        "html" => &["**/*.html"],
+        "xml" => &["**/*.{xml,csproj,props,targets,config,resx,xaml}"],
+        "css" => &["**/*.css"],
+        "kotlin" => &["**/*.kt"],
+        "angular" => &["**/*.html"],
+        "csharp" => &["**/*.cs"],
+        "cpp" => &["**/*.{cpp,cc,cxx,hpp,hh,hxx}"],
+        "c" => &["**/*.{c,h}"],
+        "php" => &["**/*.php"],
+        "ruby" => &["**/*.rb"],
+        "elixir" => &["**/*.{ex,exs}"],
+        "json" => &["**/*.json"],
+        "yaml" => &["**/*.{yaml,yml}"],
+        "toml" => &["**/*.toml"],
+        _ => &["**/*"],
+    };
+
+    patterns
+        .iter()
+        .map(|pattern| format!("            - \"{pattern}\""))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn create_shell_project(project_path: &Path, _config: &ProjectConfig) -> Result<()> {
@@ -674,21 +977,13 @@ fn create_shell_project(project_path: &Path, _config: &ProjectConfig) -> Result<
 }
 
 fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    let codemod_command = if let Some(package_manager) = &config.package_manager {
-        match package_manager.as_str() {
-            "npm" => "npx codemod@latest",
-            "yarn" => "yarn dlx codemod@latest",
-            "pnpm" => "pnpm dlx codemod@latest",
-            "bun" => "bunx codemod@latest",
-            _ => "npx codemod@latest",
-        }
-    } else {
-        "npx codemod@latest"
-    };
+    let package_manager = selected_package_manager(config);
+    let codemod_command = codemod_cli_command_for_package_manager(package_manager);
     // Create package.json
     let package_json = JS_PACKAGE_JSON_TEMPLATE
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
+        .replace("{package_manager}", selected_package_manager_spec(config))
         .replace("{codemod_command}", codemod_command);
 
     fs::write(project_path.join("package.json"), package_json)?;
@@ -704,6 +999,7 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
         "go" => JS_APPLY_SCRIPT_FOR_GO.to_string(),
         "java" => JS_APPLY_SCRIPT_FOR_JAVA.to_string(),
         "html" => JS_APPLY_SCRIPT_FOR_HTML.to_string(),
+        "xml" => JS_APPLY_SCRIPT_FOR_XML.to_string(),
         "css" => JS_APPLY_SCRIPT_FOR_CSS.to_string(),
         "kotlin" => JS_APPLY_SCRIPT_FOR_KOTLIN.to_string(),
         "angular" => JS_APPLY_SCRIPT_FOR_ANGULAR.to_string(),
@@ -715,6 +1011,7 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
         "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR.to_string(),
         "json" => JS_APPLY_SCRIPT_FOR_JSON.to_string(),
         "yaml" => JS_APPLY_SCRIPT_FOR_YAML.to_string(),
+        "toml" => JS_APPLY_SCRIPT_FOR_TOML.to_string(),
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT.to_string(),
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script.as_str())?;
@@ -729,7 +1026,6 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
 }
 
 fn create_astgrep_yaml_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    // Create rules directory
     let rules_dir = project_path.join("rules");
     fs::create_dir_all(&rules_dir)?;
 
@@ -740,6 +1036,7 @@ fn create_astgrep_yaml_project(project_path: &Path, config: &ProjectConfig) -> R
         "go" => ASTGREP_PATTERNS_FOR_GO,
         "java" => ASTGREP_PATTERNS_FOR_JAVA,
         "html" => ASTGREP_PATTERNS_FOR_HTML,
+        "xml" => ASTGREP_PATTERNS_FOR_XML,
         "css" => ASTGREP_PATTERNS_FOR_CSS,
         "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
         "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
@@ -781,6 +1078,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
         "go" => JS_APPLY_SCRIPT_FOR_GO,
         "java" => JS_APPLY_SCRIPT_FOR_JAVA,
         "html" => JS_APPLY_SCRIPT_FOR_HTML,
+        "xml" => JS_APPLY_SCRIPT_FOR_XML,
         "css" => JS_APPLY_SCRIPT_FOR_CSS,
         "kotlin" => JS_APPLY_SCRIPT_FOR_KOTLIN,
         "angular" => JS_APPLY_SCRIPT_FOR_ANGULAR,
@@ -792,47 +1090,40 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
         "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR,
         "json" => JS_APPLY_SCRIPT_FOR_JSON,
         "yaml" => JS_APPLY_SCRIPT_FOR_YAML,
+        "toml" => JS_APPLY_SCRIPT_FOR_TOML,
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT,
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script)?;
 
-    // Create rules directory
-    let rules_dir = project_path.join("rules");
-    fs::create_dir_all(&rules_dir)?;
+    if config.language != "toml" {
+        let rules_dir = project_path.join("rules");
+        fs::create_dir_all(&rules_dir)?;
 
-    let config_file = match config.language.as_str() {
-        "javascript" | "typescript" => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
-        "python" => ASTGREP_PATTERNS_FOR_PYTHON,
-        "rust" => ASTGREP_PATTERNS_FOR_RUST,
-        "go" => ASTGREP_PATTERNS_FOR_GO,
-        "java" => ASTGREP_PATTERNS_FOR_JAVA,
-        "html" => ASTGREP_PATTERNS_FOR_HTML,
-        "css" => ASTGREP_PATTERNS_FOR_CSS,
-        "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
-        "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
-        "csharp" => ASTGREP_PATTERNS_FOR_CSHARP,
-        "cpp" => ASTGREP_PATTERNS_FOR_CPP,
-        "c" => ASTGREP_PATTERNS_FOR_C,
-        "php" => ASTGREP_PATTERNS_FOR_PHP,
-        "ruby" => ASTGREP_PATTERNS_FOR_RUBY,
-        "elixir" => ASTGREP_PATTERNS_FOR_ELIXIR,
-        "json" => ASTGREP_PATTERNS_FOR_JSON,
-        "yaml" => ASTGREP_PATTERNS_FOR_YAML,
-        _ => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
-    };
-    fs::write(rules_dir.join("config.yml"), config_file)?;
-
-    // Create tests directory
-    let tests_dir = project_path.join("tests");
-    fs::create_dir_all(tests_dir.join("fixtures"))?;
-
-    if config.language == "javascript" || config.language == "typescript" {
-        fs::write(tests_dir.join("fixtures").join("input.js"), JS_TEST_INPUT)?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.js"),
-            JS_TEST_EXPECTED,
-        )?;
+        let config_file = match config.language.as_str() {
+            "javascript" | "typescript" => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
+            "python" => ASTGREP_PATTERNS_FOR_PYTHON,
+            "rust" => ASTGREP_PATTERNS_FOR_RUST,
+            "go" => ASTGREP_PATTERNS_FOR_GO,
+            "java" => ASTGREP_PATTERNS_FOR_JAVA,
+            "html" => ASTGREP_PATTERNS_FOR_HTML,
+            "xml" => ASTGREP_PATTERNS_FOR_XML,
+            "css" => ASTGREP_PATTERNS_FOR_CSS,
+            "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
+            "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
+            "csharp" => ASTGREP_PATTERNS_FOR_CSHARP,
+            "cpp" => ASTGREP_PATTERNS_FOR_CPP,
+            "c" => ASTGREP_PATTERNS_FOR_C,
+            "php" => ASTGREP_PATTERNS_FOR_PHP,
+            "ruby" => ASTGREP_PATTERNS_FOR_RUBY,
+            "elixir" => ASTGREP_PATTERNS_FOR_ELIXIR,
+            "json" => ASTGREP_PATTERNS_FOR_JSON,
+            "yaml" => ASTGREP_PATTERNS_FOR_YAML,
+            _ => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
+        };
+        fs::write(rules_dir.join("config.yml"), config_file)?;
     }
+
+    create_js_tests(project_path, config)?;
 
     // Create package.json and tsconfig.json at project root
     let package_json_content = format!(
@@ -840,6 +1131,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
   "name": "{}",
   "version": "1.0.0",
   "description": "{}",
+  "packageManager": "{}",
   "main": "scripts/codemod.ts",
   "scripts": {{
     "test": "node scripts/codemod.ts"
@@ -849,10 +1141,12 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
   }},
   "devDependencies": {{
     "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^7.0.0"
   }}
 }}"#,
-        config.name, config.description
+        config.name,
+        config.description,
+        selected_package_manager_spec(config)
     );
 
     let tsconfig_content = r#"{
@@ -877,6 +1171,29 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
 
     fs::write(project_path.join("package.json"), package_json_content)?;
     fs::write(project_path.join("tsconfig.json"), tsconfig_content)?;
+
+    Ok(())
+}
+
+fn create_skill_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    let skill_root = project_path
+        .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
+        .join(get_codemod_dir_name(&config.name));
+    let references_dir = skill_root.join("references");
+    fs::create_dir_all(&references_dir)?;
+
+    let skill_content = SKILL_TEMPLATE
+        .replace("{name}", &config.name)
+        .replace("{description}", &config.description);
+    fs::write(skill_root.join("SKILL.md"), skill_content)?;
+
+    let references_index = SKILL_REFERENCES_INDEX_TEMPLATE.replace("{name}", &config.name);
+    fs::write(references_dir.join("index.md"), references_index)?;
+
+    let references_usage = SKILL_REFERENCES_USAGE_TEMPLATE
+        .replace("{name}", &config.name)
+        .replace("{description}", &config.description);
+    fs::write(references_dir.join("usage.md"), references_usage)?;
 
     Ok(())
 }
@@ -920,6 +1237,12 @@ fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         fs::write(
             tests_dir.join("fixtures").join("expected.java"),
             JAVA_TEST_EXPECTED,
+        )?;
+    } else if config.language == "xml" {
+        fs::write(tests_dir.join("fixtures").join("input.xml"), XML_TEST_INPUT)?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.xml"),
+            XML_TEST_EXPECTED,
         )?;
     } else if config.language == "csharp" {
         fs::write(
@@ -1014,6 +1337,15 @@ fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             tests_dir.join("fixtures").join("expected.yaml"),
             YAML_TEST_EXPECTED,
         )?;
+    } else if config.language == "toml" {
+        fs::write(
+            tests_dir.join("fixtures").join("input.toml"),
+            TOML_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.toml"),
+            TOML_TEST_EXPECTED,
+        )?;
     }
 
     Ok(())
@@ -1025,19 +1357,48 @@ fn create_gitignore(project_path: &Path) -> Result<()> {
 }
 
 fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    let test_command = match config.project_type {
-        ProjectType::Shell => "bash scripts/transform.sh",
-        ProjectType::AstGrepJs => "npm test",
-        ProjectType::AstGrepYaml => "ast-grep test rules/",
-        ProjectType::Hybrid => "npm test",
+    let package_manager = selected_package_manager(config);
+    let test_command = if config.package_behavior == PackageBehavior::SkillOnly {
+        format!(
+            "{} {}",
+            codemod_cli_command_for_package_manager(package_manager),
+            config.name
+        )
+    } else {
+        match config.project_type {
+            ProjectType::Shell => "bash scripts/transform.sh".to_string(),
+            ProjectType::AstGrepJs => package_manager_test_command(package_manager),
+            ProjectType::AstGrepYaml => "ast-grep test rules/".to_string(),
+            ProjectType::Hybrid => package_manager_test_command(package_manager),
+        }
     };
 
-    let readme_content = README_TEMPLATE
+    let template = if config.package_behavior == PackageBehavior::SkillOnly {
+        SKILL_README_TEMPLATE
+    } else {
+        README_TEMPLATE
+    };
+
+    let mut readme_content = template
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
         .replace("{language}", &config.language)
-        .replace("{test_command}", test_command)
+        .replace("{test_command}", &test_command)
         .replace("{license}", &config.license);
+
+    if config.package_behavior == PackageBehavior::WorkflowAndSkill {
+        readme_content.push_str(&format!(
+            r#"
+## Skill Installation
+
+```bash
+{} {}
+```
+"#,
+            codemod_cli_command_for_package_manager(package_manager),
+            config.name
+        ));
+    }
 
     fs::write(project_path.join("README.md"), readme_content)?;
     Ok(())
@@ -1052,6 +1413,22 @@ fn create_github_action(project_path: &Path, workspace: bool) -> Result<()> {
         GITHUB_ACTION_TEMPLATE
     };
     fs::write(workflows_dir.join("publish.yml"), template)?;
+    Ok(())
+}
+
+fn create_workspace_root_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    let readme_content = WORKSPACE_SKILL_ROOT_README_TEMPLATE
+        .replace("{title}", &workspace_root_readme_title(&config.name))
+        .replace(
+            "{org_label}",
+            &workspace_root_readme_org_label(&config.name),
+        )
+        .replace(
+            "{scope_guidance}",
+            &workspace_root_readme_scope_guidance(&config.name),
+        );
+
+    fs::write(project_path.join("README.md"), readme_content)?;
     Ok(())
 }
 
@@ -1073,6 +1450,9 @@ fn create_workspace_project(project_path: &Path, config: &ProjectConfig) -> Resu
     // Create root workspace files
     create_workspace_root_package_json(project_path, config)?;
     create_gitignore(project_path)?;
+    if config.package_behavior.includes_skill() {
+        create_workspace_root_readme(project_path, config)?;
+    }
 
     // Create GitHub Actions workflow at root level if requested
     if config.github_action {
@@ -1090,15 +1470,22 @@ fn create_codemod_in_workspace(codemod_path: &Path, config: &ProjectConfig) -> R
     // Create codemod.yaml
     create_manifest(codemod_path, config)?;
 
-    // Create workflow.yaml
+    // Always create workflow.yaml (workflow-first package model)
     create_workflow(codemod_path, config)?;
 
-    // Create project-specific structure
-    match config.project_type {
-        ProjectType::Shell => create_shell_project(codemod_path, config)?,
-        ProjectType::AstGrepJs => create_js_astgrep_project(codemod_path, config)?,
-        ProjectType::AstGrepYaml => create_astgrep_yaml_project(codemod_path, config)?,
-        ProjectType::Hybrid => create_hybrid_project(codemod_path, config)?,
+    // Create workflow project structure
+    if config.package_behavior.includes_workflow() {
+        match config.project_type {
+            ProjectType::Shell => create_shell_project(codemod_path, config)?,
+            ProjectType::AstGrepJs => create_js_astgrep_project(codemod_path, config)?,
+            ProjectType::AstGrepYaml => create_astgrep_yaml_project(codemod_path, config)?,
+            ProjectType::Hybrid => create_hybrid_project(codemod_path, config)?,
+        }
+    }
+
+    // Create skill assets if requested
+    if config.package_behavior.includes_skill() {
+        create_skill_project(codemod_path, config)?;
     }
 
     // Create codemod-specific readme
@@ -1140,9 +1527,14 @@ fn create_workspace_root_package_json(project_path: &Path, config: &ProjectConfi
 }
 
 fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    if !config.package_behavior.includes_workflow() {
+        return Ok(());
+    }
+
     match config.project_type {
         ProjectType::AstGrepJs | ProjectType::Hybrid => {
-            let package_manager = config.package_manager.clone().unwrap_or("npm".to_string());
+            let package_manager = selected_package_manager(config);
+            let install_command = package_manager_install_command(package_manager);
 
             let output = ProcessCommand::new(package_manager)
                 .arg("install")
@@ -1164,15 +1556,15 @@ fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result
                         );
                         println!(
                             "  You can run {} manually later",
-                            style("npm install").cyan()
+                            style(&install_command).cyan()
                         );
                     }
                 }
                 Err(e) => {
-                    println!("{} npm not found: {}", style("⚠").red(), e);
+                    println!("{} {} not found: {}", style("⚠").red(), package_manager, e);
                     println!(
                         "  You can run {} manually later",
-                        style("npm install").cyan()
+                        style(&install_command).cyan()
                     );
                 }
             }
@@ -1258,6 +1650,8 @@ fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result
 
 fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let codemod_dir_name = get_codemod_dir_name(&config.name);
+    let package_manager = selected_package_manager(config);
+    let codemod_command = codemod_cli_command_for_package_manager(package_manager);
 
     println!();
     if config.workspace {
@@ -1278,7 +1672,15 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             style(&config.name).green().bold()
         );
         println!("{CHECKMARK} Generated codemod.yaml manifest");
-        println!("{CHECKMARK} Generated workflow.yaml definition");
+        if config.package_behavior.includes_workflow() {
+            println!("{CHECKMARK} Generated workflow.yaml definition");
+        }
+        if config.package_behavior.includes_skill() {
+            println!(
+                "{CHECKMARK} Generated skill assets under {}/{}/",
+                AGENTS_SKILL_ROOT_RELATIVE_PATH, codemod_dir_name
+            );
+        }
         println!("{CHECKMARK} Created project structure");
     }
     if config.github_action {
@@ -1294,43 +1696,80 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     println!();
     println!("{}", style("Next steps:").bold());
 
-    // Determine the path to the workflow.yaml
-    let workflow_path = if config.workspace {
-        format!(
-            "{}/codemods/{}/workflow.yaml",
-            project_path.display(),
-            codemod_dir_name
-        )
+    if config.package_behavior == PackageBehavior::SkillOnly {
+        println!();
+        println!(
+            "  {}",
+            style("Run the package to install skill behavior")
+                .bold()
+                .cyan()
+        );
+        println!(
+            "  {}",
+            style(format!("{} {}", codemod_command, config.name)).dim()
+        );
+        println!();
+        println!(
+            "  {}",
+            style("Run with harness after install").bold().cyan()
+        );
+        println!(
+            "  {}",
+            style("Use your harness to execute the installed skill instructions.").dim()
+        );
     } else {
-        format!("{}/workflow.yaml", project_path.display())
-    };
+        // Determine the path to the workflow.yaml
+        let workflow_path = if config.workspace {
+            format!(
+                "{}/codemods/{}/workflow.yaml",
+                project_path.display(),
+                codemod_dir_name
+            )
+        } else {
+            format!("{}/workflow.yaml", project_path.display())
+        };
 
-    println!();
-    println!("  {}", style("Validate your workflow").bold().cyan());
-    println!(
-        "  {}",
-        style(format!(
-            "npx codemod@latest workflow validate -w {}",
-            workflow_path
-        ))
-        .dim()
-    );
-    println!();
-    println!("  {}", style("Run your codemod locally").bold().cyan());
-    println!(
-        "  {}",
-        style("Warning: Target path is where you are and please run it on git tracked path")
-            .yellow()
-            .bold()
-    );
-    println!(
-        "  {}",
-        style(format!(
-            "npx codemod@latest workflow run -w {} --target ./some/target/path",
-            workflow_path
-        ))
-        .dim()
-    );
+        println!();
+        println!("  {}", style("Validate your workflow").bold().cyan());
+        println!(
+            "  {}",
+            style(format!(
+                "{} workflow validate -w {}",
+                codemod_command, workflow_path
+            ))
+            .dim()
+        );
+        println!();
+        println!("  {}", style("Run your codemod locally").bold().cyan());
+        println!(
+            "  {}",
+            style("Warning: Target path is where you are and please run it on git tracked path")
+                .yellow()
+                .bold()
+        );
+        println!(
+            "  {}",
+            style(format!(
+                "{} workflow run -w {} --target ./some/target/path",
+                codemod_command, workflow_path
+            ))
+            .dim()
+        );
+
+        if config.package_behavior.includes_skill() {
+            println!();
+            println!(
+                "  {}",
+                style("Run package and accept skill-install prompt")
+                    .bold()
+                    .cyan()
+            );
+            println!(
+                "  {}",
+                style(format!("{} {}", codemod_command, config.name)).dim()
+            );
+        }
+    }
     if config.github_action {
         println!();
         println!(
@@ -1379,4 +1818,454 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn selected_package_manager(config: &ProjectConfig) -> &str {
+    config.package_manager.as_deref().unwrap_or("npm")
+}
+
+fn selected_package_manager_spec(config: &ProjectConfig) -> &'static str {
+    match selected_package_manager(config) {
+        "yarn" => "yarn@4.x",
+        "pnpm" => "pnpm@10.x",
+        "bun" => "bun@1.x",
+        _ => "npm@10.x",
+    }
+}
+
+fn codemod_cli_command_for_package_manager(package_manager: &str) -> &'static str {
+    match package_manager {
+        "npm" => "npx codemod@latest",
+        "yarn" => "yarn dlx codemod@latest",
+        "pnpm" => "pnpm dlx codemod@latest",
+        "bun" => "bunx codemod@latest",
+        _ => "npx codemod@latest",
+    }
+}
+
+fn package_manager_install_command(package_manager: &str) -> String {
+    format!("{package_manager} install")
+}
+
+fn package_manager_test_command(package_manager: &str) -> String {
+    match package_manager {
+        "yarn" => "yarn test".to_string(),
+        "pnpm" => "pnpm test".to_string(),
+        "bun" => "bun run test".to_string(),
+        _ => "npm test".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::manifest::CodemodManifest;
+    use crate::utils::package_validation::validate_skill_behavior;
+    use tempfile::tempdir;
+
+    fn skill_project_config(workspace: bool) -> ProjectConfig {
+        ProjectConfig {
+            name: "@codemod/sample-skill".to_string(),
+            description: "Sample skill package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::SkillOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: if workspace {
+                Some("npm".to_string())
+            } else {
+                None
+            },
+            git_repository_url: Some("https://github.com/codemod/sample-skill".to_string()),
+            github_action: false,
+            workspace,
+        }
+    }
+
+    #[test]
+    fn create_project_skill_only_generates_skill_files_with_install_workflow() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("sample-skill");
+        let config = skill_project_config(false);
+
+        create_project(&project_path, &config).unwrap();
+
+        let skill_root = project_path
+            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
+            .join("sample-skill");
+        assert!(project_path.join("codemod.yaml").is_file());
+        assert!(skill_root.join("SKILL.md").is_file());
+        assert!(skill_root.join("references/index.md").is_file());
+        assert!(skill_root.join("references/usage.md").is_file());
+        assert!(project_path.join("README.md").is_file());
+        assert!(project_path.join("workflow.yaml").is_file());
+
+        let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
+        assert!(manifest.contains("capabilities:"));
+        assert!(manifest.contains("workflow: \"workflow.yaml\""));
+        let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
+        let validation = validate_skill_behavior(&project_path, &parsed_manifest).unwrap();
+        assert_eq!(validation.linked_reference_count, 1);
+        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("install-skill:"));
+        assert!(workflow.contains("package: \"@codemod/sample-skill\""));
+        assert!(workflow.contains("path: \"./agents/skill/sample-skill/SKILL.md\""));
+
+        let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
+        assert!(readme.contains("npx codemod@latest @codemod/sample-skill"));
+    }
+
+    #[test]
+    fn create_workspace_skill_only_places_skill_package_in_codemods_folder() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path().join("workspace");
+        let config = skill_project_config(true);
+
+        create_workspace_project(&workspace_path, &config).unwrap();
+
+        let codemod_path = workspace_path.join("codemods/sample-skill");
+        let skill_root = codemod_path
+            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
+            .join("sample-skill");
+        let root_readme = fs::read_to_string(workspace_path.join("README.md")).unwrap();
+        assert!(workspace_path.join("package.json").is_file());
+        assert!(workspace_path.join(".gitignore").is_file());
+        assert!(workspace_path.join("README.md").is_file());
+        assert!(codemod_path.join("codemod.yaml").is_file());
+        assert!(skill_root.join("SKILL.md").is_file());
+        assert!(skill_root.join("references/index.md").is_file());
+        assert!(codemod_path.join("workflow.yaml").is_file());
+        let manifest = fs::read_to_string(codemod_path.join("codemod.yaml")).unwrap();
+        let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
+        let validation = validate_skill_behavior(&codemod_path, &parsed_manifest).unwrap();
+        assert_eq!(validation.linked_reference_count, 1);
+        let workflow = fs::read_to_string(codemod_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("install-skill:"));
+        assert!(workflow.contains("path: \"./agents/skill/sample-skill/SKILL.md\""));
+
+        let readme = fs::read_to_string(codemod_path.join("README.md")).unwrap();
+        assert!(readme.contains("npx codemod@latest @codemod/sample-skill"));
+        assert!(root_readme.contains("## One-time setup"));
+        assert!(root_readme.contains("codemods/<slug>/"));
+        assert!(root_readme.contains("`@codemod/*`"));
+        assert!(root_readme.contains("## Running codemods"));
+    }
+
+    #[test]
+    fn create_manifest_for_workflow_projects_has_required_workflow_fields() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("workflow-project");
+        fs::create_dir_all(&project_path).unwrap();
+
+        let config = ProjectConfig {
+            name: "workflow-project".to_string(),
+            description: "Workflow package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::Hybrid,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("pnpm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_manifest(&project_path, &config).unwrap();
+        let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
+
+        // The init template now scaffolds the multi-workflow `workflows:`
+        // shape with a single `main` entry pointing at `workflow.yaml`.
+        assert!(manifest.contains("workflows:"));
+        assert!(manifest.contains("name: main"));
+        assert!(manifest.contains("path: workflow.yaml"));
+        assert!(manifest.contains("default: true"));
+        assert!(manifest.contains("capabilities: []"));
+        assert!(manifest.contains("Keep this aligned with the files matched in workflow.yaml."));
+    }
+
+    #[test]
+    fn create_toml_hybrid_project_uses_js_ast_grep_without_yaml_rules() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("toml-hybrid-project");
+
+        let config = ProjectConfig {
+            name: "toml-hybrid-project".to_string(),
+            description: "TOML hybrid package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::Hybrid,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "toml".to_string(),
+            private: false,
+            package_manager: Some("pnpm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_project(&project_path, &config).unwrap();
+
+        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("language: \"toml\""));
+        assert!(workflow.contains("depends_on: [shell-transform]"));
+        assert!(!workflow.contains("apply-yaml"));
+        assert!(!workflow.contains("\n        ast-grep:"));
+
+        let codemod_script = fs::read_to_string(project_path.join("scripts/codemod.ts")).unwrap();
+        assert!(codemod_script.contains("langs/toml"));
+
+        assert!(!project_path.join("rules/config.yml").exists());
+        assert!(project_path.join("tests/fixtures/input.toml").is_file());
+        assert!(project_path.join("tests/fixtures/expected.toml").is_file());
+    }
+
+    #[test]
+    fn create_project_with_skill_generates_workflow_and_skill_assets() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("hybrid-project");
+
+        let config = ProjectConfig {
+            name: "@codemod/hybrid-project".to_string(),
+            description: "Hybrid package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowAndSkill,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("npm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_project(&project_path, &config).unwrap();
+        let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
+        let skill_root = project_path
+            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
+            .join("hybrid-project");
+        let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
+
+        assert!(project_path.join("workflow.yaml").is_file());
+        assert!(skill_root.join("SKILL.md").is_file());
+        assert!(skill_root.join("references/index.md").is_file());
+        assert!(manifest.contains("workflows:"));
+        assert!(manifest.contains("path: workflow.yaml"));
+        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("install-skill:"));
+        assert!(workflow.contains("package: \"@codemod/hybrid-project\""));
+        assert!(workflow.contains("path: \"./agents/skill/hybrid-project/SKILL.md\""));
+        assert!(readme.contains("## Skill Installation"));
+        assert!(readme.contains("npx codemod@latest @codemod/hybrid-project"));
+    }
+
+    #[test]
+    fn create_project_preserves_selected_package_manager_in_generated_commands() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("yarn-project");
+
+        let config = ProjectConfig {
+            name: "yarn-project".to_string(),
+            description: "Yarn workflow package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("yarn".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_project(&project_path, &config).unwrap();
+
+        let package_json = fs::read_to_string(project_path.join("package.json")).unwrap();
+        let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
+
+        assert!(package_json.contains("\"packageManager\": \"yarn@4.x\""));
+        assert!(package_json.contains("yarn dlx codemod@latest jssg test"));
+        assert!(readme.contains("yarn test"));
+        assert!(!readme.contains("npm test"));
+    }
+
+    #[test]
+    fn create_workspace_with_skill_generates_root_readme() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path().join("workspace");
+
+        let config = ProjectConfig {
+            name: "sample-workflow-skill".to_string(),
+            description: "Workflow + skill package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowAndSkill,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("npm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: true,
+        };
+
+        create_workspace_project(&workspace_path, &config).unwrap();
+
+        let root_readme = fs::read_to_string(workspace_path.join("README.md")).unwrap();
+        assert!(root_readme.contains("## Repository layout"));
+        assert!(root_readme.contains("## One-time setup"));
+        assert!(root_readme.contains("your organization"));
+        assert!(root_readme.contains("Reserve an organization scope in Codemod"));
+    }
+
+    #[test]
+    fn create_workspace_workflow_only_does_not_generate_root_readme() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path().join("workspace");
+
+        let config = ProjectConfig {
+            name: "workflow-only".to_string(),
+            description: "Workflow package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("npm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: true,
+        };
+
+        create_workspace_project(&workspace_path, &config).unwrap();
+
+        assert!(!workspace_path.join("README.md").exists());
+    }
+
+    #[test]
+    fn create_project_uses_updated_readme_and_workflow_defaults() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("workflow-project");
+
+        let config = ProjectConfig {
+            name: "workflow-project".to_string(),
+            description: "Workflow package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "typescript".to_string(),
+            private: false,
+            package_manager: Some("pnpm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_project(&project_path, &config).unwrap();
+
+        let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
+        assert!(readme
+            .contains("Document the exact migration this codemod performs before publishing."));
+        assert!(readme.contains("pnpm test"));
+        assert!(readme.contains("codemod workflow validate -w workflow.yaml"));
+        assert!(!readme.contains("Converting `var` declarations to `const`/`let`"));
+
+        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("base_path: \".\""));
+        assert!(workflow.contains("include:"));
+        assert!(workflow.contains("\"**/*.{ts,tsx,mts,cts}\""));
+        assert!(workflow.contains("\"**/node_modules/**\""));
+
+        let package_json = fs::read_to_string(project_path.join("package.json")).unwrap();
+        assert!(package_json.contains("\"packageManager\": \"pnpm@10.x\""));
+
+        let gitignore = fs::read_to_string(project_path.join(".gitignore")).unwrap();
+        assert!(gitignore.contains("*.tgz\n"));
+        assert!(!gitignore.contains("*.tgz "));
+    }
+
+    #[test]
+    fn default_include_patterns_match_language_family() {
+        assert_eq!(
+            default_include_patterns("typescript"),
+            "            - \"**/*.{ts,tsx,mts,cts}\""
+        );
+        assert_eq!(
+            default_include_patterns("javascript"),
+            "            - \"**/*.{js,jsx,mjs,cjs}\""
+        );
+        assert_eq!(
+            default_include_patterns("yaml"),
+            "            - \"**/*.{yaml,yml}\""
+        );
+        assert_eq!(
+            default_include_patterns("xml"),
+            "            - \"**/*.{xml,csproj,props,targets,config,resx,xaml}\""
+        );
+    }
+
+    #[test]
+    fn create_project_for_xml_generates_xml_fixtures_and_globs() {
+        let temp_dir = tempdir().unwrap();
+        let project_path = temp_dir.path().join("xml-project");
+
+        let config = ProjectConfig {
+            name: "xml-project".to_string(),
+            description: "XML workflow package".to_string(),
+            author: "Codemod Team <team@codemod.com>".to_string(),
+            license: "MIT".to_string(),
+            project_type: ProjectType::AstGrepJs,
+            package_behavior: PackageBehavior::WorkflowOnly,
+            language: "xml".to_string(),
+            private: false,
+            package_manager: Some("npm".to_string()),
+            git_repository_url: None,
+            github_action: false,
+            workspace: false,
+        };
+
+        create_project(&project_path, &config).unwrap();
+
+        assert!(project_path.join("scripts/codemod.ts").is_file());
+        assert!(project_path.join("tests/fixtures/input.xml").is_file());
+        assert!(project_path.join("tests/fixtures/expected.xml").is_file());
+        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        assert!(workflow.contains("\"**/*.{xml,csproj,props,targets,config,resx,xaml}\""));
+    }
+
+    #[test]
+    fn package_manager_test_command_matches_package_manager() {
+        assert_eq!(package_manager_test_command("pnpm"), "pnpm test");
+        assert_eq!(package_manager_test_command("yarn"), "yarn test");
+        assert_eq!(package_manager_test_command("bun"), "bun run test");
+        assert_eq!(package_manager_test_command("npm"), "npm test");
+        assert_eq!(package_manager_test_command("unknown"), "npm test");
+    }
+
+    #[test]
+    fn package_behavior_flags_map_skill_modes() {
+        assert_eq!(
+            package_behavior_from_flags(false, false).unwrap(),
+            PackageBehavior::WorkflowOnly
+        );
+        assert_eq!(
+            package_behavior_from_flags(false, true).unwrap(),
+            PackageBehavior::WorkflowAndSkill
+        );
+        assert_eq!(
+            package_behavior_from_flags(true, false).unwrap(),
+            PackageBehavior::SkillOnly
+        );
+        assert!(
+            package_behavior_from_flags(true, true).is_err(),
+            "--skill + --with-skill should be rejected"
+        );
+    }
 }

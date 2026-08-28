@@ -1,16 +1,30 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+use crate::utils::path_safety::normalize_target_path;
+use crate::utils::resolve_capabilities::{
+    prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
+};
 use crate::{TelemetrySenderMutex, CLI_VERSION};
 use anyhow::{Context, Result};
+use butterflow_core::diff::FileDiff;
+use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
 use butterflow_core::utils;
 use butterflow_core::utils::generate_execution_id;
 use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
+use std::sync::atomic::Ordering;
 
-use crate::engine::create_engine;
-use crate::workflow_runner::{resolve_workflow_source, run_workflow};
+use crate::commands::run_telemetry::nested_codemod_run_observer;
+use crate::commands::TelemetrySenderExt;
+use crate::engine::{create_engine, create_registry_client};
+use crate::pro_dry_run::{
+    apply_pro_dry_run_execution_settings, notify_pro_dry_run_required, ProDryRunReason,
+};
+use crate::workflow_runner::{
+    resolve_workflow_source_with_name, run_workflow, workflow_has_manual_steps,
+};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -50,15 +64,59 @@ pub struct Command {
     #[arg(long)]
     no_interactive: bool,
 
+    /// Coding agent to use for AI steps (e.g. claude, codex, aider)
+    #[arg(long)]
+    agent: Option<String>,
+    /// Execute install-skill steps when running in non-interactive mode
+    #[arg(long)]
+    install_skill: bool,
+
     /// Disable colored diff output in dry-run mode
     #[arg(long)]
     no_color: bool,
+
+    /// Open a web-based execution report after the run completes
+    #[arg(long)]
+    report: bool,
+
+    /// Output format: "text" (default) or "jsonl" for structured logging
+    #[arg(long, default_value = "text")]
+    format: String,
+
+    /// Name of the workflow to run when codemod.yaml defines multiple workflows
+    #[arg(long = "workflow-name", value_name = "NAME")]
+    workflow_name: Option<String>,
+}
+
+fn should_auto_launch_workflow_tui(
+    no_interactive: bool,
+    dry_run: bool,
+    workflow_definition: &butterflow_core::Workflow,
+) -> bool {
+    !no_interactive && !dry_run && workflow_has_manual_steps(workflow_definition)
+}
+
+fn apply_workflow_run_mode_to_config(
+    cfg: &mut butterflow_core::config::WorkflowRunConfig,
+    auto_launch_tui: bool,
+) {
+    cfg.managed_git.enable_managed_git = auto_launch_tui;
+    cfg.managed_git.enable_worktrees = auto_launch_tui;
+    if auto_launch_tui {
+        cfg.output.quiet = true;
+        cfg.output.capture_stdout_in_quiet_mode = false;
+    }
 }
 
 /// Run a workflow
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    if args.no_color {
+        console::set_colors_enabled(false);
+    }
+
     // Resolve workflow file and bundle path
-    let (workflow_file_path, _) = resolve_workflow_source(&args.workflow)?;
+    let (workflow_file_path, _) =
+        resolve_workflow_source_with_name(&args.workflow, args.workflow_name.as_deref())?;
 
     // Parse parameters
     let params = utils::parse_params(&args.params).context("Failed to parse parameters")?;
@@ -74,38 +132,155 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         Some(workflow_dir.to_path_buf()),
     );
 
-    let target_path = args
-        .target_path
-        .clone()
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    // Build set of capabilities explicitly granted via CLI flags (skip prompting for these)
+    let mut cli_granted = std::collections::HashSet::new();
+    if args.allow_fs {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::Fs);
+    }
+    if args.allow_fetch {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::Fetch);
+    }
+    if args.allow_child_process {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::ChildProcess);
+    }
 
-    let (engine, config) = create_engine(
+    let target_path = normalize_target_path(
+        args.target_path
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().unwrap()),
+    )?;
+    let workflow_label = workflow_file_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| args.workflow.clone());
+    let execution_id = generate_execution_id();
+    let workflow_definition = utils::parse_workflow_file(&workflow_file_path).context(format!(
+        "Failed to parse workflow file: {}",
+        workflow_file_path.display()
+    ))?;
+    let registry_client = create_registry_client(None)?;
+    let dry_run_only_dependency =
+        utils::find_dry_run_only_codemod_dependency(&workflow_definition, &registry_client)
+            .await
+            .context("Failed to inspect bundled codemods")?;
+    if let Some(source) = dry_run_only_dependency.as_deref() {
+        if !args.dry_run {
+            notify_pro_dry_run_required(
+                ProDryRunReason::BundledChild { source },
+                args.no_interactive,
+            );
+        }
+    }
+    let pro_dry_run_required = dry_run_only_dependency.is_some();
+    let dry_run = args.dry_run || pro_dry_run_required;
+    let capabilities =
+        prompt_capabilities(capabilities, &cli_granted, args.no_interactive, dry_run);
+    let auto_launch_tui =
+        should_auto_launch_workflow_tui(args.no_interactive, dry_run, &workflow_definition);
+
+    // Always collect diffs so we can offer report interactively
+    let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));
+
+    let started = std::time::Instant::now();
+
+    let output_format: butterflow_core::structured_log::OutputFormat = args
+        .format
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
+
+    let (mut engine, mut config) = create_engine(
         workflow_file_path,
-        target_path,
-        args.dry_run,
-        args.allow_dirty,
+        target_path.clone(),
+        dry_run,
+        args.allow_dirty || pro_dry_run_required,
         params,
         None,
-        Some(capabilities),
+        Some(capabilities.clone()),
         args.no_interactive,
-        args.no_color,
+        diff_collector.clone(),
+        args.no_interactive && !args.install_skill,
+        output_format,
+        Some(capabilities),
+        args.agent.clone(),
+        Some(crate::commands::package_skill::create_install_skill_executor(telemetry.clone())),
     )?;
 
-    // Run workflow using the extracted workflow runner
-    let (_, seconds) = run_workflow(&engine, config).await?;
+    engine.set_name(Some(workflow_label.clone()));
+    engine
+        .workflow_run_config_mut()
+        .execution
+        .nested_codemod_run_observer = Some(nested_codemod_run_observer(
+        telemetry.clone(),
+        execution_id.clone(),
+        workflow_label,
+        dry_run,
+    ));
+    apply_workflow_run_mode_to_config(engine.workflow_run_config_mut(), auto_launch_tui);
+    if pro_dry_run_required {
+        apply_pro_dry_run_execution_settings(engine.workflow_run_config_mut());
+        apply_pro_dry_run_execution_settings(&mut config);
+    }
+    if auto_launch_tui {
+        engine.set_quiet(true);
+        engine.set_progress_callback(std::sync::Arc::new(None));
+    }
+    let (_, seconds) = run_workflow(&mut engine, config).await?;
 
-    crate::utils::metrics::print_metrics(&engine.metrics_context.get_all());
+    let duration_ms = started.elapsed().as_millis() as f64;
+
+    let metrics_data = engine.metrics_context.get_all();
+
+    let stats = engine.execution_stats.clone();
+    let files_modified = stats.files_modified.load(Ordering::Relaxed);
+    let files_unmodified = stats.files_unmodified.load(Ordering::Relaxed);
+    let files_with_errors = stats.files_with_errors.load(Ordering::Relaxed);
+
+    if crate::utils::metrics::should_show_report(
+        args.report,
+        args.no_interactive,
+        &metrics_data,
+        files_modified,
+    ) {
+        let collected_diffs = diff_collector
+            .map(|c| c.lock().unwrap().clone())
+            .unwrap_or_default();
+
+        let registry_client = create_registry_client(None)?;
+        let report = ExecutionReport::build(
+            args.workflow.clone(),
+            None,
+            duration_ms,
+            dry_run,
+            target_path.display().to_string(),
+            CLI_VERSION.to_string(),
+            files_modified,
+            files_unmodified,
+            files_with_errors,
+            convert_metrics(&metrics_data),
+            convert_diffs(&collected_diffs, &target_path.display().to_string()),
+        )
+        .with_registry_link_url(Some(
+            crate::utils::registry_link::registry_link_url_for_local_run(
+                &registry_client.config.default_registry,
+            ),
+        ));
+
+        crate::report_server::serve_report(report).await?;
+    } else {
+        crate::utils::metrics::print_metrics(&metrics_data);
+    }
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
     telemetry
-        .send_event(
+        .send_event_logged(
             BaseEvent {
                 kind: "localWorkflowExecuted".to_string(),
                 properties: HashMap::from([
-                    ("executionId".to_string(), generate_execution_id()),
+                    ("executionId".to_string(), execution_id),
                     ("runTimeSeconds".to_string(), seconds.to_string()),
                     ("dirtyRun".to_string(), args.allow_dirty.to_string()),
-                    ("dryRun".to_string(), args.dry_run.to_string()),
+                    ("dryRun".to_string(), dry_run.to_string()),
                     ("cliVersion".to_string(), CLI_VERSION.to_string()),
                     ("os".to_string(), std::env::consts::OS.to_string()),
                     ("arch".to_string(), std::env::consts::ARCH.to_string()),
@@ -116,4 +291,126 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_workflow_run_mode_to_config, should_auto_launch_workflow_tui};
+    use butterflow_core::config::WorkflowRunConfig;
+    use butterflow_core::{Node, Step, Workflow};
+    use butterflow_models::node::NodeType;
+    use butterflow_models::step::{PullRequestConfig, StepAction};
+    use std::collections::HashMap;
+
+    fn workflow_with_manual_step() -> Workflow {
+        Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![Node {
+                id: "manual-node".to_string(),
+                name: "Manual Node".to_string(),
+                description: None,
+                r#type: NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![Step {
+                    id: None,
+                    name: "noop".to_string(),
+                    action: StepAction::RunScript("echo hi".to_string()),
+                    env: None,
+                    condition: None,
+                    commit: None,
+                }],
+                env: HashMap::new(),
+                branch_name: Some("codemod-test".to_string()),
+                pull_request: Some(PullRequestConfig {
+                    title: "Test PR".to_string(),
+                    body: None,
+                    draft: Some(true),
+                    base: None,
+                }),
+            }],
+        }
+    }
+
+    fn workflow_with_manual_pull_request_only_node() -> Workflow {
+        Workflow {
+            version: "1".to_string(),
+            state: None,
+            params: None,
+            templates: vec![],
+            nodes: vec![Node {
+                id: "publish-node".to_string(),
+                name: "Publish Node".to_string(),
+                description: None,
+                r#type: NodeType::Manual,
+                depends_on: vec![],
+                trigger: None,
+                strategy: None,
+                runtime: None,
+                steps: vec![],
+                env: HashMap::new(),
+                branch_name: Some("codemod-test".to_string()),
+                pull_request: Some(PullRequestConfig {
+                    title: "Test PR".to_string(),
+                    body: None,
+                    draft: Some(true),
+                    base: None,
+                }),
+            }],
+        }
+    }
+
+    #[test]
+    fn non_tui_workflow_run_disables_managed_git_and_worktrees_even_with_manual_steps() {
+        let workflow = workflow_with_manual_step();
+        let auto_launch_tui = should_auto_launch_workflow_tui(true, false, &workflow);
+        assert!(!auto_launch_tui);
+
+        let mut cfg = WorkflowRunConfig::default();
+        apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
+        assert!(!cfg.managed_git.enable_managed_git);
+        assert!(!cfg.managed_git.enable_worktrees);
+        assert!(!cfg.output.quiet);
+        assert!(cfg.output.capture_stdout_in_quiet_mode);
+    }
+
+    #[test]
+    fn interactive_manual_workflow_run_enables_tui_managed_git_mode() {
+        let workflow = workflow_with_manual_step();
+        let auto_launch_tui = should_auto_launch_workflow_tui(false, false, &workflow);
+        assert!(auto_launch_tui);
+
+        let mut cfg = WorkflowRunConfig::default();
+        apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
+        assert!(cfg.managed_git.enable_managed_git);
+        assert!(cfg.managed_git.enable_worktrees);
+        assert!(cfg.output.quiet);
+        assert!(!cfg.output.capture_stdout_in_quiet_mode);
+    }
+
+    #[test]
+    fn manual_pull_request_only_workflow_run_does_not_enable_tui_mode() {
+        let workflow = workflow_with_manual_pull_request_only_node();
+        let auto_launch_tui = should_auto_launch_workflow_tui(false, false, &workflow);
+        assert!(!auto_launch_tui);
+
+        let mut cfg = WorkflowRunConfig::default();
+        apply_workflow_run_mode_to_config(&mut cfg, auto_launch_tui);
+        assert!(!cfg.managed_git.enable_managed_git);
+        assert!(!cfg.managed_git.enable_worktrees);
+        assert!(!cfg.output.quiet);
+        assert!(cfg.output.capture_stdout_in_quiet_mode);
+    }
+
+    #[test]
+    fn dry_run_workflow_run_does_not_enable_tui_mode() {
+        let workflow = workflow_with_manual_step();
+        let auto_launch_tui = should_auto_launch_workflow_tui(false, true, &workflow);
+        assert!(!auto_launch_tui);
+    }
 }

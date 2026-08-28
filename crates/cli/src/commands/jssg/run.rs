@@ -1,11 +1,14 @@
+use crate::commands::TelemetrySenderExt;
 use crate::engine::create_progress_callback;
+use crate::engine::create_registry_client;
 use crate::utils::resolve_capabilities::resolve_capabilities;
 use crate::utils::resolve_capabilities::ResolveCapabilitiesArgs;
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
-use butterflow_core::diff::{generate_unified_diff, DiffConfig};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
+use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
@@ -15,12 +18,12 @@ use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use codemod_sandbox::MetricsContext;
+use codemod_sandbox::{MetricsContext, SharedStateContext};
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use log::{debug, error, warn};
 use semantic_factory::LazySemanticProvider;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -80,17 +83,29 @@ pub struct Command {
     /// Disable colored diff output in dry-run mode
     #[arg(long)]
     pub no_color: bool,
+
+    /// Open a web-based execution report after the run completes
+    #[arg(long)]
+    pub report: bool,
+
+    /// Show verbose output (e.g. shared state after execution)
+    #[arg(long, short)]
+    pub verbose: bool,
 }
 
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    if args.no_color {
+        console::set_colors_enabled(false);
+    }
+
     let js_file_path = Path::new(&args.js_file);
     let target_directory = args
         .target_path
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-    let dirty_check = dirty_git_check::dirty_check();
-    dirty_check(&target_directory, args.allow_dirty);
+    let dirty_check = dirty_git_check::dirty_check(args.no_interactive);
+    dirty_check(&target_directory, args.allow_dirty, None)?;
 
     std::env::set_var("CODEMOD_STEP_ID", "jssg");
 
@@ -126,13 +141,16 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         Some(script_base_dir.to_path_buf()),
     );
 
-    let capabilities_security_callback = capabilities_security_callback(args.no_interactive);
+    let capabilities_security_callback = capabilities_security_callback(args.no_interactive, None);
     let pre_run_callback = PreRunCallback {
         callback: Arc::new(Box::new(move |_, _, config: &CodemodExecutionConfig| {
-            capabilities_security_callback(config).unwrap_or_else(|e| {
+            capabilities_security_callback(config).map_err(|e| {
                 error!("Failed to check capabilities: {e}");
-                std::process::exit(1);
-            });
+                Box::<dyn std::error::Error + Send + Sync>::from(format!(
+                    "Failed to check capabilities: {e}"
+                ))
+            })?;
+            Ok(())
         })),
     };
 
@@ -142,6 +160,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         target_path: Some(target_directory.to_path_buf()),
         base_path: None,
         include_globs: None,
+        explicit_files: None,
         exclude_globs: None,
         dry_run: args.dry_run,
         languages: Some(vec![args.language.clone()]),
@@ -184,16 +203,34 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .parse()
         .unwrap_or_else(|_| panic!("Invalid language: {}", args.language));
+    let shared_state_context = SharedStateContext::new();
     let metrics_context_clone = metrics_context.clone();
+    let shared_state_context_clone = shared_state_context.clone();
+    let runtime_event_output = super::RuntimeEventOutput::stdout();
 
     // Create diff config for dry-run mode
     let diff_config = DiffConfig::with_color_control(args.no_color);
+
+    // Always collect diffs so we can offer report interactively
+    let diff_collector: Option<Arc<Mutex<Vec<FileDiff>>>> = Some(Arc::new(Mutex::new(Vec::new())));
+    let diff_collector_clone = diff_collector.clone();
+    let execution_errors = Arc::new(Mutex::new(Vec::<String>::new()));
+    let execution_errors_for_closure = Arc::clone(&execution_errors);
+
+    // Clone target_directory for use after the closure moves it
+    let target_directory_for_report = target_directory.clone();
 
     let _ = config.execute(move |file_path, _config| {
         // Only process files
         if !file_path.is_file() {
             return;
         }
+
+        let runtime_event_buffer = super::RuntimeEventBuffer::new();
+        let runtime_event_callback = runtime_event_buffer.callback_for_title(
+            super::display_path_title(file_path, Some(&target_directory)),
+        );
+        let runtime_event_output = runtime_event_output.clone();
 
         // Use a tokio runtime to handle the async execution within the sync callback
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -219,8 +256,13 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 capabilities: capabilities_for_closure.clone(),
                 semantic_provider: semantic_provider.clone(),
                 metrics_context: Some(metrics_context_clone.clone()),
+                llm_request_handler: None,
+                shared_state_context: Some(shared_state_context_clone.clone()),
+                runtime_event_callback: Some(runtime_event_callback),
+                cancellation_flag: None,
                 test_mode: false,
-                target_directory: Some(&target_directory),
+                dry_run: false,
+                target_directory: &target_directory,
             };
 
             // Execute the codemod on this file
@@ -247,22 +289,28 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                                 if let Err(e) =
                                     tokio::fs::write(write_path, &modified.content).await
                                 {
-                                    error!(
-                                        "Failed to write modified file {}: {}",
-                                        write_path.display(),
-                                        e
-                                    );
+                                    if let Ok(mut errors) = execution_errors_for_closure.lock() {
+                                        errors.push(format!(
+                                            "Failed to write modified file {}: {}",
+                                            write_path.display(),
+                                            e
+                                        ));
+                                    }
                                 } else {
                                     // If renamed, delete the original file
                                     if modified.rename_to.is_some()
                                         && write_path != change_path.as_path()
                                     {
                                         if let Err(e) = tokio::fs::remove_file(change_path).await {
-                                            error!(
-                                                "Failed to remove original file {}: {}",
-                                                change_path.display(),
-                                                e
-                                            );
+                                            if let Ok(mut errors) =
+                                                execution_errors_for_closure.lock()
+                                            {
+                                                errors.push(format!(
+                                                    "Failed to remove original file {}: {}",
+                                                    change_path.display(),
+                                                    e
+                                                ));
+                                            }
                                         } else {
                                             debug!(
                                                 "Renamed file: {} -> {}",
@@ -301,35 +349,120 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                                     &original,
                                     &modified.content,
                                     &diff_config,
+                                    DiffMetadata::default(),
                                 );
                                 diff.print();
+
+                                // Collect plain-text diff for report
+                                if let Some(ref collector) = diff_collector_clone {
+                                    let plain_config = DiffConfig {
+                                        color: false,
+                                        ..DiffConfig::default()
+                                    };
+                                    let plain_diff = generate_unified_diff(
+                                        change_path,
+                                        &original,
+                                        &modified.content,
+                                        &plain_config,
+                                        DiffMetadata {
+                                            step_id: Some("jssg".to_string()),
+                                            step_name: Some("JSSG".to_string()),
+                                            ..DiffMetadata::default()
+                                        },
+                                    );
+                                    if let Ok(mut diffs) = collector.lock() {
+                                        diffs.push(plain_diff);
+                                    }
+                                }
+
                                 debug!("Would modify file (dry run): {}", change_path.display());
                             }
                         }
                     }
                 }
                 Err(e) => {
-                    error!(
-                        "Failed to execute codemod on {}:\n{}",
-                        file_path.display(),
-                        e
-                    );
+                    if let Ok(mut errors) = execution_errors_for_closure.lock() {
+                        errors.push(format!(
+                            "Failed to execute codemod on {}:\n{}",
+                            file_path.display(),
+                            e
+                        ));
+                    }
                 }
             }
         });
+
+        runtime_event_output.flush(&runtime_event_buffer);
     });
 
-    // Print metrics report if any metrics were collected
-    crate::utils::metrics::print_metrics(&metrics_context.get_all());
+    let metrics_data = metrics_context.get_all();
 
-    let seconds = started.elapsed().as_millis() as f64 / 1000.0;
+    let duration_ms = started.elapsed().as_millis() as f64;
+    let seconds = duration_ms / 1000.0;
     println!("✨ Done in {seconds:.3}s");
+
+    let collected_errors = execution_errors
+        .lock()
+        .map(|errors| errors.clone())
+        .unwrap_or_default();
+    if !collected_errors.is_empty() {
+        return Err(anyhow::anyhow!("{}", collected_errors.join("\n\n")));
+    }
+
+    if args.verbose {
+        let state = shared_state_context.get_persistable();
+        if !state.is_empty() {
+            println!("\nState:");
+            for (key, value) in &state {
+                println!("  {key}: {value}");
+            }
+        }
+    }
+
+    let collected_diffs = diff_collector
+        .map(|c| c.lock().unwrap().clone())
+        .unwrap_or_default();
+    let files_modified = collected_diffs.len();
+
+    if crate::utils::metrics::should_show_report(
+        args.report,
+        args.no_interactive,
+        &metrics_data,
+        files_modified,
+    ) {
+        let registry_client = create_registry_client(None)?;
+        let report = ExecutionReport::build(
+            args.js_file.clone(),
+            None,
+            duration_ms,
+            args.dry_run,
+            target_directory_for_report.display().to_string(),
+            CLI_VERSION.to_string(),
+            files_modified,
+            0,
+            0,
+            convert_metrics(&metrics_data),
+            convert_diffs(
+                &collected_diffs,
+                &target_directory_for_report.display().to_string(),
+            ),
+        )
+        .with_registry_link_url(Some(
+            crate::utils::registry_link::registry_link_url_for_local_run(
+                &registry_client.config.default_registry,
+            ),
+        ));
+
+        crate::report_server::serve_report(report).await?;
+    } else {
+        crate::utils::metrics::print_metrics(&metrics_data);
+    }
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)
     let execution_id = generate_execution_id();
 
     telemetry
-        .send_event(
+        .send_event_logged(
             BaseEvent {
                 kind: "localJssgExecuted".to_string(),
                 properties: HashMap::from([

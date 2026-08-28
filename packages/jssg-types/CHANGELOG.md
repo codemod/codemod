@@ -1,5 +1,47 @@
 # @codemod.com/jssg-types
 
+## 1.6.3
+
+### Patch Changes
+
+- 2c17368: Add types for the engine-owned `codemod:llm` runtime module.
+
+## 1.6.2
+
+### Patch Changes
+
+- 2e5eade: Add TOML language node types and `codemod:ast-grep/langs/toml` module declarations.
+
+## 1.6.1
+
+### Patch Changes
+
+- 6685a46: Add XML AST node types and XML element helpers for tag lookup, attribute reads, and indentation.
+
+## 1.6.0
+
+### Minor Changes
+
+- 41218f1: Add relativeFilename to SgRoot
+
+## 1.5.2
+
+### Patch Changes
+
+- 19a39ca: Rename Transform type to Codemod
+
+## 1.5.1
+
+### Patch Changes
+
+- 85fce65: Add dry run to TransformOptions
+
+## 1.5.0
+
+### Minor Changes
+
+- 2e21a93: codemod:workflow types
+
 ## 1.4.1
 
 ### Patch Changes

@@ -13,6 +13,7 @@ title: "API Reference"
 ### Essential Methods
 - `root.root()` - Get root AST node
 - `root.filename()` - Get file path
+- `root.relativeFilename()` - Get file path relative to the target directory
 - `node.find(rule)` - Find first match
 - `node.findAll(rule)` - Find all matches
 - `node.replace(text)` - Create edit
@@ -24,20 +25,29 @@ title: "API Reference"
 JSSG is a JavaScript runtime similar to Node.js with most Node globals/modules (for example, <code>fs</code>, <code>process</code>). It is powered by QuickJS, uses LLRT for Node module compatibility, and oxc for module resolution. ast-grep is available as a built-in module. See [Parse Helpers](#parse-helpers) for parsing functions.
 </Info>
 
+Built-in codemod modules:
+- `codemod:ast-grep` — parsing, traversal, pattern matching
+- `codemod:llm` — engine-owned text generation for codemods that declare the `fetch` capability
+- `codemod:workflow` — shared state and workflow integration
+- `codemod:metrics` — metrics collection across files
+- `codemod:runtime` — progress, warning, cancellation, and explicit failure hooks
+
+`codemod:llm` is also supported when you publish a codemod package, so published JSSG codemods can keep importing it without bundling errors.
+
 ## Transform Function
 
 Every JSSG codemod exports a transform function:
 
 ```ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = (root, options) => {
+const codemod: Codemod<TSX> = (root, options) => {
   // Your transformation logic
   return null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 <Info>
@@ -49,12 +59,15 @@ Types vs values: <code>SgRoot</code> and <code>SgNode</code> are TypeScript type
 - `undefined` - Same as null
 - Other types - Runtime error
 
+The `options` argument includes the execution context for the current run, including `params`, `matches`, `matrixValues`, `dryRun`, and `targetDir`.
+
 ## SgRoot API
 
 The root object provides access to the parsed file:
 
 <ParamField path="root()" type="SgNode">Get the root AST node of the file.</ParamField>
 <ParamField path="filename()" type="string">Get the file path or "anonymous" for ad-hoc parsing.</ParamField>
+<ParamField path="relativeFilename()" type="string">Get the file path relative to the target directory when available.</ParamField>
 <ParamField path="source()" type="string">Get the full source code of the file.</ParamField>
 <ParamField path="write(content)" type="void">Write content to this file. Only valid for files obtained via `definition()` or `references()` — cannot be called on the current file being processed.</ParamField>
 <ParamField path="rename(newPath)" type="void">Rename the current file to a new path. If relative, resolved against the file's parent directory. Can only be called once per file. See [File Renaming](#file-renaming) for details.</ParamField>
@@ -62,6 +75,7 @@ The root object provides access to the parsed file:
 ```ts
 const rootNode = root.root();
 const filePath = root.filename();
+const relativePath = root.relativeFilename();
 ```
 
 ## SgNode API
@@ -312,10 +326,10 @@ When a selector is provided, the engine pre‑computes matches; if none are foun
 Here's a complete example that replaces `console.*` calls with `logger.*`:
 
 ```ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = (root) => {
+const codemod: Codemod<TSX> = (root) => {
   const rootNode = root.root();
   
   // Find all console.* calls
@@ -476,7 +490,7 @@ Match only the pre-change shape to avoid re-editing:
 For large codebases:
 
 ```ts
-const transform: Transform<TSX> = (root) => {
+const codemod: Codemod<TSX> = (root) => {
   const rootNode = root.root();
   
   // Early return for non-applicable files
@@ -505,7 +519,7 @@ const transform: Transform<TSX> = (root) => {
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 }
 
-export default transform;
+export default codemod;
 ```
 
 ## Parse Helpers
@@ -531,15 +545,15 @@ export default function main() {
 Use `root.rename()` to rename a file alongside content changes. This is useful for codemods that convert between file formats (e.g., `.less` → `.css`, `.js` → `.ts`, `.cjs` → `.mjs`).
 
 ```ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type CSS from "codemod:ast-grep/langs/css";
 
-const transform: Transform<CSS> = async (root) => {
+const codemod: Codemod<CSS> = async (root) => {
   root.rename(root.filename().replace('.less', '.css'));
   return transformedContent; // or null for rename-only
 };
 
-export default transform;
+export default codemod;
 ```
 
 **Behavior matrix:**
@@ -571,18 +585,18 @@ Use `jssgTransform()` when a change in one file requires a corresponding change 
 
 ```ts
 import { jssgTransform } from "codemod:ast-grep";
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import type CSS from "codemod:ast-grep/langs/css";
 
 // Secondary transform: convert .less → .css
-const lessToCSS: Transform<CSS> = async (root) => {
+const lessToCSS: Codemod<CSS> = async (root) => {
   root.rename(root.filename().replace('.less', '.css'));
   return transformedCSS;
 };
 
 // Primary transform: update imports and trigger the conversion
-const transform: Transform<TSX> = async (root) => {
+const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
   const edits: Edit[] = [];
 
@@ -607,7 +621,7 @@ const transform: Transform<TSX> = async (root) => {
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 };
 
-export default transform;
+export default codemod;
 ```
 
 <Info>
@@ -697,10 +711,10 @@ const hooks = rootNode.findAll(createReactHookMatcher());
 Here's a complete example that adds type annotations to Next.js page components:
 
 ```ts
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = (root) => {
+const codemod: Codemod<TSX> = (root) => {
   const rootNode = root.root();
 
   // Find the default export
@@ -739,7 +753,7 @@ const transform: Transform<TSX> = (root) => {
   return rootNode.commitEdits([edit]);
 }
 
-export default transform;
+export default codemod;
 ```
 
 This example demonstrates:
@@ -754,7 +768,7 @@ This example demonstrates:
 For large codebases, optimize your traversal:
 
 ```ts
-const transform: Transform<TSX> = (root) => {
+const codemod: Codemod<TSX> = (root) => {
   const rootNode = root.root();
   
   // Early return for non-applicable files
@@ -787,7 +801,7 @@ const transform: Transform<TSX> = (root) => {
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 }
 
-export default transform;
+export default codemod;
 ```
 
 **Optimization tips:**
@@ -798,10 +812,10 @@ export default transform;
 
 ```ts
 // Range‑aware decision: skip very long calls
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = (root) => {
+const codemod: Codemod<TSX> = (root) => {
   const node = root.root().find({ rule: { pattern: "longCall($A, $B, $C, $D)" } });
   if (!node) return null;
   const r = node.range();
@@ -809,7 +823,7 @@ const transform: Transform<TSX> = (root) => {
   return root.root().commitEdits([node.replace("shortCall()")]);
 };
 
-export default transform;
+export default codemod;
 ```
 
 
@@ -836,7 +850,7 @@ export default transform;
     <b>Debug steps:</b>
     <CodeBlock language="ts">
     {`
-    const transform: Transform<TSX> = (root) => {
+    const codemod: Codemod<TSX> = (root) => {
     const rootNode = root.root();
     
     // Add debug logging
@@ -857,7 +871,7 @@ export default transform;
     
     return rootNode.commitEdits(edits);
     }
-    export default transform;`}
+    export default codemod;`}
     </CodeBlock>
   </Accordion>
 
@@ -917,4 +931,103 @@ function helper(node: SgNode<TSX>): Edit | null {
 Language kinds and editor IntelliSense are available via [codemod:ast-grep/langs/*](https://github.com/codemod/codemod/tree/main/packages/jssg-types/src/langs). E.g., `import { TSX } from "codemod:ast-grep/langs/tsx"`.
 </Info>
 
+## LLM Generation
 
+```ts
+import generate, { type LlmRequest, type LlmResponse } from "codemod:llm";
+```
+
+Use `codemod:llm` when your codemod needs engine-provided text generation. The engine owns provider credentials, model selection, and usage accounting.
+
+### Types
+
+<ParamField path="LlmRequest" type="object">
+  Request payload for `generate(...)`.
+</ParamField>
+
+<ParamField path="prompt" type="string" required>
+  The user prompt sent to the engine-owned LLM client.
+</ParamField>
+
+<ParamField path="systemPrompt" type="string">
+  Optional system instructions applied before the prompt.
+</ParamField>
+
+<ParamField path="outputSchema" type="Record&lt;string, unknown&gt; | boolean">
+  Optional structured-output schema hint forwarded to the engine.
+</ParamField>
+
+<ParamField path="maxTokens" type="number">
+  Optional maximum token budget for the generation request.
+</ParamField>
+
+<ParamField path="LlmResponse" type="object">
+  Response returned by `generate(...)`.
+</ParamField>
+
+<ParamField path="output" type="string" required>
+  Generated text returned by the engine-owned LLM client.
+</ParamField>
+
+### Functions
+
+<ParamField path="generate(request)" type="(request: LlmRequest) => Promise&lt;LlmResponse&gt;">
+  Generates text through the engine-owned LLM client.
+</ParamField>
+
+### Notes
+
+- Your codemod must declare the `fetch` capability before `codemod:llm` can be used.
+- Provider credentials and model selection come from the engine, not from your codemod.
+- Provider-reported usage is recorded by the engine automatically.
+
+## Runtime Hooks
+
+```ts
+import runtime, {
+  progress,
+  warn,
+  setCurrentUnit,
+  failFile,
+  failStep,
+  isCanceled,
+} from "codemod:runtime";
+```
+
+### Types
+
+<ParamField path="RuntimeMeta" type="string | number | boolean | null | Record<string, RuntimeMeta | undefined> | RuntimeMeta[]">
+  Optional structured metadata that can be attached to runtime events and failures.
+</ParamField>
+
+### Functions
+
+<ParamField path="progress(message, meta?)" type="(message: string, meta?: RuntimeMeta) => void">
+  Emits a structured progress event and refreshes the engine heartbeat.
+</ParamField>
+
+<ParamField path="warn(message, meta?)" type="(message: string, meta?: RuntimeMeta) => void">
+  Emits a structured warning without failing the task.
+</ParamField>
+
+<ParamField path="setCurrentUnit(unitId, meta?)" type="(unitId: string, meta?: RuntimeMeta) => void">
+  Sets the current logical execution unit for diagnostics, typically a file path or shard label.
+</ParamField>
+
+<ParamField path="failFile(message, meta?)" type="(message: string, meta?: RuntimeMeta) => never">
+  Fails the current file or execution unit immediately. The runtime currently treats this as terminal for the running task.
+</ParamField>
+
+<ParamField path="failStep(message, meta?)" type="(message: string, meta?: RuntimeMeta) => never">
+  Fails the current step immediately and marks the task as failed.
+</ParamField>
+
+<ParamField path="isCanceled()" type="() => boolean">
+  Returns `true` if the current task has been canceled and the codemod should stop cooperatively.
+</ParamField>
+
+### Notes
+
+- Hooks are the preferred way to report semantic failures or progress to workflows and the TUI.
+- Uncaught exceptions still fail the task, but they provide less structured context.
+- `codemod:runtime` requires a runtime version that includes runtime-hook support.

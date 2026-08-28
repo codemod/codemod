@@ -95,6 +95,10 @@ declare module "codemod:ast-grep" {
      */
     filename(): string;
     /**
+     * Returns the file path relative to the current target directory.
+     */
+    relativeFilename(): string;
+    /**
      * Returns the source code of the file.
      */
     source(): string;
@@ -542,9 +546,16 @@ declare module "codemod:ast-grep" {
     matches?: SgNode<T>[];
     language: string;
     matrixValues?: Record<string, any>;
+    dryRun?: boolean;
+    targetDir: string;
   };
 
-  export type Transform<T extends TypesMap> = (
+  /**
+   * @deprecated Use `Codemod` type instead. The name `Transform` is misleading as it implies the function must return a transformed string, but in fact it can also return null for detection purposes.
+   */
+  export type Transform<T extends TypesMap> = Codemod<T>;
+
+  export type Codemod<T extends TypesMap> = (
     root: SgRoot<T>,
     options: TransformOptions<T>,
   ) => Promise<string | null>;

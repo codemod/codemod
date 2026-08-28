@@ -32,7 +32,7 @@ repository = "https://github.com/codemod/codemod"
 homepage = "https://github.com/codemod/codemod"
 license = "Apache-2.0"
 rust-version = "1.76"
-version = "1.4.2"
+version = "1.15.3"
 edition = "2021"
 
 [workspace.dependencies]
@@ -78,6 +78,13 @@ flate2 = "1.0"
 futures = "0.3"
 ignore = { version = "0.4.23" }
 log = "0.4"
+miette = { version = "7.6.0", features = ["derive", "fancy"] }
+object = { version = "0.32", default-features = false, features = [
+  "elf",
+  "macho",
+  "pe",
+  "read_core",
+] }
 regex = "1.10"
 reqwest = { version = "0.12", default-features = false, features = [
   "rustls-tls-native-roots",
@@ -89,6 +96,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_json_canonicalizer = "0.2"
 serde_yaml = "0.9"
+semver = "1.0"
 tar = "0.4"
 tempfile = "3.8"
 thiserror = "2.0"
@@ -96,16 +104,18 @@ tokio = { version = "1.36", features = ["full"] }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 vfs = "0.12"
 walkdir = "2.4"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
 
-wasm-bindgen = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-cli-support = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-futures = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-js-sys = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
+wasm-bindgen = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-cli-support = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-futures = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+js-sys = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
 
 [patch.crates-io]
-wasm-bindgen = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-futures = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-macro = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-shared = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-wasm-bindgen-macro-support = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
-js-sys = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi" }
+wasm-bindgen = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-futures = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-macro = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-shared = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+wasm-bindgen-macro-support = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }
+js-sys = { git = "https://github.com/mohebifar/wasm-bindgen.git", branch = "wasi-v0.2.126" }

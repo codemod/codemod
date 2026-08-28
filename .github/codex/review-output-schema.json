@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary", "findings"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Short overall PR review summary."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Actionable review findings ordered by importance.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "body", "severity", "path", "line"],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Short finding title."
+          },
+          "body": {
+            "type": "string",
+            "description": "One-paragraph explanation of the issue and why it matters."
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["high", "medium", "low"],
+            "description": "Relative importance of the finding."
+          },
+          "path": {
+            "type": "string",
+            "description": "Repository-relative file path on the PR head. Use an empty string if the finding cannot be anchored confidently."
+          },
+          "line": {
+            "type": "number",
+            "description": "1-based line number on the PR head version. Use 0 if the finding cannot be anchored confidently.",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}

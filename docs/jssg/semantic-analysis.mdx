@@ -1,7 +1,6 @@
 ---
 title: "Semantic Analysis"
 description: "Find symbol definitions and references across your codebase using semantic analysis in JSSG codemods"
-tag: NEW
 ---
 
 Semantic analysis enables your codemods to understand symbol relationships in code—finding where variables are defined, tracking all references to a function, or discovering cross-file dependencies. This goes beyond pattern matching to provide IDE-like intelligence for your transformations.
@@ -212,6 +211,10 @@ npx codemod workflow run -w /path/to/codemod/workflow.yaml -t /path/to/target
 <ParamField path="-t, --target" type="PATH">
   Path to the target directory containing files to transform.
 </ParamField>
+
+<Info>
+When semantic analysis returns an `SgRoot` for another file, you can use `root.relativeFilename()` to get that file's path relative to the active target directory.
+</Info>
 
 ### Via CLI Commands
 

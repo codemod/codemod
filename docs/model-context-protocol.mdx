@@ -7,102 +7,74 @@ import { MCPDemo } from "/snippets/mcp-demo.mdx";
 
 Codemod MCP (Model Context Protocol) provides AI assistants with tools for code analysis, AST manipulation, and codemod creation. The MCP server enables AI tools like Claude, Cursor, and others to understand code structure, create codemods, and perform automated code transformations.
 
-## Quick setup
-
-<Steps>
-  <Step title="Open IDE settings">
-    **For Cursor IDE:**
-    - Open Cursor Settings
-    - Navigate to **MCP & Integrations**
-    - Click **New MCP Server** under MCP Tools
-  </Step>
-  <Step title="Add MCP server configuration">
-    Add the following configuration to your MCP settings:
-
-    ```json
-    {
-      "mcpServers": {
-        "codemod": {
-          "command": "npx",
-          "args": ["codemod@latest", "mcp"]
-        }
-      }
-    }
-    ```
-  </Step>
-  <Step title="Restart your IDE">
-    Save the configuration file and restart your IDE to activate the Codemod MCP server.
-  </Step>
-</Steps>
-
-## Available tools
-
-The Codemod MCP server provides these tools for AI assistants:
-
-- **`dump_ast`** - Dump AST nodes in an AI-friendly format for given source code and language
-- **`get_node_types`** - Get compressed tree-sitter node types for specific programming languages
-- **`run_jssg_tests`** - Run tests for jssg (TypeScript transformation scripts) codemods with test cases
-- **`get_jssg_instructions`** - Get jssg instructions for creating TypeScript transformation scripts
-- **`get_ast_grep_instructions`** - Get ast-grep instructions for creating ast-grep rules
-- **`get_codemod_cli_instructions`** - Get Codemod CLI instructions for creating codemods
-
-## Building Codemod packages with MCP
-
 <Frame>
   <MCPDemo />
 </Frame>
 
-<Steps>
-  <Step title="Ask the AI for a specific codemod">
-    Describe your transformation [clearly](#best-practices):
-    
-    ```
-    "Create a jssg codemod that converts all console.log statements to console.info in TypeScript files. 
-    The codemod should:
-    - Target .ts and .tsx files
-    - Only transform console.log calls (not console.error, console.warn, etc.)
-    - Preserve all arguments and formatting
-    - Include test cases for the transformation"
-    ```
-  </Step>
-  
-  <Step title="Let MCP build the Codemod package">
-    The AI will use MCP tools to:
-    - Analyze your codebase structure with `dump_ast`
-    - Get TypeScript node types with `get_node_types`
-    - Create the jssg codemod script
-    - Generate test cases with `run_jssg_tests`
-    - Set up the [`workflow.yaml`](/workflows/reference) and [`codemod.yaml`](/package-structure) files
-  </Step>
-  
-  <Step title="Validate the workflow">
-    ```bash
-    npx codemod@latest workflow validate -w workflow.yaml
-    ```
-    
-    This ensures your workflow file is syntactically correct and follows the schema.
-  </Step>
-  
-  <Step title="Understand and run the output package">
-    The MCP will create a complete Codemod package structure:
-    
-    <Tree>
-      <Tree.Folder name="my-codemod" defaultOpen>
-        <Tree.File name="codemod.yaml" />
-        <Tree.File name="workflow.yaml" />
-        <Tree.Folder name="scripts" defaultOpen>
-          <Tree.File name="codemod.ts" />
-        </Tree.Folder>
-        <Tree.Folder name="tests" defaultOpen />
-      </Tree.Folder>
-    </Tree>
-    
-    Run your codemod:
-    ```bash
-    npx codemod@latest workflow run -w ./my-codemod/
-    ```
-  </Step>
-</Steps>
+## Quick setup
+
+Run the bootstrap command from anywhere:
+
+```bash
+npx codemod ai
+```
+
+This is the main setup path for the AI-native CLI experience. It installs Codemod Master Skill and Codemod MCP for your coding agent so it can use Codemod CLI with built-in best practices for building, running, testing, and publishing codemods.
+
+<Accordion title="Manual MCP setup">
+  If you prefer to configure MCP yourself:
+
+  - Open your IDE MCP settings.
+  - Add the following MCP server entry:
+
+  ```json
+  {
+    "mcpServers": {
+      "codemod": {
+        "command": "npx",
+        "args": ["codemod@latest", "mcp"]
+      }
+    }
+  }
+  ```
+
+  For Cursor IDE:
+  - Open Cursor Settings
+  - Navigate to **MCP & Integrations**
+  - Click **New MCP Server** under MCP Tools
+</Accordion>
+
+<Tip>
+  **Ready to build?** Follow the [Quickstart](/oss-quickstart) for a complete walkthrough of building, testing, and publishing a codemod using MCP.
+</Tip>
+
+## Available tools
+
+The Codemod MCP server provides these operational tools for AI assistants:
+
+- **`dump_ast`** - Dump AST nodes in an AI-friendly format for given source code and language
+- **`get_node_types`** - Get compressed tree-sitter node types for specific programming languages
+- **`run_jssg_tests`** - Run tests for JSSG codemods with test cases
+- **`validate_codemod_package`** - Validate whether a codemod package is still a starter scaffold or incomplete
+
+## Available resources
+
+The Codemod MCP server provides these guidance resources for AI assistants:
+
+- **`jssg-instructions`** - Docs-backed JSSG guidance for creating and testing transformation scripts
+- **`jssg-gotchas`** - Highest-priority JSSG gotchas before implementing transforms
+- **`ast-grep-gotchas`** - Highest-priority ast-grep gotchas before implementing transforms
+- **`jssg-utils-instructions`** - Docs-backed JSSG utility guidance, including JavaScript imports, Java helpers, and XML helpers
+- **`jssg-runtime-capabilities-instructions`** - Runtime and capability guidance for LLRT/Node APIs and multi-file JSSG work
+- **`codemod-cli-instructions`** - Docs-backed CLI, package, and workflow guidance
+- **`codemod-creation-workflow-instructions`** - Docs-backed codemod authoring workflow guidance with a small local supplement
+- **`codemod-troubleshooting-instructions`** - Troubleshooting guidance for common Codemod CLI failures
+- **`codemod-maintainer-monorepo-instructions`** - Maintainer guidance for codemod monorepos and version-hop workspaces
+- **`sharding-instructions`** - Docs-backed sharding guidance
+
+For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code.
+
+When registry discovery does not find an exact package, agents should scaffold with direct `codemod init`. In non-interactive flows, agents should pass only values supplied by the user or task and rely on the CLI defaults/auth-derived author handling for optional metadata.
 
 ## Why use Codemod MCP?
 
@@ -111,17 +83,6 @@ Codemod MCP democratizes code transformation by integrating robust deterministic
 - **Individual Developers**: Take care of repetitive refactors without manual effort
 - **Accessibility**: Makes tackling tech debt more approachable for developers of all skill levels
 - **AI Integration**: Seamlessly integrates deterministic code transformation engines into AI IDE workflows
-
-## Codemod MCP vs Codemod Studio
-
-| | Codemod MCP | Codemod Studio |
-|---------|-------------|----------------|
-| **Interface** | Integrated into your IDE | Web-based interface |
-| **AI Model** | Your choice of AI model | Built-in AI assistant |
-| **Control** | Granular control over codemod creation | Quick prototyping and sharing |
-| **Iteration** | Direct, instant control in your IDE | Web-based iteration |
-| **Sharing** | Publishing to Codemod Registry and version control | Built-in sharing |
-| **Best For** | Power users, framework maintainers, pro codemods | Quick codemod creation and collaboration |
 
 ## Best practices
 
@@ -147,6 +108,29 @@ When working with AI assistants through Codemod MCP, follow these guidelines for
     - Easier to test and debug individual transformations
   </Step>
 </Steps>
+
+## Anonymous platform feedback
+
+Codemod AI and MCP can submit short anonymous platform feedback when the user has explicitly consented. Agents must ask before enabling or submitting feedback.
+
+After the user consents, submit categorized feedback with:
+
+```bash
+npx codemod ai feedback --category <category> --message <message>
+```
+
+Use short, thematic feedback only. Recommended categories are:
+
+- `jssg`: JSSG feature requests, runtime gaps, or transform-authoring friction
+- `workflow`: workflow feature requests or workflow authoring friction
+- `ai-docs`: AI docs resources that should be added, clarified, or reorganized
+- `mcp`: MCP tool, resource, or server behavior feedback
+- `cli`: CLI command or setup feedback
+- `registry`: registry discovery or package metadata feedback
+- `package-validation`: package validation checks that should be added or refined
+- `other`: feedback that does not fit the categories above
+
+Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts. The CLI records and reports the consent timestamp automatically.
 
 ## Troubleshooting
 

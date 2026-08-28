@@ -86,6 +86,14 @@ declare module "path" {
        */
       resolve(...paths: string[]): string;
       /**
+       * Solve the relative path from {from} to {to}. At times we have two absolute paths, and we need to derive the relative path from one to another. This method solves the problem.
+       *
+       * @param from The source path.
+       * @param to The destination path.
+       * @throws {TypeError} if any of the arguments is not a string.
+       */
+      relative(from: string, to: string): string;
+      /**
        * Determines whether {path} is an absolute path. An absolute path will always resolve to the same location, regardless of the working directory.
        *
        * If the given {path} is a zero-length string, `false` will be returned.

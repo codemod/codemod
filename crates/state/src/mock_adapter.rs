@@ -80,12 +80,19 @@ impl StateAdapter for MockStateAdapter {
 
     async fn list_workflow_runs(&self, limit: usize) -> Result<Vec<WorkflowRun>> {
         let mut runs: Vec<WorkflowRun> = self.workflow_runs.values().cloned().collect();
-        runs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        runs.sort_by_key(|b| std::cmp::Reverse(b.started_at));
         Ok(runs.into_iter().take(limit).collect())
     }
 
     async fn save_task(&mut self, task: &Task) -> Result<()> {
         self.tasks.insert(task.id, task.clone());
+
+        if let Some(workflow_run) = self.workflow_runs.get_mut(&task.workflow_run_id) {
+            if !workflow_run.tasks.contains(&task.id) {
+                workflow_run.tasks.push(task.id);
+            }
+        }
+
         Ok(())
     }
 

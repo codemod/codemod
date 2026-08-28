@@ -16,7 +16,7 @@ By the end of this guide, you'll have:
   <Step title="Discover a Codemod package in the Registry">
     Browse [Codemod Registry](https://go.codemod.com/registry) to find codemods for your use case.
     
-    The registry includes Codemod packages for framework upgrades, security patches, API migrations, code modernization patterns, and [more](/introduction#what-codemod-helps-you-solve).
+    The registry includes Codemod packages for framework upgrades, security patches, API migrations, code modernization patterns, and [more](/introduction#codemod-platform-core-features).
   </Step>
 
   <Step title="Apply a Codemod package to your repository">
@@ -80,13 +80,21 @@ Once you're comfortable with the basics, explore these enterprise capabilities t
 <Card title="Team Management" icon="people-group">
 Add team members to your organization to collaborate on migrations. Invite members and assign roles (Admin, Member, or Viewer) to control access to Campaigns and Insights.
 
-<b>Learn more:</b> [GitHub Integration](/platform/integrations/github#managing-team-members) or [GitLab Integration](/platform/integrations/gitlab#managing-team-members) for detailed instructions on managing team members.
+If your organization uses SAML SSO, users are provisioned automatically on first login and access is controlled through your IdP.
+
+<b>Learn more:</b> [GitHub Integration](/platform/integrations/github#managing-team-members) or [GitLab Integration](/platform/integrations/gitlab#managing-team-members) for manual invites, or [SAML SSO](/platform/saml#user-provisioning-and-access-control) for IdP-based access control.
 </Card>
 
 <Card title="Set up Insights" icon="chart-line-up-down">
   Create dashboards to track patterns, measure impact, and visualize code transformation progress over time.
 
   <b>Learn more:</b> [Insights Documentation](/platform/insights)
+</Card>
+
+<Card title="Create Automations" icon="bolt">
+React to schedules, webhooks, and repository events so Codemod can start repeatable maintenance work without a manual campaign setup each time.
+
+<b>Learn more:</b> [Automations Documentation](/platform/automations)
 </Card>
 
 <Card title="Advanced Campaign Features" icon="sliders">

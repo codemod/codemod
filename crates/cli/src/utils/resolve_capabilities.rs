@@ -1,7 +1,10 @@
+use codemod_llrt_capabilities::module_builder::UNSAFE_MODULES;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use inquire::Confirm;
 use std::{collections::HashSet, fs, path::PathBuf};
 
 use crate::utils::{ancestor_search::find_in_ancestors, manifest::CodemodManifest};
+use console::style;
 
 pub(crate) struct ResolveCapabilitiesArgs {
     pub allow_fs: bool,
@@ -57,4 +60,145 @@ pub(crate) fn resolve_capabilities(
     }
 
     capabilities
+}
+
+/// Prompt the user to approve unsafe capabilities that were resolved from the manifest.
+/// Returns the filtered set (safe modules pass through, unsafe ones require approval).
+/// Capabilities already granted via CLI flags (`cli_granted`) are not prompted for.
+/// If `no_interactive` is true, all capabilities pass through without prompting.
+pub(crate) fn prompt_capabilities(
+    capabilities: HashSet<LlrtSupportedModules>,
+    cli_granted: &HashSet<LlrtSupportedModules>,
+    no_interactive: bool,
+    dry_run: bool,
+) -> HashSet<LlrtSupportedModules> {
+    if no_interactive {
+        // In non-interactive mode, strip unsafe capabilities that were not
+        // explicitly granted via CLI flags to avoid implicitly granting
+        // dangerous permissions in CI/headless environments.
+        return filter_unapproved_unsafe_capabilities(capabilities, cli_granted);
+    }
+
+    let unsafe_set: HashSet<LlrtSupportedModules> = UNSAFE_MODULES.iter().copied().collect();
+    let mut unsafe_requested: Vec<LlrtSupportedModules> = capabilities
+        .iter()
+        .filter(|c| unsafe_set.contains(c) && !cli_granted.contains(c))
+        .copied()
+        .collect();
+    unsafe_requested.sort_by_key(|capability| capability_name(*capability));
+
+    if unsafe_requested.is_empty() {
+        return capabilities;
+    }
+
+    eprintln!();
+    eprintln!(
+        "  {} {}",
+        style("⚠").yellow().bold(),
+        style("Permission request").yellow().bold(),
+    );
+    eprintln!(
+        "  {}",
+        style("This codemod needs access to sensitive runtime capabilities.").dim()
+    );
+    eprintln!();
+    for capability in &unsafe_requested {
+        eprintln!(
+            "  {} {} {}",
+            style("•").yellow(),
+            style(format!("{:<16}", capability_name(*capability)))
+                .cyan()
+                .bold(),
+            style(capability_description(*capability)).dim(),
+        );
+    }
+    eprintln!();
+    eprintln!(
+        "  {}",
+        style("This access applies only to the current run.").dim()
+    );
+    if let Some(warning) = capability_dry_run_warning(dry_run) {
+        eprintln!();
+        eprintln!("  {}", style(warning).yellow().bold());
+    }
+
+    let answer = Confirm::new("Grant permissions?")
+        .with_default(true)
+        .with_help_message("Choose no to continue without them; the codemod may fail")
+        .prompt()
+        .unwrap_or(false);
+
+    if answer {
+        capabilities
+    } else {
+        // Strip the denied unsafe capabilities, keep safe ones + CLI-granted ones
+        filter_unapproved_unsafe_capabilities(capabilities, cli_granted)
+    }
+}
+
+fn capability_dry_run_warning(dry_run: bool) -> Option<&'static str> {
+    dry_run.then_some(
+        "Dry-run warning: These capabilities may not respect dry-run protections and could perform destructive actions.",
+    )
+}
+
+fn capability_name(capability: LlrtSupportedModules) -> &'static str {
+    match capability {
+        LlrtSupportedModules::Fs => "fs",
+        LlrtSupportedModules::Fetch => "fetch",
+        LlrtSupportedModules::ChildProcess => "child_process",
+        _ => "unknown",
+    }
+}
+
+fn capability_description(capability: LlrtSupportedModules) -> &'static str {
+    match capability {
+        LlrtSupportedModules::Fs => "Read and write files",
+        LlrtSupportedModules::Fetch => "Make HTTP requests",
+        LlrtSupportedModules::ChildProcess => "Run shell commands and child processes",
+        _ => "Sensitive runtime access",
+    }
+}
+
+fn filter_unapproved_unsafe_capabilities(
+    capabilities: HashSet<LlrtSupportedModules>,
+    cli_granted: &HashSet<LlrtSupportedModules>,
+) -> HashSet<LlrtSupportedModules> {
+    capabilities
+        .into_iter()
+        .filter(|capability| {
+            !UNSAFE_MODULES.contains(capability) || cli_granted.contains(capability)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn denied_child_process_capability_is_not_enabled() {
+        let capabilities = [
+            LlrtSupportedModules::ChildProcess,
+            LlrtSupportedModules::Assert,
+        ]
+        .into_iter()
+        .collect();
+
+        let filtered = filter_unapproved_unsafe_capabilities(capabilities, &HashSet::new());
+
+        assert!(!filtered.contains(&LlrtSupportedModules::ChildProcess));
+        assert!(filtered.contains(&LlrtSupportedModules::Assert));
+    }
+
+    #[test]
+    fn dry_run_capability_warning_is_only_shown_in_dry_run_mode() {
+        assert_eq!(
+            capability_dry_run_warning(true),
+            Some(
+                "Dry-run warning: These capabilities may not respect dry-run protections and could perform destructive actions."
+            )
+        );
+        assert_eq!(capability_dry_run_warning(false), None);
+    }
 }

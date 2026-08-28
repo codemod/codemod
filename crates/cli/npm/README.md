@@ -30,32 +30,37 @@ Whether you're an individual developer tackling tech debt, an OSS maintainer shi
 ## Installation
 
 ```bash
-npm install -g codemod@latest
+npm install -g codemod
 ```
 
 Or use via `npx` without installation:
 
 ```bash
-npx codemod@latest <command>
+npx codemod
 ```
+
+In an interactive terminal, bare `npx codemod` opens a launcher and refreshes to the latest published CLI before showing the prompt. In non-interactive contexts, it prints next steps and exits with status `1`.
 
 ## Quick Start
 
 ```bash
-# 1. Create a codemod package
+# 1. Start with the launcher or scaffold directly
+npx codemod
+
+# 2. Create a codemod package
 npx codemod init my-codemod
 cd my-codemod
 
 # You can create codemod packages with the help of AI using Codemod MCP or Studio
 
-# 2. Run it locally
+# 3. Run it locally
 npx codemod workflow run -w ./example-codemod -t /abs/path/to/repo
 
-# 3. Publish to registry
+# 4. Publish to registry
 npx codemod login
 npx codemod publish
 
-# 4. Run from registry
+# 5. Run from registry
 npx codemod @your-org/example-codemod
 ```
 
@@ -99,10 +104,10 @@ Packages can be as simple as a single transformation or as complex as multi-step
 
 ```typescript
 // Example: Replace console.log with logger.info
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 
-const transform: Transform<TSX> = (root) => {
+const codemod: Codemod<TSX> = (root) => {
   const rootNode = root.root();
 
   // Find all console.log calls
@@ -123,7 +128,7 @@ const transform: Transform<TSX> = (root) => {
   return rootNode.commitEdits(edits);
 };
 
-export default transform;
+export default codemod;
 ```
 
 jssg combines the power of AST transformations with the flexibility of JavaScript, making complex transformations intuitive and testable.
@@ -188,7 +193,7 @@ nodes:
 | Command | Description |
 |---------|-------------|
 | `npx codemod jssg run <file> <target> --language <lang>` | Run a jssg codemod directly |
-| `npx codemod jssg test <file> --language <lang>` | Test jssg codemod with fixtures |
+| `npx codemod jssg test <file> --language <lang>` | Test jssg codemod with single-file or directory-snapshot fixtures |
 
 ### Cache Management
 

@@ -45,6 +45,23 @@ pub struct FileDiff {
     pub additions: usize,
     /// Number of lines deleted
     pub deletions: usize,
+    /// Step identifier that produced the change
+    pub step_id: Option<String>,
+    /// Human-readable step name that produced the change
+    pub step_name: Option<String>,
+    /// Parent step identifier used for report grouping
+    pub parent_step_id: Option<String>,
+    /// Parent step name used for report grouping
+    pub parent_step_name: Option<String>,
+}
+
+/// Optional workflow metadata associated with a generated diff.
+#[derive(Clone, Debug, Default)]
+pub struct DiffMetadata {
+    pub step_id: Option<String>,
+    pub step_name: Option<String>,
+    pub parent_step_id: Option<String>,
+    pub parent_step_name: Option<String>,
 }
 
 impl FileDiff {
@@ -79,6 +96,7 @@ pub fn generate_unified_diff(
     original: &str,
     modified: &str,
     config: &DiffConfig,
+    metadata: DiffMetadata,
 ) -> FileDiff {
     let diff = TextDiff::from_lines(original, modified);
     let path_str = file_path.display().to_string();
@@ -160,6 +178,10 @@ pub fn generate_unified_diff(
         diff_text,
         additions,
         deletions,
+        step_id: metadata.step_id,
+        step_name: metadata.step_name,
+        parent_step_id: metadata.parent_step_id,
+        parent_step_name: metadata.parent_step_name,
     }
 }
 
@@ -178,7 +200,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = generate_unified_diff(&path, original, modified, &config);
+        let result =
+            generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
 
         assert_eq!(result.additions, 1);
         assert_eq!(result.deletions, 1);
@@ -196,7 +219,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = generate_unified_diff(&path, original, modified, &config);
+        let result =
+            generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
 
         assert_eq!(result.additions, 1);
         assert_eq!(result.deletions, 0);
@@ -213,7 +237,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = generate_unified_diff(&path, original, modified, &config);
+        let result =
+            generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
 
         assert_eq!(result.additions, 0);
         assert_eq!(result.deletions, 1);
@@ -230,10 +255,40 @@ mod tests {
             ..Default::default()
         };
 
-        let result = generate_unified_diff(&path, original, modified, &config);
+        let result =
+            generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
 
         assert_eq!(result.additions, 0);
         assert_eq!(result.deletions, 0);
+    }
+
+    #[test]
+    fn test_generate_unified_diff_preserves_metadata() {
+        let original = "line1\n";
+        let modified = "line2\n";
+        let path = PathBuf::from("test.txt");
+        let config = DiffConfig {
+            color: false,
+            ..Default::default()
+        };
+
+        let result = generate_unified_diff(
+            &path,
+            original,
+            modified,
+            &config,
+            DiffMetadata {
+                step_id: Some("step-1".to_string()),
+                step_name: Some("Step 1".to_string()),
+                parent_step_id: Some("parent-1".to_string()),
+                parent_step_name: Some("Parent Step".to_string()),
+            },
+        );
+
+        assert_eq!(result.step_id.as_deref(), Some("step-1"));
+        assert_eq!(result.step_name.as_deref(), Some("Step 1"));
+        assert_eq!(result.parent_step_id.as_deref(), Some("parent-1"));
+        assert_eq!(result.parent_step_name.as_deref(), Some("Parent Step"));
     }
 
     #[test]
@@ -246,7 +301,8 @@ mod tests {
             ..Default::default()
         };
 
-        let result = generate_unified_diff(&path, original, modified, &config);
+        let result =
+            generate_unified_diff(&path, original, modified, &config, DiffMetadata::default());
 
         // Check that ANSI color codes are present
         assert!(result.diff_text.contains("\x1b[31m")); // Red for deletions
@@ -268,7 +324,13 @@ mod tests {
             ..Default::default()
         };
 
-        let result = generate_unified_diff(&path, &original, &modified, &config);
+        let result = generate_unified_diff(
+            &path,
+            &original,
+            &modified,
+            &config,
+            DiffMetadata::default(),
+        );
 
         assert!(result.diff_text.contains("(diff truncated)"));
     }

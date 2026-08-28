@@ -29,6 +29,24 @@ pub struct BaseEvent {
 }
 
 static RUNTIME_HANDLE: OnceCell<tokio::runtime::Handle> = OnceCell::const_new();
+pub(crate) const REQUEST_TIMEOUT_SECONDS: u64 = 2;
+pub(crate) const MAX_CAPTURE_ATTEMPTS: u32 = 3;
+pub(crate) const RETRY_INITIAL_BACKOFF_MS: u64 = 100;
+pub(crate) const RETRY_MAX_BACKOFF_MS: u64 = 200;
+
+#[derive(Debug, thiserror::Error)]
+pub enum TelemetryError {
+    #[error(transparent)]
+    PostHog(#[from] posthog_rs::Error),
+    #[error("Telemetry client configuration is invalid: {0}")]
+    Configuration(String),
+    #[error("PostHog accepted the request without submitting the event")]
+    NoEventSubmitted,
+    #[error("Scarf request failed: {0}")]
+    Scarf(String),
+    #[error("Scarf responded with status {0}")]
+    ScarfStatus(u16),
+}
 
 #[async_trait]
 pub trait TelemetrySender: Send + Sync + 'static {
@@ -37,9 +55,18 @@ pub trait TelemetrySender: Send + Sync + 'static {
         event: BaseEvent,
         options_override: Option<PartialTelemetrySenderOptions>,
     );
+    async fn try_send_event(
+        &self,
+        event: BaseEvent,
+        options_override: Option<PartialTelemetrySenderOptions>,
+    ) -> Result<(), TelemetryError> {
+        self.send_event(event, options_override).await;
+        Ok(())
+    }
     async fn initialize_panic_telemetry(&self);
 }
 
+#[derive(Clone)]
 pub struct PostHogSender {
     client: Arc<posthog_rs::Client>,
     options: TelemetrySenderOptions,
@@ -48,8 +75,33 @@ pub struct PostHogSender {
 pub const POSTHOG_API_KEY: &str = env!("POSTHOG_API_KEY");
 
 impl PostHogSender {
-    pub async fn new(options: TelemetrySenderOptions) -> Self {
-        let client = posthog_rs::client(POSTHOG_API_KEY).await;
+    pub async fn new(options: TelemetrySenderOptions) -> Result<Self, TelemetryError> {
+        Self::new_with_api_key(options, POSTHOG_API_KEY).await
+    }
+
+    async fn new_with_api_key(
+        options: TelemetrySenderOptions,
+        api_key: &str,
+    ) -> Result<Self, TelemetryError> {
+        if api_key.trim().is_empty() {
+            return Err(TelemetryError::Configuration(
+                "POSTHOG_API_KEY is empty".to_string(),
+            ));
+        }
+
+        let client_options = posthog_rs::ClientOptionsBuilder::default()
+            .api_key(api_key.to_string())
+            .request_timeout_seconds(REQUEST_TIMEOUT_SECONDS)
+            .max_capture_attempts(MAX_CAPTURE_ATTEMPTS)
+            .retry_initial_backoff_ms(RETRY_INITIAL_BACKOFF_MS)
+            .retry_max_backoff_ms(RETRY_MAX_BACKOFF_MS)
+            .build()
+            .map_err(|error| TelemetryError::Configuration(error.to_string()))?;
+        let client = posthog_rs::client(client_options).await;
+        Ok(Self::with_client(options, client))
+    }
+
+    fn with_client(options: TelemetrySenderOptions, client: posthog_rs::Client) -> Self {
         Self {
             client: Arc::new(client),
             options,
@@ -64,6 +116,14 @@ impl TelemetrySender for PostHogSender {
         event: BaseEvent,
         options_override: Option<PartialTelemetrySenderOptions>,
     ) {
+        let _ = self.try_send_event(event, options_override).await;
+    }
+
+    async fn try_send_event(
+        &self,
+        event: BaseEvent,
+        options_override: Option<PartialTelemetrySenderOptions>,
+    ) -> Result<(), TelemetryError> {
         let distinct_id = options_override
             .as_ref()
             .and_then(|o| o.distinct_id.clone())
@@ -74,93 +134,351 @@ impl TelemetrySender for PostHogSender {
             .and_then(|o| o.cloud_role.clone())
             .unwrap_or_else(|| self.options.cloud_role.clone());
 
-        let mut posthog_event = posthog_rs::Event::new(
-            format!("codemod.{}.{}", cloud_role, event.kind),
-            distinct_id.clone(),
-        );
+        let mut posthog_event =
+            posthog_rs::Event::new(format!("codemod.{cloud_role}.{}", event.kind), distinct_id);
 
         for (key, value) in event.properties {
-            if let Err(e) = posthog_event.insert_prop(key, value) {
-                eprintln!("Failed to insert property into PostHog event: {e}");
-            }
+            posthog_event.insert_prop(key, value)?;
         }
 
-        if let Err(e) = self.client.capture(posthog_event).await {
-            eprintln!("Failed to send PostHog event: {e}");
+        let summary = self.client.capture_immediate(posthog_event).await?;
+        if summary.submitted() != 1 {
+            return Err(TelemetryError::NoEventSubmitted);
         }
+        Ok(())
     }
 
     async fn initialize_panic_telemetry(&self) {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let _ = RUNTIME_HANDLE.set(handle);
+        install_panic_hook(self.clone());
+    }
+}
+
+/// Installs a panic hook that reports the panic through `sender` and then
+/// defers to whatever hook was previously installed (Rust's default hook by
+/// default), so the standard panic message and any other hooks still run.
+/// Shared by every sender implementation.
+pub fn install_panic_hook<S>(sender: S)
+where
+    S: TelemetrySender + Clone,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let _ = RUNTIME_HANDLE.set(handle);
+    }
+
+    let previous_hook = panic::take_hook();
+
+    panic::set_hook(Box::new(move |panic_info| {
+        let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+
+        let panic_message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic occurred".to_string()
+        };
+
+        let location = if let Some(location) = panic_info.location() {
+            format!(
+                "{}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            )
+        } else {
+            "Unknown location".to_string()
+        };
+
+        if let Some(handle) = RUNTIME_HANDLE.get() {
+            let sender = sender.clone();
+
+            handle.spawn(async move {
+                let properties = HashMap::from([
+                    ("timestamp".to_string(), timestamp),
+                    ("message".to_string(), panic_message),
+                    ("location".to_string(), location),
+                    (
+                        "cliVersion".to_string(),
+                        env!("CARGO_PKG_VERSION").to_string(),
+                    ),
+                    ("os".to_string(), std::env::consts::OS.to_string()),
+                    ("arch".to_string(), std::env::consts::ARCH.to_string()),
+                ]);
+
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    sender.try_send_event(
+                        BaseEvent {
+                            kind: "cliPanic".to_string(),
+                            properties,
+                        },
+                        None,
+                    ),
+                )
+                .await;
+            });
+
+            std::thread::sleep(Duration::from_millis(100));
         }
 
-        let client = self.client.clone();
-        let options = self.options.clone();
+        previous_hook(panic_info);
+    }));
+}
 
-        panic::set_hook(Box::new(move |panic_info| {
-            let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+#[cfg(test)]
+pub(crate) mod test_support {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
 
-            let panic_message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "Unknown panic occurred".to_string()
-            };
+    /// A single-threaded HTTP server that answers `statuses` in order and
+    /// records every raw request it received.
+    pub(crate) struct TestServer {
+        address: std::net::SocketAddr,
+        handle: tokio::task::JoinHandle<Vec<String>>,
+    }
 
-            let location = if let Some(location) = panic_info.location() {
-                format!(
-                    "{}:{}:{}",
-                    location.file(),
-                    location.line(),
-                    location.column()
-                )
-            } else {
-                "Unknown location".to_string()
-            };
-
-            if let Some(handle) = RUNTIME_HANDLE.get() {
-                let client = client.clone();
-                let options = options.clone();
-
-                handle.spawn(async move {
-                    let mut posthog_event = posthog_rs::Event::new(
-                        format!("codemod.{}.cliPanic", options.cloud_role),
-                        options.distinct_id.clone(),
+    impl TestServer {
+        pub(crate) async fn start(statuses: Vec<&'static str>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind telemetry test server");
+            let address = listener.local_addr().expect("telemetry test address");
+            let handle = tokio::spawn(async move {
+                let mut requests = Vec::new();
+                for status in statuses {
+                    let (mut stream, _) =
+                        listener.accept().await.expect("accept telemetry request");
+                    let request = read_request(&mut stream).await;
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
                     );
+                    stream
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("write telemetry response");
+                    requests.push(request);
+                }
+                requests
+            });
+            Self { address, handle }
+        }
 
-                    let properties = HashMap::from([
-                        ("timestamp".to_string(), timestamp),
-                        ("message".to_string(), panic_message),
-                        ("location".to_string(), location),
-                        (
-                            "cliVersion".to_string(),
-                            env!("CARGO_PKG_VERSION").to_string(),
-                        ),
-                        ("os".to_string(), std::env::consts::OS.to_string()),
-                        ("arch".to_string(), std::env::consts::ARCH.to_string()),
-                    ]);
+        pub(crate) fn base_url(&self) -> String {
+            format!("http://{}", self.address)
+        }
 
-                    for (key, value) in properties {
-                        let _ = posthog_event.insert_prop(key, value);
-                    }
+        pub(crate) async fn finish(self) -> Vec<String> {
+            self.handle.await.expect("telemetry server should finish")
+        }
+    }
 
-                    let _ =
-                        tokio::time::timeout(Duration::from_secs(5), client.capture(posthog_event))
-                            .await;
-                });
+    async fn read_request(stream: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        loop {
+            let mut chunk = [0; 4096];
+            let size = stream
+                .read(&mut chunk)
+                .await
+                .expect("read telemetry request");
+            assert!(size > 0, "connection closed before request completed");
+            request.extend_from_slice(&chunk[..size]);
 
-                std::thread::sleep(Duration::from_millis(100));
+            let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+            else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.split_once(':').and_then(|(name, value)| {
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + 4 + content_length {
+                return String::from_utf8_lossy(&request).into_owned();
             }
+        }
+    }
+}
 
-            if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
-                std::panic::resume_unwind(Box::new(*s));
-            } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
-                std::panic::resume_unwind(Box::new(s.clone()));
-            } else {
-                std::panic::resume_unwind(Box::new("Unknown panic"));
-            }
-        }));
+#[cfg(test)]
+mod tests {
+    use super::test_support::TestServer;
+    use super::*;
+
+    async fn test_sender(statuses: Vec<&'static str>) -> (PostHogSender, TestServer) {
+        let server = TestServer::start(statuses).await;
+
+        let client_options = posthog_rs::ClientOptionsBuilder::default()
+            .api_key("test-key".to_string())
+            .host(server.base_url())
+            .request_timeout_seconds(1)
+            .max_capture_attempts(3)
+            .retry_initial_backoff_ms(1)
+            .retry_max_backoff_ms(2)
+            .build()
+            .expect("build test PostHog client options");
+        let client = posthog_rs::client(client_options).await;
+        (
+            PostHogSender::with_client(
+                TelemetrySenderOptions {
+                    distinct_id: "installation-123".to_string(),
+                    cloud_role: "CLI".to_string(),
+                },
+                client,
+            ),
+            server,
+        )
+    }
+
+    #[tokio::test]
+    async fn send_event_includes_stable_identity_and_event_name() {
+        let (sender, server) = test_sender(vec!["200 OK"]).await;
+
+        sender
+            .try_send_event(
+                BaseEvent {
+                    kind: "codemodRunStarted".to_string(),
+                    properties: HashMap::from([(
+                        "codemodName".to_string(),
+                        "@codemod/react/19/migration-recipe".to_string(),
+                    )]),
+                },
+                None,
+            )
+            .await
+            .expect("event should be accepted");
+
+        let requests = server.finish().await;
+        let request = &requests[0];
+        let body = request
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .expect("request should contain a body");
+        let payload: serde_json::Value =
+            serde_json::from_str(body).expect("request body should be JSON");
+        let event = &payload["batch"][0];
+
+        assert_eq!(event["distinct_id"], "installation-123");
+        assert!(event.get("$distinct_id").is_none());
+        assert_eq!(event["event"], "codemod.CLI.codemodRunStarted");
+    }
+
+    #[tokio::test]
+    async fn send_event_surfaces_non_success_responses() {
+        let (sender, server) = test_sender(vec!["400 Bad Request"]).await;
+
+        let error = sender
+            .try_send_event(
+                BaseEvent {
+                    kind: "codemodRunStarted".to_string(),
+                    properties: HashMap::new(),
+                },
+                None,
+            )
+            .await
+            .expect_err("non-success response should be reported");
+
+        assert!(matches!(
+            error,
+            TelemetryError::PostHog(posthog_rs::Error::BadRequest(_))
+        ));
+        server.finish().await;
+    }
+
+    #[tokio::test]
+    async fn send_event_retries_transient_responses() {
+        let (sender, server) = test_sender(vec![
+            "500 Internal Server Error",
+            "503 Unavailable",
+            "200 OK",
+        ])
+        .await;
+
+        sender
+            .try_send_event(
+                BaseEvent {
+                    kind: "codemodRunStarted".to_string(),
+                    properties: HashMap::new(),
+                },
+                None,
+            )
+            .await
+            .expect("event should succeed after retries");
+
+        let requests = server.finish().await;
+        assert_eq!(requests.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn send_event_reports_exhausted_transient_responses() {
+        let (sender, server) = test_sender(vec![
+            "500 Internal Server Error",
+            "503 Unavailable",
+            "504 Gateway Timeout",
+        ])
+        .await;
+
+        let error = sender
+            .try_send_event(
+                BaseEvent {
+                    kind: "codemodRunStarted".to_string(),
+                    properties: HashMap::new(),
+                },
+                None,
+            )
+            .await
+            .expect_err("exhausted retries should be reported");
+
+        assert!(error.to_string().contains("504"));
+        let requests = server.finish().await;
+        assert_eq!(requests.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn empty_api_key_is_rejected_instead_of_disabling_delivery() {
+        let result = PostHogSender::new_with_api_key(
+            TelemetrySenderOptions {
+                distinct_id: "installation-123".to_string(),
+                cloud_role: "CLI".to_string(),
+            },
+            " ",
+        )
+        .await;
+
+        assert!(matches!(result, Err(TelemetryError::Configuration(_))));
+    }
+
+    #[tokio::test]
+    async fn disabled_client_is_not_reported_as_successful_delivery() {
+        let client_options = posthog_rs::ClientOptionsBuilder::default()
+            .api_key(" ".to_string())
+            .build()
+            .expect("expected valid disabled-client options");
+        let client = posthog_rs::client(client_options).await;
+        let sender = PostHogSender::with_client(
+            TelemetrySenderOptions {
+                distinct_id: "installation-123".to_string(),
+                cloud_role: "CLI".to_string(),
+            },
+            client,
+        );
+
+        let error = sender
+            .try_send_event(
+                BaseEvent {
+                    kind: "codemodRunStarted".to_string(),
+                    properties: HashMap::new(),
+                },
+                None,
+            )
+            .await
+            .expect_err("disabled client should not report successful delivery");
+
+        assert!(matches!(error, TelemetryError::NoEventSubmitted));
     }
 }

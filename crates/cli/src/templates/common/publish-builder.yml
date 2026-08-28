@@ -1,0 +1,50 @@
+# Managed by Codemod Builder for __PACKAGE_NAME__.
+name: Publish __PACKAGE_NAME__
+
+on:
+  push:
+    branches:
+      - __DEFAULT_BRANCH__
+    paths:
+      - __PACKAGE_PATH_GLOB__
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: codemod-publish-__PACKAGE_HASH__
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether the package version changed
+        id: version
+        env:
+          BEFORE: ${{ github.event.before }}
+          PACKAGE_JSON: __PACKAGE_JSON_PATH__
+        run: |
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CURRENT_VERSION="$(node -p "require('./' + process.env.PACKAGE_JSON).version")"
+          PREVIOUS_VERSION="$(git show "$BEFORE:$PACKAGE_JSON" 2>/dev/null | node -e "let input=''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { try { process.stdout.write(JSON.parse(input).version ?? '') } catch {} })")"
+          if [ -z "$PREVIOUS_VERSION" ] || [ "$CURRENT_VERSION" != "$PREVIOUS_VERSION" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish codemod
+        if: steps.version.outputs.changed == 'true'
+        uses: codemod/publish-action@v1
+        with:
+          path: __PACKAGE_DIRECTORY__

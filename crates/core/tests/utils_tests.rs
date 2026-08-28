@@ -109,11 +109,97 @@ fn test_parse_workflow_file_invalid() {
     // Verify that parsing fails
     assert!(result.is_err());
     match result {
-        Err(Error::WorkflowValidation(_)) => {
-            // Expected error
+        Err(Error::WorkflowParse { path, .. }) => {
+            assert_eq!(path, file_path);
         }
-        _ => panic!("Expected WorkflowValidation error"),
+        _ => panic!("Expected WorkflowParse error"),
     }
+}
+
+#[test]
+fn test_validate_workflow_rejects_empty_install_skill_package() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let workflow_path = temp_dir.path().join("workflow.yaml");
+
+    let yaml_content = r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    steps:
+      - id: install-skill
+        name: Install package skill
+        install-skill:
+          package: "   "
+"#;
+
+    fs::write(&workflow_path, yaml_content).unwrap();
+    let workflow = utils::parse_workflow_file(&workflow_path).unwrap();
+
+    let result = utils::validate_workflow(&workflow, temp_dir.path());
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("invalid install-skill package value"));
+}
+
+#[test]
+fn test_validate_workflow_rejects_invalid_install_skill_path() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let workflow_path = temp_dir.path().join("workflow.yaml");
+
+    let yaml_content = r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    steps:
+      - id: install-skill
+        name: Install package skill
+        install-skill:
+          package: "@codemod/example"
+          path: "   "
+"#;
+
+    fs::write(&workflow_path, yaml_content).unwrap();
+    let workflow = utils::parse_workflow_file(&workflow_path).unwrap();
+
+    let result = utils::validate_workflow(&workflow, temp_dir.path());
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("invalid install-skill path value"));
+}
+
+#[test]
+fn test_validate_workflow_rejects_parent_traversal_install_skill_path() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let workflow_path = temp_dir.path().join("workflow.yaml");
+
+    let yaml_content = r#"
+version: "1"
+nodes:
+  - id: install
+    name: Install
+    steps:
+      - id: install-skill
+        name: Install package skill
+        install-skill:
+          package: "@codemod/example"
+          path: "../outside/SKILL.md"
+"#;
+
+    fs::write(&workflow_path, yaml_content).unwrap();
+    let workflow = utils::parse_workflow_file(&workflow_path).unwrap();
+
+    let result = utils::validate_workflow(&workflow, temp_dir.path());
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("parent-directory traversal is not allowed"));
 }
 
 #[test]
@@ -136,6 +222,8 @@ fn test_validate_workflow_valid() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node2".to_string(),
@@ -148,6 +236,8 @@ fn test_validate_workflow_valid() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     };
@@ -179,6 +269,8 @@ fn test_validate_workflow_duplicate_node_id() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node1".to_string(), // Duplicate ID
@@ -191,6 +283,8 @@ fn test_validate_workflow_duplicate_node_id() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     };
@@ -227,6 +321,8 @@ fn test_validate_workflow_nonexistent_dependency() {
             runtime: None,
             steps: vec![],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -263,6 +359,8 @@ fn test_validate_workflow_cyclic_dependency() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node2".to_string(),
@@ -275,6 +373,8 @@ fn test_validate_workflow_cyclic_dependency() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     };
@@ -440,8 +540,11 @@ fn test_validate_workflow_nonexistent_template_reference() {
                 }),
                 env: None,
                 condition: None,
+                commit: None,
             }],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -481,6 +584,8 @@ fn test_validate_workflow_invalid_matrix_strategy() {
             runtime: None,
             steps: vec![],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -518,6 +623,8 @@ fn test_validate_workflow_complex_cyclic_dependency() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node_b".to_string(),
@@ -530,6 +637,8 @@ fn test_validate_workflow_complex_cyclic_dependency() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
             Node {
                 id: "node_c".to_string(),
@@ -542,6 +651,8 @@ fn test_validate_workflow_complex_cyclic_dependency() {
                 runtime: None,
                 steps: vec![],
                 env: HashMap::new(),
+                branch_name: None,
+                pull_request: None,
             },
         ],
     };
@@ -673,6 +784,8 @@ fn test_validate_workflow_self_dependency() {
             runtime: None,
             steps: vec![],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -727,6 +840,8 @@ fn test_validate_workflow_valid_matrix_strategy_with_values() {
             runtime: None,
             steps: vec![],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -760,6 +875,8 @@ fn test_validate_workflow_valid_matrix_strategy_with_from_state() {
             runtime: None,
             steps: vec![],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -827,8 +944,11 @@ fn test_validate_workflow_with_step_env_vars() {
                 action: StepAction::RunScript("echo $STEP_VAR".to_string()),
                 env: Some(step_env),
                 condition: None,
+                commit: None,
             }],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -892,6 +1012,7 @@ fix:
                     }),
                     env: None,
                     condition: None,
+                    commit: None,
                 },
                 Step {
                     id: Some("step-2".to_string()),
@@ -911,9 +1032,12 @@ fix:
                     }),
                     env: None,
                     condition: None,
+                    commit: None,
                 },
             ],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -954,8 +1078,11 @@ fn test_validate_workflow_with_invalid_config_path() {
                 }),
                 env: None,
                 condition: None,
+                commit: None,
             }],
             env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
         }],
     };
 
@@ -964,6 +1091,195 @@ fn test_validate_workflow_with_invalid_config_path() {
 
     // Verify that validation fails
     assert!(result.is_err());
+}
+
+fn validate_workflow_yaml(package_path: &Path, yaml: &str) -> String {
+    let workflow: Workflow = serde_yaml::from_str(yaml).unwrap();
+    utils::validate_workflow(&workflow, package_path)
+        .unwrap_err()
+        .to_string()
+}
+
+#[test]
+fn test_validate_workflow_rejects_ast_grep_config_file_traversal() {
+    let package = tempfile::tempdir().unwrap();
+    let error = validate_workflow_yaml(
+        package.path(),
+        r#"
+version: "1"
+nodes:
+  - id: scan
+    name: Scan
+    steps:
+      - name: AST grep
+        ast-grep:
+          config_file: "../outside.yml"
+"#,
+    );
+
+    assert!(error.contains("ast-grep.config_file"));
+    assert!(error.contains("workspace root"));
+}
+
+#[test]
+fn test_validate_workflow_rejects_js_ast_grep_file_traversal() {
+    let package = tempfile::tempdir().unwrap();
+    let error = validate_workflow_yaml(
+        package.path(),
+        r#"
+version: "1"
+nodes:
+  - id: transform
+    name: Transform
+    steps:
+      - name: JS AST grep
+        js-ast-grep:
+          js_file: "../../../../etc/passwd"
+"#,
+    );
+
+    assert!(error.contains("js-ast-grep.js_file"));
+    assert!(error.contains("workspace root"));
+}
+
+#[test]
+fn test_validate_workflow_rejects_absolute_base_path() {
+    let package = tempfile::tempdir().unwrap();
+    let error = validate_workflow_yaml(
+        package.path(),
+        r#"
+version: "1"
+nodes:
+  - id: transform
+    name: Transform
+    steps:
+      - name: JS AST grep
+        js-ast-grep:
+          js_file: "codemod.ts"
+          base_path: "/tmp"
+"#,
+    );
+
+    assert!(error.contains("js-ast-grep.base_path"));
+    assert!(error.contains("workspace root"));
+}
+
+#[test]
+fn test_validate_workflow_rejects_glob_traversal() {
+    let package = tempfile::tempdir().unwrap();
+    let error = validate_workflow_yaml(
+        package.path(),
+        r#"
+version: "1"
+nodes:
+  - id: scan
+    name: Scan
+    steps:
+      - name: AST grep
+        ast-grep:
+          config_file: "config.yml"
+          include:
+            - "../**/*.ts"
+"#,
+    );
+
+    assert!(error.contains("ast-grep.include"));
+    assert!(error.contains("workspace root"));
+}
+
+#[test]
+fn test_validate_workflow_rejects_null_byte_path() {
+    let package = tempfile::tempdir().unwrap();
+    let workflow = Workflow {
+        version: "1".to_string(),
+        state: None,
+        params: None,
+        templates: vec![],
+        nodes: vec![Node {
+            id: "node1".to_string(),
+            name: "Node 1".to_string(),
+            description: None,
+            r#type: NodeType::Automatic,
+            depends_on: vec![],
+            trigger: None,
+            strategy: None,
+            runtime: None,
+            steps: vec![Step {
+                id: Some("step-1".to_string()),
+                name: "Step 1".to_string(),
+                action: StepAction::AstGrep(UseAstGrep {
+                    config_file: "config.yml\0.yml".to_string(),
+                    include: None,
+                    exclude: None,
+                    base_path: None,
+                    allow_dirty: None,
+                    max_threads: None,
+                }),
+                env: None,
+                condition: None,
+                commit: None,
+            }],
+            env: HashMap::new(),
+            branch_name: None,
+            pull_request: None,
+        }],
+    };
+
+    let error = utils::validate_workflow(&workflow, package.path())
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("ast-grep.config_file"));
+    assert!(error.contains("null bytes"));
+}
+
+#[test]
+fn test_validate_workflow_rejects_shard_path_traversal() {
+    let package = tempfile::tempdir().unwrap();
+    let error = validate_workflow_yaml(
+        package.path(),
+        r#"
+version: "1"
+nodes:
+  - id: shard
+    name: Shard
+    steps:
+      - name: Shard files
+        shard:
+          method:
+            function: "../shard.js"
+          target: "../src"
+          file_pattern: "**/*.ts"
+          output_state: shards
+"#,
+    );
+
+    assert!(error.contains("shard.method.function"));
+    assert!(error.contains("workspace root"));
+}
+
+#[test]
+fn test_validate_workflow_rejects_semantic_root_traversal() {
+    let package = tempfile::tempdir().unwrap();
+    let error = validate_workflow_yaml(
+        package.path(),
+        r#"
+version: "1"
+nodes:
+  - id: transform
+    name: Transform
+    steps:
+      - name: JS AST grep
+        js-ast-grep:
+          js_file: "codemod.ts"
+          semantic_analysis:
+            mode: workspace
+            root: "../outside"
+"#,
+    );
+
+    assert!(error.contains("js-ast-grep.semantic_analysis.root"));
+    assert!(error.contains("workspace root"));
 }
 
 #[test]

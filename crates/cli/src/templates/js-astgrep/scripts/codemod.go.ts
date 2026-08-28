@@ -1,7 +1,7 @@
-import type { Transform } from "codemod:ast-grep";
+import type { Codemod } from "codemod:ast-grep";
 import type Go from "codemod:ast-grep/langs/go";
 
-const transform: Transform<Go> = async (root) => {
+const codemod: Codemod<Go> = async (root) => {
   const rootNode = root.root();
 
   // Find all fmt.Println calls
@@ -84,4 +84,4 @@ const transform: Transform<Go> = async (root) => {
   return newSource;
 };
 
-export default transform;
+export default codemod;

@@ -53,10 +53,115 @@
     "nodes"
   ],
   "$defs": {
+    "BuiltinShardMethod": {
+      "description": "Built-in sharding method configuration.",
+      "type": "object",
+      "properties": {
+        "max_files_per_shard": {
+          "description": "Target number of files per shard.\nAccepts a literal number or a `${{ }}` expression (e.g. `${{ params.pr_size }}`)."
+        },
+        "min_shard_size": {
+          "description": "Minimum shard size — trailing shards smaller than this are merged\ninto the previous shard (optional)",
+          "default": null
+        },
+        "type": {
+          "description": "Built-in method type",
+          "$ref": "#/$defs/BuiltinShardType"
+        }
+      },
+      "required": [
+        "type",
+        "max_files_per_shard"
+      ]
+    },
+    "BuiltinShardType": {
+      "description": "Type of built-in sharding method.",
+      "oneOf": [
+        {
+          "description": "Group by immediate subdirectory under target, then bin-pack",
+          "type": "string",
+          "const": "directory"
+        },
+        {
+          "description": "Group by CODEOWNERS team, then bin-pack",
+          "type": "string",
+          "const": "codeowner"
+        }
+      ]
+    },
+    "CommitConfig": {
+      "description": "Configuration for a commit checkpoint on a step.\nWhen present (and cloud mode is active), a git commit is created after the step runs.",
+      "type": "object",
+      "properties": {
+        "add": {
+          "description": "Paths to stage before committing (default: `[\".\"]` — stage everything)",
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow_empty": {
+          "description": "If true, skip silently when there are no changes to commit (default: true)",
+          "type": "boolean",
+          "default": true
+        },
+        "message": {
+          "description": "Commit message (supports `${{ }}` template expressions)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message"
+      ]
+    },
+    "CustomShardFunction": {
+      "description": "Custom shard function configuration.",
+      "type": "object",
+      "properties": {
+        "function": {
+          "description": "Path to JS/TS shard function file",
+          "type": "string"
+        }
+      },
+      "required": [
+        "function"
+      ]
+    },
+    "InstallSkillHarness": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "claude",
+        "goose",
+        "opencode",
+        "cursor",
+        "codex",
+        "antigravity"
+      ]
+    },
+    "InstallSkillScope": {
+      "type": "string",
+      "enum": [
+        "project",
+        "user"
+      ]
+    },
     "Node": {
       "description": "Represents a node in a workflow",
       "type": "object",
       "properties": {
+        "branch_name": {
+          "description": "Git branch name for cloud runs (supports `${{ }}` expressions).\nDefault: `codemod-{task.signature}`",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "depends_on": {
           "description": "IDs of nodes that must complete before this node can run",
           "type": "array",
@@ -88,6 +193,18 @@
         "name": {
           "description": "Human-readable name",
           "type": "string"
+        },
+        "pull_request": {
+          "description": "Pull request configuration. When present, the engine creates a managed\ngit branch and opens a PR at the end of the node execution.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PullRequestConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "runtime": {
           "description": "Container runtime configuration",
@@ -157,6 +274,43 @@
           "type": "string",
           "const": "manual"
         }
+      ]
+    },
+    "PullRequestConfig": {
+      "description": "Configuration for automatic pull request creation at the end of a node.",
+      "type": "object",
+      "properties": {
+        "base": {
+          "description": "Base branch to merge into (auto-detected if omitted)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "body": {
+          "description": "PR body/description (supports `${{ }}` template expressions)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "draft": {
+          "description": "Create the pull request as a draft",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "title": {
+          "description": "PR title (supports `${{ }}` template expressions)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
       ]
     },
     "Runtime": {
@@ -281,6 +435,19 @@
           "description": "Workspace-wide analysis with cross-file support",
           "type": "string",
           "const": "workspace"
+        }
+      ]
+    },
+    "ShardMethod": {
+      "description": "Sharding method — either a built-in algorithm or a custom JS/TS function.\n\nDeserialized from YAML as:\n  `{ type: directory, max_files_per_shard: 30 }`\n  `{ function: \"./scripts/shard.ts\" }`",
+      "anyOf": [
+        {
+          "description": "Built-in sharding method with sizing parameters",
+          "$ref": "#/$defs/BuiltinShardMethod"
+        },
+        {
+          "description": "Custom JS/TS shard function",
+          "$ref": "#/$defs/CustomShardFunction"
         }
       ]
     },
@@ -478,6 +645,18 @@
       "description": "Represents a step in a node",
       "type": "object",
       "properties": {
+        "commit": {
+          "description": "Optional commit checkpoint — if present (and in cloud mode), a git commit\nis created after this step completes. The message supports `${{ }}` expressions.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommitConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "env": {
           "description": "Environment variables specific to this step",
           "type": [
@@ -498,7 +677,7 @@
           "default": null
         },
         "if": {
-          "description": "Conditional expression to determine if this step should be executed",
+          "description": "Conditional expression to determine if this step should be executed.\nAccepts a string expression or a literal boolean (`if: true` / `if: false`).",
           "type": [
             "string",
             "null"
@@ -581,6 +760,30 @@
           },
           "required": [
             "ai"
+          ]
+        },
+        {
+          "description": "Install package skill behavior via codemod CLI",
+          "type": "object",
+          "properties": {
+            "install-skill": {
+              "$ref": "#/$defs/UseInstallSkill"
+            }
+          },
+          "required": [
+            "install-skill"
+          ]
+        },
+        {
+          "description": "Evaluate file shards and write results to workflow state",
+          "type": "object",
+          "properties": {
+            "shard": {
+              "$ref": "#/$defs/UseShard"
+            }
+          },
+          "required": [
+            "shard"
           ]
         }
       ],
@@ -1033,6 +1236,58 @@
         "source"
       ]
     },
+    "UseInstallSkill": {
+      "type": "object",
+      "properties": {
+        "force": {
+          "description": "Overwrite existing skill files (optional, defaults to false)",
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "harness": {
+          "description": "Target harness adapter (optional, defaults to auto)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstallSkillHarness"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "package": {
+          "description": "Package identifier to install (for example `@codemod/jest-to-vitest`)",
+          "type": "string"
+        },
+        "path": {
+          "description": "Authored skill source path inside the package (optional, defaults to conventional layout)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "scope": {
+          "description": "Install scope (optional, defaults to project)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstallSkillScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "package"
+      ]
+    },
     "UseJSAstGrep": {
       "type": "object",
       "properties": {
@@ -1122,6 +1377,52 @@
       },
       "required": [
         "js_file"
+      ]
+    },
+    "UseShard": {
+      "description": "Configuration for the `shard` step action.\nEvaluates file shards and writes results to workflow state.",
+      "type": "object",
+      "properties": {
+        "file_pattern": {
+          "description": "Glob pattern for eligible files (used when js-ast-grep is not set)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "js-ast-grep": {
+          "description": "Optional js-ast-grep configuration for codemod-based pre-filtering.\nWhen set, the engine dry-runs the codemod against matched files and\nonly includes files where the transform produces changes.\nThe `include` field also serves as the file pattern for discovery.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/UseJSAstGrep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "method": {
+          "description": "Sharding method configuration — either a built-in algorithm or a custom function",
+          "$ref": "#/$defs/ShardMethod"
+        },
+        "output_state": {
+          "description": "State key to write shard results to",
+          "type": "string"
+        },
+        "target": {
+          "description": "Root directory to scan for files",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "method",
+        "output_state"
       ]
     },
     "WorkflowParams": {

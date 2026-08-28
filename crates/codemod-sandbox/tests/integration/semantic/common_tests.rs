@@ -1,7 +1,6 @@
 //! Common semantic provider tests that apply to all languages.
 //! These tests verify behavior when no semantic provider is configured.
 
-use super::fixtures::jssg_test;
 use ast_grep_language::SupportLang;
 use codemod_sandbox::CodemodLang;
 

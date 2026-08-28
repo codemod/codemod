@@ -37,6 +37,7 @@ pub enum Lang {
     TypeScript,
     Tsx,
     Html,
+    Xml,
     Css,
     Angular,
     Java,
@@ -53,6 +54,7 @@ pub enum Lang {
     Ruby,
     Elixir,
     Yaml,
+    Toml,
 }
 
 impl Lang {
@@ -62,6 +64,7 @@ impl Lang {
             Lang::TypeScript => "typescript",
             Lang::Tsx => "tsx",
             Lang::Html => "html",
+            Lang::Xml => "xml",
             Lang::Css => "css",
             Lang::Angular => "angular",
             Lang::Java => "java",
@@ -78,6 +81,7 @@ impl Lang {
             Lang::Ruby => "ruby",
             Lang::Elixir => "elixir",
             Lang::Yaml => "yaml",
+            Lang::Toml => "toml",
         }
     }
 
@@ -87,6 +91,7 @@ impl Lang {
             Lang::TypeScript => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/refs/tags/v0.23.2/typescript/src/node-types.json",
             Lang::Tsx => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/refs/tags/v0.23.2/tsx/src/node-types.json",
             Lang::Html => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-html/refs/tags/v0.23.0/src/node-types.json",
+            Lang::Xml => "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-xml/refs/tags/v0.7.0/xml/src/node-types.json",
             Lang::Css => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-css/refs/tags/v0.23.2/src/node-types.json",
             Lang::Angular => "https://raw.githubusercontent.com/codemod-com/tree-sitter-angular/refs/heads/main/src/node-types.json",
             Lang::Java => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-java/refs/tags/v0.23.0/src/node-types.json",
@@ -103,6 +108,7 @@ impl Lang {
             Lang::Ruby => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-ruby/refs/tags/v0.23.0/src/node-types.json",
             Lang::Elixir => "https://raw.githubusercontent.com/elixir-lang/tree-sitter-elixir/refs/tags/v0.3.4/src/node-types.json",
             Lang::Yaml => "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-yaml/refs/heads/master/src/node-types.json",
+            Lang::Toml => "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-toml/refs/tags/v0.7.0/src/node-types.json",
         }
     }
 
@@ -112,6 +118,7 @@ impl Lang {
             Lang::TypeScript,
             Lang::Tsx,
             Lang::Html,
+            Lang::Xml,
             Lang::Css,
             Lang::Angular,
             Lang::Java,
@@ -128,6 +135,7 @@ impl Lang {
             Lang::Ruby,
             Lang::Elixir,
             Lang::Yaml,
+            Lang::Toml,
         ]
     }
 }

@@ -3,6 +3,12 @@ use std::collections::HashMap;
 #[cfg(feature = "native")]
 use super::codemod_lang::CodemodLang;
 
+const LESS_EXTENSIONS: &[&str] = &[".less"];
+const TOML_EXTENSIONS: &[&str] = &[".toml"];
+const XML_EXTENSIONS: &[&str] = &[
+    ".xml", ".csproj", ".props", ".targets", ".config", ".resx", ".xaml",
+];
+
 /// Creates a map from CodemodLang to their associated file extensions
 pub fn create_language_extension_map() -> HashMap<CodemodLang, Vec<&'static str>> {
     let mut map = HashMap::new();
@@ -54,12 +60,6 @@ pub fn create_language_extension_map() -> HashMap<CodemodLang, Vec<&'static str>
         map.insert(CodemodLang::Static(Scala), vec![".scala", ".sc"]);
         map.insert(CodemodLang::Static(Swift), vec![".swift"]);
         map.insert(CodemodLang::Static(Yaml), vec![".yaml", ".yml"]);
-
-        // Dynamic languages (registered via tree-sitter-loader)
-        if let Ok(lang) = std::str::FromStr::from_str("less") {
-            let lang: CodemodLang = lang;
-            map.insert(lang, vec![".less"]);
-        }
     }
 
     map
@@ -67,16 +67,42 @@ pub fn create_language_extension_map() -> HashMap<CodemodLang, Vec<&'static str>
 
 /// Get file extensions for a specific language
 pub fn get_extensions_for_language(lang: CodemodLang) -> Vec<&'static str> {
+    if lang.to_string() == "less" {
+        return LESS_EXTENSIONS.to_vec();
+    }
+    if lang.to_string() == "toml" {
+        return TOML_EXTENSIONS.to_vec();
+    }
+    if lang.to_string() == "xml" {
+        return XML_EXTENSIONS.to_vec();
+    }
+
     let map = create_language_extension_map();
     map.get(&lang).cloned().unwrap_or_default()
 }
 
 /// Determine language from file extension
 pub fn get_language_from_extension(extension: &str) -> Option<CodemodLang> {
+    let extension = extension.strip_prefix('.').unwrap_or(extension);
+
+    if extension == "less" {
+        return "less".parse().ok();
+    }
+    if extension == "toml" {
+        return "toml".parse().ok();
+    }
+    if XML_EXTENSIONS
+        .iter()
+        .any(|ext| ext.strip_prefix('.') == Some(extension))
+    {
+        return "xml".parse().ok();
+    }
+
     let map = create_language_extension_map();
+    let extension = format!(".{extension}");
 
     for (lang, extensions) in map.iter() {
-        if extensions.contains(&extension) {
+        if extensions.contains(&extension.as_str()) {
             return Some(*lang);
         }
     }
@@ -88,6 +114,9 @@ pub fn get_language_from_extension(extension: &str) -> Option<CodemodLang> {
 pub fn get_all_supported_extensions() -> Vec<&'static str> {
     let map = create_language_extension_map();
     let mut extensions: Vec<&'static str> = map.values().flatten().copied().collect();
+    extensions.extend_from_slice(LESS_EXTENSIONS);
+    extensions.extend_from_slice(TOML_EXTENSIONS);
+    extensions.extend_from_slice(XML_EXTENSIONS);
     extensions.sort();
     extensions.dedup();
     extensions
@@ -124,12 +153,18 @@ mod tests {
         assert!(js_extensions.contains(&".js"));
         assert!(js_extensions.contains(&".mjs"));
         assert!(js_extensions.contains(&".cjs"));
+
+        let toml_extensions = get_extensions_for_language("toml".parse().unwrap());
+        assert_eq!(toml_extensions, vec![".toml"]);
     }
 
     #[test]
     fn test_get_language_from_extension() {
         let lang = get_language_from_extension(".rs");
         assert!(lang.is_some());
+
+        let lang = get_language_from_extension(".toml");
+        assert_eq!(lang.unwrap().to_string(), "toml");
 
         let lang = get_language_from_extension(".unknown");
         assert!(lang.is_none());
@@ -142,5 +177,6 @@ mod tests {
         assert!(extensions.contains(&".js"));
         assert!(extensions.contains(&".rs"));
         assert!(extensions.contains(&".py"));
+        assert!(extensions.contains(&".toml"));
     }
 }

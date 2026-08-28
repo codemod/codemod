@@ -1,3 +1,4 @@
+use codemod_llrt_capabilities::module_builder::UNSAFE_MODULES;
 use inquire::Confirm;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -6,12 +7,17 @@ use butterflow_core::execution::CodemodExecutionConfig;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
 type CapabilitiesSecurityCallback =
-    Arc<Box<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>>;
+    Arc<dyn Fn(&CodemodExecutionConfig) -> Result<(), anyhow::Error> + Send + Sync>;
 
-pub fn capabilities_security_callback(no_interaction: bool) -> CapabilitiesSecurityCallback {
-    let checked_capabilities = Arc::new(Mutex::new(HashSet::<LlrtSupportedModules>::new()));
+pub fn capabilities_security_callback(
+    no_interaction: bool,
+    pre_approved: Option<HashSet<LlrtSupportedModules>>,
+) -> CapabilitiesSecurityCallback {
+    let checked_capabilities = Arc::new(Mutex::new(pre_approved.unwrap_or_default()));
+    let unsafe_capabilities: HashSet<LlrtSupportedModules> =
+        UNSAFE_MODULES.iter().copied().collect();
 
-    Arc::new(Box::new(move |config: &CodemodExecutionConfig| {
+    Arc::new(move |config: &CodemodExecutionConfig| {
         if no_interaction {
             return Ok(());
         }
@@ -21,7 +27,7 @@ pub fn capabilities_security_callback(no_interaction: bool) -> CapabilitiesSecur
             .as_ref()
             .unwrap_or(&HashSet::new())
             .iter()
-            .filter(|c| !checked.contains(c))
+            .filter(|c| unsafe_capabilities.contains(c) && !checked.contains(c))
             .cloned()
             .collect::<Vec<_>>();
         drop(checked);
@@ -44,5 +50,5 @@ pub fn capabilities_security_callback(no_interaction: bool) -> CapabilitiesSecur
             return Err(anyhow::anyhow!("Aborting due to capabilities warning"));
         }
         Ok(())
-    }))
+    })
 }

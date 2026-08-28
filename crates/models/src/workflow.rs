@@ -88,6 +88,16 @@ pub struct WorkflowRun {
     #[serde(default)]
     #[ts(optional, as = "Option<HashSet<LlrtSupportedModules>>")]
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
+
+    /// Human-readable name for this workflow run
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub name: Option<String>,
+
+    /// Target path the workflow was run against
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub target_path: Option<PathBuf>,
 }
 
 /// Status of a workflow run

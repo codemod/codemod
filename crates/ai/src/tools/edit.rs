@@ -1,13 +1,11 @@
 //! File editing tool
 
-use async_trait::async_trait;
-use coro_core::error::Result;
-use coro_core::impl_tool_factory;
-use coro_core::tools::utils::{
+use crate::tools::core::Result;
+use crate::tools::core::{ToolCall, ToolResult};
+use crate::tools::utils::{
     check_file_exists, create_edit_snippet, expand_tabs, format_with_line_numbers, maybe_truncate,
     run_command, validate_absolute_path, validate_directory_operation,
 };
-use coro_core::tools::{Tool, ToolCall, ToolExample, ToolResult};
 use serde_json::json;
 use std::path::Path;
 
@@ -26,8 +24,7 @@ impl EditTool {
     }
 }
 
-#[async_trait]
-impl Tool for EditTool {
+impl EditTool {
     fn name(&self) -> &str {
         "str_replace_based_edit_tool"
     }
@@ -96,7 +93,7 @@ impl Tool for EditTool {
 
         // Validate path and command
         if let Err(e) = self.validate_path(&command, path) {
-            return Ok(ToolResult::error(&call.id, &e.to_string()));
+            return Ok(ToolResult::error(&call.id, e.to_string()));
         }
 
         match command.as_str() {
@@ -129,7 +126,7 @@ impl Tool for EditTool {
             }
             _ => Ok(ToolResult::error(
                 &call.id,
-                &format!(
+                format!(
                     "Unrecognized command {}. The allowed commands for the {} tool are: {}",
                     command,
                     self.name(),
@@ -137,50 +134,6 @@ impl Tool for EditTool {
                 ),
             )),
         }
-    }
-
-    fn examples(&self) -> Vec<ToolExample> {
-        vec![
-            ToolExample {
-                description: "View a file".to_string(),
-                parameters: json!({"command": "view", "path": "/repo/src/main.rs"}),
-                expected_result: "File contents with line numbers".to_string(),
-            },
-            ToolExample {
-                description: "View a file with line range".to_string(),
-                parameters: json!({"command": "view", "path": "/repo/src/main.rs", "view_range": [10, 20]}),
-                expected_result: "File contents from line 10 to 20 with line numbers".to_string(),
-            },
-            ToolExample {
-                description: "Create a new file".to_string(),
-                parameters: json!({
-                    "command": "create",
-                    "path": "/repo/hello.txt",
-                    "file_text": "Hello, world!"
-                }),
-                expected_result: "File created successfully".to_string(),
-            },
-            ToolExample {
-                description: "Replace text in a file".to_string(),
-                parameters: json!({
-                    "command": "str_replace",
-                    "path": "/repo/src/main.rs",
-                    "old_str": "println!(\"Hello, world!\");",
-                    "new_str": "println!(\"Hello, Rust!\");"
-                }),
-                expected_result: "Text replaced with snippet showing changes".to_string(),
-            },
-            ToolExample {
-                description: "Insert text after a specific line".to_string(),
-                parameters: json!({
-                    "command": "insert",
-                    "path": "/repo/src/main.rs",
-                    "insert_line": 5,
-                    "new_str": "    // This is a new comment"
-                }),
-                expected_result: "Text inserted with snippet showing changes".to_string(),
-            },
-        ]
     }
 }
 
@@ -253,21 +206,21 @@ impl EditTool {
             let (init_line, final_line) = (range[0], range[1]);
 
             if init_line < 1 || init_line > n_lines_file {
-                return Ok(ToolResult::error(call_id, &format!(
+                return Ok(ToolResult::error(call_id, format!(
                     "Invalid `view_range`: {:?}. Its first element `{}` should be within the range of lines of the file: [1, {}]",
                     range, init_line, n_lines_file
                 )));
             }
 
             if final_line > n_lines_file {
-                return Ok(ToolResult::error(call_id, &format!(
+                return Ok(ToolResult::error(call_id, format!(
                     "Invalid `view_range`: {:?}. Its second element `{}` should be smaller than the number of lines in the file: `{}`",
                     range, final_line, n_lines_file
                 )));
             }
 
             if final_line != -1 && final_line < init_line {
-                return Ok(ToolResult::error(call_id, &format!(
+                return Ok(ToolResult::error(call_id, format!(
                     "Invalid `view_range`: {:?}. Its second element `{}` should be larger or equal than its first `{}`",
                     range, final_line, init_line
                 )));
@@ -303,7 +256,7 @@ impl EditTool {
         self.write_file(path, file_text)?;
         Ok(ToolResult::success(
             call_id,
-            &format!("File created successfully at: {}", path.display()),
+            format!("File created successfully at: {}", path.display()),
         ))
     }
 
@@ -324,7 +277,7 @@ impl EditTool {
         if occurrences == 0 {
             return Ok(ToolResult::error(
                 call_id,
-                &format!(
+                format!(
                     "No replacement was performed, old_str `{}` did not appear verbatim in {}.",
                     old_str,
                     path.display()
@@ -343,7 +296,7 @@ impl EditTool {
                     }
                 })
                 .collect();
-            return Ok(ToolResult::error(call_id, &format!(
+            return Ok(ToolResult::error(call_id, format!(
                 "No replacement was performed. Multiple occurrences of old_str `{}` in lines {:?}. Please ensure it is unique",
                 old_str, lines
             )));
@@ -385,7 +338,7 @@ impl EditTool {
         let n_lines_file = file_text_lines.len() as i32;
 
         if insert_line < 0 || insert_line > n_lines_file {
-            return Ok(ToolResult::error(call_id, &format!(
+            return Ok(ToolResult::error(call_id, format!(
                 "Invalid `insert_line` parameter: {}. It should be within the range of lines of the file: [0, {}]",
                 insert_line, n_lines_file
             )));
@@ -452,9 +405,4 @@ impl Default for EditTool {
     }
 }
 
-impl_tool_factory!(
-    EditToolFactory,
-    EditTool,
-    "str_replace_based_edit_tool",
-    "Edit files by viewing, creating, or replacing text content"
-);
+crate::impl_rig_tooldyn!(EditTool);

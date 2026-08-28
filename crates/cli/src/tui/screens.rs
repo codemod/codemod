@@ -1,0 +1,1523 @@
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::Frame;
+
+use crate::tui::app::{ApprovalPrompt, Screen, TuiState, WorktreeConsentScope};
+use butterflow_core::config::DirtyGitApprovalKind;
+
+fn log_modal_copy_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "ctrl+c/cmd+c copy"
+    } else {
+        "ctrl+c copy"
+    }
+}
+
+fn workflow_status_text_style(status_text: &str) -> Style {
+    if status_text.starts_with("Completed") {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Awaiting trigger") {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Running") {
+        Style::default()
+            .fg(Color::Rgb(255, 165, 0))
+            .add_modifier(Modifier::BOLD)
+    } else if status_text.starts_with("Failed") {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    }
+}
+
+fn task_status_style(status: butterflow_models::TaskStatus) -> Style {
+    match status {
+        butterflow_models::TaskStatus::AwaitingTrigger => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+        butterflow_models::TaskStatus::Running => Style::default()
+            .fg(Color::Rgb(255, 165, 0))
+            .add_modifier(Modifier::BOLD),
+        butterflow_models::TaskStatus::Failed => {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        }
+        butterflow_models::TaskStatus::Completed => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        _ => Style::default(),
+    }
+}
+
+fn task_row_status_style(task: &butterflow_models::Task) -> Style {
+    if TuiState::task_publish_in_progress(task) || TuiState::task_publish_failed(task) {
+        Style::default()
+            .fg(Color::Rgb(255, 165, 0))
+            .add_modifier(Modifier::BOLD)
+    } else if TuiState::task_publish_deferred(task) {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        task_status_style(task.status)
+    }
+}
+pub fn render(frame: &mut Frame<'_>, state: &TuiState) {
+    if matches!(state.screen, Screen::RunDetail) {
+        if let Some(approval) = &state.approval {
+            frame.render_widget(Clear, frame.area());
+            render_approval_modal(frame, approval);
+            return;
+        }
+    }
+
+    if state.show_log_modal {
+        frame.render_widget(Clear, frame.area());
+        render_log_modal(frame, state);
+        return;
+    }
+
+    match state.screen {
+        Screen::Runs => render_runs(frame, state),
+        Screen::RunDetail => render_run_detail(frame, state),
+    }
+}
+
+fn render_runs(frame: &mut Frame<'_>, state: &TuiState) {
+    let size = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(size);
+    let title_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(chunks[0]);
+    let header = Paragraph::new("Workflow Runs").block(Block::default().borders(Borders::BOTTOM));
+    frame.render_widget(header, title_chunks[1]);
+
+    let content_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(chunks[1]);
+
+    let header_row_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(content_chunks[0]);
+    let table_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(content_chunks[1]);
+
+    let status_width = 16usize;
+    let content_width = table_chunks[1].width.saturating_sub(2) as usize;
+    let elapsed_width = state
+        .runs
+        .iter()
+        .map(TuiState::workflow_elapsed_text)
+        .map(|text| text.chars().count())
+        .max()
+        .unwrap_or(1)
+        .max("Elapsed".chars().count());
+    let name_width = content_width.saturating_sub(2 + status_width + 2 + elapsed_width);
+    let runs_header = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            format!("{:<status_width$}", "Status", status_width = status_width),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!(
+                "{:<name_width$}",
+                truncate_text("Workflow", name_width),
+                name_width = name_width
+            ),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!(
+                "{:>elapsed_width$}",
+                "Elapsed",
+                elapsed_width = elapsed_width
+            ),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(runs_header), header_row_chunks[1]);
+
+    let items = state
+        .runs
+        .iter()
+        .enumerate()
+        .map(|(index, run)| {
+            let is_selected = index == state.selected_run;
+            let prefix = if is_selected { "▶" } else { " " };
+            let status_text = state.display_status_for_list_run(run);
+            let elapsed_text = TuiState::workflow_elapsed_text(run);
+            let status_style = workflow_status_text_style(&status_text);
+            let item = ListItem::new(Line::from(vec![
+                Span::raw(format!("{prefix} ")),
+                Span::styled(
+                    format!("{status_text:<status_width$}", status_width = status_width),
+                    status_style,
+                ),
+                Span::raw("  "),
+                Span::raw(format!(
+                    "{:<name_width$}",
+                    truncate_text(&TuiState::workflow_run_display_name(run), name_width),
+                    name_width = name_width
+                )),
+                Span::raw("  "),
+                Span::raw(format!(
+                    "{:>elapsed_width$}",
+                    elapsed_text,
+                    elapsed_width = elapsed_width
+                )),
+            ]));
+            if is_selected {
+                item.style(
+                    Style::default()
+                        .bg(Color::Rgb(45, 45, 45))
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                item
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let list = List::new(items);
+    frame.render_widget(list, table_chunks[1]);
+    render_help_bar(frame, chunks[2], "Enter attach  q quit");
+}
+
+fn render_run_detail(frame: &mut Frame<'_>, state: &TuiState) {
+    let size = frame.area();
+    let target_path = state.display_target_path();
+    let run_params = state.display_run_params();
+    let header_height = if state.current_run.is_some() {
+        let mut line_count = 1;
+        if target_path.is_some() {
+            line_count += 1;
+        }
+        if run_params.is_some() {
+            line_count += 1;
+        }
+        (line_count + 1).max(3)
+    } else {
+        3
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(1),
+            Constraint::Length(3),
+        ])
+        .split(size);
+
+    let header = if state.current_run.is_some() {
+        let header_row_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(chunks[0]);
+        let status_text = state.display_run_status();
+        let status_style = workflow_status_text_style(&status_text);
+        let mut lines = vec![Line::from(vec![
+            Span::raw(state.display_workflow_name()),
+            Span::raw("  "),
+            Span::styled(status_text, status_style),
+        ])];
+        if let Some(target_path) = target_path {
+            lines.push(Line::from(target_path));
+        }
+        if let Some(params) = run_params {
+            lines.push(Line::from(Span::styled(
+                params,
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        frame.render_widget(
+            Paragraph::new(lines).block(Block::default().borders(Borders::BOTTOM)),
+            header_row_chunks[1],
+        );
+        None
+    } else {
+        Some(Paragraph::new("No run selected").block(Block::default().borders(Borders::BOTTOM)))
+    };
+    if let Some(header) = header {
+        frame.render_widget(header, chunks[0]);
+    }
+
+    let content_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(chunks[1]);
+
+    let header_row_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(content_chunks[0]);
+    let table_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(content_chunks[1]);
+
+    let content_width = table_chunks[1].width.saturating_sub(2) as usize;
+    let task_viewport_height = table_chunks[1].height as usize;
+    let elapsed_width = state
+        .visible_task_window(task_viewport_height)
+        .iter()
+        .map(|task| state.task_elapsed_text(task).chars().count())
+        .max()
+        .unwrap_or(1)
+        .max("Elapsed".chars().count());
+    let min_step_width = 12usize;
+    let min_status_width = 6usize;
+    let preferred_status_width = 16usize;
+    let min_progress_width = 10usize;
+    let preferred_progress_width = 18usize;
+    let available_for_progress = content_width
+        .saturating_sub(min_step_width)
+        .saturating_sub(2)
+        .saturating_sub(preferred_status_width)
+        .saturating_sub(2)
+        .saturating_sub(elapsed_width)
+        .saturating_sub(2);
+    let progress_width = available_for_progress.clamp(min_progress_width, preferred_progress_width);
+    let available_for_status = content_width
+        .saturating_sub(progress_width)
+        .saturating_sub(2)
+        .saturating_sub(elapsed_width)
+        .saturating_sub(2)
+        .saturating_sub(min_step_width)
+        .saturating_sub(2);
+    let status_width = available_for_status.clamp(min_status_width, preferred_status_width);
+    let step_width = content_width
+        .saturating_sub(status_width)
+        .saturating_sub(2)
+        .saturating_sub(elapsed_width)
+        .saturating_sub(2)
+        .saturating_sub(progress_width)
+        .saturating_sub(2);
+    let tasks_header = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(
+            format!("{:<step_width$}", "Task", step_width = step_width),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!(
+                "{:<status_width$}",
+                truncate_text("Status", status_width),
+                status_width = status_width
+            ),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!(
+                "{:>elapsed_width$}",
+                "Elapsed",
+                elapsed_width = elapsed_width
+            ),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!(
+                "{:<progress_width$}",
+                "Progress",
+                progress_width = progress_width
+            ),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(tasks_header), header_row_chunks[1]);
+
+    let task_items = state
+        .visible_task_window(task_viewport_height)
+        .iter()
+        .enumerate()
+        .map(|(index, task)| {
+            let visible_index = state.task_list_scroll + index;
+            let is_selected = visible_index == state.selected_task;
+            let prefix = if is_selected { "▶" } else { " " };
+            let step_name = state.task_display_name(task);
+            let status = compact_status_text(state.task_status_text(task), status_width);
+            let elapsed = state.task_elapsed_text(task);
+            let truncated_name = truncate_text(&step_name, step_width);
+            let progress_bar = state
+                .task_progress_bar(task, progress_width)
+                .unwrap_or_else(|| " ".repeat(progress_width));
+            let status_style = task_row_status_style(task);
+
+            let item = ListItem::new(Line::from(vec![
+                Span::raw(format!(
+                    "{prefix} {truncated_name:<step_width$}",
+                    step_width = step_width
+                )),
+                Span::raw("  "),
+                Span::styled(
+                    format!("{status:<status_width$}", status_width = status_width),
+                    status_style,
+                ),
+                Span::raw(format!(
+                    "  {elapsed:>elapsed_width$}",
+                    elapsed_width = elapsed_width
+                )),
+                Span::styled(
+                    format!(
+                        "  {progress_bar:<progress_width$}",
+                        progress_width = progress_width
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+            if is_selected {
+                item.style(
+                    Style::default()
+                        .bg(Color::Rgb(45, 45, 45))
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                item
+            }
+        })
+        .collect::<Vec<_>>();
+    let tasks = List::new(task_items);
+    frame.render_widget(tasks, table_chunks[1]);
+    let footer_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(chunks[2]);
+    if let Some(detail) = state.selected_task_completion_detail() {
+        let detail_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(footer_chunks[0]);
+        let detail = truncate_text(&detail, detail_chunks[1].width as usize);
+        frame.render_widget(
+            Paragraph::new(detail).style(Style::default().fg(Color::DarkGray)),
+            detail_chunks[1],
+        );
+    }
+    render_help_bar(frame, footer_chunks[2], &state.task_help_text());
+}
+
+fn render_log_modal(frame: &mut Frame<'_>, state: &TuiState) {
+    let size = frame.area();
+    let area = ratatui::layout::Rect {
+        x: size.x.saturating_add(1),
+        y: size.y.saturating_add(1),
+        width: size.width.saturating_sub(2),
+        height: size.height.saturating_sub(2),
+    };
+    frame.render_widget(Clear, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    let title = state
+        .selected_task()
+        .map(|task| {
+            Line::from(vec![
+                Span::raw(format!("Logs: {} (", task.node_id)),
+                Span::styled(format!("{:?}", task.status), task_status_style(task.status)),
+                Span::raw(")"),
+            ])
+        })
+        .unwrap_or_else(|| Line::from("Logs"));
+
+    let logs = Paragraph::new(ansi_log_lines(&state.selected_task_log_text()))
+        .scroll((state.log_modal_scroll, 0))
+        .wrap(Wrap { trim: false })
+        .block(Block::default().borders(Borders::ALL).title(title));
+    frame.render_widget(logs, chunks[0]);
+    render_help_bar(
+        frame,
+        chunks[1],
+        &format!(
+            "↑/↓ scroll  g top  G bottom  {}  q/esc close",
+            log_modal_copy_hint()
+        ),
+    );
+    if let Some(notice) = state.log_modal_notice_text() {
+        frame.render_widget(
+            Paragraph::new(notice).style(Style::default().fg(Color::DarkGray)),
+            chunks[2],
+        );
+    }
+}
+
+fn ansi_log_lines(text: &str) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut spans = Vec::new();
+    let mut buffer = String::new();
+    let mut style = Style::default();
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            let mut sequence = String::new();
+            for sequence_char in chars.by_ref() {
+                if sequence_char == 'm' {
+                    flush_ansi_span(&mut spans, &mut buffer, style);
+                    apply_sgr_sequence(&sequence, &mut style);
+                    break;
+                }
+                sequence.push(sequence_char);
+            }
+            continue;
+        }
+
+        if ch == '\n' {
+            flush_ansi_span(&mut spans, &mut buffer, style);
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            continue;
+        }
+
+        buffer.push(ch);
+    }
+
+    flush_ansi_span(&mut spans, &mut buffer, style);
+    lines.push(Line::from(spans));
+    lines
+}
+
+fn flush_ansi_span(spans: &mut Vec<Span<'static>>, buffer: &mut String, style: Style) {
+    if buffer.is_empty() {
+        return;
+    }
+
+    spans.push(Span::styled(std::mem::take(buffer), style));
+}
+
+fn apply_sgr_sequence(sequence: &str, style: &mut Style) {
+    if sequence.is_empty() {
+        *style = Style::default();
+        return;
+    }
+
+    for code in sequence
+        .split(';')
+        .filter_map(|part| part.parse::<u16>().ok())
+    {
+        match code {
+            0 => *style = Style::default(),
+            1 => *style = style.add_modifier(Modifier::BOLD),
+            2 => *style = style.fg(Color::DarkGray),
+            22 => *style = style.remove_modifier(Modifier::BOLD),
+            30 => *style = style.fg(Color::Black),
+            31 => *style = style.fg(Color::Red),
+            32 => *style = style.fg(Color::Green),
+            33 => *style = style.fg(Color::Yellow),
+            34 => *style = style.fg(Color::Blue),
+            35 => *style = style.fg(Color::Magenta),
+            36 => *style = style.fg(Color::Cyan),
+            37 => *style = style.fg(Color::White),
+            39 => *style = style.fg(Color::Reset),
+            90 => *style = style.fg(Color::DarkGray),
+            _ => {}
+        }
+    }
+}
+
+fn render_help_bar(frame: &mut Frame<'_>, area: ratatui::layout::Rect, text: &str) {
+    let left_padding = 2;
+    let mut x = area.x.saturating_add(left_padding);
+    for segment in text.split("  ").filter(|segment| !segment.is_empty()) {
+        let mut parts = segment.splitn(2, ' ');
+        let key = parts.next().unwrap_or_default();
+        let label = parts.next().unwrap_or_default();
+
+        let key_width = key.chars().count() as u16 + 2;
+        if x + key_width > area.x + area.width {
+            break;
+        }
+
+        let key_area = Rect {
+            x,
+            y: area.y,
+            width: key_width,
+            height: area.height,
+        };
+        let key_widget = Paragraph::new(key)
+            .style(
+                Style::default()
+                    .fg(Color::White)
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .alignment(Alignment::Center);
+        frame.render_widget(key_widget, key_area);
+        x += key_width + 1;
+
+        if !label.is_empty() {
+            let label_width = label.chars().count() as u16;
+            if x + label_width > area.x + area.width {
+                break;
+            }
+            let label_area = Rect {
+                x,
+                y: area.y,
+                width: label_width,
+                height: area.height,
+            };
+            let label_widget = Paragraph::new(label).style(
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            );
+            frame.render_widget(label_widget, label_area);
+            x += label_width + 2;
+        }
+    }
+}
+
+fn truncate_text(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let char_count = text.chars().count();
+    if char_count <= max_width {
+        return text.to_string();
+    }
+
+    if max_width == 1 {
+        return "…".to_string();
+    }
+
+    let mut truncated = text.chars().take(max_width - 1).collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
+fn compact_status_text(status: &str, max_width: usize) -> String {
+    let candidates: Vec<&str> = match status {
+        "Awaiting trigger" => vec!["Awaiting trigger", "Awaiting", "Await"],
+        "Publishing" => vec!["Publishing", "Publish", "Pub"],
+        "Publish failed" => vec!["Publish failed", "Pub failed", "Pub fail"],
+        "PR pending" => vec!["PR pending", "PR pend"],
+        "Running" => vec!["Running", "Run"],
+        "Failed" => vec!["Failed", "Fail"],
+        "Completed" => vec!["Completed", "Done"],
+        "Pending" => vec!["Pending", "Pend"],
+        "Blocked" => vec!["Blocked", "Block"],
+        "Won't do" => vec!["Won't do", "Skip"],
+        _ => vec![status],
+    };
+
+    candidates
+        .iter()
+        .find(|candidate| candidate.chars().count() <= max_width)
+        .map(|candidate| (*candidate).to_string())
+        .unwrap_or_else(|| truncate_text(candidates.last().copied().unwrap_or(""), max_width))
+}
+
+fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
+    let size = frame.area();
+    let area = ratatui::layout::Rect {
+        x: size.width / 8,
+        y: size.height / 4,
+        width: size.width * 3 / 4,
+        height: size.height / 3,
+    };
+    frame.render_widget(Clear, area);
+    match approval {
+        ApprovalPrompt::AgentSelection {
+            options, selected, ..
+        } => {
+            render_option_modal(
+                frame,
+                area,
+                "Select Coding Agent",
+                "↑/↓ move  Enter choose  esc skip",
+                &options
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (_canonical, label, available))| OptionModalRow {
+                        label: label.clone(),
+                        selected: index == *selected,
+                        enabled: *available,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            return;
+        }
+        ApprovalPrompt::Selection {
+            title,
+            options,
+            selected,
+            ..
+        } => {
+            render_option_modal(
+                frame,
+                area,
+                title,
+                "↑/↓ move  Enter choose  esc cancel",
+                &options
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (_, label))| OptionModalRow {
+                        label: label.clone(),
+                        selected: index == *selected,
+                        enabled: true,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            return;
+        }
+        _ => {}
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let (title, body, help_text) = match approval {
+        ApprovalPrompt::WorktreeConsent { scope, .. } => match scope {
+            WorktreeConsentScope::Bulk => (
+                "Trigger All".to_string(),
+                "Trigger all pending tasks?\n\nThis will use git worktrees for the bulk run."
+                    .to_string(),
+                "y/Enter approve  esc cancel".to_string(),
+            ),
+            WorktreeConsentScope::SingleTask => (
+                "Trigger Task".to_string(),
+                "Trigger this task?\n\nThis will use a git worktree.".to_string(),
+                "y/Enter approve  esc cancel".to_string(),
+            ),
+        },
+        ApprovalPrompt::PullRequestConsent { title, head, .. } => (
+            "Publish Branch and Create Pull Request".to_string(),
+            format!(
+                "Publish branch and create pull request for completed task?\n\nTitle: {title}\nBranch: {head}"
+            ),
+            "y/Enter approve  esc cancel".to_string(),
+        ),
+        ApprovalPrompt::ManualPullRequestConsent { title, head, .. } => (
+            "Publish Branch and Create Pull Request".to_string(),
+            format!("Publish branch and create pull request now?\n\nTitle: {title}\nBranch: {head}"),
+            "y/Enter approve  esc cancel".to_string(),
+        ),
+        ApprovalPrompt::Shell { command, .. } => (
+            "Approval".to_string(),
+            format!("Approve shell command?\n\n{command}"),
+            "y approve  n/esc reject".to_string(),
+        ),
+        ApprovalPrompt::Capabilities { modules, .. } => (
+            "Approval".to_string(),
+            format!("Approve capabilities?\n\n{}", modules.join(", ")),
+            "y approve  n/esc reject".to_string(),
+        ),
+        ApprovalPrompt::DirtyGit { path, kind, .. } => {
+            let body = match kind {
+                DirtyGitApprovalKind::UncommittedChanges => format!(
+                    "The target has uncommitted changes.\n\nPath: {path}\n\nProceed anyway?"
+                ),
+                DirtyGitApprovalKind::NotTracked => format!(
+                    "The target path is not tracked by Git.\n\nPath: {path}\n\nProceed anyway?"
+                ),
+            };
+            (
+                "Git Confirmation".to_string(),
+                body,
+                "y/Enter approve  n/esc cancel".to_string(),
+            )
+        }
+        ApprovalPrompt::AgentSelection { .. } | ApprovalPrompt::Selection { .. } => unreachable!(),
+    };
+    let modal = Paragraph::new(body).wrap(Wrap { trim: false }).block(
+        Block::default().borders(Borders::ALL).title(Span::styled(
+            title,
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+    );
+    frame.render_widget(modal, chunks[0]);
+    render_help_bar(frame, chunks[1], &help_text);
+}
+
+struct OptionModalRow {
+    label: String,
+    selected: bool,
+    enabled: bool,
+}
+
+fn render_option_modal(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    title: &str,
+    help_text: &str,
+    rows: &[OptionModalRow],
+) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(area);
+
+    let list_items = rows
+        .iter()
+        .map(|row| {
+            let marker = if row.selected { "▶" } else { " " };
+            let style = if row.selected {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if row.enabled {
+                Style::default()
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            ListItem::new(Line::from(vec![
+                Span::raw(format!("{marker} ")),
+                Span::styled(
+                    truncate_text(&row.label, area.width.saturating_sub(6) as usize),
+                    style,
+                ),
+            ]))
+        })
+        .collect::<Vec<_>>();
+
+    let list = List::new(list_items).block(
+        Block::default().borders(Borders::ALL).title(Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+    );
+
+    frame.render_widget(list, chunks[0]);
+    render_help_bar(frame, chunks[1], help_text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ansi_log_lines, log_modal_copy_hint, render};
+    use crate::tui::app::{ApprovalPrompt, Screen, TaskProgressView, TuiState};
+    use butterflow_core::config::DirtyGitApprovalKind;
+    use butterflow_models::{Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus};
+    use chrono::{Duration, Utc};
+    use ratatui::backend::TestBackend;
+    use ratatui::style::{Color, Modifier};
+    use ratatui::Terminal;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    fn render_state(state: &TuiState, width: u16, height: u16) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(frame, state)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn sample_run(
+        name: &str,
+        status: WorkflowStatus,
+        started_at: chrono::DateTime<Utc>,
+    ) -> WorkflowRun {
+        WorkflowRun {
+            id: Uuid::new_v4(),
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at,
+            ended_at: None,
+            capabilities: None,
+            name: Some(name.to_string()),
+            target_path: None,
+        }
+    }
+
+    #[test]
+    fn render_runs_keeps_elapsed_column_aligned() {
+        let now = Utc::now();
+        let mut state = TuiState::default();
+        let mut first = sample_run(
+            "debarrel",
+            WorkflowStatus::Completed,
+            now - Duration::minutes(4),
+        );
+        first.ended_at = Some(first.started_at + Duration::minutes(4) + Duration::seconds(8));
+        let mut second = sample_run(
+            "i18n-codemod",
+            WorkflowStatus::Completed,
+            now - Duration::minutes(13),
+        );
+        second.ended_at = Some(second.started_at + Duration::minutes(13) + Duration::seconds(51));
+        let second_elapsed = TuiState::workflow_elapsed_text(&second);
+        state.runs = vec![first, second];
+
+        let lines = render_state(&state, 80, 12);
+        let header = lines
+            .iter()
+            .find(|line| line.contains("Workflow") && line.contains("Elapsed"))
+            .unwrap();
+        let row = lines
+            .iter()
+            .find(|line| line.contains("i18n-codemod"))
+            .unwrap();
+
+        let header_elapsed = header.find("Elapsed").unwrap();
+        let row_elapsed = row.find(&second_elapsed).unwrap();
+        assert_eq!(
+            row_elapsed + second_elapsed.len(),
+            header_elapsed + "Elapsed".len()
+        );
+    }
+
+    #[test]
+    fn render_run_detail_shows_left_edge_selection_and_progress_bar() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut state = TuiState::default();
+        state.screen = Screen::RunDetail;
+        state.current_run = Some(WorkflowRun {
+            id: run_id,
+            workflow: Workflow {
+                version: "1".to_string(),
+                state: None,
+                params: None,
+                templates: vec![],
+                nodes: vec![],
+            },
+            status: WorkflowStatus::Running,
+            params: Default::default(),
+            bundle_path: None,
+            tasks: vec![],
+            started_at: Utc::now() - Duration::minutes(5),
+            ended_at: None,
+            capabilities: None,
+            name: Some("debarrel".to_string()),
+            target_path: None,
+        });
+        state.tasks.push(Task {
+            id: task_id,
+            workflow_run_id: run_id,
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now() - Duration::minutes(1)),
+            ended_at: None,
+            logs: vec![],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+            error_details: None,
+        });
+        state.task_progress.insert(
+            task_id,
+            TaskProgressView {
+                processed_files: 3,
+                total_files: Some(10),
+            },
+        );
+
+        let lines = render_state(&state, 100, 14);
+        let task_row = lines
+            .iter()
+            .find(|line| line.contains("apply-transforms") && line.contains('['))
+            .unwrap();
+
+        assert!(task_row.find("▶ ").is_some());
+        assert!(task_row.contains('['));
+        assert!(task_row.contains('>'));
+        assert!(task_row.contains(']'));
+    }
+
+    #[test]
+    fn render_run_detail_shows_workflow_params_in_header() {
+        let run_id = Uuid::new_v4();
+        let mut run = sample_run("debarrel", WorkflowStatus::Running, Utc::now());
+        run.id = run_id;
+        run.target_path = Some(std::path::PathBuf::from("/tmp/repo"));
+        run.params.insert("mode".to_string(), json!("safe"));
+        run.params
+            .insert("npmToken".to_string(), json!("secret-value"));
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(run),
+            ..Default::default()
+        };
+
+        let lines = render_state(&state, 100, 12);
+        let params_line = lines
+            .iter()
+            .find(|line| line.contains("Params:"))
+            .expect("expected params line in run detail header");
+
+        assert!(params_line.contains("mode=safe"));
+        assert!(params_line.contains("npmToken=********"));
+        assert!(!params_line.contains("secret-value"));
+    }
+
+    #[test]
+    fn render_agent_selection_modal_keeps_options_on_single_rows() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(ApprovalPrompt::AgentSelection {
+                request_id: Uuid::new_v4(),
+                options: vec![
+                    ("claude-code".to_string(), "Claude Code".to_string(), true),
+                    ("opencode".to_string(), "OpenCode".to_string(), false),
+                ],
+                selected: 0,
+            }),
+            ..Default::default()
+        };
+
+        let lines = render_state(&state, 100, 24);
+        let claude_line = lines
+            .iter()
+            .find(|line| line.contains("▶ Claude Code"))
+            .expect("selected agent should render as one row");
+        let opencode_line = lines
+            .iter()
+            .find(|line| line.contains("OpenCode"))
+            .expect("unavailable agent should render as one row");
+
+        assert!(claude_line.contains("▶ Claude Code"));
+        assert!(opencode_line.contains("OpenCode"));
+        assert!(!lines.iter().any(|line| line.trim() == "C"));
+    }
+
+    #[test]
+    fn render_run_detail_truncates_long_completion_detail() {
+        let run_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: task_id,
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: Some(Utc::now() - Duration::minutes(1)),
+                ended_at: Some(Utc::now()),
+                logs: vec![
+                    "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                    "Pull request created: https://github.com/example/repo/pull/1234567890/with/an/extra/long/path".to_string(),
+                ],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+                error_details: None,
+            }],
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 12);
+        let detail_line = lines
+            .iter()
+            .find(|line| line.contains("Branch: codemod-1234"))
+            .expect("detail line should render");
+
+        assert!(detail_line.chars().count() <= 80);
+    }
+
+    #[test]
+    fn render_run_detail_shows_publish_failed_status_without_failed_task_status() {
+        let run_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: Some(Utc::now() - Duration::minutes(1)),
+                ended_at: Some(Utc::now()),
+                logs: vec![
+                    "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                    "Branch publication and pull request creation failed: permission denied"
+                        .to_string(),
+                    "Use create-pr to retry after fixing the remote or permissions".to_string(),
+                ],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+                error_details: None,
+            }],
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 100, 12);
+        let task_row = lines
+            .iter()
+            .find(|line| line.contains("apply-transforms"))
+            .expect("task row should render");
+
+        assert!(task_row.contains("Publish failed"));
+        assert!(!task_row.contains("Failed"));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Publish failed, press p to try again")));
+    }
+
+    #[test]
+    fn render_run_detail_shows_publishing_status_for_retry_attempt() {
+        let run_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: vec![Task {
+                id: Uuid::new_v4(),
+                workflow_run_id: run_id,
+                node_id: "apply-transforms".to_string(),
+                status: TaskStatus::Completed,
+                started_at: Some(Utc::now() - Duration::minutes(1)),
+                ended_at: Some(Utc::now()),
+                logs: vec![
+                    "Preparing git worktree for branch codemod-1234 in /tmp/repo".to_string(),
+                    "Branch publication and pull request creation failed: permission denied"
+                        .to_string(),
+                    "Publishing branch and creating pull request".to_string(),
+                ],
+                master_task_id: None,
+                matrix_values: None,
+                is_master: false,
+                error: None,
+                error_details: None,
+            }],
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 100, 12);
+        let task_row = lines
+            .iter()
+            .find(|line| line.contains("apply-transforms"))
+            .expect("task row should render");
+
+        assert!(task_row.contains("Publishing"));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Publishing branch and creating pull request")));
+    }
+
+    #[test]
+    fn render_run_detail_keeps_last_visible_task_above_help_bar() {
+        let run_id = Uuid::new_v4();
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            current_run: Some(WorkflowRun {
+                id: run_id,
+                workflow: Workflow {
+                    version: "1".to_string(),
+                    state: None,
+                    params: None,
+                    templates: vec![],
+                    nodes: vec![],
+                },
+                status: WorkflowStatus::Running,
+                params: Default::default(),
+                bundle_path: None,
+                tasks: vec![],
+                started_at: Utc::now() - Duration::minutes(5),
+                ended_at: None,
+                capabilities: None,
+                name: Some("debarrel".to_string()),
+                target_path: None,
+            }),
+            tasks: (0..6)
+                .map(|index| Task {
+                    id: Uuid::new_v4(),
+                    workflow_run_id: run_id,
+                    node_id: format!("node-{index}"),
+                    status: TaskStatus::Running,
+                    started_at: Some(Utc::now() - Duration::seconds(index as i64)),
+                    ended_at: None,
+                    logs: vec![],
+                    master_task_id: None,
+                    matrix_values: None,
+                    is_master: false,
+                    error: None,
+                    error_details: None,
+                })
+                .collect(),
+            selected_task: 5,
+            task_list_scroll: 1,
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 12);
+        let last_task_line = lines
+            .iter()
+            .position(|line| line.contains("node-5"))
+            .unwrap();
+        let hint_line = lines
+            .iter()
+            .position(|line| line.contains("Enter") && line.contains("logs"))
+            .unwrap();
+
+        assert!(last_task_line < hint_line);
+    }
+
+    #[test]
+    fn log_modal_copy_hint_matches_platform() {
+        if cfg!(target_os = "macos") {
+            assert_eq!(log_modal_copy_hint(), "ctrl+c/cmd+c copy");
+        } else {
+            assert_eq!(log_modal_copy_hint(), "ctrl+c copy");
+        }
+    }
+
+    #[test]
+    fn ansi_log_lines_converts_sgr_to_styles() {
+        let lines = ansi_log_lines("plain \x1b[32mgreen\x1b[0m \x1b[1;36mbold cyan\x1b[0m");
+        let spans = &lines[0].spans;
+
+        assert_eq!(spans[0].content, "plain ");
+        assert_eq!(spans[1].content, "green");
+        assert_eq!(spans[1].style.fg, Some(Color::Green));
+        assert_eq!(spans[2].content, " ");
+        assert_eq!(spans[3].content, "bold cyan");
+        assert_eq!(spans[3].style.fg, Some(Color::Cyan));
+        assert!(spans[3].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn render_log_modal_does_not_print_raw_ansi_codes() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState {
+            screen: Screen::RunDetail,
+            ..TuiState::default()
+        };
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now() - Duration::minutes(1)),
+            ended_at: None,
+            logs: vec!["\x1b[32mRead\x1b[0m clients/cal.diy/package.json".to_string()],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+            error_details: None,
+        });
+        state.open_log_modal(20);
+
+        let lines = render_state(&state, 100, 20);
+
+        assert!(lines.iter().any(|line| line.contains("Read clients")));
+        assert!(!lines.iter().any(|line| line.contains("[32m")));
+    }
+
+    #[test]
+    fn render_log_modal_places_notice_below_help_bar() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState {
+            screen: Screen::RunDetail,
+            ..TuiState::default()
+        };
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "apply-transforms".to_string(),
+            status: TaskStatus::Running,
+            started_at: Some(Utc::now() - Duration::minutes(1)),
+            ended_at: None,
+            logs: (0..8).map(|index| format!("line {index}")).collect(),
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: None,
+            error_details: None,
+        });
+        state.open_log_modal(6);
+        state.set_log_modal_notice("Copied full log to clipboard");
+
+        let lines = render_state(&state, 100, 20);
+        let hint_line = lines
+            .iter()
+            .position(|line| line.contains("copy") && line.contains("close"))
+            .unwrap();
+        let notice_line = lines
+            .iter()
+            .position(|line| line.contains("Copied full log to clipboard"))
+            .unwrap();
+
+        assert!(notice_line > hint_line);
+    }
+
+    #[test]
+    fn render_log_modal_title_includes_task_status() {
+        let run_id = Uuid::new_v4();
+        let mut state = TuiState {
+            screen: Screen::RunDetail,
+            ..TuiState::default()
+        };
+        state.tasks.push(Task {
+            id: Uuid::new_v4(),
+            workflow_run_id: run_id,
+            node_id: "install-skill".to_string(),
+            status: TaskStatus::Failed,
+            started_at: Some(Utc::now() - Duration::minutes(1)),
+            ended_at: Some(Utc::now()),
+            logs: vec!["boom".to_string()],
+            master_task_id: None,
+            matrix_values: None,
+            is_master: false,
+            error: Some("boom".to_string()),
+            error_details: None,
+        });
+        state.open_log_modal(6);
+
+        let lines = render_state(&state, 100, 20);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Logs: install-skill (Failed)")));
+    }
+
+    #[test]
+    fn render_selection_modal_places_help_bar_at_bottom() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(crate::tui::app::ApprovalPrompt::Selection {
+                request_id: Uuid::new_v4(),
+                title: "Choose install scope".to_string(),
+                options: vec![
+                    ("project".to_string(), "project".to_string()),
+                    ("user".to_string(), "user (~/.claude/skills)".to_string()),
+                ],
+                selected: 0,
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Choose install scope")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Enter") && line.contains("choose")));
+    }
+
+    #[test]
+    fn render_worktree_consent_modal_text() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(crate::tui::app::ApprovalPrompt::WorktreeConsent {
+                task_ids: vec![Uuid::new_v4()],
+                scope: crate::tui::app::WorktreeConsentScope::Bulk,
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines.iter().any(|line| line.contains("Trigger All")));
+        assert!(lines.iter().any(|line| line.contains("git worktrees")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("approve") && line.contains("cancel")));
+    }
+
+    #[test]
+    fn render_single_task_worktree_consent_modal_text() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(crate::tui::app::ApprovalPrompt::WorktreeConsent {
+                task_ids: vec![Uuid::new_v4()],
+                scope: crate::tui::app::WorktreeConsentScope::SingleTask,
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines.iter().any(|line| line.contains("Trigger Task")));
+        assert!(lines.iter().any(|line| line.contains("a git worktree")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("approve") && line.contains("cancel")));
+    }
+
+    #[test]
+    fn render_manual_pull_request_consent_modal_text() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(crate::tui::app::ApprovalPrompt::ManualPullRequestConsent {
+                task_id: Uuid::new_v4(),
+                title: "Draft PR".to_string(),
+                head: "codemod-branch".to_string(),
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("Publish Branch and Create Pull Request")));
+        assert!(lines.iter().any(|line| line.contains("codemod-branch")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("approve") && line.contains("cancel")));
+    }
+
+    #[test]
+    fn render_dirty_git_consent_modal_text() {
+        let state = TuiState {
+            screen: Screen::RunDetail,
+            approval: Some(crate::tui::app::ApprovalPrompt::DirtyGit {
+                request_id: Uuid::new_v4(),
+                path: "/tmp/repo".to_string(),
+                kind: DirtyGitApprovalKind::UncommittedChanges,
+            }),
+            ..TuiState::default()
+        };
+
+        let lines = render_state(&state, 80, 24);
+        assert!(lines.iter().any(|line| line.contains("Git Confirmation")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("uncommitted changes")));
+        assert!(lines.iter().any(|line| line.contains("/tmp/repo")));
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("approve") && line.contains("cancel")));
+    }
+}

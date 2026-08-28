@@ -32,12 +32,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_json_canonicalizer = { workspace = true }
 serde_yaml = { workspace = true }
+semver = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 regex = { workspace = true }
+miette = { workspace = true }
 walkdir = { workspace = true }
 tempfile = { workspace = true }
 num_cpus = "1.16"
@@ -46,7 +48,7 @@ dirs = { workspace = true }
 tar = { workspace = true }
 urlencoding = "2.1"
 humantime = "2.1"
-inquire = "0.7"
+inquire = "0.9"
 console = "0.15"
 rolldown = { git = "https://github.com/rolldown/rolldown.git", rev = "3d1985ab40923590b3ae9f626b2438d9543dc588" }
 
@@ -56,6 +58,7 @@ oauth2 = "4.4"
 url = "2.4"
 base64 = "0.22"
 sha2 = "0.10"
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std"] }
 rand = "0.8"
 hyper = { version = "0.14", features = ["full"] }
 hyper-rustls = "0.24"
@@ -69,9 +72,19 @@ libtest-mimic = "0.8"
 similar = "2.0"
 ast-grep-language.workspace = true
 tabled = "0.20.0"
-posthog-rs = "0.3.7"
 async-trait.workspace = true
 indicatif = "0.18.0"
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+futures = { workspace = true }
+toml_edit = "0.22"
+arboard = "3.4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+portable-pty = "0.9"
 
 [features]
 default = []

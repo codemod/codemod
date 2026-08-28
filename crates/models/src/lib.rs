@@ -17,12 +17,15 @@ pub use node::Node;
 pub use runtime::{Runtime, RuntimeType};
 pub use schema::{SimpleSchema, SimpleSchemaProperty, SimpleSchemaType, SimpleSchemaVariant};
 pub use state_diff::{DiffOperation, FieldDiff, StateDiff, TaskDiff, WorkflowRunDiff};
-pub use step::{Step, TemplateUse};
+pub use step::{CommitConfig, PullRequestConfig, Step, TemplateUse};
 pub use strategy::{Strategy, StrategyType};
-pub use task::{Task, TaskStatus};
+pub use task::{Task, TaskErrorDetails, TaskStatus};
 pub use template::{Template, TemplateInput, TemplateOutput};
 pub use trigger::{Trigger, TriggerType};
-pub use variable::{evaluate_condition, resolve_expressions, resolve_string_with_expression};
+pub use variable::{
+    evaluate_condition, resolve_expressions, resolve_string_list, resolve_string_with_expression,
+    resolve_usize_value, TaskExpressionContext,
+};
 pub use workflow::{Workflow, WorkflowRun, WorkflowState, WorkflowStatus};
 
 pub type Result<T> = std::result::Result<T, Error>;

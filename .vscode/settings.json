@@ -13,6 +13,9 @@
   "[typescriptreact]": {
     "editor.defaultFormatter": "oxc.oxc-vscode"
   },
+  "[rust]": {
+    "editor.defaultFormatter": "rust-lang.rust-analyzer"
+  },
   "oxc.fmt.experimental": true,
   "workbench.colorCustomizations": {
     "titleBar.foreground": "#d6ff62",

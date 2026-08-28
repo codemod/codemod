@@ -237,8 +237,13 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         capabilities: None,
         semantic_provider: provider,
         metrics_context: None,
+        llm_request_handler: None,
+        shared_state_context: None,
+        runtime_event_callback: None,
+        cancellation_flag: None,
         test_mode: false,
-        target_directory: None,
+        dry_run: false,
+        target_directory: target_path.parent().unwrap_or(target_path.as_path()),
     };
 
     let result = execute_codemod_with_quickjs(options).await;
@@ -401,5 +406,3 @@ macro_rules! jssg_test {
         }
     };
 }
-
-pub use jssg_test;

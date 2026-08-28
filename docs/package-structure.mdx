@@ -44,13 +44,36 @@ npx codemod init
 |-------------|---------|
 | `codemod.yaml` | Package metadata (name, version, author, etc.) |
 | `workflow.yaml` | [Workflow definition](/workflows/reference) with nodes and steps |
-| `scripts/` | JavaScript/TypeScript codemods ([JSSG](/jssg/quickstart)) |
+| `scripts/` | JavaScript/TypeScript codemods ([JSSG](/jssg/intro)) |
 | `rules/` | YAML ast-grep rule definitions |
-| `tests/` | Test fixtures with input/expected pairs |
+| `tests/` | Test fixtures with `input.*`/`expected.*` pairs or `input/` + `expected/` directory snapshots |
 
 <Info>
 The `scripts/` and `rules/` folders are conventional, not required—use any paths you prefer as long as you reference them correctly in `workflow.yaml`.
 </Info>
+
+## Package Behavior
+
+Codemod packages use a workflow-first model and can be:
+- **Workflow-only**: `workflow.yaml` has executable steps and no `install-skill` steps.
+- **Skill-only**: `workflow.yaml` has `install-skill` steps and no executable steps, with authored skill files under `agents/skill/<skill-name>/`.
+- **Workflow + skill**: `workflow.yaml` has both executable and `install-skill` steps, with authored skill files under `agents/skill/<skill-name>/`.
+
+Use `codemod init` to scaffold a workflow package, `codemod init --skill` for a skill package, or `codemod init --with-skill` for a package that ships both. Skill-only scaffolds cannot also set `--project-type`.
+
+`codemod publish` and `codemod workflow validate -w <package-root>` validate the package shape automatically: workflow packages run workflow checks, skill packages run skill structure/frontmatter/reference checks, and combined packages run both.
+
+`install-skill` is a workflow step type. Interactive runs can trigger it like any other awaiting step. Non-interactive runs skip it by default unless `--install-skill` is passed.
+
+Skill-capable packages should keep authored skill content under:
+
+```text
+agents/skill/<skill-name>/
+  SKILL.md
+  references/
+```
+
+All files in this authored skill directory are treated as install payload and copied recursively when users run `npx codemod <package-id>` and accept the skill-install prompt.
 
 ## Package Metadata (codemod.yaml)
 
@@ -65,6 +88,7 @@ description: "Transform legacy patterns to modern syntax"
 author: "Your Name <you@example.com>"
 license: "MIT"
 workflow: "workflow.yaml"
+repository: "https://github.com/username/codemod-repo"
 category: "migration"
 
 targets:
@@ -76,6 +100,72 @@ registry:
   access: "public"
   visibility: "public"
 ```
+
+For skill-only packages, keep `workflow: "workflow.yaml"` and define `install-skill` steps in that workflow; authored skill content lives under `agents/skill/<skill-name>/`.
+
+### Multiple workflows per package
+
+A single package can ship multiple named workflow variants — for example a plain run and a sharded variant for large monorepos. Use the `workflows` array instead of `workflow`:
+
+```yaml codemod.yaml
+schema_version: "1.0"
+
+name: "my-awesome-codemod"
+version: "0.2.0"
+description: "Transform legacy patterns to modern syntax"
+author: "Your Name <you@example.com>"
+license: "MIT"
+
+# Pick exactly one of `workflow` (single-workflow) or `workflows` (multi-workflow).
+workflows:
+  - name: main
+    path: workflow.yaml
+    default: true
+    description: "Run the full migration in one pass"
+  - name: sharded
+    path: workflows/sharded.yaml
+    description: "Split the migration across many PRs by codeowner"
+
+targets:
+  languages: ["typescript"]
+
+registry:
+  access: "public"
+  visibility: "public"
+```
+
+When the package is consumed:
+
+- **CLI:** `npx codemod <package-id> --workflow <name>` selects a variant for a published package. Without `--workflow`, the entry marked `default: true` runs (or the first entry if none is flagged). When stdin is interactive and no flag is given, the CLI shows a picker.
+- **Local directory runs:** `codemod workflow run -w ./pkg --workflow-name <name>` mirrors the same selection.
+- **Codemod campaigns:** the campaign creation flow allows the user to pick the preferred workflow variant.
+
+Validation rules at publish time:
+
+- Exactly one of `workflow` or `workflows` may be set.
+- Each `name` matches alphanumeric and is unique within the package.
+- Each `path` is package-relative — absolute paths and `..` segments are rejected — and unique within the package.
+- At most one entry may set `default: true`. If none is flagged, the first entry is treated as the default.
+
+Authored package skills used by `install-skill` must include a `SKILL.md` with:
+- YAML frontmatter containing at least `name`, `description`, and `allowed-tools`
+- `codemod-compatibility: skill-package-v1`
+- `codemod-skill-version: <version>`
+
+Example:
+
+```md
+---
+name: "my-skill"
+description: "Project-specific migration guidance"
+allowed-tools:
+  - Bash(codemod *)
+---
+codemod-compatibility: skill-package-v1
+codemod-skill-version: 0.1.0
+```
+
+The `mcs-v1` compatibility marker is used by the built-in Codemod core skill and other agent-facing resources, not by authored package skills installed via `install-skill`.
 
 **Available fields:**
 
@@ -111,8 +201,35 @@ Author name and email, e.g., `Jane Doe <jane@example.com>`.
 License identifier (SPDX), e.g., <code>MIT</code>.
 </ParamField>
 
-<ParamField path="workflow" type="string" required default="workflow.yaml">
-Relative path to your workflow file.
+<ParamField path="workflow" type="string" default="workflow.yaml">
+Relative path to your workflow file. Use this for single-workflow packages. Mutually exclusive with `workflows`. Required for workflow-only, skill-only, and workflow + skill packages unless `workflows` is set.
+
+Path must be package-relative; absolute paths and `..` segments are rejected at publish time.
+</ParamField>
+
+<ParamField path="workflows" type="WorkflowEntry[]">
+List of named workflow variants this package ships. Mutually exclusive with `workflow`. Each entry has:
+
+- `name` (required) — package-local identifier matching `^[A-Za-z0-9_-]+$`. Used by `npx codemod <package-id> --workflow <name>` and the cloud campaign picker.
+- `path` (required) — package-relative path to the workflow YAML. Absolute paths and `..` segments are rejected.
+- `description` (optional) — short blurb shown in the picker UI.
+- `default` (optional) — at most one entry may set `default: true`. If none is flagged, the first entry is the default.
+
+Example:
+
+```yaml
+workflows:
+  - name: main
+    path: workflow.yaml
+    default: true
+  - name: sharded
+    path: workflows/sharded.yaml
+    description: "Sharded for large monorepos"
+```
+</ParamField>
+
+<ParamField path="repository" type="string">
+Source repository URL for this package.
 </ParamField>
 
 <ParamField path="category" type="string" default="migration">
@@ -253,10 +370,10 @@ See <a href="/jssg/security">Security & Capabilities</a> for detailed informatio
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="Workflows" icon="diagram-project" href="/workflows">
+  <Card title="Workflows" icon="diagram-project" href="/workflows/introduction">
     Get started with building Codemod Workflows.
   </Card>
-  <Card title="JSSG" icon="code" href="/jssg">
+  <Card title="JSSG" icon="code" href="/jssg/intro">
     Write JavaScript/TypeScript transformations.
   </Card>
 </CardGroup>

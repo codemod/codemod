@@ -17,8 +17,15 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1"
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 ast-grep-core.workspace = true
 ast-grep-language.workspace = true
 codemod-sandbox.workspace = true
 testing-utils.workspace = true
 codemod-llrt-capabilities.workspace = true
+reqwest.workspace = true
+butterflow-core.workspace = true
+walkdir.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

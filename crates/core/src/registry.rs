@@ -120,7 +120,11 @@ struct PackageInfo {
     scope: Option<String>,
     is_legacy: bool,
     latest_version: Option<String>,
+    #[serde(default)]
+    dist_tags: HashMap<String, String>,
     versions: HashMap<String, PackageVersion>,
+    #[serde(default)]
+    access: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -137,6 +141,8 @@ struct PackageVersion {
 struct DownloadResponse {
     download_url: String,
     expires_at: String,
+    #[serde(default)]
+    dry_run_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -147,10 +153,19 @@ pub struct PackageSpec {
 }
 
 #[derive(Debug, Clone)]
+pub struct RegistryPackageMetadata {
+    pub registry_base_url: String,
+    pub package_web_path: String,
+    pub access: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ResolvedPackage {
     pub spec: PackageSpec,
     pub version: String,
     pub package_dir: PathBuf,
+    pub dry_run_only: bool,
+    pub registry_metadata: Option<RegistryPackageMetadata>,
 }
 
 #[derive(Clone)]
@@ -204,35 +219,62 @@ impl RegistryClient {
             });
         }
 
+        let resolved_package_spec = PackageSpec {
+            name: package_info.name.clone(),
+            scope: package_info.scope.as_deref().map(normalize_scope),
+            version: None,
+        };
+
         // Determine version to use
         let version = determine_version(&package_spec, &package_info)?;
 
         // Get or create cache directory
         let package_cache_dir = self.get_package_cache_dir(&package_spec, &version)?;
 
-        // Check if package is cached and valid
-        let package_dir = if force_download || !is_package_cached(&package_cache_dir)? {
+        // Check if package is cached and valid.
+        let is_pro_package = package_info.access.as_deref() == Some("pro");
+        let should_download = force_download
+            || !is_package_cached(&package_cache_dir)?
+            || is_pro_package
+            || package_cache_dir.join(".dry_run_only").exists();
+
+        let (package_dir, dry_run_only) = if should_download {
             info!("Downloading package: {source}@{version}");
-            self.download_and_extract_package(
-                registry,
-                &package_spec,
-                &version,
-                &package_cache_dir,
-                progress_bar,
-            )
-            .await?
+            let (dir, dry_run_only) = self
+                .download_and_extract_package(
+                    registry,
+                    &resolved_package_spec,
+                    &version,
+                    &package_cache_dir,
+                    progress_bar,
+                )
+                .await?;
+
+            if dry_run_only {
+                let _ = std::fs::write(dir.join(".dry_run_only"), "");
+            }
+
+            (dir, dry_run_only)
         } else {
             debug!("Using cached package: {}", package_cache_dir.display());
-            package_cache_dir
+            (package_cache_dir, false)
         };
 
         // Validate package structure
         validate_package_structure(&package_dir)?;
 
+        let package_web_path = registry_package_web_path(&resolved_package_spec);
+
         Ok(ResolvedPackage {
             spec: package_spec,
             version,
             package_dir,
+            dry_run_only,
+            registry_metadata: Some(RegistryPackageMetadata {
+                registry_base_url: registry.to_string(),
+                package_web_path,
+                access: package_info.access.clone(),
+            }),
         })
     }
 
@@ -269,6 +311,8 @@ impl RegistryClient {
             },
             version: "local".to_string(),
             package_dir: path,
+            dry_run_only: false,
+            registry_metadata: None,
         })
     }
 
@@ -286,7 +330,10 @@ impl RegistryClient {
         let url = format!("{registry_url}/api/v1/registry/packages/{package_path}");
         debug!("Fetching package info from: {url}");
 
-        let mut request = self.client.get(&url);
+        let mut request = self
+            .client
+            .get(&url)
+            .header("x-supports-dry-run-only", "true");
 
         // Add authentication header if available
         if let Some(auth_provider) = &self.auth_provider {
@@ -349,7 +396,7 @@ impl RegistryClient {
         version: &str,
         cache_dir: &Path,
         progress_bar: Option<ProgressBarCallback>,
-    ) -> Result<PathBuf> {
+    ) -> Result<(PathBuf, bool)> {
         let package_path = if let Some(scope) = &spec.scope {
             format!("{}/{}", scope, spec.name)
         } else {
@@ -372,9 +419,17 @@ impl RegistryClient {
             None
         };
 
+        // Signal to the server that this CLI version can enforce dry-run-only mode
+        let dry_run_headers: &[(&str, &str)] = &[("x-supports-dry-run-only", "true")];
+
         // Download the initial response (might be gzip data or JSON redirect)
         let package_data = self
-            .download_from_url(&download_url, auth_token.as_deref(), progress_bar.clone())
+            .download_from_url(
+                &download_url,
+                auth_token.as_deref(),
+                Some(dry_run_headers),
+                progress_bar.clone(),
+            )
             .await?;
 
         // Check if this is a JSON redirect response
@@ -389,15 +444,22 @@ impl RegistryClient {
                             serde_json::from_str::<DownloadResponse>(text)
                         {
                             debug!(
+                                "Server returned dry_run_only: {}",
+                                download_response.dry_run_only
+                            );
+                            debug!(
                                 "Server returned download URL: {}",
                                 download_response.download_url
                             );
+
+                            let dry_run_only = download_response.dry_run_only;
 
                             // Download from the actual CDN URL
                             let actual_package_data = self
                                 .download_from_url(
                                     &download_response.download_url,
                                     auth_token.as_deref(),
+                                    None,
                                     progress_bar,
                                 )
                                 .await?;
@@ -426,7 +488,7 @@ impl RegistryClient {
                                 });
                             }
                             info!("Package cached to: {}", cache_dir.display());
-                            return Ok(cache_dir.to_path_buf());
+                            return Ok((cache_dir.to_path_buf(), dry_run_only));
                         }
                     }
                 }
@@ -438,22 +500,28 @@ impl RegistryClient {
             }
         }
 
-        // If we get here, it's a direct gzip file
+        // If we get here, it's a direct gzip file (public package)
         self.extract_package(&package_data, cache_dir).await?;
         info!("Package cached to: {}", cache_dir.display());
-        Ok(cache_dir.to_path_buf())
+        Ok((cache_dir.to_path_buf(), false))
     }
 
     async fn download_from_url(
         &self,
         url: &str,
         auth_token: Option<&str>,
+        extra_headers: Option<&[(&str, &str)]>,
         progress_bar: Option<ProgressBarCallback>,
     ) -> Result<BytesMut> {
         // Get content length for progress tracking
         let mut head_request = self.client.head(url);
         if let Some(token) = auth_token {
             head_request = head_request.header("Authorization", format!("Bearer {token}"));
+        }
+        if let Some(headers) = extra_headers {
+            for (key, value) in headers {
+                head_request = head_request.header(*key, *value);
+            }
         }
 
         let head_response =
@@ -478,6 +546,11 @@ impl RegistryClient {
         let mut get_request = self.client.get(url);
         if let Some(token) = auth_token {
             get_request = get_request.header("Authorization", format!("Bearer {token}"));
+        }
+        if let Some(headers) = extra_headers {
+            for (key, value) in headers {
+                get_request = get_request.header(*key, *value);
+            }
         }
 
         let response = get_request
@@ -597,6 +670,22 @@ pub fn parse_package_spec(package: &str) -> Result<PackageSpec> {
     })
 }
 
+fn normalize_scope(scope: &str) -> String {
+    if scope.starts_with('@') {
+        scope.to_string()
+    } else {
+        format!("@{scope}")
+    }
+}
+
+pub fn registry_package_web_path(spec: &PackageSpec) -> String {
+    if let Some(scope) = &spec.scope {
+        format!("{scope}/{}", spec.name)
+    } else {
+        spec.name.clone()
+    }
+}
+
 pub fn format_package_spec(spec: &PackageSpec) -> String {
     let name = if let Some(scope) = &spec.scope {
         format!("{}/{}", scope, spec.name)
@@ -612,22 +701,57 @@ pub fn format_package_spec(spec: &PackageSpec) -> String {
 }
 
 fn determine_version(spec: &PackageSpec, package_info: &PackageInfo) -> Result<String> {
-    if let Some(version) = &spec.version {
-        if package_info.versions.contains_key(version) {
-            Ok(version.clone())
-        } else {
-            Err(RegistryError::VersionNotFound {
-                version: version.clone(),
-                package: format_package_spec(spec),
-            })
+    if let Some(selector) = &spec.version {
+        if package_info.versions.contains_key(selector) {
+            return Ok(selector.clone());
         }
-    } else if let Some(latest) = &package_info.latest_version {
-        Ok(latest.clone())
-    } else {
-        Err(RegistryError::NoVersionAvailable {
+
+        if let Some(version) = package_info.dist_tags.get(selector) {
+            if package_info.versions.contains_key(version) {
+                return Ok(version.clone());
+            }
+        }
+
+        if selector == "latest" {
+            if let Some(version) = package_info
+                .latest_version
+                .as_ref()
+                .filter(|version| package_info.versions.contains_key(*version))
+            {
+                return Ok(version.clone());
+            }
+        }
+
+        return Err(RegistryError::VersionNotFound {
+            version: selector.clone(),
+            package: format_package_spec(spec),
+        });
+    }
+
+    if let Some(version) = package_info
+        .dist_tags
+        .get("latest")
+        .filter(|version| package_info.versions.contains_key(*version))
+    {
+        return Ok(version.clone());
+    }
+
+    if let Some(version) = package_info
+        .latest_version
+        .as_ref()
+        .filter(|version| package_info.versions.contains_key(*version))
+    {
+        return Ok(version.clone());
+    }
+
+    package_info
+        .dist_tags
+        .get("codemod-builder")
+        .filter(|version| package_info.versions.contains_key(*version))
+        .cloned()
+        .ok_or_else(|| RegistryError::NoVersionAvailable {
             package: format_package_spec(spec),
         })
-    }
 }
 
 fn is_package_cached(package_dir: &Path) -> Result<bool> {
@@ -682,4 +806,349 @@ fn copy_dir_recursively(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::{write::GzEncoder, Compression};
+    use std::io::{Cursor, Write};
+    use std::sync::Mutex;
+    use tokio::net::TcpListener;
+
+    #[test]
+    fn parse_package_spec_accepts_builder_tag() {
+        let spec = parse_package_spec("@codemod/example@codemod-builder").unwrap();
+
+        assert_eq!(spec.scope.as_deref(), Some("@codemod"));
+        assert_eq!(spec.name, "example");
+        assert_eq!(spec.version.as_deref(), Some("codemod-builder"));
+    }
+
+    #[test]
+    fn determine_version_resolves_builder_tag() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: Some("codemod-builder".to_string()),
+        };
+        let package_info = package_info_with_dist_tags();
+
+        assert_eq!(
+            determine_version(&spec, &package_info).unwrap(),
+            "0.0.1-codemod-builder.1"
+        );
+    }
+
+    #[test]
+    fn determine_version_accepts_exact_prerelease() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: Some("0.0.1-codemod-builder.1".to_string()),
+        };
+        let package_info = package_info_with_dist_tags();
+
+        assert_eq!(
+            determine_version(&spec, &package_info).unwrap(),
+            "0.0.1-codemod-builder.1"
+        );
+    }
+
+    #[test]
+    fn determine_version_defaults_to_latest_dist_tag() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: None,
+        };
+        let mut package_info = package_info_with_dist_tags();
+        package_info.latest_version = Some("0.9.0".to_string());
+
+        assert_eq!(determine_version(&spec, &package_info).unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn determine_version_resolves_explicit_latest_from_legacy_projection() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: Some("latest".to_string()),
+        };
+        let mut package_info = package_info_with_dist_tags();
+        package_info.dist_tags.clear();
+
+        assert_eq!(determine_version(&spec, &package_info).unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn determine_version_ignores_stale_latest_dist_tag() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: None,
+        };
+        let mut package_info = package_info_with_dist_tags();
+        package_info
+            .dist_tags
+            .insert("latest".to_string(), "2.0.0".to_string());
+
+        assert_eq!(determine_version(&spec, &package_info).unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn determine_version_defaults_to_builder_tag_without_latest_release() {
+        let spec = PackageSpec {
+            scope: Some("@codemod".to_string()),
+            name: "example".to_string(),
+            version: None,
+        };
+        let mut package_info = package_info_with_dist_tags();
+        package_info.dist_tags.remove("latest");
+        package_info.latest_version = None;
+
+        assert_eq!(
+            determine_version(&spec, &package_info).unwrap(),
+            "0.0.1-codemod-builder.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_package_downloads_from_resolved_unscoped_package_info_path() {
+        assert_resolve_package_downloads_from_resolved_path(
+            "alias-package@1.0.0",
+            "/api/v1/registry/packages/alias-package",
+            "canonical-package",
+            None,
+            "/api/v1/registry/packages/canonical-package/download/1.0.0",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn resolve_package_downloads_from_resolved_scoped_package_info_path() {
+        assert_resolve_package_downloads_from_resolved_path(
+            "@alias/alias-package@1.0.0",
+            "/api/v1/registry/packages/@alias/alias-package",
+            "canonical-package",
+            Some("@codemod"),
+            "/api/v1/registry/packages/@codemod/canonical-package/download/1.0.0",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn resolve_package_normalizes_resolved_scope_without_at_prefix() {
+        assert_resolve_package_downloads_from_resolved_path(
+            "@alias/alias-package@1.0.0",
+            "/api/v1/registry/packages/@alias/alias-package",
+            "canonical-package",
+            Some("codemod"),
+            "/api/v1/registry/packages/@codemod/canonical-package/download/1.0.0",
+        )
+        .await;
+    }
+
+    async fn assert_resolve_package_downloads_from_resolved_path(
+        source: &str,
+        info_path: &str,
+        resolved_name: &str,
+        resolved_scope: Option<&str>,
+        expected_download_path: &str,
+    ) {
+        let archive = package_archive();
+        let package_info = package_info_response(resolved_name, resolved_scope);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let (registry_url, server) = spawn_registry_server(
+            info_path.to_string(),
+            package_info,
+            expected_download_path.to_string(),
+            archive,
+            Arc::clone(&requests),
+        )
+        .await;
+
+        let cache_dir = tempfile::tempdir().expect("cache dir");
+        let client = RegistryClient::new(
+            RegistryConfig {
+                default_registry: registry_url.clone(),
+                cache_dir: cache_dir.path().to_path_buf(),
+            },
+            None,
+        );
+
+        let resolved = client
+            .resolve_package(source, Some(&registry_url), true, None)
+            .await
+            .expect("package should resolve and download");
+
+        assert!(resolved.package_dir.join("codemod.yaml").exists());
+        assert!(resolved.package_dir.join("workflow.yaml").exists());
+
+        let requests = requests.lock().expect("requests lock");
+        assert!(
+            requests.iter().any(|(method, path)| method == "HEAD"
+                && path == expected_download_path),
+            "expected HEAD request to resolved download path {expected_download_path}, got {requests:?}"
+        );
+        assert!(
+            requests.iter().any(|(method, path)| method == "GET"
+                && path == expected_download_path),
+            "expected GET request to resolved download path {expected_download_path}, got {requests:?}"
+        );
+        assert!(
+            !requests
+                .iter()
+                .any(|(_, path)| path.contains("alias-package/download")),
+            "download should not use parsed input alias path, got {requests:?}"
+        );
+
+        server.abort();
+    }
+
+    async fn spawn_registry_server(
+        info_path: String,
+        package_info: String,
+        download_path: String,
+        archive: Vec<u8>,
+        requests: Arc<Mutex<Vec<(String, String)>>>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test registry");
+        let addr = listener.local_addr().expect("test registry address");
+
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+
+                let info_path = info_path.clone();
+                let package_info = package_info.clone();
+                let download_path = download_path.clone();
+                let archive = archive.clone();
+                let requests = Arc::clone(&requests);
+
+                tokio::spawn(async move {
+                    let mut buffer = [0; 4096];
+                    let Ok(size) = stream
+                        .readable()
+                        .await
+                        .and_then(|_| stream.try_read(&mut buffer))
+                    else {
+                        return;
+                    };
+                    let request = String::from_utf8_lossy(&buffer[..size]);
+                    let Some(request_line) = request.lines().next() else {
+                        return;
+                    };
+                    let mut parts = request_line.split_whitespace();
+                    let method = parts.next().unwrap_or_default().to_string();
+                    let path = parts.next().unwrap_or_default().to_string();
+
+                    requests
+                        .lock()
+                        .expect("requests lock")
+                        .push((method.clone(), path.clone()));
+
+                    let (status, content_type, body) = if method == "GET" && path == info_path {
+                        ("200 OK", "application/json", package_info.into_bytes())
+                    } else if path == download_path && method == "HEAD" {
+                        ("200 OK", "application/gzip", Vec::new())
+                    } else if path == download_path && method == "GET" {
+                        ("200 OK", "application/gzip", archive)
+                    } else {
+                        ("404 Not Found", "text/plain", b"not found".to_vec())
+                    };
+
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+
+                    let _ = stream.writable().await;
+                    let _ = stream.try_write(response.as_bytes());
+                    if method != "HEAD" && !body.is_empty() {
+                        let _ = stream.writable().await;
+                        let _ = stream.try_write(&body);
+                    }
+                });
+            }
+        });
+
+        (format!("http://{addr}"), handle)
+    }
+
+    fn package_info_response(name: &str, scope: Option<&str>) -> String {
+        serde_json::json!({
+            "id": "pkg_1",
+            "name": name,
+            "scope": scope,
+            "is_legacy": false,
+            "latest_version": "1.0.0",
+            "versions": {
+                "1.0.0": {
+                    "version": "1.0.0",
+                    "description": null,
+                    "checksum": "sha256:test",
+                    "size": 1
+                }
+            }
+        })
+        .to_string()
+    }
+
+    fn package_info_with_dist_tags() -> PackageInfo {
+        serde_json::from_value(serde_json::json!({
+            "id": "pkg_1",
+            "name": "example",
+            "scope": "@codemod",
+            "is_legacy": false,
+            "latest_version": "1.0.0",
+            "dist_tags": {
+                "latest": "1.0.0",
+                "codemod-builder": "0.0.1-codemod-builder.1"
+            },
+            "versions": {
+                "1.0.0": {
+                    "version": "1.0.0",
+                    "description": null,
+                    "checksum": "sha256:latest",
+                    "size": 1
+                },
+                "0.0.1-codemod-builder.1": {
+                    "version": "0.0.1-codemod-builder.1",
+                    "description": null,
+                    "checksum": "sha256:builder",
+                    "size": 1
+                }
+            }
+        }))
+        .unwrap()
+    }
+
+    fn package_archive() -> Vec<u8> {
+        let mut tar_buffer = Vec::new();
+        {
+            let mut archive = tar::Builder::new(&mut tar_buffer);
+            append_tar_file(&mut archive, "codemod.yaml", b"name: test\n");
+            append_tar_file(&mut archive, "workflow.yaml", b"version: '1'\n");
+            archive.finish().expect("finish tar");
+        }
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&tar_buffer).expect("write gzip");
+        encoder.finish().expect("finish gzip")
+    }
+
+    fn append_tar_file(archive: &mut tar::Builder<&mut Vec<u8>>, path: &str, contents: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(path).expect("set tar path");
+        header.set_size(contents.len() as u64);
+        header.set_cksum();
+        archive
+            .append(&header, Cursor::new(contents))
+            .expect("append tar file");
+    }
 }

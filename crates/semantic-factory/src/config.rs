@@ -26,6 +26,20 @@ pub enum SemanticScope {
     },
 }
 
+/// Strategy for enumerating the workspace when building the cross-file
+/// symbol index. Only relevant for [`SemanticScope::WorkspaceScope`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WorkspaceWalker {
+    /// Use `ignore::WalkBuilder` against the real filesystem; honors
+    /// `.gitignore`. Required when the backing storage is a real disk.
+    #[default]
+    Ignore,
+    /// Recursively read the configured VFS via `VfsPath::read_dir`. Use
+    /// when the backing storage is virtual (e.g. a MemoryFS seeded from a
+    /// database manifest) — the `ignore` crate can't see these entries.
+    Vfs,
+}
+
 /// Configuration for creating semantic providers.
 #[derive(Clone, Default)]
 pub struct SemanticConfig {
@@ -34,6 +48,8 @@ pub struct SemanticConfig {
     /// Optional virtual filesystem root for file operations.
     /// If None, the provider will use the real filesystem (PhysicalFS).
     pub fs_root: Option<VfsPath>,
+    /// How to enumerate workspace files during indexing.
+    pub walker: WorkspaceWalker,
 }
 
 impl std::fmt::Debug for SemanticConfig {
@@ -41,6 +57,7 @@ impl std::fmt::Debug for SemanticConfig {
         f.debug_struct("SemanticConfig")
             .field("scope", &self.scope)
             .field("fs_root", &self.fs_root.as_ref().map(|_| "<VfsPath>"))
+            .field("walker", &self.walker)
             .finish()
     }
 }
@@ -51,6 +68,7 @@ impl SemanticConfig {
         Self {
             scope: SemanticScope::FileScope,
             fs_root: None,
+            walker: WorkspaceWalker::Ignore,
         }
     }
 
@@ -59,6 +77,7 @@ impl SemanticConfig {
         Self {
             scope: SemanticScope::FileScope,
             fs_root: Some(fs_root),
+            walker: WorkspaceWalker::Ignore,
         }
     }
 
@@ -67,6 +86,7 @@ impl SemanticConfig {
         Self {
             scope: SemanticScope::WorkspaceScope { root },
             fs_root: None,
+            walker: WorkspaceWalker::Ignore,
         }
     }
 
@@ -75,6 +95,14 @@ impl SemanticConfig {
         Self {
             scope: SemanticScope::WorkspaceScope { root },
             fs_root: Some(fs_root),
+            walker: WorkspaceWalker::Ignore,
         }
+    }
+
+    /// Override the workspace walker used during indexing. No-op for
+    /// file-scope configurations since they don't walk.
+    pub fn with_walker(mut self, walker: WorkspaceWalker) -> Self {
+        self.walker = walker;
+        self
     }
 }

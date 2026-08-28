@@ -14,11 +14,11 @@ codemod run -w workflow.yaml
 
 ## Usage
 
-This codemod transforms {language} code by:
+Document the exact migration this codemod performs before publishing. At minimum, cover:
 
-- Converting `var` declarations to `const`/`let`
-- Removing debug statements
-- Modernizing syntax patterns
+- The concrete syntax or API patterns it rewrites
+- The file types or paths it targets
+- Important preserve/no-op cases and exclusions
 
 ## Development
 
@@ -27,7 +27,7 @@ This codemod transforms {language} code by:
 {test_command}
 
 # Validate the workflow
-codemod validate -w workflow.yaml
+codemod workflow validate -w workflow.yaml
 
 # Publish to registry
 codemod login
@@ -36,4 +36,4 @@ codemod publish
 
 ## License
 
-{license} 
+{license}

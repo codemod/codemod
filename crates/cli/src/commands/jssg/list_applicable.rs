@@ -86,6 +86,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         target_path: Some(target_directory.to_path_buf()),
         base_path: None,
         include_globs: None,
+        explicit_files: None,
         exclude_globs: None,
         dry_run: false,
         languages: Some(vec![args.language.clone()]),
@@ -98,6 +99,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         language: args.language.parse().unwrap(),
         resolver: resolver.clone(),
         capabilities: config.capabilities.clone(),
+        target_directory: None,
     })
     .await?;
     let combined_scan: Option<Arc<CombinedScan<CodemodLang>>> = selector_config

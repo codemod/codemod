@@ -158,6 +158,9 @@ impl Language for CodemodLang {
         if let Some(lang) = SupportLang::from_path(path.as_ref()) {
             return Some(CodemodLang::Static(lang));
         }
+        if let Err(e) = tree_sitter_loader::init() {
+            eprintln!("Warning: failed to initialize dynamic tree-sitter parsers: {e}");
+        }
         if let Some(lang) = DynamicLang::from_path(path.as_ref()) {
             return Some(CodemodLang::Dynamic(lang));
         }

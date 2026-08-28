@@ -1,5 +1,5 @@
 # Codemod AI Crate
 
-This package provides AI-powered code modification tools based on [coro-code](https://github.com/Blushyes/coro-code).
+This package provides AI-powered code modification tools built on [`rig-core`](https://rig.rs/).
 
-**Note:** The AI tools implementation in this crate is largely copied from coro-cli to provide similar AI-driven code transformation capabilities within the codemod ecosystem.
+It includes the AI execution runtime plus codemod-focused tools (bash, edit, glob, json edit, and code knowledge graph) used by workflow `ai` steps.

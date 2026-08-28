@@ -1,5 +1,5 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use ts_rs::TS;
 /// Represents a step in a node
@@ -22,11 +22,18 @@ pub struct Step {
     #[ts(optional, as = "Option<HashMap<String, String>>")]
     pub env: Option<HashMap<String, String>>,
 
-    /// Conditional expression to determine if this step should be executed
+    /// Conditional expression to determine if this step should be executed.
+    /// Accepts a string expression or a literal boolean (`if: true` / `if: false`).
     #[serde(rename = "if")]
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_condition")]
     #[ts(optional, as = "Option<String>")]
     pub condition: Option<String>,
+
+    /// Optional commit checkpoint — if present (and in cloud mode), a git commit
+    /// is created after this step completes. The message supports `${{ }}` expressions.
+    #[serde(default)]
+    #[ts(optional, as = "Option<CommitConfig>")]
+    pub commit: Option<CommitConfig>,
 }
 
 /// Represents the action a step can take - either using templates or running a script
@@ -56,6 +63,14 @@ pub enum StepAction {
     /// Execute AI agent with prompt
     #[serde(rename = "ai")]
     AI(UseAI),
+
+    /// Install package skill behavior via codemod CLI
+    #[serde(rename = "install-skill")]
+    InstallSkill(UseInstallSkill),
+
+    /// Evaluate file shards and write results to workflow state
+    #[serde(rename = "shard")]
+    Shard(UseShard),
 }
 
 /// Represents a template use in a step
@@ -217,11 +232,6 @@ pub struct UseAI {
     #[ts(optional, as = "Option<String>")]
     pub working_dir: Option<String>,
 
-    /// Timeout in milliseconds for AI agent execution (optional)
-    #[serde(default)]
-    #[ts(optional, as = "Option<u64>")]
-    pub timeout_ms: Option<u64>,
-
     /// Environment variables to set for the AI agent execution (optional)
     #[serde(default)]
     #[ts(optional, as = "Option<HashMap<String, String>>")]
@@ -247,6 +257,11 @@ pub struct UseAI {
     #[ts(optional, as = "Option<usize>")]
     pub max_steps: Option<usize>,
 
+    /// Timeout in milliseconds for AI agent execution (optional)
+    #[serde(default)]
+    #[ts(optional, as = "Option<u64>")]
+    pub timeout_ms: Option<u64>,
+
     /// Tools available to the AI agent (optional, defaults to common tools)
     #[serde(default)]
     #[ts(optional, as = "Option<Vec<String>>")]
@@ -271,4 +286,328 @@ pub struct UseAI {
     #[serde(default)]
     #[ts(optional, as = "Option<String>")]
     pub llm_protocol: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct UseInstallSkill {
+    /// Package identifier to install (for example `@codemod/jest-to-vitest`)
+    pub package: String,
+
+    /// Authored skill source path inside the package (optional, defaults to conventional layout)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub path: Option<String>,
+
+    /// Target harness adapter (optional, defaults to auto)
+    #[serde(default)]
+    #[ts(optional, as = "Option<InstallSkillHarness>")]
+    pub harness: Option<InstallSkillHarness>,
+
+    /// Install scope (optional, defaults to project)
+    #[serde(default)]
+    #[ts(optional, as = "Option<InstallSkillScope>")]
+    pub scope: Option<InstallSkillScope>,
+
+    /// Overwrite existing skill files (optional, defaults to false)
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum InstallSkillHarness {
+    Auto,
+    Claude,
+    Goose,
+    Opencode,
+    Cursor,
+    Codex,
+    Antigravity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum InstallSkillScope {
+    Project,
+    User,
+}
+
+/// Configuration for the `shard` step action.
+/// Evaluates file shards and writes results to workflow state.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct UseShard {
+    /// Sharding method configuration — either a built-in algorithm or a custom function
+    pub method: ShardMethod,
+
+    /// Root directory to scan for files
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub target: Option<String>,
+
+    /// State key to write shard results to
+    pub output_state: String,
+
+    /// Glob pattern for eligible files (used when js-ast-grep is not set)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub file_pattern: Option<String>,
+
+    /// Optional js-ast-grep configuration for codemod-based pre-filtering.
+    /// When set, the engine dry-runs the codemod against matched files and
+    /// only includes files where the transform produces changes.
+    /// The `include` field also serves as the file pattern for discovery.
+    #[serde(rename = "js-ast-grep")]
+    #[serde(default)]
+    #[ts(optional, as = "Option<UseJSAstGrep>")]
+    pub js_ast_grep: Option<UseJSAstGrep>,
+}
+
+/// Sharding method — either a built-in algorithm or a custom JS/TS function.
+///
+/// Deserialized from YAML as:
+///   `{ type: directory, max_files_per_shard: 30 }`
+///   `{ function: "./scripts/shard.ts" }`
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(untagged)]
+pub enum ShardMethod {
+    /// Built-in sharding method with sizing parameters
+    Builtin(BuiltinShardMethod),
+    /// Custom JS/TS shard function
+    Function(CustomShardFunction),
+}
+
+/// Built-in sharding method configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct BuiltinShardMethod {
+    /// Built-in method type
+    pub r#type: BuiltinShardType,
+
+    /// Target number of files per shard.
+    /// Accepts a literal number or a `${{ }}` expression (e.g. `${{ params.pr_size }}`).
+    #[serde(deserialize_with = "deserialize_usize_or_expr")]
+    #[ts(as = "serde_json::Value")]
+    pub max_files_per_shard: serde_json::Value,
+
+    /// Minimum shard size — trailing shards smaller than this are merged
+    /// into the previous shard (optional)
+    #[serde(default, deserialize_with = "deserialize_option_usize_or_expr")]
+    #[ts(optional, as = "Option<serde_json::Value>")]
+    pub min_shard_size: Option<serde_json::Value>,
+}
+
+/// Type of built-in sharding method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinShardType {
+    /// Group by immediate subdirectory under target, then bin-pack
+    Directory,
+    /// Group by CODEOWNERS team, then bin-pack
+    Codeowner,
+}
+
+/// Custom shard function configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct CustomShardFunction {
+    /// Path to JS/TS shard function file
+    pub function: String,
+}
+
+/// Configuration for a commit checkpoint on a step.
+/// When present (and cloud mode is active), a git commit is created after the step runs.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct CommitConfig {
+    /// Commit message (supports `${{ }}` template expressions)
+    pub message: String,
+
+    /// Paths to stage before committing (default: `["."]` — stage everything)
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub add: Option<Vec<String>>,
+
+    /// If true, skip silently when there are no changes to commit (default: true)
+    #[serde(default = "default_allow_empty")]
+    pub allow_empty: bool,
+}
+
+fn default_allow_empty() -> bool {
+    true
+}
+
+/// Deserialize the `if` condition field from either a string or a boolean.
+/// YAML `if: true` / `if: false` are parsed as booleans; this converts them
+/// to the string literals `"true"` / `"false"` so the expression engine can
+/// evaluate them uniformly.
+fn deserialize_condition<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(s)) => Ok(Some(s)),
+        Some(serde_json::Value::Bool(b)) => Ok(Some(b.to_string())),
+        Some(serde_json::Value::Number(n)) => Ok(Some(n.to_string())),
+        Some(other) => Err(serde::de::Error::custom(format!(
+            "unsupported type for `if` condition: expected string or boolean, got {}",
+            match &other {
+                serde_json::Value::Array(_) => "array",
+                serde_json::Value::Object(_) => "object",
+                _ => "unknown",
+            }
+        ))),
+    }
+}
+
+/// Deserialize a value that is either a number or a string expression.
+/// Used for fields like `max_files_per_shard` that accept `20` or `${{ params.pr_size }}`.
+fn deserialize_usize_or_expr<'de, D>(deserializer: D) -> Result<serde_json::Value, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer)
+}
+
+/// Optional variant of [`deserialize_usize_or_expr`].
+fn deserialize_option_usize_or_expr<'de, D>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<serde_json::Value>::deserialize(deserializer)
+}
+
+/// Configuration for automatic pull request creation at the end of a node.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct PullRequestConfig {
+    /// PR title (supports `${{ }}` template expressions)
+    pub title: String,
+
+    /// PR body/description (supports `${{ }}` template expressions)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub body: Option<String>,
+
+    /// Create the pull request as a draft
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    pub draft: Option<bool>,
+
+    /// Base branch to merge into (auto-detected if omitted)
+    #[serde(default)]
+    #[ts(optional, as = "Option<String>")]
+    pub base: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_condition_deserializes_string() {
+        let yaml = r#"
+            name: "test step"
+            run: "echo hi"
+            if: 'params.flag == "yes"'
+        "#;
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.condition, Some(r#"params.flag == "yes""#.to_string()));
+    }
+
+    #[test]
+    fn test_condition_deserializes_bool_true() {
+        let yaml = r#"
+            name: "test step"
+            run: "echo hi"
+            if: true
+        "#;
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.condition, Some("true".to_string()));
+    }
+
+    #[test]
+    fn test_condition_deserializes_bool_false() {
+        let yaml = r#"
+            name: "test step"
+            run: "echo hi"
+            if: false
+        "#;
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.condition, Some("false".to_string()));
+    }
+
+    #[test]
+    fn test_condition_absent_is_none() {
+        let yaml = r#"
+            name: "test step"
+            run: "echo hi"
+        "#;
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.condition, None);
+    }
+
+    #[test]
+    fn test_max_files_per_shard_literal_number() {
+        let yaml = r#"
+            type: directory
+            max_files_per_shard: 20
+        "#;
+        let method: BuiltinShardMethod = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(method.max_files_per_shard, serde_json::json!(20));
+    }
+
+    #[test]
+    fn test_max_files_per_shard_expression_string() {
+        let yaml = r#"
+            type: directory
+            max_files_per_shard: "${{ params.pr_size }}"
+        "#;
+        let method: BuiltinShardMethod = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            method.max_files_per_shard,
+            serde_json::json!("${{ params.pr_size }}")
+        );
+    }
+
+    #[test]
+    fn test_min_shard_size_absent_is_none() {
+        let yaml = r#"
+            type: directory
+            max_files_per_shard: 20
+        "#;
+        let method: BuiltinShardMethod = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(method.min_shard_size, None);
+    }
+
+    #[test]
+    fn test_min_shard_size_literal_number() {
+        let yaml = r#"
+            type: directory
+            max_files_per_shard: 20
+            min_shard_size: 5
+        "#;
+        let method: BuiltinShardMethod = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(method.min_shard_size, Some(serde_json::json!(5)));
+    }
+
+    #[test]
+    fn test_min_shard_size_expression_string() {
+        let yaml = r#"
+            type: directory
+            max_files_per_shard: 20
+            min_shard_size: "${{ params.min_size }}"
+        "#;
+        let method: BuiltinShardMethod = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            method.min_shard_size,
+            Some(serde_json::json!("${{ params.min_size }}"))
+        );
+    }
 }

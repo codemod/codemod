@@ -1,0 +1,9 @@
+array: children=array, boolean, float, inline_table, integer, local_date, local_date_time, local_time, offset_date_time, string*?
+document: children=pair, table, table_array_element*?
+dotted_key: children=bare_key, dotted_key, quoted_key*
+inline_table: children=pair*?
+pair: children=array, bare_key, boolean, dotted_key, float, inline_table, integer, local_date, local_date_time, local_time, offset_date_time, quoted_key, string*
+quoted_key: children=escape_sequence*?
+string: children=escape_sequence*?
+table: children=bare_key, dotted_key, pair, quoted_key*
+table_array_element: children=bare_key, dotted_key, pair, quoted_key*
