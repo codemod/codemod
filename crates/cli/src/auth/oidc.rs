@@ -382,9 +382,9 @@ async fn handle_callback(
                         .body(Body::from(html))
                         .unwrap());
                 } else if params.contains_key("error") {
-                    let error = params.get("error").unwrap();
+                    let _error = params.get("error").unwrap();
                     let default_error = "Unknown error".to_string();
-                    let error_description =
+                    let _error_description =
                         params.get("error_description").unwrap_or(&default_error);
 
                     let html = format!(
