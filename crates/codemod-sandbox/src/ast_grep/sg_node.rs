@@ -14,7 +14,7 @@ use ast_grep_language::SupportLang;
 use language_core::SemanticProvider;
 
 use rquickjs::{
-    class, class::Trace, methods, prelude::Opt, Ctx, Exception, IntoJs, JsLifetime, Result, Value,
+    Ctx, Exception, IntoJs, JsLifetime, Result, Value, class, class::Trace, methods, prelude::Opt,
 };
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -183,7 +183,7 @@ impl<'js> SgRootRjs<'js> {
                     return Err(Exception::throw_message(
                         &ctx,
                         "Cannot write: file has no path",
-                    ))
+                    ));
                 }
             };
 

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, ValueEnum};
 use serde::Serialize;
 use serde_yaml::{Mapping, Value};
@@ -219,12 +219,14 @@ mod tests {
             "schemaVersion: 1.0.0\nname: sample\ncustom:\n  nested: true\nrepository: https://example.com/old\n",
         );
 
-        assert!(set_repository(
-            &path,
-            "https://github.com/acme/codemods",
-            Some("codemods/rename-foo"),
-        )
-        .unwrap());
+        assert!(
+            set_repository(
+                &path,
+                "https://github.com/acme/codemods",
+                Some("codemods/rename-foo"),
+            )
+            .unwrap()
+        );
 
         let value: Value = serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["custom"]["nested"], Value::Bool(true));
@@ -243,19 +245,23 @@ mod tests {
         let directory = tempdir().unwrap();
         let path = write_manifest(directory.path(), "name: sample\nunknown: keep-me\n");
 
-        assert!(set_repository(
-            &path,
-            "https://github.com/acme/codemods",
-            Some("packages/foo")
-        )
-        .unwrap());
+        assert!(
+            set_repository(
+                &path,
+                "https://github.com/acme/codemods",
+                Some("packages/foo")
+            )
+            .unwrap()
+        );
         let first = fs::read(&path).unwrap();
-        assert!(!set_repository(
-            &path,
-            "https://github.com/acme/codemods",
-            Some("packages/foo")
-        )
-        .unwrap());
+        assert!(
+            !set_repository(
+                &path,
+                "https://github.com/acme/codemods",
+                Some("packages/foo")
+            )
+            .unwrap()
+        );
         assert_eq!(fs::read(&path).unwrap(), first);
     }
 

@@ -23,8 +23,8 @@ pub use task::{Task, TaskErrorDetails, TaskStatus};
 pub use template::{Template, TemplateInput, TemplateOutput};
 pub use trigger::{Trigger, TriggerType};
 pub use variable::{
-    evaluate_condition, resolve_expressions, resolve_string_list, resolve_string_with_expression,
-    resolve_usize_value, TaskExpressionContext,
+    TaskExpressionContext, evaluate_condition, resolve_expressions, resolve_string_list,
+    resolve_string_with_expression, resolve_usize_value,
 };
 pub use workflow::{Workflow, WorkflowRun, WorkflowState, WorkflowStatus};
 

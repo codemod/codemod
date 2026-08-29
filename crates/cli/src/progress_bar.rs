@@ -246,9 +246,10 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
                             }
                             if let Some(message) =
                                 agent_message_buffers.lock().unwrap().remove(&task_id)
-                                && !message.trim().is_empty() {
-                                    eprintln!("  {} {}", style("›").cyan(), message.trim_end());
-                                }
+                                && !message.trim().is_empty()
+                            {
+                                eprintln!("  {} {}", style("›").cyan(), message.trim_end());
+                            }
                             eprintln!("{line}");
                         });
                         if !bars.lock().unwrap().contains_key(&task_id) {
@@ -322,12 +323,13 @@ pub fn create_multi_progress_reporter() -> (ProgressReporter, Instant) {
                 let mut bars_lock = bars.lock().unwrap();
                 *active_log_title.lock().unwrap() = None;
                 if let Some(message) = agent_message_buffers.lock().unwrap().remove(&task_id)
-                    && !message.trim().is_empty() {
-                        clear_agent_spinner(&agent_spinners, &task_id);
-                        mp.suspend(|| {
-                            eprintln!("  {} {}", style("›").cyan(), message.trim_end());
-                        });
-                    }
+                    && !message.trim().is_empty()
+                {
+                    clear_agent_spinner(&agent_spinners, &task_id);
+                    mp.suspend(|| {
+                        eprintln!("  {} {}", style("›").cyan(), message.trim_end());
+                    });
+                }
                 if agent_message_open
                     .lock()
                     .unwrap()

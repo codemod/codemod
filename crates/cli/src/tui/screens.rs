@@ -1,8 +1,8 @@
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
-use ratatui::Frame;
 
 use crate::tui::app::{ApprovalPrompt, Screen, TuiState, WorktreeConsentScope};
 use butterflow_core::config::DirtyGitApprovalKind;
@@ -68,11 +68,12 @@ fn task_row_status_style(task: &butterflow_models::Task) -> Style {
 }
 pub fn render(frame: &mut Frame<'_>, state: &TuiState) {
     if matches!(state.screen, Screen::RunDetail)
-        && let Some(approval) = &state.approval {
-            frame.render_widget(Clear, frame.area());
-            render_approval_modal(frame, approval);
-            return;
-        }
+        && let Some(approval) = &state.approval
+    {
+        frame.render_widget(Clear, frame.area());
+        render_approval_modal(frame, approval);
+        return;
+    }
 
     if state.show_log_modal {
         frame.render_widget(Clear, frame.area());
@@ -764,7 +765,9 @@ fn render_approval_modal(frame: &mut Frame<'_>, approval: &ApprovalPrompt) {
         ),
         ApprovalPrompt::ManualPullRequestConsent { title, head, .. } => (
             "Publish Branch and Create Pull Request".to_string(),
-            format!("Publish branch and create pull request now?\n\nTitle: {title}\nBranch: {head}"),
+            format!(
+                "Publish branch and create pull request now?\n\nTitle: {title}\nBranch: {head}"
+            ),
             "y/Enter approve  esc cancel".to_string(),
         ),
         ApprovalPrompt::Shell { command, .. } => (
@@ -867,9 +870,9 @@ mod tests {
     use butterflow_core::config::DirtyGitApprovalKind;
     use butterflow_models::{Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus};
     use chrono::{Duration, Utc};
+    use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::style::{Color, Modifier};
-    use ratatui::Terminal;
     use serde_json::json;
     use uuid::Uuid;
 
@@ -1173,9 +1176,11 @@ mod tests {
 
         assert!(task_row.contains("Publish failed"));
         assert!(!task_row.contains("Failed"));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Publish failed, press p to try again")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Publish failed, press p to try again"))
+        );
     }
 
     #[test]
@@ -1231,9 +1236,11 @@ mod tests {
             .expect("task row should render");
 
         assert!(task_row.contains("Publishing"));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Publishing branch and creating pull request")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Publishing branch and creating pull request"))
+        );
     }
 
     #[test]
@@ -1407,9 +1414,11 @@ mod tests {
         state.open_log_modal(6);
 
         let lines = render_state(&state, 100, 20);
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Logs: install-skill (Failed)")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Logs: install-skill (Failed)"))
+        );
     }
 
     #[test]
@@ -1429,12 +1438,16 @@ mod tests {
         };
 
         let lines = render_state(&state, 80, 24);
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Choose install scope")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Enter") && line.contains("choose")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Choose install scope"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Enter") && line.contains("choose"))
+        );
     }
 
     #[test]
@@ -1451,9 +1464,11 @@ mod tests {
         let lines = render_state(&state, 80, 24);
         assert!(lines.iter().any(|line| line.contains("Trigger All")));
         assert!(lines.iter().any(|line| line.contains("git worktrees")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("approve") && line.contains("cancel")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("approve") && line.contains("cancel"))
+        );
     }
 
     #[test]
@@ -1470,9 +1485,11 @@ mod tests {
         let lines = render_state(&state, 80, 24);
         assert!(lines.iter().any(|line| line.contains("Trigger Task")));
         assert!(lines.iter().any(|line| line.contains("a git worktree")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("approve") && line.contains("cancel")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("approve") && line.contains("cancel"))
+        );
     }
 
     #[test]
@@ -1488,13 +1505,17 @@ mod tests {
         };
 
         let lines = render_state(&state, 80, 24);
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("Publish Branch and Create Pull Request")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Publish Branch and Create Pull Request"))
+        );
         assert!(lines.iter().any(|line| line.contains("codemod-branch")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("approve") && line.contains("cancel")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("approve") && line.contains("cancel"))
+        );
     }
 
     #[test]
@@ -1511,12 +1532,16 @@ mod tests {
 
         let lines = render_state(&state, 80, 24);
         assert!(lines.iter().any(|line| line.contains("Git Confirmation")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("uncommitted changes")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("uncommitted changes"))
+        );
         assert!(lines.iter().any(|line| line.contains("/tmp/repo")));
-        assert!(lines
-            .iter()
-            .any(|line| line.contains("approve") && line.contains("cancel")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("approve") && line.contains("cancel"))
+        );
     }
 }

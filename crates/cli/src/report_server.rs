@@ -1,5 +1,5 @@
 use anyhow::Result;
-use butterflow_core::ai_handoff::{discover_installed_agents, AgentOption};
+use butterflow_core::ai_handoff::{AgentOption, discover_installed_agents};
 use butterflow_core::report::{ExecutionReport, ShareLevel};
 use hyper::body::to_bytes;
 use hyper::header::{CONTENT_TYPE, HOST, ORIGIN};
@@ -621,7 +621,9 @@ fn sanitize_feedback_category(category: &str) -> Result<String> {
             character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
         })
     {
-        anyhow::bail!("Feedback category must be 64 characters or fewer and contain only letters, numbers, '.', '_', or '-'.");
+        anyhow::bail!(
+            "Feedback category must be 64 characters or fewer and contain only letters, numbers, '.', '_', or '-'."
+        );
     }
     Ok(category.to_string())
 }
@@ -1121,15 +1123,17 @@ fn parse_agent_feedback_message(
 ) -> Result<String> {
     let text = extract_agent_text(output);
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim())
-        && let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
-            return sanitize_agent_feedback_message(message, target_path);
-        }
+        && let Some(message) = value.get("message").and_then(serde_json::Value::as_str)
+    {
+        return sanitize_agent_feedback_message(message, target_path);
+    }
 
     if let Some(json_text) = extract_json_object(text.trim())
         && let Ok(value) = serde_json::from_str::<serde_json::Value>(json_text)
-            && let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
-                return sanitize_agent_feedback_message(message, target_path);
-            }
+        && let Some(message) = value.get("message").and_then(serde_json::Value::as_str)
+    {
+        return sanitize_agent_feedback_message(message, target_path);
+    }
 
     sanitize_agent_feedback_message(&text, target_path)
 }

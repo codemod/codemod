@@ -349,9 +349,10 @@ fn strip_error_prefixes(message: &str) -> String {
         }
 
         if let Some(rest) = current.strip_prefix("Failed to process ")
-            && let Some((_, error)) = rest.split_once(": ") {
-                current = error.trim();
-            }
+            && let Some((_, error)) = rest.split_once(": ")
+        {
+            current = error.trim();
+        }
 
         cleaned = current.to_string();
         if cleaned == before {

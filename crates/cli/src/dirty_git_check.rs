@@ -164,8 +164,8 @@ mod tests {
         DirtyGitApprovalCallback, DirtyGitApprovalKind, DirtyGitApprovalRequest,
     };
     use std::path::Path;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn rejected_dirty_git_approval_does_not_cache_path() {

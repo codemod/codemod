@@ -366,15 +366,16 @@ impl<'a> JssgExecutionService<'a> {
         for file_path in &target_files {
             if file_path.is_file()
                 && let Ok(content) = std::fs::read_to_string(file_path)
-                    && let Err(e) = provider.notify_file_processed(file_path, &content) {
-                        slog!(
-                            logger,
-                            debug,
-                            "Failed to pre-index file {} for semantic analysis: {}",
-                            file_path.display(),
-                            e
-                        );
-                    }
+                && let Err(e) = provider.notify_file_processed(file_path, &content)
+            {
+                slog!(
+                    logger,
+                    debug,
+                    "Failed to pre-index file {} for semantic analysis: {}",
+                    file_path.display(),
+                    e
+                );
+            }
         }
 
         if let Some(task_id) = task_log_task_id {
@@ -1209,14 +1210,16 @@ impl<'a> JssgExecutionService<'a> {
         let attempted_files = attempted_file_count.load(Ordering::Relaxed);
         let failed_files = failed_file_count.load(Ordering::Relaxed);
         let succeeded_files = succeeded_file_count.load(Ordering::Relaxed);
-        if attempted_files > 0 && failed_files == attempted_files && succeeded_files == 0
+        if attempted_files > 0
+            && failed_files == attempted_files
+            && succeeded_files == 0
             && let Some(message) = execution_failure_message
                 .lock()
                 .ok()
                 .and_then(|message| message.clone())
-            {
-                return Err(Error::StepExecution(message));
-            }
+        {
+            return Err(Error::StepExecution(message));
+        }
 
         if canceled_during_execution.load(Ordering::Acquire) {
             if let Some(message) = execution_failure_message
@@ -1249,43 +1252,43 @@ impl<'a> JssgExecutionService<'a> {
                 .workflow_run_config()
                 .execution
                 .skip_state_writes
-                && !config.dry_run
-            {
-                let persistable = shared_state_context.get_persistable();
-                let removals = shared_state_context.get_removals();
+            && !config.dry_run
+        {
+            let persistable = shared_state_context.get_persistable();
+            let removals = shared_state_context.get_removals();
 
-                if !persistable.is_empty() || !removals.is_empty() {
-                    let mut fields = HashMap::new();
-                    for (key, value) in persistable {
-                        fields.insert(
-                            key,
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(value),
-                            },
-                        );
-                    }
-                    for key in removals {
-                        fields.insert(
-                            key,
-                            FieldDiff {
-                                operation: DiffOperation::Remove,
-                                value: None,
-                            },
-                        );
-                    }
-
-                    self.engine
-                        .state_adapter()
-                        .lock()
-                        .await
-                        .apply_state_diff(&StateDiff {
-                            workflow_run_id: wf_run_id,
-                            fields,
-                        })
-                        .await?;
+            if !persistable.is_empty() || !removals.is_empty() {
+                let mut fields = HashMap::new();
+                for (key, value) in persistable {
+                    fields.insert(
+                        key,
+                        FieldDiff {
+                            operation: DiffOperation::Update,
+                            value: Some(value),
+                        },
+                    );
                 }
+                for key in removals {
+                    fields.insert(
+                        key,
+                        FieldDiff {
+                            operation: DiffOperation::Remove,
+                            value: None,
+                        },
+                    );
+                }
+
+                self.engine
+                    .state_adapter()
+                    .lock()
+                    .await
+                    .apply_state_diff(&StateDiff {
+                        workflow_run_id: wf_run_id,
+                        fields,
+                    })
+                    .await?;
             }
+        }
 
         Ok(())
     }

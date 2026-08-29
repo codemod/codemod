@@ -62,14 +62,16 @@ pub(crate) fn prompt_for_overwrite_confirmation() -> std::result::Result<bool, H
 
 pub(crate) fn format_output_path(path: &Path) -> String {
     if let Ok(current_dir) = std::env::current_dir()
-        && let Ok(relative_path) = path.strip_prefix(current_dir) {
-            return relative_path.display().to_string();
-        }
+        && let Ok(relative_path) = path.strip_prefix(current_dir)
+    {
+        return relative_path.display().to_string();
+    }
 
     if let Some(home_dir) = dirs::home_dir()
-        && let Ok(home_relative_path) = path.strip_prefix(home_dir) {
-            return format!("~/{}", home_relative_path.display());
-        }
+        && let Ok(home_relative_path) = path.strip_prefix(home_dir)
+    {
+        return format!("~/{}", home_relative_path.display());
+    }
 
     path.display().to_string()
 }

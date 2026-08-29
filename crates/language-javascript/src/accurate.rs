@@ -5,8 +5,8 @@ use crate::error::JsSemanticError;
 use crate::oxc_adapter::{find_symbol_at_range, parse_and_analyze};
 use crate::vfs_fs::VfsFileSystem;
 use language_core::{
-    filesystem, ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
-    ReferencesResult, SemanticResult, SymbolLocation,
+    ByteRange, DefinitionKind, DefinitionOptions, DefinitionResult, FileReferences,
+    ReferencesResult, SemanticResult, SymbolLocation, filesystem,
 };
 use oxc_resolver::{
     Resolution, ResolveError, ResolveOptions, Resolver, ResolverGeneric, TsconfigDiscovery,
@@ -378,18 +378,19 @@ impl AccurateAnalyzer {
             .find(|r| r.range.start <= range.start && r.range.end >= range.end);
 
         if let Some(ref_info) = reference
-            && let Some(symbol) = file_symbols.find_symbol_by_id(ref_info.symbol_id) {
-                return Ok(Some(DefinitionResult::new(
-                    SymbolLocation::new(
-                        canonical.clone(),
-                        symbol.range,
-                        symbol.kind,
-                        symbol.name.clone(),
-                    ),
-                    content.to_string(),
-                    DefinitionKind::Local,
-                )));
-            }
+            && let Some(symbol) = file_symbols.find_symbol_by_id(ref_info.symbol_id)
+        {
+            return Ok(Some(DefinitionResult::new(
+                SymbolLocation::new(
+                    canonical.clone(),
+                    symbol.range,
+                    symbol.kind,
+                    symbol.name.clone(),
+                ),
+                content.to_string(),
+                DefinitionKind::Local,
+            )));
+        }
 
         // Check if this is an import
         if let Some(import) = file_symbols.find_import_at(range) {
@@ -507,48 +508,48 @@ impl AccurateAnalyzer {
                             // Try to resolve the import
                             if let Ok(resolved) =
                                 self.resolve_module(&import.module_specifier, &cached_path)
-                                && resolved == canonical {
-                                    // This file imports from our file
-                                    let matches_name = import
-                                        .imported_name
-                                        .as_ref()
-                                        .map(|n| n == &sym.name)
-                                        .unwrap_or(false)
-                                        || import.local_name == sym.name;
+                                && resolved == canonical
+                            {
+                                // This file imports from our file
+                                let matches_name = import
+                                    .imported_name
+                                    .as_ref()
+                                    .map(|n| n == &sym.name)
+                                    .unwrap_or(false)
+                                    || import.local_name == sym.name;
 
-                                    if matches_name {
-                                        files_map.entry(cached_path.clone()).or_default().push(
-                                            SymbolLocation::new(
-                                                cached_path.clone(),
-                                                import.range,
-                                                language_core::SymbolKind::Import,
-                                                import.local_name.clone(),
-                                            ),
-                                        );
+                                if matches_name {
+                                    files_map.entry(cached_path.clone()).or_default().push(
+                                        SymbolLocation::new(
+                                            cached_path.clone(),
+                                            import.range,
+                                            language_core::SymbolKind::Import,
+                                            import.local_name.clone(),
+                                        ),
+                                    );
 
-                                        // Also find references to this import in the file
-                                        let import_symbol = other_symbols
-                                            .symbols
-                                            .iter()
-                                            .find(|s| s.name == import.local_name);
+                                    // Also find references to this import in the file
+                                    let import_symbol = other_symbols
+                                        .symbols
+                                        .iter()
+                                        .find(|s| s.name == import.local_name);
 
-                                        if let Some(imp_sym) = import_symbol {
-                                            for ref_in_other in
-                                                other_symbols.find_references_to(imp_sym.symbol_id)
-                                            {
-                                                files_map
-                                                    .entry(cached_path.clone())
-                                                    .or_default()
-                                                    .push(SymbolLocation::new(
-                                                        cached_path.clone(),
-                                                        ref_in_other.range,
-                                                        sym.kind,
-                                                        import.local_name.clone(),
-                                                    ));
-                                            }
+                                    if let Some(imp_sym) = import_symbol {
+                                        for ref_in_other in
+                                            other_symbols.find_references_to(imp_sym.symbol_id)
+                                        {
+                                            files_map.entry(cached_path.clone()).or_default().push(
+                                                SymbolLocation::new(
+                                                    cached_path.clone(),
+                                                    ref_in_other.range,
+                                                    sym.kind,
+                                                    import.local_name.clone(),
+                                                ),
+                                            );
                                         }
                                     }
                                 }
+                            }
                         }
                     }
                 }
@@ -658,18 +659,19 @@ impl AccurateAnalyzer {
 
         if let Some(export) = file_symbols.find_export_by_name(export_name) {
             if let Some(local_id) = export.local_symbol_id
-                && let Some(symbol) = file_symbols.find_symbol_by_id(local_id) {
-                    return Ok(Some(DefinitionResult::new(
-                        SymbolLocation::new(
-                            resolved_path,
-                            symbol.range,
-                            symbol.kind,
-                            symbol.name.clone(),
-                        ),
-                        file_content,
-                        DefinitionKind::External,
-                    )));
-                }
+                && let Some(symbol) = file_symbols.find_symbol_by_id(local_id)
+            {
+                return Ok(Some(DefinitionResult::new(
+                    SymbolLocation::new(
+                        resolved_path,
+                        symbol.range,
+                        symbol.kind,
+                        symbol.name.clone(),
+                    ),
+                    file_content,
+                    DefinitionKind::External,
+                )));
+            }
             return Ok(Some(DefinitionResult::new(
                 SymbolLocation::new(
                     resolved_path,
@@ -683,19 +685,18 @@ impl AccurateAnalyzer {
         }
 
         // Check for default export
-        if is_default
-            && let Some(export) = file_symbols.get_default_export() {
-                return Ok(Some(DefinitionResult::new(
-                    SymbolLocation::new(
-                        resolved_path,
-                        export.range,
-                        language_core::SymbolKind::Export,
-                        "default".to_string(),
-                    ),
-                    file_content,
-                    DefinitionKind::External,
-                )));
-            }
+        if is_default && let Some(export) = file_symbols.get_default_export() {
+            return Ok(Some(DefinitionResult::new(
+                SymbolLocation::new(
+                    resolved_path,
+                    export.range,
+                    language_core::SymbolKind::Export,
+                    "default".to_string(),
+                ),
+                file_content,
+                DefinitionKind::External,
+            )));
+        }
 
         Ok(None)
     }

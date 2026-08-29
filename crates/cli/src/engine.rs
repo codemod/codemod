@@ -7,7 +7,7 @@ use butterflow_core::config::{
     AgentSelectionCallback, DryRunCallback, DryRunChange, InstallSkillExecutor, PreRunCallback,
     ShellCommandApprovalCallback, WorkflowRunConfig,
 };
-use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
+use butterflow_core::diff::{DiffConfig, DiffMetadata, FileDiff, generate_unified_diff};
 use butterflow_core::engine::Engine;
 use butterflow_core::execution::ProgressCallback;
 use butterflow_core::registry::{RegistryClient, RegistryConfig};
@@ -279,16 +279,16 @@ pub fn create_engine(
         std::env::var("BUTTERFLOW_API_AUTH_TOKEN")
             .ok()
             .unwrap_or_default(),
-    )
-        && backend == "cloud" {
-            // Create API state adapter
-            let state_adapter = Box::new(CloudStateAdapter::new(endpoint, auth_token));
-            let mut engine = Engine::with_state_adapter(state_adapter, config.clone());
-            if progress_owns_terminal {
-                engine.set_text_log_fallthrough(false);
-            }
-            return Ok((engine, config.clone()));
+    ) && backend == "cloud"
+    {
+        // Create API state adapter
+        let state_adapter = Box::new(CloudStateAdapter::new(endpoint, auth_token));
+        let mut engine = Engine::with_state_adapter(state_adapter, config.clone());
+        if progress_owns_terminal {
+            engine.set_text_log_fallthrough(false);
         }
+        return Ok((engine, config.clone()));
+    }
 
     let mut engine = Engine::with_workflow_run_config(config.clone());
     if progress_owns_terminal {

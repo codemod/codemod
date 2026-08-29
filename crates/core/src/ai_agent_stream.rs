@@ -94,7 +94,7 @@ impl AgentStreamNormalizer for ClaudeStreamNormalizer {
             Some("system") => normalize_claude_system_event(&value),
             Some("rate_limit_event") => Some(normalize_claude_rate_limit_event(&value)),
             Some("result") | Some("assistant") | Some("user") => {
-                return Some(NormalizedAgentLine::Suppress)
+                return Some(NormalizedAgentLine::Suppress);
             }
             _ => return Some(NormalizedAgentLine::Suppress),
         };
@@ -122,9 +122,10 @@ impl ClaudeStreamNormalizer {
                     );
                     self.active_tool_input.clear();
                     if let Some(input) = block.get("input").filter(|input| !input.is_null())
-                        && !input.as_object().is_some_and(serde_json::Map::is_empty) {
-                            self.active_tool_input = input.to_string();
-                        }
+                        && !input.as_object().is_some_and(serde_json::Map::is_empty)
+                    {
+                        self.active_tool_input = input.to_string();
+                    }
                 }
                 None
             }

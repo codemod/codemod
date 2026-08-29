@@ -1,4 +1,4 @@
-use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
+use rmcp::{ErrorData as McpError, handler::server::wrapper::Parameters, model::*, schemars, tool};
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct GetNodeTypesRequest {
@@ -93,7 +93,7 @@ impl Default for NodeTypesHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_node_types_response, NodeTypesHandler};
+    use super::{NodeTypesHandler, format_node_types_response};
 
     #[test]
     fn xml_language_dispatch_returns_node_types() {
@@ -107,9 +107,11 @@ mod tests {
     #[test]
     fn unsupported_language_returns_none() {
         let handler = NodeTypesHandler::new();
-        assert!(handler
-            .get_node_types_for_language("not-a-language")
-            .is_none());
+        assert!(
+            handler
+                .get_node_types_for_language("not-a-language")
+                .is_none()
+        );
     }
 
     #[test]

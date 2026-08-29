@@ -10,7 +10,7 @@ use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::{RuleConfig, SerializableRuleConfig};
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use rquickjs::{async_with, AsyncContext, AsyncRuntime};
+use rquickjs::{AsyncContext, AsyncRuntime, async_with};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{FromJs, IntoJs};
 use std::collections::{HashMap, HashSet};

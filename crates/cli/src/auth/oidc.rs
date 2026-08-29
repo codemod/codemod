@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{Duration, Utc};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
@@ -10,7 +10,7 @@ use oauth2::{
     RedirectUrl, Scope, TokenResponse, TokenUrl,
 };
 use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use reqwest::Client;
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -353,55 +353,53 @@ async fn handle_callback(
             let uri = req.uri();
 
             if uri.path() == "/callback"
-                && let Some(query) = uri.query() {
-                    let params: HashMap<String, String> =
-                        url::form_urlencoded::parse(query.as_bytes())
-                            .into_owned()
-                            .collect();
+                && let Some(query) = uri.query()
+            {
+                let params: HashMap<String, String> = url::form_urlencoded::parse(query.as_bytes())
+                    .into_owned()
+                    .collect();
 
-                    if let (Some(code), Some(state)) = (params.get("code"), params.get("state")) {
-                        // Send callback data
-                        let mut tx_guard = tx.lock().await;
-                        if let Some(sender) = tx_guard.take() {
-                            let _ = sender.send(CallbackData {
-                                code: code.clone(),
-                                state: state.clone(),
-                            });
-                        }
-
-                        // Return success page
-                        let html = format!(
-                            include_str!("html/post-login.html.txt"),
-                            title = "You're signed in",
-                            description =
-                                "You can now close this browser tab and return to the CLI."
-                        );
-
-                        return Ok(Response::builder()
-                            .status(StatusCode::OK)
-                            .header("Content-Type", "text/html")
-                            .body(Body::from(html))
-                            .unwrap());
-                    } else if params.contains_key("error") {
-                        let error = params.get("error").unwrap();
-                        let default_error = "Unknown error".to_string();
-                        let error_description =
-                            params.get("error_description").unwrap_or(&default_error);
-
-                        let html = format!(
-                            include_str!("html/post-login.html.txt"),
-                            title = "Authentication Failed",
-                            description =
-                                format!("Error: {error}<br>Description: {error_description}")
-                        );
-
-                        return Ok(Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .header("Content-Type", "text/html")
-                            .body(Body::from(html))
-                            .unwrap());
+                if let (Some(code), Some(state)) = (params.get("code"), params.get("state")) {
+                    // Send callback data
+                    let mut tx_guard = tx.lock().await;
+                    if let Some(sender) = tx_guard.take() {
+                        let _ = sender.send(CallbackData {
+                            code: code.clone(),
+                            state: state.clone(),
+                        });
                     }
+
+                    // Return success page
+                    let html = format!(
+                        include_str!("html/post-login.html.txt"),
+                        title = "You're signed in",
+                        description = "You can now close this browser tab and return to the CLI."
+                    );
+
+                    return Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "text/html")
+                        .body(Body::from(html))
+                        .unwrap());
+                } else if params.contains_key("error") {
+                    let error = params.get("error").unwrap();
+                    let default_error = "Unknown error".to_string();
+                    let error_description =
+                        params.get("error_description").unwrap_or(&default_error);
+
+                    let html = format!(
+                        include_str!("html/post-login.html.txt"),
+                        title = "Authentication Failed",
+                        description = format!("Error: {error}<br>Description: {error_description}")
+                    );
+
+                    return Ok(Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header("Content-Type", "text/html")
+                        .body(Body::from(html))
+                        .unwrap());
                 }
+            }
 
             // Default response for unknown paths
             Ok(Response::builder()

@@ -186,15 +186,17 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     // For workspace scope semantic analysis, pre-index all target files
     if let Some(ref provider) = semantic_provider
-        && provider.mode() == language_core::ProviderMode::WorkspaceScope {
-            let target_files: Vec<PathBuf> = config.collect_files();
-            for file_path in &target_files {
-                if file_path.is_file()
-                    && let Ok(content) = std::fs::read_to_string(file_path) {
-                        let _ = provider.notify_file_processed(file_path, &content);
-                    }
+        && provider.mode() == language_core::ProviderMode::WorkspaceScope
+    {
+        let target_files: Vec<PathBuf> = config.collect_files();
+        for file_path in &target_files {
+            if file_path.is_file()
+                && let Ok(content) = std::fs::read_to_string(file_path)
+            {
+                let _ = provider.notify_file_processed(file_path, &content);
             }
         }
+    }
 
     let capabilities_for_closure = config.capabilities.clone();
     let language: codemod_sandbox::CodemodLang = args

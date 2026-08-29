@@ -2,18 +2,18 @@ use anyhow::Result;
 use ast_grep_config::CombinedScan;
 use butterflow_core::execution::CodemodExecutionConfig;
 use clap::Args;
-use codemod_sandbox::sandbox::engine::{extract_selector_with_quickjs, SelectorEngineOptions};
+use codemod_sandbox::CodemodLang;
+use codemod_sandbox::sandbox::engine::{SelectorEngineOptions, extract_selector_with_quickjs};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::scan_file_with_combined_scan;
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use codemod_sandbox::CodemodLang;
 use std::sync::Arc;
 use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
 
-use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+use crate::utils::resolve_capabilities::{ResolveCapabilitiesArgs, resolve_capabilities};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -118,10 +118,11 @@ pub async fn handler(args: &Command) -> Result<()> {
         if let Some(cs) = &combined_scan_cloned {
             let result = scan_file_with_combined_scan(file_path, cs.as_ref(), false);
             if let Ok((matches, _, _)) = result
-                && !matches.is_empty() {
-                    let file_path_string = file_path.display().to_string();
-                    println!("[Applicable] {file_path_string}");
-                }
+                && !matches.is_empty()
+            {
+                let file_path_string = file_path.display().to_string();
+                println!("[Applicable] {file_path_string}");
+            }
         }
     });
 

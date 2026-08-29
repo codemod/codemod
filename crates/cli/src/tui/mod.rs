@@ -11,23 +11,23 @@ use arboard::Clipboard;
 use butterflow_core::engine::Engine;
 use butterflow_core::execution::ProgressCallback;
 use butterflow_core::workflow_runtime::{
-    publish_event, WorkflowCommand, WorkflowEvent, WorkflowSession,
+    WorkflowCommand, WorkflowEvent, WorkflowSession, publish_event,
 };
 use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use crossterm::{execute, ExecutableCommand};
+use crossterm::{ExecutableCommand, execute};
 use futures::StreamExt;
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
+use crate::TelemetrySenderMutex;
 use crate::commands::{nested_codemod_run_observer, persisted_workflow_root_name};
 use crate::tui::app::{ApprovalPrompt, Screen, TuiState};
 use crate::tui::event::AppEvent;
-use crate::TelemetrySenderMutex;
 
 struct TerminalGuard;
 
@@ -461,11 +461,12 @@ async fn run_tui_loop(
         }
 
         if workflow_drain.needs_snapshot_reconcile
-            && let Some(session) = runtime.session.as_ref() {
-                state.reduce(AppEvent::Snapshot(session.handle().load_snapshot().await?));
-                state_changed = true;
-                perf_counters.inc_workflow_lag_reconciles();
-            }
+            && let Some(session) = runtime.session.as_ref()
+        {
+            state.reduce(AppEvent::Snapshot(session.handle().load_snapshot().await?));
+            state_changed = true;
+            perf_counters.inc_workflow_lag_reconciles();
+        }
         if workflow_drain.receiver_closed {
             runtime.receiver = None;
             state_changed = true;
@@ -840,12 +841,12 @@ async fn bind_session(
 #[cfg(test)]
 mod tests {
     use super::{
-        reduce_workflow_receiver, should_exit_on_interrupt, should_redraw,
-        task_list_viewport_height, TuiPerfCounters,
+        TuiPerfCounters, reduce_workflow_receiver, should_exit_on_interrupt, should_redraw,
+        task_list_viewport_height,
     };
     use crate::tui::app::{Screen, TuiState};
     use butterflow_core::workflow_runtime::WorkflowEvent;
-    use butterflow_models::{workflow::Workflow, WorkflowRun, WorkflowStatus};
+    use butterflow_models::{WorkflowRun, WorkflowStatus, workflow::Workflow};
     use chrono::Utc;
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::time::{Duration, Instant};

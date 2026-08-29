@@ -118,9 +118,10 @@ impl TestConfig {
         let mut configs = Vec::new();
         loop {
             if let Some(stop_path) = stop_path
-                && current_path == *stop_path {
-                    break;
-                }
+                && current_path == *stop_path
+            {
+                break;
+            }
             if let Some(config) = Self::load_from_path(&current_path)? {
                 configs.push(config);
             }

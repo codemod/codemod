@@ -202,9 +202,10 @@ impl FileSystemTestCase {
             let path = entry.path();
 
             if path.is_dir()
-                && let Ok(test_case) = Self::from_directory(&path, extensions, expected_extension) {
-                    test_cases.push(test_case);
-                }
+                && let Ok(test_case) = Self::from_directory(&path, extensions, expected_extension)
+            {
+                test_cases.push(test_case);
+            }
         }
 
         test_cases.sort_by(|a, b| a.name.cmp(&b.name));
@@ -235,10 +236,11 @@ impl FileSystemTestCase {
 
             for input_file_path in input_files {
                 if let Ok(input_file) = TestFile::from_path(&input_file_path)
-                    && let Some(ext) = input_file_path.extension().and_then(|e| e.to_str()) {
-                        let key = PathBuf::from(format!("input.{}", ext));
-                        input_files_map.insert(key, input_file);
-                    }
+                    && let Some(ext) = input_file_path.extension().and_then(|e| e.to_str())
+                {
+                    let key = PathBuf::from(format!("input.{}", ext));
+                    input_files_map.insert(key, input_file);
+                }
             }
 
             for expected_file_path in expected_files {
@@ -459,9 +461,10 @@ fn collect_files_in_directory(
         }
 
         if let Some(extensions) = extensions
-            && !has_matching_extension(path, extensions) {
-                continue;
-            }
+            && !has_matching_extension(path, extensions)
+        {
+            continue;
+        }
 
         if let Ok(file) = TestFile::from_path_with_base(path, dir) {
             files.insert(file.relative_path.clone(), file);

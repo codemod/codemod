@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{Duration, sleep, timeout};
 
 /// Warning information for potentially dangerous commands
 #[derive(Debug)]
@@ -44,11 +44,10 @@ fn check_windows_command_safety(command: &str) -> Option<CommandWarning> {
     {
         return Some(CommandWarning {
             risk: "Recursive operations can be slow on large directory structures".to_string(),
-            alternatives:
-                "• Start with non-recursive commands to understand the structure\n\
+            alternatives: "• Start with non-recursive commands to understand the structure\n\
                           • Use specific paths instead of full recursive searches\n\
                           • Consider excluding large directories like target/, node_modules/, .git/"
-                    .to_string(),
+                .to_string(),
         });
     }
 
@@ -145,9 +144,10 @@ impl ShellSession {
         }
 
         if let Some(mut process) = self.process.take()
-            && process.try_wait().unwrap_or(None).is_none() {
-                std::mem::drop(process.kill());
-            }
+            && process.try_wait().unwrap_or(None).is_none()
+        {
+            std::mem::drop(process.kill());
+        }
         self.started = false;
     }
 
@@ -385,15 +385,16 @@ impl BashTool {
 
         // Windows-specific safety check for potentially dangerous recursive commands
         if cfg!(target_os = "windows")
-            && let Some(warning) = check_windows_command_safety(&command) {
-                return Ok(ToolResult::error(
-                    &call.id,
-                    format!(
-                        "⚠️  Potentially dangerous command detected: {}\n\nSafer alternatives:\n{}",
-                        warning.risk, warning.alternatives
-                    ),
-                ));
-            }
+            && let Some(warning) = check_windows_command_safety(&command)
+        {
+            return Ok(ToolResult::error(
+                &call.id,
+                format!(
+                    "⚠️  Potentially dangerous command detected: {}\n\nSafer alternatives:\n{}",
+                    warning.risk, warning.alternatives
+                ),
+            ));
+        }
 
         // Ensure session exists and is started
         let needs_start = {

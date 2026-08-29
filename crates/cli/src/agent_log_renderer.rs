@@ -656,7 +656,7 @@ fn flush_message_buffer(rendered: &mut Vec<String>, message_buffer: &mut String)
 
 #[cfg(test)]
 mod tests {
-    use super::{render_agent_event_payload_styled, RenderedAgentEvent};
+    use super::{RenderedAgentEvent, render_agent_event_payload_styled};
 
     #[test]
     fn delta_messages_render_as_fragments_without_repeating_prefix() {

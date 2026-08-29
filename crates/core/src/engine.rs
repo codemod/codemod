@@ -836,9 +836,10 @@ impl Engine {
         );
         logger.agent_event(starting_event.clone());
         if let Some(callback) = progress_callback.as_ref()
-            && let Ok(payload) = serde_json::to_string(&starting_event) {
-                (callback.callback)(&task_id, &payload, "agent", None, &0);
-            }
+            && let Ok(payload) = serde_json::to_string(&starting_event)
+        {
+            (callback.callback)(&task_id, &payload, "agent", None, &0);
+        }
 
         let mut child = cmd.spawn().map_err(|error| {
             Error::StepExecution(format!("Failed to spawn agent '{}': {}", canonical, error))
@@ -879,9 +880,10 @@ impl Engine {
                     stream_seen.store(true, Ordering::Relaxed);
                     logger.agent_event(event.clone());
                     if let Some(callback) = progress_callback.as_ref()
-                        && let Ok(payload) = serde_json::to_string(&event) {
-                            (callback.callback)(&task_id, &payload, "agent", None, &0);
-                        }
+                        && let Ok(payload) = serde_json::to_string(&event)
+                    {
+                        (callback.callback)(&task_id, &payload, "agent", None, &0);
+                    }
                 }
             })
         });
@@ -920,9 +922,10 @@ impl Engine {
                     stream_seen.store(true, Ordering::Relaxed);
                     logger.agent_event(event.clone());
                     if let Some(callback) = progress_callback.as_ref()
-                        && let Ok(payload) = serde_json::to_string(&event) {
-                            (callback.callback)(&task_id, &payload, "agent", None, &0);
-                        }
+                        && let Ok(payload) = serde_json::to_string(&event)
+                    {
+                        (callback.callback)(&task_id, &payload, "agent", None, &0);
+                    }
                 }
             })
         });
@@ -1332,25 +1335,25 @@ impl Engine {
                             .nodes
                             .iter()
                             .find(|node| node.id == task.node_id)
-                            && let Err(error) = ManagedGitService::prepare_task_worktree(
-                                &mut engine,
-                                task_id,
-                                &task,
-                                &workflow_run,
-                                node,
-                                &shared_worktree_cleanup_for_task,
-                            )
-                            .await
-                            {
-                                let message = error.to_string();
-                                let _ = engine.append_task_log(task_id, &message).await;
-                                engine.emit_error(format!(
-                                    "Failed to prepare git worktree for task {}: {}",
-                                    task_id, message
-                                ));
-                                let _ = engine.mark_task_as_failed(task_id, &message).await;
-                                return;
-                            }
+                        && let Err(error) = ManagedGitService::prepare_task_worktree(
+                            &mut engine,
+                            task_id,
+                            &task,
+                            &workflow_run,
+                            node,
+                            &shared_worktree_cleanup_for_task,
+                        )
+                        .await
+                    {
+                        let message = error.to_string();
+                        let _ = engine.append_task_log(task_id, &message).await;
+                        engine.emit_error(format!(
+                            "Failed to prepare git worktree for task {}: {}",
+                            task_id, message
+                        ));
+                        let _ = engine.mark_task_as_failed(task_id, &message).await;
+                        return;
+                    }
                 }
 
                 let task_timeout = tokio::time::Duration::from_secs(45 * 60);
@@ -2640,53 +2643,52 @@ impl Engine {
                         task_id
                     );
 
-                    if manage_git
-                        && let Some(commit_config) = &step.commit {
-                            let resolved_message = resolve_string_with_expression(
-                                &commit_config.message,
-                                &resolved_params,
-                                &state,
-                                task.matrix_values.as_ref(),
-                                None,
-                                task_expr_ctx.as_ref(),
-                            )
-                            .unwrap_or_else(|_| commit_config.message.clone());
+                    if manage_git && let Some(commit_config) = &step.commit {
+                        let resolved_message = resolve_string_with_expression(
+                            &commit_config.message,
+                            &resolved_params,
+                            &state,
+                            task.matrix_values.as_ref(),
+                            None,
+                            task_expr_ctx.as_ref(),
+                        )
+                        .unwrap_or_else(|_| commit_config.message.clone());
 
-                            let paths = commit_config.add.clone().unwrap_or_default();
-                            match crate::git_ops::commit(
-                                &resolved_message,
-                                &paths,
-                                commit_config.allow_empty,
-                                &self.workflow_run_config.execution.target_path,
-                            )
-                            .await
-                            {
-                                Ok(true) => {
-                                    had_commit_checkpoint = true;
-                                    slog!(
-                                        step_logger,
-                                        info,
-                                        "Commit checkpoint created: {}",
-                                        resolved_message
-                                    );
-                                }
-                                Ok(false) => {
-                                    slog!(
-                                        step_logger,
-                                        info,
-                                        "Commit checkpoint skipped (no changes): {}",
-                                        resolved_message
-                                    );
-                                }
-                                Err(e) => {
-                                    self.emit_error(format!(
-                                        "Commit checkpoint failed for step '{}': {}",
-                                        step.name, e
-                                    ));
-                                    return Err(e);
-                                }
+                        let paths = commit_config.add.clone().unwrap_or_default();
+                        match crate::git_ops::commit(
+                            &resolved_message,
+                            &paths,
+                            commit_config.allow_empty,
+                            &self.workflow_run_config.execution.target_path,
+                        )
+                        .await
+                        {
+                            Ok(true) => {
+                                had_commit_checkpoint = true;
+                                slog!(
+                                    step_logger,
+                                    info,
+                                    "Commit checkpoint created: {}",
+                                    resolved_message
+                                );
+                            }
+                            Ok(false) => {
+                                slog!(
+                                    step_logger,
+                                    info,
+                                    "Commit checkpoint skipped (no changes): {}",
+                                    resolved_message
+                                );
+                            }
+                            Err(e) => {
+                                self.emit_error(format!(
+                                    "Commit checkpoint failed for step '{}': {}",
+                                    step.name, e
+                                ));
+                                return Err(e);
                             }
                         }
+                    }
                 }
                 Err(Error::Deferred(message)) => {
                     step_logger.step_end("deferred", step_start_time.elapsed().as_millis() as u64);
@@ -2907,11 +2909,11 @@ impl Engine {
                             );
                             if let Ok(mut first_failure_message) =
                                 first_failure_message_for_closure.lock()
-                                && first_failure_message.is_none() {
-                                    *first_failure_message = Some(format!(
-                                        "Failed to process {execution_title}: {message}"
-                                    ));
-                                }
+                                && first_failure_message.is_none()
+                            {
+                                *first_failure_message =
+                                    Some(format!("Failed to process {execution_title}: {message}"));
+                            }
                         };
 
                         // Execute ast-grep on this file
@@ -3028,14 +3030,16 @@ impl Engine {
                 let attempted_files = attempted_file_count.load(Ordering::Relaxed);
                 let failed_files = failed_file_count.load(Ordering::Relaxed);
                 let succeeded_files = succeeded_file_count.load(Ordering::Relaxed);
-                if attempted_files > 0 && failed_files == attempted_files && succeeded_files == 0
+                if attempted_files > 0
+                    && failed_files == attempted_files
+                    && succeeded_files == 0
                     && let Some(message) = first_failure_message
                         .lock()
                         .ok()
                         .and_then(|message| message.clone())
-                    {
-                        return Err(Box::new(std::io::Error::other(message)));
-                    }
+                {
+                    return Err(Box::new(std::io::Error::other(message)));
+                }
 
                 Ok(())
             },
@@ -3231,62 +3235,62 @@ impl Engine {
                 .workflow_run_config
                 .interaction
                 .agent_selection_callback
-            {
-                let agents = discover_installed_agents();
-                // Loop to allow preview → re-select flow
-                let mut selection_result = callback(&agents);
-                loop {
-                    match selection_result.as_deref() {
-                        Some("__preview_prompt__") => {
-                            // Show the prompt, then re-prompt for agent selection
-                            self.emit_ai_instructions(
-                                logger,
-                                ai_config.system_prompt.as_deref(),
-                                &resolved_prompt,
-                            );
-                            if !self.workflow_run_config.output.quiet {
-                                logger.user_line("");
-                            }
-                            selection_result = callback(&agents);
-                            continue;
+        {
+            let agents = discover_installed_agents();
+            // Loop to allow preview → re-select flow
+            let mut selection_result = callback(&agents);
+            loop {
+                match selection_result.as_deref() {
+                    Some("__preview_prompt__") => {
+                        // Show the prompt, then re-prompt for agent selection
+                        self.emit_ai_instructions(
+                            logger,
+                            ai_config.system_prompt.as_deref(),
+                            &resolved_prompt,
+                        );
+                        if !self.workflow_run_config.output.quiet {
+                            logger.user_line("");
                         }
-                        Some("__print_prompt__") => {
-                            debug!("User chose to print prompt and skip");
-                            self.emit_ai_instructions(
-                                logger,
-                                ai_config.system_prompt.as_deref(),
-                                &resolved_prompt,
-                            );
-                            return Ok(());
-                        }
-                        Some(selected) => {
-                            debug!("User selected agent: {}", selected);
-                            if let Some(executable) = find_agent_executable(selected) {
-                                return self
-                                    .launch_agent(
-                                        selected,
-                                        &executable,
-                                        ai_config.system_prompt.as_deref(),
-                                        &resolved_prompt,
-                                        logger,
-                                    )
-                                    .await;
-                            } else {
-                                slog!(
+                        selection_result = callback(&agents);
+                        continue;
+                    }
+                    Some("__print_prompt__") => {
+                        debug!("User chose to print prompt and skip");
+                        self.emit_ai_instructions(
+                            logger,
+                            ai_config.system_prompt.as_deref(),
+                            &resolved_prompt,
+                        );
+                        return Ok(());
+                    }
+                    Some(selected) => {
+                        debug!("User selected agent: {}", selected);
+                        if let Some(executable) = find_agent_executable(selected) {
+                            return self
+                                .launch_agent(
+                                    selected,
+                                    &executable,
+                                    ai_config.system_prompt.as_deref(),
+                                    &resolved_prompt,
                                     logger,
-                                    warn,
-                                    "Agent '{}' executable not found, falling back to built-in AI",
-                                    selected
-                                );
-                            }
-                        }
-                        None => {
-                            // User dismissed the selection — fall through to built-in AI
+                                )
+                                .await;
+                        } else {
+                            slog!(
+                                logger,
+                                warn,
+                                "Agent '{}' executable not found, falling back to built-in AI",
+                                selected
+                            );
                         }
                     }
-                    break;
+                    None => {
+                        // User dismissed the selection — fall through to built-in AI
+                    }
                 }
+                break;
             }
+        }
 
         debug!(
             "AI handoff mode=rig confidence={} agent={}",

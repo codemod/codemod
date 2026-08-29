@@ -3,10 +3,10 @@
 use rig::completion::Message;
 
 use crate::memory::compact::{
-    build_memory_packet, deterministic_prune, rebuild_history_with_memory, PruneResult,
-    RebuildStats,
+    PruneResult, RebuildStats, build_memory_packet, deterministic_prune,
+    rebuild_history_with_memory,
 };
-use crate::memory::history::{estimate_context_chars, HistoryDocument};
+use crate::memory::history::{HistoryDocument, estimate_context_chars};
 use crate::memory::semantic::SemanticDocument;
 use crate::memory::summarize::hierarchical_summarize;
 use crate::memory::{MemoryError, Result};
@@ -66,14 +66,16 @@ pub fn maybe_proactive_budget(
     let chars = estimate_context_chars(prompt, history);
 
     if let Some(snapshot) = usage_snapshot
-        && snapshot.context_chars > 0 && snapshot.total_tokens > 0 {
-            let estimated_tokens = ((chars as u128 * snapshot.total_tokens as u128)
-                / snapshot.context_chars as u128) as u64;
+        && snapshot.context_chars > 0
+        && snapshot.total_tokens > 0
+    {
+        let estimated_tokens = ((chars as u128 * snapshot.total_tokens as u128)
+            / snapshot.context_chars as u128) as u64;
 
-            if estimated_tokens > SOFT_CONTEXT_TOKEN_BUDGET {
-                return Some((chars, Some(estimated_tokens)));
-            }
+        if estimated_tokens > SOFT_CONTEXT_TOKEN_BUDGET {
+            return Some((chars, Some(estimated_tokens)));
         }
+    }
 
     if chars > SOFT_CONTEXT_CHAR_BUDGET {
         return Some((chars, None));
@@ -108,12 +110,13 @@ pub fn is_context_limit_error_text(message: &str) -> bool {
 
         if let Some(start) = message.find('{')
             && let Some(end) = message.rfind('}')
-                && end > start {
-                    let raw = &message[start..=end];
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
-                        parsed.push(value);
-                    }
-                }
+            && end > start
+        {
+            let raw = &message[start..=end];
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
+                parsed.push(value);
+            }
+        }
 
         parsed
     }

@@ -558,16 +558,17 @@ impl TuiState {
 
     pub fn task_progress_counts(&self, task: &Task) -> Option<(usize, usize)> {
         if let Some(progress) = self.task_progress.get(&task.id)
-            && let Some(total) = progress.total_files {
-                let processed = if task.status == TaskStatus::Completed
-                    || Self::task_transform_phase_finished(task)
-                {
-                    total
-                } else {
-                    progress.processed_files.min(total)
-                };
-                return Some((processed as usize, total as usize));
-            }
+            && let Some(total) = progress.total_files
+        {
+            let processed = if task.status == TaskStatus::Completed
+                || Self::task_transform_phase_finished(task)
+            {
+                total
+            } else {
+                progress.processed_files.min(total)
+            };
+            return Some((processed as usize, total as usize));
+        }
 
         let total = task.logs.iter().find_map(|line| {
             let prefix = "Starting js-ast-grep file loop (";
@@ -730,12 +731,13 @@ impl TuiState {
                 let mut lines = render_task_log_lines(&task.logs);
 
                 if task.status == TaskStatus::Failed
-                    && let Some(error) = task.error.as_deref() {
-                        let rendered_error = format!("Error: {error}");
-                        if !lines.iter().any(|line| line == &rendered_error) {
-                            lines.push(rendered_error);
-                        }
+                    && let Some(error) = task.error.as_deref()
+                {
+                    let rendered_error = format!("Error: {error}");
+                    if !lines.iter().any(|line| line == &rendered_error) {
+                        lines.push(rendered_error);
                     }
+                }
 
                 if lines.is_empty() {
                     "No logs yet".to_string()
@@ -925,9 +927,10 @@ impl TuiState {
                     run.status = status;
                 }
                 if let Some(run) = self.current_run.as_mut()
-                    && run.id == workflow_run_id {
-                        run.status = status;
-                    }
+                    && run.id == workflow_run_id
+                {
+                    run.status = status;
+                }
             }
             WorkflowEvent::TaskCreated { task, .. } => {
                 if let Some(existing) = self
@@ -1384,9 +1387,9 @@ fn is_agent_log_payload(line: &str) -> bool {
 mod tests {
     use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowEvent, WorkflowSnapshot};
     use butterflow_models::{
+        Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
         node::NodeType,
         step::{Step, StepAction, UseInstallSkill},
-        Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
     };
     use chrono::Utc;
     use serde_json::json;

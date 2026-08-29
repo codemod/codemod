@@ -1,13 +1,13 @@
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
-    detect_package_behavior_shape, expected_workflow_paths, validate_package_behavior_structure,
-    validate_skill_behavior, PackageBehaviorShape,
+    PackageBehaviorShape, detect_package_behavior_shape, expected_workflow_paths,
+    validate_package_behavior_structure, validate_skill_behavior,
 };
 use crate::utils::path_safety::resolve_relative_path_within_root;
 use crate::utils::rolldown_bundler::{RolldownBundler, RolldownBundlerConfig};
-use anyhow::{anyhow, Result};
-use butterflow_core::utils::validate_workflow;
+use anyhow::{Result, anyhow};
 use butterflow_core::Workflow;
+use butterflow_core::utils::validate_workflow;
 use butterflow_models::step::StepAction;
 use clap::Args;
 use codemod_llrt_capabilities::module_builder::supported_runtime_external_modules;
@@ -30,7 +30,7 @@ use crate::utils::skill_layout::expected_authored_skill_file;
 
 use crate::auth::TokenStorage;
 use crate::commands::TelemetrySenderExt;
-use crate::{TelemetrySenderMutex, CLI_VERSION};
+use crate::{CLI_VERSION, TelemetrySenderMutex};
 use codemod_telemetry::send_event::BaseEvent;
 
 #[derive(Args, Debug)]
@@ -1064,9 +1064,11 @@ nodes:
         let error = validate_package_structure(temp_dir.path(), &manifest).unwrap_err();
         assert!(error.to_string().contains("Invalid package name"));
         assert!(error.to_string().contains("characters long"));
-        assert!(error
-            .to_string()
-            .contains(&format!("maximum allowed is {}", MAX_PACKAGE_NAME_LENGTH)));
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("maximum allowed is {}", MAX_PACKAGE_NAME_LENGTH))
+        );
     }
 
     #[test]

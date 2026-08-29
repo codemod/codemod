@@ -182,12 +182,10 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                 }
                 if let Some(SemanticAnalysisConfig::Detailed(detailed)) = &js_step.semantic_analysis
                     && matches!(detailed.mode, SemanticAnalysisMode::Workspace)
-                        && let Some(root) = &detailed.root {
-                            validate_workflow_relative_path(
-                                root,
-                                "js-ast-grep.semantic_analysis.root",
-                            )?;
-                        }
+                    && let Some(root) = &detailed.root
+                {
+                    validate_workflow_relative_path(root, "js-ast-grep.semantic_analysis.root")?;
+                }
 
                 let js_file_path = package_path.join(js_step.js_file.trim());
                 if !js_file_path.exists() {
@@ -313,12 +311,14 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
     // Check matrix strategies
     for node in &workflow.nodes {
         if let Some(strategy) = &node.strategy
-            && strategy.values.is_none() && strategy.from_state.is_none() {
-                return Err(Error::WorkflowValidation(format!(
-                    "Matrix strategy for node {} requires either 'values' or 'from_state'",
-                    node.id
-                )));
-            }
+            && strategy.values.is_none()
+            && strategy.from_state.is_none()
+        {
+            return Err(Error::WorkflowValidation(format!(
+                "Matrix strategy for node {} requires either 'values' or 'from_state'",
+                node.id
+            )));
+        }
     }
 
     Ok(())
@@ -344,9 +344,9 @@ fn detect_cycles(nodes: &[Node]) -> Result<()> {
         if !visited.contains(node.id.as_str())
             && let Some(cycle) =
                 dfs_cycle_detect(&graph, node.id.as_str(), &mut visited, &mut in_progress)
-            {
-                return Err(Error::CyclicDependency(cycle));
-            }
+        {
+            return Err(Error::CyclicDependency(cycle));
+        }
     }
 
     Ok(())
@@ -372,20 +372,22 @@ fn dfs_cycle_detect<'a>(
                 while current != node {
                     for &n in graph.keys() {
                         if let Some(deps) = graph.get(n)
-                            && deps.contains(&current) {
-                                cycle = format!("{n} → {cycle}");
-                                current = n;
-                                break;
-                            }
+                            && deps.contains(&current)
+                        {
+                            cycle = format!("{n} → {cycle}");
+                            current = n;
+                            break;
+                        }
                     }
                 }
                 return Some(cycle);
             }
 
             if !visited.contains(neighbor)
-                && let Some(cycle) = dfs_cycle_detect(graph, neighbor, visited, in_progress) {
-                    return Some(cycle);
-                }
+                && let Some(cycle) = dfs_cycle_detect(graph, neighbor, visited, in_progress)
+            {
+                return Some(cycle);
+            }
         }
     }
 

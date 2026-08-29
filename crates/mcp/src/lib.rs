@@ -1,17 +1,17 @@
 use rmcp::{
-    handler::server::router::tool::ToolRouter, model::*, schemars, service::RequestContext, tool,
-    tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler,
+    ErrorData as McpError, RoleServer, ServerHandler, handler::server::router::tool::ToolRouter,
+    model::*, schemars, service::RequestContext, tool, tool_handler, tool_router,
 };
 use serde::de::{IgnoredAny, MapAccess, Visitor};
-use serde::{de, Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize, de};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::future::Future;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::OnceCell;
 
@@ -1158,9 +1158,10 @@ impl CodemodMcpServer {
             if let Some(parent) = path
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
-                && std::fs::create_dir_all(parent).is_err() {
-                    return;
-                }
+                && std::fs::create_dir_all(parent).is_err()
+            {
+                return;
+            }
             let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) else {
                 return;
             };
@@ -1889,26 +1890,34 @@ mod tests {
         assert_eq!(creation.is_error, Some(false));
         assert_eq!(monorepo.is_error, Some(false));
 
-        assert!(runtime.content[0]
-            .as_text()
-            .expect("expected runtime text content")
-            .text
-            .contains("Canonical JSSG Runtime Capabilities Documentation"));
-        assert!(troubleshooting.content[0]
-            .as_text()
-            .expect("expected troubleshooting text content")
-            .text
-            .contains("Troubleshooting"));
-        assert!(creation.content[0]
-            .as_text()
-            .expect("expected creation text content")
-            .text
-            .contains("Codemod Creation"));
-        assert!(monorepo.content[0]
-            .as_text()
-            .expect("expected monorepo text content")
-            .text
-            .contains("Canonical Codemod Maintainer Documentation"));
+        assert!(
+            runtime.content[0]
+                .as_text()
+                .expect("expected runtime text content")
+                .text
+                .contains("Canonical JSSG Runtime Capabilities Documentation")
+        );
+        assert!(
+            troubleshooting.content[0]
+                .as_text()
+                .expect("expected troubleshooting text content")
+                .text
+                .contains("Troubleshooting")
+        );
+        assert!(
+            creation.content[0]
+                .as_text()
+                .expect("expected creation text content")
+                .text
+                .contains("Codemod Creation")
+        );
+        assert!(
+            monorepo.content[0]
+                .as_text()
+                .expect("expected monorepo text content")
+                .text
+                .contains("Canonical Codemod Maintainer Documentation")
+        );
     }
 
     #[test]

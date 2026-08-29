@@ -1,24 +1,24 @@
+use crate::CLI_VERSION;
+use crate::TelemetrySenderMutex;
 use crate::commands::run_telemetry::{
-    send_completed_event, send_event as send_telemetry_event, send_started_event,
-    send_success_events, CodemodRunOutcome, CodemodRunStats, CodemodRunTelemetry,
+    CodemodRunOutcome, CodemodRunStats, CodemodRunTelemetry, send_completed_event,
+    send_event as send_telemetry_event, send_started_event, send_success_events,
 };
 use crate::engine::{create_engine, create_registry_client};
 use crate::pro_dry_run::{
-    apply_pro_dry_run_execution_settings, notify_pro_dry_run_required, ProDryRunReason,
+    ProDryRunReason, apply_pro_dry_run_execution_settings, notify_pro_dry_run_required,
 };
 use crate::progress_bar::download_progress_bar;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{default_workflow_path, select_workflow_path};
 use crate::utils::resolve_capabilities::{
-    prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
+    ResolveCapabilitiesArgs, prompt_capabilities, resolve_capabilities,
 };
 use crate::workflow_runner::{run_workflow, workflow_has_manual_steps};
-use crate::TelemetrySenderMutex;
-use crate::CLI_VERSION;
-use anyhow::{anyhow, Result};
-use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
+use anyhow::{Result, anyhow};
+use butterflow_core::diff::{DiffConfig, DiffMetadata, FileDiff, generate_unified_diff};
 use butterflow_core::registry::{RegistryError, RegistryPackageMetadata};
-use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
+use butterflow_core::report::{ExecutionReport, convert_diffs, convert_metrics};
 use butterflow_core::structured_log::OutputFormat;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
@@ -515,9 +515,10 @@ pub async fn handler(
     }
 
     if resolved_package.dry_run_only
-        && let Err(e) = std::fs::remove_dir_all(&resolved_package.package_dir) {
-            debug!("Failed to remove cached pro codemod: {}", e);
-        }
+        && let Err(e) = std::fs::remove_dir_all(&resolved_package.package_dir)
+    {
+        debug!("Failed to remove cached pro codemod: {}", e);
+    }
 
     Ok(())
 }

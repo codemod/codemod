@@ -437,19 +437,20 @@ where
 
     for marker in ENV_MARKERS {
         if let Some(value) = env_map.get(marker.key)
-            && !value.trim().is_empty() {
-                log::debug!(
-                    "found environment marker: {}={} (agent={})",
-                    marker.key,
-                    value,
-                    marker.agent
-                );
-                signals.push(Signal {
-                    agent: marker.agent,
-                    strength: SignalStrength::Weak,
-                    reason: format!("env marker {} indicates {}", marker.key, marker.agent),
-                });
-            }
+            && !value.trim().is_empty()
+        {
+            log::debug!(
+                "found environment marker: {}={} (agent={})",
+                marker.key,
+                value,
+                marker.agent
+            );
+            signals.push(Signal {
+                agent: marker.agent,
+                strength: SignalStrength::Weak,
+                reason: format!("env marker {} indicates {}", marker.key, marker.agent),
+            });
+        }
     }
 
     signals
@@ -476,21 +477,22 @@ fn collect_process_signals(max_parent_depth: usize) -> ProcessInspection {
 
                 let executable_path = process.executable.trim();
                 if !executable_path.is_empty()
-                    && let Some(agent) = detect_agent_in_executable(executable_path) {
-                        log::debug!(
-                            "executable matched agent (strong signal): pid={} agent={}",
-                            process.pid,
-                            agent
-                        );
-                        signals.push(Signal {
-                            agent,
-                            strength: SignalStrength::Strong,
-                            reason: format!(
-                                "parent process pid={} ppid={} executable={} matched {}",
-                                process.pid, process.parent_pid, executable_path, agent
-                            ),
-                        });
-                    }
+                    && let Some(agent) = detect_agent_in_executable(executable_path)
+                {
+                    log::debug!(
+                        "executable matched agent (strong signal): pid={} agent={}",
+                        process.pid,
+                        agent
+                    );
+                    signals.push(Signal {
+                        agent,
+                        strength: SignalStrength::Strong,
+                        reason: format!(
+                            "parent process pid={} ppid={} executable={} matched {}",
+                            process.pid, process.parent_pid, executable_path, agent
+                        ),
+                    });
+                }
 
                 if let Some(agent) = detect_agent_in_text(&process.command) {
                     log::debug!(

@@ -76,31 +76,32 @@ impl FileScopeAnalyzer {
         let result = goto_definition(&db, file, offset);
 
         if let Some(ranged_targets) = result
-            && let Some(target) = ranged_targets.value.into_iter().next() {
-                let target_path = target.file().path(&db);
-                let target_content = source_text(&db, target.file()).to_string();
-                let focus_range = text_range_to_byte_range(target.focus_range());
+            && let Some(target) = ranged_targets.value.into_iter().next()
+        {
+            let target_path = target.file().path(&db);
+            let target_content = source_text(&db, target.file()).to_string();
+            let focus_range = text_range_to_byte_range(target.focus_range());
 
-                let name = target_content
-                    .get(focus_range.start as usize..focus_range.end as usize)
-                    .unwrap_or("")
-                    .to_string();
+            let name = target_content
+                .get(focus_range.start as usize..focus_range.end as usize)
+                .unwrap_or("")
+                .to_string();
 
-                let location = SymbolLocation::new(
-                    PathBuf::from(target_path.as_str()),
-                    focus_range,
-                    SymbolKind::Unknown, // ty_ide doesn't provide kind in NavigationTarget
-                    name,
-                );
+            let location = SymbolLocation::new(
+                PathBuf::from(target_path.as_str()),
+                focus_range,
+                SymbolKind::Unknown, // ty_ide doesn't provide kind in NavigationTarget
+                name,
+            );
 
-                let kind = if target_path.as_str() == path.to_string_lossy().as_ref() {
-                    DefinitionKind::Local
-                } else {
-                    DefinitionKind::External
-                };
+            let kind = if target_path.as_str() == path.to_string_lossy().as_ref() {
+                DefinitionKind::Local
+            } else {
+                DefinitionKind::External
+            };
 
-                return Ok(Some(DefinitionResult::new(location, target_content, kind)));
-            }
+            return Ok(Some(DefinitionResult::new(location, target_content, kind)));
+        }
 
         Ok(None)
     }
@@ -242,31 +243,32 @@ impl WorkspaceScopeAnalyzer {
         let result = goto_definition(&db, file, offset);
 
         if let Some(ranged_targets) = result
-            && let Some(target) = ranged_targets.value.into_iter().next() {
-                let target_path = target.file().path(&db);
-                let target_content = source_text(&db, target.file()).to_string();
-                let focus_range = text_range_to_byte_range(target.focus_range());
+            && let Some(target) = ranged_targets.value.into_iter().next()
+        {
+            let target_path = target.file().path(&db);
+            let target_content = source_text(&db, target.file()).to_string();
+            let focus_range = text_range_to_byte_range(target.focus_range());
 
-                let name = target_content
-                    .get(focus_range.start as usize..focus_range.end as usize)
-                    .unwrap_or("")
-                    .to_string();
+            let name = target_content
+                .get(focus_range.start as usize..focus_range.end as usize)
+                .unwrap_or("")
+                .to_string();
 
-                let location = SymbolLocation::new(
-                    PathBuf::from(target_path.as_str()),
-                    focus_range,
-                    SymbolKind::Unknown,
-                    name,
-                );
+            let location = SymbolLocation::new(
+                PathBuf::from(target_path.as_str()),
+                focus_range,
+                SymbolKind::Unknown,
+                name,
+            );
 
-                let kind = if target_path.as_str() == path.to_string_lossy().as_ref() {
-                    DefinitionKind::Local
-                } else {
-                    DefinitionKind::External
-                };
+            let kind = if target_path.as_str() == path.to_string_lossy().as_ref() {
+                DefinitionKind::Local
+            } else {
+                DefinitionKind::External
+            };
 
-                return Ok(Some(DefinitionResult::new(location, target_content, kind)));
-            }
+            return Ok(Some(DefinitionResult::new(location, target_content, kind)));
+        }
 
         Ok(None)
     }

@@ -1,22 +1,22 @@
+use crate::commands::TelemetrySenderExt;
 use crate::commands::harness_adapter::{
-    install_package_skill_bundle_with_runtime, install_restart_hint,
+    Harness, HarnessAdapterError, InstallRequest, InstallScope, InstalledSkill, OutputFormat,
+    SkillPackageInstallSpec, install_package_skill_bundle_with_runtime, install_restart_hint,
     package_skill_install_requires_force_with_runtime, resolve_adapter_with_runtime,
     runtime_paths_for_execution, skill_root_hint_for_scope,
-    upsert_skill_discovery_guides_with_runtime, Harness, HarnessAdapterError, InstallRequest,
-    InstallScope, InstalledSkill, OutputFormat, SkillPackageInstallSpec,
+    upsert_skill_discovery_guides_with_runtime,
 };
 use crate::commands::output::{format_output_path, prompt_for_overwrite_confirmation};
-use crate::commands::TelemetrySenderExt;
 use crate::engine::create_registry_client_with_env;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
-    authored_skill_file_candidate, detect_package_behavior_shape_with_manifest_hint,
-    AuthoredSkillFileCandidate, PackageBehaviorShape,
+    AuthoredSkillFileCandidate, PackageBehaviorShape, authored_skill_file_candidate,
+    detect_package_behavior_shape_with_manifest_hint,
 };
 use crate::utils::skill_layout::{
     expected_authored_skill_file, find_authored_skill_dir, resolve_configured_skill_file_path,
 };
-use crate::{TelemetrySenderMutex, CLI_VERSION};
+use crate::{CLI_VERSION, TelemetrySenderMutex};
 use anyhow::Result;
 use async_trait::async_trait;
 use butterflow_core::config::{
@@ -34,7 +34,7 @@ use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tabled::settings::{object::Columns, Alignment, Modify, Style};
+use tabled::settings::{Alignment, Modify, Style, object::Columns};
 use tabled::{Table, Tabled};
 
 #[cfg(test)]

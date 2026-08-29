@@ -1,7 +1,7 @@
 use crate::ast_grep::serde::JsValue;
 use dashmap::DashMap;
 use rquickjs::module::{Declarations, Exports, ModuleDef};
-use rquickjs::{prelude::Func, prelude::Opt, Ctx, Exception, Object, Result};
+use rquickjs::{Ctx, Exception, Object, Result, prelude::Func, prelude::Opt};
 use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
@@ -37,9 +37,10 @@ pub fn get_step_output(
         .map_err(|e| format!("Failed to lock STEP_OUTPUTS_STORE: {}", e))?;
 
     if let Some(outputs) = store.get(step_id)
-        && let Some(value) = outputs.get(output_name) {
-            return Ok(Some(value.clone()));
-        }
+        && let Some(value) = outputs.get(output_name)
+    {
+        return Ok(Some(value.clone()));
+    }
 
     Ok(None)
 }

@@ -264,18 +264,19 @@ impl LightweightAnalyzer {
                     // Look for the exported symbol
                     if let Some(export) = file_symbols.find_export_by_name(symbol_name) {
                         if let Some(local_id) = export.local_symbol_id
-                            && let Some(symbol) = file_symbols.find_symbol_by_id(local_id) {
-                                return Ok(Some(DefinitionResult::new(
-                                    SymbolLocation::new(
-                                        potential_path,
-                                        symbol.range,
-                                        symbol.kind,
-                                        symbol.name.clone(),
-                                    ),
-                                    file_content,
-                                    DefinitionKind::External,
-                                )));
-                            }
+                            && let Some(symbol) = file_symbols.find_symbol_by_id(local_id)
+                        {
+                            return Ok(Some(DefinitionResult::new(
+                                SymbolLocation::new(
+                                    potential_path,
+                                    symbol.range,
+                                    symbol.kind,
+                                    symbol.name.clone(),
+                                ),
+                                file_content,
+                                DefinitionKind::External,
+                            )));
+                        }
                         // Return the export location if we can't find the actual symbol
                         return Ok(Some(DefinitionResult::new(
                             SymbolLocation::new(
@@ -291,18 +292,19 @@ impl LightweightAnalyzer {
 
                     // Check for default export
                     if symbol_name == "default"
-                        && let Some(export) = file_symbols.get_default_export() {
-                            return Ok(Some(DefinitionResult::new(
-                                SymbolLocation::new(
-                                    potential_path,
-                                    export.range,
-                                    language_core::SymbolKind::Export,
-                                    "default".to_string(),
-                                ),
-                                file_content,
-                                DefinitionKind::External,
-                            )));
-                        }
+                        && let Some(export) = file_symbols.get_default_export()
+                    {
+                        return Ok(Some(DefinitionResult::new(
+                            SymbolLocation::new(
+                                potential_path,
+                                export.range,
+                                language_core::SymbolKind::Export,
+                                "default".to_string(),
+                            ),
+                            file_content,
+                            DefinitionKind::External,
+                        )));
+                    }
                 }
             }
         }

@@ -4,23 +4,23 @@ use std::sync::{Arc, Mutex};
 
 use crate::utils::path_safety::normalize_target_path;
 use crate::utils::resolve_capabilities::{
-    prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
+    ResolveCapabilitiesArgs, prompt_capabilities, resolve_capabilities,
 };
-use crate::{TelemetrySenderMutex, CLI_VERSION};
+use crate::{CLI_VERSION, TelemetrySenderMutex};
 use anyhow::{Context, Result};
 use butterflow_core::diff::FileDiff;
-use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
+use butterflow_core::report::{ExecutionReport, convert_diffs, convert_metrics};
 use butterflow_core::utils;
 use butterflow_core::utils::generate_execution_id;
 use clap::Args;
 use codemod_telemetry::send_event::BaseEvent;
 use std::sync::atomic::Ordering;
 
-use crate::commands::run_telemetry::nested_codemod_run_observer;
 use crate::commands::TelemetrySenderExt;
+use crate::commands::run_telemetry::nested_codemod_run_observer;
 use crate::engine::{create_engine, create_registry_client};
 use crate::pro_dry_run::{
-    apply_pro_dry_run_execution_settings, notify_pro_dry_run_required, ProDryRunReason,
+    ProDryRunReason, apply_pro_dry_run_execution_settings, notify_pro_dry_run_required,
 };
 use crate::workflow_runner::{
     resolve_workflow_source_with_name, run_workflow, workflow_has_manual_steps,
@@ -165,12 +165,13 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             .await
             .context("Failed to inspect bundled codemods")?;
     if let Some(source) = dry_run_only_dependency.as_deref()
-        && !args.dry_run {
-            notify_pro_dry_run_required(
-                ProDryRunReason::BundledChild { source },
-                args.no_interactive,
-            );
-        }
+        && !args.dry_run
+    {
+        notify_pro_dry_run_required(
+            ProDryRunReason::BundledChild { source },
+            args.no_interactive,
+        );
+    }
     let pro_dry_run_required = dry_run_only_dependency.is_some();
     let dry_run = args.dry_run || pro_dry_run_required;
     let capabilities =

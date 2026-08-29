@@ -38,9 +38,10 @@ pub(crate) fn resolve_capabilities(
 
     // Load capabilities from codemod.yaml in working directory ancestors
     if let Some(working_directory) = working_directory
-        && let Some(manifest) = load_manifest_from_working_dir(&working_directory) {
-            capabilities.extend(extract_capabilities(manifest));
-        }
+        && let Some(manifest) = load_manifest_from_working_dir(&working_directory)
+    {
+        capabilities.extend(extract_capabilities(manifest));
+    }
 
     // Load capabilities from provided manifest
     if let Some(manifest) = manifest {

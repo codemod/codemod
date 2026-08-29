@@ -373,8 +373,8 @@ fn relativize_managed_worktree_path(diff_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        convert_diffs, normalize_report_diff_path, ExecutionReport, ReportDiffGroup, ReportDiffs,
-        ReportFileDiff,
+        ExecutionReport, ReportDiffGroup, ReportDiffs, ReportFileDiff, convert_diffs,
+        normalize_report_diff_path,
     };
     use crate::diff::FileDiff;
     use std::collections::HashMap;
@@ -446,10 +446,12 @@ mod tests {
         assert_eq!(report_diffs.consolidated[0].path, "src/app.ts");
         assert_eq!(report_diffs.consolidated[0].additions, 3);
         assert_eq!(report_diffs.consolidated[0].deletions, 1);
-        assert!(report_diffs.consolidated[0]
-            .diff_text
-            .as_deref()
-            .is_some_and(|text| text.contains("Step: First Step")));
+        assert!(
+            report_diffs.consolidated[0]
+                .diff_text
+                .as_deref()
+                .is_some_and(|text| text.contains("Step: First Step"))
+        );
         assert_eq!(report_diffs.by_step.len(), 2);
         assert_eq!(report_diffs.by_step[0].step_name, "First Step");
         assert_eq!(report_diffs.by_step[1].step_name, "Second Step");

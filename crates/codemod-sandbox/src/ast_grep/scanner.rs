@@ -1,7 +1,7 @@
 use std::panic;
 
 use ast_grep_config::CombinedScan;
-use ast_grep_core::{replacer::Content, AstGrep, Doc, Language};
+use ast_grep_core::{AstGrep, Doc, Language, replacer::Content};
 
 use crate::ast_grep::types::{AstGrepError, AstGrepMatch};
 
@@ -42,10 +42,11 @@ where
 
         for (rule, node_match) in &scan_result.diffs {
             if let Ok(fixers) = rule.get_fixer()
-                && let Some(fixer) = fixers.first() {
-                    let edit = node_match.make_edit(&rule.matcher, fixer);
-                    edit_infos.push((edit.position, edit.deleted_length, edit.inserted_text));
-                }
+                && let Some(fixer) = fixers.first()
+            {
+                let edit = node_match.make_edit(&rule.matcher, fixer);
+                edit_infos.push((edit.position, edit.deleted_length, edit.inserted_text));
+            }
 
             // Also record this as a match for reporting
             let node = node_match.get_node();
@@ -85,7 +86,9 @@ where
                 if start > original_content.len() || end > original_content.len() {
                     eprintln!(
                         "Warning: Edit range {}..{} is beyond original content length {}. Skipping edit.",
-                        start, end, original_content.len()
+                        start,
+                        end,
+                        original_content.len()
                     );
                     continue;
                 }

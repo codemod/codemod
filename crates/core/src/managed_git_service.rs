@@ -6,8 +6,8 @@ use uuid::Uuid;
 use crate::{
     config::{ManagedGitWorktree, PullRequestCreationRequest},
     engine::{
-        pull_request_metadata_log_line, resolve_workflow_run_params, should_manage_git_for_node,
-        Engine, ResolvedPullRequestConfig,
+        Engine, ResolvedPullRequestConfig, pull_request_metadata_log_line,
+        resolve_workflow_run_params, should_manage_git_for_node,
     },
     git_ops, slog,
     structured_log::StepContext,
@@ -253,13 +253,13 @@ impl<'a> ManagedGitService<'a> {
             Err(_) => {
                 return Err(Error::Runtime(format!(
                     "Timed out resolving repo root for git worktree on branch {branch}"
-                )))
+                )));
             }
             Ok(Err(error)) => {
                 return Err(Error::Runtime(format!(
                     "Failed to resolve repo root for git worktree: {}",
                     error
-                )))
+                )));
             }
             Ok(Ok(repo_root)) => repo_root,
         };
@@ -284,13 +284,13 @@ impl<'a> ManagedGitService<'a> {
             Err(_) => {
                 return Err(Error::Runtime(format!(
                     "Timed out creating git worktree for branch {branch}"
-                )))
+                )));
             }
             Ok(Err(error)) => {
                 return Err(Error::Runtime(format!(
                     "Failed to prepare git worktree: {}",
                     error
-                )))
+                )));
             }
             Ok(Ok(worktree_path)) => worktree_path,
         };
@@ -327,17 +327,18 @@ impl<'a> ManagedGitService<'a> {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
         if let Some((repo_root, worktree_path)) = worktree_cleanup
-            && let Err(error) = git_ops::remove_worktree(&repo_root, &worktree_path).await {
-                let context = if panic_context {
-                    "panicked task"
-                } else {
-                    "task"
-                };
-                self.engine.emit_error(format!(
-                    "Failed to clean up git worktree for {} {}: {}",
-                    context, task_id, error
-                ));
-            }
+            && let Err(error) = git_ops::remove_worktree(&repo_root, &worktree_path).await
+        {
+            let context = if panic_context {
+                "panicked task"
+            } else {
+                "task"
+            };
+            self.engine.emit_error(format!(
+                "Failed to clean up git worktree for {} {}: {}",
+                context, task_id, error
+            ));
+        }
     }
 
     pub(crate) async fn begin_task_branch(

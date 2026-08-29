@@ -197,7 +197,7 @@ impl<'a> NestedCodemodService<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::{write::GzEncoder, Compression};
+    use flate2::{Compression, write::GzEncoder};
     use std::{collections::HashMap, io::Write, sync::Arc};
     use tokio::net::TcpListener;
 

@@ -88,9 +88,10 @@ impl StateAdapter for MockStateAdapter {
         self.tasks.insert(task.id, task.clone());
 
         if let Some(workflow_run) = self.workflow_runs.get_mut(&task.workflow_run_id)
-            && !workflow_run.tasks.contains(&task.id) {
-                workflow_run.tasks.push(task.id);
-            }
+            && !workflow_run.tasks.contains(&task.id)
+        {
+            workflow_run.tasks.push(task.id);
+        }
 
         Ok(())
     }

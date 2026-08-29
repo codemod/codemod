@@ -1,10 +1,10 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use butterflow_core::utils::get_cache_dir;
 use clap::{Args, Subcommand};
 use log::info;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tabled::settings::{object::Columns, Alignment, Modify, Style};
+use tabled::settings::{Alignment, Modify, Style, object::Columns};
 use tabled::{Table, Tabled};
 use walkdir::WalkDir;
 #[derive(Args, Debug)]
@@ -208,24 +208,25 @@ async fn prune_cache(max_age_days: u32, dry_run: bool) -> Result<()> {
     {
         if let Ok(metadata) = entry.metadata()
             && let Ok(modified) = metadata.modified()
-                && let Ok(modified_time) = modified.duration_since(std::time::UNIX_EPOCH)
-                    && modified_time.as_secs() < cutoff_time {
-                        let size = calculate_dir_size(entry.path())?;
+            && let Ok(modified_time) = modified.duration_since(std::time::UNIX_EPOCH)
+            && modified_time.as_secs() < cutoff_time
+        {
+            let size = calculate_dir_size(entry.path())?;
 
-                        if dry_run {
-                            println!(
-                                "Would remove: {} ({})",
-                                entry.path().display(),
-                                format_size(size)
-                            );
-                        } else {
-                            info!("Removing old cache entry: {}", entry.path().display());
-                            fs::remove_dir_all(entry.path())?;
-                        }
+            if dry_run {
+                println!(
+                    "Would remove: {} ({})",
+                    entry.path().display(),
+                    format_size(size)
+                );
+            } else {
+                info!("Removing old cache entry: {}", entry.path().display());
+                fs::remove_dir_all(entry.path())?;
+            }
 
-                        pruned_count += 1;
-                        pruned_size += size;
-                    }
+            pruned_count += 1;
+            pruned_size += size;
+        }
     }
 
     if dry_run {

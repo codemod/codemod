@@ -2,7 +2,7 @@ use crate::utils::env_paths::home_dir_from_env;
 use crate::utils::skill_layout::SKILL_FILE_NAME;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use toml_edit::{value, Array, DocumentMut, Item, Table};
+use toml_edit::{Array, DocumentMut, Item, Table, value};
 
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
@@ -391,7 +391,9 @@ impl HarnessAdapterError {
             Self::SkillPackageNotFound(_) => {
                 "Run `codemod search <migration> --format json` to locate a valid package id."
             }
-            Self::SkillPackageInstallFailed(_) => "Retry with --force or check filesystem permissions.",
+            Self::SkillPackageInstallFailed(_) => {
+                "Retry with --force or check filesystem permissions."
+            }
         }
     }
 }
@@ -1326,10 +1328,11 @@ fn upsert_codex_periodic_update_notify(
 
     let expected = vec!["sh".to_string(), runner_path.to_string_lossy().to_string()];
     if let Some(existing_notify) = read_notify_command(&document)?
-        && existing_notify != expected {
-            // Preserve existing user notify integration if configured.
-            return Ok(false);
-        }
+        && existing_notify != expected
+    {
+        // Preserve existing user notify integration if configured.
+        return Ok(false);
+    }
 
     let mut notify = Array::new();
     for arg in expected {
@@ -1711,14 +1714,15 @@ fn upsert_managed_block(
 ) -> String {
     if let (Some(begin_index), Some(end_start)) =
         (existing.find(begin_marker), existing.find(end_marker))
-        && end_start >= begin_index {
-            let end_index = end_start + end_marker.len();
-            let mut updated = String::new();
-            updated.push_str(&existing[..begin_index]);
-            updated.push_str(block);
-            updated.push_str(&existing[end_index..]);
-            return updated;
-        }
+        && end_start >= begin_index
+    {
+        let end_index = end_start + end_marker.len();
+        let mut updated = String::new();
+        updated.push_str(&existing[..begin_index]);
+        updated.push_str(block);
+        updated.push_str(&existing[end_index..]);
+        return updated;
+    }
 
     if existing.trim().is_empty() {
         return format!("{block}\n");
@@ -2268,9 +2272,10 @@ fn mcs_install_requires_force_with_runtime(
         _ => {
             if let Some(command_path) =
                 mcs_command_entrypoint_path_for_harness(harness, scope, runtime_paths)?
-                && managed_text_file_requires_force(&command_path, MCS_COMMAND_MD)? {
-                    return Ok(true);
-                }
+                && managed_text_file_requires_force(&command_path, MCS_COMMAND_MD)?
+            {
+                return Ok(true);
+            }
         }
     }
 
@@ -2834,15 +2839,14 @@ fn upsert_codemod_mcp_server_toml(
 
     if let Some(existing_server) = read_codex_mcp_server(&document)?
         && !force
-            && (existing_server.command != invocation.command
-                || existing_server.args != expected_args)
-        {
-            return Err(HarnessAdapterError::InstallFailed(format!(
-                "MCP config {} already contains a conflicting mcp_servers.{} entry. Re-run with --force to overwrite.",
-                config_path.display(),
-                MCP_SERVER_NAME,
-            )));
-        }
+        && (existing_server.command != invocation.command || existing_server.args != expected_args)
+    {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "MCP config {} already contains a conflicting mcp_servers.{} entry. Re-run with --force to overwrite.",
+            config_path.display(),
+            MCP_SERVER_NAME,
+        )));
+    }
 
     if !document.as_table().contains_key("mcp_servers") {
         document["mcp_servers"] = Item::Table(Table::new());
@@ -3803,7 +3807,7 @@ mod tests {
     use crate::utils::manifest::CodemodManifest;
     use crate::utils::package_validation::validate_skill_behavior;
     use crate::utils::skill_layout::{
-        derive_skill_name_from_package_name, AGENTS_SKILL_ROOT_RELATIVE_PATH,
+        AGENTS_SKILL_ROOT_RELATIVE_PATH, derive_skill_name_from_package_name,
     };
     use std::path::Path;
     use tempfile::tempdir;
@@ -4354,13 +4358,15 @@ codemod-skill-version: 0.1.0
             .join(".goosehints");
         assert!(agents_path.exists());
         assert!(goosehints_path.exists());
-        assert!(!runtime_paths
-            .home_dir
-            .as_ref()
-            .unwrap()
-            .join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR)
-            .join("CLAUDE.md")
-            .exists());
+        assert!(
+            !runtime_paths
+                .home_dir
+                .as_ref()
+                .unwrap()
+                .join(GOOSE_GLOBAL_ROOT_RELATIVE_DIR)
+                .join("CLAUDE.md")
+                .exists()
+        );
 
         let agents_content = fs::read_to_string(&agents_path).unwrap();
         assert!(agents_content.contains("~/.config/goose/skills/codemod/SKILL.md"));
@@ -4635,9 +4641,11 @@ codemod-skill-version: 0.1.0
         )
         .unwrap();
 
-        assert!(strategy
-            .integration_path
-            .ends_with(".config/opencode/plugins/codemod-periodic-update.js"));
+        assert!(
+            strategy
+                .integration_path
+                .ends_with(".config/opencode/plugins/codemod-periodic-update.js")
+        );
     }
 
     #[test]
@@ -4827,10 +4835,12 @@ codemod-skill-version: 0.1.0
 
         assert_eq!(installed_skill.name, MCS_SKILL_COMPONENT_ID);
         assert!(installed_skill.path.exists());
-        assert!(installed_skill
-            .path
-            .to_string_lossy()
-            .contains(".claude/skills/codemod/SKILL.md"));
+        assert!(
+            installed_skill
+                .path
+                .to_string_lossy()
+                .contains(".claude/skills/codemod/SKILL.md")
+        );
 
         assert!(mcp_entry.path.exists());
         let config: serde_json::Value =
@@ -5093,18 +5103,24 @@ codemod-skill-version: 0.1.0
             expected_managed_state_path(&runtime_paths, Harness::Claude, InstallScope::Project)
         );
         assert_eq!(loaded.components.len(), snapshots.len());
-        assert!(loaded
-            .components
-            .iter()
-            .any(|component| component.id == "codemod"));
-        assert!(loaded
-            .components
-            .iter()
-            .any(|component| component.id == "codemod-mcp"));
-        assert!(loaded
-            .components
-            .iter()
-            .any(|component| component.id == "discovery-guide:CLAUDE.md"));
+        assert!(
+            loaded
+                .components
+                .iter()
+                .any(|component| component.id == "codemod")
+        );
+        assert!(
+            loaded
+                .components
+                .iter()
+                .any(|component| component.id == "codemod-mcp")
+        );
+        assert!(
+            loaded
+                .components
+                .iter()
+                .any(|component| component.id == "discovery-guide:CLAUDE.md")
+        );
     }
 
     #[test]
@@ -5273,10 +5289,12 @@ codemod-skill-version: 0.1.0
         assert_eq!(installed_skill.name, "jest-to-vitest");
         assert_eq!(installed_skill.version, Some("0.1.0".to_string()));
         assert!(installed_skill.path.exists());
-        assert!(installed_skill
-            .path
-            .to_string_lossy()
-            .contains(".claude/skills/jest-to-vitest/SKILL.md"));
+        assert!(
+            installed_skill
+                .path
+                .to_string_lossy()
+                .contains(".claude/skills/jest-to-vitest/SKILL.md")
+        );
     }
 
     #[test]
@@ -5524,22 +5542,26 @@ codemod-skill-version: 0.1.0
         install_mcs_skill_bundle_with_runtime(Harness::Claude, &install_request, &runtime_paths)
             .unwrap();
 
-        assert!(!mcs_install_requires_force_with_runtime(
-            Harness::Claude,
-            InstallScope::Project,
-            &runtime_paths
-        )
-        .unwrap());
+        assert!(
+            !mcs_install_requires_force_with_runtime(
+                Harness::Claude,
+                InstallScope::Project,
+                &runtime_paths
+            )
+            .unwrap()
+        );
 
         let skill_path = runtime_paths.cwd.join(".claude/skills/codemod/SKILL.md");
         fs::write(&skill_path, "# changed\n").unwrap();
 
-        assert!(mcs_install_requires_force_with_runtime(
-            Harness::Claude,
-            InstallScope::Project,
-            &runtime_paths
-        )
-        .unwrap());
+        assert!(
+            mcs_install_requires_force_with_runtime(
+                Harness::Claude,
+                InstallScope::Project,
+                &runtime_paths
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -5557,13 +5579,15 @@ codemod-skill-version: 0.1.0
             source_dir: source_dir.clone(),
         };
 
-        assert!(!package_skill_install_requires_force_with_runtime(
-            Harness::Claude,
-            InstallScope::Project,
-            &package_skill,
-            &runtime_paths
-        )
-        .unwrap());
+        assert!(
+            !package_skill_install_requires_force_with_runtime(
+                Harness::Claude,
+                InstallScope::Project,
+                &package_skill,
+                &runtime_paths
+            )
+            .unwrap()
+        );
 
         install_package_skill_bundle_with_runtime(
             Harness::Claude,
@@ -5573,23 +5597,27 @@ codemod-skill-version: 0.1.0
         )
         .unwrap();
 
-        assert!(!package_skill_install_requires_force_with_runtime(
-            Harness::Claude,
-            InstallScope::Project,
-            &package_skill,
-            &runtime_paths
-        )
-        .unwrap());
+        assert!(
+            !package_skill_install_requires_force_with_runtime(
+                Harness::Claude,
+                InstallScope::Project,
+                &package_skill,
+                &runtime_paths
+            )
+            .unwrap()
+        );
 
         fs::write(source_dir.join("references/new-notes.md"), "# New notes\n").unwrap();
 
-        assert!(package_skill_install_requires_force_with_runtime(
-            Harness::Claude,
-            InstallScope::Project,
-            &package_skill,
-            &runtime_paths
-        )
-        .unwrap());
+        assert!(
+            package_skill_install_requires_force_with_runtime(
+                Harness::Claude,
+                InstallScope::Project,
+                &package_skill,
+                &runtime_paths
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -5679,12 +5707,16 @@ codemod-skill-version: 0.1.0
 
         let skills = list_skills_with_runtime(Harness::Claude, &runtime_paths).unwrap();
         assert_eq!(skills.len(), 2);
-        assert!(skills
-            .iter()
-            .any(|skill| skill.scope == Some(InstallScope::Project)));
-        assert!(skills
-            .iter()
-            .any(|skill| skill.scope == Some(InstallScope::User)));
+        assert!(
+            skills
+                .iter()
+                .any(|skill| skill.scope == Some(InstallScope::Project))
+        );
+        assert!(
+            skills
+                .iter()
+                .any(|skill| skill.scope == Some(InstallScope::User))
+        );
     }
 
     #[test]
@@ -5847,11 +5879,13 @@ codemod-skill-version: 0.1.0
         let checks = verify_skills_with_runtime(Harness::Claude, &runtime_paths).unwrap();
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].status, VerificationStatus::Fail);
-        assert!(checks[0]
-            .reason
-            .as_ref()
-            .unwrap()
-            .contains("unknown or unsafe allowed-tools entry"));
+        assert!(
+            checks[0]
+                .reason
+                .as_ref()
+                .unwrap()
+                .contains("unknown or unsafe allowed-tools entry")
+        );
     }
 
     #[test]
@@ -5935,14 +5969,18 @@ codemod-skill-version: 0.1.0
 
         let content = fs::read_to_string(&config_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert!(parsed
-            .get("mcpServers")
-            .and_then(|servers| servers.get("custom"))
-            .is_some());
-        assert!(parsed
-            .get("mcpServers")
-            .and_then(|servers| servers.get("codemod"))
-            .is_some());
+        assert!(
+            parsed
+                .get("mcpServers")
+                .and_then(|servers| servers.get("custom"))
+                .is_some()
+        );
+        assert!(
+            parsed
+                .get("mcpServers")
+                .and_then(|servers| servers.get("codemod"))
+                .is_some()
+        );
     }
 
     #[test]
@@ -6149,9 +6187,11 @@ codemod-skill-version: 0.1.0
 
         assert!(installed.iter().all(|entry| entry.name != "codemod-mcp"));
         assert_eq!(installed.len(), 1);
-        assert!(installed[0]
-            .path
-            .ends_with(".agents/skills/codemod/SKILL.md"));
+        assert!(
+            installed[0]
+                .path
+                .ends_with(".agents/skills/codemod/SKILL.md")
+        );
     }
 
     #[test]

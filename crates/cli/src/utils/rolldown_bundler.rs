@@ -101,9 +101,9 @@ impl RolldownBundler {
                 .warnings
                 .iter()
                 .find(|warning| warning.kind().to_string() == "UNRESOLVED_IMPORT")
-            {
-                return Err(anyhow::anyhow!("Rolldown unresolved import: {}", warning));
-            }
+        {
+            return Err(anyhow::anyhow!("Rolldown unresolved import: {}", warning));
+        }
 
         let bundled_code = Self::extract_js_code(&result)?;
 

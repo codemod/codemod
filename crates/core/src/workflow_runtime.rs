@@ -635,12 +635,13 @@ impl WorkflowSession {
 impl Drop for WorkflowSession {
     fn drop(&mut self) {
         if let Ok(mut map) = registry().lock()
-            && let Some(sinks) = map.get_mut(&self.workflow_run_id) {
-                sinks.remove(&self.registration_id);
-                if sinks.is_empty() {
-                    map.remove(&self.workflow_run_id);
-                }
+            && let Some(sinks) = map.get_mut(&self.workflow_run_id)
+        {
+            sinks.remove(&self.registration_id);
+            if sinks.is_empty() {
+                map.remove(&self.workflow_run_id);
             }
+        }
     }
 }
 

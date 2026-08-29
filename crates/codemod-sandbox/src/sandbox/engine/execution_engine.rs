@@ -1,14 +1,14 @@
 use super::codemod_lang::CodemodLang;
 use super::curated_fs::{
-    normalize_virtual_absolute_path, CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule,
-    FileFetcher,
+    CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule, FileFetcher,
+    normalize_virtual_absolute_path,
 };
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use super::transform_helpers::{
-    build_transform_options, process_transform_result, ModificationCheck,
+    ModificationCheck, build_transform_options, process_transform_result,
 };
-use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
+use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
 use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
@@ -19,13 +19,13 @@ use crate::sandbox::runtime_module::{
 use crate::utils::quickjs_utils::maybe_promise;
 use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
 use ast_grep_config::RuleConfig;
-use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
+use ast_grep_core::matcher::MatcherExt;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use language_core::SemanticProvider;
 use rquickjs::prelude::Rest;
-use rquickjs::{async_with, AsyncContext, AsyncRuntime, Ctx, Object, Type, Value};
+use rquickjs::{AsyncContext, AsyncRuntime, Ctx, Object, Type, Value, async_with};
 use rquickjs::{CatchResultExt, Function, Module};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -330,14 +330,16 @@ fn seed_dry_run_current_file(
     if let Some(parent) = Path::new(&relative).parent() {
         let parent = parent.to_string_lossy();
         if !parent.is_empty()
-            && let Ok(parent_vfs) = root.join(parent.trim_start_matches('/')) {
-                let _ = parent_vfs.create_dir_all();
-            }
+            && let Ok(parent_vfs) = root.join(parent.trim_start_matches('/'))
+        {
+            let _ = parent_vfs.create_dir_all();
+        }
     }
     if let Ok(file) = root.join(relative.trim_start_matches('/'))
-        && let Ok(mut writer) = file.create_file() {
-            let _ = writer.write_all(content.as_bytes());
-        }
+        && let Ok(mut writer) = file.create_file()
+    {
+        let _ = writer.write_all(content.as_bytes());
+    }
 }
 
 /// Execute a codemod on string content using QuickJS
@@ -1368,10 +1370,12 @@ export default async function transform() {
             .await
             .expect_err("codemod:llm should not resolve without fetch capability");
         assert!(format!("{error:?}").contains("codemod:llm"));
-        assert!(requests
-            .lock()
-            .expect("request capture should lock")
-            .is_empty());
+        assert!(
+            requests
+                .lock()
+                .expect("request capture should lock")
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1771,9 +1775,11 @@ function example() {
 
         match result {
             Err(ExecutionError::Runtime { source }) => {
-                assert!(source
-                    .to_string()
-                    .contains("must return either a string or null/undefined"));
+                assert!(
+                    source
+                        .to_string()
+                        .contains("must return either a string or null/undefined")
+                );
             }
             Ok(output) => panic!(
                 "Expected runtime error for invalid return type, got: {:?}",

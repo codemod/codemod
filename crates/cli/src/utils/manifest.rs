@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
@@ -329,10 +329,9 @@ fn normalize_workflow_entries_lenient(entries: &[WorkflowEntry]) -> Result<Vec<W
             }
         }
     }
-    if !seen_default
-        && let Some(first) = result.first_mut() {
-            first.default = true;
-        }
+    if !seen_default && let Some(first) = result.first_mut() {
+        first.default = true;
+    }
 
     Ok(result)
 }

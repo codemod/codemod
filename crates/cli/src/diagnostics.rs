@@ -631,9 +631,10 @@ fn parse_js_stack_location(error_text: &str) -> Option<JsStackLocation> {
         }
 
         if let Some(location) = line.strip_prefix("at ")
-            && let Some(parsed) = parse_js_location(location.trim()) {
-                return Some(parsed);
-            }
+            && let Some(parsed) = parse_js_location(location.trim())
+        {
+            return Some(parsed);
+        }
     }
     None
 }
