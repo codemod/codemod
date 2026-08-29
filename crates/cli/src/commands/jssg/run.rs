@@ -284,7 +284,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                     }
 
                     for (change_path, change_result) in &all_changes {
-                        if let ExecutionResult::Modified(ref modified) = change_result {
+                        if let ExecutionResult::Modified(modified) = change_result {
                             let write_path = modified.rename_to.as_deref().unwrap_or(change_path);
                             if !config.dry_run {
                                 if let Err(e) =
