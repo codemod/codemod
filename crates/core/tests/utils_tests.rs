@@ -3,8 +3,8 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use butterflow_core::utils;
 use butterflow_core::NodeType;
+use butterflow_core::utils;
 use butterflow_models::step::SemanticAnalysisConfig;
 use butterflow_models::step::SemanticAnalysisMode;
 use butterflow_models::step::StepAction;
@@ -138,10 +138,12 @@ nodes:
 
     let result = utils::validate_workflow(&workflow, temp_dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("invalid install-skill package value"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid install-skill package value")
+    );
 }
 
 #[test]
@@ -167,10 +169,12 @@ nodes:
 
     let result = utils::validate_workflow(&workflow, temp_dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("invalid install-skill path value"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid install-skill path value")
+    );
 }
 
 #[test]
@@ -196,10 +200,12 @@ nodes:
 
     let result = utils::validate_workflow(&workflow, temp_dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("parent-directory traversal is not allowed"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("parent-directory traversal is not allowed")
+    );
 }
 
 #[test]
@@ -676,7 +682,9 @@ fn test_validate_workflow_complex_cyclic_dependency() {
 #[test]
 fn test_get_env_vars() {
     // Set a test environment variable
-    env::set_var("BUTTERFLOW_TEST_VAR", "test_value");
+    unsafe {
+        env::set_var("BUTTERFLOW_TEST_VAR", "test_value");
+    }
 
     // Get environment variables
     let env_vars = utils::get_env_vars();
@@ -688,7 +696,9 @@ fn test_get_env_vars() {
     );
 
     // Clean up
-    env::remove_var("BUTTERFLOW_TEST_VAR");
+    unsafe {
+        env::remove_var("BUTTERFLOW_TEST_VAR");
+    }
 }
 
 #[test]

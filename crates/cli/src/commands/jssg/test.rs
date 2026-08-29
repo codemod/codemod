@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::Args;
+use codemod_sandbox::MetricsData;
 use codemod_sandbox::metrics::MetricEntry;
 use codemod_sandbox::sandbox::engine::{CodemodOutput, JssgExecutionOptions};
-use codemod_sandbox::MetricsData;
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
@@ -22,13 +22,13 @@ use codemod_sandbox::{
     utils::project_discovery::find_tsconfig,
 };
 use testing_utils::{
-    map_execution_result, ExecutionRequest, ReporterType, TestOptions, TestRunner, TestSource,
-    TransformationResult,
+    ExecutionRequest, ReporterType, TestOptions, TestRunner, TestSource, TransformationResult,
+    map_execution_result,
 };
 
 use crate::commands::TelemetrySenderExt;
-use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
-use crate::{TelemetrySenderMutex, CLI_VERSION};
+use crate::utils::resolve_capabilities::{ResolveCapabilitiesArgs, resolve_capabilities};
+use crate::{CLI_VERSION, TelemetrySenderMutex};
 
 use super::config::{ResolvedTestConfig, TestConfig};
 
@@ -185,8 +185,9 @@ async fn handler_impl(args: &Command) -> Result<()> {
     if !codemod_path.exists() {
         anyhow::bail!("Codemod file '{}' does not exist", codemod_path.display());
     }
-
-    std::env::set_var("CODEMOD_STEP_ID", "jssg");
+    unsafe {
+        std::env::set_var("CODEMOD_STEP_ID", "jssg");
+    }
 
     let current_dir = std::env::current_dir()?;
     let base_config = TestConfig::load_hierarchical(&current_dir, None)?;
@@ -396,8 +397,8 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 as Pin<
                     Box<
                         dyn std::future::Future<
-                            Output = Result<TransformationResult, anyhow::Error>,
-                        >,
+                                Output = Result<TransformationResult, anyhow::Error>,
+                            >,
                     >,
                 >
         },
@@ -613,9 +614,10 @@ fn generate_metrics_diff(expected: &str, actual: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_and_sanitize_error, finish_metrics_collection, generate_metrics_diff,
-        handle_metrics_snapshot, metric_entry_sort_key, metrics_to_canonical_json,
-        normalize_line_endings, write_metrics_output, PendingMetricsSnapshot, SharedMetricsState,
+        PendingMetricsSnapshot, SharedMetricsState, classify_and_sanitize_error,
+        finish_metrics_collection, generate_metrics_diff, handle_metrics_snapshot,
+        metric_entry_sort_key, metrics_to_canonical_json, normalize_line_endings,
+        write_metrics_output,
     };
     use codemod_sandbox::metrics::Cardinality;
     use codemod_sandbox::metrics::MetricEntry;

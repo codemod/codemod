@@ -667,8 +667,9 @@ impl<'a> JssgExecutionService<'a> {
                         StepPhase::FileLoaded,
                     );
                     Self::signal_progress(&progress_tx_for_closure);
-
-                    std::env::set_var("CODEMOD_STEP_ID", &step_id);
+                    unsafe{
+                      std::env::set_var("CODEMOD_STEP_ID", &step_id);
+                    }
                     record_unit_progress(
                         &progress_state_for_closure,
                         &relative_path,
