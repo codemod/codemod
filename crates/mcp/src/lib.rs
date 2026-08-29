@@ -1669,10 +1669,10 @@ mod tests {
     fn wait_for_usage_log(path: &std::path::Path) -> String {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            if let Ok(content) = fs::read_to_string(path) {
-                if !content.trim().is_empty() {
-                    return content;
-                }
+            if let Ok(content) = fs::read_to_string(path)
+                && !content.trim().is_empty()
+            {
+                return content;
             }
 
             assert!(

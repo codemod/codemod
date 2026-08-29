@@ -390,7 +390,7 @@ async fn handle_callback(
                     let html = format!(
                         include_str!("html/post-login.html.txt"),
                         title = "Authentication Failed",
-                        description = format!("Error: {error}<br>Description: {error_description}")
+                        description = "Error: {error}<br>Description: {error_description}"
                     );
 
                     return Ok(Response::builder()
