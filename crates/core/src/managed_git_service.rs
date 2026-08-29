@@ -326,8 +326,8 @@ impl<'a> ManagedGitService<'a> {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
-        if let Some((repo_root, worktree_path)) = worktree_cleanup {
-            if let Err(error) = git_ops::remove_worktree(&repo_root, &worktree_path).await {
+        if let Some((repo_root, worktree_path)) = worktree_cleanup
+            && let Err(error) = git_ops::remove_worktree(&repo_root, &worktree_path).await {
                 let context = if panic_context {
                     "panicked task"
                 } else {
@@ -338,7 +338,6 @@ impl<'a> ManagedGitService<'a> {
                     context, task_id, error
                 ));
             }
-        }
     }
 
     pub(crate) async fn begin_task_branch(

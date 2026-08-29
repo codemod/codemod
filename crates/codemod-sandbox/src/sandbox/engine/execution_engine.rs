@@ -329,17 +329,15 @@ fn seed_dry_run_current_file(
     let relative = normalize_virtual_absolute_path(&file_path.to_string_lossy());
     if let Some(parent) = Path::new(&relative).parent() {
         let parent = parent.to_string_lossy();
-        if !parent.is_empty() {
-            if let Ok(parent_vfs) = root.join(parent.trim_start_matches('/')) {
+        if !parent.is_empty()
+            && let Ok(parent_vfs) = root.join(parent.trim_start_matches('/')) {
                 let _ = parent_vfs.create_dir_all();
             }
-        }
     }
-    if let Ok(file) = root.join(relative.trim_start_matches('/')) {
-        if let Ok(mut writer) = file.create_file() {
+    if let Ok(file) = root.join(relative.trim_start_matches('/'))
+        && let Ok(mut writer) = file.create_file() {
             let _ = writer.write_all(content.as_bytes());
         }
-    }
 }
 
 /// Execute a codemod on string content using QuickJS

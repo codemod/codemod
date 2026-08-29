@@ -257,15 +257,12 @@ impl GlobTool {
             }
 
             // Skip hidden files if not requested
-            if !config.include_hidden {
-                if let Some(name) = path.file_name() {
-                    if let Some(name_str) = name.to_str() {
-                        if name_str.starts_with('.') && path != config.base_path {
+            if !config.include_hidden
+                && let Some(name) = path.file_name()
+                    && let Some(name_str) = name.to_str()
+                        && name_str.starts_with('.') && path != config.base_path {
                             continue;
                         }
-                    }
-                }
-            }
 
             // Check gitignore
             if let Some(ref gitignore) = gitignore {
@@ -294,15 +291,14 @@ impl GlobTool {
         let mut current_path = base_path;
         loop {
             let gitignore_path = current_path.join(".gitignore");
-            if gitignore_path.exists() {
-                if let Some(e) = builder.add(&gitignore_path) {
+            if gitignore_path.exists()
+                && let Some(e) = builder.add(&gitignore_path) {
                     tracing::warn!(
                         "Failed to parse .gitignore at {}: {}",
                         gitignore_path.display(),
                         e
                     );
                 }
-            }
 
             match current_path.parent() {
                 Some(parent) => current_path = parent,

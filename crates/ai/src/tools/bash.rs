@@ -144,11 +144,10 @@ impl ShellSession {
             return;
         }
 
-        if let Some(mut process) = self.process.take() {
-            if process.try_wait().unwrap_or(None).is_none() {
+        if let Some(mut process) = self.process.take()
+            && process.try_wait().unwrap_or(None).is_none() {
                 std::mem::drop(process.kill());
             }
-        }
         self.started = false;
     }
 
@@ -385,8 +384,8 @@ impl BashTool {
         let command: String = call.get_parameter("command")?;
 
         // Windows-specific safety check for potentially dangerous recursive commands
-        if cfg!(target_os = "windows") {
-            if let Some(warning) = check_windows_command_safety(&command) {
+        if cfg!(target_os = "windows")
+            && let Some(warning) = check_windows_command_safety(&command) {
                 return Ok(ToolResult::error(
                     &call.id,
                     format!(
@@ -395,7 +394,6 @@ impl BashTool {
                     ),
                 ));
             }
-        }
 
         // Ensure session exists and is started
         let needs_start = {

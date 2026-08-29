@@ -121,11 +121,10 @@ impl ClaudeStreamNormalizer {
                             .to_string(),
                     );
                     self.active_tool_input.clear();
-                    if let Some(input) = block.get("input").filter(|input| !input.is_null()) {
-                        if !input.as_object().is_some_and(serde_json::Map::is_empty) {
+                    if let Some(input) = block.get("input").filter(|input| !input.is_null())
+                        && !input.as_object().is_some_and(serde_json::Map::is_empty) {
                             self.active_tool_input = input.to_string();
                         }
-                    }
                 }
                 None
             }

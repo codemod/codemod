@@ -50,11 +50,10 @@ pub fn resolve_registry_link_url(
     package_path: Option<&str>,
     access: Option<&str>,
 ) -> String {
-    if let Some(package_path) = package_path.map(str::trim).filter(|path| !path.is_empty()) {
-        if links_to_registry_package_page(access) {
+    if let Some(package_path) = package_path.map(str::trim).filter(|path| !path.is_empty())
+        && links_to_registry_package_page(access) {
             return registry_package_url(registry_base, package_path);
         }
-    }
 
     registry_home_url(registry_base)
 }

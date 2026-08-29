@@ -66,11 +66,10 @@ pub fn find_first_text(node: &NormalizedNode) -> Option<String> {
         return None;
     }
 
-    if let Some(text) = &node.text {
-        if is_meaningful_text(text) {
+    if let Some(text) = &node.text
+        && is_meaningful_text(text) {
             return Some(text.clone());
         }
-    }
 
     node.children.iter().find_map(find_first_text)
 }
@@ -95,15 +94,14 @@ fn is_meaningful_text(text: &str) -> bool {
 /// the first child. For other nodes, uses the node's text or searches recursively.
 pub fn extract_sort_key(node: &NormalizedNode) -> String {
     // For key-bearing nodes, extract the key from the first child
-    if KEY_BEARING_KINDS.contains(&node.kind.as_str()) {
-        if let Some(key) = node
+    if KEY_BEARING_KINDS.contains(&node.kind.as_str())
+        && let Some(key) = node
             .children
             .first()
             .and_then(|c| c.text.clone().or_else(|| find_first_text(c)))
         {
             return key;
         }
-    }
 
     // For other nodes, use text or search recursively
     node.text

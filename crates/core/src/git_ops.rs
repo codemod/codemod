@@ -448,11 +448,10 @@ pub async fn commit(
 /// its value is used directly without any git detection.
 async fn detect_remote_base_branch(working_dir: &std::path::Path) -> String {
     // Honour explicit override from the environment
-    if let Ok(branch) = std::env::var("CODEMOD_BASE_BRANCH") {
-        if !branch.is_empty() {
+    if let Ok(branch) = std::env::var("CODEMOD_BASE_BRANCH")
+        && !branch.is_empty() {
             return branch;
         }
-    }
 
     // Try symbolic-ref first
     let mut symbolic_ref = Command::new("git");
@@ -460,8 +459,8 @@ async fn detect_remote_base_branch(working_dir: &std::path::Path) -> String {
         .args(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
         .current_dir(working_dir);
     configure_non_interactive_git_command(&mut symbolic_ref);
-    if let Ok(output) = symbolic_ref.output().await {
-        if output.status.success() {
+    if let Ok(output) = symbolic_ref.output().await
+        && output.status.success() {
             let branch = String::from_utf8_lossy(&output.stdout)
                 .trim()
                 .trim_start_matches("origin/")
@@ -470,7 +469,6 @@ async fn detect_remote_base_branch(working_dir: &std::path::Path) -> String {
                 return branch;
             }
         }
-    }
 
     // Fallback: try common default branch names on the remote.
     for candidate in &["main", "master"] {
@@ -484,11 +482,10 @@ async fn detect_remote_base_branch(working_dir: &std::path::Path) -> String {
             ])
             .current_dir(working_dir);
         configure_non_interactive_git_command(&mut command);
-        if let Ok(output) = command.output().await {
-            if output.status.success() {
+        if let Ok(output) = command.output().await
+            && output.status.success() {
                 return candidate.to_string();
             }
-        }
     }
 
     "main".to_string()

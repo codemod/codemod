@@ -95,8 +95,8 @@ pub fn evaluate_builtin_shards(
     let current_file_set: HashSet<&str> = relative_files.iter().map(|s| s.as_str()).collect();
 
     // If we have previous shards, do incremental evaluation
-    if let Some(prev) = previous_shards {
-        if !prev.is_empty() {
+    if let Some(prev) = previous_shards
+        && !prev.is_empty() {
             return evaluate_incremental(
                 prev,
                 &current_file_set,
@@ -105,7 +105,6 @@ pub fn evaluate_builtin_shards(
                 target_path,
             );
         }
-    }
 
     // Fresh evaluation — no previous state
     if relative_files.is_empty() {
@@ -525,8 +524,8 @@ fn bin_pack_files(files: &[String], max_size: usize, min_size: Option<usize>) ->
     let mut chunks: Vec<Vec<String>> = files.chunks(max_size).map(|c| c.to_vec()).collect();
 
     // Merge trailing runt into previous chunk
-    if let Some(min) = min_size {
-        if chunks.len() > 1 {
+    if let Some(min) = min_size
+        && chunks.len() > 1 {
             let last_len = chunks.last().map(|c| c.len()).unwrap_or(0);
             if last_len < min {
                 let last = chunks.pop().unwrap();
@@ -535,7 +534,6 @@ fn bin_pack_files(files: &[String], max_size: usize, min_size: Option<usize>) ->
                 }
             }
         }
-    }
 
     chunks
 }

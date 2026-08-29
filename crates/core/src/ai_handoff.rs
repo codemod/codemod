@@ -436,8 +436,8 @@ where
     let mut signals = Vec::new();
 
     for marker in ENV_MARKERS {
-        if let Some(value) = env_map.get(marker.key) {
-            if !value.trim().is_empty() {
+        if let Some(value) = env_map.get(marker.key)
+            && !value.trim().is_empty() {
                 log::debug!(
                     "found environment marker: {}={} (agent={})",
                     marker.key,
@@ -450,7 +450,6 @@ where
                     reason: format!("env marker {} indicates {}", marker.key, marker.agent),
                 });
             }
-        }
     }
 
     signals
@@ -476,8 +475,8 @@ fn collect_process_signals(max_parent_depth: usize) -> ProcessInspection {
                 );
 
                 let executable_path = process.executable.trim();
-                if !executable_path.is_empty() {
-                    if let Some(agent) = detect_agent_in_executable(executable_path) {
+                if !executable_path.is_empty()
+                    && let Some(agent) = detect_agent_in_executable(executable_path) {
                         log::debug!(
                             "executable matched agent (strong signal): pid={} agent={}",
                             process.pid,
@@ -492,7 +491,6 @@ fn collect_process_signals(max_parent_depth: usize) -> ProcessInspection {
                             ),
                         });
                     }
-                }
 
                 if let Some(agent) = detect_agent_in_text(&process.command) {
                     log::debug!(

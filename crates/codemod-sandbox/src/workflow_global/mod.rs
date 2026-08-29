@@ -36,11 +36,10 @@ pub fn get_step_output(
         .lock()
         .map_err(|e| format!("Failed to lock STEP_OUTPUTS_STORE: {}", e))?;
 
-    if let Some(outputs) = store.get(step_id) {
-        if let Some(value) = outputs.get(output_name) {
+    if let Some(outputs) = store.get(step_id)
+        && let Some(value) = outputs.get(output_name) {
             return Ok(Some(value.clone()));
         }
-    }
 
     Ok(None)
 }

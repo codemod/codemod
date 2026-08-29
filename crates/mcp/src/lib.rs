@@ -1158,11 +1158,9 @@ impl CodemodMcpServer {
             if let Some(parent) = path
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
-            {
-                if std::fs::create_dir_all(parent).is_err() {
+                && std::fs::create_dir_all(parent).is_err() {
                     return;
                 }
-            }
             let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) else {
                 return;
             };

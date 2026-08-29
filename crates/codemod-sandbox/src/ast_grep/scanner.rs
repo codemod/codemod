@@ -41,12 +41,11 @@ where
         let mut edit_infos: Vec<(usize, usize, Vec<u8>)> = Vec::new(); // (position, deleted_length, inserted_text)
 
         for (rule, node_match) in &scan_result.diffs {
-            if let Ok(fixers) = rule.get_fixer() {
-                if let Some(fixer) = fixers.first() {
+            if let Ok(fixers) = rule.get_fixer()
+                && let Some(fixer) = fixers.first() {
                     let edit = node_match.make_edit(&rule.matcher, fixer);
                     edit_infos.push((edit.position, edit.deleted_length, edit.inserted_text));
                 }
-            }
 
             // Also record this as a match for reporting
             let node = node_match.get_node();

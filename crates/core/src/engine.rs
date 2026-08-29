@@ -835,11 +835,10 @@ impl Engine {
             },
         );
         logger.agent_event(starting_event.clone());
-        if let Some(callback) = progress_callback.as_ref() {
-            if let Ok(payload) = serde_json::to_string(&starting_event) {
+        if let Some(callback) = progress_callback.as_ref()
+            && let Ok(payload) = serde_json::to_string(&starting_event) {
                 (callback.callback)(&task_id, &payload, "agent", None, &0);
             }
-        }
 
         let mut child = cmd.spawn().map_err(|error| {
             Error::StepExecution(format!("Failed to spawn agent '{}': {}", canonical, error))
@@ -879,11 +878,10 @@ impl Engine {
                     };
                     stream_seen.store(true, Ordering::Relaxed);
                     logger.agent_event(event.clone());
-                    if let Some(callback) = progress_callback.as_ref() {
-                        if let Ok(payload) = serde_json::to_string(&event) {
+                    if let Some(callback) = progress_callback.as_ref()
+                        && let Ok(payload) = serde_json::to_string(&event) {
                             (callback.callback)(&task_id, &payload, "agent", None, &0);
                         }
-                    }
                 }
             })
         });
@@ -921,11 +919,10 @@ impl Engine {
                     };
                     stream_seen.store(true, Ordering::Relaxed);
                     logger.agent_event(event.clone());
-                    if let Some(callback) = progress_callback.as_ref() {
-                        if let Ok(payload) = serde_json::to_string(&event) {
+                    if let Some(callback) = progress_callback.as_ref()
+                        && let Ok(payload) = serde_json::to_string(&event) {
                             (callback.callback)(&task_id, &payload, "agent", None, &0);
                         }
-                    }
                 }
             })
         });
@@ -1329,14 +1326,13 @@ impl Engine {
                         let adapter = engine.state_adapter.lock().await;
                         adapter.get_workflow_run(task.workflow_run_id).await.ok()
                     };
-                    if let Some(workflow_run) = workflow_run {
-                        if let Some(node) = workflow_run
+                    if let Some(workflow_run) = workflow_run
+                        && let Some(node) = workflow_run
                             .workflow
                             .nodes
                             .iter()
                             .find(|node| node.id == task.node_id)
-                        {
-                            if let Err(error) = ManagedGitService::prepare_task_worktree(
+                            && let Err(error) = ManagedGitService::prepare_task_worktree(
                                 &mut engine,
                                 task_id,
                                 &task,
@@ -1355,8 +1351,6 @@ impl Engine {
                                 let _ = engine.mark_task_as_failed(task_id, &message).await;
                                 return;
                             }
-                        }
-                    }
                 }
 
                 let task_timeout = tokio::time::Duration::from_secs(45 * 60);
@@ -2646,8 +2640,8 @@ impl Engine {
                         task_id
                     );
 
-                    if manage_git {
-                        if let Some(commit_config) = &step.commit {
+                    if manage_git
+                        && let Some(commit_config) = &step.commit {
                             let resolved_message = resolve_string_with_expression(
                                 &commit_config.message,
                                 &resolved_params,
@@ -2693,7 +2687,6 @@ impl Engine {
                                 }
                             }
                         }
-                    }
                 }
                 Err(Error::Deferred(message)) => {
                     step_logger.step_end("deferred", step_start_time.elapsed().as_millis() as u64);
@@ -2914,13 +2907,11 @@ impl Engine {
                             );
                             if let Ok(mut first_failure_message) =
                                 first_failure_message_for_closure.lock()
-                            {
-                                if first_failure_message.is_none() {
+                                && first_failure_message.is_none() {
                                     *first_failure_message = Some(format!(
                                         "Failed to process {execution_title}: {message}"
                                     ));
                                 }
-                            }
                         };
 
                         // Execute ast-grep on this file
@@ -3037,15 +3028,14 @@ impl Engine {
                 let attempted_files = attempted_file_count.load(Ordering::Relaxed);
                 let failed_files = failed_file_count.load(Ordering::Relaxed);
                 let succeeded_files = succeeded_file_count.load(Ordering::Relaxed);
-                if attempted_files > 0 && failed_files == attempted_files && succeeded_files == 0 {
-                    if let Some(message) = first_failure_message
+                if attempted_files > 0 && failed_files == attempted_files && succeeded_files == 0
+                    && let Some(message) = first_failure_message
                         .lock()
                         .ok()
                         .and_then(|message| message.clone())
                     {
                         return Err(Box::new(std::io::Error::other(message)));
                     }
-                }
 
                 Ok(())
             },
@@ -3236,8 +3226,8 @@ impl Engine {
         }
 
         // 3. If interactive, discover installed agents and prompt user to select
-        if !self.workflow_run_config.interaction.no_interactive {
-            if let Some(ref callback) = self
+        if !self.workflow_run_config.interaction.no_interactive
+            && let Some(ref callback) = self
                 .workflow_run_config
                 .interaction
                 .agent_selection_callback
@@ -3297,7 +3287,6 @@ impl Engine {
                     break;
                 }
             }
-        }
 
         debug!(
             "AI handoff mode=rig confidence={} agent={}",

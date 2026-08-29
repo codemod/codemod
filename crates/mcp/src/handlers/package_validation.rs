@@ -461,8 +461,8 @@ impl PackageValidationHandler {
             ));
         }
 
-        if let Some(result) = &default_test {
-            if !result.success {
+        if let Some(result) = &default_test
+            && !result.success {
                 issues.push(issue(
                     "error",
                     "default_test_failed",
@@ -470,10 +470,9 @@ impl PackageValidationHandler {
                     Some(package_root.clone()),
                 ));
             }
-        }
 
-        if let Some(result) = &check_types {
-            if !result.success {
+        if let Some(result) = &check_types
+            && !result.success {
                 issues.push(issue(
                     "error",
                     "check_types_failed",
@@ -481,7 +480,6 @@ impl PackageValidationHandler {
                     Some(package_root.clone()),
                 ));
             }
-        }
 
         let ready = issues.iter().all(|issue| issue.severity != "error");
 
@@ -1088,7 +1086,7 @@ async fn collect_output(task: Option<tokio::task::JoinHandle<Vec<u8>>>) -> Vec<u
     }
 }
 
-fn configure_command_for_timeout_cleanup(command: &mut Command) {
+fn configure_command_for_timeout_cleanup(_command: &mut Command) {
     #[cfg(unix)]
     {
         command.process_group(0);

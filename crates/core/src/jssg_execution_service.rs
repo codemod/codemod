@@ -364,9 +364,9 @@ impl<'a> JssgExecutionService<'a> {
         }
 
         for file_path in &target_files {
-            if file_path.is_file() {
-                if let Ok(content) = std::fs::read_to_string(file_path) {
-                    if let Err(e) = provider.notify_file_processed(file_path, &content) {
+            if file_path.is_file()
+                && let Ok(content) = std::fs::read_to_string(file_path)
+                    && let Err(e) = provider.notify_file_processed(file_path, &content) {
                         slog!(
                             logger,
                             debug,
@@ -375,8 +375,6 @@ impl<'a> JssgExecutionService<'a> {
                             e
                         );
                     }
-                }
-            }
         }
 
         if let Some(task_id) = task_log_task_id {
@@ -639,11 +637,9 @@ impl<'a> JssgExecutionService<'a> {
                             );
                             if let Ok(mut execution_failure_message) =
                                 execution_failure_message_for_closure.lock()
-                            {
-                                if execution_failure_message.is_none() {
+                                && execution_failure_message.is_none() {
                                     *execution_failure_message = Some(execution_message.clone());
                                 }
-                            }
                             if let (Some(task_id), Some(run_id)) =
                                 (task_log_task_id, workflow_run_id)
                             {
@@ -981,8 +977,8 @@ impl<'a> JssgExecutionService<'a> {
                                     }
                                 }
                                 ExecutionResult::Unmodified => {
-                                    if has_selector {
-                                        if let Some(ref collector) =
+                                    if has_selector
+                                        && let Some(ref collector) =
                                             selector_matched_files_collector_clone
                                         {
                                             collector
@@ -990,7 +986,6 @@ impl<'a> JssgExecutionService<'a> {
                                                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                                                 .push(file_path.to_path_buf());
                                         }
-                                    }
                                     engine
                                         .execution_stats
                                         .files_unmodified
@@ -1046,11 +1041,9 @@ impl<'a> JssgExecutionService<'a> {
                                 canceled_flag_for_closure.store(true, Ordering::Release);
                                 if let Ok(mut runtime_failure_message) =
                                     runtime_failure_message_for_closure.lock()
-                                {
-                                    if runtime_failure_message.is_none() {
+                                    && runtime_failure_message.is_none() {
                                         *runtime_failure_message = Some(message);
                                     }
-                                }
                             } else if Self::is_runtime_initialization_failure(&e)
                                 || Self::is_codemod_source_reference_failure(
                                     &e,
@@ -1076,11 +1069,9 @@ impl<'a> JssgExecutionService<'a> {
                             );
                             if let Ok(mut execution_failure_message) =
                                 execution_failure_message_for_closure.lock()
-                            {
-                                if execution_failure_message.is_none() {
+                                && execution_failure_message.is_none() {
                                     *execution_failure_message = Some(execution_message.clone());
                                 }
-                            }
                             if let (Some(task_id), Some(run_id)) =
                                 (task_log_task_id, workflow_run_id)
                             {
@@ -1126,11 +1117,9 @@ impl<'a> JssgExecutionService<'a> {
                             );
                             if let Ok(mut execution_failure_message) =
                                 execution_failure_message_for_closure.lock()
-                            {
-                                if execution_failure_message.is_none() {
+                                && execution_failure_message.is_none() {
                                     *execution_failure_message = Some(execution_message.clone());
                                 }
-                            }
                             if let (Some(task_id), Some(run_id)) =
                                 (task_log_task_id, workflow_run_id)
                             {
@@ -1220,15 +1209,14 @@ impl<'a> JssgExecutionService<'a> {
         let attempted_files = attempted_file_count.load(Ordering::Relaxed);
         let failed_files = failed_file_count.load(Ordering::Relaxed);
         let succeeded_files = succeeded_file_count.load(Ordering::Relaxed);
-        if attempted_files > 0 && failed_files == attempted_files && succeeded_files == 0 {
-            if let Some(message) = execution_failure_message
+        if attempted_files > 0 && failed_files == attempted_files && succeeded_files == 0
+            && let Some(message) = execution_failure_message
                 .lock()
                 .ok()
                 .and_then(|message| message.clone())
             {
                 return Err(Error::StepExecution(message));
             }
-        }
 
         if canceled_during_execution.load(Ordering::Acquire) {
             if let Some(message) = execution_failure_message
@@ -1255,8 +1243,8 @@ impl<'a> JssgExecutionService<'a> {
             }
         }
 
-        if let Some(wf_run_id) = workflow_run_id {
-            if !self
+        if let Some(wf_run_id) = workflow_run_id
+            && !self
                 .engine
                 .workflow_run_config()
                 .execution
@@ -1298,7 +1286,6 @@ impl<'a> JssgExecutionService<'a> {
                         .await?;
                 }
             }
-        }
 
         Ok(())
     }

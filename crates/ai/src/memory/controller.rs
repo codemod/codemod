@@ -65,8 +65,8 @@ pub fn maybe_proactive_budget(
 ) -> Option<(usize, Option<u64>)> {
     let chars = estimate_context_chars(prompt, history);
 
-    if let Some(snapshot) = usage_snapshot {
-        if snapshot.context_chars > 0 && snapshot.total_tokens > 0 {
+    if let Some(snapshot) = usage_snapshot
+        && snapshot.context_chars > 0 && snapshot.total_tokens > 0 {
             let estimated_tokens = ((chars as u128 * snapshot.total_tokens as u128)
                 / snapshot.context_chars as u128) as u64;
 
@@ -74,7 +74,6 @@ pub fn maybe_proactive_budget(
                 return Some((chars, Some(estimated_tokens)));
             }
         }
-    }
 
     if chars > SOFT_CONTEXT_CHAR_BUDGET {
         return Some((chars, None));
@@ -107,16 +106,14 @@ pub fn is_context_limit_error_text(message: &str) -> bool {
             parsed.push(value);
         }
 
-        if let Some(start) = message.find('{') {
-            if let Some(end) = message.rfind('}') {
-                if end > start {
+        if let Some(start) = message.find('{')
+            && let Some(end) = message.rfind('}')
+                && end > start {
                     let raw = &message[start..=end];
                     if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) {
                         parsed.push(value);
                     }
                 }
-            }
-        }
 
         parsed
     }

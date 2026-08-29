@@ -160,13 +160,12 @@ fn check_no_symlink_escape(
     for component in Path::new(rel).components() {
         if let Component::Normal(name) = component {
             cursor.push(name);
-            if let Ok(meta) = std::fs::symlink_metadata(&cursor) {
-                if meta.file_type().is_symlink() {
+            if let Ok(meta) = std::fs::symlink_metadata(&cursor)
+                && meta.file_type().is_symlink() {
                     return Err(FsErrorKind::AccessDenied {
                         path: normalized.to_string(),
                     });
                 }
-            }
         }
     }
     Ok(())
@@ -329,11 +328,10 @@ fn encoding_from_options<'js>(options: Opt<Value<'js>>) -> Option<String> {
     if let Some(s) = value.as_string() {
         return s.to_string().ok();
     }
-    if let Some(obj) = value.as_object() {
-        if let Ok(enc) = obj.get::<_, Option<String>>("encoding") {
+    if let Some(obj) = value.as_object()
+        && let Ok(enc) = obj.get::<_, Option<String>>("encoding") {
             return enc;
         }
-    }
     None
 }
 
@@ -419,11 +417,10 @@ fn read_bytes_via_vfs_or_fetcher(
                     // Populate the VFS so the next read skips the fetcher
                     // entirely (and so other workers sharing this VFS see
                     // the file immediately).
-                    if let Some(parent) = parent_of(normalized) {
-                        if let Ok(parent_vfs) = cfg.root.join(parent.trim_start_matches('/')) {
+                    if let Some(parent) = parent_of(normalized)
+                        && let Ok(parent_vfs) = cfg.root.join(parent.trim_start_matches('/')) {
                             let _ = parent_vfs.create_dir_all();
                         }
-                    }
                     // Another worker raced us — if the file now exists,
                     // proceed with our freshly fetched bytes and let
                     // their write stand. Any other write failure is
@@ -487,11 +484,10 @@ fn hydrate_file_from_fetcher(
     };
     match fetcher.fetch(normalized) {
         Ok(Some(bytes)) => {
-            if let Some(parent) = parent_of(normalized) {
-                if let Ok(parent_vfs) = cfg.root.join(parent.trim_start_matches('/')) {
+            if let Some(parent) = parent_of(normalized)
+                && let Ok(parent_vfs) = cfg.root.join(parent.trim_start_matches('/')) {
                     let _ = parent_vfs.create_dir_all();
                 }
-            }
             let mut file = vfs_path
                 .create_file()
                 .map_err(|e| throw_fs(ctx, map_vfs_err(e, normalized), syscall))?;
@@ -693,16 +689,14 @@ fn list_directory_entries(ctx: &Ctx<'_>, path: &str) -> Result<(String, Vec<Stri
     let iter = vfs_path
         .read_dir()
         .or_else(|err| {
-            if matches!(err.kind(), VfsErrorKind::FileNotFound) {
-                if let Some(fetcher) = &cfg.fetcher {
-                    if let Ok(Some(meta)) = fetcher.metadata(&normalized) {
+            if matches!(err.kind(), VfsErrorKind::FileNotFound)
+                && let Some(fetcher) = &cfg.fetcher
+                    && let Ok(Some(meta)) = fetcher.metadata(&normalized) {
                         if !matches!(meta.file_type, VfsFileType::Directory) {
                             return Err(err);
                         }
                         let _ = vfs_path.create_dir_all();
                     }
-                }
-            }
             vfs_path.read_dir()
         })
         .map_err(|e| throw_fs(ctx, map_vfs_err(e, &normalized), "scandir"))?;

@@ -377,8 +377,8 @@ impl AccurateAnalyzer {
             .iter()
             .find(|r| r.range.start <= range.start && r.range.end >= range.end);
 
-        if let Some(ref_info) = reference {
-            if let Some(symbol) = file_symbols.find_symbol_by_id(ref_info.symbol_id) {
+        if let Some(ref_info) = reference
+            && let Some(symbol) = file_symbols.find_symbol_by_id(ref_info.symbol_id) {
                 return Ok(Some(DefinitionResult::new(
                     SymbolLocation::new(
                         canonical.clone(),
@@ -390,7 +390,6 @@ impl AccurateAnalyzer {
                     DefinitionKind::Local,
                 )));
             }
-        }
 
         // Check if this is an import
         if let Some(import) = file_symbols.find_import_at(range) {
@@ -508,8 +507,7 @@ impl AccurateAnalyzer {
                             // Try to resolve the import
                             if let Ok(resolved) =
                                 self.resolve_module(&import.module_specifier, &cached_path)
-                            {
-                                if resolved == canonical {
+                                && resolved == canonical {
                                     // This file imports from our file
                                     let matches_name = import
                                         .imported_name
@@ -551,7 +549,6 @@ impl AccurateAnalyzer {
                                         }
                                     }
                                 }
-                            }
                         }
                     }
                 }
@@ -660,8 +657,8 @@ impl AccurateAnalyzer {
         };
 
         if let Some(export) = file_symbols.find_export_by_name(export_name) {
-            if let Some(local_id) = export.local_symbol_id {
-                if let Some(symbol) = file_symbols.find_symbol_by_id(local_id) {
+            if let Some(local_id) = export.local_symbol_id
+                && let Some(symbol) = file_symbols.find_symbol_by_id(local_id) {
                     return Ok(Some(DefinitionResult::new(
                         SymbolLocation::new(
                             resolved_path,
@@ -673,7 +670,6 @@ impl AccurateAnalyzer {
                         DefinitionKind::External,
                     )));
                 }
-            }
             return Ok(Some(DefinitionResult::new(
                 SymbolLocation::new(
                     resolved_path,
@@ -687,8 +683,8 @@ impl AccurateAnalyzer {
         }
 
         // Check for default export
-        if is_default {
-            if let Some(export) = file_symbols.get_default_export() {
+        if is_default
+            && let Some(export) = file_symbols.get_default_export() {
                 return Ok(Some(DefinitionResult::new(
                     SymbolLocation::new(
                         resolved_path,
@@ -700,7 +696,6 @@ impl AccurateAnalyzer {
                     DefinitionKind::External,
                 )));
             }
-        }
 
         Ok(None)
     }

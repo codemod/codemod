@@ -263,8 +263,8 @@ impl LightweightAnalyzer {
                 if let Some((file_symbols, file_content)) = self.cache.get(&potential_path) {
                     // Look for the exported symbol
                     if let Some(export) = file_symbols.find_export_by_name(symbol_name) {
-                        if let Some(local_id) = export.local_symbol_id {
-                            if let Some(symbol) = file_symbols.find_symbol_by_id(local_id) {
+                        if let Some(local_id) = export.local_symbol_id
+                            && let Some(symbol) = file_symbols.find_symbol_by_id(local_id) {
                                 return Ok(Some(DefinitionResult::new(
                                     SymbolLocation::new(
                                         potential_path,
@@ -276,7 +276,6 @@ impl LightweightAnalyzer {
                                     DefinitionKind::External,
                                 )));
                             }
-                        }
                         // Return the export location if we can't find the actual symbol
                         return Ok(Some(DefinitionResult::new(
                             SymbolLocation::new(
@@ -291,8 +290,8 @@ impl LightweightAnalyzer {
                     }
 
                     // Check for default export
-                    if symbol_name == "default" {
-                        if let Some(export) = file_symbols.get_default_export() {
+                    if symbol_name == "default"
+                        && let Some(export) = file_symbols.get_default_export() {
                             return Ok(Some(DefinitionResult::new(
                                 SymbolLocation::new(
                                     potential_path,
@@ -304,7 +303,6 @@ impl LightweightAnalyzer {
                                 DefinitionKind::External,
                             )));
                         }
-                    }
                 }
             }
         }

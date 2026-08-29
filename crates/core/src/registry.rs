@@ -336,14 +336,13 @@ impl RegistryClient {
             .header("x-supports-dry-run-only", "true");
 
         // Add authentication header if available
-        if let Some(auth_provider) = &self.auth_provider {
-            if let Ok(Some(auth)) = auth_provider.get_auth_for_registry(registry_url) {
+        if let Some(auth_provider) = &self.auth_provider
+            && let Ok(Some(auth)) = auth_provider.get_auth_for_registry(registry_url) {
                 request = request.header(
                     "Authorization",
                     format!("Bearer {}", auth.tokens.access_token),
                 );
             }
-        }
 
         let response = request.send().await?;
 
@@ -437,8 +436,8 @@ impl RegistryClient {
             let magic = &package_data[0..2];
             if magic != [0x1f, 0x8b] {
                 // Check if this is a JSON response with a download_url
-                if let Ok(text) = std::str::from_utf8(&package_data) {
-                    if text.trim().starts_with('{') {
+                if let Ok(text) = std::str::from_utf8(&package_data)
+                    && text.trim().starts_with('{') {
                         // Try to parse as JSON to get the actual download URL
                         if let Ok(download_response) =
                             serde_json::from_str::<DownloadResponse>(text)
@@ -491,7 +490,6 @@ impl RegistryClient {
                             return Ok((cache_dir.to_path_buf(), dry_run_only));
                         }
                     }
-                }
 
                 // If we get here, it's not a valid gzip file and not a JSON redirect
                 return Err(RegistryError::InvalidDownloadData {
@@ -706,21 +704,19 @@ fn determine_version(spec: &PackageSpec, package_info: &PackageInfo) -> Result<S
             return Ok(selector.clone());
         }
 
-        if let Some(version) = package_info.dist_tags.get(selector) {
-            if package_info.versions.contains_key(version) {
+        if let Some(version) = package_info.dist_tags.get(selector)
+            && package_info.versions.contains_key(version) {
                 return Ok(version.clone());
             }
-        }
 
-        if selector == "latest" {
-            if let Some(version) = package_info
+        if selector == "latest"
+            && let Some(version) = package_info
                 .latest_version
                 .as_ref()
                 .filter(|version| package_info.versions.contains_key(*version))
             {
                 return Ok(version.clone());
             }
-        }
 
         return Err(RegistryError::VersionNotFound {
             version: selector.clone(),

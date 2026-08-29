@@ -194,13 +194,12 @@ impl CkgDatabase {
         let node_type = node.kind();
 
         // Extract symbol based on node type (simplified)
-        if self.is_symbol_node(node_type, language) {
-            if let Some(symbol) =
+        if self.is_symbol_node(node_type, language)
+            && let Some(symbol) =
                 self.extract_symbol_from_node(node, content, file_path, language, parent.clone())
             {
                 symbols.push(symbol);
             }
-        }
 
         // Recursively process children
         let mut cursor = node.walk();
@@ -521,9 +520,9 @@ impl CkgTool {
         for entry in walker {
             match entry {
                 Ok(entry) => {
-                    if entry.file_type().is_file() {
-                        if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
-                            if extensions.contains(&ext.to_string()) {
+                    if entry.file_type().is_file()
+                        && let Some(ext) = entry.path().extension().and_then(|e| e.to_str())
+                            && extensions.contains(&ext.to_string()) {
                                 total_files += 1;
 
                                 match self.process_file(entry.path()).await {
@@ -540,8 +539,6 @@ impl CkgTool {
                                     }
                                 }
                             }
-                        }
-                    }
                 }
                 Err(e) => {
                     errors.push(format!("Error walking directory: {}", e));

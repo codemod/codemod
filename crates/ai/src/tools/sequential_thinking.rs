@@ -230,14 +230,12 @@ impl ThinkingTool {
     fn handle_branching(&self, thought_data: &ThoughtData) {
         if let (Some(_), Some(branch_id)) =
             (&thought_data.branch_from_thought, &thought_data.branch_id)
-        {
-            if let Ok(mut branches) = self.branches.lock() {
+            && let Ok(mut branches) = self.branches.lock() {
                 branches
                     .entry(branch_id.clone())
                     .or_insert_with(Vec::new)
                     .push(thought_data.clone());
             }
-        }
     }
 
     /// Create response data for output

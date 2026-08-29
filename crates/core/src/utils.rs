@@ -181,16 +181,13 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                     validate_workflow_relative_path(base_path, "js-ast-grep.base_path")?;
                 }
                 if let Some(SemanticAnalysisConfig::Detailed(detailed)) = &js_step.semantic_analysis
-                {
-                    if matches!(detailed.mode, SemanticAnalysisMode::Workspace) {
-                        if let Some(root) = &detailed.root {
+                    && matches!(detailed.mode, SemanticAnalysisMode::Workspace)
+                        && let Some(root) = &detailed.root {
                             validate_workflow_relative_path(
                                 root,
                                 "js-ast-grep.semantic_analysis.root",
                             )?;
                         }
-                    }
-                }
 
                 let js_file_path = package_path.join(js_step.js_file.trim());
                 if !js_file_path.exists() {
@@ -250,7 +247,7 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                 }
                 match &shard.method {
                     ShardMethod::Builtin(_) => {
-                        if shard.target.as_ref().map_or(true, |t| t.trim().is_empty()) {
+                        if shard.target.as_ref().is_none_or(|t| t.trim().is_empty()) {
                             return Err(Error::WorkflowValidation(format!(
                                 "Step '{}' in node '{}': built-in shard method requires a non-empty 'target' field",
                                 step.name, node.id
@@ -315,14 +312,13 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
 
     // Check matrix strategies
     for node in &workflow.nodes {
-        if let Some(strategy) = &node.strategy {
-            if strategy.values.is_none() && strategy.from_state.is_none() {
+        if let Some(strategy) = &node.strategy
+            && strategy.values.is_none() && strategy.from_state.is_none() {
                 return Err(Error::WorkflowValidation(format!(
                     "Matrix strategy for node {} requires either 'values' or 'from_state'",
                     node.id
                 )));
             }
-        }
     }
 
     Ok(())
@@ -345,13 +341,12 @@ fn detect_cycles(nodes: &[Node]) -> Result<()> {
 
     // DFS to detect cycles
     for node in nodes {
-        if !visited.contains(node.id.as_str()) {
-            if let Some(cycle) =
+        if !visited.contains(node.id.as_str())
+            && let Some(cycle) =
                 dfs_cycle_detect(&graph, node.id.as_str(), &mut visited, &mut in_progress)
             {
                 return Err(Error::CyclicDependency(cycle));
             }
-        }
     }
 
     Ok(())
@@ -376,23 +371,21 @@ fn dfs_cycle_detect<'a>(
                 let mut current = neighbor;
                 while current != node {
                     for &n in graph.keys() {
-                        if let Some(deps) = graph.get(n) {
-                            if deps.contains(&current) {
+                        if let Some(deps) = graph.get(n)
+                            && deps.contains(&current) {
                                 cycle = format!("{n} → {cycle}");
                                 current = n;
                                 break;
                             }
-                        }
                     }
                 }
                 return Some(cycle);
             }
 
-            if !visited.contains(neighbor) {
-                if let Some(cycle) = dfs_cycle_detect(graph, neighbor, visited, in_progress) {
+            if !visited.contains(neighbor)
+                && let Some(cycle) = dfs_cycle_detect(graph, neighbor, visited, in_progress) {
                     return Some(cycle);
                 }
-            }
         }
     }
 
