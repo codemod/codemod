@@ -1,6 +1,6 @@
 [package]
 name = "codemod-llrt-capabilities"
-edition = "2021"
+edition = "2024"
 authors.workspace = true
 description.workspace = true
 documentation.workspace = true

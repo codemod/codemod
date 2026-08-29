@@ -1,7 +1,7 @@
 [package]
 name = "language-javascript"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 description = "JavaScript/TypeScript semantic analysis provider using oxc"
 
 [dependencies]
@@ -28,4 +28,3 @@ yarn_pnp = ["oxc_resolver/yarn_pnp"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
-
