@@ -352,8 +352,8 @@ async fn handle_callback(
         &Method::GET => {
             let uri = req.uri();
 
-            if uri.path() == "/callback" {
-                if let Some(query) = uri.query() {
+            if uri.path() == "/callback"
+                && let Some(query) = uri.query() {
                     let params: HashMap<String, String> =
                         url::form_urlencoded::parse(query.as_bytes())
                             .into_owned()
@@ -402,7 +402,6 @@ async fn handle_callback(
                             .unwrap());
                     }
                 }
-            }
 
             // Default response for unknown paths
             Ok(Response::builder()

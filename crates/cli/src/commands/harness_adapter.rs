@@ -1325,12 +1325,11 @@ fn upsert_codex_periodic_update_notify(
     };
 
     let expected = vec!["sh".to_string(), runner_path.to_string_lossy().to_string()];
-    if let Some(existing_notify) = read_notify_command(&document)? {
-        if existing_notify != expected {
+    if let Some(existing_notify) = read_notify_command(&document)?
+        && existing_notify != expected {
             // Preserve existing user notify integration if configured.
             return Ok(false);
         }
-    }
 
     let mut notify = Array::new();
     for arg in expected {
@@ -1712,8 +1711,7 @@ fn upsert_managed_block(
 ) -> String {
     if let (Some(begin_index), Some(end_start)) =
         (existing.find(begin_marker), existing.find(end_marker))
-    {
-        if end_start >= begin_index {
+        && end_start >= begin_index {
             let end_index = end_start + end_marker.len();
             let mut updated = String::new();
             updated.push_str(&existing[..begin_index]);
@@ -1721,7 +1719,6 @@ fn upsert_managed_block(
             updated.push_str(&existing[end_index..]);
             return updated;
         }
-    }
 
     if existing.trim().is_empty() {
         return format!("{block}\n");
@@ -2271,11 +2268,9 @@ fn mcs_install_requires_force_with_runtime(
         _ => {
             if let Some(command_path) =
                 mcs_command_entrypoint_path_for_harness(harness, scope, runtime_paths)?
-            {
-                if managed_text_file_requires_force(&command_path, MCS_COMMAND_MD)? {
+                && managed_text_file_requires_force(&command_path, MCS_COMMAND_MD)? {
                     return Ok(true);
                 }
-            }
         }
     }
 
@@ -2837,8 +2832,8 @@ fn upsert_codemod_mcp_server_toml(
     let mut expected_args = invocation.args_prefix;
     expected_args.push(MCP_SERVER_ARG_COMMAND.to_string());
 
-    if let Some(existing_server) = read_codex_mcp_server(&document)? {
-        if !force
+    if let Some(existing_server) = read_codex_mcp_server(&document)?
+        && !force
             && (existing_server.command != invocation.command
                 || existing_server.args != expected_args)
         {
@@ -2848,7 +2843,6 @@ fn upsert_codemod_mcp_server_toml(
                 MCP_SERVER_NAME,
             )));
         }
-    }
 
     if !document.as_table().contains_key("mcp_servers") {
         document["mcp_servers"] = Item::Table(Table::new());

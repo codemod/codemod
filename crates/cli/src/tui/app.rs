@@ -557,8 +557,8 @@ impl TuiState {
     }
 
     pub fn task_progress_counts(&self, task: &Task) -> Option<(usize, usize)> {
-        if let Some(progress) = self.task_progress.get(&task.id) {
-            if let Some(total) = progress.total_files {
+        if let Some(progress) = self.task_progress.get(&task.id)
+            && let Some(total) = progress.total_files {
                 let processed = if task.status == TaskStatus::Completed
                     || Self::task_transform_phase_finished(task)
                 {
@@ -568,7 +568,6 @@ impl TuiState {
                 };
                 return Some((processed as usize, total as usize));
             }
-        }
 
         let total = task.logs.iter().find_map(|line| {
             let prefix = "Starting js-ast-grep file loop (";
@@ -730,14 +729,13 @@ impl TuiState {
             .map(|task| {
                 let mut lines = render_task_log_lines(&task.logs);
 
-                if task.status == TaskStatus::Failed {
-                    if let Some(error) = task.error.as_deref() {
+                if task.status == TaskStatus::Failed
+                    && let Some(error) = task.error.as_deref() {
                         let rendered_error = format!("Error: {error}");
                         if !lines.iter().any(|line| line == &rendered_error) {
                             lines.push(rendered_error);
                         }
                     }
-                }
 
                 if lines.is_empty() {
                     "No logs yet".to_string()
@@ -926,11 +924,10 @@ impl TuiState {
                 if let Some(run) = self.runs.iter_mut().find(|run| run.id == workflow_run_id) {
                     run.status = status;
                 }
-                if let Some(run) = self.current_run.as_mut() {
-                    if run.id == workflow_run_id {
+                if let Some(run) = self.current_run.as_mut()
+                    && run.id == workflow_run_id {
                         run.status = status;
                     }
-                }
             }
             WorkflowEvent::TaskCreated { task, .. } => {
                 if let Some(existing) = self

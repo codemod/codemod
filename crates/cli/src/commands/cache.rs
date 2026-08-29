@@ -206,10 +206,10 @@ async fn prune_cache(max_age_days: u32, dry_run: bool) -> Result<()> {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_dir())
     {
-        if let Ok(metadata) = entry.metadata() {
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(modified_time) = modified.duration_since(std::time::UNIX_EPOCH) {
-                    if modified_time.as_secs() < cutoff_time {
+        if let Ok(metadata) = entry.metadata()
+            && let Ok(modified) = metadata.modified()
+                && let Ok(modified_time) = modified.duration_since(std::time::UNIX_EPOCH)
+                    && modified_time.as_secs() < cutoff_time {
                         let size = calculate_dir_size(entry.path())?;
 
                         if dry_run {
@@ -226,9 +226,6 @@ async fn prune_cache(max_age_days: u32, dry_run: bool) -> Result<()> {
                         pruned_count += 1;
                         pruned_size += size;
                     }
-                }
-            }
-        }
     }
 
     if dry_run {

@@ -96,15 +96,14 @@ impl RolldownBundler {
             .generate()
             .await
             .map_err(|e| anyhow::anyhow!("Rolldown bundling failed: {:?}", e))?;
-        if self.config.fail_on_unresolved_imports {
-            if let Some(warning) = result
+        if self.config.fail_on_unresolved_imports
+            && let Some(warning) = result
                 .warnings
                 .iter()
                 .find(|warning| warning.kind().to_string() == "UNRESOLVED_IMPORT")
             {
                 return Err(anyhow::anyhow!("Rolldown unresolved import: {}", warning));
             }
-        }
 
         let bundled_code = Self::extract_js_code(&result)?;
 

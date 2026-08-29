@@ -789,11 +789,10 @@ pub(in crate::commands::ai) fn validate_remote_update_manifest(
     if manifest.schema_version.trim().is_empty() {
         return Err("schema_version is required".to_string());
     }
-    if let Some(generated_at) = manifest.generated_at.as_deref() {
-        if generated_at.trim().is_empty() {
+    if let Some(generated_at) = manifest.generated_at.as_deref()
+        && generated_at.trim().is_empty() {
             return Err("generated_at cannot be empty when present".to_string());
         }
-    }
     if manifest.components.is_empty() {
         return Err("components must contain at least one entry".to_string());
     }
@@ -824,22 +823,20 @@ pub(in crate::commands::ai) fn validate_remote_update_manifest(
                 component.id
             ));
         }
-        if let Some(min_cli_version) = component.min_cli_version.as_deref() {
-            if min_cli_version.trim().is_empty() {
+        if let Some(min_cli_version) = component.min_cli_version.as_deref()
+            && min_cli_version.trim().is_empty() {
                 return Err(format!(
                     "component `{}` has empty min_cli_version",
                     component.id
                 ));
             }
-        }
-        if let Some(max_cli_version) = component.max_cli_version.as_deref() {
-            if max_cli_version.trim().is_empty() {
+        if let Some(max_cli_version) = component.max_cli_version.as_deref()
+            && max_cli_version.trim().is_empty() {
                 return Err(format!(
                     "component `{}` has empty max_cli_version",
                     component.id
                 ));
             }
-        }
         if let Some(harnesses) = &component.harnesses {
             if harnesses.is_empty() {
                 return Err(format!(
@@ -936,13 +933,11 @@ pub(in crate::commands::ai) fn maybe_attach_registry_auth(
     mut request: reqwest::RequestBuilder,
     remote_source: &str,
 ) -> reqwest::RequestBuilder {
-    if let Some(registry_url) = registry_source_base_url(remote_source) {
-        if let Ok(storage) = TokenStorage::new() {
-            if let Ok(Some(auth)) = storage.get_auth_for_registry(&registry_url) {
+    if let Some(registry_url) = registry_source_base_url(remote_source)
+        && let Ok(storage) = TokenStorage::new()
+            && let Ok(Some(auth)) = storage.get_auth_for_registry(&registry_url) {
                 request = request.bearer_auth(auth.tokens.access_token);
             }
-        }
-    }
     request
 }
 

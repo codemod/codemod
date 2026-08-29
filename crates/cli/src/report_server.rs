@@ -1120,19 +1120,16 @@ fn parse_agent_feedback_message(
     target_path: Option<&std::path::Path>,
 ) -> Result<String> {
     let text = extract_agent_text(output);
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim()) {
-        if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim())
+        && let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
             return sanitize_agent_feedback_message(message, target_path);
         }
-    }
 
-    if let Some(json_text) = extract_json_object(text.trim()) {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_text) {
-            if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
+    if let Some(json_text) = extract_json_object(text.trim())
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(json_text)
+            && let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
                 return sanitize_agent_feedback_message(message, target_path);
             }
-        }
-    }
 
     sanitize_agent_feedback_message(&text, target_path)
 }

@@ -514,11 +514,10 @@ pub async fn handler(
         crate::utils::metrics::print_metrics(&metrics_data);
     }
 
-    if resolved_package.dry_run_only {
-        if let Err(e) = std::fs::remove_dir_all(&resolved_package.package_dir) {
+    if resolved_package.dry_run_only
+        && let Err(e) = std::fs::remove_dir_all(&resolved_package.package_dir) {
             debug!("Failed to remove cached pro codemod: {}", e);
         }
-    }
 
     Ok(())
 }

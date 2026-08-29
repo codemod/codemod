@@ -67,13 +67,12 @@ fn task_row_status_style(task: &butterflow_models::Task) -> Style {
     }
 }
 pub fn render(frame: &mut Frame<'_>, state: &TuiState) {
-    if matches!(state.screen, Screen::RunDetail) {
-        if let Some(approval) = &state.approval {
+    if matches!(state.screen, Screen::RunDetail)
+        && let Some(approval) = &state.approval {
             frame.render_widget(Clear, frame.area());
             render_approval_modal(frame, approval);
             return;
         }
-    }
 
     if state.show_log_modal {
         frame.render_widget(Clear, frame.area());

@@ -279,8 +279,8 @@ pub fn create_engine(
         std::env::var("BUTTERFLOW_API_AUTH_TOKEN")
             .ok()
             .unwrap_or_default(),
-    ) {
-        if backend == "cloud" {
+    )
+        && backend == "cloud" {
             // Create API state adapter
             let state_adapter = Box::new(CloudStateAdapter::new(endpoint, auth_token));
             let mut engine = Engine::with_state_adapter(state_adapter, config.clone());
@@ -289,7 +289,6 @@ pub fn create_engine(
             }
             return Ok((engine, config.clone()));
         }
-    }
 
     let mut engine = Engine::with_workflow_run_config(config.clone());
     if progress_owns_terminal {

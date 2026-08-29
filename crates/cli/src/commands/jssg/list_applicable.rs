@@ -117,12 +117,11 @@ pub async fn handler(args: &Command) -> Result<()> {
 
         if let Some(cs) = &combined_scan_cloned {
             let result = scan_file_with_combined_scan(file_path, cs.as_ref(), false);
-            if let Ok((matches, _, _)) = result {
-                if !matches.is_empty() {
+            if let Ok((matches, _, _)) = result
+                && !matches.is_empty() {
                     let file_path_string = file_path.display().to_string();
                     println!("[Applicable] {file_path_string}");
                 }
-            }
         }
     });
 

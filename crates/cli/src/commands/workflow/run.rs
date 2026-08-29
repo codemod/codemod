@@ -164,14 +164,13 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         utils::find_dry_run_only_codemod_dependency(&workflow_definition, &registry_client)
             .await
             .context("Failed to inspect bundled codemods")?;
-    if let Some(source) = dry_run_only_dependency.as_deref() {
-        if !args.dry_run {
+    if let Some(source) = dry_run_only_dependency.as_deref()
+        && !args.dry_run {
             notify_pro_dry_run_required(
                 ProDryRunReason::BundledChild { source },
                 args.no_interactive,
             );
         }
-    }
     let pro_dry_run_required = dry_run_only_dependency.is_some();
     let dry_run = args.dry_run || pro_dry_run_required;
     let capabilities =

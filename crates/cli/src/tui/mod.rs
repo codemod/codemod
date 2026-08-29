@@ -460,13 +460,12 @@ async fn run_tui_loop(
             perf_counters.inc_workflow_events();
         }
 
-        if workflow_drain.needs_snapshot_reconcile {
-            if let Some(session) = runtime.session.as_ref() {
+        if workflow_drain.needs_snapshot_reconcile
+            && let Some(session) = runtime.session.as_ref() {
                 state.reduce(AppEvent::Snapshot(session.handle().load_snapshot().await?));
                 state_changed = true;
                 perf_counters.inc_workflow_lag_reconciles();
             }
-        }
         if workflow_drain.receiver_closed {
             runtime.receiver = None;
             state_changed = true;

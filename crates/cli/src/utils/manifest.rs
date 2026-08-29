@@ -329,11 +329,10 @@ fn normalize_workflow_entries_lenient(entries: &[WorkflowEntry]) -> Result<Vec<W
             }
         }
     }
-    if !seen_default {
-        if let Some(first) = result.first_mut() {
+    if !seen_default
+        && let Some(first) = result.first_mut() {
             first.default = true;
         }
-    }
 
     Ok(result)
 }
