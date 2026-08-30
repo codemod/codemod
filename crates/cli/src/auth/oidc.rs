@@ -382,15 +382,20 @@ async fn handle_callback(
                         .body(Body::from(html))
                         .unwrap());
                 } else if params.contains_key("error") {
-                    let _error = params.get("error").unwrap();
+                    let error = params.get("error").unwrap();
                     let default_error = "Unknown error".to_string();
-                    let _error_description =
+                    let error_description =
                         params.get("error_description").unwrap_or(&default_error);
+
+                    let error = html_escape::encode_text(error);
+                    let error_description = html_escape::encode_text(error_description);
+
+                    let description = format!("Error: {error}<br>Description: {error_description}");
 
                     let html = format!(
                         include_str!("html/post-login.html.txt"),
                         title = "Authentication Failed",
-                        description = "Error: {error}<br>Description: {error_description}"
+                        description = description
                     );
 
                     return Ok(Response::builder()
