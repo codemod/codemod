@@ -1,12 +1,12 @@
 use super::codemod_lang::CodemodLang;
 use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule, FileFetcher};
-use super::execution_engine::{map_transform_execution_error, CodemodOutput, ExecutionResult};
+use super::execution_engine::{CodemodOutput, ExecutionResult, map_transform_execution_error};
 use super::quickjs_adapters::QuickJSResolver;
 use super::transform_helpers::{
-    build_transform_options, process_transform_result, ModificationCheck,
+    ModificationCheck, build_transform_options, process_transform_result,
 };
-use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
+use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
 use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
@@ -15,17 +15,17 @@ use crate::sandbox::runtime_module::{RuntimeHooksContext, RuntimeModule};
 use crate::utils::quickjs_utils::maybe_promise;
 use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
 use ast_grep_config::RuleConfig;
+use ast_grep_core::AstGrep;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::tree_sitter::StrDoc;
-use ast_grep_core::AstGrep;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use language_core::SemanticProvider;
-use rquickjs::{async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, Module};
+use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, Function, Module, async_with};
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use vfs::VfsPath;
 
@@ -828,7 +828,9 @@ export default function transform(root) {
             .expect("Failed to write codemod file");
 
         // Seed a host env var that must not leak into process.env.
-        std::env::set_var("PG_SG_SANDBOX_LEAK_CHECK", "should-not-appear");
+        unsafe {
+            std::env::set_var("PG_SG_SANDBOX_LEAK_CHECK", "should-not-appear");
+        }
 
         let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
         let content = "const x = 1;";

@@ -1,6 +1,6 @@
 use butterflow_models::schema::resolve_values_with_default;
-use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
-use codemod_ai::llm::{generate as generate_llm, GenerateError, GenerateRequest, GenerateResponse};
+use codemod_ai::execute::{ExecuteAiStepConfig, execute_ai_step};
+use codemod_ai::llm::{GenerateError, GenerateRequest, GenerateResponse, generate as generate_llm};
 use futures_util::FutureExt;
 use serde::Deserialize;
 use std::any::Any;
@@ -13,18 +13,18 @@ use std::io::Write;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
 
 use crate::ai_agent_stream::{
-    agent_display_name, normalize_raw_agent_line, AgentLogEvent, AgentStreamNormalizer,
-    ClaudeStreamNormalizer, CodexStreamNormalizer, NormalizedAgentLine, OpenCodeStreamNormalizer,
+    AgentLogEvent, AgentStreamNormalizer, ClaudeStreamNormalizer, CodexStreamNormalizer,
+    NormalizedAgentLine, OpenCodeStreamNormalizer, agent_display_name, normalize_raw_agent_line,
 };
 use crate::ai_handoff::{
-    build_agent_command, detect_parent_coding_agent, discover_installed_agents,
-    find_agent_executable, resolve_agent_name, DetectionConfidence,
+    DetectionConfidence, build_agent_command, detect_parent_coding_agent,
+    discover_installed_agents, find_agent_executable, resolve_agent_name,
 };
 use crate::config::{
     CapabilitiesSecurityCallback, InstallSkillExecutionRequest, InstallSkillExecutor,
@@ -36,17 +36,17 @@ use crate::file_ops::AsyncFileWriter;
 use crate::jssg_execution_service::{JssgExecutionRequest, JssgExecutionService};
 use crate::llm_usage::LlmUsageContext;
 use crate::managed_git_service::{ManagedGitService, WorktreeCleanup};
-use crate::nested_codemod_run::{observe_nested_codemod_run, NestedCodemodRun};
+use crate::nested_codemod_run::{NestedCodemodRun, observe_nested_codemod_run};
 use crate::nested_codemod_service::NestedCodemodService;
 use crate::progress_output::{
-    append_buffered_diagnostic, append_buffered_log, flush_buffered_execution_output,
-    BufferedExecutionOutput,
+    BufferedExecutionOutput, append_buffered_diagnostic, append_buffered_log,
+    flush_buffered_execution_output,
 };
 use crate::slog;
 use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::task_state_service::TaskStateService;
 use crate::utils::validate_workflow;
-use crate::workflow_runtime::{publish_event, WorkflowEvent};
+use crate::workflow_runtime::{WorkflowEvent, publish_event};
 use chrono::Utc;
 use codemod_sandbox::llm::{LlmRequestHandler, LlmResponse};
 use codemod_sandbox::sandbox::engine::CodemodOutput;
@@ -67,9 +67,9 @@ use butterflow_models::runtime::RuntimeType;
 
 use butterflow_models::step::{UseAI, UseAstGrep, UseCodemod, UseJSAstGrep};
 use butterflow_models::{
-    evaluate_condition, resolve_string_list, resolve_string_with_expression, resolve_usize_value,
     DiffOperation, Error, FieldDiff, Node, Result, StateDiff, Strategy, Task, TaskErrorDetails,
-    TaskExpressionContext, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
+    TaskExpressionContext, TaskStatus, Workflow, WorkflowRun, WorkflowStatus, evaluate_condition,
+    resolve_string_list, resolve_string_with_expression, resolve_usize_value,
 };
 use butterflow_runners::direct_runner::DirectRunner;
 #[cfg(feature = "docker")]
@@ -78,8 +78,8 @@ use butterflow_runners::docker_runner::DockerRunner;
 use butterflow_runners::podman_runner::PodmanRunner;
 use butterflow_runners::{OutputCallback, Runner};
 use butterflow_scheduler::Scheduler;
-use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
+use butterflow_state::local_adapter::LocalStateAdapter;
 use codemod_llrt_capabilities::module_builder::UNSAFE_MODULES;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::MetricsContext;
@@ -835,10 +835,10 @@ impl Engine {
             },
         );
         logger.agent_event(starting_event.clone());
-        if let Some(callback) = progress_callback.as_ref() {
-            if let Ok(payload) = serde_json::to_string(&starting_event) {
-                (callback.callback)(&task_id, &payload, "agent", None, &0);
-            }
+        if let Some(callback) = progress_callback.as_ref()
+            && let Ok(payload) = serde_json::to_string(&starting_event)
+        {
+            (callback.callback)(&task_id, &payload, "agent", None, &0);
         }
 
         let mut child = cmd.spawn().map_err(|error| {
@@ -879,10 +879,10 @@ impl Engine {
                     };
                     stream_seen.store(true, Ordering::Relaxed);
                     logger.agent_event(event.clone());
-                    if let Some(callback) = progress_callback.as_ref() {
-                        if let Ok(payload) = serde_json::to_string(&event) {
-                            (callback.callback)(&task_id, &payload, "agent", None, &0);
-                        }
+                    if let Some(callback) = progress_callback.as_ref()
+                        && let Ok(payload) = serde_json::to_string(&event)
+                    {
+                        (callback.callback)(&task_id, &payload, "agent", None, &0);
                     }
                 }
             })
@@ -921,10 +921,10 @@ impl Engine {
                     };
                     stream_seen.store(true, Ordering::Relaxed);
                     logger.agent_event(event.clone());
-                    if let Some(callback) = progress_callback.as_ref() {
-                        if let Ok(payload) = serde_json::to_string(&event) {
-                            (callback.callback)(&task_id, &payload, "agent", None, &0);
-                        }
+                    if let Some(callback) = progress_callback.as_ref()
+                        && let Ok(payload) = serde_json::to_string(&event)
+                    {
+                        (callback.callback)(&task_id, &payload, "agent", None, &0);
                     }
                 }
             })
@@ -1329,33 +1329,30 @@ impl Engine {
                         let adapter = engine.state_adapter.lock().await;
                         adapter.get_workflow_run(task.workflow_run_id).await.ok()
                     };
-                    if let Some(workflow_run) = workflow_run {
-                        if let Some(node) = workflow_run
+                    if let Some(workflow_run) = workflow_run
+                        && let Some(node) = workflow_run
                             .workflow
                             .nodes
                             .iter()
                             .find(|node| node.id == task.node_id)
-                        {
-                            if let Err(error) = ManagedGitService::prepare_task_worktree(
-                                &mut engine,
-                                task_id,
-                                &task,
-                                &workflow_run,
-                                node,
-                                &shared_worktree_cleanup_for_task,
-                            )
-                            .await
-                            {
-                                let message = error.to_string();
-                                let _ = engine.append_task_log(task_id, &message).await;
-                                engine.emit_error(format!(
-                                    "Failed to prepare git worktree for task {}: {}",
-                                    task_id, message
-                                ));
-                                let _ = engine.mark_task_as_failed(task_id, &message).await;
-                                return;
-                            }
-                        }
+                        && let Err(error) = ManagedGitService::prepare_task_worktree(
+                            &mut engine,
+                            task_id,
+                            &task,
+                            &workflow_run,
+                            node,
+                            &shared_worktree_cleanup_for_task,
+                        )
+                        .await
+                    {
+                        let message = error.to_string();
+                        let _ = engine.append_task_log(task_id, &message).await;
+                        engine.emit_error(format!(
+                            "Failed to prepare git worktree for task {}: {}",
+                            task_id, message
+                        ));
+                        let _ = engine.mark_task_as_failed(task_id, &message).await;
+                        return;
                     }
                 }
 
@@ -2646,51 +2643,49 @@ impl Engine {
                         task_id
                     );
 
-                    if manage_git {
-                        if let Some(commit_config) = &step.commit {
-                            let resolved_message = resolve_string_with_expression(
-                                &commit_config.message,
-                                &resolved_params,
-                                &state,
-                                task.matrix_values.as_ref(),
-                                None,
-                                task_expr_ctx.as_ref(),
-                            )
-                            .unwrap_or_else(|_| commit_config.message.clone());
+                    if manage_git && let Some(commit_config) = &step.commit {
+                        let resolved_message = resolve_string_with_expression(
+                            &commit_config.message,
+                            &resolved_params,
+                            &state,
+                            task.matrix_values.as_ref(),
+                            None,
+                            task_expr_ctx.as_ref(),
+                        )
+                        .unwrap_or_else(|_| commit_config.message.clone());
 
-                            let paths = commit_config.add.clone().unwrap_or_default();
-                            match crate::git_ops::commit(
-                                &resolved_message,
-                                &paths,
-                                commit_config.allow_empty,
-                                &self.workflow_run_config.execution.target_path,
-                            )
-                            .await
-                            {
-                                Ok(true) => {
-                                    had_commit_checkpoint = true;
-                                    slog!(
-                                        step_logger,
-                                        info,
-                                        "Commit checkpoint created: {}",
-                                        resolved_message
-                                    );
-                                }
-                                Ok(false) => {
-                                    slog!(
-                                        step_logger,
-                                        info,
-                                        "Commit checkpoint skipped (no changes): {}",
-                                        resolved_message
-                                    );
-                                }
-                                Err(e) => {
-                                    self.emit_error(format!(
-                                        "Commit checkpoint failed for step '{}': {}",
-                                        step.name, e
-                                    ));
-                                    return Err(e);
-                                }
+                        let paths = commit_config.add.clone().unwrap_or_default();
+                        match crate::git_ops::commit(
+                            &resolved_message,
+                            &paths,
+                            commit_config.allow_empty,
+                            &self.workflow_run_config.execution.target_path,
+                        )
+                        .await
+                        {
+                            Ok(true) => {
+                                had_commit_checkpoint = true;
+                                slog!(
+                                    step_logger,
+                                    info,
+                                    "Commit checkpoint created: {}",
+                                    resolved_message
+                                );
+                            }
+                            Ok(false) => {
+                                slog!(
+                                    step_logger,
+                                    info,
+                                    "Commit checkpoint skipped (no changes): {}",
+                                    resolved_message
+                                );
+                            }
+                            Err(e) => {
+                                self.emit_error(format!(
+                                    "Commit checkpoint failed for step '{}': {}",
+                                    step.name, e
+                                ));
+                                return Err(e);
                             }
                         }
                     }
@@ -2914,12 +2909,10 @@ impl Engine {
                             );
                             if let Ok(mut first_failure_message) =
                                 first_failure_message_for_closure.lock()
+                                && first_failure_message.is_none()
                             {
-                                if first_failure_message.is_none() {
-                                    *first_failure_message = Some(format!(
-                                        "Failed to process {execution_title}: {message}"
-                                    ));
-                                }
+                                *first_failure_message =
+                                    Some(format!("Failed to process {execution_title}: {message}"));
                             }
                         };
 
@@ -3037,14 +3030,15 @@ impl Engine {
                 let attempted_files = attempted_file_count.load(Ordering::Relaxed);
                 let failed_files = failed_file_count.load(Ordering::Relaxed);
                 let succeeded_files = succeeded_file_count.load(Ordering::Relaxed);
-                if attempted_files > 0 && failed_files == attempted_files && succeeded_files == 0 {
-                    if let Some(message) = first_failure_message
+                if attempted_files > 0
+                    && failed_files == attempted_files
+                    && succeeded_files == 0
+                    && let Some(message) = first_failure_message
                         .lock()
                         .ok()
                         .and_then(|message| message.clone())
-                    {
-                        return Err(Box::new(std::io::Error::other(message)));
-                    }
+                {
+                    return Err(Box::new(std::io::Error::other(message)));
                 }
 
                 Ok(())
@@ -3236,66 +3230,65 @@ impl Engine {
         }
 
         // 3. If interactive, discover installed agents and prompt user to select
-        if !self.workflow_run_config.interaction.no_interactive {
-            if let Some(ref callback) = self
+        if !self.workflow_run_config.interaction.no_interactive
+            && let Some(ref callback) = self
                 .workflow_run_config
                 .interaction
                 .agent_selection_callback
-            {
-                let agents = discover_installed_agents();
-                // Loop to allow preview → re-select flow
-                let mut selection_result = callback(&agents);
-                loop {
-                    match selection_result.as_deref() {
-                        Some("__preview_prompt__") => {
-                            // Show the prompt, then re-prompt for agent selection
-                            self.emit_ai_instructions(
-                                logger,
-                                ai_config.system_prompt.as_deref(),
-                                &resolved_prompt,
-                            );
-                            if !self.workflow_run_config.output.quiet {
-                                logger.user_line("");
-                            }
-                            selection_result = callback(&agents);
-                            continue;
+        {
+            let agents = discover_installed_agents();
+            // Loop to allow preview → re-select flow
+            let mut selection_result = callback(&agents);
+            loop {
+                match selection_result.as_deref() {
+                    Some("__preview_prompt__") => {
+                        // Show the prompt, then re-prompt for agent selection
+                        self.emit_ai_instructions(
+                            logger,
+                            ai_config.system_prompt.as_deref(),
+                            &resolved_prompt,
+                        );
+                        if !self.workflow_run_config.output.quiet {
+                            logger.user_line("");
                         }
-                        Some("__print_prompt__") => {
-                            debug!("User chose to print prompt and skip");
-                            self.emit_ai_instructions(
-                                logger,
-                                ai_config.system_prompt.as_deref(),
-                                &resolved_prompt,
-                            );
-                            return Ok(());
-                        }
-                        Some(selected) => {
-                            debug!("User selected agent: {}", selected);
-                            if let Some(executable) = find_agent_executable(selected) {
-                                return self
-                                    .launch_agent(
-                                        selected,
-                                        &executable,
-                                        ai_config.system_prompt.as_deref(),
-                                        &resolved_prompt,
-                                        logger,
-                                    )
-                                    .await;
-                            } else {
-                                slog!(
+                        selection_result = callback(&agents);
+                        continue;
+                    }
+                    Some("__print_prompt__") => {
+                        debug!("User chose to print prompt and skip");
+                        self.emit_ai_instructions(
+                            logger,
+                            ai_config.system_prompt.as_deref(),
+                            &resolved_prompt,
+                        );
+                        return Ok(());
+                    }
+                    Some(selected) => {
+                        debug!("User selected agent: {}", selected);
+                        if let Some(executable) = find_agent_executable(selected) {
+                            return self
+                                .launch_agent(
+                                    selected,
+                                    &executable,
+                                    ai_config.system_prompt.as_deref(),
+                                    &resolved_prompt,
                                     logger,
-                                    warn,
-                                    "Agent '{}' executable not found, falling back to built-in AI",
-                                    selected
-                                );
-                            }
-                        }
-                        None => {
-                            // User dismissed the selection — fall through to built-in AI
+                                )
+                                .await;
+                        } else {
+                            slog!(
+                                logger,
+                                warn,
+                                "Agent '{}' executable not found, falling back to built-in AI",
+                                selected
+                            );
                         }
                     }
-                    break;
+                    None => {
+                        // User dismissed the selection — fall through to built-in AI
+                    }
                 }
+                break;
             }
         }
 
@@ -3920,7 +3913,7 @@ impl Engine {
     ) -> Result<Vec<crate::shard::ShardResult>> {
         use crate::shard::collect_files_with_pattern;
         use codemod_sandbox::sandbox::engine::execution_engine::{
-            execute_shard_function_with_quickjs, ShardFunctionOptions,
+            ShardFunctionOptions, execute_shard_function_with_quickjs,
         };
         use codemod_sandbox::sandbox::resolvers::OxcResolver;
         use codemod_sandbox::utils::project_discovery::find_tsconfig;
@@ -4420,10 +4413,11 @@ mod tests {
             ]
         );
         assert_eq!(run.dependency_path.len(), dependency_chain.len());
-        assert!(!run
-            .dependency_path
-            .iter()
-            .any(|segment| segment.contains("private")));
+        assert!(
+            !run.dependency_path
+                .iter()
+                .any(|segment| segment.contains("private"))
+        );
         assert!(registry_nested_codemod_run(&resolved_package(None), &dependency_chain).is_none());
     }
 
@@ -4561,9 +4555,11 @@ author: test
 
         let records = usage_context.get_all();
         assert_eq!(records.len(), 2);
-        assert!(records
-            .iter()
-            .all(|record| record.provider == "openai_compatible"));
+        assert!(
+            records
+                .iter()
+                .all(|record| record.provider == "openai_compatible")
+        );
     }
 
     struct EnvVarGuard {
@@ -4574,17 +4570,21 @@ author: test
     impl EnvVarGuard {
         fn unset(key: &'static str) -> Self {
             let original = std::env::var(key).ok();
-            std::env::remove_var(key);
+            unsafe {
+                std::env::remove_var(key);
+            }
             Self { key, original }
         }
     }
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
-            if let Some(original) = &self.original {
-                std::env::set_var(self.key, original);
-            } else {
-                std::env::remove_var(self.key);
+            unsafe {
+                if let Some(original) = &self.original {
+                    std::env::set_var(self.key, original);
+                } else {
+                    std::env::remove_var(self.key);
+                }
             }
         }
     }
@@ -4597,8 +4597,9 @@ author: test
             js_ast_grep_idle_timeout(),
             Duration::from_millis(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT)
         );
-
-        std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
+        unsafe {
+            std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
+        }
         assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
     }
 
@@ -4612,9 +4613,11 @@ author: test
         let _git_askpass_guard = EnvVarGuard::unset("GIT_ASKPASS");
         let _http_proxy_guard = EnvVarGuard::unset("HTTP_PROXY");
 
-        std::env::set_var("BUTTERFLOW_API_AUTH_TOKEN", "local-token");
-        std::env::set_var("LLM_API_KEY", "local-llm-key");
-        std::env::set_var("LLM_BASE_URL", "http://local-llm.example/v1");
+        unsafe {
+            std::env::set_var("BUTTERFLOW_API_AUTH_TOKEN", "local-token");
+            std::env::set_var("LLM_API_KEY", "local-llm-key");
+            std::env::set_var("LLM_BASE_URL", "http://local-llm.example/v1");
+        }
 
         let local_env = parent_env_for_child_processes();
         assert_eq!(
@@ -4632,9 +4635,11 @@ author: test
             Some("http://local-llm.example/v1")
         );
 
-        std::env::set_var("BUTTERFLOW_STATE_BACKEND", "cloud");
-        std::env::set_var("GIT_ASKPASS", "/tmp/codemod-git-askpass");
-        std::env::set_var("HTTP_PROXY", "http://proxy.example");
+        unsafe {
+            std::env::set_var("BUTTERFLOW_STATE_BACKEND", "cloud");
+            std::env::set_var("GIT_ASKPASS", "/tmp/codemod-git-askpass");
+            std::env::set_var("HTTP_PROXY", "http://proxy.example");
+        }
 
         let cloud_env = parent_env_for_child_processes();
         assert_eq!(

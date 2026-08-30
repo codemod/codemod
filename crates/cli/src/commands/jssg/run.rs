@@ -1,14 +1,14 @@
+use crate::CLI_VERSION;
+use crate::TelemetrySenderMutex;
 use crate::commands::TelemetrySenderExt;
 use crate::engine::create_progress_callback;
 use crate::engine::create_registry_client;
-use crate::utils::resolve_capabilities::resolve_capabilities;
 use crate::utils::resolve_capabilities::ResolveCapabilitiesArgs;
-use crate::TelemetrySenderMutex;
-use crate::CLI_VERSION;
+use crate::utils::resolve_capabilities::resolve_capabilities;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
-use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
-use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
+use butterflow_core::diff::{DiffConfig, DiffMetadata, FileDiff, generate_unified_diff};
+use butterflow_core::report::{ExecutionReport, convert_diffs, convert_metrics};
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
@@ -106,8 +106,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let dirty_check = dirty_git_check::dirty_check(args.no_interactive);
     dirty_check(&target_directory, args.allow_dirty, None)?;
-
-    std::env::set_var("CODEMOD_STEP_ID", "jssg");
+    unsafe {
+        std::env::set_var("CODEMOD_STEP_ID", "jssg");
+    }
 
     // Create a new metrics context for this execution run
     let metrics_context = MetricsContext::new();
@@ -184,15 +185,15 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         };
 
     // For workspace scope semantic analysis, pre-index all target files
-    if let Some(ref provider) = semantic_provider {
-        if provider.mode() == language_core::ProviderMode::WorkspaceScope {
-            let target_files: Vec<PathBuf> = config.collect_files();
-            for file_path in &target_files {
-                if file_path.is_file() {
-                    if let Ok(content) = std::fs::read_to_string(file_path) {
-                        let _ = provider.notify_file_processed(file_path, &content);
-                    }
-                }
+    if let Some(ref provider) = semantic_provider
+        && provider.mode() == language_core::ProviderMode::WorkspaceScope
+    {
+        let target_files: Vec<PathBuf> = config.collect_files();
+        for file_path in &target_files {
+            if file_path.is_file()
+                && let Ok(content) = std::fs::read_to_string(file_path)
+            {
+                let _ = provider.notify_file_processed(file_path, &content);
             }
         }
     }
@@ -283,7 +284,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                     }
 
                     for (change_path, change_result) in &all_changes {
-                        if let ExecutionResult::Modified(ref modified) = change_result {
+                        if let ExecutionResult::Modified(modified) = change_result {
                             let write_path = modified.rename_to.as_deref().unwrap_or(change_path);
                             if !config.dry_run {
                                 if let Err(e) =

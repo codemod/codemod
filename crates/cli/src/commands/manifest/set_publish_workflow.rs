@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, ValueEnum};
 use regex::{Captures, Regex};
 use serde::Serialize;
@@ -267,8 +267,10 @@ mod tests {
 
         assert_eq!(first, repeated);
         assert_ne!(first, second);
-        assert!(path_with_forward_slashes(&first)
-            .starts_with(".github/workflows/codemod-publish-acme-rename-foo-"));
+        assert!(
+            path_with_forward_slashes(&first)
+                .starts_with(".github/workflows/codemod-publish-acme-rename-foo-")
+        );
     }
 
     #[test]
@@ -291,9 +293,11 @@ mod tests {
 
         let error = write_managed_workflow(&path, "rename-foo", b"workflow\n").unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("Failed to read existing workflow"));
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to read existing workflow")
+        );
     }
 
     #[test]

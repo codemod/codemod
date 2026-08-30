@@ -57,7 +57,9 @@ pub enum RegistryError {
     #[error("CDN file is not a valid gzip file. Expected magic bytes 1f 8b, got {magic}")]
     InvalidCdnGzipFile { magic: String },
 
-    #[error("Downloaded data is not a valid gzip file and not a JSON redirect. Expected gzip magic bytes 1f 8b, got {magic}")]
+    #[error(
+        "Downloaded data is not a valid gzip file and not a JSON redirect. Expected gzip magic bytes 1f 8b, got {magic}"
+    )]
     InvalidDownloadData { magic: String },
 
     #[error("Invalid package: missing {file} in {path}")]
@@ -336,13 +338,13 @@ impl RegistryClient {
             .header("x-supports-dry-run-only", "true");
 
         // Add authentication header if available
-        if let Some(auth_provider) = &self.auth_provider {
-            if let Ok(Some(auth)) = auth_provider.get_auth_for_registry(registry_url) {
-                request = request.header(
-                    "Authorization",
-                    format!("Bearer {}", auth.tokens.access_token),
-                );
-            }
+        if let Some(auth_provider) = &self.auth_provider
+            && let Ok(Some(auth)) = auth_provider.get_auth_for_registry(registry_url)
+        {
+            request = request.header(
+                "Authorization",
+                format!("Bearer {}", auth.tokens.access_token),
+            );
         }
 
         let response = request.send().await?;
@@ -437,59 +439,57 @@ impl RegistryClient {
             let magic = &package_data[0..2];
             if magic != [0x1f, 0x8b] {
                 // Check if this is a JSON response with a download_url
-                if let Ok(text) = std::str::from_utf8(&package_data) {
-                    if text.trim().starts_with('{') {
-                        // Try to parse as JSON to get the actual download URL
-                        if let Ok(download_response) =
-                            serde_json::from_str::<DownloadResponse>(text)
-                        {
-                            debug!(
-                                "Server returned dry_run_only: {}",
-                                download_response.dry_run_only
-                            );
-                            debug!(
-                                "Server returned download URL: {}",
-                                download_response.download_url
-                            );
+                if let Ok(text) = std::str::from_utf8(&package_data)
+                    && text.trim().starts_with('{')
+                {
+                    // Try to parse as JSON to get the actual download URL
+                    if let Ok(download_response) = serde_json::from_str::<DownloadResponse>(text) {
+                        debug!(
+                            "Server returned dry_run_only: {}",
+                            download_response.dry_run_only
+                        );
+                        debug!(
+                            "Server returned download URL: {}",
+                            download_response.download_url
+                        );
 
-                            let dry_run_only = download_response.dry_run_only;
+                        let dry_run_only = download_response.dry_run_only;
 
-                            // Download from the actual CDN URL
-                            let actual_package_data = self
-                                .download_from_url(
-                                    &download_response.download_url,
-                                    auth_token.as_deref(),
-                                    None,
-                                    progress_bar,
-                                )
-                                .await?;
+                        // Download from the actual CDN URL
+                        let actual_package_data = self
+                            .download_from_url(
+                                &download_response.download_url,
+                                auth_token.as_deref(),
+                                None,
+                                progress_bar,
+                            )
+                            .await?;
 
-                            // Check if this is a gzip file or uncompressed tar
-                            if actual_package_data.len() >= 2 {
-                                let actual_magic = &actual_package_data[0..2];
-                                if actual_magic == [0x1f, 0x8b] {
-                                    // It's a gzip file, extract as usual
-                                    self.extract_package(&actual_package_data, cache_dir)
-                                        .await
-                                        .map_err(|e| RegistryError::InvalidCdnGzipFile {
-                                            magic: e.to_string(),
-                                        })?;
-                                } else {
-                                    // It might be an uncompressed tar file, try to extract it directly
-                                    self.extract_uncompressed_tar(&actual_package_data, cache_dir)
-                                        .await
-                                        .map_err(|e| RegistryError::InvalidCdnGzipFile {
-                                            magic: e.to_string(),
-                                        })?;
-                                }
+                        // Check if this is a gzip file or uncompressed tar
+                        if actual_package_data.len() >= 2 {
+                            let actual_magic = &actual_package_data[0..2];
+                            if actual_magic == [0x1f, 0x8b] {
+                                // It's a gzip file, extract as usual
+                                self.extract_package(&actual_package_data, cache_dir)
+                                    .await
+                                    .map_err(|e| RegistryError::InvalidCdnGzipFile {
+                                        magic: e.to_string(),
+                                    })?;
                             } else {
-                                return Err(RegistryError::InvalidCdnGzipFile {
-                                    magic: "empty file".to_string(),
-                                });
+                                // It might be an uncompressed tar file, try to extract it directly
+                                self.extract_uncompressed_tar(&actual_package_data, cache_dir)
+                                    .await
+                                    .map_err(|e| RegistryError::InvalidCdnGzipFile {
+                                        magic: e.to_string(),
+                                    })?;
                             }
-                            info!("Package cached to: {}", cache_dir.display());
-                            return Ok((cache_dir.to_path_buf(), dry_run_only));
+                        } else {
+                            return Err(RegistryError::InvalidCdnGzipFile {
+                                magic: "empty file".to_string(),
+                            });
                         }
+                        info!("Package cached to: {}", cache_dir.display());
+                        return Ok((cache_dir.to_path_buf(), dry_run_only));
                     }
                 }
 
@@ -706,20 +706,19 @@ fn determine_version(spec: &PackageSpec, package_info: &PackageInfo) -> Result<S
             return Ok(selector.clone());
         }
 
-        if let Some(version) = package_info.dist_tags.get(selector) {
-            if package_info.versions.contains_key(version) {
-                return Ok(version.clone());
-            }
+        if let Some(version) = package_info.dist_tags.get(selector)
+            && package_info.versions.contains_key(version)
+        {
+            return Ok(version.clone());
         }
 
-        if selector == "latest" {
-            if let Some(version) = package_info
+        if selector == "latest"
+            && let Some(version) = package_info
                 .latest_version
                 .as_ref()
                 .filter(|version| package_info.versions.contains_key(*version))
-            {
-                return Ok(version.clone());
-            }
+        {
+            return Ok(version.clone());
         }
 
         return Err(RegistryError::VersionNotFound {
@@ -811,7 +810,7 @@ fn copy_dir_recursively(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::{write::GzEncoder, Compression};
+    use flate2::{Compression, write::GzEncoder};
     use std::io::{Cursor, Write};
     use std::sync::Mutex;
     use tokio::net::TcpListener;
@@ -987,13 +986,15 @@ mod tests {
 
         let requests = requests.lock().expect("requests lock");
         assert!(
-            requests.iter().any(|(method, path)| method == "HEAD"
-                && path == expected_download_path),
+            requests
+                .iter()
+                .any(|(method, path)| method == "HEAD" && path == expected_download_path),
             "expected HEAD request to resolved download path {expected_download_path}, got {requests:?}"
         );
         assert!(
-            requests.iter().any(|(method, path)| method == "GET"
-                && path == expected_download_path),
+            requests
+                .iter()
+                .any(|(method, path)| method == "GET" && path == expected_download_path),
             "expected GET request to resolved download path {expected_download_path}, got {requests:?}"
         );
         assert!(

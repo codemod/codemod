@@ -1,21 +1,21 @@
 use super::update::auto_safe::extract_skill_archive_writes;
 use super::update::auto_safe::{apply_staged_component_updates, maybe_apply_auto_safe_updates};
 use super::update::output::{
-    build_install_output, build_update_policy_output, BuildInstallOutputInput,
+    BuildInstallOutputInput, build_install_output, build_update_policy_output,
 };
 use super::update::policy::{
-    parse_update_remote_source_value, remote_manifest_endpoint, resolve_update_policy_context,
-    validate_remote_update_manifest, UpdatePolicyResolveOptions,
+    UpdatePolicyResolveOptions, parse_update_remote_source_value, remote_manifest_endpoint,
+    resolve_update_policy_context, validate_remote_update_manifest,
 };
 use super::update::reconcile::{
     build_component_reconcile_decisions, update_policy_runtime_message,
 };
 use super::update::types::{
-    AutoSafeApplyResult, AutoSafeComponentStatus, ManagedUpdateManifest,
-    ManagedUpdateManifestComponent, ReconcileDecisionStatus, RemoteManifestSnapshot,
-    StagedComponentUpdate, StagedFileWrite, UpdatePolicyContext, UpdatePolicyMode,
-    MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR, MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER,
-    MANAGED_UPDATE_POLICY_LOCAL_SOURCE,
+    AutoSafeApplyResult, AutoSafeComponentStatus, MANAGED_UPDATE_MANIFEST_PUBLIC_KEYS_ENV_VAR,
+    MANAGED_UPDATE_MANIFEST_SIGNATURES_HEADER, MANAGED_UPDATE_POLICY_LOCAL_SOURCE,
+    ManagedUpdateManifest, ManagedUpdateManifestComponent, ReconcileDecisionStatus,
+    RemoteManifestSnapshot, StagedComponentUpdate, StagedFileWrite, UpdatePolicyContext,
+    UpdatePolicyMode,
 };
 use super::{
     goose_project_scope_command_warning, interactive_user_scope_label,
@@ -142,7 +142,9 @@ impl EnvRestoreGuard {
         let mut saved = Vec::with_capacity(vars.len());
         for (key, value) in vars {
             saved.push((*key, std::env::var(key).ok()));
-            std::env::set_var(key, value);
+            unsafe {
+                std::env::set_var(key, value);
+            }
         }
         Self { saved }
     }
@@ -151,9 +153,11 @@ impl EnvRestoreGuard {
 impl Drop for EnvRestoreGuard {
     fn drop(&mut self) {
         for (key, previous_value) in &self.saved {
-            match previous_value {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
+            unsafe {
+                match previous_value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
             }
         }
     }
@@ -450,35 +454,39 @@ fn update_policy_runtime_message_notify_reflects_state_status() {
             .unwrap()
             .contains("no codemod-managed state change")
     );
-    assert!(update_policy_runtime_message(
-        &autosafe_context,
-        None,
-        Some(&AutoSafeApplyResult {
-            attempted: 2,
-            applied: 1,
-            skipped: 1,
-            failed: 0,
-            rolled_back: false,
-            rollback_reason: None,
-            components: Vec::new(),
-        }),
-    )
-    .unwrap()
-    .contains("attempted 2"));
-    assert!(update_policy_runtime_message(
-        &autosafe_context,
-        None,
-        Some(&AutoSafeApplyResult {
-            attempted: 0,
-            applied: 0,
-            skipped: 0,
-            failed: 0,
-            rolled_back: false,
-            rollback_reason: Some("remote_manifest_unavailable".to_string()),
-            components: Vec::new(),
-        }),
-    )
-    .is_none());
+    assert!(
+        update_policy_runtime_message(
+            &autosafe_context,
+            None,
+            Some(&AutoSafeApplyResult {
+                attempted: 2,
+                applied: 1,
+                skipped: 1,
+                failed: 0,
+                rolled_back: false,
+                rollback_reason: None,
+                components: Vec::new(),
+            }),
+        )
+        .unwrap()
+        .contains("attempted 2")
+    );
+    assert!(
+        update_policy_runtime_message(
+            &autosafe_context,
+            None,
+            Some(&AutoSafeApplyResult {
+                attempted: 0,
+                applied: 0,
+                skipped: 0,
+                failed: 0,
+                rolled_back: false,
+                rollback_reason: Some("remote_manifest_unavailable".to_string()),
+                components: Vec::new(),
+            }),
+        )
+        .is_none()
+    );
     assert!(update_policy_runtime_message(&autosafe_context, None, None).is_none());
     assert!(update_policy_runtime_message(&manual_context, None, None).is_none());
 }
@@ -813,11 +821,13 @@ fn apply_staged_component_updates_rolls_back_on_write_failure() {
 
     assert!(result.rolled_back);
     assert!(result.failed > 0);
-    assert!(result
-        .components
-        .iter()
-        .any(|component| component.id == "component-a"
-            && component.status == AutoSafeComponentStatus::RolledBack));
+    assert!(
+        result
+            .components
+            .iter()
+            .any(|component| component.id == "component-a"
+                && component.status == AutoSafeComponentStatus::RolledBack)
+    );
     assert_eq!(
         fs::read_to_string(&target_file).expect("expected restored component file"),
         "before"
@@ -868,12 +878,16 @@ fn extract_skill_archive_writes_supports_single_root_folder() {
     )
     .expect("expected staged writes");
 
-    assert!(writes
-        .iter()
-        .any(|write| write.path == skill_root.join("SKILL.md")));
-    assert!(writes
-        .iter()
-        .any(|write| { write.path == skill_root.join("references/core/search-and-discovery.md") }));
+    assert!(
+        writes
+            .iter()
+            .any(|write| write.path == skill_root.join("SKILL.md"))
+    );
+    assert!(
+        writes.iter().any(|write| {
+            write.path == skill_root.join("references/core/search-and-discovery.md")
+        })
+    );
 }
 
 #[test]
@@ -1343,10 +1357,12 @@ fn remote_auto_safe_update_lock_contention_is_reported_deterministically() {
             result.rollback_reason.as_deref(),
             Some("lock_acquire_failed")
         );
-        assert!(apply
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("timed out after 40ms")));
+        assert!(
+            apply
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("timed out after 40ms"))
+        );
         assert_eq!(
             fs::read_to_string(&skill_path).expect("expected unchanged skill content"),
             "old-skill-content"

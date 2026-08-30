@@ -1,5 +1,5 @@
 use rquickjs::module::{Declarations, Exports, ModuleDef};
-use rquickjs::{prelude::Opt, Ctx, Exception, JsLifetime, Object, Result, Value};
+use rquickjs::{Ctx, Exception, JsLifetime, Object, Result, Value, prelude::Opt};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;

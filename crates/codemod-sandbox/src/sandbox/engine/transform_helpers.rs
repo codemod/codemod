@@ -160,7 +160,9 @@ pub fn process_transform_result(
         let type_name = result_obj.type_name();
         Err(ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                message: format!("Codemod transform functions must return either a string or null/undefined. Received {type_name}"),
+                message: format!(
+                    "Codemod transform functions must return either a string or null/undefined. Received {type_name}"
+                ),
             },
         })
     }

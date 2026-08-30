@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use butterflow_core::utils::{parse_workflow_file, validate_workflow};
-use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
+use rmcp::{ErrorData as McpError, handler::server::wrapper::Parameters, model::*, schemars, tool};
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
 use std::collections::BTreeMap;
@@ -461,26 +461,26 @@ impl PackageValidationHandler {
             ));
         }
 
-        if let Some(result) = &default_test {
-            if !result.success {
-                issues.push(issue(
-                    "error",
-                    "default_test_failed",
-                    "The package default test command failed.",
-                    Some(package_root.clone()),
-                ));
-            }
+        if let Some(result) = &default_test
+            && !result.success
+        {
+            issues.push(issue(
+                "error",
+                "default_test_failed",
+                "The package default test command failed.",
+                Some(package_root.clone()),
+            ));
         }
 
-        if let Some(result) = &check_types {
-            if !result.success {
-                issues.push(issue(
-                    "error",
-                    "check_types_failed",
-                    "The package check-types command failed.",
-                    Some(package_root.clone()),
-                ));
-            }
+        if let Some(result) = &check_types
+            && !result.success
+        {
+            issues.push(issue(
+                "error",
+                "check_types_failed",
+                "The package check-types command failed.",
+                Some(package_root.clone()),
+            ));
         }
 
         let ready = issues.iter().all(|issue| issue.severity != "error");
@@ -1234,10 +1234,12 @@ mod tests {
 
         assert!(response.files.workflow_yaml);
         assert!(response.workflow_valid);
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_workflow_yaml"));
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_workflow_yaml")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1264,18 +1266,24 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_package_json"));
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_transform_script"));
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_tests_dir"));
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_package_json")
+        );
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_transform_script")
+        );
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_tests_dir")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1312,14 +1320,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_transform_script"));
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_tests_dir"));
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_transform_script")
+        );
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_tests_dir")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1348,14 +1360,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_transform_script"));
-        assert!(response
-            .issues
-            .iter()
-            .any(|issue| issue.code == "missing_tests_dir"));
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_transform_script")
+        );
+        assert!(
+            response
+                .issues
+                .iter()
+                .any(|issue| issue.code == "missing_tests_dir")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1383,14 +1399,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response
-            .issues
-            .iter()
-            .any(|issue| issue.code == "missing_transform_script"));
-        assert!(response
-            .issues
-            .iter()
-            .any(|issue| issue.code == "missing_tests_dir"));
+        assert!(
+            response
+                .issues
+                .iter()
+                .any(|issue| issue.code == "missing_transform_script")
+        );
+        assert!(
+            response
+                .issues
+                .iter()
+                .any(|issue| issue.code == "missing_tests_dir")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1417,14 +1437,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_package_json"));
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_transform_script"));
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_package_json")
+        );
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_transform_script")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1461,14 +1485,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_transform_script"));
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_tests_dir"));
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_transform_script")
+        );
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_tests_dir")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1503,14 +1531,18 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_transform_script"));
-        assert!(response
-            .issues
-            .iter()
-            .all(|issue| issue.code != "missing_tests_dir"));
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_transform_script")
+        );
+        assert!(
+            response
+                .issues
+                .iter()
+                .all(|issue| issue.code != "missing_tests_dir")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1782,10 +1814,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response
-            .issues
-            .iter()
-            .any(|issue| issue.code == "codemod_yaml_invalid"));
+        assert!(
+            response
+                .issues
+                .iter()
+                .any(|issue| issue.code == "codemod_yaml_invalid")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1816,10 +1850,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response
-            .issues
-            .iter()
-            .any(|issue| issue.code == "workflow_path_invalid"));
+        assert!(
+            response
+                .issues
+                .iter()
+                .any(|issue| issue.code == "workflow_path_invalid")
+        );
         assert!(response.workflow_valid);
 
         fs::remove_dir_all(dir).unwrap();
@@ -1853,10 +1889,12 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(response
-            .issues
-            .iter()
-            .any(|issue| issue.code == "invalid_package_json"));
+        assert!(
+            response
+                .issues
+                .iter()
+                .any(|issue| issue.code == "invalid_package_json")
+        );
         assert!(!response.ready);
 
         fs::remove_dir_all(dir).unwrap();

@@ -206,24 +206,33 @@ impl EditTool {
             let (init_line, final_line) = (range[0], range[1]);
 
             if init_line < 1 || init_line > n_lines_file {
-                return Ok(ToolResult::error(call_id, format!(
-                    "Invalid `view_range`: {:?}. Its first element `{}` should be within the range of lines of the file: [1, {}]",
-                    range, init_line, n_lines_file
-                )));
+                return Ok(ToolResult::error(
+                    call_id,
+                    format!(
+                        "Invalid `view_range`: {:?}. Its first element `{}` should be within the range of lines of the file: [1, {}]",
+                        range, init_line, n_lines_file
+                    ),
+                ));
             }
 
             if final_line > n_lines_file {
-                return Ok(ToolResult::error(call_id, format!(
-                    "Invalid `view_range`: {:?}. Its second element `{}` should be smaller than the number of lines in the file: `{}`",
-                    range, final_line, n_lines_file
-                )));
+                return Ok(ToolResult::error(
+                    call_id,
+                    format!(
+                        "Invalid `view_range`: {:?}. Its second element `{}` should be smaller than the number of lines in the file: `{}`",
+                        range, final_line, n_lines_file
+                    ),
+                ));
             }
 
             if final_line != -1 && final_line < init_line {
-                return Ok(ToolResult::error(call_id, format!(
-                    "Invalid `view_range`: {:?}. Its second element `{}` should be larger or equal than its first `{}`",
-                    range, final_line, init_line
-                )));
+                return Ok(ToolResult::error(
+                    call_id,
+                    format!(
+                        "Invalid `view_range`: {:?}. Its second element `{}` should be larger or equal than its first `{}`",
+                        range, final_line, init_line
+                    ),
+                ));
             }
 
             let start_idx = (init_line - 1) as usize;
@@ -296,10 +305,13 @@ impl EditTool {
                     }
                 })
                 .collect();
-            return Ok(ToolResult::error(call_id, format!(
-                "No replacement was performed. Multiple occurrences of old_str `{}` in lines {:?}. Please ensure it is unique",
-                old_str, lines
-            )));
+            return Ok(ToolResult::error(
+                call_id,
+                format!(
+                    "No replacement was performed. Multiple occurrences of old_str `{}` in lines {:?}. Please ensure it is unique",
+                    old_str, lines
+                ),
+            ));
         }
 
         // Replace old_str with new_str
@@ -318,7 +330,11 @@ impl EditTool {
         let success_msg = format!(
             "The file {} has been edited. {}\nReview the changes and make sure they are as expected. Edit the file again if necessary.",
             path.display(),
-            self.make_output(&snippet, &format!("a snippet of {}", path.display()), (replacement_line.saturating_sub(SNIPPET_LINES) + 1) as i32)
+            self.make_output(
+                &snippet,
+                &format!("a snippet of {}", path.display()),
+                (replacement_line.saturating_sub(SNIPPET_LINES) + 1) as i32
+            )
         );
 
         Ok(ToolResult::success(call_id, &success_msg))
@@ -338,10 +354,13 @@ impl EditTool {
         let n_lines_file = file_text_lines.len() as i32;
 
         if insert_line < 0 || insert_line > n_lines_file {
-            return Ok(ToolResult::error(call_id, format!(
-                "Invalid `insert_line` parameter: {}. It should be within the range of lines of the file: [0, {}]",
-                insert_line, n_lines_file
-            )));
+            return Ok(ToolResult::error(
+                call_id,
+                format!(
+                    "Invalid `insert_line` parameter: {}. It should be within the range of lines of the file: [0, {}]",
+                    insert_line, n_lines_file
+                ),
+            ));
         }
 
         let new_str_lines: Vec<&str> = new_str_expanded.lines().collect();
@@ -359,7 +378,11 @@ impl EditTool {
         let success_msg = format!(
             "The file {} has been edited. {}\nReview the changes and make sure they are as expected (correct indentation, no duplicate lines, etc). Edit the file again if necessary.",
             path.display(),
-            self.make_output(&snippet, "a snippet of the edited file", (insert_idx.saturating_sub(SNIPPET_LINES) + 1) as i32)
+            self.make_output(
+                &snippet,
+                "a snippet of the edited file",
+                (insert_idx.saturating_sub(SNIPPET_LINES) + 1) as i32
+            )
         );
 
         Ok(ToolResult::success(call_id, &success_msg))

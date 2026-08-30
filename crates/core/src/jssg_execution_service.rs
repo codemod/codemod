@@ -2,54 +2,55 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
 use ast_grep_config::RuleConfig;
 use butterflow_models::{
-    step::{SemanticAnalysisConfig, SemanticAnalysisMode, UseJSAstGrep},
     DiffOperation, FieldDiff, Result, StateDiff, TaskExpressionContext,
+    step::{SemanticAnalysisConfig, SemanticAnalysisMode, UseJSAstGrep},
 };
 use chrono::Utc;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::{
     engine::{
+        CodemodOutput, ExecutionResult, JssgExecutionOptions, SelectorEngineOptions,
         codemod_lang::CodemodLang, execution_engine::execute_codemod_with_quickjs,
-        extract_selector_with_quickjs, CodemodOutput, ExecutionResult, JssgExecutionOptions,
-        SelectorEngineOptions,
+        extract_selector_with_quickjs,
     },
     errors::{ExecutionError as SandboxExecutionError, RuntimeError as SandboxRuntimeError},
     resolvers::OxcResolver,
     runtime_module::{RuntimeEventCallback, RuntimeEventKind},
 };
 use codemod_sandbox::{
-    utils::project_discovery::find_tsconfig, MetricsContext, SharedStateContext,
+    MetricsContext, SharedStateContext, utils::project_discovery::find_tsconfig,
 };
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{Notify, mpsc};
 use uuid::Uuid;
 
 use crate::{
+    Error,
     config::DryRunChange,
     engine::{
-        auto_meta_files_include, await_js_ast_grep_execution_task, block_on_runtime_handle,
+        CapabilitiesData, Engine, StepPhase, StepProgressState, auto_meta_files_include,
+        await_js_ast_grep_execution_task, block_on_runtime_handle,
         build_js_ast_grep_idle_timeout_message, finish_unit_progress, format_runtime_event_log,
         format_runtime_failure_message, js_ast_grep_idle_timeout,
         merge_capability_strings_for_interaction, record_output_progress, record_unit_progress,
-        resolve_optional_glob_list, CapabilitiesData, Engine, StepPhase, StepProgressState,
+        resolve_optional_glob_list,
     },
     execution::{CodemodExecutionConfig, PreRunCallback},
     progress_output::{
-        append_buffered_diagnostic, append_buffered_log, flush_buffered_execution_output,
-        BufferedExecutionOutput,
+        BufferedExecutionOutput, append_buffered_diagnostic, append_buffered_log,
+        flush_buffered_execution_output,
     },
     slog,
     structured_log::StructuredLogger,
-    workflow_runtime::{publish_event, WorkflowEvent},
-    Error,
+    workflow_runtime::{WorkflowEvent, publish_event},
 };
 
 pub(crate) struct JssgExecutionRequest<'a> {
@@ -221,11 +222,13 @@ impl<'a> JssgExecutionService<'a> {
             exclude_globs: resolved_exclude,
             dry_run: request.js_ast_grep.dry_run.unwrap_or(false)
                 || self.engine.workflow_run_config().execution.dry_run,
-            languages: Some(vec![request
-                .js_ast_grep
-                .language
-                .clone()
-                .unwrap_or("typescript".to_string())]),
+            languages: Some(vec![
+                request
+                    .js_ast_grep
+                    .language
+                    .clone()
+                    .unwrap_or("typescript".to_string()),
+            ]),
             threads: request.js_ast_grep.max_threads,
             capabilities: effective_capabilities.clone(),
         };
@@ -361,18 +364,17 @@ impl<'a> JssgExecutionService<'a> {
         }
 
         for file_path in &target_files {
-            if file_path.is_file() {
-                if let Ok(content) = std::fs::read_to_string(file_path) {
-                    if let Err(e) = provider.notify_file_processed(file_path, &content) {
-                        slog!(
-                            logger,
-                            debug,
-                            "Failed to pre-index file {} for semantic analysis: {}",
-                            file_path.display(),
-                            e
-                        );
-                    }
-                }
+            if file_path.is_file()
+                && let Ok(content) = std::fs::read_to_string(file_path)
+                && let Err(e) = provider.notify_file_processed(file_path, &content)
+            {
+                slog!(
+                    logger,
+                    debug,
+                    "Failed to pre-index file {} for semantic analysis: {}",
+                    file_path.display(),
+                    e
+                );
             }
         }
 
@@ -636,11 +638,9 @@ impl<'a> JssgExecutionService<'a> {
                             );
                             if let Ok(mut execution_failure_message) =
                                 execution_failure_message_for_closure.lock()
-                            {
-                                if execution_failure_message.is_none() {
+                                && execution_failure_message.is_none() {
                                     *execution_failure_message = Some(execution_message.clone());
                                 }
-                            }
                             if let (Some(task_id), Some(run_id)) =
                                 (task_log_task_id, workflow_run_id)
                             {
@@ -667,8 +667,9 @@ impl<'a> JssgExecutionService<'a> {
                         StepPhase::FileLoaded,
                     );
                     Self::signal_progress(&progress_tx_for_closure);
-
-                    std::env::set_var("CODEMOD_STEP_ID", &step_id);
+                    unsafe{
+                      std::env::set_var("CODEMOD_STEP_ID", &step_id);
+                    }
                     record_unit_progress(
                         &progress_state_for_closure,
                         &relative_path,
@@ -836,7 +837,7 @@ impl<'a> JssgExecutionService<'a> {
                             succeeded_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
                             let apply_change =
                                 |change_path: &Path, result: &ExecutionResult| match result {
-                                    ExecutionResult::Modified(ref modified) => {
+                                    ExecutionResult::Modified(modified) => {
                                         let write_path =
                                             modified.rename_to.as_deref().unwrap_or(change_path);
                                         if config.dry_run {
@@ -977,8 +978,8 @@ impl<'a> JssgExecutionService<'a> {
                                     }
                                 }
                                 ExecutionResult::Unmodified => {
-                                    if has_selector {
-                                        if let Some(ref collector) =
+                                    if has_selector
+                                        && let Some(ref collector) =
                                             selector_matched_files_collector_clone
                                         {
                                             collector
@@ -986,7 +987,6 @@ impl<'a> JssgExecutionService<'a> {
                                                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                                                 .push(file_path.to_path_buf());
                                         }
-                                    }
                                     engine
                                         .execution_stats
                                         .files_unmodified
@@ -1042,11 +1042,9 @@ impl<'a> JssgExecutionService<'a> {
                                 canceled_flag_for_closure.store(true, Ordering::Release);
                                 if let Ok(mut runtime_failure_message) =
                                     runtime_failure_message_for_closure.lock()
-                                {
-                                    if runtime_failure_message.is_none() {
+                                    && runtime_failure_message.is_none() {
                                         *runtime_failure_message = Some(message);
                                     }
-                                }
                             } else if Self::is_runtime_initialization_failure(&e)
                                 || Self::is_codemod_source_reference_failure(
                                     &e,
@@ -1072,11 +1070,9 @@ impl<'a> JssgExecutionService<'a> {
                             );
                             if let Ok(mut execution_failure_message) =
                                 execution_failure_message_for_closure.lock()
-                            {
-                                if execution_failure_message.is_none() {
+                                && execution_failure_message.is_none() {
                                     *execution_failure_message = Some(execution_message.clone());
                                 }
-                            }
                             if let (Some(task_id), Some(run_id)) =
                                 (task_log_task_id, workflow_run_id)
                             {
@@ -1122,11 +1118,9 @@ impl<'a> JssgExecutionService<'a> {
                             );
                             if let Ok(mut execution_failure_message) =
                                 execution_failure_message_for_closure.lock()
-                            {
-                                if execution_failure_message.is_none() {
+                                && execution_failure_message.is_none() {
                                     *execution_failure_message = Some(execution_message.clone());
                                 }
-                            }
                             if let (Some(task_id), Some(run_id)) =
                                 (task_log_task_id, workflow_run_id)
                             {
@@ -1216,14 +1210,15 @@ impl<'a> JssgExecutionService<'a> {
         let attempted_files = attempted_file_count.load(Ordering::Relaxed);
         let failed_files = failed_file_count.load(Ordering::Relaxed);
         let succeeded_files = succeeded_file_count.load(Ordering::Relaxed);
-        if attempted_files > 0 && failed_files == attempted_files && succeeded_files == 0 {
-            if let Some(message) = execution_failure_message
+        if attempted_files > 0
+            && failed_files == attempted_files
+            && succeeded_files == 0
+            && let Some(message) = execution_failure_message
                 .lock()
                 .ok()
                 .and_then(|message| message.clone())
-            {
-                return Err(Error::StepExecution(message));
-            }
+        {
+            return Err(Error::StepExecution(message));
         }
 
         if canceled_during_execution.load(Ordering::Acquire) {
@@ -1251,48 +1246,47 @@ impl<'a> JssgExecutionService<'a> {
             }
         }
 
-        if let Some(wf_run_id) = workflow_run_id {
-            if !self
+        if let Some(wf_run_id) = workflow_run_id
+            && !self
                 .engine
                 .workflow_run_config()
                 .execution
                 .skip_state_writes
-                && !config.dry_run
-            {
-                let persistable = shared_state_context.get_persistable();
-                let removals = shared_state_context.get_removals();
+            && !config.dry_run
+        {
+            let persistable = shared_state_context.get_persistable();
+            let removals = shared_state_context.get_removals();
 
-                if !persistable.is_empty() || !removals.is_empty() {
-                    let mut fields = HashMap::new();
-                    for (key, value) in persistable {
-                        fields.insert(
-                            key,
-                            FieldDiff {
-                                operation: DiffOperation::Update,
-                                value: Some(value),
-                            },
-                        );
-                    }
-                    for key in removals {
-                        fields.insert(
-                            key,
-                            FieldDiff {
-                                operation: DiffOperation::Remove,
-                                value: None,
-                            },
-                        );
-                    }
-
-                    self.engine
-                        .state_adapter()
-                        .lock()
-                        .await
-                        .apply_state_diff(&StateDiff {
-                            workflow_run_id: wf_run_id,
-                            fields,
-                        })
-                        .await?;
+            if !persistable.is_empty() || !removals.is_empty() {
+                let mut fields = HashMap::new();
+                for (key, value) in persistable {
+                    fields.insert(
+                        key,
+                        FieldDiff {
+                            operation: DiffOperation::Update,
+                            value: Some(value),
+                        },
+                    );
                 }
+                for key in removals {
+                    fields.insert(
+                        key,
+                        FieldDiff {
+                            operation: DiffOperation::Remove,
+                            value: None,
+                        },
+                    );
+                }
+
+                self.engine
+                    .state_adapter()
+                    .lock()
+                    .await
+                    .apply_state_diff(&StateDiff {
+                        workflow_run_id: wf_run_id,
+                        fields,
+                    })
+                    .await?;
             }
         }
 
