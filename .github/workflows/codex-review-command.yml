@@ -7,83 +7,56 @@ on:
     types:
       - created
 
+permissions: {}
+
 concurrency:
   group: codex-review-${{ github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
   resolve-pr:
+    name: Resolve pull request
     if: >-
       github.event.issue.pull_request &&
       github.event.comment.body == '/codex-review' &&
       contains(fromJSON('["OWNER","MEMBER"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pull-requests: read
+      pull-requests: read # Route trusted and fork reviews using PR metadata.
     outputs:
-      pr_number: ${{ steps.resolve.outputs.pr_number }}
-      head_repo_full_name: ${{ steps.resolve.outputs.head_repo_full_name }}
       is_draft: ${{ steps.resolve.outputs.is_draft }}
+      is_fork: ${{ steps.resolve.outputs.is_fork }}
     steps:
-      - name: Resolve pull request context
+      - name: Resolve pull request trust level
         id: resolve
-        uses: actions/github-script@v9
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
         with:
           github-token: ${{ github.token }}
+          retries: 3
           script: |
-            const prNumber = Number(context.payload.issue?.number);
-            if (!Number.isFinite(prNumber)) {
-              core.setFailed("/codex-review requires a pull request number");
-              return;
-            }
-
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: prNumber,
+              pull_number: context.payload.issue.number,
             });
-
-            core.setOutput("pr_number", String(pr.number));
-            core.setOutput("head_repo_full_name", pr.head.repo?.full_name || "");
             core.setOutput("is_draft", String(Boolean(pr.draft)));
+            core.setOutput("is_fork", String(pr.head.repo?.full_name !== pr.base.repo?.full_name));
 
-  codex-review:
+  same-repository-review:
+    name: Review same-repository PR
     needs: resolve-pr
-    if: ${{ !fromJSON(needs.resolve-pr.outputs.is_draft) && needs.resolve-pr.outputs.head_repo_full_name == github.repository }}
+    if: ${{ needs.resolve-pr.outputs.is_draft == 'false' && needs.resolve-pr.outputs.is_fork == 'false' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
-      issues: write
+      pull-requests: write # Let the composite action post inline review comments.
+      issues: write # Let the composite action upsert its summary comment.
     steps:
-      - name: Acknowledge command
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            const comment = context.payload.comment;
-            if (String(comment?.body || "") !== "/codex-review") {
-              core.setFailed("The comment did not contain the exact /codex-review command");
-              return;
-            }
-
-            try {
-              await github.rest.reactions.createForIssueComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: comment.id,
-                content: "eyes",
-              });
-            } catch (error) {
-              core.warning(`Could not add acknowledgement reaction: ${error.message}`);
-            }
-
       # The sync workflow replaces @main; pin it manually when copying this template elsewhere.
-      - uses: codemod/codex-review-action@0808e160dab04ad659fdd49cd160a18df4bfd1a8
+      - uses: codemod/codex-review-action@78c3bfeb2afacdd4d93e6773e9c8a40f04732930 # zizmor: ignore[unpinned-uses] -- sync-action-pins replaces this template ref with a full SHA.
         with:
           github_token: ${{ github.token }}
-          pr_number: ${{ needs.resolve-pr.outputs.pr_number }}
+          pr_number: ${{ github.event.issue.number }}
           codex_model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
           azure_openai_api_key: ${{ secrets.AZURE_OPENAI_API_KEY }}
           azure_openai_responses_endpoint: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
@@ -101,3 +74,30 @@ jobs:
             - security issues
           extra_prompt: |
             Follow any repository-specific review guidance files when present.
+
+  fork-review:
+    name: Review fork PR
+    needs: resolve-pr
+    if: ${{ needs.resolve-pr.outputs.is_draft == 'false' && needs.resolve-pr.outputs.is_fork == 'true' }}
+    permissions:
+      contents: read
+      pull-requests: write # Let only the called workflow's posting job write reviews.
+      issues: write # Let only the called workflow's posting job upsert its summary.
+    # The sync workflow replaces @main; pin it manually when copying this template elsewhere.
+    uses: codemod/codex-review-action/.github/workflows/fork-review.yml@78c3bfeb2afacdd4d93e6773e9c8a40f04732930 # zizmor: ignore[unpinned-uses] -- sync-action-pins replaces this template ref with a full SHA.
+    with:
+      pr_number: ${{ github.event.issue.number }}
+      codex_model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
+      working_directory: .
+      codex_effort: high
+      review_focus: |
+        Focus on:
+        - correctness bugs
+        - behavioral regressions
+        - missing tests or missing edge-case coverage
+        - security issues
+      extra_prompt: |
+        Follow repository-specific review guidance from the trusted base checkout when present.
+    secrets:
+      azure_openai_api_key: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      azure_openai_responses_endpoint: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
