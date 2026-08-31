@@ -62,7 +62,7 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: codemod/codex-review-action@0808e160dab04ad659fdd49cd160a18df4bfd1a8
+      - uses: codemod/codex-review-action@78c3bfeb2afacdd4d93e6773e9c8a40f04732930
         continue-on-error: ${{ github.actor == 'codemod[bot]' }}
         with:
           github_token: ${{ github.token }}
