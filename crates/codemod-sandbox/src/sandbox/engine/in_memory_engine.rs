@@ -103,6 +103,9 @@ pub struct InMemoryExecutionOptions<'a, R> {
     pub llm_request_handler: Option<LlmRequestHandler>,
     /// Optional shared state context for cross-thread state communication
     pub shared_state_context: Option<SharedStateContext>,
+    /// Optional cooperative cancellation flag. When set, the QuickJS
+    /// interrupt handler stops execution as soon as cancellation is observed.
+    pub cancellation_flag: Option<Arc<AtomicBool>>,
     /// Execution timeout in milliseconds (default: 200ms)
     pub timeout_ms: Option<u64>,
     /// Memory limit in bytes (default: 64 MB)
@@ -176,15 +179,25 @@ where
 
     let timeout_ms = options.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
     let memory_limit = options.memory_limit.unwrap_or(DEFAULT_MEMORY_LIMIT);
+    let cancellation_flag = options.cancellation_flag.clone();
 
     runtime.set_memory_limit(memory_limit).await;
     runtime.set_max_stack_size(DEFAULT_MAX_STACK_SIZE).await;
     let start_time = Instant::now();
     let timeout_exceeded = Arc::new(AtomicBool::new(false));
     let timeout_exceeded_clone = Arc::clone(&timeout_exceeded);
+    let cancellation_observed = Arc::new(AtomicBool::new(false));
+    let cancellation_observed_clone = Arc::clone(&cancellation_observed);
 
     runtime
         .set_interrupt_handler(Some(Box::new(move || {
+            if cancellation_flag
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                cancellation_observed_clone.store(true, Ordering::SeqCst);
+                return true;
+            }
             if start_time.elapsed().as_millis() as u64 > timeout_ms {
                 timeout_exceeded_clone.store(true, Ordering::SeqCst);
                 true // Interrupt execution
@@ -259,7 +272,7 @@ where
     let metrics_context = options.metrics_context.clone();
     let llm_runtime_context = LlmRuntimeContext::new(options.llm_request_handler.clone());
     let shared_state_context = options.shared_state_context.clone();
-    let runtime_hooks_context = RuntimeHooksContext::default();
+    let runtime_hooks_context = RuntimeHooksContext::new(None, options.cancellation_flag.clone());
     let process_sandbox = options.process_sandbox.clone();
     let fs_sandbox = options.fs_sandbox.clone();
     let timeout_exceeded_check = Arc::clone(&timeout_exceeded);
@@ -454,6 +467,12 @@ where
     })
     .await;
 
+    if cancellation_observed.load(Ordering::SeqCst) {
+        return Err(ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::ExecutionCancelled,
+        });
+    }
+
     if timeout_exceeded_check.load(Ordering::SeqCst) {
         return Err(ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::ExecutionTimeout { timeout_ms },
@@ -509,6 +528,7 @@ mod tests {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
@@ -569,6 +589,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: Some(50), // 50ms timeout for faster test
             memory_limit: None,
             process_sandbox: None,
@@ -587,6 +608,61 @@ export default function transform(root) {
             ),
             Err(e) => panic!("Expected timeout error, got different error: {:?}", e),
         }
+    }
+
+    #[test]
+    fn test_execute_codemod_sync_cancellation_interrupts_quickjs() {
+        let codemod_content = r#"
+export default function transform(root) {
+  while (true) {
+    // Infinite loop to prove cancellation interrupts active JavaScript.
+  }
+  return root.root().text();
+}
+        "#
+        .trim();
+        let content = "const x = 1;";
+        let cancellation_flag = Arc::new(AtomicBool::new(false));
+        let cancellation_trigger = Arc::clone(&cancellation_flag);
+        let trigger = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            cancellation_trigger.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+
+        let result = execute_codemod_sync(InMemoryExecutionOptions::<InMemoryResolver> {
+            codemod_source: codemod_content,
+            language: js_lang(),
+            ast: AstGrep::new(content, js_lang()),
+            original_sha256: Some(compute_sha256(content)),
+            resolver: None,
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            file_path: None,
+            target_directory: ".",
+            semantic_provider: None,
+            metrics_context: None,
+            llm_request_handler: None,
+            shared_state_context: None,
+            cancellation_flag: Some(cancellation_flag),
+            timeout_ms: Some(5_000),
+            memory_limit: None,
+            process_sandbox: None,
+            fs_sandbox: None,
+        });
+
+        trigger.join().unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "cancellation should not wait for the five-second timeout"
+        );
+        assert!(matches!(
+            result,
+            Err(ExecutionError::Runtime {
+                source: RuntimeError::ExecutionCancelled,
+            })
+        ));
     }
 
     #[test]
@@ -630,6 +706,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
@@ -779,6 +856,7 @@ export default function transform(root, options) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
@@ -854,6 +932,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: Some(sandbox),
@@ -932,6 +1011,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
@@ -1009,6 +1089,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
@@ -1087,6 +1168,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
@@ -1187,6 +1269,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
@@ -1554,6 +1637,7 @@ export default function transform(root) {
                 metrics_context: None,
                 llm_request_handler: None,
                 shared_state_context: None,
+                cancellation_flag: None,
                 timeout_ms: None,
                 memory_limit: None,
                 process_sandbox: None,
@@ -1626,6 +1710,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
@@ -1735,6 +1820,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
@@ -1827,6 +1913,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
@@ -1896,6 +1983,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
@@ -1935,6 +2023,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,

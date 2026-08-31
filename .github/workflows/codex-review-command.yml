@@ -80,7 +80,7 @@ jobs:
             }
 
       # The sync workflow replaces @main; pin it manually when copying this template elsewhere.
-      - uses: codemod/codex-review-action@0808e160dab04ad659fdd49cd160a18df4bfd1a8
+      - uses: codemod/codex-review-action@d9f4707c2454897be1c4e93c51c8e69bf0e4ce46
         with:
           github_token: ${{ github.token }}
           pr_number: ${{ needs.resolve-pr.outputs.pr_number }}

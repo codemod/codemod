@@ -731,6 +731,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.23",
  "semantic-factory",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
