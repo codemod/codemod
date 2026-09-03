@@ -5,251 +5,61 @@ icon: 'arrow-up-right-dots'
 description: 'Run codemods with automated PRs and centralized tracking.'
 ---
 
-import { CodemodCampaignsDemo } from "/snippets/codemod-campaigns-demo.mdx";
+Campaigns run codemods across one or more repositories. Codemod creates tasks, opens pull requests, tracks CI checks, and gives you one place to follow the rollout.
+
+Use a campaign when you want to move from "we found the work" to "we are applying the change".
 
 <Frame>
-  <CodemodCampaignsDemo />
+  <img
+    src="/images/campaigns/campaign-detail-light.png"
+    alt="Campaign detail page with workflow tasks, generated pull request, and passing checks"
+    className="block dark:hidden"
+  />
+  <img
+    src="/images/campaigns/campaign-detail-dark.png"
+    alt="Campaign detail page with workflow tasks, generated pull request, and passing checks"
+    className="hidden dark:block"
+  />
 </Frame>
 
-A Campaign allows you to orchestrate large-scale code migrations. When you create a Campaign, Codemod executes the underlying [workflow](/workflows/introduction), creates tasks, and opens pull requests. You can monitor progress, review PRs, re-run failed tasks, and track status from a centralized dashboard.
-
-## How Campaigns use workflows
-
-Campaigns are powered by the Codemod [workflows](/workflows/introduction), which orchestrates multi-step code migrations at scale.
-
-### Workflow structure
-
-A workflow defines what transformations to run and how they're orchestrated:
-
-- **Nodes** are the primary execution units that represent a stage in your migration. Nodes can depend on other nodes, run automatically or require manual approval, and fan out across matrix dimensions.
-- **Steps** are atomic actions within a node. Each step performs one transformation or command (e.g., run a JSSG codemod, execute a shell script, call an AI agent).
-- **Tasks** are runtime instances of nodes. When a Campaign runs, the engine creates tasks for each node. For [matrix strategies](/workflows/reference#matrix-strategy), a single node can spawn multiple parallel tasks (e.g., one per team or shard).
-
-In Codemod Campaigns, each task executes on its own branch. Nodes can define step-level commit checkpoints and pull request metadata, and a task that ends with commits will push its branch and open a pull request. See [Workflow reference](/workflows/reference#nodes) and [available step fields](/workflows/reference#common-step-fields).
-
-```
-Workflow Definition          Runtime Execution
-───────────────────────────────────────
-Workflow                     Campaign Run
-  └── Node A                   └── Task A-1
-       └── Step 1                   (executes steps 1, 2, 3)
-       └── Step 2              └── Task A-2 (matrix)
-       └── Step 3                   (executes steps 1, 2, 3)
-  └── Node B (depends on A)    └── Task B-1 (waits for A)
-       └── Step 1                   (executes step 1)
-```
-
-### Why this matters for large-scale migrations
-
-The workflow engine handles the complexity of coordinating transformations:
-
-- **Dependency-aware scheduling**: Nodes execute in the correct order based on their dependencies
-- **Parallel execution**: Independent nodes and matrix tasks run concurrently
-- **Resumable state**: Progress persists across runs, so interrupted migrations can continue where they left off
-- **Mixed transformation types**: Combine deterministic AST codemods with AI-powered fixups and shell scripts in a single workflow
-
-## Creating a Campaign
+## Campaign flow
 
 <Steps>
-  <Step title="Choose a codemod">
-    Navigate to **[Campaigns](https://app.codemod.com/workflows/create/registry)** and click **Create Campaign**. Search the [Codemod Registry](https://go.codemod.com/registry) by name or keyword, then select the codemod you want to run. Use the version picker to choose a specific version or default to the latest.
-
-    Pro codemods are available to Pro and Enterprise plan customers.
+  <Step title="Create a campaign">
+    Choose a registry codemod and select one or more target repositories.
   </Step>
-
-  <Step title="Select target repositories">
-    Open the repository selector and choose the repository or repositories from your connected GitHub or GitLab accounts.
-
-    <Info>
-      Codemod needs access to your repositories via the [GitHub App](/platform/integrations/github) or [GitLab integration](/platform/integrations/gitlab). If no repositories appear, connect your account first.
-    </Info>
+  <Step title="Review the plan">
+    Confirm the package, repositories, campaign name, arguments, and recovery settings.
   </Step>
-
-  <Step title="Configure parameters">
-    If the codemod accepts configuration, a dynamic form is generated from its schema. Fill in the fields. The form supports text inputs, numbers, booleans, dropdowns, and secrets.
-
-    Parameters make workflows reusable and configurable for different contexts. For example:
-    - Specify which library version to migrate to
-    - Configure team-specific behavior or file paths
-    - Pass API keys or tokens needed by the transformation
-
-    <Tip>
-      Use the value reference button to insert organization-level secrets (e.g., `${secrets.apiKey}`) instead of hardcoding sensitive values.
-    </Tip>
-
-    The parameters you configure here are accessible at every stage of the workflow:
-
-    - **JSSG transforms**: Access parameters via `options.params`. See [JSSG documentation](/jssg/advanced#parameters-and-configuration) for details.
-    - **Shell steps**: Parameters are available as environment variables, each prefixed with `PARAM_`.
-    - **Nested codemod steps**: Parameters are inherited via environment variable forwarding.
-
-    This ensures your configuration values are available wherever they're needed within your workflow.
-  </Step>
-
-  <Step title="Configure rollout behavior">
-    Depending on the selected package and workflow, campaign creation can include additional rollout controls:
-
-    - **Sharding** splits eligible codemods into smaller parallel tasks and pull requests. You can group files by `.github/CODEOWNERS` or directory structure, set the maximum files per shard, and optionally set a minimum shard size or target directory.
-    - **AI review** adds a final cleanup step when the workflow does not already include an AI step.
-    - **CI recovery** controls how Codemod responds to failing checks on generated pull requests. Codemod can patch the generated PR directly for repository-specific failures, repair and republish source-available codemod packages when failures look systematic, and stop after the configured retry cap.
-  </Step>
-
-  <Step title="Name, review, and start your Campaign">
-    Choose a Campaign name and optionally add a description.
-    Review your configuration summary, then click **Create Campaign**.
+  <Step title="Track the rollout">
+    Watch workflow tasks, generated pull requests, and CI checks from the campaign detail page.
   </Step>
 </Steps>
 
-<CardGroup cols={2}>
-  <Card title="GitHub Integration" icon="github" href="/platform/integrations/github">
-    Install the Codemod GitHub App to target your repositories.
-  </Card>
-  <Card title="GitLab Integration" icon="gitlab" href="/platform/integrations/gitlab">
-    Set up group access tokens for GitLab repositories.
-  </Card>
-</CardGroup>
-
-## Managing a Campaign
-
-Once a Campaign is running, the detail page gives you full visibility into execution progress and lets you manage individual tasks.
-
-### Campaign dashboard
-
-The Campaign dashboard provides two primary views for monitoring execution:
-
-#### 1. Map view (workflow graph)
-
-An interactive DAG showing workflow **nodes** as connected boxes. The graph visualizes dependencies between nodes and shows the execution order.
-
-Click any node to expand it and see:
-- The **steps** within that node and their individual status
-- The **tasks** spawned by that node (one or more for matrix strategies)
-- Logs and execution details for each step
-
-#### 2. Table view
-
-A detailed breakdown with one row per **task**, showing:
-- Task status and the node it belongs to
-- Step-by-step execution state within each task
-- Assignee, PR links, and available actions
-- For matrix nodes, each matrix combination appears as a separate task row
-
-<Tip>
-Use the table view when you need to see step-level details across all tasks, or to quickly identify which specific step failed within a task.
-</Tip>
-
-Both views also provide:
-- **Pull request links**: Each task that finishes with commits shows the PRs created from its task branch, with state indicators and direct links to GitHub or GitLab.
-- **Check summaries**: Generated PRs show supported CI checks, including pending, passing, and failing checks with links back to the provider when available.
-- **Real-time updates**: Status changes, task creation events, and PR additions stream live without page refresh.
-
-### Sharded campaigns
-
-When sharding is enabled, Codemod splits eligible work into smaller parallel tasks. Shards can be grouped by code owner or directory, and each shard follows the same workflow execution model as any other task.
-
-Use sharding when one large migration PR would be difficult to review or when teams need smaller slices of the same migration. The table view is usually the clearest way to inspect sharded work because each matrix task appears as its own row.
-
-### Build logs
-
-Click **View Logs** on any task to open the log panel. Logs stream in real-time and support full-text search, log level filtering, and ANSI color rendering.
-
-<Tip>
-  Toggle debug output on or off to control the level of detail shown in the log panel.
-</Tip>
-
-### Task statuses
-
-Tasks move through simple status states like `Todo`, `In Review`, `Done`, or `Won't Do`, which you can update from the status dropdown.
-
-If a task fails (e.g. a network timeout or build error), you can re-run it individually from the task's dropdown menu without re-running the entire Campaign. Only tasks in a failed or errored state can be re-run.
-
-To stop an active run, click **Cancel Run**. Completed tasks are not affected, but in-flight tasks will be terminated.
-
-<Warning>
-  Cancelling is immediate. In-flight tasks may leave partial changes. You can re-run individual tasks afterward.
-</Warning>
-
-### Pull request checks and auto-heal
-
-Generated pull requests show supported CI checks inline on the task card. Codemod groups checks into pending, passing, and failing states and links to provider check details when the provider sends a URL.
-
-Campaigns also include auto-heal for generated PRs. When auto-heal is on, Codemod waits for checks to settle before deciding whether recovery is needed. It can then:
-
-- Patch the generated PR directly when the failure looks repository-specific.
-- Repair and republish a source-available codemod package when the failure looks like a systematic transform issue.
-- Ask for a recovery decision, report only, or stop when the retry cap is reached.
-
-You can turn auto-heal on or off from the campaign detail page. When it is off and checks settle with failures, Codemod records that auto-heal is available and lets you start it manually from the pull request card.
-
-Recovery status appears inline with the PR checks. When available, use **View agent** or **View logs** to inspect the recovery work.
-
-## Project management integration
-
-Link a Campaign to a Jira epic for bidirectional task sync. When task statuses change in Codemod, they update in your project management tool, and vice versa.
-
-| Campaign status | Jira status |
-|-----------------|----------------------|
-| Todo            | To Do                |
-| In Review       | In Progress          |
-| Done            | Done                 |
-| Won't Do        | Won't Do             |
+## Learn the pieces
 
 <CardGroup cols={2}>
-  <Card title="Set up Jira" icon="jira" href="/platform/integrations/jira">
-    Connect your Jira workspace for bidirectional task sync.
+  <Card title="Create a campaign" href="/platform/campaigns/create" icon="plus">
+    Choose a codemod and select target repositories.
+  </Card>
+  <Card title="Review and start" href="/platform/campaigns/review-and-start" icon="list-checks">
+    Review campaign settings before Codemod opens PRs.
+  </Card>
+  <Card title="Track progress" href="/platform/campaigns/track-progress" icon="git-pull-request">
+    Follow generated tasks, pull requests, and CI checks.
+  </Card>
+  <Card title="Workflows" href="/workflows/introduction" icon="diagram-project">
+    Learn how workflow nodes, steps, and tasks fit together.
   </Card>
 </CardGroup>
-
-## Parameters
-
-Parameters unlock powerful patterns for managing migrations at scale:
-
-### Reusable workflows
-
-Define a workflow once and run it across different contexts by parameterizing variable parts:
-
-```yaml
-params:
-  schema:
-    targetVersion:
-      name: "Target Version"
-      type: string
-      default: "v2"
-    teams:
-      name: "Teams to migrate"
-      type: string
-      description: "Comma-separated list of team directories"
-```
-
-When creating a Campaign, you configure these parameters in the UI. The same workflow can migrate team A to v2, then team B to v3, without code changes.
-
-### Dynamic behavior
-
-Parameters can control conditional execution within workflows:
-- Skip certain steps based on configuration
-- Adjust file patterns per repository
-- Enable or disable AI-powered fixups
-
-### Secrets management
-
-For workflows that need API keys, tokens, or other credentials:
-1. Store secrets at the organization level in Codemod
-2. Reference them in parameters using `${secrets.secretName}`
-3. Secrets are injected at runtime and never exposed in logs
-
-<Card title="Parameter Reference" icon="sliders" href="/workflows/reference#parameters">
-  Complete parameter schema options and access patterns.
-</Card>
 
 ## Next steps
 
-For multi-step migrations, you can design workflows using `workflow.yaml` to define nodes, dependencies, matrix strategies, and parameters. Pro and Enterprise customers can also request custom workflows built by the Codemod team.
-
 <CardGroup cols={2}>
-  <Card title="Enterprise" icon="play" href="/platform/quickstart">
-    Run your first codemod and create a PR in minutes.
+  <Card title="Insights" href="/platform/insights" icon="chart-simple">
+    Find and measure migration work before you run a campaign.
   </Card>
-  <Card title="Workflows" icon="diagram-project" href="/workflows/introduction">
-    Learn how nodes, steps, and matrix strategies work.
+  <Card title="Registry" href="/platform/registry" icon="globe">
+    Choose reusable codemods for a rollout.
   </Card>
 </CardGroup>
