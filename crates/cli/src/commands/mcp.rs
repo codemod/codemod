@@ -2,7 +2,7 @@ use crate::feedback;
 use anyhow::Result;
 use clap::Args;
 use codemod_mcp::CodemodMcpServer;
-use rmcp::{transport, ServiceExt};
+use rmcp::{ServiceExt, transport};
 use std::path::PathBuf;
 use tracing_subscriber::{self, EnvFilter};
 

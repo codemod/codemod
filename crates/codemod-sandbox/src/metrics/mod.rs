@@ -1,11 +1,11 @@
 use dashmap::DashMap;
 use rquickjs::class::Trace;
 use rquickjs::module::{Declarations, Exports, ModuleDef};
-use rquickjs::{prelude::Opt, Class, Ctx, Exception, JsLifetime, Object, Result};
+use rquickjs::{Class, Ctx, Exception, JsLifetime, Object, Result, prelude::Opt};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Represents a set of cardinality dimensions for a metric.
 /// Cardinality allows tracking metrics with multiple dimensions,

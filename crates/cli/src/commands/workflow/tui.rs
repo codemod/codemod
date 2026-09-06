@@ -2,9 +2,9 @@ use anyhow::Result;
 use clap::Args;
 use uuid::Uuid;
 
+use crate::TelemetrySenderMutex;
 use crate::engine::create_engine;
 use crate::tui::run_workflow_tui;
-use crate::TelemetrySenderMutex;
 
 #[derive(Args, Debug)]
 pub struct Command {

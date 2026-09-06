@@ -5,10 +5,10 @@
 //! to ensure thread safety, but file contents are cached to support cross-file
 //! analysis.
 
-use ruff_db::files::{system_path_to_file, File, FileRootKind, Files};
+use ruff_db::Db as SourceDb;
+use ruff_db::files::{File, FileRootKind, Files, system_path_to_file};
 use ruff_db::system::{System, SystemPath, SystemPathBuf, TestSystem};
 use ruff_db::vendored::VendoredFileSystem;
-use ruff_db::Db as SourceDb;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use ty_project::{Db, Project, ProjectMetadata};

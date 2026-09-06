@@ -1,7 +1,7 @@
 [package]
 name = "butterflow-scheduler"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 authors.workspace = true
 description.workspace = true
 documentation.workspace = true

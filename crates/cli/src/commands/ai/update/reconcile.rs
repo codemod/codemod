@@ -1,6 +1,6 @@
 use super::types::{
-    AutoSafeApplyResult, ComponentReconcileDecision, ManagedUpdateManifestComponent,
-    ReconcileDecisionStatus, UpdatePolicyContext, UpdatePolicyMode, CURRENT_CLI_VERSION,
+    AutoSafeApplyResult, CURRENT_CLI_VERSION, ComponentReconcileDecision,
+    ManagedUpdateManifestComponent, ReconcileDecisionStatus, UpdatePolicyContext, UpdatePolicyMode,
 };
 use crate::commands::harness_adapter::{
     Harness, ManagedComponentSnapshot, ManagedStateWriteResult, ManagedStateWriteStatus,

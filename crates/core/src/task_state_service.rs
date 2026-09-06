@@ -11,7 +11,7 @@ use log::debug;
 use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
-use crate::workflow_runtime::{publish_event, WorkflowEvent};
+use crate::workflow_runtime::{WorkflowEvent, publish_event};
 
 #[derive(Clone)]
 pub(crate) struct TaskStateService {

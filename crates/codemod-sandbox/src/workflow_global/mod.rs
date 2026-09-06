@@ -1,26 +1,32 @@
 use crate::ast_grep::serde::JsValue;
 use dashmap::DashMap;
 use rquickjs::module::{Declarations, Exports, ModuleDef};
-use rquickjs::{prelude::Func, prelude::Opt, Ctx, Exception, Object, Result};
+use rquickjs::{Ctx, Exception, Object, Result, prelude::Func, prelude::Opt};
 use std::collections::HashMap;
-use std::env;
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 
 static STEP_OUTPUTS_STORE: LazyLock<Mutex<HashMap<String, HashMap<String, String>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// The workflow step id of the current execution, stored in QuickJS userdata.
+#[derive(Clone, Default)]
+pub struct StepIdContext(pub Option<String>);
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for StepIdContext {
+    type Changed<'to> = StepIdContext;
+}
+
 pub fn set_step_output(
+    step_id: &str,
     output_name: &str,
     value: &str,
 ) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let step_id = env::var("CODEMOD_STEP_ID").unwrap_or_default();
-
     {
         let mut store = STEP_OUTPUTS_STORE
             .lock()
             .map_err(|e| format!("Failed to lock STEP_OUTPUTS_STORE: {}", e))?;
         store
-            .entry(step_id)
+            .entry(step_id.to_string())
             .or_default()
             .insert(output_name.to_string(), value.to_string());
     }
@@ -36,10 +42,10 @@ pub fn get_step_output(
         .lock()
         .map_err(|e| format!("Failed to lock STEP_OUTPUTS_STORE: {}", e))?;
 
-    if let Some(outputs) = store.get(step_id) {
-        if let Some(value) = outputs.get(output_name) {
-            return Ok(Some(value.clone()));
-        }
+    if let Some(outputs) = store.get(step_id)
+        && let Some(value) = outputs.get(output_name)
+    {
+        return Ok(Some(value.clone()));
     }
 
     Ok(None)
@@ -378,7 +384,11 @@ impl ModuleDef for WorkflowGlobalModule {
 }
 
 fn set_step_output_rjs(ctx: Ctx<'_>, output_name: String, value: String) -> Result<()> {
-    let result = set_step_output(&output_name, &value);
+    let step_id = ctx
+        .userdata::<StepIdContext>()
+        .and_then(|step_id| step_id.0.clone())
+        .unwrap_or_default();
+    let result = set_step_output(&step_id, &output_name, &value);
     result.map_err(|e| Exception::throw_message(&ctx, &format!("Failed to set step output: {e}")))
 }
 
@@ -430,13 +440,7 @@ mod tests {
         let default_value = "default_value";
 
         // Temporarily set the step ID for the test
-        unsafe {
-            std::env::set_var("CODEMOD_STEP_ID", step_id);
-        }
-        set_step_output(output_name, initial_value).unwrap();
-        unsafe {
-            std::env::remove_var("CODEMOD_STEP_ID");
-        }
+        set_step_output(step_id, output_name, initial_value).unwrap();
 
         // Try to get or set with different default
         let result = get_or_set_step_output(step_id, output_name, default_value).unwrap();
@@ -527,16 +531,8 @@ mod tests {
         let output_name = "test_output_basic";
         let value = "test_value";
 
-        unsafe {
-            std::env::set_var("CODEMOD_STEP_ID", "test_step_6");
-        }
-
-        set_step_output(output_name, value).unwrap();
+        set_step_output("test_step_6", output_name, value).unwrap();
         let result = get_step_output("test_step_6", output_name).unwrap();
-
-        unsafe {
-            std::env::remove_var("CODEMOD_STEP_ID");
-        }
 
         assert_eq!(result, Some(value.to_string()));
     }
@@ -580,6 +576,35 @@ mod tests {
         // Verify all outputs are stored
         let all_outputs = get_step_outputs(step_id).unwrap();
         assert_eq!(all_outputs.len(), num_threads);
+    }
+
+    #[test]
+    fn test_set_step_output_concurrent_different_steps() {
+        let num_threads = 8;
+        let handles: Vec<_> = (0..num_threads)
+            .map(|i| {
+                thread::spawn(move || {
+                    set_step_output(
+                        &format!("parallel_step_{i}"),
+                        "output",
+                        &format!("value_{i}"),
+                    )
+                    .unwrap()
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        // Each step's outputs must stay isolated from the others.
+        for i in 0..num_threads {
+            assert_eq!(
+                get_step_output(&format!("parallel_step_{i}"), "output").unwrap(),
+                Some(format!("value_{i}"))
+            );
+        }
     }
 
     #[test]

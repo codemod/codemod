@@ -17,9 +17,9 @@ pub use sandbox::engine::codemod_lang::CodemodLang;
 pub use sandbox::engine::curated_fs::FileFetcher;
 #[cfg(feature = "jssg-in-memory")]
 pub use sandbox::engine::{
-    execute_codemod_sync, CodemodOutput, ExecutionResult, FsSandbox, InMemoryExecutionOptions,
-    ProcessSandbox,
+    CodemodOutput, ExecutionResult, FsSandbox, InMemoryExecutionOptions, ProcessSandbox,
+    execute_codemod_sync,
 };
 #[cfg(feature = "jssg-in-memory")]
 pub use sandbox::resolvers::{InMemoryLoader, InMemoryResolver};
-pub use workflow_global::SharedStateContext;
+pub use workflow_global::{SharedStateContext, StepIdContext};

@@ -1,6 +1,6 @@
 use butterflow_models::step::{BuiltinShardType, UseShard};
-use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
+use ignore::overrides::OverrideBuilder;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -95,16 +95,10 @@ pub fn evaluate_builtin_shards(
     let current_file_set: HashSet<&str> = relative_files.iter().map(|s| s.as_str()).collect();
 
     // If we have previous shards, do incremental evaluation
-    if let Some(prev) = previous_shards {
-        if !prev.is_empty() {
-            return evaluate_incremental(
-                prev,
-                &current_file_set,
-                method,
-                &search_base,
-                target_path,
-            );
-        }
+    if let Some(prev) = previous_shards
+        && !prev.is_empty()
+    {
+        return evaluate_incremental(prev, &current_file_set, method, &search_base, target_path);
     }
 
     // Fresh evaluation — no previous state
@@ -525,14 +519,14 @@ fn bin_pack_files(files: &[String], max_size: usize, min_size: Option<usize>) ->
     let mut chunks: Vec<Vec<String>> = files.chunks(max_size).map(|c| c.to_vec()).collect();
 
     // Merge trailing runt into previous chunk
-    if let Some(min) = min_size {
-        if chunks.len() > 1 {
-            let last_len = chunks.last().map(|c| c.len()).unwrap_or(0);
-            if last_len < min {
-                let last = chunks.pop().unwrap();
-                if let Some(prev) = chunks.last_mut() {
-                    prev.extend(last);
-                }
+    if let Some(min) = min_size
+        && chunks.len() > 1
+    {
+        let last_len = chunks.last().map(|c| c.len()).unwrap_or(0);
+        if last_len < min {
+            let last = chunks.pop().unwrap();
+            if let Some(prev) = chunks.last_mut() {
+                prev.extend(last);
             }
         }
     }

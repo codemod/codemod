@@ -279,10 +279,11 @@ mod tests {
         let diff = semantic_diff(expected, actual, "javascript");
         assert!(diff.is_semantic);
         assert!(!diff.differences.is_empty());
-        assert!(diff
-            .differences
-            .iter()
-            .any(|d| d.kind == DiffKind::TextMismatch));
+        assert!(
+            diff.differences
+                .iter()
+                .any(|d| d.kind == DiffKind::TextMismatch)
+        );
     }
 
     #[test]

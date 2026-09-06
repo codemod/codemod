@@ -12,13 +12,13 @@ use ast_grep_config::{RuleConfig, SerializableRuleConfig};
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::loader::Loader;
-use rquickjs::{async_with, AsyncContext, AsyncRuntime};
+use rquickjs::{AsyncContext, AsyncRuntime, async_with};
 use rquickjs::{CatchResultExt, Function, Module};
 use rquickjs::{FromJs, IntoJs};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::ast_grep::serde::JsValue;

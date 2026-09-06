@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::Args;
 use inquire::Confirm;
 use log::{info, warn};
@@ -210,32 +210,24 @@ async fn unpublish_package(
                     ))
                 }
             }
-            reqwest::StatusCode::FORBIDDEN => {
-                Err(anyhow!(
-                    "Access denied. You may not have permission to unpublish this package.\n\
+            reqwest::StatusCode::FORBIDDEN => Err(anyhow!(
+                "Access denied. You may not have permission to unpublish this package.\n\
                      Only package owners and organization members with appropriate permissions can unpublish packages."
-                ))
-            }
-            reqwest::StatusCode::BAD_REQUEST => {
-                Err(anyhow!(
-                    "Bad request: {}\n\
+            )),
+            reqwest::StatusCode::BAD_REQUEST => Err(anyhow!(
+                "Bad request: {}\n\
                      This may happen if you're trying to unpublish all versions without the --force flag.",
-                    error_text
-                ))
-            }
-            reqwest::StatusCode::UNAUTHORIZED => {
-                Err(anyhow!(
-                    "Authentication failed. Please run 'npx codemod@latest login' again.\n\
+                error_text
+            )),
+            reqwest::StatusCode::UNAUTHORIZED => Err(anyhow!(
+                "Authentication failed. Please run 'npx codemod@latest login' again.\n\
                      Your session may have expired."
-                ))
-            }
-            _ => {
-                Err(anyhow!(
-                    "Unpublish failed with status {}: {}",
-                    status,
-                    error_text
-                ))
-            }
+            )),
+            _ => Err(anyhow!(
+                "Unpublish failed with status {}: {}",
+                status,
+                error_text
+            )),
         };
     }
 

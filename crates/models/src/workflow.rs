@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 
+use crate::SimpleSchema;
 use crate::node::Node;
 use crate::template::Template;
-use crate::SimpleSchema;
 use ts_rs::TS;
 
 /// Represents a workflow definition

@@ -31,9 +31,9 @@ documentation = "https://docs.rs/butterflow"
 repository = "https://github.com/codemod/codemod"
 homepage = "https://github.com/codemod/codemod"
 license = "Apache-2.0"
-rust-version = "1.76"
+rust-version = "1.98.0"
 version = "1.17.3"
-edition = "2021"
+edition = "2024"
 
 [workspace.dependencies]
 butterflow-models = { path = "crates/models" }

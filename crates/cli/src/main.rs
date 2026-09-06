@@ -410,7 +410,10 @@ async fn run_cli() -> Result<()> {
             .map(|params| params.disable_analytics)
             .unwrap_or(false)
     {
-        std::env::set_var("DISABLE_ANALYTICS", "true");
+        // SAFETY: runs on the main thread during CLI startup, before threads spawn.
+        unsafe {
+            std::env::set_var("DISABLE_ANALYTICS", "true");
+        }
     }
 
     let telemetry_sender: Arc<Box<dyn TelemetrySender + Send + Sync>> =
@@ -564,7 +567,7 @@ async fn run_cli() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::{error::ErrorKind, CommandFactory};
+    use clap::{CommandFactory, error::ErrorKind};
 
     #[test]
     fn top_level_help_lists_ai_and_mcp() {

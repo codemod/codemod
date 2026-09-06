@@ -3,7 +3,7 @@
 use crate::tools::core::Result;
 use std::path::Path;
 use tokio::process::Command;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 /// Maximum response length before truncation.
 pub const MAX_RESPONSE_LEN: usize = 16000;

@@ -87,28 +87,72 @@ impl Lang {
 
     pub fn node_types_url(&self) -> &'static str {
         match self {
-            Lang::JavaScript => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-javascript/refs/tags/v0.23.0/src/node-types.json",
-            Lang::TypeScript => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/refs/tags/v0.23.2/typescript/src/node-types.json",
-            Lang::Tsx => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/refs/tags/v0.23.2/tsx/src/node-types.json",
-            Lang::Html => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-html/refs/tags/v0.23.0/src/node-types.json",
-            Lang::Xml => "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-xml/refs/tags/v0.7.0/xml/src/node-types.json",
-            Lang::Css => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-css/refs/tags/v0.23.2/src/node-types.json",
-            Lang::Angular => "https://raw.githubusercontent.com/codemod-com/tree-sitter-angular/refs/heads/main/src/node-types.json",
-            Lang::Java => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-java/refs/tags/v0.23.0/src/node-types.json",
-            Lang::Kotlin => "https://raw.githubusercontent.com/fwcd/tree-sitter-kotlin/refs/tags/0.3.8/src/node-types.json",
-            Lang::Scala => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-scala/refs/tags/v0.23.0/src/node-types.json",
-            Lang::Python => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-python/refs/tags/v0.23.0/src/node-types.json",
-            Lang::Go => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-go/refs/tags/v0.23.0/src/node-types.json",
-            Lang::Rust => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-rust/refs/tags/v0.23.0/src/node-types.json",
-            Lang::Json => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-json/refs/tags/v0.23.0/src/node-types.json",
-            Lang::CSharp => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-c-sharp/refs/tags/v0.23.0/src/node-types.json",
-            Lang::Cpp => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-cpp/refs/tags/v0.23.0/src/node-types.json",
-            Lang::C => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-c/refs/tags/v0.23.0/src/node-types.json",
-            Lang::Php => "https://github.com/tree-sitter/tree-sitter-php/raw/refs/heads/master/php_only/src/node-types.json",
-            Lang::Ruby => "https://raw.githubusercontent.com/tree-sitter/tree-sitter-ruby/refs/tags/v0.23.0/src/node-types.json",
-            Lang::Elixir => "https://raw.githubusercontent.com/elixir-lang/tree-sitter-elixir/refs/tags/v0.3.4/src/node-types.json",
-            Lang::Yaml => "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-yaml/refs/heads/master/src/node-types.json",
-            Lang::Toml => "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-toml/refs/tags/v0.7.0/src/node-types.json",
+            Lang::JavaScript => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-javascript/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::TypeScript => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/refs/tags/v0.23.2/typescript/src/node-types.json"
+            }
+            Lang::Tsx => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-typescript/refs/tags/v0.23.2/tsx/src/node-types.json"
+            }
+            Lang::Html => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-html/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::Xml => {
+                "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-xml/refs/tags/v0.7.0/xml/src/node-types.json"
+            }
+            Lang::Css => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-css/refs/tags/v0.23.2/src/node-types.json"
+            }
+            Lang::Angular => {
+                "https://raw.githubusercontent.com/codemod-com/tree-sitter-angular/refs/heads/main/src/node-types.json"
+            }
+            Lang::Java => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-java/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::Kotlin => {
+                "https://raw.githubusercontent.com/fwcd/tree-sitter-kotlin/refs/tags/0.3.8/src/node-types.json"
+            }
+            Lang::Scala => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-scala/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::Python => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-python/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::Go => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-go/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::Rust => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-rust/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::Json => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-json/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::CSharp => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-c-sharp/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::Cpp => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-cpp/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::C => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-c/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::Php => {
+                "https://github.com/tree-sitter/tree-sitter-php/raw/refs/heads/master/php_only/src/node-types.json"
+            }
+            Lang::Ruby => {
+                "https://raw.githubusercontent.com/tree-sitter/tree-sitter-ruby/refs/tags/v0.23.0/src/node-types.json"
+            }
+            Lang::Elixir => {
+                "https://raw.githubusercontent.com/elixir-lang/tree-sitter-elixir/refs/tags/v0.3.4/src/node-types.json"
+            }
+            Lang::Yaml => {
+                "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-yaml/refs/heads/master/src/node-types.json"
+            }
+            Lang::Toml => {
+                "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-toml/refs/tags/v0.7.0/src/node-types.json"
+            }
         }
     }
 

@@ -6,8 +6,8 @@ use rig::completion::message::UserContent;
 use rig::completion::{AssistantContent, Message};
 
 use crate::memory::history::{
-    clip_chars, estimate_context_chars, extract_history_documents, extract_message_text,
-    HistoryDocument,
+    HistoryDocument, clip_chars, estimate_context_chars, extract_history_documents,
+    extract_message_text,
 };
 
 const RECENT_MESSAGE_WINDOW: usize = 16;

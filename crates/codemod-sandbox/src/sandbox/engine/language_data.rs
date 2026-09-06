@@ -132,18 +132,21 @@ mod tests {
         let map = create_language_extension_map();
         assert!(!map.is_empty());
 
-        assert!(map
-            .get(&CodemodLang::Static(SupportLang::JavaScript))
-            .unwrap()
-            .contains(&".js"));
-        assert!(map
-            .get(&CodemodLang::Static(SupportLang::TypeScript))
-            .unwrap()
-            .contains(&".ts"));
-        assert!(map
-            .get(&CodemodLang::Static(SupportLang::Rust))
-            .unwrap()
-            .contains(&".rs"));
+        assert!(
+            map.get(&CodemodLang::Static(SupportLang::JavaScript))
+                .unwrap()
+                .contains(&".js")
+        );
+        assert!(
+            map.get(&CodemodLang::Static(SupportLang::TypeScript))
+                .unwrap()
+                .contains(&".ts")
+        );
+        assert!(
+            map.get(&CodemodLang::Static(SupportLang::Rust))
+                .unwrap()
+                .contains(&".rs")
+        );
     }
 
     #[test]

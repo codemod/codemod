@@ -1,7 +1,7 @@
 use rquickjs::{
+    AsyncContext, AsyncRuntime, CatchResultExt, Error as RquickjsError, Function, Module, Value,
     async_with,
     loader::{BuiltinLoader, BuiltinResolver, ModuleLoader},
-    AsyncContext, AsyncRuntime, CatchResultExt, Error as RquickjsError, Function, Module, Value,
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 use crate::ast_grep::AstGrepModule;
 use crate::ast_grep::{
     scanner::scan_content,
-    wasm_utils::{convert_to_debug_node, dump_pattern_impl, try_get_rule_config, WasmMatch},
+    wasm_utils::{WasmMatch, convert_to_debug_node, dump_pattern_impl, try_get_rule_config},
 };
 use crate::capabilities::CapabilitiesModule;
 use crate::plugins;

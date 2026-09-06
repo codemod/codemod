@@ -1,31 +1,31 @@
 use super::codemod_lang::CodemodLang;
 use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule, FileFetcher};
-use super::execution_engine::{map_transform_execution_error, CodemodOutput, ExecutionResult};
+use super::execution_engine::{CodemodOutput, ExecutionResult, map_transform_execution_error};
 use super::quickjs_adapters::QuickJSResolver;
 use super::transform_helpers::{
-    build_transform_options, process_transform_result, ModificationCheck,
+    ModificationCheck, build_transform_options, process_transform_result,
 };
-use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
+use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
 use crate::metrics::{MetricsContext, MetricsModule};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver};
 use crate::sandbox::runtime_module::{RuntimeHooksContext, RuntimeModule};
 use crate::utils::quickjs_utils::maybe_promise;
-use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
+use crate::workflow_global::{SharedStateContext, StepIdContext, WorkflowGlobalModule};
 use ast_grep_config::RuleConfig;
+use ast_grep_core::AstGrep;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::tree_sitter::StrDoc;
-use ast_grep_core::AstGrep;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use language_core::SemanticProvider;
-use rquickjs::{async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, Module};
+use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, Function, Module, async_with};
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use vfs::VfsPath;
 
@@ -125,6 +125,8 @@ pub struct InMemoryExecutionOptions<'a, R> {
     /// will fail to resolve unless the caller separately enables the llrt
     /// `Fs` capability).
     pub fs_sandbox: Option<FsSandbox>,
+    /// Workflow step id recorded with `setStepOutput` calls made by this execution.
+    pub step_id: Option<String>,
 }
 
 /// Execute a codemod synchronously by blocking on the async runtime
@@ -297,6 +299,12 @@ where
         ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store SharedStateContext: {:?}", e),
+            },
+        })?;
+
+        ctx.store_userdata(StepIdContext(options.step_id.clone())).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store StepIdContext: {:?}", e),
             },
         })?;
 
@@ -492,6 +500,7 @@ mod tests {
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
     use crate::sandbox::runtime_module::RuntimeFailureKind;
     use ast_grep_language::SupportLang;
+    use serial_test::serial;
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::sync::Arc;
@@ -533,6 +542,7 @@ mod tests {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: None,
+            step_id: None,
         })
     }
 
@@ -594,6 +604,7 @@ export default function transform(root) {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: None,
+            step_id: None,
         });
 
         match result {
@@ -645,6 +656,7 @@ export default function transform(root) {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            step_id: None,
             cancellation_flag: Some(cancellation_flag),
             timeout_ms: Some(5_000),
             memory_limit: None,
@@ -711,6 +723,7 @@ export default function transform(root) {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: None,
+            step_id: None,
         });
 
         match result {
@@ -861,6 +874,7 @@ export default function transform(root, options) {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: None,
+            step_id: None,
         });
 
         match result {
@@ -879,6 +893,7 @@ export default function transform(root, options) {
     }
 
     #[test]
+    #[serial]
     fn test_process_sandbox_overrides_env_and_cwd() {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
@@ -906,7 +921,10 @@ export default function transform(root) {
             .expect("Failed to write codemod file");
 
         // Seed a host env var that must not leak into process.env.
-        std::env::set_var("PG_SG_SANDBOX_LEAK_CHECK", "should-not-appear");
+        // SAFETY: test is #[serial], so no other test touches the env concurrently.
+        unsafe {
+            std::env::set_var("PG_SG_SANDBOX_LEAK_CHECK", "should-not-appear");
+        }
 
         let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
         let content = "const x = 1;";
@@ -937,6 +955,7 @@ export default function transform(root) {
             memory_limit: None,
             process_sandbox: Some(sandbox),
             fs_sandbox: None,
+            step_id: None,
         });
 
         match result {
@@ -1016,6 +1035,7 @@ export default function transform(root) {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: Some(fs_sandbox),
+            step_id: None,
         });
         match result {
             Ok(output) => match output.primary {
@@ -1094,6 +1114,7 @@ export default function transform(root) {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: Some(fs_sandbox),
+            step_id: None,
         });
 
         match result {
@@ -1173,6 +1194,7 @@ export default function transform(root) {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: Some(fs_sandbox),
+            step_id: None,
         });
 
         match result {
@@ -1274,6 +1296,7 @@ export default function transform(root) {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: Some(fs_sandbox),
+            step_id: None,
         });
 
         match result {
@@ -1642,6 +1665,7 @@ export default function transform(root) {
                 memory_limit: None,
                 process_sandbox: None,
                 fs_sandbox: Some(fs_sandbox),
+                step_id: None,
             })
             .unwrap_or_else(|e| panic!("iteration {idx} failed: {e:?}"));
             match out.primary {
@@ -1715,6 +1739,7 @@ export default function transform(root) {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: Some(fs_sandbox),
+            step_id: None,
         });
 
         match result {
@@ -1825,6 +1850,7 @@ export default function transform(root) {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: Some(fs_sandbox),
+            step_id: None,
         });
 
         match result {
@@ -1918,6 +1944,7 @@ export default function transform(root) {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: Some(fs_sandbox),
+            step_id: None,
         });
 
         match result {
@@ -1987,6 +2014,7 @@ export default function transform(root) {
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
+            step_id: None,
             fs_sandbox: Some(FsSandbox {
                 target_dir: "/app".to_string(),
                 root: root_a,
@@ -2027,6 +2055,7 @@ export default function transform(root) {
             timeout_ms: None,
             memory_limit: None,
             process_sandbox: None,
+            step_id: None,
             fs_sandbox: Some(FsSandbox {
                 target_dir: "/app".to_string(),
                 root: root_b,

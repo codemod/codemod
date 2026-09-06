@@ -5,11 +5,11 @@
 //! - The `jssg_test!` macro for declarative test definitions
 
 use ast_grep_language::SupportLang;
+use codemod_sandbox::CodemodLang;
 use codemod_sandbox::sandbox::engine::execution_engine::{
-    execute_codemod_with_quickjs, CodemodOutput, ExecutionResult, JssgExecutionOptions,
+    CodemodOutput, ExecutionResult, JssgExecutionOptions, execute_codemod_with_quickjs,
 };
 use codemod_sandbox::sandbox::resolvers::oxc_resolver::OxcResolver;
-use codemod_sandbox::CodemodLang;
 use language_core::SemanticProvider;
 use language_javascript::OxcSemanticProvider;
 use language_python::RuffSemanticProvider;
@@ -239,6 +239,7 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         metrics_context: None,
         llm_request_handler: None,
         shared_state_context: None,
+        step_id: None,
         runtime_event_callback: None,
         cancellation_flag: None,
         test_mode: false,

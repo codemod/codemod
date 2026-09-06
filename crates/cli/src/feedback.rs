@@ -1,6 +1,6 @@
-use crate::auth::TokenStorage;
 use crate::CLI_VERSION;
-use anyhow::{bail, Result};
+use crate::auth::TokenStorage;
+use anyhow::{Result, bail};
 use codemod_mcp::AnonymousFeedbackClient;
 use std::collections::HashMap;
 

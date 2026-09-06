@@ -1,10 +1,10 @@
 //! Semantic retrieval primitives backed by Rig embeddings and in-memory vector store.
 
+use rig::Embed;
 use rig::client::embeddings::EmbeddingsClient;
 use rig::embeddings::EmbeddingsBuilder;
-use rig::vector_store::{in_memory_store::InMemoryVectorStore, TopNResults, VectorStoreIndexDyn};
+use rig::vector_store::{TopNResults, VectorStoreIndexDyn, in_memory_store::InMemoryVectorStore};
 use rig::wasm_compat::WasmBoxedFuture;
-use rig::Embed;
 
 use crate::memory::MemoryError;
 

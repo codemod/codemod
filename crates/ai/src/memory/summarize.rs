@@ -2,7 +2,7 @@
 
 use rig::completion::Prompt;
 
-use crate::memory::history::{clip_chars, HistoryDocument};
+use crate::memory::history::{HistoryDocument, clip_chars};
 use crate::memory::{MemoryError, Result};
 
 const SUMMARIZER_PREAMBLE: &str = "You summarize prior AI tool-execution context. Preserve facts, file paths, commands, failures, and decisions. Keep output concise and structured.";

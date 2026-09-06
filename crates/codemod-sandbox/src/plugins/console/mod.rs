@@ -1,6 +1,6 @@
 use crate::utils::quickjs_wasm::quickjs_value_to_jsvalue;
-use rquickjs::{function::Func, prelude::Rest, Ctx, Object, Result, Value};
-use wasm_bindgen::{prelude::*, JsValue};
+use rquickjs::{Ctx, Object, Result, Value, function::Func, prelude::Rest};
+use wasm_bindgen::{JsValue, prelude::*};
 
 pub fn init(ctx: &Ctx<'_>) -> Result<()> {
     let globals = ctx.globals();

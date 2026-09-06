@@ -1,10 +1,10 @@
 use std::str::FromStr;
 
+use ast_grep_core::Position;
 use ast_grep_core::language::Language;
 use ast_grep_core::matcher::{Pattern, PatternBuilder, PatternError};
 use ast_grep_core::source::{Content, Doc, Edit, SgNode};
-use ast_grep_core::Position;
-use serde::{de, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de};
 use std::borrow::Cow;
 use std::ops::Range;
 use std::sync::Mutex;

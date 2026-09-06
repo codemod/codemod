@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 use butterflow_models::step::{SemanticAnalysisConfig, SemanticAnalysisMode, StepAction};
 use serde_yaml;
 
-use butterflow_models::{Error, Node, Result, Workflow};
+use butterflow_models::{Error, Node, Result, Workflow, WorkflowParseError};
 
 use crate::{
     engine::CodemodDependency, nested_codemod_service::NestedCodemodService,
@@ -100,7 +100,7 @@ pub fn parse_workflow_file<P: AsRef<Path>>(path: P) -> Result<Workflow> {
                 Ok(workflow) => Ok(workflow),
                 Err(json_err) => {
                     let yaml_location = yaml_err.location();
-                    Err(Error::WorkflowParse {
+                    Err(Error::WorkflowParse(Box::new(WorkflowParseError {
                         path: path.as_ref().to_path_buf(),
                         yaml_error: yaml_err.to_string().into_boxed_str(),
                         yaml_line: yaml_location.as_ref().map(|location| location.line()),
@@ -108,7 +108,7 @@ pub fn parse_workflow_file<P: AsRef<Path>>(path: P) -> Result<Workflow> {
                         json_error: json_err.to_string().into_boxed_str(),
                         json_line: Some(json_err.line()),
                         json_column: Some(json_err.column()),
-                    })
+                    })))
                 }
             }
         }
@@ -181,15 +181,10 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                     validate_workflow_relative_path(base_path, "js-ast-grep.base_path")?;
                 }
                 if let Some(SemanticAnalysisConfig::Detailed(detailed)) = &js_step.semantic_analysis
+                    && matches!(detailed.mode, SemanticAnalysisMode::Workspace)
+                    && let Some(root) = &detailed.root
                 {
-                    if matches!(detailed.mode, SemanticAnalysisMode::Workspace) {
-                        if let Some(root) = &detailed.root {
-                            validate_workflow_relative_path(
-                                root,
-                                "js-ast-grep.semantic_analysis.root",
-                            )?;
-                        }
-                    }
+                    validate_workflow_relative_path(root, "js-ast-grep.semantic_analysis.root")?;
                 }
 
                 let js_file_path = package_path.join(js_step.js_file.trim());
@@ -250,7 +245,7 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
                 }
                 match &shard.method {
                     ShardMethod::Builtin(_) => {
-                        if shard.target.as_ref().map_or(true, |t| t.trim().is_empty()) {
+                        if shard.target.as_ref().is_none_or(|t| t.trim().is_empty()) {
                             return Err(Error::WorkflowValidation(format!(
                                 "Step '{}' in node '{}': built-in shard method requires a non-empty 'target' field",
                                 step.name, node.id
@@ -315,13 +310,14 @@ pub fn validate_workflow(workflow: &Workflow, package_path: &Path) -> Result<()>
 
     // Check matrix strategies
     for node in &workflow.nodes {
-        if let Some(strategy) = &node.strategy {
-            if strategy.values.is_none() && strategy.from_state.is_none() {
-                return Err(Error::WorkflowValidation(format!(
-                    "Matrix strategy for node {} requires either 'values' or 'from_state'",
-                    node.id
-                )));
-            }
+        if let Some(strategy) = &node.strategy
+            && strategy.values.is_none()
+            && strategy.from_state.is_none()
+        {
+            return Err(Error::WorkflowValidation(format!(
+                "Matrix strategy for node {} requires either 'values' or 'from_state'",
+                node.id
+            )));
         }
     }
 
@@ -345,12 +341,11 @@ fn detect_cycles(nodes: &[Node]) -> Result<()> {
 
     // DFS to detect cycles
     for node in nodes {
-        if !visited.contains(node.id.as_str()) {
-            if let Some(cycle) =
+        if !visited.contains(node.id.as_str())
+            && let Some(cycle) =
                 dfs_cycle_detect(&graph, node.id.as_str(), &mut visited, &mut in_progress)
-            {
-                return Err(Error::CyclicDependency(cycle));
-            }
+        {
+            return Err(Error::CyclicDependency(cycle));
         }
     }
 
@@ -376,22 +371,22 @@ fn dfs_cycle_detect<'a>(
                 let mut current = neighbor;
                 while current != node {
                     for &n in graph.keys() {
-                        if let Some(deps) = graph.get(n) {
-                            if deps.contains(&current) {
-                                cycle = format!("{n} → {cycle}");
-                                current = n;
-                                break;
-                            }
+                        if let Some(deps) = graph.get(n)
+                            && deps.contains(&current)
+                        {
+                            cycle = format!("{n} → {cycle}");
+                            current = n;
+                            break;
                         }
                     }
                 }
                 return Some(cycle);
             }
 
-            if !visited.contains(neighbor) {
-                if let Some(cycle) = dfs_cycle_detect(graph, neighbor, visited, in_progress) {
-                    return Some(cycle);
-                }
+            if !visited.contains(neighbor)
+                && let Some(cycle) = dfs_cycle_detect(graph, neighbor, visited, in_progress)
+            {
+                return Some(cycle);
             }
         }
     }

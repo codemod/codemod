@@ -4,7 +4,7 @@ use crate::tools::core::Result;
 use crate::tools::core::{ToolCall, ToolResult};
 use crate::tools::utils::validate_absolute_path;
 use jsonpath_rust::JsonPathQuery;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use tokio::fs;
 
@@ -386,7 +386,7 @@ impl JsonEditTool {
         for (i, part) in path_parts.iter().enumerate() {
             if i == path_parts.len() - 1 {
                 // Last part - set the value
-                if let Value::Object(ref mut map) = current {
+                if let Value::Object(map) = current {
                     map.insert(part.to_string(), value);
                     return Ok(());
                 } else {
@@ -394,7 +394,7 @@ impl JsonEditTool {
                 }
             } else {
                 // Navigate to the next level
-                if let Value::Object(ref mut map) = current {
+                if let Value::Object(map) = current {
                     if !map.contains_key(part) {
                         map.insert(part.to_string(), Value::Object(serde_json::Map::new()));
                     }
@@ -426,7 +426,7 @@ impl JsonEditTool {
 
         // Navigate to parent
         for part in &path_parts[..path_parts.len() - 1] {
-            if let Value::Object(ref mut map) = current {
+            if let Value::Object(map) = current {
                 current = map
                     .get_mut(part)
                     .ok_or_else(|| format!("Path '{}' not found", part))?;
@@ -437,7 +437,7 @@ impl JsonEditTool {
 
         // Remove the final key
         let final_key = path_parts.last().unwrap();
-        if let Value::Object(ref mut map) = current {
+        if let Value::Object(map) = current {
             if map.remove(final_key).is_none() {
                 return Err(format!("Key '{}' not found", final_key).into());
             }

@@ -1,12 +1,12 @@
-use crate::utils::manifest::{is_safe_relative_path, CodemodManifest, WorkflowEntry};
+use crate::utils::manifest::{CodemodManifest, WorkflowEntry, is_safe_relative_path};
 use crate::utils::path_safety::{has_parent_path_components, resolve_relative_path_within_root};
 use crate::utils::skill_layout::{
-    expected_authored_skill_file, find_authored_skill_dir, resolve_configured_skill_file_path,
-    AGENTS_SKILL_ROOT_RELATIVE_PATH, SKILL_FILE_NAME,
+    AGENTS_SKILL_ROOT_RELATIVE_PATH, SKILL_FILE_NAME, expected_authored_skill_file,
+    find_authored_skill_dir, resolve_configured_skill_file_path,
 };
-use anyhow::{anyhow, Result};
-use butterflow_core::utils::parse_workflow_file;
+use anyhow::{Result, anyhow};
 use butterflow_core::Workflow;
+use butterflow_core::utils::parse_workflow_file;
 use butterflow_models::step::StepAction;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -864,9 +864,11 @@ nodes:
         fs::write(references_index, "[escape](../outside.md)\n").unwrap();
 
         let error = validate_skill_behavior(temp_dir.path(), &manifest).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("has invalid relative link target"));
+        assert!(
+            error
+                .to_string()
+                .contains("has invalid relative link target")
+        );
     }
 
     #[test]
@@ -891,9 +893,11 @@ nodes:
 
         let error = authored_skill_file_candidate(temp_dir.path(), Some(&manifest), &manifest.name)
             .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("parent-directory traversal in `path` value"));
+        assert!(
+            error
+                .to_string()
+                .contains("parent-directory traversal in `path` value")
+        );
     }
 
     #[test]
@@ -1032,9 +1036,11 @@ nodes:
         );
 
         let error = validate_package_behavior_structure(temp_dir.path(), &manifest).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("no workflow contains any `install-skill` steps"));
+        assert!(
+            error
+                .to_string()
+                .contains("no workflow contains any `install-skill` steps")
+        );
     }
 
     #[test]
@@ -1057,9 +1063,11 @@ nodes:
         );
 
         let error = validate_package_behavior_structure(temp_dir.path(), &manifest).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Workflow contains `install-skill` step(s)"));
+        assert!(
+            error
+                .to_string()
+                .contains("Workflow contains `install-skill` step(s)")
+        );
     }
 
     #[test]
@@ -1079,8 +1087,10 @@ nodes:
         );
 
         let error = validate_package_behavior_structure(temp_dir.path(), &manifest).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("does not define runnable behavior"));
+        assert!(
+            error
+                .to_string()
+                .contains("does not define runnable behavior")
+        );
     }
 }

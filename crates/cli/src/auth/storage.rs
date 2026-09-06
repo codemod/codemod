@@ -540,9 +540,11 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(fs::read_to_string(symlink_target).unwrap(), "do not change");
-        assert!(fs::symlink_metadata(auth_path)
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        assert!(
+            fs::symlink_metadata(auth_path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 }

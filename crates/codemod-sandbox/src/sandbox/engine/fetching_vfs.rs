@@ -257,8 +257,8 @@ impl FileSystem for FetchingMemoryFs {
 mod tests {
     use super::*;
     use std::io::Read;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use vfs::VfsPath;
 
     struct RecordingFetcher {

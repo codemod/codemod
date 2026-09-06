@@ -4,13 +4,13 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use butterflow_models::{
+        Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
         node::NodeType,
         step::{Step, StepAction, UseJSAstGrep},
-        Task, TaskStatus, Workflow, WorkflowRun, WorkflowStatus,
     };
     use chrono::Utc;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use uuid::Uuid;
 
     use crate::tui::app::{Screen, TaskProgressView, TuiState};

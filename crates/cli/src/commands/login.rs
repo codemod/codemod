@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::Args;
 use log::{info, warn};
 use reqwest::Client;
@@ -139,7 +139,9 @@ pub async fn handler(args: &Command) -> Result<()> {
                 );
             }
 
-            println!("Use 'npx codemod@latest logout' to log out or 'npx codemod@latest login --registry <url>' to log in to a different registry.");
+            println!(
+                "Use 'npx codemod@latest logout' to log out or 'npx codemod@latest login --registry <url>' to log in to a different registry."
+            );
             return Ok(());
         } else {
             println!("Token is invalid, logging out");
