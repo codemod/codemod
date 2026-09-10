@@ -25,6 +25,52 @@ pipelines, safe parallel reads, dynamic fan-out, agents, approvals, resumability
 and repository-wide coordination. The goal is therefore to simplify authoring,
 not to remove orchestration.
 
+## What Changes
+
+Today, a package describes nodes, steps, dependencies, and action-specific
+settings in YAML. The Rust engine parses that file, builds a graph, schedules
+each step, and sends work to a runner. Even a package with one JSSG transform
+must use this workflow shape.
+
+This proposal changes the package-facing definition, not the whole execution
+stack. It does not move shell or JSSG execution into Node, and it does not yet
+convert existing YAML packages:
+
+```text
+Today:     workflow.yaml -> Rust graph and scheduler -> existing runners
+Proposed:  TypeScript plan or workflow -> command history -> existing runners
+```
+
+A runnable is a typed description of one operation. Calling `jssg()`, `exec()`,
+or `ai()` does not run anything. It creates a value that can be used by a plan
+or passed to `w.run()`. The engine still decides when and where the operation
+runs.
+
+| Current workflow concept | Proposed TypeScript form |
+| --- | --- |
+| `run` action | `exec()` |
+| JSSG or AI action | `jssg()` or `ai()` |
+| fixed sequence or parallel readers | `plan()` |
+| condition based on an earlier result | normal `if` inside `workflow()` |
+| workflow-state handoff | operation return value passed as input |
+| nested codemod | imported runnable used in a plan or workflow |
+
+The prototype defines all three operation shapes, but the Rust bridge only runs
+`exec()` today. JSSG and AI results are scripted in tests until adapters exist.
+
+In the target API, a simple package can export the operation itself. There is
+no need to add a workflow wrapper just to run one transform:
+
+```ts
+export default jssg({
+  name: "remove-old-api",
+  package: "@codemod/remove-old-api",
+});
+```
+
+The prototype currently runs operations inside `plan()` or `workflow()`. Direct
+leaf exports are part of the proposed package contract, not implemented wiring.
+
 ## Proposal
 
 Use typed operations as the common unit and provide two orchestration modes:
@@ -34,9 +80,24 @@ Use typed operations as the common unit and provide two orchestration modes:
   `w.run(...)` are recorded and replayed.
 
 `exec()`, `jssg()`, and `ai()` all describe `Runnable<Input, Output>` values.
-They return plain JSON data validated with Standard Schema, so operations can be
-composed without action-specific state APIs. Static and procedural orchestration
-share the same executor, repository rules, result types, and test harness.
+They return plain JSON data checked by schemas, including libraries such as Zod.
+This replaces action-specific state with normal typed inputs and outputs. Both
+orchestration modes use the same operations and executor.
+
+A plan is the closest replacement for a fixed YAML graph. Its full shape is
+known before execution, so it can be validated and sent to the existing
+scheduler later:
+
+```ts
+const migrate = jssg({ name: "migrate", package: "@codemod/migrate" });
+const format = exec({ name: "format", command: "npm run format" });
+
+export default plan(migrate, format);
+```
+
+A workflow is for cases where the next operation depends on an earlier result.
+The TypeScript function controls the branch, but operations only run through
+`w.run()`, which lets the engine record them:
 
 ```ts
 const inspect = exec({ name: "inspect", command: "node inspect.js", output: Project });
@@ -50,8 +111,10 @@ export default workflow(async (w) => {
 ```
 
 Plans permit parallelism only through explicit `parallel(...)` groups whose
-members are declared read-only. Writable operations remain sequential until the
-engine has an isolation and merge model.
+members are read-only. This is stricter than relying on graph shape alone: the
+engine rejects parallel writers because they could change the same files.
+Writable operations stay sequential until there is a clear isolation and merge
+model.
 
 ## Ownership
 
@@ -73,22 +136,49 @@ terminal output.
 TypeScript workflow -> replay gate -> execution bridge -> DirectRunner
 ```
 
-The boundary is intentionally plain JSON: `OperationRequest` enters an executor
-and `OperationCompletion` comes back. Completion metadata stays separate from
-operation output.
+The split keeps the new authoring API easy to change while reusing the execution
+behavior we already have. It also avoids rewriting shell execution in Node. The
+boundary is plain JSON. For example, TypeScript sends:
+
+```json
+{
+  "protocolVersion": 1,
+  "commandId": "format",
+  "operation": { "kind": "exec", "command": "npm run format" }
+}
+```
+
+Rust returns a completion with the same command id, a status, and plain output.
+The small bridge uses files for this exchange because non-CLI crates must not
+write protocol messages to the terminal. It builds without the full Codemod CLI.
 
 ## Replay Model
 
-Every `w.run(...)` creates a command with a stable id and canonical JSON
-identity. History is append-only and records scheduling, completion, and final
-workflow output. A later run replays matching completions and reports changed,
-reordered, added, removed, or output nondeterminism.
+History is an ordered execution record, not only a result cache. Each `w.run()`
+has a stable command id and stores the operation details, its completion, and
+finally the workflow output. A normal run looks like this:
 
-This prototype detects nondeterminism after the fact. Workflow functions run
+```text
+run inspect -> record request and result
+run migrate -> record request and result
+return summary -> record final output
+```
+
+On a later run, the same `inspect` and `migrate` calls return their recorded
+results without executing again. If a command is changed, moved, added, or
+removed, replay stops with a clear nondeterminism error instead of silently
+running a different workflow against old history. Repeated uses of one runnable
+need explicit ids, such as `lint:client` and `lint:server`.
+
+Workflow code must await every `w.run()` call. The runtime waits for any missed
+call to finish, but refuses to finalize that workflow run. This prevents command
+results from being appended after finalization.
+
+The prototype only detects nondeterminism after the fact. Workflow functions run
 directly in Node and can access time, randomness, the filesystem, the network,
-and process state. Durable or untrusted execution requires moving workflow code
-into a restricted QuickJS host that exposes only deterministic APIs such as
-`w.run(...)`.
+and process state. Durable or untrusted execution requires moving the same
+workflow bundle into a restricted QuickJS host that only exposes approved APIs,
+including `w.run()`.
 
 ## Prototype Scope
 
