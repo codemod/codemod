@@ -116,6 +116,44 @@ export default plan(parallel(todos, fixmes), format);
 `parallel(todos, format)` is rejected because `format` can write files. Writable
 operations remain sequential until there is an isolation and merge model.
 
+Dynamic parallel work uses a workflow because the list is only known after an
+operation runs:
+
+```ts
+const discover = exec({
+  name: "discover",
+  command: "node discover-packages.js",
+  output: Packages,
+  readOnly: true,
+});
+
+const inspectPackage = exec({
+  name: "inspect-package",
+  input: Package,
+  output: Report,
+  readOnly: true,
+  command: 'node inspect-package.js "$PACKAGE_PATH"',
+  env: (pkg) => ({ PACKAGE_PATH: pkg.path }),
+});
+
+export default workflow(async (w) => {
+  const packages = await w.run(discover);
+  return Promise.all(
+    packages.map((pkg) =>
+      w.run(inspectPackage, {
+        id: `inspect:${pkg.name}`,
+        input: pkg,
+      }),
+    ),
+  );
+});
+```
+
+The stable id ties each result to a package even if operations finish in a
+different order. The prototype runs this concurrently, but does not yet reject a
+writable runnable inside `Promise.all`. Production dynamic parallelism must
+enforce the same read-only rule as `parallel()`.
+
 ## Ownership
 
 TypeScript owns the author-facing model and the parts that need rapid iteration:
