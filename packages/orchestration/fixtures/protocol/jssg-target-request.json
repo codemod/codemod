@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "commandId": "rename-api",
+  "operation": {
+    "kind": "jssg",
+    "package": "@codemod/rename-api",
+    "target": {
+      "root": "apps/web",
+      "include": ["src/**"],
+      "exclude": ["**/generated/**"]
+    }
+  }
+}

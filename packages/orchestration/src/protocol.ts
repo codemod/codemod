@@ -17,10 +17,29 @@ export interface ExecOperation {
   env?: Record<string, string>;
 }
 
-/** Placeholder for the future JSSG OperationExecutor adapter. Not executed by the bridge. */
+/**
+ * Repository area one JSSG invocation applies to. `root` is a directory
+ * relative to the executor's working directory; `include` and `exclude` are
+ * glob patterns relative to `root`. The effective file set is the
+ * intersection of this target with the JSSG definition's own applicability.
+ * Author input is validated and normalized by `target.ts`; on the wire this is
+ * plain data and part of the command content that replay compares.
+ */
+export interface Target {
+  root?: string;
+  include?: string[];
+  exclude?: string[];
+}
+
+/**
+ * JSSG codemod invocation. Only this operation carries a `target`: a JSSG
+ * adapter is the only executor that can enumerate and enforce a file set.
+ * Not executed by the bridge yet; it decodes the request and reports no adapter.
+ */
 export interface JssgOperation {
   kind: "jssg";
   package: string;
+  target?: Target;
   input?: Json;
 }
 
@@ -79,6 +98,20 @@ function isJson(value: unknown): value is Json {
   return isRecord(value) && Object.values(value).every(isJson);
 }
 
+function isStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === "string");
+}
+
+/** Wire shape only; author-facing rules (relative root, non-empty lists) live in `target.ts`. */
+export function isTarget(value: unknown): value is Target {
+  return (
+    isRecord(value) &&
+    (value.root === undefined || typeof value.root === "string") &&
+    (value.include === undefined || isStringList(value.include)) &&
+    (value.exclude === undefined || isStringList(value.exclude))
+  );
+}
+
 function isCompletionError(value: unknown): value is CompletionError {
   return (
     isRecord(value) &&
@@ -97,7 +130,9 @@ export function isOperation(value: unknown): value is Operation {
       );
     case "jssg":
       return (
-        typeof value.package === "string" && (value.input === undefined || isJson(value.input))
+        typeof value.package === "string" &&
+        (value.target === undefined || isTarget(value.target)) &&
+        (value.input === undefined || isJson(value.input))
       );
     case "ai":
       return typeof value.prompt === "string" && (value.input === undefined || isJson(value.input));

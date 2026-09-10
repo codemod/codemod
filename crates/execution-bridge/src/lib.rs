@@ -25,8 +25,12 @@ pub enum Operation {
         env: HashMap<String, String>,
     },
     /// Decoded for protocol parity only; no executor adapter exists yet.
+    /// `target` is the only file selection on the wire: a JSSG adapter is
+    /// the only executor that can enumerate and enforce it.
     Jssg {
         package: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<Target>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<Value>,
     },
@@ -36,6 +40,20 @@ pub enum Operation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<Value>,
     },
+}
+
+/// Repository area one JSSG invocation applies to. Mirrors `Target` in
+/// `protocol.ts`: `root` is relative to the working directory, `include` and
+/// `exclude` are globs relative to `root`. Validation of author input happens
+/// in TypeScript; this is the decoded wire shape.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Target {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<Vec<String>>,
 }
 
 impl Operation {

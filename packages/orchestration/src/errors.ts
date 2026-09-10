@@ -51,6 +51,20 @@ export class DuplicateCommandIdError extends Error {
   }
 }
 
+/**
+ * A JSSG invocation target is malformed, or a target was handed to something
+ * that cannot enforce it (`exec`, `ai`, or `w.run` options).
+ */
+export class TargetValidationError extends Error {
+  constructor(
+    readonly where: string,
+    message: string,
+  ) {
+    super(`invalid target for ${where}: ${message}`);
+    this.name = "TargetValidationError";
+  }
+}
+
 export class PlanValidationError extends Error {
   constructor(message: string) {
     super(`invalid plan: ${message}`);

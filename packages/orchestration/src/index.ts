@@ -1,7 +1,17 @@
 export { ai, exec, jssg } from "./runnable.ts";
-export type { ExecOutput, InputOf, OutputOf, Runnable } from "./runnable.ts";
+export type {
+  ExecOutput,
+  InputOf,
+  JssgDefinition,
+  JssgInvocation,
+  JssgRunnable,
+  OperationKind,
+  OutputOf,
+  Runnable,
+} from "./runnable.ts";
+export { normalizeTarget } from "./target.ts";
 export { parallel, plan } from "./plan.ts";
-export type { Parallel, Plan, PlanIr } from "./plan.ts";
+export type { Parallel, Plan, PlanIr, PlanIrEntry, PlanIrStep } from "./plan.ts";
 export { run, workflow } from "./workflow.ts";
 export type {
   Executable,
@@ -17,17 +27,22 @@ export { canonicalJson } from "./json.ts";
 export type { Json } from "./json.ts";
 export {
   PROTOCOL_VERSION,
+  isOperation,
   isOperationCompletion,
   isOperationRequest,
+  isTarget,
   parseCompletion,
 } from "./protocol.ts";
 export type {
+  AiOperation,
   CompletionError,
   CompletionStatus,
   ExecOperation,
+  JssgOperation,
   Operation,
   OperationCompletion,
   OperationRequest,
+  Target,
 } from "./protocol.ts";
 export {
   MemoryHistoryStore,
@@ -48,5 +63,6 @@ export {
   NondeterminismError,
   OperationError,
   PlanValidationError,
+  TargetValidationError,
 } from "./errors.ts";
 export type { NondeterminismKind } from "./errors.ts";

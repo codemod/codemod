@@ -15,6 +15,7 @@ packages/orchestration/
   DESIGN.md         problem statement, proposal, scope, and migration path
   src/protocol.ts   versioned JSON OperationRequest / OperationCompletion
   src/runnable.ts   exec / jssg / ai descriptors (typed via Standard Schema)
+  src/target.ts     validation and normalization of a JSSG invocation Target
   src/plan.ts       plan(...) and parallel(...) groups + JSON IR
   src/workflow.ts   workflow(async (w) => ...) and run(executable, options)
   src/history.ts    HistoryStore seam + MemoryHistoryStore
@@ -46,6 +47,16 @@ export default workflow(async (w) => {
 export default plan(rename, updateImports, format);
 // explicit assertion that these operations have no ordering dependency
 export default plan(parallel(countTodos, countFixmes), format);
+
+// JSSG invocations carry a file target; exec and ai never do
+const web = { root: "apps/web", include: ["src/**"], exclude: ["**/generated/**"] };
+export default plan(rename({ target: web }), updateImports({ target: web }), format);
+export default parallel(transformA({ target: web }), transformB({ target: web }));
+export default workflow(async (w) => {
+  for (const pkg of packages) {
+    await w.run(migrate({ target: { root: pkg.path } }), { input: pkg, id: `migrate:${pkg.name}` });
+  }
+});
 ```
 
 - `exec` output: with an `output` schema, the runner's returned text is parsed
@@ -62,13 +73,19 @@ export default plan(parallel(countTodos, countFixmes), format);
   whole concurrent operation; it does not implement per-file locking. Do not
   place dependent mutations or opaque commands that may conflict in one group.
   `DESIGN.md` describes the future JSSG file scheduler.
-- `target({ root, include, exclude }, child)` is the proposed way to narrow a
-  runnable or plan to a repository area. It is documented in `DESIGN.md`
-  ("Targeting") but is **not exported** by this package: the bridge runs whole
-  `exec` operations with no working directory or file list, so a `target()`
-  here would be silently ignored. Every operation the prototype runs applies to
-  the executor's `cwd`. Physical sharding and worker counts are scheduler
-  behavior and have no public helper.
+- A JSSG definition is callable with exactly `{ target: { root?, include?, exclude? } }`
+  and returns a targeted runnable; `input` and `id` still go to `w.run`. The
+  target is validated when bound (relative `root` without `..`, non-empty
+  pattern lists, no unknown fields, not empty), recorded in history as command
+  content, and sent on the wire as `operation.target`. Changing it under the
+  same id replays as `changed`. `exec` and `ai` are not callable, a targeted
+  runnable cannot be targeted again, and `w.run` rejects a `target` option, so
+  a target is never silently ignored. There is no generic `target()` wrapper
+  and no `shard()`/`scope()` helper; sharding and worker counts are scheduler
+  behavior.
+- No adapter enforces a target yet: the bridge decodes it and answers "no
+  adapter" for `jssg`, and every `exec` still runs in the executor's `cwd`.
+  See `DESIGN.md` ("Targeting") for the proposed callable form.
 
 ## Running
 
@@ -114,8 +131,9 @@ comparison; if a workflow uses such inputs the replay will fail with
 `OperationExecutor`, `HistoryStore`, `CommandGate`, and `EventSink` are small
 interfaces with JSON-only inputs and outputs. Each in-memory implementation can
 move to Rust one at a time without changing workflow source. `jssg` and `ai`
-descriptors exist but have no executor adapter yet; the bridge returns a
-`failed` completion for them and the harness scripts their results.
+descriptors exist but have no executor adapter yet; the bridge decodes them
+(including a JSSG `target`), returns a `failed` completion, and the harness
+scripts their results.
 
 ## Commands
 

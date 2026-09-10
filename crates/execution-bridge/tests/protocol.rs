@@ -2,7 +2,7 @@ use std::path::Path;
 
 use butterflow_execution_bridge::{
     completion_from_result, execute, parse_request, CompletionStatus, Operation,
-    OperationCompletion, OperationRequest, PROTOCOL_VERSION,
+    OperationCompletion, OperationRequest, Target, PROTOCOL_VERSION,
 };
 use butterflow_models::Error;
 use butterflow_runners::direct_runner::DirectRunner;
@@ -32,7 +32,11 @@ fn exec_request(command_id: &str, command: &str) -> OperationRequest {
 
 #[test]
 fn request_fixtures_round_trip_to_identical_json() {
-    for name in ["exec-request.json", "jssg-request.json"] {
+    for name in [
+        "exec-request.json",
+        "jssg-request.json",
+        "jssg-target-request.json",
+    ] {
         let text = fixture(name);
         let request = parse_request(&text).expect("fixture should parse");
         let expected: Value = serde_json::from_str(&text).expect("fixture is JSON");
@@ -52,6 +56,85 @@ fn exec_request_fixture_carries_command_and_env() {
         }
         other => panic!("expected exec operation, got {}", other.kind()),
     }
+}
+
+#[test]
+fn jssg_request_fixture_has_no_target() {
+    let request = parse_request(&fixture("jssg-request.json")).expect("parse");
+    match request.operation {
+        Operation::Jssg {
+            package,
+            target,
+            input,
+        } => {
+            assert_eq!(package, "@codemod/migrate");
+            assert_eq!(target, None);
+            assert_eq!(input, Some(serde_json::json!({ "needsMigration": true })));
+        }
+        other => panic!("expected jssg operation, got {}", other.kind()),
+    }
+}
+
+#[test]
+fn jssg_target_request_fixture_decodes_root_include_and_exclude() {
+    let request = parse_request(&fixture("jssg-target-request.json")).expect("parse");
+    assert_eq!(request.command_id, "rename-api");
+    match request.operation {
+        Operation::Jssg {
+            package,
+            target,
+            input,
+        } => {
+            assert_eq!(package, "@codemod/rename-api");
+            assert_eq!(
+                target,
+                Some(Target {
+                    root: Some("apps/web".to_string()),
+                    include: Some(vec!["src/**".to_string()]),
+                    exclude: Some(vec!["**/generated/**".to_string()]),
+                })
+            );
+            assert_eq!(input, None);
+        }
+        other => panic!("expected jssg operation, got {}", other.kind()),
+    }
+}
+
+#[test]
+fn partial_targets_omit_absent_fields_when_serialized() {
+    let text = r#"{"protocolVersion":1,"commandId":"t","operation":{"kind":"jssg","package":"p","target":{"root":"packages/a"}}}"#;
+    let request = parse_request(text).expect("parse");
+    let value = serde_json::to_value(&request).expect("serialize");
+    assert_eq!(
+        value["operation"]["target"],
+        serde_json::json!({ "root": "packages/a" })
+    );
+}
+
+#[test]
+fn malformed_targets_are_rejected() {
+    for target in [
+        r#""apps/web""#,
+        r#"{"root":1}"#,
+        r#"{"include":"src/**"}"#,
+        r#"{"exclude":[null]}"#,
+    ] {
+        let text = format!(
+            r#"{{"protocolVersion":1,"commandId":"t","operation":{{"kind":"jssg","package":"p","target":{target}}}}}"#
+        );
+        let error = parse_request(&text).expect_err("malformed target must not parse");
+        assert!(error.contains("invalid request JSON"), "{target}: {error}");
+    }
+}
+
+#[test]
+fn exec_and_ai_operations_do_not_carry_a_target() {
+    // `exec` and `ai` have no target field; serde ignores unknown fields, so a
+    // stray target is dropped rather than decoded and must never reach the runner.
+    let text = r#"{"protocolVersion":1,"commandId":"t","operation":{"kind":"exec","command":"true","target":{"root":"apps"}}}"#;
+    let request = parse_request(text).expect("parse");
+    let value = serde_json::to_value(&request).expect("serialize");
+    assert!(value["operation"].get("target").is_none());
 }
 
 #[test]
@@ -115,10 +198,13 @@ fn other_runner_errors_convert_to_unknown() {
 
 #[tokio::test]
 async fn non_exec_operations_are_rejected_without_running() {
-    let request = parse_request(&fixture("jssg-request.json")).expect("parse");
-    let completion = execute(&DirectRunner::with_quiet(true), &request).await;
-    assert_eq!(completion.status, CompletionStatus::Failed);
-    assert!(completion.error.unwrap().message.contains("jssg"));
+    for name in ["jssg-request.json", "jssg-target-request.json"] {
+        let request = parse_request(&fixture(name)).expect("parse");
+        let completion = execute(&DirectRunner::with_quiet(true), &request).await;
+        assert_eq!(completion.command_id, request.command_id, "{name}");
+        assert_eq!(completion.status, CompletionStatus::Failed, "{name}");
+        assert!(completion.error.unwrap().message.contains("jssg"), "{name}");
+    }
 }
 
 #[cfg(unix)]

@@ -4,7 +4,8 @@
  * to a small JSON IR so a future Rust scheduler could consume it directly.
  */
 import { PlanValidationError } from "./errors.ts";
-import type { Runnable } from "./runnable.ts";
+import type { Target } from "./protocol.ts";
+import type { JssgRunnable, Runnable } from "./runnable.ts";
 
 export interface Parallel<Outputs extends unknown[] = unknown[]> {
   readonly type: "parallel";
@@ -27,9 +28,17 @@ export interface PlanIr {
   steps: PlanIrStep[];
 }
 
+/** `target` is present only for targeted JSSG members. */
+export interface PlanIrEntry {
+  id: string;
+  name: string;
+  kind: string;
+  target?: Target;
+}
+
 export type PlanIrStep =
-  | { type: "run"; id: string; name: string; kind: string }
-  | { type: "parallel"; members: { id: string; name: string; kind: string }[] };
+  | ({ type: "run" } & PlanIrEntry)
+  | { type: "parallel"; members: PlanIrEntry[] };
 
 type StepOutput<S> =
   S extends Parallel<infer O> ? O : S extends Runnable<void, infer O> ? O : never;
@@ -58,23 +67,28 @@ export function plan<const S extends readonly PlanStep[]>(...steps: S): Plan<Ste
     seen.add(name);
     return name;
   };
+  const entry = (runnable: Runnable<void, unknown>): PlanIrEntry => {
+    const target = targetOf(runnable);
+    return {
+      id: use(runnable.name),
+      name: runnable.name,
+      kind: runnable.kind,
+      ...(target === undefined ? {} : { target }),
+    };
+  };
   const ir: PlanIr = { version: 1, steps: [] };
   for (const step of steps) {
     if (isParallel(step)) {
-      ir.steps.push({
-        type: "parallel",
-        members: step.members.map((m) => ({ id: use(m.name), name: m.name, kind: m.kind })),
-      });
+      ir.steps.push({ type: "parallel", members: step.members.map(entry) });
     } else {
-      ir.steps.push({
-        type: "run",
-        id: use(step.name),
-        name: step.name,
-        kind: step.kind,
-      });
+      ir.steps.push({ type: "run", ...entry(step) });
     }
   }
   return { type: "plan", steps, ir };
+}
+
+function targetOf(runnable: Runnable<void, unknown>): Target | undefined {
+  return runnable.kind === "jssg" ? (runnable as JssgRunnable<void, unknown>).target : undefined;
 }
 
 export function isParallel(step: unknown): step is Parallel {

@@ -34,7 +34,8 @@ Proposed:  TypeScript plan or workflow -> command history -> existing runners
 A runnable is a typed description of one operation. `jssg()`, `exec()`, and
 `ai()` define runnables; invoking a runnable in the proposed API creates a lazy
 command controlled by the workflow runtime. The prototype still passes
-descriptors to `w.run()` instead of making them callable.
+descriptors to `w.run()`; the only call it supports is `jssgDefinition({ target })`,
+which attaches a file target and returns a runnable (see Targeting).
 
 | Current workflow concept | Proposed TypeScript form |
 | --- | --- |
@@ -46,7 +47,7 @@ descriptors to `w.run()` instead of making them callable.
 | condition based on an earlier result | normal `if` inside `workflow()` |
 | workflow-state handoff | operation return value passed as input |
 | nested codemod | imported runnable used in a plan or workflow |
-| per-step `base_path`, `include`, `exclude` | `target()` around a runnable or plan |
+| per-step `base_path`, `include`, `exclude` | `{ target }` on a JSSG invocation |
 | `shard` step and `max_threads` | automatic scheduler behavior, no public helper |
 
 The prototype defines all three operation shapes, but the Rust bridge only runs
@@ -68,9 +69,9 @@ export default jssg({
 
 `language` and `files` are the definition's intrinsic applicability: what the
 transform can process at all. They travel with the package and are not an
-invocation choice. Where the transform runs is chosen by the caller with
-`target()` (see Targeting below). Scheduling controls such as the current YAML
-`max_threads` do not belong on a JSSG definition.
+invocation choice. Where the transform runs is chosen by the caller through the
+invocation's `target` (see Targeting below). Scheduling controls such as the
+current YAML `max_threads` do not belong on a JSSG definition.
 
 The prototype currently runs operations inside `plan()` or `workflow()`. Direct
 leaf exports and the applicability fields are part of the proposed package
@@ -87,15 +88,14 @@ Use typed operations as the common unit and provide four composable forms:
 - `parallel(...)` declares that its members have no ordering dependency.
 - `workflow(async () => ...)` uses normal TypeScript for dynamic control flow.
 
-One modifier selects where composed work applies:
-
-- `target({ root, include, exclude }, child)` narrows a runnable or plan to a
-  repository area. It is not executable on its own and has no id.
+There is no separate form for file selection. A JSSG invocation carries its own
+`{ root, include, exclude }` target (see Targeting); nothing wraps plans or
+other runnables.
 
 Operations return plain JSON checked by schemas such as Zod. One result can be
-passed directly to the next operation without workflow state. `pipe()`,
-`target()`, and callable runnables are proposed API work and are not
-implemented in the prototype.
+passed directly to the next operation without workflow state. `pipe()` and
+callable commands are proposed API work and are not implemented in the
+prototype.
 
 ### Nested bundle
 
@@ -193,10 +193,23 @@ that partition is not a public helper.
 Many registry packages run one transform over part of a repository: a single
 app in a monorepo, everything except generated code, or one package at a time.
 Today each YAML JSSG step carries its own `base_path`, `include`, and
-`exclude`. In the proposed API, that selection is one modifier, `target()`,
-applied around the thing it should narrow.
+`exclude`. In the proposed API that selection is data on the JSSG invocation
+itself. There is no generic `target()`, `scope()`, `within()`, or `shard()`
+wrapper: only a JSSG adapter can enumerate and enforce a file set, so only a
+JSSG invocation accepts one. `exec` runs a whole command and `ai` has no file
+set, and neither accepts target metadata.
 
-Whole-plan targeting narrows every step at once:
+A target is a small plain object that can be shared between invocations:
+
+```ts
+const web = { root: "apps/web", include: ["src/**"], exclude: ["**/generated/**"] };
+```
+
+`root` is a directory relative to the repository; `include` and `exclude` are
+globs relative to `root`. Every field is optional, but an empty target is
+rejected because it would look like a narrowing while selecting everything.
+
+A static plan gives the same target to two JSSG steps and none to `exec`:
 
 ```ts
 import renameApi from "@codemod/rename-api";
@@ -204,84 +217,66 @@ import updateImports from "@codemod/update-imports";
 
 const format = exec({ name: "format", command: "npm run format" });
 
-export default target(
-  { root: "apps/web", exclude: ["**/generated/**"] },
-  plan(renameApi, updateImports, format),
-);
+export default plan(renameApi({ target: web }), updateImports({ target: web }), format);
 ```
 
-Partial targeting narrows only some steps. Untargeted steps keep the enclosing
-target, or the whole repository when there is none:
+A dynamic workflow targets one invocation per discovered package, with an
+explicit id because the same definition runs repeatedly:
 
 ```ts
-export default plan(
-  target({ root: "packages/client" }, renameApi),
-  target({ root: "packages/server", include: ["src/**/*.ts"] }, renameApi),
-  format,
-);
+export default workflow(async () => {
+  const project = await inspect();
+  for (const pkg of project.packages) {
+    await migrate({ input: project, target: { root: pkg.path }, id: `migrate:${pkg.name}` });
+  }
+});
 ```
 
-`target()` composes with the other forms. It can wrap a `parallel()` group so
-the group's independence assertion and its file selection are stated once, and
-a `pipe()` behaves the same way as a `plan()`:
+A parallel group states independence and per-member targets in one place:
 
 ```ts
-export default target(
-  { root: "apps/web" },
-  plan(parallel(transformA, transformB), format),
-);
+export default parallel(transformA({ target: web }), transformB({ target: web }));
 ```
-
-Nested targets intersect. The inner `root` is resolved relative to the outer
-one, and `include` and `exclude` lists are combined, so an inner target can only
-narrow, never escape, the outer selection.
 
 The rules that make this coherent:
 
-- **A target is not a command and has no id.** A targeted runnable or plan
-  remains executable, but the target never appears in history as its own
-  command. Wrapping a runnable in `target()` does not change which command the
-  scheduler records; it changes the content of that command.
-- **Static identity comes from plan structure.** In the partial example above,
-  `renameApi` appears twice and would clash on its runnable name. The plan gives
-  each occurrence a positional id derived from structure, such as
-  `rename-api#1` and `rename-api#2`, while `root`, `include`, and `exclude`
-  become command content that replay compares. Changing a target on a step
-  therefore reads as a `changed` command, not a new one.
-- **Dynamic repeated calls still need explicit ids.** Inside `workflow()`,
-  `target()` does not replace `{ id }`:
-
-  ```ts
-  export default workflow(async () => {
-    const packages = await discover();
-    await parallel(
-      packages.map((pkg) =>
-        target({ root: pkg.path }, renameApi)({ id: `rename:${pkg.name}` }),
-      ),
-    );
-  });
-  ```
-
-- **Definitions own applicability; targets own invocation.** A JSSG definition
-  says which language and default file patterns it can handle. A target says
-  which repository area this invocation should touch. The effective file set is
-  their intersection. A target cannot widen a definition's applicability, and a
-  definition cannot pin itself to one repository area.
+- **Definitions own applicability; invocations own the target.** A JSSG
+  definition says which language and default file patterns it can handle. The
+  invocation's target says which repository area this run should touch. The
+  effective file set is their intersection: a target cannot widen a definition's
+  applicability, and a definition cannot pin itself to one repository area.
+- **A target is command content, not command identity.** It travels inside the
+  JSSG operation on the wire and is part of the command record that replay
+  compares, so the same id with a different target is a `changed` command, and
+  adding a target to a previously untargeted command is also a change. It never
+  creates an id. Static invocations take identity from plan structure: the
+  prototype uses the runnable name, so one definition targeted twice in a plan
+  clashes today, and positional structural ids such as `rename-api#1` remain
+  proposed. Dynamic repeated invocations use explicit ids, as above.
 - **Targets do not partition work.** A target says "these files", never "these
   files on this worker". Splitting the effective file set into physical shards,
   choosing worker counts, and holding per-file locks are automatic scheduler
-  behavior. There is no public `shard()`, `within()`, or `scope()` helper, and
-  the current YAML `shard` step and `max_threads` have no author-facing
-  replacement. Two targets over disjoint roots are a request for two selections,
-  not a request for two workers; the scheduler may still run them on one.
+  behavior. The current YAML `shard` step and `max_threads` have no
+  author-facing replacement. Two targets over disjoint roots are a request for
+  two selections, not for two workers; the scheduler may still run them on one.
 
-The prototype does not implement `target()`. The Rust bridge executes whole
-`exec` operations with no working directory or file list, there is no JSSG
-adapter, and there is no file-target scheduler. Adding a `target()` that the
-runtime ignored would let a plan claim to touch `apps/web` while rewriting the
-whole repository, so it is left out rather than stubbed. The wire protocol will
-need a target field on JSSG operations, and `exec` operations will need at least
-a working directory, before it can be honored.
+What the prototype implements: calling a JSSG definition attaches only the
+target. `renameApi({ target: web })` returns a targeted runnable that goes into
+`plan()`, `parallel()`, or `w.run()`, while `input` and `id` still go to
+`w.run(runnable, { input, id })`. The dynamic example therefore reads
+`await w.run(migrate({ target: { root: pkg.path } }), { input: project, id })`
+in the prototype. The target is validated and normalized when bound (relative
+root without `..`, non-empty pattern lists, no unknown fields), recorded in
+history, sent on the wire as `operation.target`, and decoded by the Rust bridge,
+which still reports that no JSSG adapter exists. `exec` and `ai` runnables are
+not callable, a targeted runnable cannot be targeted again, and `w.run` rejects
+a `target` option for any runnable, so a target is never silently dropped.
+
+What the prototype does not implement: no JSSG adapter enumerates the effective
+file set or enforces that a transform stays inside it, the bridge still runs
+`exec` in the executor's working directory with no file list, and there is no
+file-target scheduler. The callable command form `migrate({ input, target, id })`
+is proposed syntax, not prototype behavior.
 
 ### Dynamic analysis and finding collection
 
@@ -442,6 +437,7 @@ including `w.run()`.
 Included:
 
 - typed `exec`, `jssg`, and `ai` descriptors
+- JSSG invocation targets, validated at bind time and carried on the wire
 - static plans and explicit parallel groups
 - procedural workflows
 - append-only in-memory history and replay checks
@@ -451,9 +447,9 @@ Included:
 Not included:
 
 - QuickJS workflow sandboxing
-- callable runnables and `pipe()`
-- `target()`, JSSG applicability fields, and structural command ids
-- JSSG and AI execution adapters
+- callable commands (`migrate({ input, target, id })`) and `pipe()`
+- JSSG applicability fields (`language`, `files`) and structural command ids
+- JSSG and AI execution adapters, so no target is enumerated or enforced yet
 - durable persistence, cancellation, or production scheduling
 - a shared file-job scheduler, per-file locks, worktrees, or merge semantics
 - metrics, findings, artifacts, or human approval channels
@@ -470,7 +466,7 @@ us move one part at a time:
 1. Move command ID calculation and file-backed history into Rust.
 2. Move replay comparisons and final output checks into Rust.
 3. Let Rust execute operations directly, then add JSSG, AI, and Plan adapters.
-   Carry `target()` root, include, and exclude on the wire as command content.
+   The JSSG adapter reads the invocation `target` that is already on the wire.
 4. Add one shared file-job scheduler that resolves each command's effective
    file set, shards it automatically, and holds per-file locks across each JSSG
    read-transform-write cycle.

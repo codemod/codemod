@@ -34,8 +34,11 @@ interface ExistingEngineBridge {
 ```ts
 type Operation =
   | { kind: "exec"; command: string; env?: Record<string, string> }
-  | { kind: "jssg"; package: string; input?: Json } // decoded only, never executed here
+  | { kind: "jssg"; package: string; target?: Target; input?: Json } // decoded only, never executed here
   | { kind: "ai"; prompt: string; input?: Json }; // decoded only, never executed here
+
+// Only jssg carries a file selection; a future JSSG adapter enforces it.
+interface Target { root?: string; include?: string[]; exclude?: string[] }
 ```
 
 `OperationRequest` / `OperationCompletion` / `CompletionError` /
@@ -136,3 +139,5 @@ otherwise a signal maps to `cancelled` and any other exit to `unknown`.
   independent of the full CLI.
 - Nothing else is in Rust: no plans, loops, replay, history, scheduling, JSSG,
   or AI. Those are TypeScript and can move behind the same JSON seams later.
+  The JSSG `target` is decoded here for protocol parity only; no file set is
+  resolved or enforced until a JSSG adapter exists.

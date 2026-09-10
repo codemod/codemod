@@ -4,7 +4,7 @@
  * in this prototype: it is validated after the fact by replaying history and
  * comparing issued commands (see README).
  */
-import { OperationError } from "./errors.ts";
+import { OperationError, TargetValidationError } from "./errors.ts";
 import { CollectingSink, type EventSink } from "./events.ts";
 import type { OperationExecutor } from "./executor.ts";
 import { ReplayGate, type CommandGate } from "./gate.ts";
@@ -19,6 +19,11 @@ import { isParallel, isPlan, type Plan, type PlanStep } from "./plan.ts";
 import type { Runnable } from "./runnable.ts";
 import { validate } from "./schema.ts";
 
+/**
+ * `w.run` options carry identity (`id`) and data (`input`) only. A JSSG
+ * invocation target is attached by calling the definition, `migrate({ target })`,
+ * so that it cannot be passed to an `exec` or `ai` runnable that would ignore it.
+ */
 export type RunArgs<I> = I extends void
   ? [options?: { id?: string }]
   : [options: { id?: string; input: I }];
@@ -39,8 +44,8 @@ export function workflow<R>(body: (w: WorkflowContext) => Promise<R>): Workflow<
 
 /**
  * Something `run()` can execute. Named `Executable` rather than "target" so it
- * is not confused with the proposed `target()` file-selection modifier, which
- * is not itself an operation (see DESIGN.md, "Targeting").
+ * is not confused with a JSSG invocation `Target`, which is file selection
+ * inside one command, not something that runs (see DESIGN.md, "Targeting").
  */
 export type Executable = Workflow<unknown> | Plan;
 export type ExecutableOutput<T> =
@@ -111,6 +116,16 @@ class Context implements WorkflowContext {
   ): Promise<unknown> {
     if (this.#closed) {
       return Promise.reject(new Error("w.run called after the workflow body returned"));
+    }
+    if (options !== undefined && "target" in options) {
+      const where = isPlan(subject) ? "plan" : `${subject.kind} '${subject.name}'`;
+      const hint =
+        !isPlan(subject) && subject.kind === "jssg"
+          ? `call the definition instead: w.run(${subject.name}({ target }), { id, input })`
+          : "only JSSG invocations accept a target";
+      return Promise.reject(
+        new TargetValidationError(where, `w.run options do not accept 'target'; ${hint}`),
+      );
     }
     const operation = isPlan(subject) ? this.#runPlan(subject) : this.#runOne(subject, options);
     this.#inFlight.add(operation);
