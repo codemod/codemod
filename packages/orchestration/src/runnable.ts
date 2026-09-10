@@ -81,7 +81,7 @@ function readStdout(output: Json | undefined): string {
   ) {
     return output.stdout;
   }
-  return "";
+  throw new Error("exec completion did not contain string stdout");
 }
 
 interface DataOptions<I, O> {

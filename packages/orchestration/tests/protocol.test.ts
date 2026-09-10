@@ -53,4 +53,30 @@ describe("protocol fixtures shared with crates/execution-bridge", () => {
     );
     expect(() => parseCompletion("not json")).toThrow(/invalid JSON/);
   });
+
+  it("rejects malformed status-dependent completion fields", () => {
+    expect(isOperationCompletion({ protocolVersion: 1, commandId: "x", status: "succeeded" })).toBe(
+      false,
+    );
+    expect(
+      isOperationCompletion({
+        protocolVersion: 1,
+        commandId: "x",
+        status: "succeeded",
+        output: null,
+        error: { message: "unexpected" },
+      }),
+    ).toBe(false);
+    expect(isOperationCompletion({ protocolVersion: 1, commandId: "x", status: "failed" })).toBe(
+      false,
+    );
+    expect(
+      isOperationCompletion({
+        protocolVersion: 1,
+        commandId: "x",
+        status: "failed",
+        error: { message: "bad", exitCode: "3" },
+      }),
+    ).toBe(false);
+  });
 });

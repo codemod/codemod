@@ -61,11 +61,25 @@ export async function run<T extends RunTarget>(
   const store = options.history ?? new MemoryHistoryStore();
   const events = options.events ?? new CollectingSink();
   const gate = new ReplayGate(await store.load(), store, options.executor, events);
-  const state = { closed: false };
-  const context = new Context(gate, state);
+  const context = new Context(gate);
   const runnable: RunTarget = target;
-  const output = isPlan(runnable) ? await context.run(runnable) : await runnable.body(context);
-  state.closed = true;
+  let output: unknown;
+  let bodyError: unknown;
+  let bodySucceeded = false;
+  try {
+    output = isPlan(runnable) ? await context.run(runnable) : await runnable.body(context);
+    bodySucceeded = true;
+  } catch (error) {
+    bodyError = error;
+  }
+
+  const pending = context.close();
+  await Promise.allSettled(pending);
+  if (!bodySucceeded) throw bodyError;
+  if (pending.length > 0) {
+    throw new Error(`workflow body returned without awaiting ${pending.length} operation(s)`);
+  }
+
   const { replayed } = await gate.finish((output === undefined ? null : output) as Json);
   return {
     output: output as TargetOutput<T>,
@@ -76,21 +90,37 @@ export async function run<T extends RunTarget>(
 
 class Context implements WorkflowContext {
   readonly #gate: CommandGate;
-  readonly #state: { closed: boolean };
+  readonly #inFlight = new Set<Promise<unknown>>();
+  #closed = false;
 
-  constructor(gate: CommandGate, state: { closed: boolean }) {
+  constructor(gate: CommandGate) {
     this.#gate = gate;
-    this.#state = state;
   }
 
   run<I, O>(runnable: Runnable<I, O>, ...args: RunArgs<I>): Promise<O>;
   run<Outputs extends unknown[]>(plan: Plan<Outputs>): Promise<Outputs>;
-  async run(
+  run(
     target: Runnable<unknown, unknown> | Plan,
     options?: { id?: string; input?: unknown },
   ): Promise<unknown> {
-    if (this.#state.closed) throw new Error("w.run called after the workflow body returned");
-    if (!isPlan(target)) return this.#runOne(target, options);
+    if (this.#closed) {
+      return Promise.reject(new Error("w.run called after the workflow body returned"));
+    }
+    const operation = isPlan(target) ? this.#runPlan(target) : this.#runOne(target, options);
+    this.#inFlight.add(operation);
+    void operation.then(
+      () => this.#inFlight.delete(operation),
+      () => this.#inFlight.delete(operation),
+    );
+    return operation;
+  }
+
+  close(): Promise<unknown>[] {
+    this.#closed = true;
+    return [...this.#inFlight];
+  }
+
+  async #runPlan(target: Plan): Promise<unknown[]> {
     const outputs: unknown[] = [];
     for (const step of target.steps) outputs.push(await this.#runStep(step));
     return outputs;

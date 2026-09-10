@@ -9,7 +9,7 @@
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   BridgeExecutor,
@@ -69,7 +69,7 @@ describe("execution bridge end-to-end", () => {
     }
     dir = mkdtempSync(join(tmpdir(), "codemod-bridge-"));
     calls = [];
-    const bridge = new BridgeExecutor({ bin, cwd: dir });
+    const bridge = new BridgeExecutor({ bin: relative(process.cwd(), bin), cwd: dir });
     executor = {
       execute(request) {
         calls.push(request);

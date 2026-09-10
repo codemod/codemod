@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   PROTOCOL_VERSION,
   parseCompletion,
@@ -34,7 +34,11 @@ export interface BridgeOptions {
  * touches the filesystem; workflow code never can.
  */
 export class BridgeExecutor implements OperationExecutor {
-  constructor(private readonly options: BridgeOptions) {}
+  private readonly bin: string;
+
+  constructor(private readonly options: BridgeOptions) {
+    this.bin = resolve(options.bin);
+  }
 
   async execute(request: OperationRequest): Promise<OperationCompletion> {
     const exchangeDir = mkdtempSync(join(tmpdir(), "codemod-bridge-"));
@@ -44,11 +48,29 @@ export class BridgeExecutor implements OperationExecutor {
     try {
       // Written by the trusted host only; workflow code never sees these paths.
       writeFileSync(requestPath, JSON.stringify(request));
-      const { code, signal } = await runBridge(this.options, requestPath, responsePath);
+      let code: number | null;
+      let signal: NodeJS.Signals | null;
+      try {
+        ({ code, signal } = await runBridge(this.bin, this.options, requestPath, responsePath));
+      } catch (error) {
+        return completion(
+          request,
+          "unknown",
+          `failed to start bridge: ${(error as Error).message}`,
+        );
+      }
       const response = readResponse(responsePath);
       if (response !== undefined) {
         try {
-          return parseCompletion(response);
+          const parsed = parseCompletion(response);
+          if (parsed.commandId !== request.commandId) {
+            return completion(
+              request,
+              "unknown",
+              `bridge returned completion for '${parsed.commandId}' while running '${request.commandId}'`,
+            );
+          }
+          return parsed;
         } catch (error) {
           return completion(request, "unknown", (error as Error).message);
         }
@@ -65,9 +87,9 @@ export class BridgeExecutor implements OperationExecutor {
   }
 }
 
-function runBridge(options: BridgeOptions, requestPath: string, responsePath: string) {
+function runBridge(bin: string, options: BridgeOptions, requestPath: string, responsePath: string) {
   return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    const child = spawn(options.bin, [requestPath, responsePath], {
+    const child = spawn(bin, [requestPath, responsePath], {
       cwd: options.cwd,
       env: { ...process.env, ...options.env },
       stdio: "ignore",

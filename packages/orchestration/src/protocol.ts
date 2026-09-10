@@ -45,15 +45,22 @@ export interface CompletionError {
   output?: string;
 }
 
-export interface OperationCompletion {
-  protocolVersion: typeof PROTOCOL_VERSION;
-  commandId: string;
-  status: CompletionStatus;
-  /** Present when status is `succeeded`. For exec this is `{ stdout: string }`. */
-  output?: Json;
-  /** Present when status is not `succeeded`. */
-  error?: CompletionError;
-}
+export type OperationCompletion =
+  | {
+      protocolVersion: typeof PROTOCOL_VERSION;
+      commandId: string;
+      status: "succeeded";
+      /** For exec this is `{ stdout: string }`. */
+      output: Json;
+      error?: never;
+    }
+  | {
+      protocolVersion: typeof PROTOCOL_VERSION;
+      commandId: string;
+      status: Exclude<CompletionStatus, "succeeded">;
+      output?: never;
+      error: CompletionError;
+    };
 
 const STATUSES: readonly CompletionStatus[] = ["succeeded", "failed", "cancelled", "unknown"];
 
@@ -65,6 +72,22 @@ function isStringMap(value: unknown): value is Record<string, string> {
   return isRecord(value) && Object.values(value).every((v) => typeof v === "string");
 }
 
+function isJson(value: unknown): value is Json {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJson);
+  return isRecord(value) && Object.values(value).every(isJson);
+}
+
+function isCompletionError(value: unknown): value is CompletionError {
+  return (
+    isRecord(value) &&
+    typeof value.message === "string" &&
+    (value.exitCode === undefined || Number.isInteger(value.exitCode)) &&
+    (value.output === undefined || typeof value.output === "string")
+  );
+}
+
 export function isOperation(value: unknown): value is Operation {
   if (!isRecord(value)) return false;
   switch (value.kind) {
@@ -73,9 +96,11 @@ export function isOperation(value: unknown): value is Operation {
         typeof value.command === "string" && (value.env === undefined || isStringMap(value.env))
       );
     case "jssg":
-      return typeof value.package === "string";
+      return (
+        typeof value.package === "string" && (value.input === undefined || isJson(value.input))
+      );
     case "ai":
-      return typeof value.prompt === "string";
+      return typeof value.prompt === "string" && (value.input === undefined || isJson(value.input));
     default:
       return false;
   }
@@ -95,10 +120,8 @@ export function isOperationCompletion(value: unknown): value is OperationComplet
   if (value.protocolVersion !== PROTOCOL_VERSION) return false;
   if (typeof value.commandId !== "string") return false;
   if (!STATUSES.includes(value.status as CompletionStatus)) return false;
-  if (value.error !== undefined) {
-    if (!isRecord(value.error) || typeof value.error.message !== "string") return false;
-  }
-  return true;
+  if (value.status === "succeeded") return isJson(value.output) && value.error === undefined;
+  return value.output === undefined && isCompletionError(value.error);
 }
 
 /** Parse a completion produced by an external executor, e.g. the Rust bridge. */

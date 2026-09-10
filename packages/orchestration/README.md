@@ -48,8 +48,10 @@ export default plan(rename, updateImports, format);
 export default plan(parallel(countTodos, countFixmes), format);
 ```
 
-- `exec` output: with an `output` schema, stdout is parsed as JSON and validated;
-  without one the output is `{ stdout }`.
+- `exec` output: with an `output` schema, the runner's returned text is parsed
+  as JSON and validated; without one the output is `{ stdout }`. The field name
+  is provisional: the existing `DirectRunner` combines stdout and stderr on
+  Unix but returns stdout alone on other platforms.
 - Repeated calls of the same runnable need an explicit id, for example
   `w.run(lint, { id: "lint:" + i })`. A repeated call without an id throws
   `DuplicateCommandIdError`. Unique calls use the runnable name as their id.

@@ -136,6 +136,18 @@ async fn exec_runs_through_direct_runner() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn exec_preserves_direct_runners_combined_unix_output() {
+    let request = exec_request("stdio", "printf out; printf err >&2");
+    let completion = execute(&DirectRunner::with_quiet(true), &request).await;
+    assert_eq!(completion.status, CompletionStatus::Succeeded);
+    assert_eq!(
+        completion.output.unwrap()["stdout"],
+        Value::String("outerr\n".to_string())
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn exec_request_env_reaches_the_command() {
     let mut request = exec_request("env", "printf '%s' \"$BRIDGE_TEST\"");
     if let Operation::Exec { env, .. } = &mut request.operation {

@@ -108,6 +108,7 @@ Not included:
 - durable persistence, cancellation, or production scheduling
 - mutable shared workflow state, locks, worktrees, or merge semantics
 - metrics, findings, artifacts, or human approval channels
+- a platform-neutral structured stdout/stderr result from `DirectRunner`
 
 These omissions are explicit boundaries, not compatibility behavior to preserve.
 

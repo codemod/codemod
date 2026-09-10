@@ -124,9 +124,12 @@ otherwise a signal maps to `cancelled` and any other exit to `unknown`.
 ## Why Rust here
 
 - `DirectRunner` already implements the shell semantics used by YAML workflows
-  (`sh -c`, shebang scripts, env clearing, combined stdout/stderr capture,
-  exit-code errors). Reusing it keeps the prototype's `exec` behavior identical
-  to the production engine instead of reimplementing it in Node.
+  (`sh -c`, shebang scripts, env clearing, output capture, exit-code errors).
+  Reusing it keeps the prototype's `exec` behavior identical to the production
+  engine instead of reimplementing it in Node. Its current returned output is
+  platform-dependent: stdout and stderr are combined on Unix, while non-Unix
+  builds return stdout for successful commands. A production structured stdio
+  contract remains future work.
 - The bridge is one-shot JSON over two files, so no N-API or WASM build is
   needed, the TypeScript side stays a plain `child_process.spawn`, and the
   binary builds with `cargo build -p butterflow-execution-bridge` alone,

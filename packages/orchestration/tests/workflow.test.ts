@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { cancelled, createHarness, failed, unknown } from "../src/harness.ts";
 import {
   DuplicateCommandIdError,
+  BridgeExecutor,
   MemoryHistoryStore,
   OperationError,
   PROTOCOL_VERSION,
@@ -10,6 +11,7 @@ import {
   jssg,
   run,
   workflow,
+  type WorkflowContext,
 } from "../src/index.ts";
 
 interface Project {
@@ -80,6 +82,107 @@ describe("workflow execution", () => {
     const h = createHarness({ results: { list: "a\nb\n" } });
     const result = await h.run(workflow((w) => w.run(list)));
     expect(result.output).toEqual({ stdout: "a\nb\n" });
+  });
+
+  it("rejects a succeeded exec completion without string stdout", async () => {
+    const executor = {
+      async execute(request: { commandId: string }) {
+        return {
+          protocolVersion: PROTOCOL_VERSION,
+          commandId: request.commandId,
+          status: "succeeded" as const,
+          output: null,
+        };
+      },
+    };
+
+    await expect(
+      run(
+        workflow((w) => w.run(exec({ name: "step", command: "step" }))),
+        { executor },
+      ),
+    ).rejects.toThrow("exec completion did not contain string stdout");
+  });
+
+  it("waits for an un-awaited operation and does not finalize the workflow", async () => {
+    const store = new MemoryHistoryStore();
+    let release!: () => void;
+    let started!: () => void;
+    const operationStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const executor = {
+      async execute() {
+        started();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return {
+          protocolVersion: PROTOCOL_VERSION,
+          commandId: "step",
+          status: "succeeded" as const,
+          output: { stdout: "ok" },
+        };
+      },
+    };
+    const result = run(
+      workflow(async (w) => {
+        void w.run(exec({ name: "step", command: "step" }));
+        return "done";
+      }),
+      { executor, history: store },
+    );
+
+    await operationStarted;
+    let settled = false;
+    void result.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    release();
+    await expect(result).rejects.toThrow("workflow body returned without awaiting 1 operation(s)");
+    expect(store.toJSON().events.map((event) => event.type)).toEqual(["scheduled", "completed"]);
+  });
+
+  it("closes a retained context when the workflow body throws", async () => {
+    const h = createHarness();
+    let retained: WorkflowContext | undefined;
+    await expect(
+      h.run(
+        workflow(async (w) => {
+          retained = w;
+          throw new Error("body failed");
+        }),
+      ),
+    ).rejects.toThrow("body failed");
+
+    await expect(retained!.run(exec({ name: "late", command: "late" }))).rejects.toThrow(
+      "w.run called after the workflow body returned",
+    );
+    expect(h.executed).toHaveLength(0);
+  });
+
+  it("records a missing bridge binary as an unknown completion", async () => {
+    const store = new MemoryHistoryStore();
+    const executor = new BridgeExecutor({ bin: "missing-butterflow-execution-bridge" });
+
+    await expect(
+      run(
+        workflow((w) => w.run(exec({ name: "step", command: "step" }))),
+        {
+          executor,
+          history: store,
+        },
+      ),
+    ).rejects.toMatchObject({ status: "unknown" });
+    expect(store.toJSON().events.map((event) => event.type)).toEqual(["scheduled", "completed"]);
   });
 
   it("serializes history, reloads it, and replays without executing", async () => {
