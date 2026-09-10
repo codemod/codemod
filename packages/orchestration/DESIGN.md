@@ -48,8 +48,10 @@ runs.
 The prototype defines all three operation shapes, but the Rust bridge only runs
 `exec()` today. JSSG and AI results are scripted in tests until adapters exist.
 
-In the target API, a simple package can export the operation itself. There is
-no need to add a workflow wrapper just to run one transform:
+### Single JSSG leaf
+
+The registry has 358 single AST-rule packages. In the target API, one can export
+the operation directly:
 
 ```ts
 export default jssg({
@@ -72,20 +74,27 @@ Use typed operations as the common unit and provide two orchestration modes:
 Operations return plain JSON checked by schemas such as Zod. One result can be
 passed directly to the next operation without workflow state.
 
-A plan is the closest replacement for a fixed YAML graph. Its full shape is
-known before execution, so it can be validated and sent to the existing
-scheduler later:
+### Nested bundle
+
+Fifty-two parent packages contain 943 nested-codemod actions. Imported runnables
+turn a fixed bundle into a normal plan:
 
 ```ts
-const migrate = jssg({ name: "migrate", package: "@codemod/migrate" });
+import renameApi from "@codemod/rename-api";
+import updateImports from "@codemod/update-imports";
+
 const format = exec({ name: "format", command: "npm run format" });
 
-export default plan(migrate, format);
+export default plan(renameApi, updateImports, format);
 ```
 
-A workflow is for cases where the next operation depends on an earlier result.
-The TypeScript function controls the branch, but operations only run through
-`w.run()`, which lets the engine record them:
+The whole plan is known before execution, like a fixed YAML graph. It can be
+validated and sent to the existing scheduler later.
+
+### Command and JSSG hybrid
+
+Eleven current packages combine shell commands with AI or JSSG actions. When the next step
+depends on command output, a workflow passes the typed result directly:
 
 ```ts
 const inspect = exec({ name: "inspect", command: "node inspect.js", output: Project });
@@ -103,7 +112,10 @@ export default workflow(async (w) => {
 });
 ```
 
-Parallel groups only accept read-only operations:
+### Fixed parallel audit
+
+Forty-four current workflows are parallel graphs with no dependencies. Read-only
+checks can use an explicit parallel group:
 
 ```ts
 const todos = exec({ name: "todos", command: "rg -c TODO", readOnly: true });
@@ -116,8 +128,12 @@ export default plan(parallel(todos, fixmes), format);
 `parallel(todos, format)` is rejected because `format` can write files. Writable
 operations remain sequential until there is an isolation and merge model.
 
-Dynamic parallel work uses a workflow because the list is only known after an
-operation runs:
+### Dynamic analysis and finding collection
+
+The Datadog pattern discovers monorepo projects at runtime. Azure Pipelines, ARM
+managed identity, and accessibility workflows use locked state to collect
+findings. Here each read-only operation returns data, then one writer receives
+the combined list:
 
 ```ts
 const discover = exec({
@@ -136,23 +152,60 @@ const inspectPackage = exec({
   env: (pkg) => ({ PACKAGE_PATH: pkg.path }),
 });
 
+const writeReport = jssg({
+  name: "write-report",
+  package: "@codemod/write-report",
+  input: Findings,
+  output: Summary,
+});
+
 export default workflow(async (w) => {
   const packages = await w.run(discover);
-  return Promise.all(
+  const reports = await Promise.all(
     packages.map((pkg) =>
-      w.run(inspectPackage, {
-        id: `inspect:${pkg.name}`,
-        input: pkg,
-      }),
+      w.run(inspectPackage, { id: `inspect:${pkg.name}`, input: pkg }),
     ),
   );
+
+  const findings = reports.flatMap((report) => report.findings);
+  return w.run(writeReport, { input: findings });
 });
 ```
 
 The stable id ties each result to a package even if operations finish in a
-different order. The prototype runs this concurrently, but does not yet reject a
-writable runnable inside `Promise.all`. Production dynamic parallelism must
-enforce the same read-only rule as `parallel()`.
+different order. The local `reports` array replaces shared workflow state and a
+lock. The prototype does not yet reject writable work inside `Promise.all`;
+production must enforce the same read-only rule as `parallel()`.
+
+### AI follow-up from earlier results
+
+AI appears in 68 current packages. Next.js to TanStack and accessibility
+patterns feed earlier summaries or findings into prompts. That handoff becomes
+normal data:
+
+```ts
+const findIssues = jssg({
+  name: "find-issues",
+  package: "@codemod/find-issues",
+  output: Findings,
+  readOnly: true,
+});
+
+const writeGuide = ai({
+  name: "write-guide",
+  prompt: "Write a migration guide for these findings",
+  input: Findings,
+  output: Guide,
+});
+
+export default workflow(async (w) => {
+  const findings = await w.run(findIssues);
+  if (findings.length === 0) return null;
+  return w.run(writeGuide, { input: findings });
+});
+```
+
+The AI adapter is target work; the TypeScript harness scripts this result today.
 
 ## Ownership
 
@@ -252,6 +305,7 @@ Not included:
 - durable persistence, cancellation, or production scheduling
 - mutable shared workflow state, locks, worktrees, or merge semantics
 - metrics, findings, artifacts, or human approval channels
+- state-backed matrices, native shards, or delivery behavior
 - a platform-neutral structured stdout/stderr result from `DirectRunner`
 
 These omissions are explicit boundaries, not compatibility behavior to preserve.
