@@ -2,7 +2,8 @@ use std::path::Path;
 
 use butterflow_execution_bridge::{
     completion_from_result, execute, parse_request, CompletionStatus, Operation,
-    OperationCompletion, OperationRequest, Target, PROTOCOL_VERSION,
+    OperationCompletion, OperationRequest, RequestContext, SemanticAnalysis,
+    SemanticAnalysisDetails, SemanticMode, Target, PROTOCOL_VERSION,
 };
 use butterflow_models::Error;
 use butterflow_runners::direct_runner::DirectRunner;
@@ -27,7 +28,12 @@ fn exec_request(command_id: &str, command: &str) -> OperationRequest {
             command: command.to_string(),
             env: Default::default(),
         },
+        context: None,
     }
+}
+
+fn jssg_request(operation: &str) -> String {
+    format!(r#"{{"protocolVersion":2,"commandId":"t","operation":{operation}}}"#)
 }
 
 #[test]
@@ -63,11 +69,21 @@ fn jssg_request_fixture_has_no_target() {
     let request = parse_request(&fixture("jssg-request.json")).expect("parse");
     match request.operation {
         Operation::Jssg {
-            package,
+            script,
+            language,
+            include,
+            semantic_analysis,
             target,
             input,
+            ..
         } => {
-            assert_eq!(package, "@codemod/migrate");
+            assert_eq!(script, "scripts/migrate.ts");
+            assert_eq!(language, "tsx");
+            assert_eq!(include, Some(vec!["**/*.tsx".to_string()]));
+            assert_eq!(
+                semantic_analysis,
+                Some(SemanticAnalysis::Mode(SemanticMode::Workspace))
+            );
             assert_eq!(target, None);
             assert_eq!(input, Some(serde_json::json!({ "needsMigration": true })));
         }
@@ -81,11 +97,18 @@ fn jssg_target_request_fixture_decodes_root_include_and_exclude() {
     assert_eq!(request.command_id, "rename-api");
     match request.operation {
         Operation::Jssg {
-            package,
+            script,
+            language,
+            include,
+            exclude,
             target,
             input,
+            ..
         } => {
-            assert_eq!(package, "@codemod/rename-api");
+            assert_eq!(script, "scripts/rename-api.ts");
+            assert_eq!(language, "typescript");
+            assert_eq!(include, Some(vec!["**/*.ts".to_string()]));
+            assert_eq!(exclude, Some(vec!["**/*.d.ts".to_string()]));
             assert_eq!(
                 target,
                 Some(Target {
@@ -102,7 +125,7 @@ fn jssg_target_request_fixture_decodes_root_include_and_exclude() {
 
 #[test]
 fn partial_targets_omit_absent_fields_when_serialized() {
-    let text = r#"{"protocolVersion":1,"commandId":"t","operation":{"kind":"jssg","package":"p","target":{"root":"packages/a"}}}"#;
+    let text = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript","target":{"root":"packages/a"}}}"#;
     let request = parse_request(text).expect("parse");
     let value = serde_json::to_value(&request).expect("serialize");
     assert_eq!(
@@ -121,7 +144,7 @@ fn malformed_targets_are_rejected() {
         r#"{"root":"apps/web","files":["a.ts"]}"#,
     ] {
         let text = format!(
-            r#"{{"protocolVersion":1,"commandId":"t","operation":{{"kind":"jssg","package":"p","target":{target}}}}}"#
+            r#"{{"protocolVersion":2,"commandId":"t","operation":{{"kind":"jssg","script":"p.ts","language":"typescript","target":{target}}}}}"#
         );
         let error = parse_request(&text).expect_err("malformed target must not parse");
         assert!(error.contains("invalid request JSON"), "{target}: {error}");
@@ -136,7 +159,7 @@ fn exec_and_ai_operations_reject_a_target() {
         r#"{"kind":"exec","command":"true","target":{"root":"apps"}}"#,
         r#"{"kind":"ai","prompt":"summarize","target":{"root":"apps"}}"#,
     ] {
-        let text = format!(r#"{{"protocolVersion":1,"commandId":"t","operation":{operation}}}"#);
+        let text = format!(r#"{{"protocolVersion":2,"commandId":"t","operation":{operation}}}"#);
         let error = parse_request(&text).expect_err("target on exec/ai must not parse");
         assert!(
             error.contains("invalid request JSON"),
@@ -153,13 +176,136 @@ fn exec_and_ai_operations_reject_a_target() {
 fn operations_reject_fields_from_other_variants() {
     for operation in [
         r#"{"kind":"exec","command":"true","package":"p"}"#,
-        r#"{"kind":"jssg","package":"p","command":"true"}"#,
+        r#"{"kind":"jssg","script":"p.ts","language":"typescript","command":"true"}"#,
         r#"{"kind":"ai","prompt":"x","env":{}}"#,
     ] {
-        let text = format!(r#"{{"protocolVersion":1,"commandId":"t","operation":{operation}}}"#);
+        let text = format!(r#"{{"protocolVersion":2,"commandId":"t","operation":{operation}}}"#);
         let error = parse_request(&text).expect_err("unknown operation field must not parse");
         assert!(error.contains("unknown field"), "{operation}: {error}");
     }
+}
+
+#[test]
+fn semantic_analysis_rejects_unknown_fields() {
+    let text = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"workspace","threads":4}}}"#;
+    let error = parse_request(text).expect_err("unknown semantic field must not parse");
+    assert!(error.contains("invalid request JSON"), "{error}");
+}
+
+#[test]
+fn jssg_definition_rejects_invalid_intrinsic_fields() {
+    for operation in [
+        r#"{"kind":"jssg","script":"","language":"typescript"}"#,
+        r#"{"kind":"jssg","script":"p.ts","language":" "}"#,
+        r#"{"kind":"jssg","script":"p.ts","language":"typescript","include":[] }"#,
+        r#"{"kind":"jssg","script":"p.ts","language":"typescript","exclude":[" "] }"#,
+        r#"{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"file","root":"src"}}"#,
+    ] {
+        assert!(
+            parse_request(&jssg_request(operation)).is_err(),
+            "{operation}"
+        );
+    }
+}
+
+#[test]
+fn jssg_paths_must_be_safe_and_relative_on_every_platform() {
+    // Same rules as `isSafeRelativePath` in packages/orchestration/src/paths.ts.
+    for bad in [
+        "/abs/p.ts",
+        "\\\\server\\p.ts",
+        "C:\\p.ts",
+        "c:/p.ts",
+        "../p.ts",
+        "scripts/../p.ts",
+        "scripts\\..\\p.ts",
+    ] {
+        let escaped = bad.replace('\\', "\\\\");
+        for operation in [
+            format!(r#"{{"kind":"jssg","script":"{escaped}","language":"typescript"}}"#),
+            format!(
+                r#"{{"kind":"jssg","script":"p.ts","language":"typescript","target":{{"root":"{escaped}"}}}}"#
+            ),
+            format!(
+                r#"{{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{{"mode":"workspace","root":"{escaped}"}}}}"#
+            ),
+        ] {
+            let error = parse_request(&jssg_request(&operation)).expect_err("must reject");
+            assert!(error.contains("safe relative path"), "{operation}: {error}");
+        }
+    }
+    // A `..` inside a segment is an ordinary name, not an escape.
+    let ok = r#"{"kind":"jssg","script":"scripts/foo..bar.ts","language":"typescript","target":{"root":"apps/a..b"},"semanticAnalysis":{"mode":"workspace","root":"src..gen"}}"#;
+    parse_request(&jssg_request(ok)).expect("foo..bar is a valid name");
+}
+
+#[test]
+fn semantic_details_omit_absent_root_when_serialized() {
+    let text = jssg_request(
+        r#"{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"workspace"}}"#,
+    );
+    let request = parse_request(&text).expect("parse");
+    match &request.operation {
+        Operation::Jssg {
+            semantic_analysis, ..
+        } => assert_eq!(
+            semantic_analysis,
+            &Some(SemanticAnalysis::Detailed(SemanticAnalysisDetails {
+                mode: SemanticMode::Workspace,
+                root: None,
+            }))
+        ),
+        other => panic!("expected jssg operation, got {}", other.kind()),
+    }
+    let value = serde_json::to_value(&request).expect("serialize");
+    assert_eq!(
+        value["operation"]["semanticAnalysis"],
+        serde_json::json!({ "mode": "workspace" })
+    );
+    let file_only = jssg_request(
+        r#"{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"file"}}"#,
+    );
+    let value = serde_json::to_value(parse_request(&file_only).expect("parse")).expect("json");
+    assert_eq!(
+        value["operation"]["semanticAnalysis"],
+        serde_json::json!({ "mode": "file" })
+    );
+}
+
+#[test]
+fn request_context_is_optional_strict_and_never_serialized_when_absent() {
+    let without = parse_request(&fixture("jssg-request.json")).expect("parse");
+    assert_eq!(without.context, None);
+    let value = serde_json::to_value(&without).expect("serialize");
+    assert!(value.get("context").is_none());
+
+    let text = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript"},"context":{"scriptRoot":"/tmp/workflow"}}"#;
+    let request = parse_request(text).expect("parse");
+    assert_eq!(
+        request.context,
+        Some(RequestContext {
+            script_root: Some("/tmp/workflow".to_string())
+        })
+    );
+    let value = serde_json::to_value(&request).expect("serialize");
+    assert_eq!(
+        value["context"],
+        serde_json::json!({ "scriptRoot": "/tmp/workflow" })
+    );
+
+    let empty = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"exec","command":"true"},"context":{}}"#;
+    assert_eq!(
+        parse_request(empty).expect("empty context parses").context,
+        Some(RequestContext::default())
+    );
+    let blank = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"exec","command":"true"},"context":{"scriptRoot":" "}}"#;
+    assert!(parse_request(blank)
+        .expect_err("blank root")
+        .contains("scriptRoot"));
+    let unknown = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"exec","command":"true"},"context":{"cwd":"/tmp"}}"#;
+    assert!(parse_request(unknown)
+        .expect_err("unknown context field")
+        .contains("unknown field"));
 }
 
 #[test]
@@ -185,9 +331,9 @@ fn completion_fixtures_round_trip_to_identical_json() {
 #[test]
 fn parse_request_rejects_other_protocol_versions() {
     let text = fixture("exec-request.json");
-    let text = text.replace("\"protocolVersion\": 1", "\"protocolVersion\": 2");
-    let error = parse_request(&text).expect_err("version 2 must be rejected");
-    assert!(error.contains("unsupported protocolVersion 2"), "{error}");
+    let text = text.replace("\"protocolVersion\": 2", "\"protocolVersion\": 99");
+    let error = parse_request(&text).expect_err("version 99 must be rejected");
+    assert!(error.contains("unsupported protocolVersion 99"), "{error}");
 }
 
 #[test]
@@ -222,14 +368,23 @@ fn other_runner_errors_convert_to_unknown() {
 }
 
 #[tokio::test]
-async fn non_exec_operations_are_rejected_without_running() {
-    for name in ["jssg-request.json", "jssg-target-request.json"] {
-        let request = parse_request(&fixture(name)).expect("parse");
-        let completion = execute(&DirectRunner::with_quiet(true), &request).await;
-        assert_eq!(completion.command_id, request.command_id, "{name}");
-        assert_eq!(completion.status, CompletionStatus::Failed, "{name}");
-        assert!(completion.error.unwrap().message.contains("jssg"), "{name}");
-    }
+async fn ai_operations_are_rejected_without_running() {
+    let request = OperationRequest {
+        protocol_version: PROTOCOL_VERSION,
+        command_id: "ai".to_string(),
+        operation: Operation::Ai {
+            prompt: "summarize".to_string(),
+            input: None,
+        },
+        context: None,
+    };
+    let completion = execute(&DirectRunner::with_quiet(true), &request).await;
+    assert_eq!(completion.status, CompletionStatus::Failed);
+    assert!(completion
+        .error
+        .expect("error")
+        .message
+        .contains("no executor adapter"));
 }
 
 #[cfg(unix)]

@@ -1,10 +1,9 @@
 # Rust execution bridge, explained in TypeScript
 
-All orchestration logic lives in TypeScript. Rust is used for exactly one
-thing: running an `exec` operation through the existing
-`butterflow_runners::Runner` implementation (`DirectRunner`) so the prototype
-reuses the shell execution, environment handling, and output capture that the
-YAML engine already has. The whole bridge is equivalent to:
+All orchestration logic lives in TypeScript. Rust executes `exec` through the
+existing `DirectRunner` and local JSSG through the existing QuickJS sandbox.
+Planning, replay, and history remain TypeScript responsibilities. The whole
+bridge is equivalent to:
 
 ```ts
 interface ExistingEngineBridge {
@@ -20,6 +19,9 @@ interface ExistingEngineBridge {
 - `crates/execution-bridge/tests/protocol.rs`: round-trips the shared fixtures in
   `packages/orchestration/fixtures/protocol` and runs `echo`-style commands
   through `DirectRunner`.
+- `crates/execution-bridge/tests/jssg.rs`: JSSG adapter behavior (default
+  language globs, walker settings, failure status, deferred rename deletion,
+  script root resolution) through `execute_in` against temporary repositories.
 - `crates/execution-bridge/src/main.rs`: the `butterflow-execution-bridge`
   binary. One-shot file protocol: `<request.json> <response.json>`. It never
   writes to stdout or stderr (non-CLI crates must not), so the "only the CLI
@@ -34,22 +36,42 @@ interface ExistingEngineBridge {
 ```ts
 type Operation =
   | { kind: "exec"; command: string; env?: Record<string, string> }
-  | { kind: "jssg"; package: string; target?: Target; input?: Json } // decoded only, never executed here
+  | {
+      kind: "jssg";
+      script: string; // safe relative path; resolved against context.scriptRoot
+      language: string;
+      include?: string[]; // default: the language's file extensions
+      exclude?: string[];
+      semanticAnalysis?: "file" | "workspace" | { mode: "file" | "workspace"; root?: string };
+      target?: Target;
+      input?: Json; // exposed to the transform as options.params.input
+    }
   | { kind: "ai"; prompt: string; input?: Json }; // decoded only, never executed here
 
-// Only jssg carries a file selection; a future JSSG adapter enforces it.
+// Only jssg carries file selection. Definition and invocation filters intersect.
 interface Target { root?: string; include?: string[]; exclude?: string[] }
 ```
 
-`OperationRequest` / `OperationCompletion` / `CompletionError` /
-`CompletionStatus`
+`script`, `target.root`, and `semanticAnalysis.root` are validated with one
+rule on both sides (`isSafeRelativePath` in `paths.ts`,
+`validate_relative_path` in `lib.rs`): non-empty, not absolute on any platform
+(`/x`, `\x`, `C:\x`), and no `..` segment; `foo..bar` is an ordinary name.
+`semanticAnalysis.root` requires `workspace` mode and is omitted from the
+serialized object form when absent.
+
+`OperationRequest` / `RequestContext` / `OperationCompletion` /
+`CompletionError` / `CompletionStatus`
 
 ```ts
-interface OperationRequest { protocolVersion: 1; commandId: string; operation: Operation }
+interface OperationRequest {
+  protocolVersion: 2; commandId: string; operation: Operation;
+  context?: RequestContext; // executor input, never recorded in history
+}
+interface RequestContext { scriptRoot?: string } // strict: no other fields
 type CompletionStatus = "succeeded" | "failed" | "cancelled" | "unknown";
 interface CompletionError { message: string; exitCode?: number; output?: string }
 interface OperationCompletion {
-  protocolVersion: 1; commandId: string; status: CompletionStatus;
+  protocolVersion: 2; commandId: string; status: CompletionStatus;
   output?: Json; error?: CompletionError;
 }
 ```
@@ -66,7 +88,7 @@ validation error on both sides rather than a silently ignored field.
 ```ts
 function parseRequest(text: string): OperationRequest {
   const request = JSON.parse(text);
-  if (request.protocolVersion !== 1) throw new Error("unsupported protocol version");
+  if (request.protocolVersion !== 2) throw new Error("unsupported protocol version");
   return request;
 }
 ```
@@ -75,8 +97,11 @@ function parseRequest(text: string): OperationRequest {
 
 ```ts
 async function execute(runner: Runner, request: OperationRequest): Promise<OperationCompletion> {
-  if (request.operation.kind !== "exec") {
-    return { ...base(request), status: "failed", error: { message: `no executor adapter for '${kind}'` } };
+  if (request.operation.kind === "jssg") {
+    return executeJssg(request.operation);
+  }
+  if (request.operation.kind === "ai") {
+    return { ...base(request), status: "failed", error: { message: "no AI executor adapter" } };
   }
   const env = { ...process.env, ...request.operation.env };
   const result = await runner.runCommand(request.operation.command, env); // butterflow_runners::Runner
@@ -88,15 +113,63 @@ async function execute(runner: Runner, request: OperationRequest): Promise<Opera
 
 ```ts
 function completionFromResult(commandId: string, result: Result<string, RunnerError>): OperationCompletion {
-  if (result.ok) return { protocolVersion: 1, commandId, status: "succeeded", output: { stdout: result.value } };
+  if (result.ok) return { protocolVersion: 2, commandId, status: "succeeded", output: { stdout: result.value } };
   if (result.error.kind === "ShellCommandFailed") {
-    return { protocolVersion: 1, commandId, status: "failed",
+    return { protocolVersion: 2, commandId, status: "failed",
       error: { message: String(result.error), exitCode: result.error.exitCode, output: result.error.output } };
   }
   // Spawn/wait failures: the bridge cannot tell whether side effects happened.
-  return { protocolVersion: 1, commandId, status: "unknown", error: { message: String(result.error) } };
+  return { protocolVersion: 2, commandId, status: "unknown", error: { message: String(result.error) } };
 }
 ```
+
+## JSSG execution
+
+`execute_jssg` in `src/lib.rs`, in order:
+
+1. Resolve `script` against `context.scriptRoot` (or the working directory)
+   and canonicalize it; resolve `target.root` beneath the working directory.
+2. Build the definition filter: `include`, or `**/*<ext>` for each of the
+   language's extensions when `include` is absent (the same
+   `get_extensions_for_language` table the workflow engine uses), plus
+   `exclude`. Build the invocation filter from `target.include`/`exclude`
+   relative to the target root.
+3. Enumerate files with `codemod_walk_builder` from `codemod-sandbox`, the
+   walker configuration shared with the workflow engine and shard planning:
+   hidden files visited, `.gitignore`/`.ignore`/global excludes honored without
+   requiring a git repository, symlinks not followed, parent ignore files
+   applied. Keep files accepted by both filters; sort.
+4. Load the selector (`getSelector`, with no params, as the shipped engine
+   does) and build the semantic provider. Workspace mode pre-indexes the
+   enumerated set.
+5. For each file: read it (skip if it vanished or is not UTF-8, as the engine
+   does), run `execute_codemod_with_quickjs` with `params = { input }`, write
+   the primary and any `jssgTransform` secondary results beneath the target
+   root, refresh the semantic index, and collect `output` when present.
+6. Remove the originals of renamed files only now, so a rename cannot delete a
+   later enumerated source before it runs (the engine's deferred deletion).
+
+Each file completes one read-transform-write cycle before the next starts.
+This intentionally uses a worker budget of one until the shared global file
+scheduler and path locks exist.
+
+Legacy JSSG returns (`string | null`) still work and contribute no output
+entry. A top-level transform may also return `{ content?, output }`
+(`StructuredCodemod` in `@codemod.com/jssg-types`); `content` is applied and
+each present `output` is appended to the completion array in sorted file
+order. `jssgTransform` accepts only `string | null` transforms: a structured
+result from a secondary transform is a runtime error, not a discarded value.
+
+Failure status tracks the bridge's own writes. Every error before the first
+write (script resolution, language, globs, target root, selector, semantic
+root or indexing, reading, and a transform error on an earlier file) is
+`failed` with nothing changed. Once any file has been written, a later error is
+`unknown` because earlier files may already differ. A transform that writes
+through the curated `fs` module before failing is not tracked.
+
+The local profile grants no optional sandbox capabilities (no `fetch`, real
+`fs`, `child_process`, LLM, or shared workflow state); the curated `fs` module
+is limited to the target root.
 
 `main` in `src/main.rs`
 
@@ -116,16 +189,17 @@ function main(argv: string[]): number {
 }
 
 function writeError(path: string, commandId: string, message: string, code: number): number {
-  try { writeFileSync(path, JSON.stringify({ protocolVersion: 1, commandId, status: "failed", error: { message } })); }
+  try { writeFileSync(path, JSON.stringify({ protocolVersion: 2, commandId, status: "failed", error: { message } })); }
   catch {}
   return code;
 }
 ```
 
 `cancelled` is never produced by Rust. The TypeScript `BridgeExecutor` writes
-the request file, spawns the binary, and reads the response file. If a response
-exists it is used regardless of exit code (error completions are structured);
-otherwise a signal maps to `cancelled` and any other exit to `unknown`.
+the request file (adding `context.scriptRoot` when configured), spawns the
+binary, and reads the response file. If a response exists it is used regardless
+of exit code (error completions are structured); otherwise a signal maps to
+`cancelled` and any other exit to `unknown`.
 
 ## Why Rust here
 
@@ -140,7 +214,6 @@ otherwise a signal maps to `cancelled` and any other exit to `unknown`.
   needed, the TypeScript side stays a plain `child_process.spawn`, and the
   binary builds with `cargo build -p butterflow-execution-bridge` alone,
   independent of the full CLI.
-- Nothing else is in Rust: no plans, loops, replay, history, scheduling, JSSG,
-  or AI. Those are TypeScript and can move behind the same JSON seams later.
-  The JSSG `target` is decoded here for protocol parity only; no file set is
-  resolved or enforced until a JSSG adapter exists.
+- No orchestration is in Rust: no plans, loops, replay, or history. The bridge's
+  JSSG adapter only resolves files, configures semantics, invokes the existing
+  sandbox, and applies its file results. AI remains unimplemented.

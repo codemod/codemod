@@ -46,8 +46,11 @@ export type {
   Operation,
   OperationCompletion,
   OperationRequest,
+  RequestContext,
+  SemanticAnalysis,
   Target,
 } from "./protocol.ts";
+export { isSafeRelativePath } from "./paths.ts";
 export {
   MemoryHistoryStore,
   emptyHistory,

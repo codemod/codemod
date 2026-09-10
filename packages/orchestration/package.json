@@ -15,10 +15,14 @@
       "default": "./src/harness.ts"
     }
   },
+  "bin": {
+    "codemod-workflow": "./bin/codemod-workflow.mjs"
+  },
   "scripts": {
     "test": "vitest run",
     "build:bridge": "cargo build -p butterflow-execution-bridge",
     "test:e2e": "pnpm build:bridge && CODEMOD_BRIDGE_E2E=1 vitest run tests/bridge.e2e.test.ts",
+    "workflow": "node bin/codemod-workflow.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

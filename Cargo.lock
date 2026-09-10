@@ -751,6 +751,10 @@ version = "1.13.18"
 dependencies = [
  "butterflow-models",
  "butterflow-runners",
+ "codemod-sandbox",
+ "ignore",
+ "language-core",
+ "semantic-factory",
  "serde",
  "serde_json",
  "tempfile",

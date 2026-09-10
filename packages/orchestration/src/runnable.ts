@@ -9,7 +9,8 @@
  */
 import { createCommand, type Command, type InvokeArgs, type JssgInvokeArgs } from "./command.ts";
 import type { Json } from "./json.ts";
-import type { JssgOperation, Operation, Target } from "./protocol.ts";
+import { isSafeRelativePath } from "./paths.ts";
+import type { JssgOperation, Operation, SemanticAnalysis, Target } from "./protocol.ts";
 import { validate, type StandardSchemaV1 } from "./schema.ts";
 
 export type OperationKind = Operation["kind"];
@@ -107,32 +108,86 @@ interface DataOptions<I, O> {
 /**
  * JSSG codemod package. The only runnable whose invocation may carry a
  * `target`. The target is command content (it travels on the wire and replay
- * compares it), not command identity. No executor adapter exists yet; see
- * README. Tests use scripted completions.
+ * compares it), not command identity. The bridge executes trusted local
+ * scripts; the harness can script completions.
+ *
+ * `script` is a safe relative path (`scripts/migrate.ts`), resolved by the
+ * executor against its script root: the workflow file's directory for the
+ * local CLI, or `BridgeOptions.scriptRoot`. It is never absolute so the
+ * recorded command identity does not depend on where a checkout lives.
  */
 export interface JssgRunnable<I = void, O = unknown> extends Runnable<I, O, "jssg"> {
-  readonly package: string;
+  readonly script: string;
   toOperation(input: I, target?: Target): JssgOperation;
   (...args: JssgInvokeArgs<I>): Command<O>;
 }
 
 export function jssg<I = void, O = unknown>(
-  options: DataOptions<I, O> & { package: string },
+  options: DataOptions<I, O> & {
+    script: string;
+    language: string;
+    include?: string[];
+    exclude?: string[];
+    semanticAnalysis?: SemanticAnalysis;
+  },
 ): JssgRunnable<I, O> {
+  assertJssgOptions(options);
   return callable<I, O, "jssg", JssgRunnable<I, O>>({
     kind: "jssg",
-    package: options.package,
+    script: options.script,
     name: options.name,
     input: options.input,
     output: options.output,
     toOperation(input, target) {
-      const operation: JssgOperation = { kind: "jssg", package: options.package };
+      const operation: JssgOperation = {
+        kind: "jssg",
+        script: options.script,
+        language: options.language,
+      };
+      if (options.include !== undefined) operation.include = options.include;
+      if (options.exclude !== undefined) operation.exclude = options.exclude;
+      if (options.semanticAnalysis !== undefined) {
+        operation.semanticAnalysis = options.semanticAnalysis;
+      }
       if (target !== undefined) operation.target = target;
       if (input !== undefined) operation.input = input as Json;
       return operation;
     },
     decode: (output) => validate(options.output, output, `jssg '${options.name}' output`),
   });
+}
+
+function assertJssgOptions(options: {
+  script: string;
+  language: string;
+  include?: string[];
+  exclude?: string[];
+  semanticAnalysis?: SemanticAnalysis;
+}): void {
+  if (options.script.trim() === "") throw new Error("jssg script must not be empty");
+  if (!isSafeRelativePath(options.script)) {
+    throw new Error(
+      `jssg script '${options.script}' must be a relative path without '..' segments; it is resolved against the executor's script root`,
+    );
+  }
+  if (options.language.trim() === "") throw new Error("jssg language must not be empty");
+  for (const [name, patterns] of [
+    ["include", options.include],
+    ["exclude", options.exclude],
+  ] as const) {
+    if (patterns?.length === 0 || patterns?.some((pattern) => pattern.trim() === "")) {
+      throw new Error(`jssg ${name} must contain non-empty glob patterns`);
+    }
+  }
+  const semantic = options.semanticAnalysis;
+  if (typeof semantic === "object" && semantic.root !== undefined) {
+    if (semantic.mode !== "workspace") {
+      throw new Error("jssg semanticAnalysis.root requires workspace mode");
+    }
+    if (!isSafeRelativePath(semantic.root)) {
+      throw new Error("jssg semanticAnalysis.root must be a safe relative path");
+    }
+  }
 }
 
 export interface AiRunnable<I = void, O = unknown> extends Runnable<I, O, "ai"> {

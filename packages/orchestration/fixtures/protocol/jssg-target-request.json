@@ -1,9 +1,12 @@
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "commandId": "rename-api",
   "operation": {
     "kind": "jssg",
-    "package": "@codemod/rename-api",
+    "script": "scripts/rename-api.ts",
+    "language": "typescript",
+    "include": ["**/*.ts"],
+    "exclude": ["**/*.d.ts"],
     "target": {
       "root": "apps/web",
       "include": ["src/**"],

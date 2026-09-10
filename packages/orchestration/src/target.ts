@@ -5,6 +5,7 @@
  */
 import { posix } from "node:path";
 import { TargetValidationError } from "./errors.ts";
+import { escapesRoot, isAbsolutePath } from "./paths.ts";
 import type { Target } from "./protocol.ts";
 
 const FIELDS: readonly string[] = ["root", "include", "exclude"];
@@ -46,11 +47,11 @@ function normalizeRoot(value: unknown, where: string): string {
   if (typeof value !== "string" || value.trim() === "") {
     throw new TargetValidationError(where, "root must be a non-empty relative path");
   }
-  if (isAbsolute(value)) {
+  if (isAbsolutePath(value)) {
     throw new TargetValidationError(where, `root '${value}' must be relative to the repository`);
   }
   const normalized = posix.normalize(value.replaceAll("\\", "/")).replace(/\/+$/, "");
-  if (normalized === "" || escapes(normalized)) {
+  if (normalized === "" || escapesRoot(normalized)) {
     throw new TargetValidationError(where, `root '${value}' escapes the repository`);
   }
   return normalized;
@@ -64,7 +65,7 @@ function patterns(value: unknown, field: "include" | "exclude", where: string): 
     if (typeof pattern !== "string" || pattern.trim() === "") {
       throw new TargetValidationError(where, `${field} patterns must be non-empty strings`);
     }
-    if (isAbsolute(pattern) || escapes(pattern)) {
+    if (isAbsolutePath(pattern) || escapesRoot(pattern)) {
       throw new TargetValidationError(
         where,
         `${field} pattern '${pattern}' must stay relative to the target root`,
@@ -72,12 +73,4 @@ function patterns(value: unknown, field: "include" | "exclude", where: string): 
     }
     return pattern;
   });
-}
-
-function isAbsolute(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:/.test(path);
-}
-
-function escapes(path: string): boolean {
-  return path.split(/[\\/]/).includes("..");
 }
