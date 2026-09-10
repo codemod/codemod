@@ -5,6 +5,7 @@ import {
   PROTOCOL_VERSION,
   canonicalJson,
   exec,
+  isOperation,
   isOperationCompletion,
   isOperationRequest,
   parseCompletion,
@@ -44,35 +45,76 @@ describe("protocol fixtures shared with crates/execution-bridge", () => {
     expect(canonicalJson(request)).toBe(canonicalJson(fixture("exec-request.json")));
   });
 
+  it("accepts an optional strict request context that never enters the operation", () => {
+    const base = fixture("jssg-request.json") as Record<string, unknown>;
+    expect(isOperationRequest({ ...base, context: { scriptRoot: "/tmp/workflow" } })).toBe(true);
+    expect(isOperationRequest({ ...base, context: {} })).toBe(true);
+    expect(isOperationRequest({ ...base, context: { scriptRoot: " " } })).toBe(false);
+    expect(isOperationRequest({ ...base, context: { cwd: "/tmp" } })).toBe(false);
+    expect(isOperationRequest({ ...base, context: "/tmp" })).toBe(false);
+    expect(isOperationRequest({ ...base, scriptRoot: "/tmp" })).toBe(false);
+    const operation = base.operation as Record<string, unknown>;
+    expect(isOperationRequest({ ...base, operation: { ...operation, scriptRoot: "/tmp" } })).toBe(
+      false,
+    );
+  });
+
+  it("requires jssg script and roots to be safe relative paths on the wire", () => {
+    const base = { kind: "jssg", script: "scripts/x.ts", language: "typescript" };
+    expect(isOperation(base)).toBe(true);
+    expect(isOperation({ ...base, script: "scripts/foo..bar.ts" })).toBe(true);
+    for (const bad of ["/abs/x.ts", "\\\\server\\x.ts", "C:\\x.ts", "c:/x.ts", "../x.ts", " "]) {
+      expect(isOperation({ ...base, script: bad }), bad).toBe(false);
+      expect(isOperation({ ...base, target: { root: bad } }), bad).toBe(false);
+      expect(
+        isOperation({ ...base, semanticAnalysis: { mode: "workspace", root: bad } }),
+        bad,
+      ).toBe(false);
+    }
+    expect(isOperation({ ...base, target: { root: "apps/a..b" } })).toBe(true);
+    expect(
+      isOperation({ ...base, semanticAnalysis: { mode: "workspace", root: "src..gen" } }),
+    ).toBe(true);
+    expect(isOperation({ ...base, semanticAnalysis: { mode: "file" } })).toBe(true);
+  });
+
   it("rejects unknown protocol versions and statuses", () => {
-    expect(isOperationCompletion({ protocolVersion: 2, commandId: "x", status: "succeeded" })).toBe(
-      false,
-    );
-    expect(isOperationCompletion({ protocolVersion: 1, commandId: "x", status: "done" })).toBe(
-      false,
-    );
+    expect(
+      isOperationCompletion({ protocolVersion: 99, commandId: "x", status: "succeeded" }),
+    ).toBe(false);
+    expect(
+      isOperationCompletion({ protocolVersion: PROTOCOL_VERSION, commandId: "x", status: "done" }),
+    ).toBe(false);
     expect(() => parseCompletion("not json")).toThrow(/invalid JSON/);
   });
 
   it("rejects malformed status-dependent completion fields", () => {
-    expect(isOperationCompletion({ protocolVersion: 1, commandId: "x", status: "succeeded" })).toBe(
-      false,
-    );
     expect(
       isOperationCompletion({
-        protocolVersion: 1,
+        protocolVersion: PROTOCOL_VERSION,
+        commandId: "x",
+        status: "succeeded",
+      }),
+    ).toBe(false);
+    expect(
+      isOperationCompletion({
+        protocolVersion: PROTOCOL_VERSION,
         commandId: "x",
         status: "succeeded",
         output: null,
         error: { message: "unexpected" },
       }),
     ).toBe(false);
-    expect(isOperationCompletion({ protocolVersion: 1, commandId: "x", status: "failed" })).toBe(
-      false,
-    );
     expect(
       isOperationCompletion({
-        protocolVersion: 1,
+        protocolVersion: PROTOCOL_VERSION,
+        commandId: "x",
+        status: "failed",
+      }),
+    ).toBe(false);
+    expect(
+      isOperationCompletion({
+        protocolVersion: PROTOCOL_VERSION,
         commandId: "x",
         status: "failed",
         error: { message: "bad", exitCode: "3" },

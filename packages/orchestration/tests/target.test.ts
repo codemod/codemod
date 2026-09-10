@@ -22,15 +22,24 @@ import {
 
 const web: Target = { root: "apps/web", include: ["src/**"], exclude: ["**/generated/**"] };
 
-const renameApi = jssg({ name: "rename-api", package: "@codemod/rename-api" });
-const updateImports = jssg({ name: "update-imports", package: "@codemod/update-imports" });
+const renameApi = jssg({ name: "rename-api", script: "rename-api.ts", language: "typescript" });
+const updateImports = jssg({
+  name: "update-imports",
+  script: "update-imports.ts",
+  language: "typescript",
+});
 const format = exec({ name: "format", command: "npm run format" });
 
 const Project = guard(
   "Project",
   (v: unknown): v is { path: string } => typeof v === "object" && v !== null,
 );
-const migrate = jssg({ name: "migrate", package: "@codemod/migrate", input: Project });
+const migrate = jssg({
+  name: "migrate",
+  script: "migrate.ts",
+  language: "typescript",
+  input: Project,
+});
 
 describe("target normalization", () => {
   it("normalizes the root and keeps patterns as written", () => {
@@ -43,6 +52,11 @@ describe("target normalization", () => {
     });
     expect(normalizeTarget(web, "t")).toEqual(web);
     expect(normalizeTarget({ include: ["**/*.ts"] }, "t")).toEqual({ include: ["**/*.ts"] });
+    // `..` inside a name is not an escape.
+    expect(normalizeTarget({ root: "apps/a..b", include: ["foo..bar/**"] }, "t")).toEqual({
+      root: "apps/a..b",
+      include: ["foo..bar/**"],
+    });
   });
 
   it.each([
@@ -52,7 +66,9 @@ describe("target normalization", () => {
     ["an empty root", { root: "  " }, /root must be a non-empty relative path/],
     ["an absolute posix root", { root: "/apps/web" }, /must be relative/],
     ["an absolute windows root", { root: "C:\\apps" }, /must be relative/],
+    ["a unc root", { root: "\\\\server\\share" }, /must be relative/],
     ["a root that escapes", { root: "apps/../../etc" }, /escapes the repository/],
+    ["a root that escapes with backslashes", { root: "apps\\..\\..\\etc" }, /escapes/],
     ["a bare parent root", { root: ".." }, /escapes the repository/],
     ["an empty include list", { include: [] }, /include must be a non-empty list/],
     ["a non-string exclude entry", { exclude: [1] }, /exclude patterns must be non-empty strings/],
@@ -75,15 +91,23 @@ describe("JSSG invocation targets", () => {
     const operation = renameApi.toOperation(undefined, targeted.target);
     expect(operation).toEqual({
       kind: "jssg",
-      package: "@codemod/rename-api",
+      script: "rename-api.ts",
+      language: "typescript",
       target: { root: "apps/web", include: ["src/**"] },
     });
     expect(isOperation(operation)).toBe(true);
   });
 
   it("matches the shared jssg-target-request fixture", async () => {
+    const fixtureRunnable = jssg({
+      name: "rename-api",
+      script: "scripts/rename-api.ts",
+      language: "typescript",
+      include: ["**/*.ts"],
+      exclude: ["**/*.d.ts"],
+    });
     const h = createHarness({ fallback: () => ({}) });
-    const result = await h.run(workflow(() => renameApi({ target: web })));
+    const result = await h.run(workflow(() => fixtureRunnable({ target: web })));
     const fixture = readFileSync(
       join(import.meta.dirname, "..", "fixtures", "protocol", "jssg-target-request.json"),
       "utf8",
@@ -95,7 +119,11 @@ describe("JSSG invocation targets", () => {
   it("leaves the definition untargeted and does not mutate it", () => {
     renameApi({ target: web });
     expect(renameApi).not.toHaveProperty("target");
-    expect(renameApi.toOperation()).toEqual({ kind: "jssg", package: "@codemod/rename-api" });
+    expect(renameApi.toOperation()).toEqual({
+      kind: "jssg",
+      script: "rename-api.ts",
+      language: "typescript",
+    });
     expect(renameApi()).not.toHaveProperty("target");
   });
 
@@ -106,7 +134,8 @@ describe("JSSG invocation targets", () => {
     );
     expect(result.commands[0]?.operation).toEqual({
       kind: "jssg",
-      package: "@codemod/migrate",
+      script: "migrate.ts",
+      language: "typescript",
       target: { root: "packages/a" },
       input: { path: "packages/a" },
     });
@@ -160,13 +189,14 @@ describe("targeted JSSG in plans and parallel groups", () => {
     const result = await h.run(fixed);
     expect(result.output).toEqual([{ changed: 3 }, { changed: 1 }, { stdout: "" }]);
     expect(result.commands.map((c) => c.operation)).toEqual([
-      { kind: "jssg", package: "@codemod/rename-api", target: web },
-      { kind: "jssg", package: "@codemod/update-imports", target: web },
+      { kind: "jssg", script: "rename-api.ts", language: "typescript", target: web },
+      { kind: "jssg", script: "update-imports.ts", language: "typescript", target: web },
       { kind: "exec", command: "npm run format" },
     ]);
     expect(h.executed[0]?.operation).toEqual({
       kind: "jssg",
-      package: "@codemod/rename-api",
+      script: "rename-api.ts",
+      language: "typescript",
       target: web,
     });
 
@@ -176,8 +206,8 @@ describe("targeted JSSG in plans and parallel groups", () => {
   });
 
   it("accepts targeted members in a parallel group", async () => {
-    const transformA = jssg({ name: "transform-a", package: "@codemod/a" });
-    const transformB = jssg({ name: "transform-b", package: "@codemod/b" });
+    const transformA = jssg({ name: "transform-a", script: "a.ts", language: "typescript" });
+    const transformB = jssg({ name: "transform-b", script: "b.ts", language: "typescript" });
     const group = parallel(transformA({ target: web }), transformB({ target: web }));
     expect(group.members.map((m) => m.target)).toEqual([web, web]);
 
@@ -232,7 +262,8 @@ describe("targets in dynamic workflows and replay", () => {
         "migrate:a",
         {
           kind: "jssg",
-          package: "@codemod/migrate",
+          script: "migrate.ts",
+          language: "typescript",
           target: { root: "packages/a" },
           input: { path: "packages/a" },
         },
@@ -241,7 +272,8 @@ describe("targets in dynamic workflows and replay", () => {
         "migrate:b",
         {
           kind: "jssg",
-          package: "@codemod/migrate",
+          script: "migrate.ts",
+          language: "typescript",
           target: { root: "packages/b" },
           input: { path: "packages/b" },
         },
@@ -293,8 +325,28 @@ describe("targets in dynamic workflows and replay", () => {
 });
 
 describe("protocol validation of targets", () => {
+  it("validates intrinsic JSSG applicability and semantic configuration", () => {
+    const base = { kind: "jssg", script: "x.ts", language: "typescript" };
+    expect(
+      isOperation({
+        ...base,
+        include: ["**/*.ts"],
+        exclude: ["**/*.d.ts"],
+        semanticAnalysis: { mode: "workspace", root: "src" },
+      }),
+    ).toBe(true);
+    expect(isOperation({ ...base, include: "**/*.ts" })).toBe(false);
+    expect(isOperation({ ...base, include: [] })).toBe(false);
+    expect(isOperation({ ...base, exclude: [""] })).toBe(false);
+    expect(isOperation({ ...base, semanticAnalysis: "repository" })).toBe(false);
+    expect(isOperation({ ...base, semanticAnalysis: { mode: "file", root: "src" } })).toBe(false);
+    expect(isOperation({ ...base, semanticAnalysis: { mode: "workspace", threads: 4 } })).toBe(
+      false,
+    );
+  });
+
   it("accepts well-formed and rejects malformed jssg targets on the wire", () => {
-    const base = { kind: "jssg", package: "@codemod/x" };
+    const base = { kind: "jssg", script: "x.ts", language: "typescript" };
     expect(isOperation({ ...base, target: { root: "a" } })).toBe(true);
     expect(isOperation({ ...base, target: { include: ["a"], exclude: ["b"] } })).toBe(true);
     expect(isOperation({ ...base, target: {} })).toBe(true);

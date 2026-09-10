@@ -8108,6 +8108,7 @@ async fn await_js_ast_grep_execution_task_returns_prompt_completion_without_poll
                 Ok(CodemodOutput {
                     primary: ExecutionResult::Unmodified,
                     secondary: vec![],
+                    output: None,
                 })
             });
 
@@ -8169,6 +8170,7 @@ async fn await_js_ast_grep_execution_task_prefers_completed_result_over_later_id
                 Ok(CodemodOutput {
                     primary: ExecutionResult::Unmodified,
                     secondary: vec![],
+                    output: None,
                 })
             });
 

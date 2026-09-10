@@ -55,7 +55,8 @@ const inspectPackage = exec({
 });
 const writeReport = jssg({
   name: "write-report",
-  package: "@codemod/write-report",
+  script: "write-report.ts",
+  language: "typescript",
   input: guard("Findings", (v: unknown): v is string[] => Array.isArray(v)),
   output: Summary,
 });

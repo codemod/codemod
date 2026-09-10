@@ -267,7 +267,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
             // Execute the codemod on this file
             match execute_codemod_with_quickjs(options).await {
-                Ok(CodemodOutput { primary, secondary }) => {
+                Ok(CodemodOutput {
+                    primary, secondary, ..
+                }) => {
                     // Collect all file changes: primary + secondary from jssgTransform
                     let mut all_changes: Vec<(
                         std::path::PathBuf,

@@ -51,8 +51,8 @@ command reaches.
 | per-step `base_path`, `include`, `exclude` | `{ target }` on a JSSG invocation |
 | `shard` step and `max_threads` | automatic scheduler behavior, no public helper |
 
-The prototype defines all three operation shapes, but the Rust bridge only runs
-`exec()` today. JSSG and AI results are scripted in tests until adapters exist.
+The prototype defines all three operation shapes. The Rust bridge executes
+`exec()` and trusted local JSSG scripts; AI results remain scripted in tests.
 
 ### Single JSSG leaf
 
@@ -62,22 +62,24 @@ export the operation directly:
 ```ts
 export default jssg({
   name: "remove-old-api",
-  package: "@codemod/remove-old-api",
+  script: "scripts/remove-old-api.ts",
   language: "typescript",
-  files: ["**/*.{ts,tsx}"],
+  include: ["**/*.{ts,tsx}"],
 });
 ```
 
-`language` and `files` are the definition's intrinsic applicability: what the
+`language`, `include`, and `exclude` are the definition's intrinsic applicability: what the
 transform can process at all. They travel with the package and are not an
-invocation choice. Where the transform runs is chosen by the caller through the
+invocation choice; without `include`, the language's file extensions apply, as
+in a YAML `js-ast-grep` step. `script` is relative to the package (the
+workflow file's directory) so the recorded command identity is the same on
+every checkout. Where the transform runs is chosen by the caller through the
 invocation's `target` (see Targeting below). Scheduling controls such as the
 current YAML `max_threads` do not belong on a JSSG definition.
 
 The prototype currently runs operations inside `plan()` or `workflow()`. Direct
-leaf exports and the applicability fields are part of the proposed package
-contract, not implemented wiring; the prototype `jssg()` accepts only `name`,
-`package`, and schemas.
+leaf exports remain proposed; applicability fields and local script execution
+are implemented.
 
 ## Proposal
 
@@ -124,7 +126,9 @@ depends on command output, a workflow passes the typed result directly:
 const inspect = exec({ name: "inspect", command: "node inspect.js", output: Project });
 const migrate = jssg({
   name: "migrate",
-  package: "@codemod/migrate",
+  script: "scripts/migrate.ts",
+  language: "tsx",
+  include: ["**/*.{ts,tsx}"],
   input: Project,
   output: Summary,
 });
@@ -271,13 +275,16 @@ invocation takes `{ input?, target?, id? }`; `exec` and `ai` invocations take
 target is never silently dropped. The target is validated and normalized when
 the command is created (relative root without `..`, non-empty pattern lists, no
 unknown fields), recorded in history, sent on the wire as `operation.target`,
-and decoded by the Rust bridge, which still reports that no JSSG adapter
-exists.
+and enforced by the Rust bridge's JSSG adapter: it enumerates the files
+accepted by both the definition and the target (with the workflow engine's
+walker settings), runs them serially in sorted order, applies each file's
+result beneath the target root, and returns the per-file structured outputs in
+that order.
 
-What the prototype does not implement: no JSSG adapter enumerates the effective
-file set or enforces that a transform stays inside it, the bridge still runs
-`exec` in the executor's working directory with no file list, and there is no
-file-target scheduler.
+What the prototype does not implement: `exec` still runs in the executor's
+working directory with no file list, a transform's own `fs` access is limited
+to the target root rather than to the enumerated set, and there is no
+file-target scheduler, per-file locking, or parallel file execution.
 
 ### Dynamic analysis and finding collection
 
@@ -303,7 +310,8 @@ const inspectPackage = exec({
 
 const writeReport = jssg({
   name: "write-report",
-  package: "@codemod/write-report",
+  script: "scripts/write-report.ts",
+  language: "typescript",
   input: Findings,
   output: Summary,
 });
@@ -337,7 +345,8 @@ normal data:
 ```ts
 const findIssues = jssg({
   name: "find-issues",
-  package: "@codemod/find-issues",
+  script: "scripts/find-issues.ts",
+  language: "tsx",
   output: Findings,
 });
 
@@ -367,14 +376,15 @@ TypeScript owns the author-facing model and the parts that need rapid iteration:
 - the test harness
 - prototype replay and in-memory history
 
-Rust initially owns only operation execution. The versioned JSON bridge calls
-the existing `butterflow_runners::DirectRunner`; it does not implement planning,
-replay, persistence, or scheduling. A small file-based binary keeps this path
+Rust owns only operation execution. The versioned JSON bridge calls the
+existing `butterflow_runners::DirectRunner` for shell commands and the existing
+QuickJS sandbox for JSSG; it does not implement planning, replay, or persistence.
+A small file-based binary keeps this path
 independent of the full Codemod CLI and avoids mixing protocol data with
 terminal output.
 
 ```text
-TypeScript workflow -> replay gate -> execution bridge -> DirectRunner
+TypeScript workflow -> replay gate -> execution bridge -> DirectRunner / JSSG sandbox
 ```
 
 The split keeps the new authoring API easy to change while reusing the execution
@@ -383,7 +393,7 @@ boundary is plain JSON. For example, TypeScript sends:
 
 ```json
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "commandId": "format",
   "operation": { "kind": "exec", "command": "npm run format" }
 }
@@ -393,7 +403,7 @@ Rust returns plain data:
 
 ```json
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "commandId": "format",
   "status": "succeeded",
   "output": { "stdout": "formatted 12 files\n" }
@@ -458,15 +468,17 @@ Included:
 - append-only in-memory history and replay checks
 - scripted TypeScript tests
 - real `exec` calls through the existing Rust runner
+- real local JSSG calls through the existing sandbox, including semantic analysis
+- deterministic structured JSSG output and definition/target intersection
+- an experimental trusted-local TypeScript workflow CLI
 
 Not included:
 
 - QuickJS workflow sandboxing and host-bound runtime (the prototype uses `AsyncLocalStorage`)
 - `pipe()`
-- JSSG applicability fields (`language`, `files`) and structural command ids
-- JSSG and AI execution adapters, so no target is enumerated or enforced yet
+- AI execution
 - durable persistence, cancellation, or production scheduling
-- a shared file-job scheduler, per-file locks, worktrees, or merge semantics
+- a parallel file-job scheduler, per-file locks, worktrees, or merge semantics
 - metrics, findings, artifacts, or human approval channels
 - state-backed matrices, native shards, or delivery behavior
 - a platform-neutral structured stdout/stderr result from `DirectRunner`

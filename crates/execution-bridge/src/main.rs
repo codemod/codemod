@@ -4,8 +4,8 @@
 //! butterflow-execution-bridge <request.json> <response.json>
 //! ```
 //!
-//! Reads an `OperationRequest`, executes it through the existing
-//! `DirectRunner`, and writes an `OperationCompletion` to the response file.
+//! Reads an `OperationRequest`, executes it through the bridge's exec or JSSG
+//! adapter, and writes an `OperationCompletion` to the response file.
 //! This binary never writes to stdout or stderr. Problems are reported through
 //! the exit code and, whenever a response path is available, an error
 //! completion in the response file.

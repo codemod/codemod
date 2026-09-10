@@ -6,8 +6,9 @@
  * `fixtures/protocol/*.json` are the shared conformance fixtures.
  */
 import type { Json } from "./json.ts";
+import { isSafeRelativePath } from "./paths.ts";
 
-export const PROTOCOL_VERSION = 1 as const;
+export const PROTOCOL_VERSION = 2 as const;
 
 export type CompletionStatus = "succeeded" | "failed" | "cancelled" | "unknown";
 
@@ -32,13 +33,28 @@ export interface Target {
 }
 
 /**
+ * `"file"`, `"workspace"`, or the object form. `root` is a safe relative path
+ * beneath the invocation's target root and is only valid with `workspace`.
+ */
+export type SemanticAnalysis = "file" | "workspace" | { mode: "file" | "workspace"; root?: string };
+
+/**
  * JSSG codemod invocation. Only this operation carries a `target`: a JSSG
  * adapter is the only executor that can enumerate and enforce a file set.
- * Not executed by the bridge yet; it decodes the request and reports no adapter.
+ * Definition fields are intrinsic applicability. `target` can only narrow them.
  */
 export interface JssgOperation {
   kind: "jssg";
-  package: string;
+  /**
+   * Safe relative path to the transform, resolved by the executor against
+   * its script root (`RequestContext.scriptRoot`). Never absolute, so the
+   * command identity recorded in history is the same on every checkout.
+   */
+  script: string;
+  language: string;
+  include?: string[];
+  exclude?: string[];
+  semanticAnalysis?: SemanticAnalysis;
   target?: Target;
   input?: Json;
 }
@@ -52,10 +68,22 @@ export interface AiOperation {
 
 export type Operation = ExecOperation | JssgOperation | AiOperation;
 
+/**
+ * Executor-side context. It is attached by the host that runs an executor
+ * (for example `BridgeExecutor` or the local workflow CLI), never by workflow
+ * code, and it is not part of the command record that history stores, so it
+ * may carry machine-specific absolute paths.
+ */
+export interface RequestContext {
+  /** Directory that relative JSSG `script` paths are resolved against. */
+  scriptRoot?: string;
+}
+
 export interface OperationRequest {
   protocolVersion: typeof PROTOCOL_VERSION;
   commandId: string;
   operation: Operation;
+  context?: RequestContext;
 }
 
 export interface CompletionError {
@@ -102,6 +130,10 @@ function isStringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
+function isNonEmptyStringList(value: unknown): value is string[] {
+  return isStringList(value) && value.length > 0 && value.every((item) => item.trim() !== "");
+}
+
 function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
 }
@@ -115,18 +147,44 @@ const TARGET_FIELDS = ["root", "include", "exclude"] as const;
  */
 const OPERATION_FIELDS = {
   exec: ["kind", "command", "env"],
-  jssg: ["kind", "package", "target", "input"],
+  jssg: ["kind", "script", "language", "include", "exclude", "semanticAnalysis", "target", "input"],
   ai: ["kind", "prompt", "input"],
 } as const satisfies Record<Operation["kind"], readonly string[]>;
 
-/** Wire shape only; author-facing rules (relative root, non-empty lists) live in `target.ts`. */
+/**
+ * Wire shape plus the path rule the bridge also enforces (`root` is a safe
+ * relative path). Normalization and non-empty lists live in `target.ts`.
+ */
 export function isTarget(value: unknown): value is Target {
   return (
     isRecord(value) &&
     hasOnlyKeys(value, TARGET_FIELDS) &&
-    (value.root === undefined || typeof value.root === "string") &&
+    (value.root === undefined ||
+      (typeof value.root === "string" && isSafeRelativePath(value.root))) &&
     (value.include === undefined || isStringList(value.include)) &&
     (value.exclude === undefined || isStringList(value.exclude))
+  );
+}
+
+function isSemanticAnalysis(value: unknown): value is SemanticAnalysis {
+  if (value === "file" || value === "workspace") return true;
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["mode", "root"]) &&
+    (value.mode === "file" || value.mode === "workspace") &&
+    (value.root === undefined ||
+      (value.mode === "workspace" &&
+        typeof value.root === "string" &&
+        isSafeRelativePath(value.root)))
+  );
+}
+
+function isRequestContext(value: unknown): value is RequestContext {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["scriptRoot"]) &&
+    (value.scriptRoot === undefined ||
+      (typeof value.scriptRoot === "string" && value.scriptRoot.trim() !== ""))
   );
 }
 
@@ -151,7 +209,13 @@ export function isOperation(value: unknown): value is Operation {
     case "jssg":
       return (
         hasOnlyKeys(value, OPERATION_FIELDS.jssg) &&
-        typeof value.package === "string" &&
+        typeof value.script === "string" &&
+        isSafeRelativePath(value.script) &&
+        typeof value.language === "string" &&
+        value.language.trim() !== "" &&
+        (value.include === undefined || isNonEmptyStringList(value.include)) &&
+        (value.exclude === undefined || isNonEmptyStringList(value.exclude)) &&
+        (value.semanticAnalysis === undefined || isSemanticAnalysis(value.semanticAnalysis)) &&
         (value.target === undefined || isTarget(value.target)) &&
         (value.input === undefined || isJson(value.input))
       );
@@ -169,9 +233,11 @@ export function isOperation(value: unknown): value is Operation {
 export function isOperationRequest(value: unknown): value is OperationRequest {
   return (
     isRecord(value) &&
+    hasOnlyKeys(value, ["protocolVersion", "commandId", "operation", "context"]) &&
     value.protocolVersion === PROTOCOL_VERSION &&
     typeof value.commandId === "string" &&
-    isOperation(value.operation)
+    isOperation(value.operation) &&
+    (value.context === undefined || isRequestContext(value.context))
   );
 }
 

@@ -5,7 +5,7 @@ use super::curated_fs::{
 };
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use super::transform_helpers::{
-    build_transform_options, process_transform_result, ModificationCheck,
+    build_transform_options, extract_transform_output, process_transform_result, ModificationCheck,
 };
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
@@ -159,6 +159,8 @@ pub struct FileChange {
 pub struct CodemodOutput {
     pub primary: ExecutionResult,
     pub secondary: Vec<FileChange>,
+    /// JSON data returned by `{ content, output }`; independent of file edits.
+    pub output: Option<serde_json::Value>,
 }
 
 /// Shared accumulator for file changes produced by `jssgTransform`.
@@ -657,7 +659,11 @@ where
                     .collect();
 
                 if ast_matches.is_empty() {
-                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![] });
+                    return Ok(CodemodOutput {
+                        primary: ExecutionResult::Skipped,
+                        secondary: vec![],
+                        output: None,
+                    });
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
@@ -700,8 +706,10 @@ where
                 .catch(&ctx)
                 .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
+            let (content_result, output) = extract_transform_output(&ctx, result_obj)?;
+
             let primary = process_transform_result(
-                &result_obj,
+                &content_result,
                 &sg_root_inner,
                 ModificationCheck::StringEquality { original_content: options.content },
             )?;
@@ -710,7 +718,7 @@ where
                 .map(|guard| guard.clone())
                 .unwrap_or_default();
 
-            Ok(CodemodOutput { primary, secondary })
+            Ok(CodemodOutput { primary, secondary, output })
         };
         execution.await
     })
@@ -1743,6 +1751,111 @@ function example() {
             ),
             Err(e) => panic!("Expected specific runtime error, got: {:?}", e),
         }
+    }
+
+    fn structured_options<'a>(
+        codemod_path: &'a Path,
+        resolver: Arc<OxcResolver>,
+        content: &'a str,
+        target_directory: &'a Path,
+    ) -> JssgExecutionOptions<'a, OxcResolver> {
+        JssgExecutionOptions {
+            script_path: codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content,
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            llm_request_handler: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_top_level_structured_result_returns_content_and_output() {
+        let codemod_content = r#"
+export default function transform(root) {
+  return { content: root.root().text().replace("old", "new"), output: { changed: true } };
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = structured_options(&codemod_path, resolver, "old();", temp_dir.path());
+
+        let output = execute_codemod_with_quickjs(options)
+            .await
+            .expect("structured result executes");
+        assert_eq!(output.output, Some(serde_json::json!({ "changed": true })));
+        match output.primary {
+            ExecutionResult::Modified(modified) => assert_eq!(modified.content, "new();"),
+            other => panic!("Expected modified result, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_top_level_structured_result_without_output_is_rejected() {
+        let codemod_content = r#"
+export default function transform(root) {
+  return { content: root.root().text() };
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = structured_options(&codemod_path, resolver, "old();", temp_dir.path());
+
+        let error = execute_codemod_with_quickjs(options)
+            .await
+            .expect_err("object without output must fail");
+        assert!(
+            error.to_string().contains("must contain an 'output' field"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jssg_transform_rejects_structured_results() {
+        let codemod_content = r#"
+import { jssgTransform } from "codemod:ast-grep";
+export default async function transform(root, options) {
+  await jssgTransform(
+    async (secondary) => ({ content: secondary.root().text(), output: 1 }),
+    options.targetDir + "/secondary.js",
+    "javascript",
+  );
+  return null;
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        fs::write(temp_dir.path().join("secondary.js"), "old();").expect("secondary file");
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = structured_options(&codemod_path, resolver, "primary();", temp_dir.path());
+
+        let error = execute_codemod_with_quickjs(options)
+            .await
+            .expect_err("structured secondary result must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("jssgTransform() transforms must return a string or null"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_to_string(temp_dir.path().join("secondary.js")).expect("secondary"),
+            "old();"
+        );
     }
 
     #[tokio::test]

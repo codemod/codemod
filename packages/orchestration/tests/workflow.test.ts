@@ -32,7 +32,8 @@ const Summary = guard(
 const inspect = exec({ name: "inspect", command: "node inspect.js", output: Project });
 const migrate = jssg({
   name: "migrate",
-  package: "@codemod/migrate",
+  script: "migrate.ts",
+  language: "typescript",
   input: Project,
   output: Summary,
 });
@@ -58,7 +59,8 @@ describe("workflow execution", () => {
     expect(result.commands[1]?.input).toEqual({ needsMigration: true, files: 3 });
     expect(result.commands[1]?.operation).toEqual({
       kind: "jssg",
-      package: "@codemod/migrate",
+      script: "migrate.ts",
+      language: "typescript",
       input: { needsMigration: true, files: 3 },
     });
     expect(h.executed).toHaveLength(2);

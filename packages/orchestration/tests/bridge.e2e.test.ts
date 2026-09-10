@@ -7,9 +7,18 @@
  * (builds only crates/execution-bridge, then runs this file).
  * Override the binary with CODEMOD_BRIDGE_BIN=/path/to/butterflow-execution-bridge.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   BridgeExecutor,
@@ -104,5 +113,106 @@ describe("execution bridge end-to-end", () => {
     expect(second.output).toEqual(first.output);
     expect(calls).toHaveLength(3);
     expect(readFileSync(join(dir, "marker.txt"), "utf8")).toBe("run\n");
+  });
+});
+
+/** A repository with files inside and outside the fixture workflow's target. */
+function seedRepository(): string {
+  const target = mkdtempSync(join(tmpdir(), "codemod-jssg-"));
+  mkdirSync(join(target, "src"));
+  mkdirSync(join(target, "other"));
+  writeFileSync(join(target, "src", "b.ts"), "oldApi('b');\n");
+  writeFileSync(join(target, "src", "a.ts"), "oldApi('a');\n");
+  writeFileSync(join(target, "src", "skip.generated.ts"), "oldApi('skip');\n");
+  writeFileSync(join(target, "other", "outside.ts"), "oldApi('outside');\n");
+  return target;
+}
+
+function expectMigrated(target: string, stdout: string): void {
+  expect(JSON.parse(stdout)).toEqual([{ file: "src/a.ts" }, { file: "src/b.ts" }]);
+  expect(readFileSync(join(target, "src", "a.ts"), "utf8")).toBe("newApi('a');\n");
+  expect(readFileSync(join(target, "src", "b.ts"), "utf8")).toBe("newApi('b');\n");
+  expect(readFileSync(join(target, "src", "skip.generated.ts"), "utf8")).toBe("oldApi('skip');\n");
+  expect(readFileSync(join(target, "other", "outside.ts"), "utf8")).toBe("oldApi('outside');\n");
+}
+
+describe("local TypeScript JSSG workflow end-to-end", () => {
+  it("intersects targets, writes edits, aggregates output, and runs through the CLI", () => {
+    const target = seedRepository();
+    // The fixture's `script: "transform.ts"` resolves against the workflow's
+    // directory, which is the CLI's default script root.
+    const workflowPath = resolve(import.meta.dirname, "fixtures/jssg/workflow.ts");
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          resolve(import.meta.dirname, "../bin/codemod-workflow.mjs"),
+          workflowPath,
+          "--target",
+          target,
+          "--bridge",
+          bin,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expectMigrated(target, result.stdout);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it("runs from a package installed under node_modules", () => {
+    // Copy (not link) the package into a consumer's node_modules so its `.ts`
+    // sources sit under a real node_modules path, which Node's built-in type
+    // stripping refuses; the bin's loader hook must cover them.
+    const consumer = mkdtempSync(join(tmpdir(), "codemod-consumer-"));
+    const installed = join(consumer, "node_modules", "@codemod.com", "orchestration");
+    const packageDir = resolve(import.meta.dirname, "..");
+    for (const entry of ["package.json", "bin", "src"]) {
+      cpSync(join(packageDir, entry), join(installed, entry), { recursive: true });
+    }
+    writeFileSync(join(consumer, "package.json"), JSON.stringify({ type: "module" }));
+    mkdirSync(join(consumer, "scripts"));
+    cpSync(
+      resolve(import.meta.dirname, "fixtures/jssg/transform.ts"),
+      join(consumer, "scripts", "migrate.ts"),
+    );
+    writeFileSync(
+      join(consumer, "workflow.ts"),
+      `import { jssg, workflow } from "@codemod.com/orchestration";
+const migrate = jssg<void, { file: string }[]>({
+  name: "migrate",
+  script: "scripts/migrate.ts",
+  language: "typescript",
+  include: ["**/*.ts"],
+});
+export default workflow(() =>
+  migrate({ target: { include: ["src/**"], exclude: ["**/*.generated.ts"] } }),
+);
+`,
+    );
+    const target = seedRepository();
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          join(installed, "bin", "codemod-workflow.mjs"),
+          "workflow.ts",
+          "--target",
+          target,
+          "--bridge",
+          bin,
+        ],
+        { cwd: consumer, encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expectMigrated(target, result.stdout);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+      rmSync(consumer, { recursive: true, force: true });
+    }
   });
 });

@@ -2,7 +2,7 @@ use crate::ast_grep::serde::JsValue;
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootInner};
 use crate::sandbox::engine::execution_engine::{ExecutionResult, ModifiedResult};
 use crate::sandbox::errors::ExecutionError;
-use rquickjs::{Ctx, IntoJs, Object, Value};
+use rquickjs::{Ctx, FromJs, IntoJs, Object, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,6 +14,46 @@ pub enum ModificationCheck<'a> {
     /// Compare SHA256 hash of new content against original hash
     #[cfg(feature = "native")]
     Sha256(Option<[u8; 32]>),
+}
+
+/// Split the extended `{ content, output }` result without changing legacy
+/// string/null result handling.
+pub fn extract_transform_output<'js>(
+    ctx: &Ctx<'js>,
+    result: Value<'js>,
+) -> Result<(Value<'js>, Option<serde_json::Value>), ExecutionError> {
+    let Some(object) = result.as_object() else {
+        return Ok((result, None));
+    };
+    let output: Value<'_> = object
+        .get("output")
+        .map_err(|error| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                message: error.to_string(),
+            },
+        })?;
+    if output.is_undefined() {
+        return Err(ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                message: "Object codemod results must contain an 'output' field".to_string(),
+            },
+        });
+    }
+    let content: Value<'_> = object
+        .get("content")
+        .map_err(|error| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                message: error.to_string(),
+            },
+        })?;
+    let output = JsValue::from_js(ctx, output)
+        .map_err(|error| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                message: format!("Codemod output must be JSON: {error}"),
+            },
+        })?
+        .0;
+    Ok((content, Some(output)))
 }
 
 /// Build the JS `options` object passed to the transform function.
