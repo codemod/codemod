@@ -15,7 +15,7 @@ packages/orchestration/
   DESIGN.md         problem statement, proposal, scope, and migration path
   src/protocol.ts   versioned JSON OperationRequest / OperationCompletion
   src/runnable.ts   exec / jssg / ai descriptors (typed via Standard Schema)
-  src/plan.ts       plan(...) and read-only parallel(...) groups + JSON IR
+  src/plan.ts       plan(...) and parallel(...) groups + JSON IR
   src/workflow.ts   workflow(async (w) => ...) and run(target, options)
   src/history.ts    HistoryStore seam + MemoryHistoryStore
   src/gate.ts       CommandGate seam + ReplayGate (replay matching, errors)
@@ -44,7 +44,7 @@ export default workflow(async (w) => {
 
 // fixed plan
 export default plan(rename, updateImports, format);
-// explicit read-only parallel group; every member must declare readOnly: true
+// explicit assertion that these operations have no ordering dependency
 export default plan(parallel(countTodos, countFixmes), format);
 ```
 
@@ -58,6 +58,10 @@ export default plan(parallel(countTodos, countFixmes), format);
 - Non-success completions (`failed`, `cancelled`, `unknown`) throw
   `OperationError` from `w.run`; catch it to branch.
 - Workflow return values and operation outputs are plain JSON.
+- `parallel(...)` is an author assertion. The prototype starts each member as a
+  whole concurrent operation; it does not implement per-file locking. Do not
+  place dependent mutations or opaque commands that may conflict in one group.
+  `DESIGN.md` describes the target JSSG file scheduler.
 
 ## Running
 

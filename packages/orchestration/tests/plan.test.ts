@@ -13,13 +13,11 @@ const format = exec({ name: "format", command: "format" });
 const countTodos = exec({
   name: "count-todos",
   command: "grep -c TODO",
-  readOnly: true,
   output: Count,
 });
 const countFixmes = exec({
   name: "count-fixmes",
   command: "grep -c FIXME",
-  readOnly: true,
   output: Count,
 });
 
@@ -29,15 +27,14 @@ describe("plans", () => {
     expect(fixed.ir).toEqual({
       version: 1,
       steps: [
-        { type: "run", id: "rename", name: "rename", kind: "exec", readOnly: false },
+        { type: "run", id: "rename", name: "rename", kind: "exec" },
         {
           type: "run",
           id: "update-imports",
           name: "update-imports",
           kind: "exec",
-          readOnly: false,
         },
-        { type: "run", id: "format", name: "format", kind: "exec", readOnly: false },
+        { type: "run", id: "format", name: "format", kind: "exec" },
       ],
     });
 
@@ -57,11 +54,10 @@ describe("plans", () => {
     expect(replay.output).toEqual(result.output);
   });
 
-  it("runs explicit read-only parallel groups and records members in group order", async () => {
+  it("runs explicit parallel groups and records members in group order", async () => {
     const survey = plan(parallel(countTodos, countFixmes), format);
     expect(survey.ir.steps[0]).toEqual({
       type: "parallel",
-      readOnly: true,
       members: [
         { id: "count-todos", name: "count-todos", kind: "exec" },
         { id: "count-fixmes", name: "count-fixmes", kind: "exec" },
@@ -79,9 +75,8 @@ describe("plans", () => {
     expect(typed[0][0].count + typed[0][1].count).toBe(5);
   });
 
-  it("rejects parallel groups with writable members", () => {
-    expect(() => parallel(countTodos, format)).toThrow(PlanValidationError);
-    expect(() => parallel(countTodos, format)).toThrow(/not read-only/);
+  it("accepts mutations as an explicit independence assertion", () => {
+    expect(parallel(countTodos, format).members).toEqual([countTodos, format]);
     expect(() => parallel()).toThrow(PlanValidationError);
   });
 

@@ -12,8 +12,6 @@ export type OperationKind = Operation["kind"];
 export interface Runnable<I = void, O = unknown> {
   readonly kind: OperationKind;
   readonly name: string;
-  /** Read-only runnables may be placed in a `parallel` group. */
-  readonly readOnly: boolean;
   readonly input?: StandardSchemaV1<unknown, I>;
   readonly output?: StandardSchemaV1<unknown, O>;
   /** Build the wire operation from validated input. Must be pure. */
@@ -30,7 +28,6 @@ interface ExecOptions<I, O> {
   /** Shell command, or a pure function of the validated input. */
   command: string | ((input: I) => string);
   env?: Record<string, string> | ((input: I) => Record<string, string>);
-  readOnly?: boolean;
   input?: StandardSchemaV1<unknown, I>;
   /**
    * When present, stdout is parsed as JSON and validated. Without it the
@@ -47,7 +44,6 @@ export function exec<I = void, O = ExecOutput>(options: ExecOptions<I, O>): Runn
   return {
     kind: "exec",
     name: options.name,
-    readOnly: options.readOnly ?? false,
     input: options.input,
     output: options.output,
     toOperation(input) {
@@ -86,7 +82,6 @@ function readStdout(output: Json | undefined): string {
 
 interface DataOptions<I, O> {
   name: string;
-  readOnly?: boolean;
   input?: StandardSchemaV1<unknown, I>;
   output?: StandardSchemaV1<unknown, O>;
 }
@@ -101,7 +96,6 @@ export function jssg<I = void, O = unknown>(
   return {
     kind: "jssg",
     name: options.name,
-    readOnly: options.readOnly ?? false,
     input: options.input,
     output: options.output,
     toOperation: (input) =>
@@ -119,7 +113,6 @@ export function ai<I = void, O = unknown>(
   return {
     kind: "ai",
     name: options.name,
-    readOnly: options.readOnly ?? false,
     input: options.input,
     output: options.output,
     toOperation: (input) =>

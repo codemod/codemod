@@ -1,6 +1,6 @@
 /**
  * Fixed plans: an ordered list of runnables, optionally containing explicit
- * read-only parallel groups. A plan is validated at construction and compiled
+ * parallel groups. A plan is validated at construction and compiled
  * to a small JSON IR so a future Rust scheduler could consume it directly.
  */
 import { PlanValidationError } from "./errors.ts";
@@ -28,8 +28,8 @@ export interface PlanIr {
 }
 
 export type PlanIrStep =
-  | { type: "run"; id: string; name: string; kind: string; readOnly: boolean }
-  | { type: "parallel"; readOnly: true; members: { id: string; name: string; kind: string }[] };
+  | { type: "run"; id: string; name: string; kind: string }
+  | { type: "parallel"; members: { id: string; name: string; kind: string }[] };
 
 type StepOutput<S> =
   S extends Parallel<infer O> ? O : S extends Runnable<void, infer O> ? O : never;
@@ -38,18 +38,11 @@ type MemberOutputs<M extends readonly Runnable<void, unknown>[]> = {
   -readonly [K in keyof M]: M[K] extends Runnable<void, infer O> ? O : never;
 };
 
-/** Explicit read-only parallel group. Every member must declare `readOnly: true`. */
+/** Explicit assertion that members have no ordering dependency. */
 export function parallel<const M extends readonly Runnable<void, unknown>[]>(
   ...members: M
 ): Parallel<MemberOutputs<M>> {
   if (members.length === 0) throw new PlanValidationError("parallel group has no members");
-  for (const member of members) {
-    if (!member.readOnly) {
-      throw new PlanValidationError(
-        `parallel member '${member.name}' is not read-only; parallel groups may only contain readOnly runnables`,
-      );
-    }
-  }
   return { type: "parallel", members };
 }
 
@@ -70,7 +63,6 @@ export function plan<const S extends readonly PlanStep[]>(...steps: S): Plan<Ste
     if (isParallel(step)) {
       ir.steps.push({
         type: "parallel",
-        readOnly: true,
         members: step.members.map((m) => ({ id: use(m.name), name: m.name, kind: m.kind })),
       });
     } else {
@@ -79,7 +71,6 @@ export function plan<const S extends readonly PlanStep[]>(...steps: S): Plan<Ste
         id: use(step.name),
         name: step.name,
         kind: step.kind,
-        readOnly: step.readOnly,
       });
     }
   }

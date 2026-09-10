@@ -13,7 +13,7 @@ step, state, and scheduling model:
 - JSSG appeared in 530 packages, while only 12 used workflow state.
 
 Simple transforms should need less setup. Complex workflows still need branches,
-parallel reads, agents, approvals, recovery, and repository-wide coordination.
+parallel work, agents, approvals, recovery, and repository-wide coordination.
 
 ## What Changes
 
@@ -31,16 +31,18 @@ Today:     workflow.yaml -> Rust graph and scheduler -> existing runners
 Proposed:  TypeScript plan or workflow -> command history -> existing runners
 ```
 
-A runnable is a typed description of one operation. Calling `jssg()`, `exec()`,
-or `ai()` does not run anything. It creates a value that can be used by a plan
-or passed to `w.run()`. The engine still decides when and where the operation
-runs.
+A runnable is a typed description of one operation. `jssg()`, `exec()`, and
+`ai()` define runnables; invoking a runnable in the target API creates a lazy
+command controlled by the workflow runtime. The prototype still passes
+descriptors to `w.run()` instead of making them callable.
 
 | Current workflow concept | Proposed TypeScript form |
 | --- | --- |
 | `run` action | `exec()` |
 | JSSG or AI action | `jssg()` or `ai()` |
-| fixed sequence or parallel readers | `plan()` |
+| fixed sequence | `plan()` |
+| fixed data flow | `pipe()` |
+| independent work | `parallel()` |
 | condition based on an earlier result | normal `if` inside `workflow()` |
 | workflow-state handoff | operation return value passed as input |
 | nested codemod | imported runnable used in a plan or workflow |
@@ -65,14 +67,17 @@ leaf exports are part of the proposed package contract, not implemented wiring.
 
 ## Proposal
 
-Use typed operations as the common unit and provide two orchestration modes:
+Use typed operations as the common unit and provide four composable forms:
 
-- `plan(...)` creates a fixed, serializable graph at package build time.
-- `workflow(async (w) => ...)` runs procedural TypeScript whose calls to
-  `w.run(...)` are recorded and replayed.
+- `plan(...)` runs fixed steps in order. It does not pass return values between
+  them; repository changes are the usual handoff.
+- `pipe(...)` creates fixed typed data flow from each output to the next input.
+- `parallel(...)` declares that its members have no ordering dependency.
+- `workflow(async () => ...)` uses normal TypeScript for dynamic control flow.
 
 Operations return plain JSON checked by schemas such as Zod. One result can be
-passed directly to the next operation without workflow state.
+passed directly to the next operation without workflow state. `pipe()` and
+callable runnables are target API work and are not implemented in the prototype.
 
 ### Nested bundle
 
@@ -105,34 +110,66 @@ const migrate = jssg({
   output: Summary,
 });
 
-export default workflow(async (w) => {
-  const project = await w.run(inspect);
+export default workflow(async () => {
+  const project = await inspect();
   if (!project.needsMigration) return { migrated: 0 };
-  return w.run(migrate, { input: project });
+  return migrate(project);
 });
 ```
 
+When the structure is fixed and has no branch, the same handoff is shorter as a
+typed pipeline: `pipe(inspect, migrate)`.
+
 ### Fixed parallel audit
 
-Forty-four current workflows are parallel graphs with no dependencies. Read-only
-checks can use an explicit parallel group:
+Forty-four current workflows are parallel graphs with no dependencies. An
+explicit group tells the scheduler that no member depends on another:
 
 ```ts
-const todos = exec({ name: "todos", command: "rg -c TODO", readOnly: true });
-const fixmes = exec({ name: "fixmes", command: "rg -c FIXME", readOnly: true });
+const todos = exec({ name: "todos", command: "rg -c TODO" });
+const fixmes = exec({ name: "fixmes", command: "rg -c FIXME" });
 const format = exec({ name: "format", command: "npm run format" });
 
 export default plan(parallel(todos, fixmes), format);
 ```
 
-`parallel(todos, format)` is rejected because `format` can write files. Writable
-operations remain sequential until there is an isolation and merge model.
+`parallel()` is an author assertion, not an inferred effect check. Runnables do
+not carry `effects`, `readOnly`, or `idempotent` metadata. If `format` depends on
+the checks, it stays outside the group as shown.
+
+### Parallel transforms
+
+Writable JSSG transforms can also be independent. The target scheduler can
+pipeline them without increasing the global worker limit:
+
+```ts
+export default parallel(transformA, transformB, transformC);
+```
+
+`plan(transformA, transformB, transformC)` places a global barrier after each
+transform. In the parallel form, the runner may start `transformB` on one file
+while `transformA` is still processing other files. It must lock a file before
+reading it and hold that lock through its write, so only one transform performs
+a read-transform-write cycle on that file at a time. Contention should resolve
+in declaration order for reproducibility.
+
+This only removes barriers; it does not create more workers or reduce total
+work. It helps with small file sets and long-tail tasks, but adds little when
+each transform already saturates every worker. A single scheduler must own the
+worker pool to avoid oversubscription.
+
+The author remains responsible for semantic independence. Transforms that rely
+on repository-wide state, files created by an earlier transform, or a particular
+order must use `plan()`. File-level locking requires a runner such as the future
+JSSG adapter that mediates file access. The prototype runs parallel members as
+whole operations and provides no file locking; opaque shell commands cannot gain
+that guarantee without isolation or a more constrained adapter.
 
 ### Dynamic analysis and finding collection
 
 The Datadog pattern discovers monorepo projects at runtime. Azure Pipelines, ARM
 managed identity, and accessibility workflows use locked state to collect
-findings. Here each read-only operation returns data, then one writer receives
+findings. Here each operation returns data, then one writer receives
 the combined list:
 
 ```ts
@@ -140,14 +177,12 @@ const discover = exec({
   name: "discover",
   command: "node discover-packages.js",
   output: Packages,
-  readOnly: true,
 });
 
 const inspectPackage = exec({
   name: "inspect-package",
   input: Package,
   output: Report,
-  readOnly: true,
   command: 'node inspect-package.js "$PACKAGE_PATH"',
   env: (pkg) => ({ PACKAGE_PATH: pkg.path }),
 });
@@ -159,23 +194,21 @@ const writeReport = jssg({
   output: Summary,
 });
 
-export default workflow(async (w) => {
-  const packages = await w.run(discover);
-  const reports = await Promise.all(
-    packages.map((pkg) =>
-      w.run(inspectPackage, { id: `inspect:${pkg.name}`, input: pkg }),
-    ),
+export default workflow(async () => {
+  const packages = await discover();
+  const reports = await parallel(
+    packages.map((pkg) => inspectPackage(pkg, { id: `inspect:${pkg.name}` })),
   );
 
   const findings = reports.flatMap((report) => report.findings);
-  return w.run(writeReport, { input: findings });
+  return writeReport(findings);
 });
 ```
 
 The stable id ties each result to a package even if operations finish in a
 different order. The local `reports` array replaces shared workflow state and a
-lock. The prototype does not yet reject writable work inside `Promise.all`;
-production must enforce the same read-only rule as `parallel()`.
+lock. The same `parallel()` helper represents a fixed group when given runnable
+definitions and a dynamic group when given commands created during a workflow.
 
 ### AI follow-up from earlier results
 
@@ -188,7 +221,6 @@ const findIssues = jssg({
   name: "find-issues",
   package: "@codemod/find-issues",
   output: Findings,
-  readOnly: true,
 });
 
 const writeGuide = ai({
@@ -198,10 +230,10 @@ const writeGuide = ai({
   output: Guide,
 });
 
-export default workflow(async (w) => {
-  const findings = await w.run(findIssues);
+export default workflow(async () => {
+  const findings = await findIssues();
   if (findings.length === 0) return null;
-  return w.run(writeGuide, { input: findings });
+  return writeGuide(findings);
 });
 ```
 
@@ -292,7 +324,7 @@ including `w.run()`.
 Included:
 
 - typed `exec`, `jssg`, and `ai` descriptors
-- static plans and read-only parallel validation
+- static plans and explicit parallel groups
 - procedural workflows
 - append-only in-memory history and replay checks
 - scripted TypeScript tests
@@ -301,9 +333,10 @@ Included:
 Not included:
 
 - QuickJS workflow sandboxing
+- callable runnables and `pipe()`
 - JSSG and AI execution adapters
 - durable persistence, cancellation, or production scheduling
-- mutable shared workflow state, locks, worktrees, or merge semantics
+- a shared file-job scheduler, per-file locks, worktrees, or merge semantics
 - metrics, findings, artifacts, or human approval channels
 - state-backed matrices, native shards, or delivery behavior
 - a platform-neutral structured stdout/stderr result from `DirectRunner`
@@ -318,7 +351,9 @@ us move one part at a time:
 1. Move command ID calculation and file-backed history into Rust.
 2. Move replay comparisons and final output checks into Rust.
 3. Let Rust execute operations directly, then add JSSG, AI, and Plan adapters.
-4. Run workflow bundles in restricted QuickJS before treating them as durable or
+4. Add one shared file-job scheduler and hold per-file locks across each JSSG
+   read-transform-write cycle.
+5. Run workflow bundles in restricted QuickJS before treating them as durable or
    untrusted.
 
 Workflow bodies, runnable typing, schemas, plan authoring, and test ergonomics
