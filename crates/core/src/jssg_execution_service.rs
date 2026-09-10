@@ -251,7 +251,6 @@ impl<'a> JssgExecutionService<'a> {
             language,
             resolver: Arc::clone(&resolver),
             capabilities: effective_capabilities,
-            params: request.params.clone(),
             target_directory: Some(&target_path),
         })
         .await
