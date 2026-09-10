@@ -32,10 +32,11 @@ Proposed:  TypeScript plan or workflow -> command history -> existing runners
 ```
 
 A runnable is a typed description of one operation. `jssg()`, `exec()`, and
-`ai()` define runnables; invoking a runnable in the proposed API creates a lazy
-command controlled by the workflow runtime. The prototype still passes
-descriptors to `w.run()`; the only call it supports is `jssgDefinition({ target })`,
-which attaches a file target and returns a runnable (see Targeting).
+`ai()` define runnables. Invoking a runnable, `inspect()` or
+`migrate({ input, target, id })`, creates a lazy command: plain data that a
+plan can hold, and that executes when a workflow awaits it. The workflow body
+takes no context argument; the runtime executing the body is what an awaited
+command reaches.
 
 | Current workflow concept | Proposed TypeScript form |
 | --- | --- |
@@ -93,9 +94,9 @@ There is no separate form for file selection. A JSSG invocation carries its own
 other runnables.
 
 Operations return plain JSON checked by schemas such as Zod. One result can be
-passed directly to the next operation without workflow state. `pipe()` and
-callable commands are proposed API work and are not implemented in the
-prototype.
+passed directly to the next operation without workflow state. `pipe()` is
+proposed API work and is not implemented in the prototype; the other three
+forms are.
 
 ### Nested bundle
 
@@ -131,12 +132,14 @@ const migrate = jssg({
 export default workflow(async () => {
   const project = await inspect();
   if (!project.needsMigration) return { migrated: 0 };
-  return migrate(project);
+  return migrate({ input: project });
 });
 ```
 
-When the structure is fixed and has no branch, the same handoff is shorter as a
-typed pipeline: `pipe(inspect, migrate)`.
+A command returned from the body is awaited by the runtime before the workflow
+finalizes, so the last step needs no `await`. When the structure is fixed and
+has no branch, the same handoff would be shorter as a typed pipeline,
+`pipe(inspect, migrate)`, which remains proposed.
 
 ### Fixed parallel audit
 
@@ -232,6 +235,9 @@ export default workflow(async () => {
 });
 ```
 
+The same ids let a static plan target one definition twice:
+`plan(renameApi({ target: client, id: "rename-api:client" }), renameApi({ target: web, id: "rename-api:web" }))`.
+
 A parallel group states independence and per-member targets in one place:
 
 ```ts
@@ -249,10 +255,9 @@ The rules that make this coherent:
   JSSG operation on the wire and is part of the command record that replay
   compares, so the same id with a different target is a `changed` command, and
   adding a target to a previously untargeted command is also a change. It never
-  creates an id. Static invocations take identity from plan structure: the
-  prototype uses the runnable name, so one definition targeted twice in a plan
-  clashes today, and positional structural ids such as `rename-api#1` remain
-  proposed. Dynamic repeated invocations use explicit ids, as above.
+  creates an id. An invocation without `id` uses the runnable name, so one
+  definition invoked twice in a plan or a run needs explicit ids; positional
+  structural ids such as `rename-api#1` remain proposed.
 - **Targets do not partition work.** A target says "these files", never "these
   files on this worker". Splitting the effective file set into physical shards,
   choosing worker counts, and holding per-file locks are automatic scheduler
@@ -260,23 +265,19 @@ The rules that make this coherent:
   author-facing replacement. Two targets over disjoint roots are a request for
   two selections, not for two workers; the scheduler may still run them on one.
 
-What the prototype implements: calling a JSSG definition attaches only the
-target. `renameApi({ target: web })` returns a targeted runnable that goes into
-`plan()`, `parallel()`, or `w.run()`, while `input` and `id` still go to
-`w.run(runnable, { input, id })`. The dynamic example therefore reads
-`await w.run(migrate({ target: { root: pkg.path } }), { input: project, id })`
-in the prototype. The target is validated and normalized when bound (relative
-root without `..`, non-empty pattern lists, no unknown fields), recorded in
-history, sent on the wire as `operation.target`, and decoded by the Rust bridge,
-which still reports that no JSSG adapter exists. `exec` and `ai` runnables are
-not callable, a targeted runnable cannot be targeted again, and `w.run` rejects
-a `target` option for any runnable, so a target is never silently dropped.
+What the prototype implements: every example above runs as written. A JSSG
+invocation takes `{ input?, target?, id? }`; `exec` and `ai` invocations take
+`{ input?, id? }` and throw `TargetValidationError` when given a `target`, so a
+target is never silently dropped. The target is validated and normalized when
+the command is created (relative root without `..`, non-empty pattern lists, no
+unknown fields), recorded in history, sent on the wire as `operation.target`,
+and decoded by the Rust bridge, which still reports that no JSSG adapter
+exists.
 
 What the prototype does not implement: no JSSG adapter enumerates the effective
 file set or enforces that a transform stays inside it, the bridge still runs
 `exec` in the executor's working directory with no file list, and there is no
-file-target scheduler. The callable command form `migrate({ input, target, id })`
-is proposed syntax, not prototype behavior.
+file-target scheduler.
 
 ### Dynamic analysis and finding collection
 
@@ -310,18 +311,22 @@ const writeReport = jssg({
 export default workflow(async () => {
   const packages = await discover();
   const reports = await parallel(
-    packages.map((pkg) => inspectPackage(pkg, { id: `inspect:${pkg.name}` })),
+    packages.map((pkg) => inspectPackage({ input: pkg, id: `inspect:${pkg.name}` })),
   );
 
   const findings = reports.flatMap((report) => report.findings);
-  return writeReport(findings);
+  return writeReport({ input: findings });
 });
 ```
 
 The stable id ties each result to a package even if operations finish in a
-different order. The local `reports` array replaces shared workflow state and a
-lock. The same `parallel()` helper represents a fixed group when given runnable
-definitions and a dynamic group when given commands created during a workflow.
+different order: members start in declaration order, are recorded in that
+order, and `reports` comes back in that order. The local `reports` array
+replaces shared workflow state and a lock. The same `parallel()` helper
+represents a fixed group when given runnables spread as arguments and a
+dynamic group when given one array of commands created during a workflow.
+Workflows do not reach for `Promise.all`: the group is the unit the scheduler
+sees and the unit replay compares.
 
 ### AI follow-up from earlier results
 
@@ -346,7 +351,7 @@ const writeGuide = ai({
 export default workflow(async () => {
   const findings = await findIssues();
   if (findings.length === 0) return null;
-  return writeGuide(findings);
+  return writeGuide({ input: findings });
 });
 ```
 
@@ -412,42 +417,52 @@ const second = await run(migration, { executor, history });
 // second.replayed === true; recorded results were returned
 ```
 
-Each `w.run()` stores its command id, operation details, and completion. The
-workflow output is stored last. Changing, moving, adding, or removing a command
-causes `NondeterminismError` instead of mixing new code with old history.
-Repeated calls need explicit ids:
+Each issued command stores its command id, operation details, and completion.
+The workflow output is stored last. Changing, moving, adding, or removing a
+command causes `NondeterminismError` instead of mixing new code with old
+history. Repeated invocations need explicit ids:
 
 ```ts
-await w.run(lint, { id: "lint:client" });
-await w.run(lint, { id: "lint:server" });
+await lint({ id: "lint:client" });
+await lint({ id: "lint:server" });
 ```
 
-Workflow code must await every `w.run()` call. The runtime waits for any missed
-call to finish, but refuses to finalize that workflow run. This prevents command
-results from being appended after finalization.
+Workflow code must await every command it creates. A command that the body
+created but never awaited, or awaited without waiting for its result, blocks
+finalization: the runtime waits for running work to finish, then throws
+instead of recording an output. This prevents command results from being
+appended after finalization.
+
+A command finds its run without a context argument. The Node prototype binds
+the run's runtime to the body with `AsyncLocalStorage`, which follows the
+body's async continuations, keeps concurrent runs apart, and is not a
+process-global; a command awaited outside any run rejects. That binding is a
+host concern, so in production it moves into the host: a restricted QuickJS
+instance exposes the runtime to the workflow bundle it executes and nothing
+else.
 
 The prototype only detects nondeterminism after the fact. Workflow functions run
 directly in Node and can access time, randomness, the filesystem, the network,
 and process state. Durable or untrusted execution requires moving the same
-workflow bundle into a restricted QuickJS host that only exposes approved APIs,
-including `w.run()`.
+workflow bundle into that restricted QuickJS host, which only exposes approved
+APIs and the bound runtime.
 
 ## Prototype Scope
 
 Included:
 
-- typed `exec`, `jssg`, and `ai` descriptors
-- JSSG invocation targets, validated at bind time and carried on the wire
-- static plans and explicit parallel groups
-- procedural workflows
+- typed, callable `exec`, `jssg`, and `ai` descriptors that create lazy commands
+- JSSG invocation targets, validated when the command is created and carried on the wire
+- static plans and explicit parallel groups, fixed or built inside a workflow
+- procedural workflows that await commands directly, with no context argument
 - append-only in-memory history and replay checks
 - scripted TypeScript tests
 - real `exec` calls through the existing Rust runner
 
 Not included:
 
-- QuickJS workflow sandboxing
-- callable commands (`migrate({ input, target, id })`) and `pipe()`
+- QuickJS workflow sandboxing and host-bound runtime (the prototype uses `AsyncLocalStorage`)
+- `pipe()`
 - JSSG applicability fields (`language`, `files`) and structural command ids
 - JSSG and AI execution adapters, so no target is enumerated or enforced yet
 - durable persistence, cancellation, or production scheduling
@@ -470,7 +485,8 @@ us move one part at a time:
 4. Add one shared file-job scheduler that resolves each command's effective
    file set, shards it automatically, and holds per-file locks across each JSSG
    read-transform-write cycle.
-5. Run workflow bundles in restricted QuickJS before treating them as durable or
+5. Run workflow bundles in restricted QuickJS, with the runtime bound by the
+   host instead of `AsyncLocalStorage`, before treating them as durable or
    untrusted.
 
 Workflow bodies, runnable typing, schemas, plan authoring, and test ergonomics

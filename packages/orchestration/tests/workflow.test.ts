@@ -4,14 +4,16 @@ import {
   DuplicateCommandIdError,
   BridgeExecutor,
   MemoryHistoryStore,
+  NoActiveWorkflowError,
   OperationError,
   PROTOCOL_VERSION,
   exec,
   guard,
   jssg,
+  parallel,
+  plan,
   run,
   workflow,
-  type WorkflowContext,
 } from "../src/index.ts";
 
 interface Project {
@@ -35,10 +37,10 @@ const migrate = jssg({
   output: Summary,
 });
 
-const migration = workflow(async (w) => {
-  const project = await w.run(inspect);
+const migration = workflow(async () => {
+  const project = await inspect();
   if (project.needsMigration) {
-    const summary = await w.run(migrate, { input: project });
+    const summary = await migrate({ input: project });
     return { migrated: summary.migrated, files: project.files };
   }
   return { migrated: 0, files: project.files };
@@ -80,7 +82,7 @@ describe("workflow execution", () => {
   it("returns raw stdout when an exec runnable has no output schema", async () => {
     const list = exec({ name: "list", command: "ls" });
     const h = createHarness({ results: { list: "a\nb\n" } });
-    const result = await h.run(workflow((w) => w.run(list)));
+    const result = await h.run(workflow(() => list()));
     expect(result.output).toEqual({ stdout: "a\nb\n" });
   });
 
@@ -98,13 +100,28 @@ describe("workflow execution", () => {
 
     await expect(
       run(
-        workflow((w) => w.run(exec({ name: "step", command: "step" }))),
+        workflow(() => exec({ name: "step", command: "step" })()),
         { executor },
       ),
     ).rejects.toThrow("exec completion did not contain string stdout");
   });
 
-  it("waits for an un-awaited operation and does not finalize the workflow", async () => {
+  it("refuses to finalize when a created command was never awaited, and runs nothing", async () => {
+    const h = createHarness({ fallback: () => "ok" });
+    const step = exec({ name: "step", command: "step" });
+    await expect(
+      h.run(
+        workflow(async () => {
+          step();
+          return "done";
+        }),
+      ),
+    ).rejects.toThrow("workflow body returned without awaiting 1 operation(s): step");
+    expect(h.executed).toHaveLength(0);
+    expect(h.store.toJSON().events).toEqual([]);
+  });
+
+  it("waits for a started but un-awaited operation and does not finalize the workflow", async () => {
     const store = new MemoryHistoryStore();
     let release!: () => void;
     let started!: () => void;
@@ -126,8 +143,9 @@ describe("workflow execution", () => {
       },
     };
     const result = run(
-      workflow(async (w) => {
-        void w.run(exec({ name: "step", command: "step" }));
+      workflow(async () => {
+        // Calling then() starts the command without waiting for it.
+        exec({ name: "step", command: "step" })().then(() => {});
         return "done";
       }),
       { executor, history: store },
@@ -151,22 +169,32 @@ describe("workflow execution", () => {
     expect(store.toJSON().events.map((event) => event.type)).toEqual(["scheduled", "completed"]);
   });
 
-  it("closes a retained context when the workflow body throws", async () => {
-    const h = createHarness();
-    let retained: WorkflowContext | undefined;
-    await expect(
-      h.run(
-        workflow(async (w) => {
-          retained = w;
-          throw new Error("body failed");
-        }),
-      ),
-    ).rejects.toThrow("body failed");
+  it("rejects a command issued from a stray callback after the body returned", async () => {
+    const h = createHarness({ fallback: () => "ok" });
+    const late = exec({ name: "late", command: "late" });
+    let stray: Promise<unknown> | undefined;
+    const result = await h.run(
+      workflow(async () => {
+        // A timer callback still sees this run's runtime, but the run is closed by then.
+        stray = new Promise<void>((resolve) => setTimeout(resolve, 0)).then(() => late());
+        return "done";
+      }),
+    );
+    expect(result.output).toBe("done");
+    expect(result.history.events.map((e) => e.type)).toEqual(["finalized"]);
 
-    await expect(retained!.run(exec({ name: "late", command: "late" }))).rejects.toThrow(
-      "w.run called after the workflow body returned",
+    await expect(stray).rejects.toThrow(
+      "command 'late' was issued after the workflow body returned",
     );
     expect(h.executed).toHaveLength(0);
+  });
+
+  it("rejects a command that is awaited outside any workflow", async () => {
+    const step = exec({ name: "step", command: "step" });
+    await expect(step()).rejects.toThrow(NoActiveWorkflowError);
+    await expect(step()).rejects.toThrow(/command 'step' was awaited outside a workflow/);
+    await expect(plan(step)).rejects.toThrow(/plan was awaited outside a workflow/);
+    await expect(parallel(step)).rejects.toThrow(/parallel group was awaited outside a workflow/);
   });
 
   it("records a missing bridge binary as an unknown completion", async () => {
@@ -175,7 +203,7 @@ describe("workflow execution", () => {
 
     await expect(
       run(
-        workflow((w) => w.run(exec({ name: "step", command: "step" }))),
+        workflow(() => exec({ name: "step", command: "step" })()),
         {
           executor,
           history: store,
@@ -217,9 +245,9 @@ describe("command ids", () => {
   const lint = exec({ name: "lint", command: "lint" });
 
   it("uses explicit ids for repeated calls in a bounded loop and keeps them stable on replay", async () => {
-    const loop = workflow(async (w) => {
+    const loop = workflow(async () => {
       const outputs: string[] = [];
-      for (let i = 0; i < 3; i++) outputs.push((await w.run(lint, { id: `lint:${i}` })).stdout);
+      for (let i = 0; i < 3; i++) outputs.push((await lint({ id: `lint:${i}` })).stdout);
       return outputs;
     });
     const h = createHarness({ fallback: (request) => `ran ${request.commandId}` });
@@ -232,9 +260,9 @@ describe("command ids", () => {
   });
 
   it("rejects repeated calls without an explicit id", async () => {
-    const twice = workflow(async (w) => {
-      await w.run(lint);
-      await w.run(lint);
+    const twice = workflow(async () => {
+      await lint();
+      await lint();
     });
     await expect(createHarness({ fallback: () => "ok" }).run(twice)).rejects.toBeInstanceOf(
       DuplicateCommandIdError,
@@ -244,9 +272,9 @@ describe("command ids", () => {
 
 describe("non-success outcomes", () => {
   const step = exec({ name: "step", command: "step" });
-  const guarded = workflow(async (w) => {
+  const guarded = workflow(async () => {
     try {
-      await w.run(step);
+      await step();
       return "ok";
     } catch (error) {
       if (error instanceof OperationError) return `${error.status}:${error.detail?.message ?? ""}`;
@@ -290,7 +318,7 @@ describe("non-success outcomes", () => {
 
   it("propagates uncaught operation failures and leaves history unfinalized", async () => {
     const h = createHarness({ results: { step: failed("boom") } });
-    await expect(h.run(workflow((w) => w.run(step)))).rejects.toBeInstanceOf(OperationError);
+    await expect(h.run(workflow(() => step()))).rejects.toBeInstanceOf(OperationError);
     expect(h.store.toJSON().events.map((e) => e.type)).toEqual(["scheduled", "completed"]);
   });
 
@@ -309,7 +337,7 @@ describe("non-success outcomes", () => {
 
     await expect(
       run(
-        workflow((w) => w.run(step)),
+        workflow(() => step()),
         { executor, history: store },
       ),
     ).rejects.toThrow("executor returned completion for 'other' while running 'step'");

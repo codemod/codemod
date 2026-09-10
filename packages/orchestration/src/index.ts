@@ -1,26 +1,30 @@
-export { ai, exec, jssg } from "./runnable.ts";
+export { ai, exec, isRunnable, jssg } from "./runnable.ts";
 export type {
+  AiRunnable,
   ExecOutput,
+  ExecRunnable,
   InputOf,
-  JssgDefinition,
-  JssgInvocation,
   JssgRunnable,
   OperationKind,
   OutputOf,
   Runnable,
 } from "./runnable.ts";
+export { isCommand } from "./command.ts";
+export type { Command, Invocation, JssgInvocation } from "./command.ts";
+export { NoActiveWorkflowError } from "./context.ts";
 export { normalizeTarget } from "./target.ts";
-export { parallel, plan } from "./plan.ts";
-export type { Parallel, Plan, PlanIr, PlanIrEntry, PlanIrStep } from "./plan.ts";
-export { run, workflow } from "./workflow.ts";
+export { isParallel, isPlan, parallel, plan } from "./plan.ts";
 export type {
-  Executable,
-  ExecutableOutput,
-  RunOptions,
-  RunResult,
-  Workflow,
-  WorkflowContext,
-} from "./workflow.ts";
+  Parallel,
+  Plan,
+  PlanIr,
+  PlanIrEntry,
+  PlanIrStep,
+  PlanMember,
+  PlanStep,
+} from "./plan.ts";
+export { run, workflow } from "./workflow.ts";
+export type { Executable, ExecutableOutput, RunOptions, RunResult, Workflow } from "./workflow.ts";
 export { guard, SchemaError } from "./schema.ts";
 export type { InferOutput, StandardSchemaV1 } from "./schema.ts";
 export { canonicalJson } from "./json.ts";
@@ -60,6 +64,7 @@ export { CollectingSink, nullSink } from "./events.ts";
 export type { EventSink, WorkflowEvent } from "./events.ts";
 export {
   DuplicateCommandIdError,
+  InvocationError,
   NondeterminismError,
   OperationError,
   PlanValidationError,

@@ -1,6 +1,6 @@
 /**
- * CommandGate: the replay/execute decision point. Every `w.run` call becomes a
- * `resolve`, and the workflow's return becomes a `finish`. The gate is the
+ * CommandGate: the replay/execute decision point. Every issued command becomes
+ * a `resolve`, and the workflow's return becomes a `finish`. The gate is the
  * only place that reads or appends history.
  */
 import { NondeterminismError, DuplicateCommandIdError } from "./errors.ts";

@@ -1,6 +1,6 @@
 import type { CompletionError, CompletionStatus } from "./protocol.ts";
 
-/** Thrown from `w.run` when a command did not succeed. */
+/** Thrown from an awaited command when it did not succeed. */
 export class OperationError extends Error {
   constructor(
     readonly commandId: string,
@@ -41,19 +41,30 @@ export class NondeterminismError extends Error {
   }
 }
 
-/** Two `w.run` calls in one run resolved to the same command id. */
+/** Two commands in one run resolved to the same command id. */
 export class DuplicateCommandIdError extends Error {
   constructor(readonly commandId: string) {
     super(
-      `command id '${commandId}' was issued twice in one run; pass an explicit { id } when running the same runnable repeatedly`,
+      `command id '${commandId}' was issued twice in one run; pass an explicit { id } when invoking the same runnable repeatedly`,
     );
     this.name = "DuplicateCommandIdError";
   }
 }
 
+/** The options passed when invoking a runnable are malformed. */
+export class InvocationError extends Error {
+  constructor(
+    readonly where: string,
+    message: string,
+  ) {
+    super(`invalid invocation of ${where}: ${message}`);
+    this.name = "InvocationError";
+  }
+}
+
 /**
- * A JSSG invocation target is malformed, or a target was handed to something
- * that cannot enforce it (`exec`, `ai`, or `w.run` options).
+ * A JSSG invocation target is malformed, or a target was handed to a runnable
+ * that cannot enforce it (`exec` or `ai`).
  */
 export class TargetValidationError extends Error {
   constructor(

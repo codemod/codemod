@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createHarness, failed } from "../src/harness.ts";
 import {
+  InvocationError,
   NondeterminismError,
-  PROTOCOL_VERSION,
   PlanValidationError,
   TargetValidationError,
   ai,
@@ -17,7 +17,6 @@ import {
   parallel,
   plan,
   workflow,
-  type JssgRunnable,
   type Target,
 } from "../src/index.ts";
 
@@ -67,104 +66,82 @@ describe("target normalization", () => {
 });
 
 describe("JSSG invocation targets", () => {
-  it("binds a normalized target and puts it on the wire operation", () => {
+  it("binds a normalized target on the command and puts it on the wire operation", () => {
     const targeted = renameApi({ target: { root: "./apps/web/", include: ["src/**"] } });
-    expect(targeted.kind).toBe("jssg");
-    expect(targeted.name).toBe("rename-api");
-    expect(targeted.package).toBe("@codemod/rename-api");
+    expect(targeted.type).toBe("command");
+    expect(targeted.id).toBe("rename-api");
+    expect(targeted.runnable).toBe(renameApi);
     expect(targeted.target).toEqual({ root: "apps/web", include: ["src/**"] });
-    expect(targeted.toOperation()).toEqual({
+    const operation = renameApi.toOperation(undefined, targeted.target);
+    expect(operation).toEqual({
       kind: "jssg",
       package: "@codemod/rename-api",
       target: { root: "apps/web", include: ["src/**"] },
     });
-    expect(isOperation(targeted.toOperation())).toBe(true);
+    expect(isOperation(operation)).toBe(true);
   });
 
-  it("matches the shared jssg-target-request fixture", () => {
-    const request = {
-      protocolVersion: PROTOCOL_VERSION,
-      commandId: "rename-api",
-      operation: renameApi({ target: web }).toOperation(),
-    };
+  it("matches the shared jssg-target-request fixture", async () => {
+    const h = createHarness({ fallback: () => ({}) });
+    const result = await h.run(workflow(() => renameApi({ target: web })));
     const fixture = readFileSync(
       join(import.meta.dirname, "..", "fixtures", "protocol", "jssg-target-request.json"),
       "utf8",
     );
-    expect(canonicalJson(request)).toBe(canonicalJson(JSON.parse(fixture)));
+    expect(canonicalJson(h.executed[0])).toBe(canonicalJson(JSON.parse(fixture)));
+    expect(result.commands[0]?.operation).toEqual(JSON.parse(fixture).operation);
   });
 
   it("leaves the definition untargeted and does not mutate it", () => {
-    expect(renameApi.target).toBeUndefined();
     renameApi({ target: web });
-    expect(renameApi.target).toBeUndefined();
+    expect(renameApi).not.toHaveProperty("target");
     expect(renameApi.toOperation()).toEqual({ kind: "jssg", package: "@codemod/rename-api" });
+    expect(renameApi()).not.toHaveProperty("target");
   });
 
-  it("keeps the input alongside the target for typed invocations", () => {
-    const operation = migrate({ target: { root: "packages/a" } }).toOperation({
-      path: "packages/a",
-    });
-    expect(operation).toEqual({
+  it("keeps the input alongside the target for typed invocations", async () => {
+    const h = createHarness({ fallback: () => ({}) });
+    const result = await h.run(
+      workflow(() => migrate({ target: { root: "packages/a" }, input: { path: "packages/a" } })),
+    );
+    expect(result.commands[0]?.operation).toEqual({
       kind: "jssg",
       package: "@codemod/migrate",
       target: { root: "packages/a" },
       input: { path: "packages/a" },
     });
+    expect(result.commands[0]?.input).toEqual({ path: "packages/a" });
   });
 
-  it("rejects invalid targets and anything other than { target } at bind time", () => {
+  it("rejects invalid targets and unknown fields when the command is created", () => {
     expect(() => renameApi({ target: { root: "/abs" } })).toThrow(TargetValidationError);
     expect(() => renameApi({ target: {} })).toThrow(/invalid target for jssg 'rename-api'/);
-    // @ts-expect-error a target is required
-    expect(() => renameApi({})).toThrow(/target must be an object/);
-    // @ts-expect-error the prototype call takes only { target }
-    expect(() => renameApi({ target: web, id: "x" })).toThrow(
-      /unknown invocation field 'id'; pass 'id' to w.run/,
-    );
-    // @ts-expect-error input still goes to w.run
-    expect(() => migrate({ target: web, input: { path: "a" } })).toThrow(
-      /unknown invocation field 'input'; pass 'input' to w.run/,
+    // @ts-expect-error a target must be an object
+    expect(() => renameApi({ target: "apps/web" })).toThrow(/target must be an object/);
+    // @ts-expect-error unknown invocation field
+    expect(() => renameApi({ target: web, files: ["a"] })).toThrow(InvocationError);
+    // @ts-expect-error unknown invocation field
+    expect(() => renameApi({ target: web, files: ["a"] })).toThrow(
+      /invalid invocation of jssg 'rename-api': unknown invocation field 'files'/,
     );
     // @ts-expect-error not an object
-    expect(() => renameApi("apps/web")).toThrow(/invocation must be an object/);
+    expect(() => renameApi("apps/web")).toThrow(/invocation options must be an object/);
+    // @ts-expect-error id must be a string
+    expect(() => renameApi({ id: 3 })).toThrow(/id must be a non-empty string/);
   });
 
-  it("does not let a targeted runnable be targeted again", () => {
-    const targeted = renameApi({ target: web });
-    // @ts-expect-error a targeted runnable is data, not a definition
-    expect(() => targeted({ target: web })).toThrow(TypeError);
-  });
-
-  it("is not available on exec or ai runnables", () => {
+  it("is not available on exec or ai invocations", () => {
     const summarize = ai({ name: "summarize", prompt: "summarize" });
-    // @ts-expect-error exec runnables are not callable
-    expect(() => format({ target: web })).toThrow(TypeError);
-    // @ts-expect-error ai runnables are not callable
-    expect(() => summarize({ target: web })).toThrow(TypeError);
+    // @ts-expect-error exec invocations never take a target
+    expect(() => format({ target: web })).toThrow(TargetValidationError);
+    // @ts-expect-error exec invocations never take a target
+    expect(() => format({ target: web })).toThrow(
+      /invalid target for exec 'format': exec does not accept a target; only JSSG invocations select files/,
+    );
+    // @ts-expect-error ai invocations never take a target
+    expect(() => summarize({ target: web })).toThrow(TargetValidationError);
     expect(format.toOperation()).not.toHaveProperty("target");
     expect(summarize.toOperation()).not.toHaveProperty("target");
-  });
-
-  it("rejects a 'target' passed through w.run options instead of the definition", async () => {
-    const viaOptions = workflow(async (w) => {
-      // @ts-expect-error w.run options do not carry a target
-      await w.run(renameApi, { target: web });
-    });
-    const h = createHarness({ fallback: () => "ok" });
-    await expect(h.run(viaOptions)).rejects.toThrow(TargetValidationError);
-    await expect(h.run(viaOptions)).rejects.toThrow(
-      /jssg 'rename-api': w\.run options do not accept 'target'; call the definition instead/,
-    );
-
-    const onExec = workflow(async (w) => {
-      // @ts-expect-error exec never accepts a target
-      await w.run(format, { target: web });
-    });
-    await expect(h.run(onExec)).rejects.toThrow(
-      /exec 'format': w\.run options do not accept 'target'; only JSSG invocations accept a target/,
-    );
-    expect(h.executed).toHaveLength(0);
   });
 });
 
@@ -202,8 +179,7 @@ describe("targeted JSSG in plans and parallel groups", () => {
     const transformA = jssg({ name: "transform-a", package: "@codemod/a" });
     const transformB = jssg({ name: "transform-b", package: "@codemod/b" });
     const group = parallel(transformA({ target: web }), transformB({ target: web }));
-    const members: readonly JssgRunnable[] = group.members as readonly JssgRunnable[];
-    expect(members.map((m) => m.target)).toEqual([web, web]);
+    expect(group.members.map((m) => m.target)).toEqual([web, web]);
 
     const h = createHarness({ fallback: () => ({ ok: true }) });
     const result = await h.run(plan(group));
@@ -213,16 +189,24 @@ describe("targeted JSSG in plans and parallel groups", () => {
     );
   });
 
-  it("still uses the runnable name as the static id, so two targets of one definition clash", () => {
+  it("targets one definition twice in a plan when the invocations carry distinct ids", () => {
     expect(() =>
       plan(renameApi({ target: { root: "packages/client" } }), renameApi({ target: web })),
     ).toThrow(PlanValidationError);
+    const fixed = plan(
+      renameApi({ target: { root: "packages/client" }, id: "rename-api:client" }),
+      renameApi({ target: web, id: "rename-api:web" }),
+    );
+    expect(fixed.ir.steps.map((s) => (s.type === "run" ? [s.id, s.target] : []))).toEqual([
+      ["rename-api:client", { root: "packages/client" }],
+      ["rename-api:web", web],
+    ]);
   });
 });
 
 describe("targets in dynamic workflows and replay", () => {
   const perPackage = (root: string) =>
-    workflow(async (w) => {
+    workflow(async () => {
       const packages = [
         { name: "a", path: "packages/a" },
         { name: "b", path: root },
@@ -230,8 +214,9 @@ describe("targets in dynamic workflows and replay", () => {
       const outputs = [];
       for (const pkg of packages) {
         outputs.push(
-          await w.run(migrate({ target: { root: pkg.path } }), {
+          await migrate({
             input: { path: pkg.path },
+            target: { root: pkg.path },
             id: `migrate:${pkg.name}`,
           }),
         );
@@ -287,11 +272,11 @@ describe("targets in dynamic workflows and replay", () => {
 
   it("treats adding a target to a previously untargeted command as a change", async () => {
     const h = createHarness({ fallback: () => ({}) });
-    await h.run(workflow((w) => w.run(renameApi)));
+    await h.run(workflow(() => renameApi()));
 
     const replay = h.reload({ fallback: () => failed("must not execute") });
     const error = await replay
-      .run(workflow((w) => w.run(renameApi({ target: web }))))
+      .run(workflow(() => renameApi({ target: web })))
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(NondeterminismError);
     expect((error as NondeterminismError).kind).toBe("changed");
@@ -299,10 +284,10 @@ describe("targets in dynamic workflows and replay", () => {
 
   it("produces identical commands for equivalent target spellings", async () => {
     const h = createHarness({ fallback: () => ({}) });
-    await h.run(workflow((w) => w.run(renameApi({ target: { root: "apps/web" } }))));
+    await h.run(workflow(() => renameApi({ target: { root: "apps/web" } })));
     const replay = await h
       .reload({ fallback: () => failed("must not execute") })
-      .run(workflow((w) => w.run(renameApi({ target: { root: "./apps/web/" } }))));
+      .run(workflow(() => renameApi({ target: { root: "./apps/web/" } })));
     expect(replay.replayed).toBe(true);
   });
 });

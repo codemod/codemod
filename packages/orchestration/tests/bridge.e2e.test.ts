@@ -43,12 +43,12 @@ const envEcho = exec({
   env: { BRIDGE_TEST: "from-request" },
 });
 
-const wf = workflow(async (w) => {
-  const first = await w.run(touch);
-  const env = await w.run(envEcho);
+const wf = workflow(async () => {
+  const first = await touch();
+  const env = await envEcho();
   let failure = "";
   try {
-    await w.run(failing);
+    await failing();
   } catch (error) {
     if (!(error instanceof OperationError)) throw error;
     failure = `${error.status}:${error.detail?.exitCode ?? "none"}`;

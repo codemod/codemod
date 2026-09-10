@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { createHarness, failed } from "../src/harness.ts";
-import { PlanValidationError, exec, guard, parallel, plan, workflow } from "../src/index.ts";
+import {
+  PlanValidationError,
+  exec,
+  guard,
+  isCommand,
+  parallel,
+  plan,
+  workflow,
+} from "../src/index.ts";
 
 const Count = guard(
   "Count",
@@ -76,19 +84,38 @@ describe("plans", () => {
   });
 
   it("accepts mutations as an explicit independence assertion", () => {
-    expect(parallel(countTodos, format).members).toEqual([countTodos, format]);
+    const group = parallel(countTodos, format);
+    expect(group.members.map((m) => [m.id, m.runnable])).toEqual([
+      ["count-todos", countTodos],
+      ["format", format],
+    ]);
     expect(() => parallel()).toThrow(PlanValidationError);
+    expect(() => parallel([])).toThrow(PlanValidationError);
   });
 
-  it("rejects empty plans and duplicate runnable names", () => {
+  it("normalizes bare runnables to their default commands", () => {
+    const fixed = plan(rename, format({ id: "format:late" }));
+    expect(fixed.steps.map((s) => (isCommand(s) ? s.id : "group"))).toEqual([
+      "rename",
+      "format:late",
+    ]);
+    expect(fixed.ir.steps.map((s) => (s.type === "run" ? s.id : "group"))).toEqual([
+      "rename",
+      "format:late",
+    ]);
+  });
+
+  it("rejects empty plans and duplicate command ids", () => {
     expect(() => plan()).toThrow(PlanValidationError);
-    expect(() => plan(format, rename, format)).toThrow(/appears twice/);
+    expect(() => plan(format, rename, format)).toThrow(/command id 'format' appears twice/);
+    expect(() => plan(format, parallel(rename, format()))).toThrow(/appears twice/);
+    expect(plan(format, format({ id: "format:again" })).ir.steps).toHaveLength(2);
   });
 
   it("can be embedded in a procedural workflow", async () => {
-    const wf = workflow(async (w) => {
-      const [counts] = await w.run(plan(parallel(countTodos, countFixmes)));
-      if (counts[0].count > 0) await w.run(format);
+    const wf = workflow(async () => {
+      const [counts] = await plan(parallel(countTodos, countFixmes));
+      if (counts[0].count > 0) await format();
       return counts[0].count;
     });
     const h = createHarness({

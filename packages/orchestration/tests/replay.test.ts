@@ -8,8 +8,8 @@ const c = exec({ name: "c", command: "c" });
 const x = exec({ name: "x", command: "x" });
 
 const sequence = (...steps: (typeof a)[]) =>
-  workflow(async (w) => {
-    for (const step of steps) await w.run(step);
+  workflow(async () => {
+    for (const step of steps) await step();
     return steps.map((s) => s.name).join("");
   });
 
@@ -20,8 +20,8 @@ async function recorded(wf: Workflow<unknown>, finalize = true) {
     return h;
   }
   // Record commands but stop before finalization by throwing from the body.
-  const partial = workflow(async (w) => {
-    await wf.body(w);
+  const partial = workflow(async () => {
+    await wf.body();
     throw new Error("crash before finalize");
   });
   await expect(h.run(partial)).rejects.toThrow("crash before finalize");
@@ -89,9 +89,9 @@ describe("replay nondeterminism detection", () => {
 
   it("detects a different final output", async () => {
     const h = await recorded(sequence(a, b));
-    const differentOutput = workflow(async (w) => {
-      await w.run(a);
-      await w.run(b);
+    const differentOutput = workflow(async () => {
+      await a();
+      await b();
       return "something else";
     });
     const error = await replayError(differentOutput, h);
