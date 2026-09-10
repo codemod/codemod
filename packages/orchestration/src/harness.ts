@@ -19,7 +19,7 @@ import {
   type OperationCompletion,
   type OperationRequest,
 } from "./protocol.ts";
-import { run, type RunResult, type RunTarget, type TargetOutput } from "./workflow.ts";
+import { run, type Executable, type ExecutableOutput, type RunResult } from "./workflow.ts";
 
 export class Outcome {
   constructor(
@@ -57,7 +57,7 @@ export interface Harness {
   readonly executed: OperationRequest[];
   readonly store: MemoryHistoryStore;
   readonly events: CollectingSink;
-  run<T extends RunTarget>(target: T): Promise<HarnessRun<TargetOutput<T>>>;
+  run<T extends Executable>(executable: T): Promise<HarnessRun<ExecutableOutput<T>>>;
   serialize(): string;
   /** A fresh harness that starts from this harness's serialized history. */
   reload(overrides?: Omit<HarnessOptions, "history">): Harness;
@@ -81,13 +81,13 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     executed,
     store,
     events,
-    async run<T extends RunTarget>(target: T) {
-      const result = await run(target, { executor, history: store, events });
+    async run<T extends Executable>(executable: T) {
+      const result = await run(executable, { executor, history: store, events });
       return {
         ...result,
         commands: scheduledCommands(result.history),
         completions: completions(result.history),
-      } as HarnessRun<TargetOutput<T>>;
+      } as HarnessRun<ExecutableOutput<T>>;
     },
     serialize: () => store.serialize(),
     reload: (overrides = {}) =>

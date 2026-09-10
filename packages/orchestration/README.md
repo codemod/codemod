@@ -16,7 +16,7 @@ packages/orchestration/
   src/protocol.ts   versioned JSON OperationRequest / OperationCompletion
   src/runnable.ts   exec / jssg / ai descriptors (typed via Standard Schema)
   src/plan.ts       plan(...) and parallel(...) groups + JSON IR
-  src/workflow.ts   workflow(async (w) => ...) and run(target, options)
+  src/workflow.ts   workflow(async (w) => ...) and run(executable, options)
   src/history.ts    HistoryStore seam + MemoryHistoryStore
   src/gate.ts       CommandGate seam + ReplayGate (replay matching, errors)
   src/executor.ts   OperationExecutor seam + BridgeExecutor (spawns Rust bridge)
@@ -61,7 +61,14 @@ export default plan(parallel(countTodos, countFixmes), format);
 - `parallel(...)` is an author assertion. The prototype starts each member as a
   whole concurrent operation; it does not implement per-file locking. Do not
   place dependent mutations or opaque commands that may conflict in one group.
-  `DESIGN.md` describes the target JSSG file scheduler.
+  `DESIGN.md` describes the future JSSG file scheduler.
+- `target({ root, include, exclude }, child)` is the proposed way to narrow a
+  runnable or plan to a repository area. It is documented in `DESIGN.md`
+  ("Targeting") but is **not exported** by this package: the bridge runs whole
+  `exec` operations with no working directory or file list, so a `target()`
+  here would be silently ignored. Every operation the prototype runs applies to
+  the executor's `cwd`. Physical sharding and worker counts are scheduler
+  behavior and have no public helper.
 
 ## Running
 

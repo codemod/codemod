@@ -4,10 +4,10 @@ export { parallel, plan } from "./plan.ts";
 export type { Parallel, Plan, PlanIr } from "./plan.ts";
 export { run, workflow } from "./workflow.ts";
 export type {
+  Executable,
+  ExecutableOutput,
   RunOptions,
   RunResult,
-  RunTarget,
-  TargetOutput,
   Workflow,
   WorkflowContext,
 } from "./workflow.ts";

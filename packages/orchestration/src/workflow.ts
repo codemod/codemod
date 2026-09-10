@@ -37,8 +37,14 @@ export function workflow<R>(body: (w: WorkflowContext) => Promise<R>): Workflow<
   return { type: "workflow", body };
 }
 
-export type RunTarget = Workflow<unknown> | Plan;
-export type TargetOutput<T> = T extends Workflow<infer R> ? R : T extends Plan<infer O> ? O : never;
+/**
+ * Something `run()` can execute. Named `Executable` rather than "target" so it
+ * is not confused with the proposed `target()` file-selection modifier, which
+ * is not itself an operation (see DESIGN.md, "Targeting").
+ */
+export type Executable = Workflow<unknown> | Plan;
+export type ExecutableOutput<T> =
+  T extends Workflow<infer R> ? R : T extends Plan<infer O> ? O : never;
 
 export interface RunOptions {
   executor: OperationExecutor;
@@ -54,15 +60,15 @@ export interface RunResult<R> {
   history: History;
 }
 
-export async function run<T extends RunTarget>(
-  target: T,
+export async function run<T extends Executable>(
+  executable: T,
   options: RunOptions,
-): Promise<RunResult<TargetOutput<T>>> {
+): Promise<RunResult<ExecutableOutput<T>>> {
   const store = options.history ?? new MemoryHistoryStore();
   const events = options.events ?? new CollectingSink();
   const gate = new ReplayGate(await store.load(), store, options.executor, events);
   const context = new Context(gate);
-  const runnable: RunTarget = target;
+  const runnable: Executable = executable;
   let output: unknown;
   let bodyError: unknown;
   let bodySucceeded = false;
@@ -82,7 +88,7 @@ export async function run<T extends RunTarget>(
 
   const { replayed } = await gate.finish((output === undefined ? null : output) as Json);
   return {
-    output: output as TargetOutput<T>,
+    output: output as ExecutableOutput<T>,
     replayed,
     history: await store.load(),
   };
@@ -100,13 +106,13 @@ class Context implements WorkflowContext {
   run<I, O>(runnable: Runnable<I, O>, ...args: RunArgs<I>): Promise<O>;
   run<Outputs extends unknown[]>(plan: Plan<Outputs>): Promise<Outputs>;
   run(
-    target: Runnable<unknown, unknown> | Plan,
+    subject: Runnable<unknown, unknown> | Plan,
     options?: { id?: string; input?: unknown },
   ): Promise<unknown> {
     if (this.#closed) {
       return Promise.reject(new Error("w.run called after the workflow body returned"));
     }
-    const operation = isPlan(target) ? this.#runPlan(target) : this.#runOne(target, options);
+    const operation = isPlan(subject) ? this.#runPlan(subject) : this.#runOne(subject, options);
     this.#inFlight.add(operation);
     void operation.then(
       () => this.#inFlight.delete(operation),
@@ -120,9 +126,9 @@ class Context implements WorkflowContext {
     return [...this.#inFlight];
   }
 
-  async #runPlan(target: Plan): Promise<unknown[]> {
+  async #runPlan(plan: Plan): Promise<unknown[]> {
     const outputs: unknown[] = [];
-    for (const step of target.steps) outputs.push(await this.#runStep(step));
+    for (const step of plan.steps) outputs.push(await this.#runStep(step));
     return outputs;
   }
 
