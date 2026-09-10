@@ -142,7 +142,6 @@ describe("JSSG invocation targets", () => {
     expect(() => format({ target: web })).toThrow(TypeError);
     // @ts-expect-error ai runnables are not callable
     expect(() => summarize({ target: web })).toThrow(TypeError);
-    expect(isOperation({ kind: "exec", command: "x", target: web })).toBe(true);
     expect(format.toOperation()).not.toHaveProperty("target");
     expect(summarize.toOperation()).not.toHaveProperty("target");
   });
@@ -318,5 +317,21 @@ describe("protocol validation of targets", () => {
     expect(isOperation({ ...base, target: { root: 1 } })).toBe(false);
     expect(isOperation({ ...base, target: { include: "src/**" } })).toBe(false);
     expect(isOperation({ ...base, target: { exclude: [null] } })).toBe(false);
+    expect(isOperation({ ...base, target: { root: "a", files: ["a.ts"] } })).toBe(false);
+  });
+
+  it("rejects a target on exec and ai operations instead of ignoring it", () => {
+    expect(isOperation({ kind: "exec", command: "x" })).toBe(true);
+    expect(isOperation({ kind: "exec", command: "x", target: web })).toBe(false);
+    expect(isOperation({ kind: "exec", command: "x", target: {} })).toBe(false);
+    expect(isOperation({ kind: "ai", prompt: "p" })).toBe(true);
+    expect(isOperation({ kind: "ai", prompt: "p", target: web })).toBe(false);
+    expect(isOperation({ kind: "ai", prompt: "p", target: {} })).toBe(false);
+  });
+
+  it("rejects fields that belong to another operation kind", () => {
+    expect(isOperation({ kind: "exec", command: "x", package: "p" })).toBe(false);
+    expect(isOperation({ kind: "jssg", package: "p", command: "x" })).toBe(false);
+    expect(isOperation({ kind: "ai", prompt: "p", env: {} })).toBe(false);
   });
 });

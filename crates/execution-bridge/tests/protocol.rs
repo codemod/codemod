@@ -118,6 +118,7 @@ fn malformed_targets_are_rejected() {
         r#"{"root":1}"#,
         r#"{"include":"src/**"}"#,
         r#"{"exclude":[null]}"#,
+        r#"{"root":"apps/web","files":["a.ts"]}"#,
     ] {
         let text = format!(
             r#"{{"protocolVersion":1,"commandId":"t","operation":{{"kind":"jssg","package":"p","target":{target}}}}}"#
@@ -128,13 +129,37 @@ fn malformed_targets_are_rejected() {
 }
 
 #[test]
-fn exec_and_ai_operations_do_not_carry_a_target() {
-    // `exec` and `ai` have no target field; serde ignores unknown fields, so a
-    // stray target is dropped rather than decoded and must never reach the runner.
-    let text = r#"{"protocolVersion":1,"commandId":"t","operation":{"kind":"exec","command":"true","target":{"root":"apps"}}}"#;
-    let request = parse_request(text).expect("parse");
-    let value = serde_json::to_value(&request).expect("serialize");
-    assert!(value["operation"].get("target").is_none());
+fn exec_and_ai_operations_reject_a_target() {
+    // Only `jssg` carries a target. A target on `exec` or `ai` is a parse error,
+    // never a silently dropped field, so it cannot reach the runner unenforced.
+    for operation in [
+        r#"{"kind":"exec","command":"true","target":{"root":"apps"}}"#,
+        r#"{"kind":"ai","prompt":"summarize","target":{"root":"apps"}}"#,
+    ] {
+        let text = format!(r#"{{"protocolVersion":1,"commandId":"t","operation":{operation}}}"#);
+        let error = parse_request(&text).expect_err("target on exec/ai must not parse");
+        assert!(
+            error.contains("invalid request JSON"),
+            "{operation}: {error}"
+        );
+        assert!(
+            error.contains("unknown field `target`"),
+            "{operation}: {error}"
+        );
+    }
+}
+
+#[test]
+fn operations_reject_fields_from_other_variants() {
+    for operation in [
+        r#"{"kind":"exec","command":"true","package":"p"}"#,
+        r#"{"kind":"jssg","package":"p","command":"true"}"#,
+        r#"{"kind":"ai","prompt":"x","env":{}}"#,
+    ] {
+        let text = format!(r#"{{"protocolVersion":1,"commandId":"t","operation":{operation}}}"#);
+        let error = parse_request(&text).expect_err("unknown operation field must not parse");
+        assert!(error.contains("unknown field"), "{operation}: {error}");
+    }
 }
 
 #[test]

@@ -16,8 +16,11 @@ use serde_json::{Map, Value};
 /// Must match `PROTOCOL_VERSION` in `packages/orchestration/src/protocol.ts`.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Every variant rejects fields it does not declare, so a `target` on `exec`
+/// or `ai` is a parse error rather than a silently dropped field. Only `jssg`
+/// carries a target.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "lowercase")]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 pub enum Operation {
     Exec {
         command: String,
@@ -45,8 +48,9 @@ pub enum Operation {
 /// Repository area one JSSG invocation applies to. Mirrors `Target` in
 /// `protocol.ts`: `root` is relative to the working directory, `include` and
 /// `exclude` are globs relative to `root`. Validation of author input happens
-/// in TypeScript; this is the decoded wire shape.
+/// in TypeScript; this is the decoded wire shape, and unknown fields are rejected.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Target {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,

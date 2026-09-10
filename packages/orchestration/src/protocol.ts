@@ -102,10 +102,28 @@ function isStringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+const TARGET_FIELDS = ["root", "include", "exclude"] as const;
+
+/**
+ * Field sets per operation kind. Validation is strict: a field from another
+ * variant, most importantly a `target` on `exec` or `ai`, makes the operation
+ * invalid rather than being ignored. Mirrors `deny_unknown_fields` in the Rust bridge.
+ */
+const OPERATION_FIELDS = {
+  exec: ["kind", "command", "env"],
+  jssg: ["kind", "package", "target", "input"],
+  ai: ["kind", "prompt", "input"],
+} as const satisfies Record<Operation["kind"], readonly string[]>;
+
 /** Wire shape only; author-facing rules (relative root, non-empty lists) live in `target.ts`. */
 export function isTarget(value: unknown): value is Target {
   return (
     isRecord(value) &&
+    hasOnlyKeys(value, TARGET_FIELDS) &&
     (value.root === undefined || typeof value.root === "string") &&
     (value.include === undefined || isStringList(value.include)) &&
     (value.exclude === undefined || isStringList(value.exclude))
@@ -126,16 +144,23 @@ export function isOperation(value: unknown): value is Operation {
   switch (value.kind) {
     case "exec":
       return (
-        typeof value.command === "string" && (value.env === undefined || isStringMap(value.env))
+        hasOnlyKeys(value, OPERATION_FIELDS.exec) &&
+        typeof value.command === "string" &&
+        (value.env === undefined || isStringMap(value.env))
       );
     case "jssg":
       return (
+        hasOnlyKeys(value, OPERATION_FIELDS.jssg) &&
         typeof value.package === "string" &&
         (value.target === undefined || isTarget(value.target)) &&
         (value.input === undefined || isJson(value.input))
       );
     case "ai":
-      return typeof value.prompt === "string" && (value.input === undefined || isJson(value.input));
+      return (
+        hasOnlyKeys(value, OPERATION_FIELDS.ai) &&
+        typeof value.prompt === "string" &&
+        (value.input === undefined || isJson(value.input))
+      );
     default:
       return false;
   }

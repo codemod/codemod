@@ -56,7 +56,10 @@ interface OperationCompletion {
 
 Rust field names are snake_case with `#[serde(rename_all = "camelCase")]`, so
 the wire JSON is byte-for-byte the TypeScript shape. Optional fields are
-omitted when absent.
+omitted when absent. `Operation` and `Target` use `deny_unknown_fields`, and
+`isOperation` / `isTarget` in `protocol.ts` apply the same per-variant field
+sets, so a `target` on `exec` or `ai` (or any field from another variant) is a
+validation error on both sides rather than a silently ignored field.
 
 `parse_request(text)`
 
