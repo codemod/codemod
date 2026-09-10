@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1,
+  "commandId": "inspect",
+  "status": "unknown",
+  "error": {
+    "message": "Runtime error: Failed to wait for command"
+  }
+}

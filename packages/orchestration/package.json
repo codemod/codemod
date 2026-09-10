@@ -1,0 +1,30 @@
+{
+  "name": "@codemod.com/orchestration",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TypeScript prototype of the Codemod orchestration runtime (workflows, plans, replay history) over the Butterflow execution bridge",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./harness": {
+      "types": "./src/harness.ts",
+      "default": "./src/harness.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "build:bridge": "cargo build -p butterflow-execution-bridge",
+    "test:e2e": "pnpm build:bridge && CODEMOD_BRIDGE_E2E=1 vitest run tests/bridge.e2e.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@codemod.com/tsconfig": "workspace:*",
+    "@types/node": "*",
+    "typescript": "catalog:",
+    "vitest": "^1.6.0"
+  }
+}

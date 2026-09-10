@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 1,
+  "commandId": "migrate",
+  "operation": {
+    "kind": "jssg",
+    "package": "@codemod/migrate",
+    "input": {
+      "needsMigration": true
+    }
+  }
+}

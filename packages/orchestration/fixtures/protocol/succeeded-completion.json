@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1,
+  "commandId": "inspect",
+  "status": "succeeded",
+  "output": {
+    "stdout": "{\"needsMigration\":true}\n"
+  }
+}
