@@ -4,26 +4,16 @@
 
 ## Problem
 
-The current workflow model makes simple codemods use the same YAML graph, state,
-scheduling, and delivery concepts as complex workflows. Composition is split
-across different action shapes, data commonly moves through mutable workflow
-state, and the model does not provide durable command history for long-running
-or adaptive work.
-
-A registry census supports optimizing the common case:
+Most Codemod workflows are small, but every package uses the same YAML graph,
+step, state, and scheduling model:
 
 - 613 current packages contained 616 workflows.
 - The median workflow had one node and one step.
-- 502 workflows were singletons; only 23 were branching DAGs.
-- 379 packages (61.8%) had one workflow, one node, and one step.
-- JSSG appeared in 530 packages (86.5%).
-- 52 parent packages accounted for 943 nested-codemod actions.
-- Only 12 packages declared or directly used workflow state.
+- 379 packages (61.8%) had exactly one workflow, node, and step.
+- JSSG appeared in 530 packages, while only 12 used workflow state.
 
-The engine still needs to support the less common cases: fixed multi-step
-pipelines, safe parallel reads, dynamic fan-out, agents, approvals, resumability,
-and repository-wide coordination. The goal is therefore to simplify authoring,
-not to remove orchestration.
+Simple transforms should need less setup. Complex workflows still need branches,
+parallel reads, agents, approvals, recovery, and repository-wide coordination.
 
 ## What Changes
 
@@ -79,10 +69,8 @@ Use typed operations as the common unit and provide two orchestration modes:
 - `workflow(async (w) => ...)` runs procedural TypeScript whose calls to
   `w.run(...)` are recorded and replayed.
 
-`exec()`, `jssg()`, and `ai()` all describe `Runnable<Input, Output>` values.
-They return plain JSON data checked by schemas, including libraries such as Zod.
-This replaces action-specific state with normal typed inputs and outputs. Both
-orchestration modes use the same operations and executor.
+Operations return plain JSON checked by schemas such as Zod. One result can be
+passed directly to the next operation without workflow state.
 
 A plan is the closest replacement for a fixed YAML graph. Its full shape is
 known before execution, so it can be validated and sent to the existing
@@ -101,20 +89,32 @@ The TypeScript function controls the branch, but operations only run through
 
 ```ts
 const inspect = exec({ name: "inspect", command: "node inspect.js", output: Project });
-const migrate = jssg({ name: "migrate", package: "@codemod/migrate", input: Project });
+const migrate = jssg({
+  name: "migrate",
+  package: "@codemod/migrate",
+  input: Project,
+  output: Summary,
+});
 
 export default workflow(async (w) => {
   const project = await w.run(inspect);
-  if (project.needsMigration) await w.run(migrate, { input: project });
-  return project;
+  if (!project.needsMigration) return { migrated: 0 };
+  return w.run(migrate, { input: project });
 });
 ```
 
-Plans permit parallelism only through explicit `parallel(...)` groups whose
-members are read-only. This is stricter than relying on graph shape alone: the
-engine rejects parallel writers because they could change the same files.
-Writable operations stay sequential until there is a clear isolation and merge
-model.
+Parallel groups only accept read-only operations:
+
+```ts
+const todos = exec({ name: "todos", command: "rg -c TODO", readOnly: true });
+const fixmes = exec({ name: "fixmes", command: "rg -c FIXME", readOnly: true });
+const format = exec({ name: "format", command: "npm run format" });
+
+export default plan(parallel(todos, fixmes), format);
+```
+
+`parallel(todos, format)` is rejected because `format` can write files. Writable
+operations remain sequential until there is an isolation and merge model.
 
 ## Ownership
 
@@ -122,7 +122,7 @@ TypeScript owns the author-facing model and the parts that need rapid iteration:
 
 - runnable definitions and schema-based typing
 - workflow and plan authoring
-- Plan IR
+- serializable plan data
 - the test harness
 - prototype replay and in-memory history
 
@@ -148,27 +148,43 @@ boundary is plain JSON. For example, TypeScript sends:
 }
 ```
 
-Rust returns a completion with the same command id, a status, and plain output.
-The small bridge uses files for this exchange because non-CLI crates must not
-write protocol messages to the terminal. It builds without the full Codemod CLI.
+Rust returns plain data:
+
+```json
+{
+  "protocolVersion": 1,
+  "commandId": "format",
+  "status": "succeeded",
+  "output": { "stdout": "formatted 12 files\n" }
+}
+```
+
+The bridge uses files because non-CLI crates must not write protocol messages to
+the terminal. It builds without the full Codemod CLI.
 
 ## Replay Model
 
-History is an ordered execution record, not only a result cache. Each `w.run()`
-has a stable command id and stores the operation details, its completion, and
-finally the workflow output. A normal run looks like this:
+History is an ordered execution record, not only a result cache:
 
-```text
-run inspect -> record request and result
-run migrate -> record request and result
-return summary -> record final output
+```ts
+const history = new MemoryHistoryStore();
+
+const first = await run(migration, { executor, history });
+// first.replayed === false; inspect and migrate executed
+
+const second = await run(migration, { executor, history });
+// second.replayed === true; recorded results were returned
 ```
 
-On a later run, the same `inspect` and `migrate` calls return their recorded
-results without executing again. If a command is changed, moved, added, or
-removed, replay stops with a clear nondeterminism error instead of silently
-running a different workflow against old history. Repeated uses of one runnable
-need explicit ids, such as `lint:client` and `lint:server`.
+Each `w.run()` stores its command id, operation details, and completion. The
+workflow output is stored last. Changing, moving, adding, or removing a command
+causes `NondeterminismError` instead of mixing new code with old history.
+Repeated calls need explicit ids:
+
+```ts
+await w.run(lint, { id: "lint:client" });
+await w.run(lint, { id: "lint:server" });
+```
 
 Workflow code must await every `w.run()` call. The runtime waits for any missed
 call to finish, but refuses to finalize that workflow run. This prevents command
@@ -204,18 +220,14 @@ These omissions are explicit boundaries, not compatibility behavior to preserve.
 
 ## Migration Path
 
-The interfaces `OperationExecutor`, `HistoryStore`, `CommandGate`, and
-`EventSink` are migration seams. Move responsibility only when the prototype
-provides enough evidence for the production implementation:
+Four small interfaces separate execution, history, replay, and events. That lets
+us move one part at a time:
 
-1. Move canonical command identity, a versioned session envelope, and
-   file-backed history into Rust.
-2. Move replay matching and finalization into Rust while TypeScript still
-   executes workflow operations through the gate.
-3. Let the Rust gate execute operations internally and add JSSG, AI, and Plan
-   adapters.
-4. Run procedural workflow bundles in a restricted QuickJS context before
-   treating them as durable or untrusted.
+1. Move command ID calculation and file-backed history into Rust.
+2. Move replay comparisons and final output checks into Rust.
+3. Let Rust execute operations directly, then add JSSG, AI, and Plan adapters.
+4. Run workflow bundles in restricted QuickJS before treating them as durable or
+   untrusted.
 
 Workflow bodies, runnable typing, schemas, plan authoring, and test ergonomics
 should remain TypeScript. This keeps Rust focused on durable engine concerns
