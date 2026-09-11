@@ -803,6 +803,7 @@ impl<'a> JssgExecutionService<'a> {
                                         cancellation_flag: Some(cancellation_flag_for_execution),
                                         test_mode: false,
                                         dry_run,
+                                        stage_writes: false,
                                         target_directory: &target_path_owned,
                                     })
                                     .await
