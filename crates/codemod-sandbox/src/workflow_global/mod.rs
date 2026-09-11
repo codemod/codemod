@@ -186,14 +186,18 @@ impl SharedStateContext {
             if tid == current {
                 break; // re-entrant: we hold the lock
             }
-            if cancellation_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-                return None;
-            }
-            holder = lock
-                .condvar
-                .wait_timeout(holder, CANCELLATION_POLL_INTERVAL)
-                .unwrap()
-                .0;
+            holder = match cancellation_flag {
+                Some(flag) => {
+                    if flag.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    lock.condvar
+                        .wait_timeout(holder, CANCELLATION_POLL_INTERVAL)
+                        .unwrap()
+                        .0
+                }
+                None => lock.condvar.wait(holder).unwrap(),
+            };
         }
         if cancellation_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             return None;
@@ -315,14 +319,19 @@ impl SharedStateContext {
                     released: std::sync::atomic::AtomicBool::new(true), // already "released" — won't double-release
                 }));
             }
-            if cancellation_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-                return None;
-            }
-            holder = key_lock
-                .condvar
-                .wait_timeout(holder, CANCELLATION_POLL_INTERVAL)
-                .unwrap()
-                .0;
+            holder = match cancellation_flag {
+                Some(flag) => {
+                    if flag.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    key_lock
+                        .condvar
+                        .wait_timeout(holder, CANCELLATION_POLL_INTERVAL)
+                        .unwrap()
+                        .0
+                }
+                None => key_lock.condvar.wait(holder).unwrap(),
+            };
         }
         if cancellation_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             return None;

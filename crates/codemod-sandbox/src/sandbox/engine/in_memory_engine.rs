@@ -181,6 +181,7 @@ where
     let memory_limit = options.memory_limit.unwrap_or(DEFAULT_MEMORY_LIMIT);
     let cancellation_flag = options.cancellation_flag.clone();
     let cancellation_wait_flag = options.cancellation_flag.clone();
+    let cancellation_result_flag = options.cancellation_flag.clone();
 
     runtime.set_memory_limit(memory_limit).await;
     runtime.set_max_stack_size(DEFAULT_MAX_STACK_SIZE).await;
@@ -506,6 +507,20 @@ where
         });
     }
 
+    // A workflow state/lock wait observes the same cancellation flag and may
+    // finish by throwing before the polling future wins the select. Preserve
+    // cancellation semantics instead of exposing that host exception as a
+    // generic execution failure.
+    if result.is_err()
+        && cancellation_result_flag
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    {
+        return Err(ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::ExecutionCancelled,
+        });
+    }
+
     if timeout_exceeded_check.load(Ordering::SeqCst) {
         return Err(ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::ExecutionTimeout { timeout_ms },
@@ -781,6 +796,60 @@ export default async function transform() {
 
         trigger.join().unwrap();
         assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(matches!(
+            result,
+            Err(ExecutionError::Runtime {
+                source: RuntimeError::ExecutionCancelled,
+            })
+        ));
+    }
+
+    #[test]
+    fn test_execute_codemod_sync_maps_cancelled_workflow_wait_to_cancellation() {
+        let codemod_content = r#"
+import { getState } from "codemod:workflow";
+
+export default function transform(root) {
+  getState("blocked-state");
+  return root.root().text();
+}
+        "#
+        .trim();
+        let shared_state = SharedStateContext::new();
+        let guard = shared_state.acquire_lock("blocked-state");
+        let cancellation_flag = Arc::new(AtomicBool::new(false));
+        let execution_cancellation_flag = Arc::clone(&cancellation_flag);
+
+        let runner = std::thread::spawn(move || {
+            let content = "const x = 1;";
+            execute_codemod_sync(InMemoryExecutionOptions::<InMemoryResolver> {
+                codemod_source: codemod_content,
+                language: js_lang(),
+                ast: AstGrep::new(content, js_lang()),
+                original_sha256: Some(compute_sha256(content)),
+                resolver: None,
+                selector_config: None,
+                params: None,
+                matrix_values: None,
+                file_path: None,
+                target_directory: ".",
+                semantic_provider: None,
+                metrics_context: None,
+                llm_request_handler: None,
+                shared_state_context: Some(shared_state),
+                cancellation_flag: Some(execution_cancellation_flag),
+                timeout_ms: Some(5_000),
+                memory_limit: None,
+                process_sandbox: None,
+                fs_sandbox: None,
+            })
+        });
+
+        std::thread::sleep(Duration::from_millis(25));
+        cancellation_flag.store(true, Ordering::SeqCst);
+        let result = runner.join().unwrap();
+        guard.release();
+
         assert!(matches!(
             result,
             Err(ExecutionError::Runtime {
