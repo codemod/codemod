@@ -1,34 +1,69 @@
-//! One-shot file protocol for the TypeScript orchestration prototype:
+//! `butterflow-execution-bridge`: the Rust side of the TypeScript
+//! orchestration prototype, in two modes.
+//!
+//! One-shot file protocol (exec):
 //!
 //! ```text
 //! butterflow-execution-bridge <request.json> <response.json>
 //! ```
 //!
-//! Reads an `OperationRequest`, executes it through the bridge's exec or JSSG
-//! adapter, and writes an `OperationCompletion` to the response file.
-//! This binary never writes to stdout or stderr. Problems are reported through
+//! Reads an `OperationRequest`, executes it, and writes an
+//! `OperationCompletion` to the response file. Problems are reported through
 //! the exit code and, whenever a response path is available, an error
-//! completion in the response file.
+//! completion in the response file. Exit codes: 0 completion written, 2
+//! wrong arguments, 3 unreadable or malformed request, 4 response could not
+//! be written or runtime failed.
 //!
-//! Exit codes: 0 completion written, 2 wrong arguments, 3 unreadable or
-//! malformed request, 4 response could not be written or runtime failed.
+//! JSSG worker (JSONL):
+//!
+//! ```text
+//! butterflow-execution-bridge --jssg-worker
+//! ```
+//!
+//! Reads worker messages from stdin and answers on stdout, one JSON object
+//! per line, until `close` or EOF (see `worker.rs`). The pipes are the
+//! protocol channel owned by the host that spawned the worker; nothing else
+//! is ever written to them, and the sandbox's `console` goes to runtime
+//! events, not to the process streams. Exit codes: 0 closed or EOF, 3
+//! malformed message or protocol misuse (an `error` line was written first),
+//! 4 I/O failure.
 
+use std::io::{BufReader, BufWriter};
 use std::path::Path;
 use std::process::ExitCode;
 
 use butterflow_execution_bridge::{
-    execute, parse_request, CompletionError, CompletionStatus, OperationCompletion,
-    PROTOCOL_VERSION,
+    execute, parse_request, worker::run_worker, CompletionStatus, OperationCompletion,
 };
 use butterflow_runners::direct_runner::DirectRunner;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let [request_path, response_path] = args.as_slice() else {
-        return ExitCode::from(2);
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(_) => return ExitCode::from(4),
     };
-    let response_path = Path::new(response_path);
+    match args.as_slice() {
+        [flag] if flag == "--jssg-worker" => {
+            let stdin = std::io::stdin();
+            let stdout = std::io::stdout();
+            let code = run_worker(
+                runtime.handle(),
+                BufReader::new(stdin.lock()),
+                BufWriter::new(stdout.lock()),
+            );
+            ExitCode::from(code)
+        }
+        [request_path, response_path] => one_shot(&runtime, request_path, Path::new(response_path)),
+        _ => ExitCode::from(2),
+    }
+}
 
+fn one_shot(
+    runtime: &tokio::runtime::Runtime,
+    request_path: &str,
+    response_path: &Path,
+) -> ExitCode {
     let text = match std::fs::read_to_string(request_path) {
         Ok(text) => text,
         Err(error) => {
@@ -44,18 +79,6 @@ fn main() -> ExitCode {
         Ok(request) => request,
         Err(error) => return write_error(response_path, &command_id_hint(&text), error, 3),
     };
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            return write_error(
-                response_path,
-                &request.command_id,
-                format!("failed to start runtime: {error}"),
-                4,
-            )
-        }
-    };
-
     let completion = runtime.block_on(execute(&DirectRunner::with_quiet(true), &request));
     match write_completion(response_path, &completion) {
         Ok(()) => ExitCode::SUCCESS,
@@ -72,17 +95,8 @@ fn command_id_hint(text: &str) -> String {
 }
 
 fn write_error(path: &Path, command_id: &str, message: String, code: u8) -> ExitCode {
-    let completion = OperationCompletion {
-        protocol_version: PROTOCOL_VERSION,
-        command_id: command_id.to_string(),
-        status: CompletionStatus::Failed,
-        output: None,
-        error: Some(CompletionError {
-            message,
-            exit_code: None,
-            output: None,
-        }),
-    };
+    let completion =
+        OperationCompletion::not_succeeded(command_id, CompletionStatus::Failed, message);
     // The exit code already reports the failure; a second write error is not recoverable.
     let _ = write_completion(path, &completion);
     ExitCode::from(code)

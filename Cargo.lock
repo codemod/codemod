@@ -749,6 +749,7 @@ dependencies = [
 name = "butterflow-execution-bridge"
 version = "1.13.18"
 dependencies = [
+ "ast-grep-config",
  "butterflow-models",
  "butterflow-runners",
  "codemod-sandbox",

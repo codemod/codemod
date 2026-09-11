@@ -45,6 +45,12 @@ export interface RunOptions {
   /** Defaults to an empty in-memory store. */
   history?: HistoryStore;
   events?: EventSink;
+  /**
+   * Aborts the operation in flight. Its completion becomes `cancelled` (no
+   * repository change) or `unknown` (a JSSG commit had started) and is
+   * recorded; the awaited command rejects with `OperationError`.
+   */
+  signal?: AbortSignal;
 }
 
 export interface RunResult<R> {
@@ -60,7 +66,7 @@ export async function run<T extends Executable>(
 ): Promise<RunResult<ExecutableOutput<T>>> {
   const store = options.history ?? new MemoryHistoryStore();
   const events = options.events ?? new CollectingSink();
-  const gate = new ReplayGate(await store.load(), store, options.executor, events);
+  const gate = new ReplayGate(await store.load(), store, options.executor, events, options.signal);
   const runtime = new WorkflowRuntime(gate);
   const subject: Executable = executable;
   let output: unknown;

@@ -1,8 +1,14 @@
 {
-  "protocolVersion": 2,
-  "commandId": "inspect",
+  "protocolVersion": 3,
+  "commandId": "migrate",
   "status": "unknown",
   "error": {
-    "message": "Runtime error: Failed to wait for command"
+    "message": "commit failed after 1 of 2 files: EACCES",
+    "details": {
+      "phase": "commit",
+      "applied": ["src/a.ts"],
+      "failed": "src/b.ts",
+      "remaining": []
+    }
   }
 }

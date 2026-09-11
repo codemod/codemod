@@ -3,12 +3,13 @@
  * OperationExecutor, including the Rust execution bridge
  * (`crates/execution-bridge`). Keep this file JSON-only: no classes, no
  * functions on the wire. The Rust serde structs mirror these shapes exactly;
- * `fixtures/protocol/*.json` are the shared conformance fixtures.
+ * `fixtures/protocol/*.json` are the shared conformance fixtures. The JSSG
+ * worker messages live in `worker-protocol.ts`.
  */
 import type { Json } from "./json.ts";
 import { isSafeRelativePath } from "./paths.ts";
 
-export const PROTOCOL_VERSION = 2 as const;
+export const PROTOCOL_VERSION = 3 as const;
 
 export type CompletionStatus = "succeeded" | "failed" | "cancelled" | "unknown";
 
@@ -47,8 +48,8 @@ export interface JssgOperation {
   kind: "jssg";
   /**
    * Safe relative path to the transform, resolved by the executor against
-   * its script root (`RequestContext.scriptRoot`). Never absolute, so the
-   * command identity recorded in history is the same on every checkout.
+   * its script root. Never absolute, so the command identity recorded in
+   * history is the same on every checkout.
    */
   script: string;
   language: string;
@@ -69,10 +70,9 @@ export interface AiOperation {
 export type Operation = ExecOperation | JssgOperation | AiOperation;
 
 /**
- * Executor-side context. It is attached by the host that runs an executor
- * (for example `BridgeExecutor` or the local workflow CLI), never by workflow
- * code, and it is not part of the command record that history stores, so it
- * may carry machine-specific absolute paths.
+ * Executor-side context. It is attached by the host that runs an executor,
+ * never by workflow code, and it is not part of the command record that
+ * history stores, so it may carry machine-specific absolute paths.
  */
 export interface RequestContext {
   /** Directory that relative JSSG `script` paths are resolved against. */
@@ -90,6 +90,12 @@ export interface CompletionError {
   message: string;
   exitCode?: number;
   output?: string;
+  /**
+   * Structured failure detail. JSSG commands report the phase that failed
+   * (`open`, `select`, `index`, `transform`, `stage`, `commit`), the file
+   * involved, and for commit failures which files were already applied.
+   */
+  details?: Json;
 }
 
 export type OperationCompletion =
@@ -97,7 +103,7 @@ export type OperationCompletion =
       protocolVersion: typeof PROTOCOL_VERSION;
       commandId: string;
       status: "succeeded";
-      /** For exec this is `{ stdout: string }`. */
+      /** For exec this is `{ stdout: string }`; for jssg the per-file outputs in file order. */
       output: Json;
       error?: never;
     }
@@ -111,7 +117,7 @@ export type OperationCompletion =
 
 const STATUSES: readonly CompletionStatus[] = ["succeeded", "failed", "cancelled", "unknown"];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -119,14 +125,14 @@ function isStringMap(value: unknown): value is Record<string, string> {
   return isRecord(value) && Object.values(value).every((v) => typeof v === "string");
 }
 
-function isJson(value: unknown): value is Json {
+export function isJson(value: unknown): value is Json {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;
   if (typeof value === "number") return Number.isFinite(value);
   if (Array.isArray(value)) return value.every(isJson);
   return isRecord(value) && Object.values(value).every(isJson);
 }
 
-function isStringList(value: unknown): value is string[] {
+export function isStringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
@@ -134,7 +140,7 @@ function isNonEmptyStringList(value: unknown): value is string[] {
   return isStringList(value) && value.length > 0 && value.every((item) => item.trim() !== "");
 }
 
-function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+export function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
 }
 
@@ -166,7 +172,7 @@ export function isTarget(value: unknown): value is Target {
   );
 }
 
-function isSemanticAnalysis(value: unknown): value is SemanticAnalysis {
+export function isSemanticAnalysis(value: unknown): value is SemanticAnalysis {
   if (value === "file" || value === "workspace") return true;
   return (
     isRecord(value) &&
@@ -191,9 +197,11 @@ function isRequestContext(value: unknown): value is RequestContext {
 function isCompletionError(value: unknown): value is CompletionError {
   return (
     isRecord(value) &&
+    hasOnlyKeys(value, ["message", "exitCode", "output", "details"]) &&
     typeof value.message === "string" &&
     (value.exitCode === undefined || Number.isInteger(value.exitCode)) &&
-    (value.output === undefined || typeof value.output === "string")
+    (value.output === undefined || typeof value.output === "string") &&
+    (value.details === undefined || isJson(value.details))
   );
 }
 
@@ -243,6 +251,9 @@ export function isOperationRequest(value: unknown): value is OperationRequest {
 
 export function isOperationCompletion(value: unknown): value is OperationCompletion {
   if (!isRecord(value)) return false;
+  if (!hasOnlyKeys(value, ["protocolVersion", "commandId", "status", "output", "error"])) {
+    return false;
+  }
   if (value.protocolVersion !== PROTOCOL_VERSION) return false;
   if (typeof value.commandId !== "string") return false;
   if (!STATUSES.includes(value.status as CompletionStatus)) return false;

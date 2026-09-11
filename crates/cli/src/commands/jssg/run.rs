@@ -262,6 +262,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 cancellation_flag: None,
                 test_mode: false,
                 dry_run: false,
+                stage_writes: false,
                 target_directory: &target_directory,
             };
 

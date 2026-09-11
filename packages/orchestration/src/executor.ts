@@ -1,13 +1,15 @@
 /**
  * Migration seam: how an `OperationRequest` becomes an `OperationCompletion`.
- * Implementations: `BridgeExecutor` (Rust bridge over butterflow_runners and
- * the JSSG sandbox) and the harness's scripted executor. A future AI adapter
- * plugs in here.
+ * Implementations: `BridgeExecutor` (Rust bridge for `exec`, TypeScript JSSG
+ * orchestration over the Rust JSSG worker) and the harness's scripted
+ * executor. A future AI adapter plugs in here.
  */
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import type { EventSink } from "./events.ts";
+import { executeJssg } from "./jssg.ts";
 import {
   PROTOCOL_VERSION,
   parseCompletion,
@@ -16,7 +18,8 @@ import {
 } from "./protocol.ts";
 
 export interface OperationExecutor {
-  execute(request: OperationRequest): Promise<OperationCompletion>;
+  /** `signal` aborts the operation; the completion is then `cancelled` or `unknown`. */
+  execute(request: OperationRequest, signal?: AbortSignal): Promise<OperationCompletion>;
 }
 
 export interface BridgeOptions {
@@ -26,50 +29,94 @@ export interface BridgeOptions {
   cwd?: string;
   /**
    * Directory that relative JSSG `script` paths resolve against, typically
-   * the workflow file's directory. Sent as `context.scriptRoot`; it never
-   * enters history. Defaults to the bridge's working directory.
+   * the workflow file's directory. Sent to the worker's `open` message; it
+   * never enters history. Defaults to `cwd`.
    */
   scriptRoot?: string;
   env?: Record<string, string>;
+  /** Receives `jssg.worker` and `jssg.progress` events. */
+  events?: EventSink;
 }
 
 /**
- * One-shot file protocol: writes the request JSON to a file, runs
- * `butterflow-execution-bridge <request> <response>`, and reads the completion
- * back. The Rust side calls `butterflow_runners::DirectRunner` and never
- * touches stdout/stderr. Only this trusted host process spawns anything or
- * touches the filesystem; workflow code never can.
+ * `exec`: one-shot file protocol (`butterflow-execution-bridge <request>
+ * <response>`) through `butterflow_runners::DirectRunner`. `jssg`: the
+ * TypeScript orchestrator in `jssg.ts` over one persistent worker process.
+ * `ai`: refused. Only this trusted host process spawns anything; workflow
+ * code never can.
  */
 export class BridgeExecutor implements OperationExecutor {
   private readonly bin: string;
-  private readonly scriptRoot: string | undefined;
+  private readonly cwd: string;
+  private readonly scriptRoot: string;
 
   constructor(private readonly options: BridgeOptions) {
     this.bin = resolve(options.bin);
-    this.scriptRoot = options.scriptRoot === undefined ? undefined : resolve(options.scriptRoot);
+    this.cwd = resolve(options.cwd ?? process.cwd());
+    this.scriptRoot = options.scriptRoot === undefined ? this.cwd : resolve(options.scriptRoot);
   }
 
-  async execute(request: OperationRequest): Promise<OperationCompletion> {
+  async execute(request: OperationRequest, signal?: AbortSignal): Promise<OperationCompletion> {
+    switch (request.operation.kind) {
+      case "exec":
+        return this.executeExec(request, signal);
+      case "jssg":
+        return executeJssg({
+          bin: this.bin,
+          cwd: this.cwd,
+          scriptRoot: this.scriptRoot,
+          commandId: request.commandId,
+          operation: request.operation,
+          signal,
+          events: this.options.events,
+          env: this.options.env,
+        });
+      case "ai":
+        return completion(
+          request,
+          "failed",
+          "operation kind 'ai' has no executor adapter in the execution bridge",
+        );
+    }
+  }
+
+  private async executeExec(
+    request: OperationRequest,
+    signal?: AbortSignal,
+  ): Promise<OperationCompletion> {
+    if (signal?.aborted) return completion(request, "cancelled", "aborted before start");
     const exchangeDir = mkdtempSync(join(tmpdir(), "codemod-bridge-"));
     const requestPath = join(exchangeDir, "request.json");
     const responsePath = join(exchangeDir, "response.json");
-    const sent: OperationRequest =
-      this.scriptRoot === undefined
-        ? request
-        : { ...request, context: { ...request.context, scriptRoot: this.scriptRoot } };
-
     try {
       // Written by the trusted host only; workflow code never sees these paths.
-      writeFileSync(requestPath, JSON.stringify(sent));
+      writeFileSync(requestPath, JSON.stringify(request));
       let code: number | null;
-      let signal: NodeJS.Signals | null;
+      let exitSignal: NodeJS.Signals | null;
       try {
-        ({ code, signal } = await runBridge(this.bin, this.options, requestPath, responsePath));
+        ({ code, signal: exitSignal } = await runBridge(
+          this.bin,
+          { cwd: this.cwd, env: this.options.env },
+          requestPath,
+          responsePath,
+          signal,
+        ));
       } catch (error) {
         return completion(
           request,
           "unknown",
           `failed to start bridge: ${(error as Error).message}`,
+        );
+      }
+      if (signal?.aborted) {
+        // The command may have run to completion or been killed part-way;
+        // the bridge cannot tell us which side effects happened.
+        return completion(
+          request,
+          exitSignal ? "cancelled" : "unknown",
+          exitSignal
+            ? `bridge killed by ${exitSignal} on abort`
+            : "aborted while the command was finishing",
         );
       }
       const response = readResponse(responsePath);
@@ -88,7 +135,7 @@ export class BridgeExecutor implements OperationExecutor {
           return completion(request, "unknown", (error as Error).message);
         }
       }
-      if (signal) return completion(request, "cancelled", `bridge killed by ${signal}`);
+      if (exitSignal) return completion(request, "cancelled", `bridge killed by ${exitSignal}`);
       return completion(
         request,
         "unknown",
@@ -100,15 +147,29 @@ export class BridgeExecutor implements OperationExecutor {
   }
 }
 
-function runBridge(bin: string, options: BridgeOptions, requestPath: string, responsePath: string) {
+function runBridge(
+  bin: string,
+  options: { cwd: string; env?: Record<string, string> },
+  requestPath: string,
+  responsePath: string,
+  signal?: AbortSignal,
+) {
   return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
     const child = spawn(bin, [requestPath, responsePath], {
       cwd: options.cwd,
       env: { ...process.env, ...options.env },
       stdio: "ignore",
     });
-    child.once("error", reject);
-    child.once("close", (code, signal) => resolve({ code, signal }));
+    const onAbort = () => child.kill("SIGKILL");
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.once("error", (error) => {
+      signal?.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+    child.once("close", (code, exitSignal) => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ code, signal: exitSignal });
+    });
   });
 }
 
@@ -122,7 +183,7 @@ function readResponse(path: string): string | undefined {
 
 function completion(
   request: OperationRequest,
-  status: "cancelled" | "unknown",
+  status: "failed" | "cancelled" | "unknown",
   message: string,
 ): OperationCompletion {
   return {

@@ -1,5 +1,5 @@
 {
-  "protocolVersion": 2,
+  "protocolVersion": 3,
   "commandId": "rename-api",
   "operation": {
     "kind": "jssg",

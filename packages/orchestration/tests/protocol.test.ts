@@ -8,7 +8,10 @@ import {
   isOperation,
   isOperationCompletion,
   isOperationRequest,
+  isWorkerRequest,
+  isWorkerResponse,
   parseCompletion,
+  parseWorkerResponse,
 } from "../src/index.ts";
 
 const dir = join(import.meta.dirname, "..", "fixtures", "protocol");
@@ -86,6 +89,77 @@ describe("protocol fixtures shared with crates/execution-bridge", () => {
       isOperationCompletion({ protocolVersion: PROTOCOL_VERSION, commandId: "x", status: "done" }),
     ).toBe(false);
     expect(() => parseCompletion("not json")).toThrow(/invalid JSON/);
+  });
+
+  it("accepts structured error details and rejects unknown completion fields", () => {
+    const base = { protocolVersion: PROTOCOL_VERSION, commandId: "x", status: "failed" };
+    expect(
+      isOperationCompletion({ ...base, error: { message: "m", details: { phase: "stage" } } }),
+    ).toBe(true);
+    expect(isOperationCompletion({ ...base, error: { message: "m", details: undefined } })).toBe(
+      true,
+    );
+    expect(isOperationCompletion({ ...base, error: { message: "m", stack: "s" } })).toBe(false);
+    expect(isOperationCompletion({ ...base, error: { message: "m" }, extra: 1 })).toBe(false);
+  });
+
+  it("validates worker requests strictly", () => {
+    const open = {
+      type: "open",
+      protocolVersion: PROTOCOL_VERSION,
+      script: "transform.ts",
+      scriptRoot: "/abs/workflow",
+      language: "typescript",
+      targetRoot: "/abs/repo",
+    };
+    expect(isWorkerRequest(open)).toBe(true);
+    expect(isWorkerRequest({ ...open, semanticAnalysis: "workspace", input: { a: 1 } })).toBe(true);
+    expect(isWorkerRequest({ ...open, protocolVersion: 2 })).toBe(false);
+    expect(isWorkerRequest({ ...open, script: "../t.ts" })).toBe(false);
+    expect(isWorkerRequest({ ...open, target: { root: "x" } })).toBe(false);
+    expect(isWorkerRequest({ type: "index", path: "src/a.ts", content: "" })).toBe(true);
+    expect(isWorkerRequest({ type: "transform", path: "/abs/a.ts", content: "" })).toBe(false);
+    expect(isWorkerRequest({ type: "transform", path: "a.ts" })).toBe(false);
+    expect(isWorkerRequest({ type: "close" })).toBe(true);
+    expect(isWorkerRequest({ type: "close", force: true })).toBe(false);
+    expect(isWorkerRequest({ type: "refresh" })).toBe(false);
+  });
+
+  it("validates worker responses strictly, including every path the worker returns", () => {
+    const opened = { type: "opened", protocolVersion: PROTOCOL_VERSION, extensions: [".ts"] };
+    expect(isWorkerResponse({ ...opened, semanticMode: null })).toBe(true);
+    expect(isWorkerResponse({ ...opened, semanticMode: "workspace" })).toBe(true);
+    expect(isWorkerResponse({ ...opened, protocolVersion: 2, semanticMode: null })).toBe(false);
+    expect(isWorkerResponse({ type: "indexed" })).toBe(true);
+    expect(isWorkerResponse({ type: "closed", code: 0 })).toBe(false);
+    expect(isWorkerResponse({ type: "error", message: "m", fatal: false })).toBe(true);
+    expect(isWorkerResponse({ type: "error", message: "m" })).toBe(false);
+    const transformed = (result: unknown) => ({ type: "transformed", result });
+    const unmodified = { kind: "unmodified" };
+    expect(
+      isWorkerResponse(
+        transformed({
+          primary: { kind: "modified", content: "x", renameTo: "src/moved.ts" },
+          secondary: [{ path: "src/b.ts", result: unmodified }],
+          output: { file: "a" },
+        }),
+      ),
+    ).toBe(true);
+    expect(isWorkerResponse(transformed({ primary: { kind: "skipped" }, secondary: [] }))).toBe(
+      true,
+    );
+    const escaping = { kind: "modified", content: "x", renameTo: "../x" };
+    expect(isWorkerResponse(transformed({ primary: escaping, secondary: [] }))).toBe(false);
+    const absolute = [{ path: "/etc/x", result: unmodified }];
+    expect(isWorkerResponse(transformed({ primary: unmodified, secondary: absolute }))).toBe(false);
+    expect(isWorkerResponse(transformed({ primary: unmodified, secondary: [], extra: 1 }))).toBe(
+      false,
+    );
+    expect(isWorkerResponse(transformed({ primary: { kind: "deleted" }, secondary: [] }))).toBe(
+      false,
+    );
+    expect(() => parseWorkerResponse("{")).toThrow(/invalid JSON/);
+    expect(() => parseWorkerResponse('{"type":"nope"}')).toThrow(/invalid message/);
   });
 
   it("rejects malformed status-dependent completion fields", () => {

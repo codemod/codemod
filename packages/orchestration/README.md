@@ -3,36 +3,46 @@
 TypeScript-first prototype of the Codemod orchestration runtime. Workflows are
 plain async TypeScript; calling a runnable creates a command, awaiting it inside
 a workflow issues it, and every issued command is recorded in an append-only
-history and replayed from that history on later runs. A small Rust execution
-bridge runs `exec` through `butterflow_runners::DirectRunner` and local JSSG
-operations through the existing QuickJS sandbox (see `RUST_BRIDGE.md`). The evidence,
-problem statement, proposal, boundaries, and migration path are summarized in
-`DESIGN.md`.
+history and replayed from that history on later runs. `exec` runs through a
+small Rust bridge over `butterflow_runners::DirectRunner`. Local JSSG commands
+are orchestrated here in TypeScript (file selection, ordering, staging,
+transactional commit, output aggregation, failure classification) over one
+persistent Rust worker process that owns the QuickJS sandbox and semantic
+providers (see `RUST_BRIDGE.md`). The evidence, problem statement, proposal,
+boundaries, and migration path are summarized in `DESIGN.md`.
 
 ## Layout
 
 ```
 packages/orchestration/
-  DESIGN.md         problem statement, proposal, scope, and migration path
-  src/protocol.ts   versioned JSON OperationRequest / OperationCompletion
-  src/runnable.ts   callable exec / jssg / ai descriptors (typed via Standard Schema)
-  src/command.ts    Command: one invocation as data, awaitable inside a workflow
-  src/context.ts    the active workflow runtime (AsyncLocalStorage in the Node prototype)
-  src/target.ts     validation and normalization of a JSSG invocation Target
-  src/paths.ts      safe-relative-path rules shared by targets, scripts, and the wire
-  src/cli.ts        experimental local runner behind bin/codemod-workflow.mjs
-  src/plan.ts       plan(...) and parallel(...) groups + JSON IR
-  src/workflow.ts   workflow(async () => ...) and run(executable, options)
-  src/history.ts    HistoryStore seam + MemoryHistoryStore
-  src/gate.ts       CommandGate seam + ReplayGate (replay matching, errors)
-  src/executor.ts   OperationExecutor seam + BridgeExecutor (spawns Rust bridge)
-  src/events.ts     EventSink seam
-  src/harness.ts    test harness with scripted completions
-  fixtures/protocol shared JSON fixtures checked by TS and Rust tests
-  tests/            scenario tests (fast, no Rust) + bridge.e2e.test.ts
-  bin/              codemod-workflow.mjs and its node_modules type-stripping hook
-crates/execution-bridge/  serde structs, Runner call, and the JSSG adapter (no orchestration logic)
-  src/main.rs             `butterflow-execution-bridge <request.json> <response.json>`
+  DESIGN.md              problem statement, proposal, scope, and migration path
+  RUST_BRIDGE.md         the Rust boundary: protocols, session, security model, transactions
+  src/protocol.ts        versioned JSON OperationRequest / OperationCompletion (v3)
+  src/worker-protocol.ts JSONL messages between executeJssg and the Rust JSSG worker
+  src/worker.ts          JssgWorker: one persistent `--jssg-worker` process
+  src/jssg.ts            executeJssg: select, index, transform, stage, commit, classify
+  src/walker.ts          repository traversal with the engine's walker semantics; selectFiles
+  src/gitignore.ts       gitignore/globset matching ported from the Rust `ignore` crate
+  src/staging.ts         staged edits, conflict rules, transactional commit
+  src/paths.ts           safe-relative-path rules and root containment (realpath)
+  src/runnable.ts        callable exec / jssg / ai descriptors (typed via Standard Schema)
+  src/command.ts         Command: one invocation as data, awaitable inside a workflow
+  src/context.ts         the active workflow runtime (AsyncLocalStorage in the Node prototype)
+  src/target.ts          validation and normalization of a JSSG invocation Target
+  src/cli.ts             experimental local runner behind bin/codemod-workflow.mjs
+  src/plan.ts            plan(...) and parallel(...) groups + JSON IR
+  src/workflow.ts        workflow(async () => ...) and run(executable, options)
+  src/history.ts         HistoryStore seam + MemoryHistoryStore
+  src/gate.ts            CommandGate seam + ReplayGate (replay matching, errors)
+  src/executor.ts        OperationExecutor seam + BridgeExecutor (exec bridge, jssg orchestrator)
+  src/events.ts          EventSink seam (+ jssg.worker / jssg.progress events)
+  src/harness.ts         test harness with scripted completions
+  fixtures/protocol      shared JSON fixtures checked by TS and Rust tests
+  fixtures/walker        file-walker contract checked by TS and Rust (engine walker) tests
+  tests/                 unit tests (fast, no Rust; fake worker) + bridge.e2e.test.ts
+  bin/                   codemod-workflow.mjs and its node_modules type-stripping hook
+crates/execution-bridge/ protocol structs, exec bridge, JSSG session and JSONL worker
+  src/main.rs            `butterflow-execution-bridge <request.json> <response.json>` | `--jssg-worker`
 ```
 
 ## Authoring
@@ -97,7 +107,9 @@ export default workflow(async () => {
   `lint({ id: "lint:" + i })`. A repeated invocation without an id throws
   `DuplicateCommandIdError`. Unique invocations use the runnable name as their id.
 - Non-success completions (`failed`, `cancelled`, `unknown`) reject the awaited
-  command with `OperationError`; catch it to branch.
+  command with `OperationError`; catch it to branch. `error.details` carries
+  structured data (for JSSG: the phase, the file, and for commits the applied
+  and remaining paths).
 - Workflow return values and operation outputs are plain JSON.
 - `plan(...)` and `parallel(...)` are data too. A bare runnable in either stands
   for its default command. Both are awaitable inside a workflow; `run(plan)`
@@ -120,42 +132,73 @@ export default workflow(async () => {
   `"workspace"`, or `{ mode: "file" | "workspace", root? }` where `root` is a
   safe relative path beneath the target root and is only valid with
   `workspace`. Without `include`, the definition applies to the language's
-  file extensions, exactly as a YAML `js-ast-grep` step without `include`.
+  file extensions, exactly as a YAML `js-ast-grep` step without `include`; the
+  extension list comes from the Rust worker when the session opens, so there
+  is no second table to drift.
 - `script` is a safe relative path (no leading `/`, no drive letter, no `..`
   segment). That relative path is the command identity recorded in history, so
   a history replays on another checkout. The executor resolves it against its
   script root: the workflow file's directory for `codemod-workflow`, or
-  `BridgeOptions.scriptRoot` for `BridgeExecutor`. The root travels as
-  `request.context.scriptRoot`, which is never part of a recorded command.
+  `BridgeOptions.scriptRoot` for `BridgeExecutor`. The root is sent only to
+  the worker's `open` message and is never part of a recorded command; moving
+  a checkout and its script root replays without executing.
 - The script's default export may return the existing `string | null`
   (`Codemod<T>` in `@codemod.com/jssg-types`) or `{ content?, output }`
-  (`StructuredCodemod<T, O>`). The bridge applies `content` like any JSSG
-  result and returns the present `output` values as an array in sorted file
-  order; a `string | null` transform yields `[]`. Only the top-level transform
-  may be structured: `jssgTransform` accepts a plain `Codemod` and the sandbox
+  (`StructuredCodemod<T, O>`). `content` is staged like any JSSG result and
+  the present `output` values come back as an array in file order; a
+  `string | null` transform yields `[]`. Only the top-level transform may be
+  structured: `jssgTransform` accepts a plain `Codemod` and the sandbox
   rejects a structured result from a secondary transform with an error rather
   than discarding it. Invocation input reaches the transform as
   `options.params.input` (typed by `StructuredTransformOptions`); the shipped
   selector engine passes no params, so `getSelector` sees `{}` as before.
-- The JSSG bridge intersects definition `include`/`exclude` patterns with the
-  invocation target, sorts matching paths, and executes each file's
-  read-transform-write cycle serially. Files are enumerated with the same
-  walker settings as the workflow engine: hidden files are visited, `.gitignore`
-  and `.ignore` apply even outside a git repository, symlinks are not followed.
-  Files that vanish before they are read or that are not valid UTF-8 are
-  skipped, as the engine does. A renamed file's original is removed only after
-  every enumerated file has run. `exec` runs in the executor's `cwd`.
-  The local JSSG profile grants no process, network, unrestricted filesystem,
-  LLM, or mutable workflow-state capabilities; the curated `fs` module is
-  limited to the target root.
-- JSSG completion status: configuration, script resolution, glob, selector,
-  semantic-index, and transform errors that happen before the bridge has written
-  any file are `failed` (nothing changed). An error after the first write is
-  `unknown` because earlier files may already be modified. A transform that
-  writes through the curated `fs` module before failing is not tracked.
-- A body that returns while a command it created is unissued, or while an
-  issued command is still running, is not finalized: the runtime waits for
-  running work and then throws.
+
+### How a JSSG command runs
+
+1. The target root is resolved beneath the executor's working directory and
+   proven to stay there (symlinks out of the repository are rejected).
+2. One Rust worker process is spawned for the command and opened with the
+   script, language, semantic mode, and input. It loads the script and
+   selector once and reports the language's extensions.
+3. TypeScript enumerates the effective file set: files under the target root
+   accepted by the definition's applicability (repository-relative
+   `include`/`exclude`, defaulting to `**/*<ext>` for the language) and by the
+   invocation target (target-root-relative `include`/`exclude`). The walker
+   has the workflow engine's semantics, pinned by `fixtures/walker/cases.json`
+   which the Rust engine walker must also satisfy: hidden files and `.git`
+   contents are visited, `.ignore`, `.gitignore`, `.git/info/exclude`, and the
+   global git excludes apply without requiring a git repository, ignore files
+   in ancestor directories apply, symlinks are skipped and never followed,
+   and include/exclude globs take precedence over every ignore file (so a
+   language default or include glob whitelists a gitignored file, while a
+   gitignored directory is never entered). Order is component-wise byte order.
+4. In workspace semantic mode every selected file is indexed before the first
+   transform (the engine's pre-index set). Files that vanished or are not
+   UTF-8 are skipped, as the engine does.
+5. Each file is transformed serially. The result (primary edit, `jssgTransform`
+   and staged `write()` secondary edits, renames, JSON output) is staged in
+   memory, cross-file conflicts are checked, and every staged write is
+   re-indexed so later files observe earlier edits in the semantic index. A
+   later file whose path an earlier secondary result edited is transformed
+   from the staged content; a file renamed away earlier is skipped. Disk reads
+   inside the sandbox (`jssgTransform`, the curated `fs`) still see the
+   pre-commit snapshot.
+6. The worker is closed, then every staged write is committed through a
+   sibling temp file plus atomic rename, and rename sources are removed.
+
+Nothing touches the repository before step 6. A failure in any earlier step,
+or an abort, leaves every file unchanged (`failed` / `cancelled`). A commit
+that stops part-way is `unknown` with the applied and remaining paths in
+`error.details`; per-file writes are atomic, the set is not.
+
+Conflict rules: two results writing one destination (two secondary edits of
+one file, two renames onto one path), a rename onto an existing file that was
+not itself renamed away, or a second rename of one source fail the command
+before any write. The workflow engine would instead let the last write win;
+this prototype prefers a loud failure.
+
+A transform that writes through the curated `fs` module bypasses staging and
+is not tracked.
 
 ## Running
 
@@ -181,13 +224,18 @@ codemod-workflow <workflow.ts> [--target <directory>] [--script-root <directory>
   `target/debug/butterflow-execution-bridge`) locates the bridge binary; the
   command fails early when it is missing.
 
-The command prints the workflow's final value as JSON. The bin re-spawns Node
-with `--experimental-transform-types` and a `node:module` hook that strips
-types from `.ts` files under `node_modules`, so it works both from this
-checkout and from a workspace or package installation of
-`@codemod.com/orchestration` (the e2e suite installs a copy under a consumer's
-`node_modules` to prove it). The workflow module and the sources it imports are
-expected to be ESM. No build step or `dist/` exists.
+The command prints the workflow's final value as JSON on stdout and errors on
+stderr with exit code 1; it is the only place that writes to the terminal.
+`SIGINT`/`SIGTERM` abort the run: the JSSG worker is killed and the command in
+flight is recorded as `cancelled` (nothing written) or `unknown` (its commit
+had started). The bin re-spawns Node with `--experimental-transform-types`
+and a `node:module` hook that strips types from `.ts` files under
+`node_modules`, so it works both from this checkout and from a workspace or
+package installation of `@codemod.com/orchestration` (the e2e suite installs
+a copy under a consumer's `node_modules` to prove it). The workflow module
+and the sources it imports are expected to be ESM. No build step or `dist/`
+exists. This is a trusted-local runner: it does not sandbox the workflow body
+and makes no claim about untrusted registry packages.
 
 Remaining work before Solid Migration Assistant can move onto this package:
 
@@ -195,6 +243,9 @@ Remaining work before Solid Migration Assistant can move onto this package:
   as relative `script` paths, and its structured outputs (`StructuredCodemod`);
 - ship the bridge binary with the package or as a `codemod` subcommand; today it
   must be built from this monorepo and pointed at with `--bridge`;
+- decide the cross-file edit policy Solid needs: today two secondary edits of
+  one file in one command, or a secondary edit that races a file's own
+  transform in the other direction, fail the command instead of merging;
 - an AI executor adapter, `pipe()`, approvals, and durable history remain
   unimplemented, so any Solid step that needs them stays in YAML;
 - restricted QuickJS execution of the workflow body and registry loading are
@@ -205,13 +256,15 @@ The programmatic API is:
 ```ts
 import { BridgeExecutor, MemoryHistoryStore, run } from "@codemod.com/orchestration";
 
+const controller = new AbortController();
 const executor = new BridgeExecutor({
   bin: "target/debug/butterflow-execution-bridge",
   cwd: repoDir, // exec cwd and JSSG target root
   scriptRoot: workflowDir, // what relative jssg `script` paths resolve against
+  events: sink, // optional: jssg.worker / jssg.progress events
 });
 const history = new MemoryHistoryStore();
-const first = await run(workflowModule, { executor, history });
+const first = await run(workflowModule, { executor, history, signal: controller.signal });
 const again = await run(workflowModule, { executor, history: MemoryHistoryStore.fromJSON(history.serialize()) });
 // again.replayed === true, nothing was executed
 ```
@@ -233,7 +286,8 @@ whole command record. `ReplayGate` raises `NondeterminismError` with a `kind`:
 
 A command that was scheduled but never completed replays as `unknown`.
 An unfinalized history replays its recorded commands and then executes new
-ones, which is how a crashed run resumes.
+ones, which is how a crashed run resumes. A `cancelled` or `unknown`
+completion is recorded like any other and replays as recorded.
 
 ## How a command finds its workflow
 
@@ -257,21 +311,20 @@ replay comparison; if a workflow uses such inputs the replay will fail with
 
 `OperationExecutor`, `HistoryStore`, `CommandGate`, and `EventSink` are small
 interfaces with JSON-only inputs and outputs. Each in-memory implementation can
-move to Rust one at a time without changing workflow source. `exec` and local
-`jssg` have bridge adapters; `ai` remains protocol-only (the bridge answers
-`failed` with "no executor adapter") and the harness can still script any
-operation in unit tests. `OperationRequest.context` is the executor's own
-input (currently `scriptRoot`); it is validated strictly on both sides and is
-never written to history.
+move to Rust one at a time without changing workflow source. `exec` has a
+bridge adapter, local `jssg` has the TypeScript orchestrator over the Rust
+worker, and `ai` remains protocol-only (the executor answers `failed` with "no
+executor adapter"); the harness can still script any operation in unit tests.
+`OperationExecutor.execute` takes an optional `AbortSignal`.
 
 ## Commands
 
 ```
 pnpm install
-pnpm --filter @codemod.com/orchestration test          # fast TS tests, no Rust
+pnpm --filter @codemod.com/orchestration test          # fast TS tests, no Rust (fake worker)
 pnpm --filter @codemod.com/orchestration typecheck
-pnpm --filter @codemod.com/orchestration test:e2e     # builds only the bridge crate, then cross-language test
-cargo test -p butterflow-execution-bridge              # Rust protocol, runner, JSSG adapter, and binary tests
+pnpm --filter @codemod.com/orchestration test:e2e     # builds only the bridge crate, then cross-language tests
+cargo test -p butterflow-execution-bridge              # protocol, worker loop, session, paths, binary, walker parity
 ```
 
 The full `codemod` CLI is never built or used by this package.

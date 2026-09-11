@@ -1,17 +1,17 @@
 /**
  * Script identity and resolution: a JSSG `script` is a safe relative path on
  * the wire and in history, and the executor (not the operation) carries the
- * machine-specific root it resolves against.
+ * machine-specific root it resolves against, sending it only to the worker.
  */
-import { chmodSync } from "node:fs";
-import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseArgs, USAGE } from "../src/cli.ts";
-import { createHarness } from "../src/harness.ts";
 import {
   BridgeExecutor,
   MemoryHistoryStore,
-  isOperationRequest,
+  exec,
   isSafeRelativePath,
   jssg,
   run,
@@ -85,23 +85,32 @@ describe("jssg definitions", () => {
 const migrate = jssg({ name: "migrate", script: "scripts/migrate.ts", language: "typescript" });
 const wf = workflow(() => migrate({ target: { root: "apps/web" } }));
 
+interface EchoOutput {
+  path: string;
+  open: { script: string; scriptRoot: string; targetRoot: string };
+}
+
 describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () => {
-  it("sends scriptRoot as request context, outside the operation and history", async () => {
+  let repo: string;
+  beforeEach(() => {
     chmodSync(fakeBridge, 0o755);
+    repo = realpathSync.native(mkdtempSync(join(tmpdir(), "codemod-exec-")));
+    mkdirSync(join(repo, "apps/web"), { recursive: true });
+    writeFileSync(join(repo, "apps/web/a.ts"), "a\n");
+  });
+  afterEach(() => rmSync(repo, { recursive: true, force: true }));
+
+  it("sends scriptRoot to the worker's open message, outside the operation and history", async () => {
     const scriptRoot = resolve(import.meta.dirname, "fixtures");
-    const executor = new BridgeExecutor({ bin: fakeBridge, scriptRoot });
+    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo, scriptRoot });
     const store = new MemoryHistoryStore();
 
     const first = await run(wf, { executor, history: store });
 
-    const { request } = first.output as { request: OperationRequest };
-    expect(isOperationRequest(request)).toBe(true);
-    expect(request.context).toEqual({ scriptRoot });
-    expect(request.operation).toEqual({
-      kind: "jssg",
-      script: "scripts/migrate.ts",
-      language: "typescript",
-      target: { root: "apps/web" },
+    const [output] = first.output as EchoOutput[];
+    expect(output).toMatchObject({
+      path: "a.ts",
+      open: { script: "scripts/migrate.ts", scriptRoot, targetRoot: join(repo, "apps/web") },
     });
     const scheduled = first.history.events.find((event) => event.type === "scheduled");
     expect(scheduled).toEqual({
@@ -110,28 +119,41 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
         id: "migrate",
         runnable: "migrate",
         kind: "jssg",
-        operation: request.operation,
+        operation: {
+          kind: "jssg",
+          script: "scripts/migrate.ts",
+          language: "typescript",
+          target: { root: "apps/web" },
+        },
       },
     });
-    // Only the completion (which this fake bridge fills with the echoed request)
-    // mentions the root; the recorded command that replay compares does not.
+    // Only the completion (which this fake worker fills with the echoed open
+    // message) mentions the root; the recorded command that replay compares does not.
     expect(JSON.stringify(scheduled)).not.toContain("scriptRoot");
     expect(JSON.stringify(scheduled)).not.toContain(scriptRoot);
+    expect(JSON.stringify(scheduled)).not.toContain(repo);
   });
 
   it("replays history recorded on another checkout without re-executing", async () => {
-    chmodSync(fakeBridge, 0o755);
-    const recorded = new BridgeExecutor({ bin: fakeBridge, scriptRoot: "/checkout/one" });
+    const recorded = new BridgeExecutor({
+      bin: fakeBridge,
+      cwd: repo,
+      scriptRoot: "/checkout/one",
+    });
     const store = new MemoryHistoryStore();
     const first = await run(wf, { executor: recorded, history: store });
 
     const executed: OperationRequest[] = [];
-    const elsewhere = new BridgeExecutor({ bin: fakeBridge, scriptRoot: "/checkout/two" });
+    const elsewhere = new BridgeExecutor({
+      bin: fakeBridge,
+      cwd: repo,
+      scriptRoot: "/checkout/two",
+    });
     const second = await run(wf, {
       executor: {
-        execute(request) {
+        execute(request, signal) {
           executed.push(request);
-          return elsewhere.execute(request);
+          return elsewhere.execute(request, signal);
         },
       },
       history: MemoryHistoryStore.fromJSON(store.serialize()),
@@ -142,13 +164,30 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
     expect(executed).toHaveLength(0);
   });
 
-  it("omits context when no scriptRoot is configured", async () => {
-    chmodSync(fakeBridge, 0o755);
-    const h = createHarness();
-    const executor = new BridgeExecutor({ bin: fakeBridge });
-    const result = await run(wf, { executor, history: h.store });
-    const { request } = result.output as { request: OperationRequest };
-    expect(request).not.toHaveProperty("context");
+  it("defaults the script root to the working directory", async () => {
+    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
+    const result = await run(wf, { executor });
+    const [output] = result.output as EchoOutput[];
+    expect(output?.open.scriptRoot).toBe(repo);
+  });
+
+  it("runs exec through the one-shot file protocol and refuses ai locally", async () => {
+    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
+    const inspect = exec({ name: "inspect", command: "true" });
+    const result = await run(
+      workflow(() => inspect()),
+      { executor },
+    );
+    const echoed = JSON.parse((result.output as { stdout: string }).stdout) as {
+      request: OperationRequest;
+    };
+    expect(echoed.request.operation).toEqual({ kind: "exec", command: "true" });
+    const ai = await executor.execute({
+      protocolVersion: 3,
+      commandId: "ai",
+      operation: { kind: "ai", prompt: "x" },
+    });
+    expect(ai.status).toBe("failed");
   });
 });
 

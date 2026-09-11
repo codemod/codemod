@@ -52,6 +52,17 @@ unsafe impl<'js> rquickjs::JsLifetime<'js> for DryRunExecutionFlag {
     type Changed<'to> = DryRunExecutionFlag;
 }
 
+/// When set, `SgRoot.write()` on a semantic definition/reference root records
+/// a `FileChange` in `JssgFileChanges` instead of writing to disk, so a host
+/// that stages edits (the TypeScript orchestration worker) sees every edit
+/// as data. Absent or `false` keeps the engine's direct write.
+#[derive(Debug, Clone, Copy)]
+pub struct StageFileWrites(pub bool);
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for StageFileWrites {
+    type Changed<'to> = StageFileWrites;
+}
+
 fn install_console_bridge(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
     let console = Object::new(ctx.clone())?;
     console.set("log", Function::new(ctx.clone(), console_log)?)?;
@@ -252,6 +263,10 @@ pub struct JssgExecutionOptions<'a, R> {
     pub test_mode: bool,
     /// Whether this is a dry-run execution (passed to codemod via options.dryRun)
     pub dry_run: bool,
+    /// Route `SgRoot.write()` on semantic roots into `CodemodOutput::secondary`
+    /// instead of writing to disk. Hosts that stage and commit edits themselves
+    /// set this; the workflow engine leaves it `false`.
+    pub stage_writes: bool,
     /// The target directory the codemod is running against.
     /// Used to validate that `jssgTransform` and `rename()` only access files within this directory.
     pub target_directory: &'a Path,
@@ -494,6 +509,12 @@ where
         ctx.store_userdata(DryRunExecutionFlag(options.dry_run)).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store DryRunExecutionFlag: {:?}", e),
+            },
+        })?;
+
+        ctx.store_userdata(StageFileWrites(options.stage_writes)).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store StageFileWrites: {:?}", e),
             },
         })?;
 
@@ -1225,6 +1246,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1299,6 +1321,7 @@ export default async function transform() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1369,6 +1392,7 @@ export default async function transform() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1444,6 +1468,7 @@ export default function transform(root, options) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: true,
+            stage_writes: false,
             target_directory: &target_dir,
         };
 
@@ -1520,6 +1545,7 @@ export default function transform(root, options) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: &target_dir,
         };
 
@@ -1583,6 +1609,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1636,6 +1663,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1689,6 +1717,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1734,6 +1763,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1777,6 +1807,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory,
         }
     }
@@ -1889,6 +1920,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2000,6 +2032,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2080,6 +2113,7 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2128,6 +2162,7 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2176,6 +2211,7 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2224,6 +2260,7 @@ export default async function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 

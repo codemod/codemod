@@ -33,7 +33,7 @@ fn exec_request(command_id: &str, command: &str) -> OperationRequest {
 }
 
 fn jssg_request(operation: &str) -> String {
-    format!(r#"{{"protocolVersion":2,"commandId":"t","operation":{operation}}}"#)
+    format!(r#"{{"protocolVersion":3,"commandId":"t","operation":{operation}}}"#)
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn jssg_target_request_fixture_decodes_root_include_and_exclude() {
 
 #[test]
 fn partial_targets_omit_absent_fields_when_serialized() {
-    let text = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript","target":{"root":"packages/a"}}}"#;
+    let text = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript","target":{"root":"packages/a"}}}"#;
     let request = parse_request(text).expect("parse");
     let value = serde_json::to_value(&request).expect("serialize");
     assert_eq!(
@@ -144,7 +144,7 @@ fn malformed_targets_are_rejected() {
         r#"{"root":"apps/web","files":["a.ts"]}"#,
     ] {
         let text = format!(
-            r#"{{"protocolVersion":2,"commandId":"t","operation":{{"kind":"jssg","script":"p.ts","language":"typescript","target":{target}}}}}"#
+            r#"{{"protocolVersion":3,"commandId":"t","operation":{{"kind":"jssg","script":"p.ts","language":"typescript","target":{target}}}}}"#
         );
         let error = parse_request(&text).expect_err("malformed target must not parse");
         assert!(error.contains("invalid request JSON"), "{target}: {error}");
@@ -159,7 +159,7 @@ fn exec_and_ai_operations_reject_a_target() {
         r#"{"kind":"exec","command":"true","target":{"root":"apps"}}"#,
         r#"{"kind":"ai","prompt":"summarize","target":{"root":"apps"}}"#,
     ] {
-        let text = format!(r#"{{"protocolVersion":2,"commandId":"t","operation":{operation}}}"#);
+        let text = format!(r#"{{"protocolVersion":3,"commandId":"t","operation":{operation}}}"#);
         let error = parse_request(&text).expect_err("target on exec/ai must not parse");
         assert!(
             error.contains("invalid request JSON"),
@@ -173,21 +173,25 @@ fn exec_and_ai_operations_reject_a_target() {
 }
 
 #[test]
-fn operations_reject_fields_from_other_variants() {
+fn operations_and_envelopes_reject_fields_from_other_variants() {
     for operation in [
         r#"{"kind":"exec","command":"true","package":"p"}"#,
         r#"{"kind":"jssg","script":"p.ts","language":"typescript","command":"true"}"#,
         r#"{"kind":"ai","prompt":"x","env":{}}"#,
     ] {
-        let text = format!(r#"{{"protocolVersion":2,"commandId":"t","operation":{operation}}}"#);
+        let text = format!(r#"{{"protocolVersion":3,"commandId":"t","operation":{operation}}}"#);
         let error = parse_request(&text).expect_err("unknown operation field must not parse");
         assert!(error.contains("unknown field"), "{operation}: {error}");
     }
+    let envelope = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"exec","command":"true"},"scriptRoot":"/tmp"}"#;
+    assert!(parse_request(envelope)
+        .expect_err("unknown envelope field")
+        .contains("unknown field"));
 }
 
 #[test]
 fn semantic_analysis_rejects_unknown_fields() {
-    let text = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"workspace","threads":4}}}"#;
+    let text = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"workspace","threads":4}}}"#;
     let error = parse_request(text).expect_err("unknown semantic field must not parse");
     assert!(error.contains("invalid request JSON"), "{error}");
 }
@@ -262,14 +266,6 @@ fn semantic_details_omit_absent_root_when_serialized() {
         value["operation"]["semanticAnalysis"],
         serde_json::json!({ "mode": "workspace" })
     );
-    let file_only = jssg_request(
-        r#"{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"file"}}"#,
-    );
-    let value = serde_json::to_value(parse_request(&file_only).expect("parse")).expect("json");
-    assert_eq!(
-        value["operation"]["semanticAnalysis"],
-        serde_json::json!({ "mode": "file" })
-    );
 }
 
 #[test]
@@ -279,7 +275,7 @@ fn request_context_is_optional_strict_and_never_serialized_when_absent() {
     let value = serde_json::to_value(&without).expect("serialize");
     assert!(value.get("context").is_none());
 
-    let text = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript"},"context":{"scriptRoot":"/tmp/workflow"}}"#;
+    let text = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript"},"context":{"scriptRoot":"/tmp/workflow"}}"#;
     let request = parse_request(text).expect("parse");
     assert_eq!(
         request.context,
@@ -287,22 +283,11 @@ fn request_context_is_optional_strict_and_never_serialized_when_absent() {
             script_root: Some("/tmp/workflow".to_string())
         })
     );
-    let value = serde_json::to_value(&request).expect("serialize");
-    assert_eq!(
-        value["context"],
-        serde_json::json!({ "scriptRoot": "/tmp/workflow" })
-    );
-
-    let empty = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"exec","command":"true"},"context":{}}"#;
-    assert_eq!(
-        parse_request(empty).expect("empty context parses").context,
-        Some(RequestContext::default())
-    );
-    let blank = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"exec","command":"true"},"context":{"scriptRoot":" "}}"#;
+    let blank = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"exec","command":"true"},"context":{"scriptRoot":" "}}"#;
     assert!(parse_request(blank)
         .expect_err("blank root")
         .contains("scriptRoot"));
-    let unknown = r#"{"protocolVersion":2,"commandId":"t","operation":{"kind":"exec","command":"true"},"context":{"cwd":"/tmp"}}"#;
+    let unknown = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"exec","command":"true"},"context":{"cwd":"/tmp"}}"#;
     assert!(parse_request(unknown)
         .expect_err("unknown context field")
         .contains("unknown field"));
@@ -326,12 +311,21 @@ fn completion_fixtures_round_trip_to_identical_json() {
         let actual = serde_json::to_value(&completion).expect("completion serializes");
         assert_eq!(actual, expected, "{name}");
     }
+    // The unknown fixture carries TypeScript-produced structured details.
+    let unknown: OperationCompletion =
+        serde_json::from_str(&fixture("unknown-completion.json")).expect("parse");
+    assert_eq!(
+        unknown.error.expect("error").details.expect("details")["phase"],
+        "commit"
+    );
+    let extra = r#"{"protocolVersion":3,"commandId":"x","status":"failed","error":{"message":"m","stack":"s"}}"#;
+    assert!(serde_json::from_str::<OperationCompletion>(extra).is_err());
 }
 
 #[test]
 fn parse_request_rejects_other_protocol_versions() {
     let text = fixture("exec-request.json");
-    let text = text.replace("\"protocolVersion\": 2", "\"protocolVersion\": 99");
+    let text = text.replace("\"protocolVersion\": 3", "\"protocolVersion\": 99");
     let error = parse_request(&text).expect_err("version 99 must be rejected");
     assert!(error.contains("unsupported protocolVersion 99"), "{error}");
 }
@@ -363,13 +357,16 @@ fn other_runner_errors_convert_to_unknown() {
         "inspect",
         Err(Error::Runtime("Failed to wait for command".to_string())),
     );
-    let expected: Value = serde_json::from_str(&fixture("unknown-completion.json")).unwrap();
-    assert_eq!(serde_json::to_value(&completion).unwrap(), expected);
+    assert_eq!(completion.status, CompletionStatus::Unknown);
+    assert_eq!(
+        completion.error.expect("error").message,
+        "Runtime error: Failed to wait for command"
+    );
 }
 
 #[tokio::test]
-async fn ai_operations_are_rejected_without_running() {
-    let request = OperationRequest {
+async fn ai_and_jssg_operations_are_refused_by_the_one_shot_bridge() {
+    let ai = OperationRequest {
         protocol_version: PROTOCOL_VERSION,
         command_id: "ai".to_string(),
         operation: Operation::Ai {
@@ -378,13 +375,22 @@ async fn ai_operations_are_rejected_without_running() {
         },
         context: None,
     };
-    let completion = execute(&DirectRunner::with_quiet(true), &request).await;
+    let completion = execute(&DirectRunner::with_quiet(true), &ai).await;
     assert_eq!(completion.status, CompletionStatus::Failed);
     assert!(completion
         .error
         .expect("error")
         .message
         .contains("no executor adapter"));
+
+    let jssg = parse_request(&fixture("jssg-request.json")).expect("parse");
+    let completion = execute(&DirectRunner::with_quiet(true), &jssg).await;
+    assert_eq!(completion.status, CompletionStatus::Failed);
+    assert!(completion
+        .error
+        .expect("error")
+        .message
+        .contains("worker protocol"));
 }
 
 #[cfg(unix)]

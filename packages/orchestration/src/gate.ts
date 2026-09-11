@@ -38,6 +38,7 @@ export class ReplayGate implements CommandGate {
     private readonly store: HistoryStore,
     private readonly executor: OperationExecutor,
     private readonly events: EventSink = nullSink,
+    private readonly signal?: AbortSignal,
   ) {
     this.recorded = scheduledCommands(history);
     this.recorded.forEach((command, index) => this.recordedIndex.set(command.id, index));
@@ -110,11 +111,14 @@ export class ReplayGate implements CommandGate {
 
     await this.store.append({ type: "scheduled", command });
     this.events.emit({ type: "command.scheduled", command });
-    const completion = await this.executor.execute({
-      protocolVersion: PROTOCOL_VERSION,
-      commandId: command.id,
-      operation: command.operation,
-    });
+    const completion = await this.executor.execute(
+      {
+        protocolVersion: PROTOCOL_VERSION,
+        commandId: command.id,
+        operation: command.operation,
+      },
+      this.signal,
+    );
     if (completion.commandId !== command.id) {
       throw new Error(
         `executor returned completion for '${completion.commandId}' while running '${command.id}'`,

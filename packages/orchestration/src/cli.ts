@@ -2,8 +2,12 @@
  * Experimental local workflow runner: `codemod-workflow <workflow.ts>`.
  *
  * Loads a TypeScript workflow module, runs its default export through the
- * Rust execution bridge, and prints the final value as JSON. Trusted local
- * use only: the workflow runs in plain Node, not a restricted sandbox.
+ * Rust execution bridge (one-shot `exec`, persistent JSSG worker), and prints
+ * the final value as JSON. Trusted local use only: the workflow runs in plain
+ * Node, not a restricted sandbox, and nothing here validates registry
+ * packages. SIGINT/SIGTERM abort the run: the operation in flight is
+ * cancelled (worker killed, nothing written) or reported `unknown` if its
+ * commit had started.
  */
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -26,7 +30,7 @@ export interface CliOptions {
 export const USAGE =
   "usage: codemod-workflow <workflow.ts> [--target <directory>] [--script-root <directory>] [--bridge <binary>]";
 
-export async function runWorkflowCli(argv: string[]): Promise<unknown> {
+export async function runWorkflowCli(argv: string[], signal?: AbortSignal): Promise<unknown> {
   const options = parseArgs(argv);
   if (!existsSync(options.workflow)) {
     throw new Error(`workflow does not exist: ${options.workflow}`);
@@ -50,6 +54,7 @@ export async function runWorkflowCli(argv: string[]): Promise<unknown> {
       cwd: options.target,
       scriptRoot: options.scriptRoot,
     }),
+    signal,
   });
   return result.output;
 }
@@ -98,11 +103,20 @@ export function parseArgs(argv: string[]): CliOptions {
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runWorkflowCli(process.argv.slice(2)).then(
-    (output) => process.stdout.write(`${JSON.stringify(output, null, 2)}\n`),
-    (error: unknown) => {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-      process.exitCode = 1;
-    },
-  );
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  process.once("SIGINT", abort);
+  process.once("SIGTERM", abort);
+  runWorkflowCli(process.argv.slice(2), controller.signal)
+    .then(
+      (output) => process.stdout.write(`${JSON.stringify(output, null, 2)}\n`),
+      (error: unknown) => {
+        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 1;
+      },
+    )
+    .finally(() => {
+      process.off("SIGINT", abort);
+      process.off("SIGTERM", abort);
+    });
 }
