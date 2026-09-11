@@ -5,28 +5,23 @@ import {
   PROTOCOL_VERSION,
   canonicalJson,
   exec,
+  isFileOutcomes,
   isOperation,
   isOperationCompletion,
   isOperationRequest,
-  isWorkerRequest,
-  isWorkerResponse,
   parseCompletion,
-  parseWorkerResponse,
 } from "../src/index.ts";
 
 const dir = join(import.meta.dirname, "..", "fixtures", "protocol");
 const fixture = (name: string) => JSON.parse(readFileSync(join(dir, name), "utf8")) as unknown;
 
 describe("protocol fixtures shared with crates/execution-bridge", () => {
-  it("every request fixture is a valid OperationRequest", () => {
+  it("every fixture is valid and round-trips", () => {
     for (const name of readdirSync(dir).filter((f) => f.endsWith("-request.json"))) {
       const value = fixture(name);
       expect(isOperationRequest(value), name).toBe(true);
       expect((value as { protocolVersion: number }).protocolVersion).toBe(PROTOCOL_VERSION);
     }
-  });
-
-  it("every completion fixture is a valid OperationCompletion", () => {
     for (const name of readdirSync(dir).filter((f) => f.endsWith("-completion.json"))) {
       const text = readFileSync(join(dir, name), "utf8");
       expect(isOperationCompletion(JSON.parse(text)), name).toBe(true);
@@ -47,152 +42,156 @@ describe("protocol fixtures shared with crates/execution-bridge", () => {
     };
     expect(canonicalJson(request)).toBe(canonicalJson(fixture("exec-request.json")));
   });
+});
 
-  it("accepts an optional strict request context that never enters the operation", () => {
-    const base = fixture("jssg-request.json") as Record<string, unknown>;
-    expect(isOperationRequest({ ...base, context: { scriptRoot: "/tmp/workflow" } })).toBe(true);
-    expect(isOperationRequest({ ...base, context: {} })).toBe(true);
-    expect(isOperationRequest({ ...base, context: { scriptRoot: " " } })).toBe(false);
-    expect(isOperationRequest({ ...base, context: { cwd: "/tmp" } })).toBe(false);
-    expect(isOperationRequest({ ...base, context: "/tmp" })).toBe(false);
-    expect(isOperationRequest({ ...base, scriptRoot: "/tmp" })).toBe(false);
-    const operation = base.operation as Record<string, unknown>;
-    expect(isOperationRequest({ ...base, operation: { ...operation, scriptRoot: "/tmp" } })).toBe(
+describe("strict validation", () => {
+  const base = fixture("jssg-request.json") as Record<string, unknown>;
+  const jssg = { kind: "jssg", script: "scripts/x.ts", language: "typescript" };
+
+  it.each<[string, unknown, boolean]>([
+    [
+      "a strict request context",
+      { ...base, context: { scriptRoot: "/w", targetRoot: "/r" } },
+      true,
+    ],
+    ["an empty context", { ...base, context: {} }, true],
+    [
+      "a batch of safe relative files",
+      { ...base, context: { files: [{ path: "src/a.ts", content: "" }] } },
+      true,
+    ],
+    ["a blank script root", { ...base, context: { scriptRoot: " " } }, false],
+    ["an unknown context field", { ...base, context: { cwd: "/tmp" } }, false],
+    ["a non-object context", { ...base, context: "/tmp" }, false],
+    ["a context field on the envelope", { ...base, scriptRoot: "/tmp" }, false],
+    [
+      "an absolute batch path",
+      { ...base, context: { files: [{ path: "/a.ts", content: "" }] } },
       false,
-    );
+    ],
+    [
+      "an unknown batch file field",
+      { ...base, context: { files: [{ path: "a.ts", content: "", mode: 1 }] } },
+      false,
+    ],
+  ])("request with %s", (_name, value, expected) => {
+    expect(isOperationRequest(value)).toBe(expected);
   });
 
   it("requires jssg script and roots to be safe relative paths on the wire", () => {
-    const base = { kind: "jssg", script: "scripts/x.ts", language: "typescript" };
-    expect(isOperation(base)).toBe(true);
-    expect(isOperation({ ...base, script: "scripts/foo..bar.ts" })).toBe(true);
+    expect(isOperation(jssg)).toBe(true);
+    expect(isOperation({ ...jssg, script: "scripts/foo..bar.ts" })).toBe(true);
     for (const bad of ["/abs/x.ts", "\\\\server\\x.ts", "C:\\x.ts", "c:/x.ts", "../x.ts", " "]) {
-      expect(isOperation({ ...base, script: bad }), bad).toBe(false);
-      expect(isOperation({ ...base, target: { root: bad } }), bad).toBe(false);
+      expect(isOperation({ ...jssg, script: bad }), bad).toBe(false);
+      expect(isOperation({ ...jssg, target: { root: bad } }), bad).toBe(false);
       expect(
-        isOperation({ ...base, semanticAnalysis: { mode: "workspace", root: bad } }),
+        isOperation({ ...jssg, semanticAnalysis: { mode: "workspace", root: bad } }),
         bad,
       ).toBe(false);
     }
-    expect(isOperation({ ...base, target: { root: "apps/a..b" } })).toBe(true);
+    expect(isOperation({ ...jssg, target: { root: "apps/a..b" } })).toBe(true);
+    expect(isOperation({ ...jssg, semanticAnalysis: { mode: "file" } })).toBe(true);
+    expect(isOperation({ ...jssg, semanticAnalysis: { mode: "file", root: "src" } })).toBe(false);
+    expect(isOperation({ kind: "exec", command: "true", target: { root: "a" } })).toBe(false);
+  });
+
+  it("validates batch outcomes including every returned path", () => {
+    const outcome = (edits: unknown[], extra = {}) => [{ path: "src/a.ts", edits, ...extra }];
     expect(
-      isOperation({ ...base, semanticAnalysis: { mode: "workspace", root: "src..gen" } }),
+      isFileOutcomes(outcome([{ path: "src/a.ts", content: "x", renameTo: "src/b.ts" }])),
     ).toBe(true);
-    expect(isOperation({ ...base, semanticAnalysis: { mode: "file" } })).toBe(true);
-  });
-
-  it("rejects unknown protocol versions and statuses", () => {
-    expect(
-      isOperationCompletion({ protocolVersion: 99, commandId: "x", status: "succeeded" }),
-    ).toBe(false);
-    expect(
-      isOperationCompletion({ protocolVersion: PROTOCOL_VERSION, commandId: "x", status: "done" }),
-    ).toBe(false);
-    expect(() => parseCompletion("not json")).toThrow(/invalid JSON/);
-  });
-
-  it("accepts structured error details and rejects unknown completion fields", () => {
-    const base = { protocolVersion: PROTOCOL_VERSION, commandId: "x", status: "failed" };
-    expect(
-      isOperationCompletion({ ...base, error: { message: "m", details: { phase: "stage" } } }),
-    ).toBe(true);
-    expect(isOperationCompletion({ ...base, error: { message: "m", details: undefined } })).toBe(
-      true,
-    );
-    expect(isOperationCompletion({ ...base, error: { message: "m", stack: "s" } })).toBe(false);
-    expect(isOperationCompletion({ ...base, error: { message: "m" }, extra: 1 })).toBe(false);
-  });
-
-  it("validates worker requests strictly", () => {
-    const open = {
-      type: "open",
-      protocolVersion: PROTOCOL_VERSION,
-      script: "transform.ts",
-      scriptRoot: "/abs/workflow",
-      language: "typescript",
-      targetRoot: "/abs/repo",
-    };
-    expect(isWorkerRequest(open)).toBe(true);
-    expect(isWorkerRequest({ ...open, semanticAnalysis: "workspace", input: { a: 1 } })).toBe(true);
-    expect(isWorkerRequest({ ...open, protocolVersion: 2 })).toBe(false);
-    expect(isWorkerRequest({ ...open, script: "../t.ts" })).toBe(false);
-    expect(isWorkerRequest({ ...open, target: { root: "x" } })).toBe(false);
-    expect(isWorkerRequest({ type: "index", path: "src/a.ts", content: "" })).toBe(true);
-    expect(isWorkerRequest({ type: "transform", path: "/abs/a.ts", content: "" })).toBe(false);
-    expect(isWorkerRequest({ type: "transform", path: "a.ts" })).toBe(false);
-    expect(isWorkerRequest({ type: "close" })).toBe(true);
-    expect(isWorkerRequest({ type: "close", force: true })).toBe(false);
-    expect(isWorkerRequest({ type: "refresh" })).toBe(false);
-  });
-
-  it("validates worker responses strictly, including every path the worker returns", () => {
-    const opened = { type: "opened", protocolVersion: PROTOCOL_VERSION, extensions: [".ts"] };
-    expect(isWorkerResponse({ ...opened, semanticMode: null })).toBe(true);
-    expect(isWorkerResponse({ ...opened, semanticMode: "workspace" })).toBe(true);
-    expect(isWorkerResponse({ ...opened, protocolVersion: 2, semanticMode: null })).toBe(false);
-    expect(isWorkerResponse({ type: "indexed" })).toBe(true);
-    expect(isWorkerResponse({ type: "closed", code: 0 })).toBe(false);
-    expect(isWorkerResponse({ type: "error", message: "m", fatal: false })).toBe(true);
-    expect(isWorkerResponse({ type: "error", message: "m" })).toBe(false);
-    const transformed = (result: unknown) => ({ type: "transformed", result });
-    const unmodified = { kind: "unmodified" };
-    expect(
-      isWorkerResponse(
-        transformed({
-          primary: { kind: "modified", content: "x", renameTo: "src/moved.ts" },
-          secondary: [{ path: "src/b.ts", result: unmodified }],
-          output: { file: "a" },
-        }),
-      ),
-    ).toBe(true);
-    expect(isWorkerResponse(transformed({ primary: { kind: "skipped" }, secondary: [] }))).toBe(
-      true,
-    );
-    const escaping = { kind: "modified", content: "x", renameTo: "../x" };
-    expect(isWorkerResponse(transformed({ primary: escaping, secondary: [] }))).toBe(false);
-    const absolute = [{ path: "/etc/x", result: unmodified }];
-    expect(isWorkerResponse(transformed({ primary: unmodified, secondary: absolute }))).toBe(false);
-    expect(isWorkerResponse(transformed({ primary: unmodified, secondary: [], extra: 1 }))).toBe(
+    expect(isFileOutcomes(outcome([], { output: { file: "a" } }))).toBe(true);
+    expect(isFileOutcomes(outcome([{ path: "src/a.ts", content: "x", renameTo: "../x" }]))).toBe(
       false,
     );
-    expect(isWorkerResponse(transformed({ primary: { kind: "deleted" }, secondary: [] }))).toBe(
+    expect(isFileOutcomes(outcome([{ path: "/etc/x", content: "x" }]))).toBe(false);
+    expect(isFileOutcomes(outcome([{ path: "src/a.ts", content: "x", kind: "modified" }]))).toBe(
       false,
     );
-    expect(() => parseWorkerResponse("{")).toThrow(/invalid JSON/);
-    expect(() => parseWorkerResponse('{"type":"nope"}')).toThrow(/invalid message/);
+    expect(isFileOutcomes(outcome([], { secondary: [] }))).toBe(false);
+    expect(isFileOutcomes([{ path: "../a.ts", edits: [] }])).toBe(false);
+    expect(isFileOutcomes({ files: [] })).toBe(false);
   });
 
-  it("rejects malformed status-dependent completion fields", () => {
-    expect(
-      isOperationCompletion({
+  it.each<[string, unknown, boolean]>([
+    [
+      "an unknown protocol version",
+      { protocolVersion: 99, commandId: "x", status: "succeeded", output: null },
+      false,
+    ],
+    [
+      "an unknown status",
+      { protocolVersion: PROTOCOL_VERSION, commandId: "x", status: "done" },
+      false,
+    ],
+    [
+      "structured error details",
+      {
         protocolVersion: PROTOCOL_VERSION,
         commandId: "x",
-        status: "succeeded",
-      }),
-    ).toBe(false);
-    expect(
-      isOperationCompletion({
+        status: "failed",
+        error: { message: "m", details: { phase: "stage" } },
+      },
+      true,
+    ],
+    [
+      "an unknown error field",
+      {
+        protocolVersion: PROTOCOL_VERSION,
+        commandId: "x",
+        status: "failed",
+        error: { message: "m", stack: "s" },
+      },
+      false,
+    ],
+    [
+      "an unknown envelope field",
+      {
+        protocolVersion: PROTOCOL_VERSION,
+        commandId: "x",
+        status: "failed",
+        error: { message: "m" },
+        extra: 1,
+      },
+      false,
+    ],
+    [
+      "success without output",
+      { protocolVersion: PROTOCOL_VERSION, commandId: "x", status: "succeeded" },
+      false,
+    ],
+    [
+      "success with an error",
+      {
         protocolVersion: PROTOCOL_VERSION,
         commandId: "x",
         status: "succeeded",
         output: null,
-        error: { message: "unexpected" },
-      }),
-    ).toBe(false);
-    expect(
-      isOperationCompletion({
+        error: { message: "m" },
+      },
+      false,
+    ],
+    [
+      "failure without an error",
+      { protocolVersion: PROTOCOL_VERSION, commandId: "x", status: "failed" },
+      false,
+    ],
+    [
+      "a non-integer exit code",
+      {
         protocolVersion: PROTOCOL_VERSION,
         commandId: "x",
         status: "failed",
-      }),
-    ).toBe(false);
-    expect(
-      isOperationCompletion({
-        protocolVersion: PROTOCOL_VERSION,
-        commandId: "x",
-        status: "failed",
-        error: { message: "bad", exitCode: "3" },
-      }),
-    ).toBe(false);
+        error: { message: "m", exitCode: "3" },
+      },
+      false,
+    ],
+  ])("completion with %s", (_name, value, expected) => {
+    expect(isOperationCompletion(value)).toBe(expected);
+  });
+
+  it("reports invalid completion text", () => {
+    expect(() => parseCompletion("not json")).toThrow(/invalid JSON/);
+    expect(() => parseCompletion('{"protocolVersion":1}')).toThrow(/invalid completion/);
   });
 });

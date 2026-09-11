@@ -1,5 +1,5 @@
 {
-  "protocolVersion": 3,
+  "protocolVersion": 4,
   "commandId": "migrate",
   "status": "unknown",
   "error": {

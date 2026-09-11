@@ -1,36 +1,37 @@
 /**
- * JSSG orchestration for one command, entirely in TypeScript:
+ * One JSSG command, in TypeScript around one bridge process:
  *
- * 1. resolve the target root beneath the working directory;
- * 2. open one persistent Rust worker with the script, language, semantic
- *    mode, and invocation input, and learn the language's extensions;
- * 3. enumerate and order the effective file set (definition applicability
- *    intersected with the invocation target, engine walker semantics);
- * 4. in workspace semantic mode, index that set before any transform;
- * 5. transform each file serially, stage its primary and secondary edits and
- *    renames, validate cross-file conflicts, and refresh the semantic index
- *    with the staged content;
- * 6. close the worker, then commit every staged edit, or report why not.
+ * 1. resolve the target root beneath the working directory and select the
+ *    effective file set (definition applicability intersected with the
+ *    invocation target, engine walker semantics), reading every file;
+ * 2. send the whole batch to one `butterflow-execution-bridge` process, which
+ *    loads the script once, indexes the batch for workspace semantics, and
+ *    transforms every file from the content it was given (snapshot
+ *    semantics: no transform sees another's edits);
+ * 3. validate the returned edits, check cross-file conflicts, then commit.
  *
- * Failure classification: anything before commit leaves the repository
- * unchanged and is `failed` (or `cancelled` when the signal fired); a commit
- * that stops part-way is `unknown` with the applied and remaining paths.
+ * Nothing touches the repository before step 3's commit. Failures before it
+ * are `failed` (or `cancelled` when the signal fired) with the repository
+ * unchanged; a commit that stops part-way is `unknown` with the applied and
+ * remaining paths.
  */
-import { readFileSync, realpathSync } from "node:fs";
-import { resolve } from "node:path";
-import { nullSink, type EventSink, type JssgPhase } from "./events.ts";
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { spawnBridge } from "./bridge.ts";
+import type { EventSink } from "./events.ts";
+import { comparePaths, selectFiles } from "./files.ts";
 import type { Json } from "./json.ts";
-import { PathEscapeError, resolveInsideRoot } from "./paths.ts";
+import { lexists, resolveInsideRoot } from "./paths.ts";
 import {
   PROTOCOL_VERSION,
+  isFileOutcomes,
+  isRecord,
+  type BatchFile,
   type CompletionStatus,
+  type FileOutcome,
   type JssgOperation,
   type OperationCompletion,
 } from "./protocol.ts";
-import { CommitError, Staging, StagingConflictError } from "./staging.ts";
-import { selectFiles } from "./walker.ts";
-import { JssgWorker, WorkerExitError } from "./worker.ts";
-import type { TransformResult } from "./worker-protocol.ts";
 
 export interface JssgExecutionOptions {
   bin: string;
@@ -47,258 +48,190 @@ export interface JssgExecutionOptions {
   globalExcludes?: string | null;
 }
 
-/** A failure before commit, with the phase it happened in. */
-class JssgFailure extends Error {
-  constructor(
-    readonly phase: JssgPhase,
-    message: string,
-    readonly detail: Record<string, Json> = {},
-  ) {
-    super(message);
-    this.name = "JssgFailure";
-  }
-}
-
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
 /**
- * Read a selected file. `undefined` means it vanished since enumeration or is
+ * Read a selected file. `undefined` means it vanished since selection or is
  * not valid UTF-8; both are skipped, as the workflow engine does.
  */
 function readSource(absolute: string): string | undefined {
-  let bytes: Buffer;
   try {
-    bytes = readFileSync(absolute);
+    return decoder.decode(readFileSync(absolute));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof TypeError) {
+      return undefined;
+    }
     throw error;
-  }
-  try {
-    return decoder.decode(bytes);
-  } catch {
-    return undefined;
   }
 }
 
 export async function executeJssg(options: JssgExecutionOptions): Promise<OperationCompletion> {
   const { commandId, operation, signal } = options;
-  const events = options.events ?? nullSink;
-  const completion = (
-    status: CompletionStatus,
+  const fail = (
+    status: Exclude<CompletionStatus, "succeeded">,
     message: string,
     details: Json,
-  ): OperationCompletion =>
-    status === "succeeded"
-      ? { protocolVersion: PROTOCOL_VERSION, commandId, status, output: details }
-      : { protocolVersion: PROTOCOL_VERSION, commandId, status, error: { message, details } };
+  ): OperationCompletion => ({
+    protocolVersion: PROTOCOL_VERSION,
+    commandId,
+    status,
+    error: { message, details },
+  });
 
-  let worker: JssgWorker | undefined;
-  let staging: Staging | undefined;
-  const outputs: Json[] = [];
+  let targetRoot: string;
+  let files: BatchFile[];
   try {
     const cwd = realpathSync.native(resolve(options.cwd));
-    const scriptRoot = resolve(options.scriptRoot);
-    const targetRoot = resolveTargetRoot(cwd, operation.target?.root);
-    staging = new Staging(targetRoot);
-
-    worker = JssgWorker.spawn({ bin: options.bin, cwd, env: options.env, signal });
-    events.emit({ type: "jssg.worker", commandId, pid: worker.pid });
-    const opened = await request(worker, "open", {
-      type: "open",
-      protocolVersion: PROTOCOL_VERSION,
-      script: operation.script,
-      scriptRoot,
-      language: operation.language,
-      targetRoot,
-      ...(operation.semanticAnalysis === undefined
-        ? {}
-        : { semanticAnalysis: operation.semanticAnalysis }),
-      ...(operation.input === undefined ? {} : { input: operation.input }),
-    });
-    if (opened.type !== "opened")
-      throw new JssgFailure("open", `unexpected worker reply ${opened.type}`);
-
-    let files: string[];
-    try {
-      files = selectFiles({
-        cwd,
-        targetRoot,
-        definition: { include: operation.include, exclude: operation.exclude },
-        invocation: { include: operation.target?.include, exclude: operation.target?.exclude },
-        extensions: opened.extensions,
-        globalExcludes: options.globalExcludes,
-      });
-    } catch (error) {
-      throw new JssgFailure("select", (error as Error).message);
-    }
-    events.emit({
-      type: "jssg.progress",
-      commandId,
-      phase: "select",
-      completed: files.length,
-      total: files.length,
-    });
-
-    if (opened.semanticMode === "workspace") {
-      let indexed = 0;
-      for (const path of files) {
-        const content = readSource(resolveInsideRoot(targetRoot, path, "selected file"));
-        if (content === undefined) continue;
-        await request(worker, "index", { type: "index", path, content }, path);
-        events.emit({
-          type: "jssg.progress",
-          commandId,
-          phase: "index",
-          path,
-          completed: ++indexed,
-          total: files.length,
-        });
-      }
-    }
-
-    let completed = 0;
-    for (const path of files) {
-      completed += 1;
-      if (staging.isRemoved(path)) {
-        events.emit({
-          type: "jssg.progress",
-          commandId,
-          phase: "transform",
-          path,
-          completed,
-          total: files.length,
-          skipped: "renamed away",
-        });
-        continue;
-      }
-      const content =
-        staging.contentFor(path) ??
-        readSource(resolveInsideRoot(targetRoot, path, "selected file"));
-      if (content === undefined) continue;
-      const reply = await request(worker, "transform", { type: "transform", path, content }, path);
-      if (reply.type !== "transformed")
-        throw new JssgFailure("transform", `unexpected worker reply ${reply.type}`, { path });
-      const written = stage(staging, path, reply.result);
-      if (reply.result.output !== undefined) outputs.push(reply.result.output);
-      if (opened.semanticMode !== null) {
-        for (const edit of written) {
-          await request(
-            worker,
-            "index",
-            { type: "index", path: edit.path, content: edit.content },
-            edit.path,
-          );
-        }
-      }
-      events.emit({
-        type: "jssg.progress",
-        commandId,
-        phase: "transform",
-        path,
-        completed,
-        total: files.length,
-      });
-    }
-    await worker.close();
-  } catch (error) {
-    worker?.kill();
-    if (signal?.aborted) {
-      return completion("cancelled", `cancelled before commit: ${(error as Error).message}`, {
-        phase: error instanceof JssgFailure ? error.phase : "transform",
-        committed: false,
-      });
-    }
-    if (error instanceof JssgFailure) {
-      return completion("failed", error.message, { phase: error.phase, ...error.detail });
-    }
-    return completion("failed", (error as Error).message, { phase: "transform" });
-  }
-
-  if (signal?.aborted) {
-    return completion("cancelled", "cancelled before commit", {
-      phase: "commit",
-      committed: false,
-    });
-  }
-  const plan = staging.plan();
-  events.emit({
-    type: "jssg.progress",
-    commandId,
-    phase: "commit",
-    completed: 0,
-    total: plan.writes.length + plan.deletes.length,
-  });
-  try {
-    const report = staging.commit(signal);
-    events.emit({
-      type: "jssg.progress",
-      commandId,
-      phase: "commit",
-      completed: report.written.length + report.deleted.length,
-      total: report.written.length + report.deleted.length,
-    });
-  } catch (error) {
-    if (error instanceof CommitError) {
-      return completion("unknown", error.message, { ...error.detail });
-    }
-    return completion("unknown", `commit failed: ${(error as Error).message}`, { phase: "commit" });
-  }
-  return completion("succeeded", "", outputs);
-}
-
-function resolveTargetRoot(cwd: string, root: string | undefined): string {
-  let resolved: string;
-  try {
-    resolved = root === undefined ? cwd : resolveInsideRoot(cwd, root, "target root");
-  } catch (error) {
-    throw new JssgFailure("select", (error as Error).message);
-  }
-  let real: string;
-  try {
-    real = realpathSync.native(resolved);
-  } catch (error) {
-    throw new JssgFailure(
-      "select",
-      `failed to resolve JSSG target root '${root ?? "."}': ${(error as Error).message}`,
+    targetRoot = realpathSync.native(
+      operation.target?.root === undefined
+        ? cwd
+        : resolveInsideRoot(cwd, operation.target.root, "target root"),
     );
-  }
-  return real;
-}
-
-async function request(
-  worker: JssgWorker,
-  phase: JssgPhase,
-  message: Parameters<JssgWorker["request"]>[0],
-  path?: string,
-) {
-  let reply: Awaited<ReturnType<JssgWorker["request"]>>;
-  try {
-    reply = await worker.request(message);
+    files = selectFiles({
+      cwd,
+      targetRoot,
+      language: operation.language,
+      definition: { include: operation.include, exclude: operation.exclude },
+      invocation: { include: operation.target?.include, exclude: operation.target?.exclude },
+      globalExcludes: options.globalExcludes,
+    }).flatMap((path) => {
+      const content = readSource(join(targetRoot, path));
+      return content === undefined ? [] : [{ path, content }];
+    });
   } catch (error) {
-    if (error instanceof WorkerExitError) {
-      throw new JssgFailure(phase, error.message, path === undefined ? {} : { path });
-    }
-    throw new JssgFailure(phase, (error as Error).message, path === undefined ? {} : { path });
+    return fail("failed", (error as Error).message, { phase: "select" });
   }
-  if (reply.type === "error") {
-    throw new JssgFailure(phase, reply.message, {
-      ...(path === undefined ? {} : { path }),
-      fatal: reply.fatal,
+
+  const completion = await spawnBridge(
+    { bin: options.bin, cwd: options.cwd, env: options.env, events: options.events },
+    {
+      protocolVersion: PROTOCOL_VERSION,
+      commandId,
+      operation,
+      context: { scriptRoot: resolve(options.scriptRoot), targetRoot, files },
+    },
+    signal,
+  );
+  // The bridge never writes, so anything short of success leaves the
+  // repository unchanged.
+  if (completion.status !== "succeeded") {
+    return fail(signal?.aborted ? "cancelled" : "failed", completion.error.message, {
+      phase: "transform",
     });
   }
-  return reply;
+  const outcomes = isRecord(completion.output) ? completion.output.files : undefined;
+  if (
+    !isFileOutcomes(outcomes) ||
+    outcomes.length !== files.length ||
+    outcomes.some((outcome, index) => outcome.path !== files[index]!.path)
+  ) {
+    return fail("failed", "bridge returned an invalid batch result", { phase: "transform" });
+  }
+
+  let staged: Staged;
+  try {
+    staged = stage(targetRoot, outcomes);
+  } catch (error) {
+    return fail("failed", (error as Error).message, { phase: "stage" });
+  }
+  if (signal?.aborted) return fail("cancelled", "cancelled before commit", { phase: "commit" });
+  const applied: string[] = [];
+  const steps = [
+    ...staged.writes.map(([path, content]) => ({
+      path,
+      run: () => write(targetRoot, path, content),
+    })),
+    ...staged.deletes.map((path) => ({
+      path,
+      run: () => rmSync(join(targetRoot, path), { force: true }),
+    })),
+  ];
+  for (const [index, step] of steps.entries()) {
+    try {
+      step.run();
+    } catch (error) {
+      return fail(
+        "unknown",
+        `commit failed at '${step.path}' after ${index} of ${steps.length} files: ${(error as Error).message}`,
+        {
+          phase: "commit",
+          applied,
+          failed: step.path,
+          remaining: steps.slice(index).map((s) => s.path),
+        },
+      );
+    }
+    applied.push(step.path);
+  }
+  return {
+    protocolVersion: PROTOCOL_VERSION,
+    commandId,
+    status: "succeeded",
+    output: outcomes.flatMap((outcome) => (outcome.output === undefined ? [] : [outcome.output])),
+  };
 }
 
-function stage(staging: Staging, path: string, result: TransformResult) {
-  try {
-    return staging.apply(path, result);
-  } catch (error) {
-    if (error instanceof StagingConflictError) {
-      throw new JssgFailure("stage", error.message, { ...error.detail, origin: path });
+function write(root: string, path: string, content: string): void {
+  const absolute = join(root, path);
+  mkdirSync(dirname(absolute), { recursive: true });
+  writeFileSync(absolute, content);
+}
+
+interface Staged {
+  /** Destination path and content, in commit order. */
+  writes: [string, string][];
+  /** Rename sources to remove after every write, in commit order. */
+  deletes: string[];
+}
+
+/**
+ * Merge every outcome's edits into one write set, proving each path lies
+ * beneath the root, and reject what snapshot semantics cannot reconcile:
+ * two edits to one destination, a source renamed twice, a write to a path
+ * another edit renames away, and a rename onto a file that exists unless that
+ * file is itself renamed away. Throws before anything is written.
+ */
+function stage(root: string, outcomes: FileOutcome[]): Staged {
+  const writes = new Map<string, { content: string; origin: string; renamed: boolean }>();
+  const sources = new Map<string, string>();
+  for (const { path: origin, edits } of outcomes) {
+    for (const edit of edits) {
+      resolveInsideRoot(root, edit.path, "edited file");
+      const destination = edit.renameTo ?? edit.path;
+      if (edit.renameTo !== undefined) {
+        resolveInsideRoot(root, edit.renameTo, "rename target");
+        const earlier = sources.get(edit.path);
+        if (earlier !== undefined) {
+          throw new Error(`'${edit.path}' is renamed by both '${earlier}' and '${origin}'`);
+        }
+        sources.set(edit.path, origin);
+      }
+      const existing = writes.get(destination);
+      if (existing) {
+        throw new Error(`'${destination}' is written by both '${existing.origin}' and '${origin}'`);
+      }
+      writes.set(destination, {
+        content: edit.content,
+        origin,
+        renamed: edit.renameTo !== undefined,
+      });
     }
-    if (error instanceof PathEscapeError) {
-      throw new JssgFailure("stage", error.message, { path, escaped: error.path });
-    }
-    throw error;
   }
+  for (const [destination, { origin, renamed }] of writes) {
+    const renamer = sources.get(destination);
+    if (!renamed && renamer !== undefined) {
+      throw new Error(
+        `'${destination}' is renamed away by '${renamer}' and written by '${origin}'`,
+      );
+    }
+    if (renamed && renamer === undefined && lexists(join(root, destination))) {
+      throw new Error(`'${origin}' renames onto '${destination}', which already exists`);
+    }
+  }
+  return {
+    writes: [...writes]
+      .map(([path, { content }]): [string, string] => [path, content])
+      .sort(([a], [b]) => comparePaths(a, b)),
+    deletes: [...sources.keys()].filter((path) => !writes.has(path)).sort(comparePaths),
+  };
 }

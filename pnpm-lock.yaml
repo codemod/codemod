@@ -167,6 +167,10 @@ importers:
         version: 5.9.3
 
   packages/orchestration:
+    dependencies:
+      ignore:
+        specifier: ^5.3.1
+        version: 5.3.1
     devDependencies:
       '@codemod.com/tsconfig':
         specifier: workspace:*

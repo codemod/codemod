@@ -1,8 +1,7 @@
 /**
  * Cross-language tests against the real Rust binary
- * (`butterflow-execution-bridge`): `exec` through the one-shot file protocol
- * and butterflow_runners::DirectRunner, and JSSG through the TypeScript
- * orchestrator over one persistent `--jssg-worker` process.
+ * (`butterflow-execution-bridge`): `exec` through butterflow_runners::DirectRunner
+ * and JSSG through the TypeScript orchestrator around one batch process.
  *
  * Run with: pnpm --filter @codemod.com/orchestration test:e2e
  * (builds only crates/execution-bridge, then runs this file).
@@ -183,6 +182,11 @@ describe("local TypeScript JSSG workflow end-to-end", () => {
     for (const entry of ["package.json", "bin", "src"]) {
       cpSync(join(packageDir, entry), join(installed, entry), { recursive: true });
     }
+    // The package's one runtime dependency, as an install would place it.
+    cpSync(join(packageDir, "node_modules", "ignore"), join(installed, "node_modules", "ignore"), {
+      recursive: true,
+      dereference: true,
+    });
     writeFileSync(join(consumer, "package.json"), JSON.stringify({ type: "module" }));
     mkdirSync(join(consumer, "scripts"));
     cpSync(
@@ -227,7 +231,7 @@ export default workflow(() =>
   });
 });
 
-describe("TypeScript JSSG orchestration over one persistent Rust worker", () => {
+describe("TypeScript JSSG orchestration around one Rust batch process", () => {
   let repo: string;
   const write = (relativePath: string, content: string) => {
     const path = join(repo, relativePath);
@@ -237,7 +241,7 @@ describe("TypeScript JSSG orchestration over one persistent Rust worker", () => 
   const read = (relativePath: string) => readFileSync(join(repo, relativePath), "utf8");
 
   beforeEach(() => {
-    repo = realpathSync.native(mkdtempSync(join(tmpdir(), "codemod-worker-")));
+    repo = realpathSync.native(mkdtempSync(join(tmpdir(), "codemod-batch-")));
   });
   afterEach(() => rmSync(repo, { recursive: true, force: true }));
 
@@ -250,7 +254,7 @@ describe("TypeScript JSSG orchestration over one persistent Rust worker", () => 
 
   /** Run one JSSG command through `run()` and return its recorded completion. */
   async function runJssg(
-    definition: Parameters<typeof jssg>[0],
+    definition: Parameters<typeof jssg<void, unknown>>[0],
     invocation: { target?: Target; id?: string } = {},
     options: { scriptRoot?: string; signal?: AbortSignal; history?: MemoryHistoryStore } = {},
   ): Promise<RunOutcome> {
@@ -276,7 +280,7 @@ describe("TypeScript JSSG orchestration over one persistent Rust worker", () => 
     return { completion: completed.completion, events, output, error };
   }
 
-  it("shares one session: workspace semantics across files, staged write() edits, outputs together", async () => {
+  it("shares one provider: workspace semantics across files, staged write() edits, outputs together", async () => {
     write("main.ts", 'import { add } from "./utils";\nconst result = add(1, 2);\n');
     write("utils.ts", "export function add(a: number, b: number): number {\n  return a + b;\n}\n");
     write("other.ts", "export const unrelated = 1;\n");
@@ -296,13 +300,10 @@ describe("TypeScript JSSG orchestration over one persistent Rust worker", () => 
     ]);
     expect(read("utils.ts")).toContain("function sum");
     expect(read("main.ts")).toContain("add(1, 2)");
-    expect(events.events.filter((e) => e.type === "jssg.worker")).toHaveLength(1);
-    const phases = events.events.flatMap((e) => (e.type === "jssg.progress" ? [e.phase] : []));
-    expect(phases.slice(0, 4)).toEqual(["select", "index", "index", "index"]);
-    expect(phases.at(-1)).toBe("commit");
+    expect(events.events.filter((e) => e.type === "bridge.spawned")).toHaveLength(1);
   });
 
-  it("selects by the language's extensions from the worker when the definition has no include", async () => {
+  it("selects by the language's extensions when the definition has no include", async () => {
     write("a.ts", "oldApi('a');\n");
     write("b.js", "oldApi('b');\n");
     write("c.tsx", "oldApi('c');\n");
@@ -361,7 +362,8 @@ describe("TypeScript JSSG orchestration over one persistent Rust worker", () => 
     });
     expect(completion.status).toBe("failed");
     expect(completion.error?.message).toContain("second file exploded");
-    expect(completion.error?.details).toMatchObject({ phase: "transform", path: "src/b.ts" });
+    expect(completion.error?.message).toContain("src/b.ts");
+    expect(completion.error?.details).toEqual({ phase: "transform" });
     expect(error).toBeInstanceOf(OperationError);
     expect(read("src/a.ts")).toBe("oldApi('a');\n");
     expect(read("src/b.ts")).toBe("oldApi('b');\n");
@@ -376,12 +378,8 @@ describe("TypeScript JSSG orchestration over one persistent Rust worker", () => 
       language: "typescript",
     });
     expect(completion.status).toBe("failed");
-    expect(completion.error?.details).toMatchObject({
-      phase: "stage",
-      path: "same.ts",
-      origin: "b.ts",
-      conflictingOrigin: "a.ts",
-    });
+    expect(completion.error?.details).toEqual({ phase: "stage" });
+    expect(completion.error?.message).toBe("'same.ts' is written by both 'a.ts' and 'b.ts'");
     expect(read("a.ts")).toBe("a\n");
     expect(read("b.ts")).toBe("b\n");
     expect(existsSync(join(repo, "same.ts"))).toBe(false);
@@ -443,7 +441,7 @@ describe("TypeScript JSSG orchestration over one persistent Rust worker", () => 
     }
   });
 
-  it("kills the worker on abort and reports cancelled with nothing written", async () => {
+  it("kills the bridge on abort and reports cancelled with nothing written", async () => {
     write("a.ts", "a\n");
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 500);
@@ -453,17 +451,17 @@ describe("TypeScript JSSG orchestration over one persistent Rust worker", () => 
       { signal: controller.signal },
     );
     expect(completion.status).toBe("cancelled");
-    expect(completion.error?.details).toMatchObject({ committed: false });
+    expect(completion.error?.details).toEqual({ phase: "transform" });
     expect(error).toBeInstanceOf(OperationError);
     expect(read("a.ts")).toBe("a\n");
-    const pid = (events.events.find((e) => e.type === "jssg.worker") as { pid?: number }).pid!;
+    const pid = (events.events.find((e) => e.type === "bridge.spawned") as { pid?: number }).pid!;
     for (let attempt = 0; ; attempt++) {
       try {
         process.kill(pid, 0);
       } catch {
         break;
       }
-      if (attempt > 50) throw new Error(`worker ${pid} still alive`);
+      if (attempt > 50) throw new Error(`bridge ${pid} still alive`);
       await new Promise((r) => setTimeout(r, 50));
     }
   });

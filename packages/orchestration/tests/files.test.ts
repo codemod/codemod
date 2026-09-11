@@ -1,20 +1,19 @@
 /**
- * The TypeScript side of the walker contract shared with the workflow
- * engine (`fixtures/walker/cases.json`, also run by
- * `crates/execution-bridge/tests/walker_parity.rs`), plus file selection
- * (definition applicability intersected with the invocation target) and the
- * global git excludes discovery.
+ * File selection: the walker contract shared with the workflow engine
+ * (`fixtures/walker/cases.json`, also run by
+ * `crates/execution-bridge/tests/contracts.rs`), definition/target
+ * intersection, language defaults, and global excludes discovery.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  OverrideMatcher,
   comparePaths,
   discoverGlobalExcludesPath,
+  languageExtensions,
   selectFiles,
-  walkFiles,
+  type Selection,
 } from "../src/index.ts";
 
 interface Contract {
@@ -27,11 +26,8 @@ const contract = JSON.parse(
   readFileSync(join(import.meta.dirname, "../fixtures/walker/cases.json"), "utf8"),
 ) as Contract;
 
-function materialize(
-  dir: string,
-  files: Record<string, string>,
-  symlinks: Record<string, string> = {},
-) {
+function materialize(files: Record<string, string>, symlinks: Record<string, string> = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "codemod-files-"));
   for (const [relative, content] of Object.entries(files)) {
     const path = join(dir, relative);
     mkdirSync(dirname(path), { recursive: true });
@@ -42,22 +38,28 @@ function materialize(
       symlinkSync(join(dir, target), join(dir, link));
     }
   }
+  return dir;
 }
 
 describe("walker parity with the workflow engine", () => {
   let dir: string;
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), "codemod-walker-"));
-    materialize(dir, contract.files, contract.symlinks);
+    dir = materialize(contract.files, contract.symlinks);
   });
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   it.each(contract.cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
-    const overrides =
-      c.include === undefined && c.exclude === undefined
-        ? []
-        : [{ root: dir, matcher: new OverrideMatcher({ include: c.include, exclude: c.exclude }) }];
-    expect(walkFiles(dir, { overrides })).toEqual(c.expected);
+    // A language without extensions and no include leaves only the case's
+    // own globs as overrides, exactly like the engine side of the contract.
+    const selection: Selection = {
+      cwd: dir,
+      targetRoot: dir,
+      language: "none",
+      definition: {},
+      invocation: { include: c.include, exclude: c.exclude },
+      globalExcludes: null,
+    };
+    expect(selectFiles(selection)).toEqual(c.expected);
   });
 
   it("sorts component-wise like Rust PathBuf ordering", () => {
@@ -74,8 +76,7 @@ describe("walker parity with the workflow engine", () => {
 describe("selectFiles", () => {
   let repo: string;
   beforeAll(() => {
-    repo = mkdtempSync(join(tmpdir(), "codemod-select-"));
-    materialize(repo, {
+    repo = materialize({
       "app/src/a.ts": "",
       "app/src/b.tsx": "",
       "app/src/c.generated.ts": "",
@@ -88,95 +89,68 @@ describe("selectFiles", () => {
   });
   afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
-  it("uses the language extensions when the definition has no include", () => {
-    expect(
-      selectFiles({
-        cwd: repo,
-        targetRoot: join(repo, "app"),
-        definition: {},
-        invocation: {},
-        extensions: [".ts", ".tsx"],
-        globalExcludes: null,
-      }),
-    ).toEqual(["other/d.ts", "src/a.ts", "src/b.tsx", "src/c.generated.ts"]);
-  });
+  const select = (overrides: Partial<Selection>) =>
+    selectFiles({
+      cwd: repo,
+      targetRoot: join(repo, "app"),
+      language: "none",
+      definition: {},
+      invocation: {},
+      globalExcludes: null,
+      ...overrides,
+    });
 
-  it("selects nothing extension-wise for a language without extensions and no include", () => {
-    expect(
-      selectFiles({
-        cwd: repo,
-        targetRoot: join(repo, "app"),
-        definition: {},
-        invocation: { include: ["src/**"] },
-        extensions: [],
-        globalExcludes: null,
-      }),
-    ).toEqual(["src/a.ts", "src/b.tsx", "src/c.generated.ts", "src/notes.md"]);
-  });
-
-  it("intersects repository-relative definition globs with target-relative invocation globs", () => {
-    expect(
-      selectFiles({
-        cwd: repo,
-        targetRoot: join(repo, "app"),
-        definition: { include: ["app/**/*.ts"], exclude: ["**/*.d.ts"] },
+  it.each<[string, Partial<Selection>, string[]]>([
+    [
+      "the language's extensions when the definition has no include",
+      { language: "tsx" },
+      ["other/d.ts", "src/a.ts", "src/b.tsx", "src/c.generated.ts"],
+    ],
+    [
+      "everything the target names for a language without extensions",
+      { invocation: { include: ["src/**"] } },
+      ["src/a.ts", "src/b.tsx", "src/c.generated.ts", "src/notes.md"],
+    ],
+    [
+      "repository-relative definition globs intersected with target-relative ones",
+      {
+        language: "typescript",
+        definition: { include: ["app/**/*.{ts,tsx}"], exclude: ["**/*.d.ts"] },
         invocation: { include: ["src/**"], exclude: ["**/*.generated.ts"] },
-        extensions: [".ts"],
-        globalExcludes: null,
-      }),
-    ).toEqual(["src/a.ts"]);
-    // A definition include that names another repository area selects nothing here.
-    expect(
-      selectFiles({
-        cwd: repo,
-        targetRoot: join(repo, "app"),
-        definition: { include: ["lib/**/*.ts"] },
-        invocation: {},
-        extensions: [".ts"],
-        globalExcludes: null,
-      }),
-    ).toEqual([]);
-  });
-
-  it("reports invalid globs", () => {
-    expect(() =>
-      selectFiles({
-        cwd: repo,
-        targetRoot: join(repo, "app"),
-        definition: { include: ["["] },
-        invocation: {},
-        extensions: [],
-        globalExcludes: null,
-      }),
-    ).toThrow(/invalid glob/);
+      },
+      ["src/a.ts", "src/b.tsx"],
+    ],
+    [
+      "nothing for a definition include naming another repository area",
+      { language: "typescript", definition: { include: ["lib/**/*.ts"] } },
+      [],
+    ],
+  ])("selects %s", (_name, overrides, expected) => {
+    expect(select(overrides)).toEqual(expected);
   });
 
   it("honors an explicit global excludes file unless an include glob whitelists the file", () => {
     const global = join(repo, "global-ignore");
     writeFileSync(global, "*.md\n");
-    const select = (invocation: { include?: string[] }) =>
-      selectFiles({
-        cwd: repo,
-        targetRoot: join(repo, "app"),
-        definition: {},
-        invocation,
-        extensions: [],
-        globalExcludes: global,
-      });
-    expect(select({})).toEqual([
+    expect(select({ globalExcludes: global })).toEqual([
       ".gitignore",
       "other/d.ts",
       "src/a.ts",
       "src/b.tsx",
       "src/c.generated.ts",
     ]);
-    // Overrides have the highest precedence in the engine's walker.
-    expect(select({ include: ["src/**"] })).toEqual([
+    expect(select({ globalExcludes: global, invocation: { include: ["src/**"] } })).toEqual([
       "src/a.ts",
       "src/b.tsx",
       "src/c.generated.ts",
       "src/notes.md",
     ]);
+  });
+
+  it("reads the language table pinned to the engine", () => {
+    expect(languageExtensions("typescript")).toContain(".ts");
+    expect(languageExtensions("typescript")).not.toContain(".tsx");
+    expect(languageExtensions("none")).toEqual([]);
   });
 });
 

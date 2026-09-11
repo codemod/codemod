@@ -3,14 +3,13 @@ name = "butterflow-execution-bridge"
 version.workspace = true
 edition = "2021"
 authors.workspace = true
-description = "JSON request/completion bridge and stateful JSSG worker for the TypeScript orchestration prototype"
+description = "JSON request/completion bridge (exec and batched JSSG) for the TypeScript orchestration prototype"
 documentation.workspace = true
 repository.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-ast-grep-config = { workspace = true }
 butterflow-models = { workspace = true }
 butterflow-runners = { workspace = true }
 codemod-sandbox = { workspace = true, features = ["native"] }
@@ -21,7 +20,7 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-# Only the walker parity test uses the walker; the bridge itself never
+# Only the walker parity contract uses the walker; the bridge itself never
 # enumerates a repository.
 ignore = { workspace = true }
 tempfile = { workspace = true }

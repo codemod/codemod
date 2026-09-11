@@ -1,123 +1,85 @@
 #!/usr/bin/env node
-// Stand-in for butterflow-execution-bridge in unit tests.
-//
-// One-shot mode (`<request> <response>`): echoes the request inside a
-// succeeded completion so tests can inspect the exec wire.
-//
-// Worker mode (`--jssg-worker`): speaks the JSONL protocol. FAKE_BRIDGE_MODE
-// selects scripted behavior:
-//   echo (default)  transform appends "// fake\n" and outputs { path, open, indexed }
-//   fail-second     the second transform answers a recoverable error
-//   fatal           the first transform answers a fatal error and exits 3
-//   hang            transforms never answer (cancellation tests)
-//   escape          every primary result renames to "../escaped.ts"
-//   escape-symlink  every primary result renames to "linkdir/out.ts"
-//   escape-secondary  a secondary result targets an absolute path
-//   conflict        every primary result renames to "same.ts"
-//   rename          every primary result renames "x.ts" to "x.moved.ts"
-//   secondary       a.ts also edits FAKE_SECONDARY_PATH; every primary appends "// primary <path>\n"
+// Stand-in for butterflow-execution-bridge in unit tests: reads the request
+// file, writes a completion file. `exec` requests are echoed back inside a
+// succeeded completion. `jssg` requests answer a batch result shaped by
+// FAKE_BRIDGE_MODE:
+//   echo (default)  every file gets "// fake\n" appended and outputs
+//                   { path, context, input }
+//   fail            a failed completion, nothing else
+//   hang            never answers (cancellation tests)
+//   escape          every file renames to "../escaped.ts"
+//   escape-symlink  every file renames to "linkdir/out.ts"
+//   escape-absolute a secondary edit targets an absolute path
+//   conflict        every file renames to "same.ts"
+//   rename          every file renames "x.ts" to "x.moved.ts"
+//   rename-twice    a.ts also renames b.ts to "x.ts"; b.ts renames itself to "y.ts"
+//   write-renamed   a.ts also renames b.ts to "b.moved.ts"; b.ts edits itself in place
+//   secondary       a.ts also edits FAKE_SECONDARY_PATH
 import { readFileSync, writeFileSync } from "node:fs";
-import { createInterface } from "node:readline";
 
-const [first, second] = process.argv.slice(2);
-if (first === "--jssg-worker") worker();
-else oneShot(first, second);
-
-function oneShot(requestPath, responsePath) {
-  const request = JSON.parse(readFileSync(requestPath, "utf8"));
+const [requestPath, responsePath] = process.argv.slice(2);
+const request = JSON.parse(readFileSync(requestPath, "utf8"));
+const mode = process.env.FAKE_BRIDGE_MODE ?? "echo";
+const reply = (completion) =>
   writeFileSync(
     responsePath,
-    JSON.stringify({
-      protocolVersion: 3,
-      commandId: request.commandId,
-      status: "succeeded",
-      output: { stdout: JSON.stringify({ request }) },
-    }),
+    JSON.stringify({ protocolVersion: 4, commandId: request.commandId, ...completion }),
   );
-}
 
-function worker() {
-  const mode = process.env.FAKE_BRIDGE_MODE ?? "echo";
-  const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
-  const modified = (content, renameTo) =>
-    renameTo === undefined
-      ? { kind: "modified", content }
-      : { kind: "modified", content, renameTo };
-  let open;
-  let count = 0;
-  const indexed = [];
-  const rl = createInterface({ input: process.stdin });
-  rl.on("line", (line) => {
-    const message = JSON.parse(line);
-    switch (message.type) {
-      case "open": {
-        open = message;
-        const semantic = message.semanticAnalysis;
-        send({
-          type: "opened",
-          protocolVersion: 3,
-          extensions: [".ts", ".js"],
-          semanticMode:
-            semantic === undefined ? null : typeof semantic === "string" ? semantic : semantic.mode,
-        });
-        break;
-      }
-      case "index":
-        indexed.push(message.path);
-        send({ type: "indexed" });
-        break;
-      case "transform": {
-        count += 1;
-        const { path, content } = message;
-        if (mode === "hang") return;
-        if (mode === "fatal") {
-          send({ type: "error", message: "scripted fatal failure", fatal: true });
-          process.exit(3);
-        }
-        if (mode === "fail-second" && count === 2) {
-          send({ type: "error", message: "scripted transform failure", fatal: false });
-          return;
-        }
-        const transformed = (primary, secondary = [], output) =>
-          send({
-            type: "transformed",
-            result: output === undefined ? { primary, secondary } : { primary, secondary, output },
-          });
-        if (mode === "escape") return transformed(modified(content, "../escaped.ts"));
-        if (mode === "escape-symlink") return transformed(modified(content, "linkdir/out.ts"));
-        if (mode === "escape-secondary") {
-          return transformed({ kind: "unmodified" }, [
-            { path: "/etc/passwd", result: modified("pwned") },
-          ]);
-        }
-        if (mode === "conflict") return transformed(modified(content, "same.ts"));
-        if (mode === "rename") {
-          return transformed(modified(content, path.replace(/\.ts$/u, ".moved.ts")));
-        }
-        if (mode === "secondary") {
-          const secondary =
-            path === "a.ts"
-              ? [{ path: process.env.FAKE_SECONDARY_PATH, result: modified("// secondary\n") }]
-              : [];
-          return transformed(modified(`${content}// primary ${path}\n`), secondary);
-        }
-        return transformed(modified(`${content}// fake\n`), [], {
+if (request.operation.kind === "exec") {
+  reply({ status: "succeeded", output: { stdout: JSON.stringify({ request }) } });
+} else if (mode === "hang") {
+  setInterval(() => {}, 1000);
+} else if (mode === "fail") {
+  reply({ status: "failed", error: { message: "scripted transform failure" } });
+} else {
+  const { files, ...context } = request.context;
+  const edit = (path, content, renameTo) =>
+    renameTo === undefined ? { path, content } : { path, content, renameTo };
+  const outcome = (file) => {
+    const { path, content } = file;
+    switch (mode) {
+      case "escape":
+        return { path, edits: [edit(path, content, "../escaped.ts")] };
+      case "escape-symlink":
+        return { path, edits: [edit(path, content, "linkdir/out.ts")] };
+      case "escape-absolute":
+        return { path, edits: [edit("/etc/passwd", "pwned")] };
+      case "conflict":
+        return { path, edits: [edit(path, content, "same.ts")] };
+      case "rename":
+        return { path, edits: [edit(path, content, path.replace(/\.ts$/u, ".moved.ts"))] };
+      case "rename-twice":
+        return {
           path,
-          open: {
-            script: open.script,
-            scriptRoot: open.scriptRoot,
-            language: open.language,
-            targetRoot: open.targetRoot,
-            semanticAnalysis: open.semanticAnalysis ?? null,
-            input: open.input ?? null,
-          },
-          indexed: [...indexed],
-        });
-      }
-      case "close":
-        send({ type: "closed" });
-        process.exit(0);
+          edits:
+            path === "a.ts"
+              ? [edit(path, content), edit("b.ts", "b\n", "x.ts")]
+              : [edit(path, content, "y.ts")],
+        };
+      case "write-renamed":
+        return {
+          path,
+          edits:
+            path === "a.ts"
+              ? [edit(path, content), edit("b.ts", "b\n", "b.moved.ts")]
+              : [edit(path, `${content}// b\n`)],
+        };
+      case "secondary":
+        return {
+          path,
+          edits: [
+            edit(path, `${content}// primary ${path}\n`),
+            ...(path === "a.ts" ? [edit(process.env.FAKE_SECONDARY_PATH, "// secondary\n")] : []),
+          ],
+        };
+      default:
+        return {
+          path,
+          edits: [edit(path, `${content}// fake\n`)],
+          output: { path, context, input: request.operation.input ?? null },
+        };
     }
-  });
-  rl.on("close", () => process.exit(0));
+  };
+  reply({ status: "succeeded", output: { files: files.map(outcome) } });
 }

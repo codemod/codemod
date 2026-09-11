@@ -31,6 +31,7 @@ export { canonicalJson } from "./json.ts";
 export type { Json } from "./json.ts";
 export {
   PROTOCOL_VERSION,
+  isFileOutcomes,
   isJson,
   isOperation,
   isOperationCompletion,
@@ -40,9 +41,12 @@ export {
 } from "./protocol.ts";
 export type {
   AiOperation,
+  BatchFile,
   CompletionError,
   CompletionStatus,
+  Edit,
   ExecOperation,
+  FileOutcome,
   JssgOperation,
   Operation,
   OperationCompletion,
@@ -53,35 +57,16 @@ export type {
 } from "./protocol.ts";
 export { PathEscapeError, isSafeRelativePath, resolveInsideRoot } from "./paths.ts";
 export {
-  isTransformResult,
-  isWorkerRequest,
-  isWorkerResponse,
-  parseWorkerResponse,
-} from "./worker-protocol.ts";
-export type {
-  FileResult,
-  SecondaryResult,
-  TransformResult,
-  WorkerRequest,
-  WorkerResponse,
-} from "./worker-protocol.ts";
-export { JssgWorker, WorkerExitError } from "./worker.ts";
+  comparePaths,
+  discoverGlobalExcludesPath,
+  languageExtensions,
+  selectFiles,
+} from "./files.ts";
+export type { Selection } from "./files.ts";
+export { spawnBridge } from "./bridge.ts";
+export type { BridgeProcessOptions } from "./bridge.ts";
 export { executeJssg } from "./jssg.ts";
 export type { JssgExecutionOptions } from "./jssg.ts";
-export { CommitError, Staging, StagingConflictError } from "./staging.ts";
-export type { CommitDetail, CommitReport, StagedWrite } from "./staging.ts";
-export { comparePaths, discoverGlobalExcludesPath, selectFiles, walkFiles } from "./walker.ts";
-export type { OverrideSet, Selection, WalkOptions } from "./walker.ts";
-export {
-  GlobError,
-  GitignoreMatcher,
-  OverrideMatcher,
-  globToRegex,
-  parseGitignore,
-  parseGitignoreLine,
-} from "./gitignore.ts";
-export type { CompiledGlob, MatchKind } from "./gitignore.ts";
-export type { JssgPhase } from "./events.ts";
 export {
   MemoryHistoryStore,
   emptyHistory,

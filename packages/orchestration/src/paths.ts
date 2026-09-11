@@ -1,9 +1,9 @@
 /**
  * Path rules shared by JSSG targets, JSSG definitions (`script`,
- * `semanticAnalysis.root`), the wire protocol, and the staging area. The Rust
- * worker applies the same rules (`validate_relative_path` and `paths.rs` in
- * crates/execution-bridge), so a value accepted here is accepted there and
- * every path is checked independently on both sides.
+ * `semanticAnalysis.root`), the wire protocol, and the commit. The Rust
+ * bridge applies the same rules (`validate_relative_path` and the containment
+ * checks in `crates/execution-bridge/src/jssg.rs`), so a value accepted here
+ * is accepted there and every path is checked independently on both sides.
  */
 import { lstatSync, realpathSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
@@ -21,10 +21,6 @@ export function escapesRoot(path: string): boolean {
 /** Non-empty, relative, and without `..` segments. */
 export function isSafeRelativePath(path: string): boolean {
   return path.trim() !== "" && !isAbsolutePath(path) && !escapesRoot(path);
-}
-
-export function toPosix(path: string): string {
-  return sep === "/" ? path : path.split(sep).join("/");
 }
 
 /** A path was outside the root it must stay beneath. */

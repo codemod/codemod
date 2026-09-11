@@ -3,13 +3,12 @@
  * OperationExecutor, including the Rust execution bridge
  * (`crates/execution-bridge`). Keep this file JSON-only: no classes, no
  * functions on the wire. The Rust serde structs mirror these shapes exactly;
- * `fixtures/protocol/*.json` are the shared conformance fixtures. The JSSG
- * worker messages live in `worker-protocol.ts`.
+ * `fixtures/protocol/*.json` are the shared conformance fixtures.
  */
 import type { Json } from "./json.ts";
 import { isSafeRelativePath } from "./paths.ts";
 
-export const PROTOCOL_VERSION = 3 as const;
+export const PROTOCOL_VERSION = 4 as const;
 
 export type CompletionStatus = "succeeded" | "failed" | "cancelled" | "unknown";
 
@@ -69,14 +68,25 @@ export interface AiOperation {
 
 export type Operation = ExecOperation | JssgOperation | AiOperation;
 
+/** One selected file, already read by the host. `path` is target-root-relative. */
+export interface BatchFile {
+  path: string;
+  content: string;
+}
+
 /**
  * Executor-side context. It is attached by the host that runs an executor,
  * never by workflow code, and it is not part of the command record that
- * history stores, so it may carry machine-specific absolute paths.
+ * history stores, so it may carry machine-specific absolute paths and file
+ * contents.
  */
 export interface RequestContext {
-  /** Directory that relative JSSG `script` paths are resolved against. */
+  /** Absolute directory that a relative JSSG `script` resolves against. */
   scriptRoot?: string;
+  /** Absolute directory every JSSG file path is relative to. */
+  targetRoot?: string;
+  /** The JSSG batch: selected files in transform order. */
+  files?: BatchFile[];
 }
 
 export interface OperationRequest {
@@ -86,14 +96,35 @@ export interface OperationRequest {
   context?: RequestContext;
 }
 
+/**
+ * One write the sandbox asked for: `content` belongs at `renameTo` when set
+ * (and `path` goes away), otherwise at `path`. Both are target-root-relative.
+ */
+export interface Edit {
+  path: string;
+  content: string;
+  renameTo?: string;
+}
+
+/**
+ * What one batch file's transform produced: its own edit if modified,
+ * `jssgTransform` and `write()` edits, and the `StructuredCodemod` output.
+ * The bridge returns `{ files: FileOutcome[] }` in batch order.
+ */
+export interface FileOutcome {
+  path: string;
+  edits: Edit[];
+  output?: Json;
+}
+
 export interface CompletionError {
   message: string;
   exitCode?: number;
   output?: string;
   /**
    * Structured failure detail. JSSG commands report the phase that failed
-   * (`open`, `select`, `index`, `transform`, `stage`, `commit`), the file
-   * involved, and for commit failures which files were already applied.
+   * (`select`, `transform`, `stage`, `commit`) and for commit failures which
+   * files were already applied.
    */
   details?: Json;
 }
@@ -103,7 +134,7 @@ export type OperationCompletion =
       protocolVersion: typeof PROTOCOL_VERSION;
       commandId: string;
       status: "succeeded";
-      /** For exec this is `{ stdout: string }`; for jssg the per-file outputs in file order. */
+      /** For exec `{ stdout }`; for jssg the per-file structured outputs in file order. */
       output: Json;
       error?: never;
     }
@@ -132,7 +163,7 @@ export function isJson(value: unknown): value is Json {
   return isRecord(value) && Object.values(value).every(isJson);
 }
 
-export function isStringList(value: unknown): value is string[] {
+function isStringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
@@ -140,11 +171,13 @@ function isNonEmptyStringList(value: unknown): value is string[] {
   return isStringList(value) && value.length > 0 && value.every((item) => item.trim() !== "");
 }
 
+function isNonBlank(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
 export function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
 }
-
-const TARGET_FIELDS = ["root", "include", "exclude"] as const;
 
 /**
  * Field sets per operation kind. Validation is strict: a field from another
@@ -164,7 +197,7 @@ const OPERATION_FIELDS = {
 export function isTarget(value: unknown): value is Target {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, TARGET_FIELDS) &&
+    hasOnlyKeys(value, ["root", "include", "exclude"]) &&
     (value.root === undefined ||
       (typeof value.root === "string" && isSafeRelativePath(value.root))) &&
     (value.include === undefined || isStringList(value.include)) &&
@@ -185,12 +218,52 @@ export function isSemanticAnalysis(value: unknown): value is SemanticAnalysis {
   );
 }
 
+function isBatchFile(value: unknown): value is BatchFile {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["path", "content"]) &&
+    typeof value.path === "string" &&
+    isSafeRelativePath(value.path) &&
+    typeof value.content === "string"
+  );
+}
+
 function isRequestContext(value: unknown): value is RequestContext {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["scriptRoot"]) &&
-    (value.scriptRoot === undefined ||
-      (typeof value.scriptRoot === "string" && value.scriptRoot.trim() !== ""))
+    hasOnlyKeys(value, ["scriptRoot", "targetRoot", "files"]) &&
+    (value.scriptRoot === undefined || isNonBlank(value.scriptRoot)) &&
+    (value.targetRoot === undefined || isNonBlank(value.targetRoot)) &&
+    (value.files === undefined || (Array.isArray(value.files) && value.files.every(isBatchFile)))
+  );
+}
+
+function isEdit(value: unknown): value is Edit {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["path", "content", "renameTo"]) &&
+    typeof value.path === "string" &&
+    isSafeRelativePath(value.path) &&
+    typeof value.content === "string" &&
+    (value.renameTo === undefined ||
+      (typeof value.renameTo === "string" && isSafeRelativePath(value.renameTo)))
+  );
+}
+
+/** Every path the bridge returns must be a safe relative path. */
+export function isFileOutcomes(value: unknown): value is FileOutcome[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (outcome) =>
+        isRecord(outcome) &&
+        hasOnlyKeys(outcome, ["path", "edits", "output"]) &&
+        typeof outcome.path === "string" &&
+        isSafeRelativePath(outcome.path) &&
+        Array.isArray(outcome.edits) &&
+        outcome.edits.every(isEdit) &&
+        (outcome.output === undefined || isJson(outcome.output)),
+    )
   );
 }
 
@@ -219,8 +292,7 @@ export function isOperation(value: unknown): value is Operation {
         hasOnlyKeys(value, OPERATION_FIELDS.jssg) &&
         typeof value.script === "string" &&
         isSafeRelativePath(value.script) &&
-        typeof value.language === "string" &&
-        value.language.trim() !== "" &&
+        isNonBlank(value.language) &&
         (value.include === undefined || isNonEmptyStringList(value.include)) &&
         (value.exclude === undefined || isNonEmptyStringList(value.exclude)) &&
         (value.semanticAnalysis === undefined || isSemanticAnalysis(value.semanticAnalysis)) &&

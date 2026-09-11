@@ -278,10 +278,10 @@ unknown fields), recorded in history, sent on the wire as `operation.target`,
 and enforced by the TypeScript JSSG orchestrator: it enumerates the files
 accepted by both the definition and the target (with the workflow engine's
 walker semantics, pinned by a shared contract the engine walker also runs),
-transforms them serially in component-wise order through one Rust worker
-session, stages every result, checks cross-file conflicts, commits all edits
-only after the last transform succeeded, and returns the per-file structured
-outputs in that order.
+sends them in component-wise order as one batch to one Rust bridge process,
+checks the returned edits for cross-file conflicts, commits all edits only
+after every transform succeeded, and returns the per-file structured outputs
+in that order.
 
 What the prototype does not implement: `exec` still runs in the executor's
 working directory with no file list, a transform's own `fs` access is limited
@@ -379,26 +379,25 @@ and the parts that need rapid iteration:
 - the test harness
 - prototype replay and in-memory history
 - for JSSG: repository traversal and language-extension defaults, definition
-  and target intersection, deterministic ordering, serial scheduling,
-  reading sources, staging primary and secondary edits and renames,
+  and target intersection, deterministic ordering, reading sources,
   cross-file conflict validation, the transactional commit, typed output
-  aggregation, progress events, cancellation, and failure classification
+  aggregation, cancellation, and failure classification
 
 Rust owns only execution and the checks on its own side of the boundary. The
 versioned JSON bridge calls the existing `butterflow_runners::DirectRunner`
-for shell commands. For JSSG, one persistent worker process per command holds
-a stateful session (the loaded script and selector, module resolution, the
-semantic provider and its index) over the existing QuickJS sandbox, answers
-`open` / `index` / `transform` / `close` messages with plain JSON, and
-validates every path it receives or produces against the target root. It
-never enumerates the repository and never writes repository files on this
-path. It does not implement planning, replay, or persistence, and it builds
-without the full Codemod CLI.
+for shell commands. For JSSG, one bridge process per command receives the
+selected files with their contents, loads the script and selector once, builds
+one semantic provider, transforms every file through the existing QuickJS
+sandbox, validates every path it receives or produces against the target
+root, and returns the edits and outputs as plain JSON. It never enumerates
+the repository and never writes repository files on this path. It does not
+implement planning, replay, or persistence, and it builds without the full
+Codemod CLI.
 
 ```text
 TypeScript workflow -> replay gate -> BridgeExecutor
-    exec -> one-shot file protocol -> DirectRunner
-    jssg -> executeJssg (select, index, transform, stage, commit) -> JSONL worker -> JSSG sandbox
+    exec -> bridge process -> DirectRunner
+    jssg -> executeJssg (select, read) -> bridge process (one batch) -> executeJssg (validate, stage, commit)
 ```
 
 The split keeps the new authoring API and its policy easy to change while
@@ -425,14 +424,13 @@ Rust returns plain data:
 }
 ```
 
-The one-shot bridge uses files, and the JSSG worker uses the pipes the host
-gave it, because non-CLI crates must not write protocol messages to the
-terminal. `RUST_BRIDGE.md` documents both protocols, the security model, and
-the transaction semantics.
+The bridge exchanges request and completion files because non-CLI crates
+must not write protocol messages to the terminal. `RUST_BRIDGE.md` documents
+the protocol, the batch, the security model, and the transaction semantics.
 
 The existing YAML engine is untouched: Butterflow keeps its graph,
 scheduling, state, reporting, JSSG execution, and filesystem mutation path.
-The only shared change is a sandbox option (`stage_writes`) that the worker
+The only shared change is a sandbox option (`stage_writes`) that the bridge
 turns on and the engine leaves off.
 
 ## Replay Model
@@ -490,12 +488,12 @@ Included:
 - append-only in-memory history and replay checks
 - scripted TypeScript tests
 - real `exec` calls through the existing Rust runner
-- real local JSSG calls through the existing sandbox over one stateful Rust
-  session per command, including workspace semantic analysis
+- real local JSSG calls through the existing sandbox as one Rust batch per
+  command, including workspace semantic analysis
 - TypeScript-owned file selection with the engine's walker semantics,
-  deterministic ordering, staged edits, transactional commit, structured
+  deterministic ordering, conflict checks, transactional commit, structured
   output aggregation, and failure classification
-- cancellation of the operation in flight (worker killed, nothing written)
+- cancellation of the operation in flight (bridge killed, nothing written)
 - an experimental trusted-local TypeScript workflow CLI
 
 Not included:
@@ -505,8 +503,9 @@ Not included:
 - AI execution
 - durable persistence or production scheduling
 - a parallel file-job scheduler, per-file locks, worktrees, or merge semantics
-  (conflicting cross-file edits fail the command instead of merging)
-- cross-file atomicity of the commit beyond per-file atomic renames
+  (every transform sees the pre-command snapshot; conflicting cross-file
+  edits fail the command instead of chaining or merging)
+- cross-file atomicity of the commit
 - metrics, findings, artifacts, or human approval channels
 - state-backed matrices, native shards, or delivery behavior
 - a platform-neutral structured stdout/stderr result from `DirectRunner`
@@ -521,9 +520,9 @@ us move one part at a time:
 1. Move command ID calculation and file-backed history into Rust.
 2. Move replay comparisons and final output checks into Rust.
 3. Let Rust execute operations directly, then add AI and Plan adapters. JSSG
-   already runs through a narrow Rust session; the orchestration around it
-   (selection, staging, commit) stays in TypeScript until the scheduler below
-   exists.
+   already runs through a narrow Rust batch; the orchestration around it
+   (selection, conflict checks, commit) stays in TypeScript until the
+   scheduler below exists.
 4. Add one shared file-job scheduler that resolves each command's effective
    file set, shards it automatically, and holds per-file locks across each JSSG
    read-transform-write cycle.

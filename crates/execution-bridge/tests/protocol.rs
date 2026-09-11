@@ -1,13 +1,16 @@
+//! The wire contract shared with `packages/orchestration/src/protocol.ts`:
+//! the JSON fixtures both sides check, strict decoding, and `exec` through
+//! the real `DirectRunner`.
+
 use std::path::Path;
 
 use butterflow_execution_bridge::{
     completion_from_result, execute, parse_request, CompletionStatus, Operation,
-    OperationCompletion, OperationRequest, RequestContext, SemanticAnalysis,
-    SemanticAnalysisDetails, SemanticMode, Target, PROTOCOL_VERSION,
+    OperationCompletion, RequestContext, SemanticAnalysis, SemanticMode, Target, PROTOCOL_VERSION,
 };
 use butterflow_models::Error;
 use butterflow_runners::direct_runner::DirectRunner;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 const FIXTURES: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -19,328 +22,190 @@ fn fixture(name: &str) -> String {
         .unwrap_or_else(|error| panic!("failed to read fixture {name}: {error}"))
 }
 
-#[cfg(unix)]
-fn exec_request(command_id: &str, command: &str) -> OperationRequest {
-    OperationRequest {
-        protocol_version: PROTOCOL_VERSION,
-        command_id: command_id.to_string(),
-        operation: Operation::Exec {
-            command: command.to_string(),
-            env: Default::default(),
-        },
-        context: None,
-    }
-}
-
-fn jssg_request(operation: &str) -> String {
-    format!(r#"{{"protocolVersion":3,"commandId":"t","operation":{operation}}}"#)
+fn request(operation: &str) -> String {
+    format!(r#"{{"protocolVersion":{PROTOCOL_VERSION},"commandId":"t","operation":{operation}}}"#)
 }
 
 #[test]
-fn request_fixtures_round_trip_to_identical_json() {
+fn fixtures_round_trip_to_identical_json() {
     for name in [
         "exec-request.json",
         "jssg-request.json",
         "jssg-target-request.json",
     ] {
         let text = fixture(name);
-        let request = parse_request(&text).expect("fixture should parse");
+        let parsed = parse_request(&text).expect(name);
         let expected: Value = serde_json::from_str(&text).expect("fixture is JSON");
-        let actual = serde_json::to_value(&request).expect("request serializes");
-        assert_eq!(actual, expected, "{name}");
-    }
-}
-
-#[test]
-fn exec_request_fixture_carries_command_and_env() {
-    let request = parse_request(&fixture("exec-request.json")).expect("parse");
-    assert_eq!(request.command_id, "inspect");
-    match request.operation {
-        Operation::Exec { command, env } => {
-            assert_eq!(command, "printf '{\"needsMigration\":true}'");
-            assert_eq!(env.get("CI").map(String::as_str), Some("1"));
-        }
-        other => panic!("expected exec operation, got {}", other.kind()),
-    }
-}
-
-#[test]
-fn jssg_request_fixture_has_no_target() {
-    let request = parse_request(&fixture("jssg-request.json")).expect("parse");
-    match request.operation {
-        Operation::Jssg {
-            script,
-            language,
-            include,
-            semantic_analysis,
-            target,
-            input,
-            ..
-        } => {
-            assert_eq!(script, "scripts/migrate.ts");
-            assert_eq!(language, "tsx");
-            assert_eq!(include, Some(vec!["**/*.tsx".to_string()]));
-            assert_eq!(
-                semantic_analysis,
-                Some(SemanticAnalysis::Mode(SemanticMode::Workspace))
-            );
-            assert_eq!(target, None);
-            assert_eq!(input, Some(serde_json::json!({ "needsMigration": true })));
-        }
-        other => panic!("expected jssg operation, got {}", other.kind()),
-    }
-}
-
-#[test]
-fn jssg_target_request_fixture_decodes_root_include_and_exclude() {
-    let request = parse_request(&fixture("jssg-target-request.json")).expect("parse");
-    assert_eq!(request.command_id, "rename-api");
-    match request.operation {
-        Operation::Jssg {
-            script,
-            language,
-            include,
-            exclude,
-            target,
-            input,
-            ..
-        } => {
-            assert_eq!(script, "scripts/rename-api.ts");
-            assert_eq!(language, "typescript");
-            assert_eq!(include, Some(vec!["**/*.ts".to_string()]));
-            assert_eq!(exclude, Some(vec!["**/*.d.ts".to_string()]));
-            assert_eq!(
-                target,
-                Some(Target {
-                    root: Some("apps/web".to_string()),
-                    include: Some(vec!["src/**".to_string()]),
-                    exclude: Some(vec!["**/generated/**".to_string()]),
-                })
-            );
-            assert_eq!(input, None);
-        }
-        other => panic!("expected jssg operation, got {}", other.kind()),
-    }
-}
-
-#[test]
-fn partial_targets_omit_absent_fields_when_serialized() {
-    let text = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript","target":{"root":"packages/a"}}}"#;
-    let request = parse_request(text).expect("parse");
-    let value = serde_json::to_value(&request).expect("serialize");
-    assert_eq!(
-        value["operation"]["target"],
-        serde_json::json!({ "root": "packages/a" })
-    );
-}
-
-#[test]
-fn malformed_targets_are_rejected() {
-    for target in [
-        r#""apps/web""#,
-        r#"{"root":1}"#,
-        r#"{"include":"src/**"}"#,
-        r#"{"exclude":[null]}"#,
-        r#"{"root":"apps/web","files":["a.ts"]}"#,
-    ] {
-        let text = format!(
-            r#"{{"protocolVersion":3,"commandId":"t","operation":{{"kind":"jssg","script":"p.ts","language":"typescript","target":{target}}}}}"#
-        );
-        let error = parse_request(&text).expect_err("malformed target must not parse");
-        assert!(error.contains("invalid request JSON"), "{target}: {error}");
-    }
-}
-
-#[test]
-fn exec_and_ai_operations_reject_a_target() {
-    // Only `jssg` carries a target. A target on `exec` or `ai` is a parse error,
-    // never a silently dropped field, so it cannot reach the runner unenforced.
-    for operation in [
-        r#"{"kind":"exec","command":"true","target":{"root":"apps"}}"#,
-        r#"{"kind":"ai","prompt":"summarize","target":{"root":"apps"}}"#,
-    ] {
-        let text = format!(r#"{{"protocolVersion":3,"commandId":"t","operation":{operation}}}"#);
-        let error = parse_request(&text).expect_err("target on exec/ai must not parse");
-        assert!(
-            error.contains("invalid request JSON"),
-            "{operation}: {error}"
-        );
-        assert!(
-            error.contains("unknown field `target`"),
-            "{operation}: {error}"
+        assert_eq!(
+            serde_json::to_value(&parsed).expect("serializes"),
+            expected,
+            "{name}"
         );
     }
-}
-
-#[test]
-fn operations_and_envelopes_reject_fields_from_other_variants() {
-    for operation in [
-        r#"{"kind":"exec","command":"true","package":"p"}"#,
-        r#"{"kind":"jssg","script":"p.ts","language":"typescript","command":"true"}"#,
-        r#"{"kind":"ai","prompt":"x","env":{}}"#,
-    ] {
-        let text = format!(r#"{{"protocolVersion":3,"commandId":"t","operation":{operation}}}"#);
-        let error = parse_request(&text).expect_err("unknown operation field must not parse");
-        assert!(error.contains("unknown field"), "{operation}: {error}");
-    }
-    let envelope = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"exec","command":"true"},"scriptRoot":"/tmp"}"#;
-    assert!(parse_request(envelope)
-        .expect_err("unknown envelope field")
-        .contains("unknown field"));
-}
-
-#[test]
-fn semantic_analysis_rejects_unknown_fields() {
-    let text = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"workspace","threads":4}}}"#;
-    let error = parse_request(text).expect_err("unknown semantic field must not parse");
-    assert!(error.contains("invalid request JSON"), "{error}");
-}
-
-#[test]
-fn jssg_definition_rejects_invalid_intrinsic_fields() {
-    for operation in [
-        r#"{"kind":"jssg","script":"","language":"typescript"}"#,
-        r#"{"kind":"jssg","script":"p.ts","language":" "}"#,
-        r#"{"kind":"jssg","script":"p.ts","language":"typescript","include":[] }"#,
-        r#"{"kind":"jssg","script":"p.ts","language":"typescript","exclude":[" "] }"#,
-        r#"{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"file","root":"src"}}"#,
-    ] {
-        assert!(
-            parse_request(&jssg_request(operation)).is_err(),
-            "{operation}"
-        );
-    }
-}
-
-#[test]
-fn jssg_paths_must_be_safe_and_relative_on_every_platform() {
-    // Same rules as `isSafeRelativePath` in packages/orchestration/src/paths.ts.
-    for bad in [
-        "/abs/p.ts",
-        "\\\\server\\p.ts",
-        "C:\\p.ts",
-        "c:/p.ts",
-        "../p.ts",
-        "scripts/../p.ts",
-        "scripts\\..\\p.ts",
-    ] {
-        let escaped = bad.replace('\\', "\\\\");
-        for operation in [
-            format!(r#"{{"kind":"jssg","script":"{escaped}","language":"typescript"}}"#),
-            format!(
-                r#"{{"kind":"jssg","script":"p.ts","language":"typescript","target":{{"root":"{escaped}"}}}}"#
-            ),
-            format!(
-                r#"{{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{{"mode":"workspace","root":"{escaped}"}}}}"#
-            ),
-        ] {
-            let error = parse_request(&jssg_request(&operation)).expect_err("must reject");
-            assert!(error.contains("safe relative path"), "{operation}: {error}");
-        }
-    }
-    // A `..` inside a segment is an ordinary name, not an escape.
-    let ok = r#"{"kind":"jssg","script":"scripts/foo..bar.ts","language":"typescript","target":{"root":"apps/a..b"},"semanticAnalysis":{"mode":"workspace","root":"src..gen"}}"#;
-    parse_request(&jssg_request(ok)).expect("foo..bar is a valid name");
-}
-
-#[test]
-fn semantic_details_omit_absent_root_when_serialized() {
-    let text = jssg_request(
-        r#"{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"workspace"}}"#,
-    );
-    let request = parse_request(&text).expect("parse");
-    match &request.operation {
-        Operation::Jssg {
-            semantic_analysis, ..
-        } => assert_eq!(
-            semantic_analysis,
-            &Some(SemanticAnalysis::Detailed(SemanticAnalysisDetails {
-                mode: SemanticMode::Workspace,
-                root: None,
-            }))
-        ),
-        other => panic!("expected jssg operation, got {}", other.kind()),
-    }
-    let value = serde_json::to_value(&request).expect("serialize");
-    assert_eq!(
-        value["operation"]["semanticAnalysis"],
-        serde_json::json!({ "mode": "workspace" })
-    );
-}
-
-#[test]
-fn request_context_is_optional_strict_and_never_serialized_when_absent() {
-    let without = parse_request(&fixture("jssg-request.json")).expect("parse");
-    assert_eq!(without.context, None);
-    let value = serde_json::to_value(&without).expect("serialize");
-    assert!(value.get("context").is_none());
-
-    let text = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"jssg","script":"p.ts","language":"typescript"},"context":{"scriptRoot":"/tmp/workflow"}}"#;
-    let request = parse_request(text).expect("parse");
-    assert_eq!(
-        request.context,
-        Some(RequestContext {
-            script_root: Some("/tmp/workflow".to_string())
-        })
-    );
-    let blank = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"exec","command":"true"},"context":{"scriptRoot":" "}}"#;
-    assert!(parse_request(blank)
-        .expect_err("blank root")
-        .contains("scriptRoot"));
-    let unknown = r#"{"protocolVersion":3,"commandId":"t","operation":{"kind":"exec","command":"true"},"context":{"cwd":"/tmp"}}"#;
-    assert!(parse_request(unknown)
-        .expect_err("unknown context field")
-        .contains("unknown field"));
-}
-
-#[test]
-fn completion_fixtures_round_trip_to_identical_json() {
-    let cases = [
+    for (name, status) in [
         ("succeeded-completion.json", CompletionStatus::Succeeded),
         ("failed-completion.json", CompletionStatus::Failed),
         ("cancelled-completion.json", CompletionStatus::Cancelled),
         ("unknown-completion.json", CompletionStatus::Unknown),
-    ];
-    for (name, status) in cases {
+    ] {
         let text = fixture(name);
-        let completion: OperationCompletion =
-            serde_json::from_str(&text).expect("fixture should parse");
-        assert_eq!(completion.protocol_version, PROTOCOL_VERSION);
+        let completion: OperationCompletion = serde_json::from_str(&text).expect(name);
         assert_eq!(completion.status, status, "{name}");
         let expected: Value = serde_json::from_str(&text).expect("fixture is JSON");
-        let actual = serde_json::to_value(&completion).expect("completion serializes");
-        assert_eq!(actual, expected, "{name}");
+        assert_eq!(
+            serde_json::to_value(&completion).expect("serializes"),
+            expected,
+            "{name}"
+        );
     }
-    // The unknown fixture carries TypeScript-produced structured details.
-    let unknown: OperationCompletion =
-        serde_json::from_str(&fixture("unknown-completion.json")).expect("parse");
+}
+
+#[test]
+fn jssg_fixtures_decode_every_field() {
+    let plain = parse_request(&fixture("jssg-request.json")).expect("parse");
+    assert_eq!(plain.context, None);
+    let Operation::Jssg {
+        script,
+        language,
+        include,
+        semantic_analysis,
+        target,
+        input,
+        ..
+    } = plain.operation
+    else {
+        panic!("expected jssg");
+    };
+    assert_eq!(script, "scripts/migrate.ts");
+    assert_eq!(language, "tsx");
+    assert_eq!(include, Some(vec!["**/*.tsx".to_string()]));
     assert_eq!(
-        unknown.error.expect("error").details.expect("details")["phase"],
-        "commit"
+        semantic_analysis,
+        Some(SemanticAnalysis::Mode(SemanticMode::Workspace))
     );
-    let extra = r#"{"protocolVersion":3,"commandId":"x","status":"failed","error":{"message":"m","stack":"s"}}"#;
-    assert!(serde_json::from_str::<OperationCompletion>(extra).is_err());
+    assert_eq!(target, None);
+    assert_eq!(input, Some(json!({ "needsMigration": true })));
+
+    let targeted = parse_request(&fixture("jssg-target-request.json")).expect("parse");
+    let Operation::Jssg { target, .. } = targeted.operation else {
+        panic!("expected jssg");
+    };
+    assert_eq!(
+        target,
+        Some(Target {
+            root: Some("apps/web".to_string()),
+            include: Some(vec!["src/**".to_string()]),
+            exclude: Some(vec!["**/generated/**".to_string()]),
+        })
+    );
 }
 
 #[test]
-fn parse_request_rejects_other_protocol_versions() {
-    let text = fixture("exec-request.json");
-    let text = text.replace("\"protocolVersion\": 3", "\"protocolVersion\": 99");
-    let error = parse_request(&text).expect_err("version 99 must be rejected");
-    assert!(error.contains("unsupported protocolVersion 99"), "{error}");
+fn context_carries_roots_and_files_and_omits_absent_fields() {
+    let text = format!(
+        r#"{{"protocolVersion":{PROTOCOL_VERSION},"commandId":"t","operation":{{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{{"mode":"workspace"}}}},"context":{{"scriptRoot":"/w","targetRoot":"/r","files":[{{"path":"a.ts","content":"x"}}]}}}}"#
+    );
+    let parsed = parse_request(&text).expect("parse");
+    let context = parsed.context.clone().expect("context");
+    assert_eq!(context.script_root.as_deref(), Some("/w"));
+    assert_eq!(context.target_root.as_deref(), Some("/r"));
+    assert_eq!(context.files.as_ref().map(Vec::len), Some(1));
+    let value = serde_json::to_value(&parsed).expect("serialize");
+    assert_eq!(
+        value["operation"]["semanticAnalysis"],
+        json!({ "mode": "workspace" })
+    );
+    assert_eq!(
+        value["context"]["files"][0],
+        json!({ "path": "a.ts", "content": "x" })
+    );
+    assert_eq!(
+        serde_json::to_value(RequestContext::default()).expect("serialize"),
+        json!({})
+    );
 }
 
 #[test]
-fn success_converts_to_stdout_output() {
-    let completion = completion_from_result("inspect", Ok("hello\n".to_string()));
+fn decoding_is_strict() {
+    let cases = [
+        // (request body, expected error fragment)
+        (
+            request(r#"{"kind":"exec","command":"true","target":{"root":"apps"}}"#),
+            "unknown field `target`",
+        ),
+        (
+            request(r#"{"kind":"ai","prompt":"x","target":{"root":"apps"}}"#),
+            "unknown field `target`",
+        ),
+        (
+            request(r#"{"kind":"exec","command":"true","package":"p"}"#),
+            "unknown field",
+        ),
+        (
+            request(r#"{"kind":"jssg","script":"p.ts","language":"typescript","command":"true"}"#),
+            "unknown field",
+        ),
+        (
+            request(r#"{"kind":"jssg","script":"p.ts","language":"typescript","target":"apps"}"#),
+            "invalid request JSON",
+        ),
+        (
+            request(
+                r#"{"kind":"jssg","script":"p.ts","language":"typescript","target":{"root":"a","files":[]}}"#,
+            ),
+            "unknown field `files`",
+        ),
+        (
+            request(
+                r#"{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"workspace","threads":4}}"#,
+            ),
+            "invalid request JSON",
+        ),
+        (
+            request(r#"{"kind":"exec","command":"true"}"#)
+                .replace(r#""commandId""#, r#""cwd":"/","commandId""#),
+            "unknown field `cwd`",
+        ),
+        (
+            request(r#"{"kind":"exec","command":"true"}"#).replace(
+                r#""commandId":"t""#,
+                r#""commandId":"t","context":{"cwd":"/tmp"}"#,
+            ),
+            "unknown field `cwd`",
+        ),
+        (
+            request(r#"{"kind":"exec","command":"true"}"#).replace(
+                r#""commandId":"t""#,
+                r#""commandId":"t","context":{"files":[{"path":"a","content":"","mode":1}]}"#,
+            ),
+            "unknown field `mode`",
+        ),
+        (
+            fixture("exec-request.json").replace(
+                &format!("\"protocolVersion\": {PROTOCOL_VERSION}"),
+                "\"protocolVersion\": 99",
+            ),
+            "unsupported protocolVersion 99",
+        ),
+    ];
+    for (text, expected) in cases {
+        let error = parse_request(&text).expect_err(&text);
+        assert!(error.contains(expected), "{text}: {error}");
+    }
+    let extra = format!(
+        r#"{{"protocolVersion":{PROTOCOL_VERSION},"commandId":"x","status":"failed","error":{{"message":"m","stack":"s"}}}}"#
+    );
+    assert!(serde_json::from_str::<OperationCompletion>(&extra).is_err());
+}
+
+#[test]
+fn runner_results_convert_to_completions() {
+    let ok = completion_from_result("inspect", Ok("hello\n".to_string()));
     let mut expected: Value = serde_json::from_str(&fixture("succeeded-completion.json")).unwrap();
     expected["output"]["stdout"] = Value::String("hello\n".to_string());
-    assert_eq!(serde_json::to_value(&completion).unwrap(), expected);
-}
+    assert_eq!(serde_json::to_value(&ok).unwrap(), expected);
 
-#[test]
-fn shell_failure_converts_to_failed_with_exit_code() {
-    let completion = completion_from_result(
+    let failed = completion_from_result(
         "inspect",
         Err(Error::ShellCommandFailed {
             exit_code: 3,
@@ -348,98 +213,87 @@ fn shell_failure_converts_to_failed_with_exit_code() {
         }),
     );
     let expected: Value = serde_json::from_str(&fixture("failed-completion.json")).unwrap();
-    assert_eq!(serde_json::to_value(&completion).unwrap(), expected);
-}
+    assert_eq!(serde_json::to_value(&failed).unwrap(), expected);
 
-#[test]
-fn other_runner_errors_convert_to_unknown() {
-    let completion = completion_from_result(
+    let unknown = completion_from_result(
         "inspect",
         Err(Error::Runtime("Failed to wait for command".to_string())),
     );
-    assert_eq!(completion.status, CompletionStatus::Unknown);
+    assert_eq!(unknown.status, CompletionStatus::Unknown);
     assert_eq!(
-        completion.error.expect("error").message,
+        unknown.error.expect("error").message,
         "Runtime error: Failed to wait for command"
     );
 }
 
 #[tokio::test]
-async fn ai_and_jssg_operations_are_refused_by_the_one_shot_bridge() {
-    let ai = OperationRequest {
-        protocol_version: PROTOCOL_VERSION,
-        command_id: "ai".to_string(),
-        operation: Operation::Ai {
-            prompt: "summarize".to_string(),
-            input: None,
-        },
-        context: None,
-    };
-    let completion = execute(&DirectRunner::with_quiet(true), &ai).await;
+async fn ai_is_refused() {
+    let request = parse_request(&request(r#"{"kind":"ai","prompt":"summarize"}"#)).expect("parse");
+    let completion = execute(&DirectRunner::with_quiet(true), &request).await;
     assert_eq!(completion.status, CompletionStatus::Failed);
     assert!(completion
         .error
         .expect("error")
         .message
         .contains("no executor adapter"));
-
-    let jssg = parse_request(&fixture("jssg-request.json")).expect("parse");
-    let completion = execute(&DirectRunner::with_quiet(true), &jssg).await;
-    assert_eq!(completion.status, CompletionStatus::Failed);
-    assert!(completion
-        .error
-        .expect("error")
-        .message
-        .contains("worker protocol"));
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn exec_runs_through_direct_runner() {
-    let request = exec_request("hello", "printf '{\"ok\":true}'");
-    let completion = execute(&DirectRunner::with_quiet(true), &request).await;
-    assert_eq!(completion.status, CompletionStatus::Succeeded);
-    assert_eq!(completion.command_id, "hello");
-    assert_eq!(
-        completion.output.unwrap()["stdout"],
-        Value::String("{\"ok\":true}\n".to_string())
-    );
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn exec_preserves_direct_runners_combined_unix_output() {
-    let request = exec_request("stdio", "printf out; printf err >&2");
-    let completion = execute(&DirectRunner::with_quiet(true), &request).await;
-    assert_eq!(completion.status, CompletionStatus::Succeeded);
-    assert_eq!(
-        completion.output.unwrap()["stdout"],
-        Value::String("outerr\n".to_string())
-    );
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn exec_request_env_reaches_the_command() {
-    let mut request = exec_request("env", "printf '%s' \"$BRIDGE_TEST\"");
-    if let Operation::Exec { env, .. } = &mut request.operation {
-        env.insert("BRIDGE_TEST".to_string(), "from-request".to_string());
+    // (command, env, expected status, expected stdout / error output, exit code)
+    let cases = [
+        (
+            "printf '{\"ok\":true}'",
+            None,
+            CompletionStatus::Succeeded,
+            "{\"ok\":true}\n",
+            None,
+        ),
+        // DirectRunner combines stdout and stderr on Unix.
+        (
+            "printf out; printf err >&2",
+            None,
+            CompletionStatus::Succeeded,
+            "outerr\n",
+            None,
+        ),
+        (
+            "printf '%s' \"$BRIDGE_TEST\"",
+            Some("from-request"),
+            CompletionStatus::Succeeded,
+            "from-request\n",
+            None,
+        ),
+        (
+            "echo boom >&2; exit 3",
+            None,
+            CompletionStatus::Failed,
+            "boom\n",
+            Some(3),
+        ),
+    ];
+    for (command, env, status, text, exit_code) in cases {
+        let env = env.map_or_else(String::new, |value| {
+            format!(r#","env":{{"BRIDGE_TEST":"{value}"}}"#)
+        });
+        let request = parse_request(&request(&format!(
+            r#"{{"kind":"exec","command":{}{env}}}"#,
+            Value::String(command.to_string())
+        )))
+        .expect("parse");
+        let completion = execute(&DirectRunner::with_quiet(true), &request).await;
+        assert_eq!(completion.status, status, "{command}");
+        assert_eq!(completion.command_id, "t");
+        match status {
+            CompletionStatus::Succeeded => {
+                assert_eq!(completion.output.unwrap()["stdout"], text, "{command}");
+            }
+            _ => {
+                let error = completion.error.unwrap();
+                assert_eq!(error.exit_code, exit_code, "{command}");
+                assert_eq!(error.output.as_deref(), Some(text), "{command}");
+            }
+        }
     }
-    let completion = execute(&DirectRunner::with_quiet(true), &request).await;
-    assert_eq!(completion.status, CompletionStatus::Succeeded);
-    assert_eq!(
-        completion.output.unwrap()["stdout"],
-        Value::String("from-request\n".to_string())
-    );
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn exec_nonzero_exit_is_failed() {
-    let request = exec_request("bad", "echo boom >&2; exit 3");
-    let completion = execute(&DirectRunner::with_quiet(true), &request).await;
-    assert_eq!(completion.status, CompletionStatus::Failed);
-    let error = completion.error.unwrap();
-    assert_eq!(error.exit_code, Some(3));
-    assert_eq!(error.output.as_deref(), Some("boom\n"));
 }

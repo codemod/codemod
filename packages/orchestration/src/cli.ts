@@ -2,12 +2,11 @@
  * Experimental local workflow runner: `codemod-workflow <workflow.ts>`.
  *
  * Loads a TypeScript workflow module, runs its default export through the
- * Rust execution bridge (one-shot `exec`, persistent JSSG worker), and prints
+ * Rust execution bridge (one process per `exec` or JSSG command), and prints
  * the final value as JSON. Trusted local use only: the workflow runs in plain
  * Node, not a restricted sandbox, and nothing here validates registry
  * packages. SIGINT/SIGTERM abort the run: the operation in flight is
- * cancelled (worker killed, nothing written) or reported `unknown` if its
- * commit had started.
+ * cancelled (bridge killed, nothing written).
  */
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";

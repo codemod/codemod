@@ -1,5 +1,5 @@
 {
-  "protocolVersion": 3,
+  "protocolVersion": 4,
   "commandId": "inspect",
   "status": "cancelled",
   "error": {

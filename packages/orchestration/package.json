@@ -25,6 +25,9 @@
     "workflow": "node bin/codemod-workflow.mjs",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "ignore": "^5.3.1"
+  },
   "devDependencies": {
     "@codemod.com/tsconfig": "workspace:*",
     "@types/node": "*",

@@ -1,7 +1,7 @@
 /**
  * Script identity and resolution: a JSSG `script` is a safe relative path on
  * the wire and in history, and the executor (not the operation) carries the
- * machine-specific root it resolves against, sending it only to the worker.
+ * machine-specific root it resolves against, sending it only in the request context.
  */
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -87,7 +87,7 @@ const wf = workflow(() => migrate({ target: { root: "apps/web" } }));
 
 interface EchoOutput {
   path: string;
-  open: { script: string; scriptRoot: string; targetRoot: string };
+  context: { scriptRoot: string; targetRoot: string };
 }
 
 describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () => {
@@ -100,7 +100,7 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
   });
   afterEach(() => rmSync(repo, { recursive: true, force: true }));
 
-  it("sends scriptRoot to the worker's open message, outside the operation and history", async () => {
+  it("sends scriptRoot in the request context, outside the operation and history", async () => {
     const scriptRoot = resolve(import.meta.dirname, "fixtures");
     const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo, scriptRoot });
     const store = new MemoryHistoryStore();
@@ -110,7 +110,7 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
     const [output] = first.output as EchoOutput[];
     expect(output).toMatchObject({
       path: "a.ts",
-      open: { script: "scripts/migrate.ts", scriptRoot, targetRoot: join(repo, "apps/web") },
+      context: { scriptRoot, targetRoot: join(repo, "apps/web") },
     });
     const scheduled = first.history.events.find((event) => event.type === "scheduled");
     expect(scheduled).toEqual({
@@ -127,8 +127,8 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
         },
       },
     });
-    // Only the completion (which this fake worker fills with the echoed open
-    // message) mentions the root; the recorded command that replay compares does not.
+    // Only the completion (which this fake bridge fills with the echoed
+    // context) mentions the root; the recorded command that replay compares does not.
     expect(JSON.stringify(scheduled)).not.toContain("scriptRoot");
     expect(JSON.stringify(scheduled)).not.toContain(scriptRoot);
     expect(JSON.stringify(scheduled)).not.toContain(repo);
@@ -168,7 +168,7 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
     const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
     const result = await run(wf, { executor });
     const [output] = result.output as EchoOutput[];
-    expect(output?.open.scriptRoot).toBe(repo);
+    expect(output?.context.scriptRoot).toBe(repo);
   });
 
   it("runs exec through the one-shot file protocol and refuses ai locally", async () => {
@@ -183,7 +183,7 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
     };
     expect(echoed.request.operation).toEqual({ kind: "exec", command: "true" });
     const ai = await executor.execute({
-      protocolVersion: 3,
+      protocolVersion: 4,
       commandId: "ai",
       operation: { kind: "ai", prompt: "x" },
     });

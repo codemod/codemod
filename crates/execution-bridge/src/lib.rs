@@ -1,39 +1,29 @@
 //! Execution bridge for the TypeScript orchestration prototype.
 //!
-//! Two entry points share one binary:
-//!
-//! - the one-shot file protocol (`OperationRequest` in, `OperationCompletion`
-//!   out) executes `exec` through the existing `butterflow_runners::Runner`;
-//! - the JSONL worker (`--jssg-worker`, see [`worker`]) holds one stateful
-//!   JSSG [`session::JssgSession`] and answers `open` / `index` / `transform`
-//!   / `close` messages with plain JSON.
-//!
-//! Neither path walks a repository, interprets globs, orders files, applies
-//! edits, or decides repository-level failure policy: TypeScript owns all of
-//! that (`packages/orchestration/src/jssg.ts`). See
-//! `packages/orchestration/RUST_BRIDGE.md`.
+//! One binary, one exchange: an `OperationRequest` is read from a file, an
+//! `OperationCompletion` is written to another. `exec` runs through the
+//! existing `butterflow_runners::Runner`; `jssg` runs one batch of
+//! host-supplied files through the sandbox (see [`jssg`]). The bridge never
+//! walks a repository, interprets globs, orders files, applies edits, or
+//! decides repository-level failure policy: TypeScript owns all of that
+//! (`packages/orchestration/src/jssg.ts`, `RUST_BRIDGE.md`).
 
-use std::{
-    collections::HashMap,
-    path::{Component, Path},
-};
+use std::collections::HashMap;
 
 use butterflow_models::Error;
 use butterflow_runners::Runner;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Value};
 
-pub mod paths;
-pub mod session;
-pub mod worker;
+pub mod jssg;
 
 /// Must match `PROTOCOL_VERSION` in `packages/orchestration/src/protocol.ts`.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Every variant rejects fields it does not declare, so a `target` on `exec`
-/// or `ai` is a parse error rather than a silently dropped field. Only `jssg`
-/// carries a target. The `jssg` variant is decoded for wire parity only: JSSG
-/// runs through the worker protocol, never through the one-shot bridge.
+/// or `ai` is a parse error rather than a silently dropped field. `include`,
+/// `exclude`, and `target` are decoded for strictness only: TypeScript has
+/// already turned them into the file list in `RequestContext::files`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -48,8 +38,7 @@ pub enum Operation {
         env: HashMap<String, String>,
     },
     Jssg {
-        /// Safe relative path, resolved by the host against its script root.
-        /// Never absolute, so command identity is stable across checkouts.
+        /// Safe relative path, resolved beneath `RequestContext::script_root`.
         script: String,
         language: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,6 +60,8 @@ pub enum Operation {
     },
 }
 
+/// `"file"`, `"workspace"`, or `{ mode, root? }` where `root` is a safe
+/// relative path beneath the target root and requires workspace mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SemanticAnalysis {
@@ -93,37 +84,7 @@ pub enum SemanticMode {
     Workspace,
 }
 
-impl SemanticAnalysis {
-    pub fn mode(&self) -> SemanticMode {
-        match self {
-            SemanticAnalysis::Mode(mode) => *mode,
-            SemanticAnalysis::Detailed(details) => details.mode,
-        }
-    }
-
-    pub fn root(&self) -> Option<&str> {
-        match self {
-            SemanticAnalysis::Mode(_) => None,
-            SemanticAnalysis::Detailed(details) => details.root.as_deref(),
-        }
-    }
-
-    /// Shared validation: `root` requires workspace mode and must be a safe
-    /// relative path. Used by the one-shot request parser and the worker.
-    pub fn validate(&self) -> Result<(), String> {
-        if let Some(root) = self.root() {
-            if self.mode() == SemanticMode::File {
-                return Err("semanticAnalysis.root requires workspace mode".to_string());
-            }
-            validate_relative_path(root, "semanticAnalysis.root")?;
-        }
-        Ok(())
-    }
-}
-
-/// Repository area one JSSG invocation applies to. Mirrors `Target` in
-/// `protocol.ts`: `root` is relative to the working directory, `include` and
-/// `exclude` are globs relative to `root`. Interpreted only by TypeScript.
+/// Mirrors `Target` in `protocol.ts`. Interpreted only by TypeScript.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Target {
@@ -135,25 +96,29 @@ pub struct Target {
     pub exclude: Option<Vec<String>>,
 }
 
-impl Operation {
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Operation::Exec { .. } => "exec",
-            Operation::Jssg { .. } => "jssg",
-            Operation::Ai { .. } => "ai",
-        }
-    }
-}
-
-/// Executor-side context that is not part of command identity. It is set by
-/// the host that spawns the bridge and is never recorded in history, so it
-/// may hold machine-specific paths.
+/// Executor-side context set by the host that spawns the bridge. It is not
+/// command identity and never enters history, so it may hold machine-specific
+/// paths and file contents.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestContext {
-    /// Directory that relative JSSG `script` paths are resolved against.
+    /// Absolute directory that a relative JSSG `script` resolves against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub script_root: Option<String>,
+    /// Absolute directory every JSSG file path is relative to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_root: Option<String>,
+    /// The selected files, in transform order, already read by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<BatchFile>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BatchFile {
+    /// Safe relative path beneath the target root.
+    pub path: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -183,8 +148,7 @@ pub struct CompletionError {
     pub exit_code: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
-    /// Structured failure detail (phase, path, applied/remaining files).
-    /// Produced by TypeScript for JSSG commands; the bridge never sets it.
+    /// Structured failure detail; produced by TypeScript for JSSG commands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
 }
@@ -202,33 +166,31 @@ pub struct OperationCompletion {
 }
 
 impl OperationCompletion {
-    fn succeeded(command_id: &str, output: Value) -> Self {
+    fn new(command_id: &str, status: CompletionStatus, output: Option<Value>) -> Self {
         Self {
             protocol_version: PROTOCOL_VERSION,
             command_id: command_id.to_string(),
-            status: CompletionStatus::Succeeded,
-            output: Some(output),
+            status,
+            output,
             error: None,
         }
     }
 
     pub fn not_succeeded(command_id: &str, status: CompletionStatus, message: String) -> Self {
         Self {
-            protocol_version: PROTOCOL_VERSION,
-            command_id: command_id.to_string(),
-            status,
-            output: None,
             error: Some(CompletionError {
                 message,
                 exit_code: None,
                 output: None,
                 details: None,
             }),
+            ..Self::new(command_id, status, None)
         }
     }
 }
 
 /// Parse a request and reject protocol versions this bridge does not speak.
+/// Path rules are enforced where the paths are used (`jssg`).
 pub fn parse_request(text: &str) -> Result<OperationRequest, String> {
     let request: OperationRequest =
         serde_json::from_str(text).map_err(|error| format!("invalid request JSON: {error}"))?;
@@ -238,95 +200,50 @@ pub fn parse_request(text: &str) -> Result<OperationRequest, String> {
             request.protocol_version
         ));
     }
-    if let Operation::Jssg {
-        script,
-        language,
-        include,
-        exclude,
-        semantic_analysis,
-        target,
-        ..
-    } = &request.operation
-    {
-        validate_relative_path(script, "JSSG script")?;
-        if language.trim().is_empty() {
-            return Err("JSSG language must not be empty".to_string());
-        }
-        for (name, patterns) in [("include", include), ("exclude", exclude)] {
-            if patterns.as_ref().is_some_and(|values| {
-                values.is_empty() || values.iter().any(|value| value.trim().is_empty())
-            }) {
-                return Err(format!("JSSG {name} must contain non-empty glob patterns"));
-            }
-        }
-        if let Some(root) = target.as_ref().and_then(|target| target.root.as_deref()) {
-            validate_relative_path(root, "JSSG target root")?;
-        }
-        if let Some(semantic) = semantic_analysis {
-            semantic.validate()?;
-        }
-    }
-    if let Some(root) = request
-        .context
-        .as_ref()
-        .and_then(|context| context.script_root.as_deref())
-    {
-        if root.trim().is_empty() {
-            return Err("context.scriptRoot must not be empty".to_string());
-        }
-    }
     Ok(request)
 }
 
-/// Same rules as `isSafeRelativePath` in `packages/orchestration/src/paths.ts`:
-/// non-empty, not absolute on any platform (`/x`, `\x`, `C:\x`), and no `..`
-/// segment. A `..` inside a name such as `foo..bar` is allowed.
-pub fn validate_relative_path(value: &str, name: &str) -> Result<(), String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(format!("{name} must not be empty"));
-    }
-    if is_absolute_path(trimmed) || escapes_root(trimmed) {
-        return Err(format!("{name} must be a safe relative path"));
-    }
-    Ok(())
-}
-
-fn is_absolute_path(value: &str) -> bool {
-    let path = Path::new(value);
-    let bytes = value.as_bytes();
-    path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
-        || value.starts_with('/')
-        || value.starts_with('\\')
-        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
-}
-
-fn escapes_root(value: &str) -> bool {
-    value.split(['/', '\\']).any(|segment| segment == "..")
-}
-
-/// Execute one one-shot request through the given runner. `exec` runs in the
-/// process working directory (the runner owns that). `jssg` is refused: it
-/// runs through the worker protocol so TypeScript can stage its edits.
+/// Execute one request. `exec` runs in the process working directory (the
+/// runner owns that). `jssg` transforms `context.files` and returns the edits
+/// as data in `output.files`; it never writes to the repository.
 pub async fn execute(runner: &dyn Runner, request: &OperationRequest) -> OperationCompletion {
+    let id = &request.command_id;
     match &request.operation {
         Operation::Exec { command, env } => {
             let mut merged: HashMap<String, String> = std::env::vars().collect();
             merged.extend(env.clone());
-            let result = runner.run_command(command, &merged, None).await;
-            completion_from_result(&request.command_id, result)
+            completion_from_result(id, runner.run_command(command, &merged, None).await)
         }
-        Operation::Jssg { .. } => OperationCompletion::not_succeeded(
-            &request.command_id,
-            CompletionStatus::Failed,
-            "jssg operations run through the JSSG worker protocol (--jssg-worker), not the one-shot bridge"
-                .to_string(),
-        ),
+        Operation::Jssg {
+            script,
+            language,
+            semantic_analysis,
+            input,
+            ..
+        } => {
+            let context = request.context.clone().unwrap_or_default();
+            let batch = jssg::Batch {
+                script,
+                script_root: context.script_root.as_deref(),
+                language,
+                target_root: context.target_root.as_deref(),
+                semantic_analysis: semantic_analysis.as_ref(),
+                input: input.as_ref(),
+                files: context.files.as_deref().unwrap_or_default(),
+            };
+            match jssg::transform_batch(batch).await {
+                Ok(files) => OperationCompletion::new(
+                    id,
+                    CompletionStatus::Succeeded,
+                    Some(json!({ "files": files })),
+                ),
+                Err(message) => {
+                    OperationCompletion::not_succeeded(id, CompletionStatus::Failed, message)
+                }
+            }
+        }
         Operation::Ai { .. } => OperationCompletion::not_succeeded(
-            &request.command_id,
+            id,
             CompletionStatus::Failed,
             "operation kind 'ai' has no executor adapter in the execution bridge".to_string(),
         ),
@@ -339,22 +256,19 @@ pub fn completion_from_result(
     result: butterflow_models::Result<String>,
 ) -> OperationCompletion {
     match result {
-        Ok(stdout) => {
-            let mut output = Map::new();
-            output.insert("stdout".to_string(), Value::String(stdout));
-            OperationCompletion::succeeded(command_id, Value::Object(output))
-        }
+        Ok(stdout) => OperationCompletion::new(
+            command_id,
+            CompletionStatus::Succeeded,
+            Some(json!({ "stdout": stdout })),
+        ),
         Err(Error::ShellCommandFailed { exit_code, output }) => OperationCompletion {
-            protocol_version: PROTOCOL_VERSION,
-            command_id: command_id.to_string(),
-            status: CompletionStatus::Failed,
-            output: None,
             error: Some(CompletionError {
                 message: format!("Command failed with exit code {exit_code}: {output}"),
                 exit_code: Some(exit_code),
                 output: Some(output),
                 details: None,
             }),
+            ..OperationCompletion::new(command_id, CompletionStatus::Failed, None)
         },
         // Spawn/wait failures: the bridge cannot tell whether side effects happened.
         Err(error) => OperationCompletion::not_succeeded(
