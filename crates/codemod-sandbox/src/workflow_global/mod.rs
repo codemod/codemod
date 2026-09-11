@@ -1,10 +1,14 @@
 use crate::ast_grep::serde::JsValue;
+use crate::sandbox::runtime_module::RuntimeHooksContext;
 use dashmap::DashMap;
 use rquickjs::module::{Declarations, Exports, ModuleDef};
 use rquickjs::{prelude::Func, prelude::Opt, Ctx, Exception, Object, Result};
 use std::collections::HashMap;
 use std::env;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
+
+const CANCELLATION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
 
 static STEP_OUTPUTS_STORE: LazyLock<Mutex<HashMap<String, HashMap<String, String>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -153,6 +157,18 @@ impl SharedStateContext {
     /// before `f()` runs.  The per-key `Mutex` is held during `f` so that no
     /// `acquireLock` can start between our check and the data operation.
     fn with_key_guard<T>(&self, name: &str, f: impl FnOnce() -> T) -> T {
+        self.with_key_guard_cancellable(name, None, f)
+            .expect("state access without cancellation cannot be cancelled")
+    }
+
+    /// Execute `f` while respecting an active key lock and cooperative
+    /// cancellation. Returns `None` when cancellation wins the wait.
+    fn with_key_guard_cancellable<T>(
+        &self,
+        name: &str,
+        cancellation_flag: Option<&AtomicBool>,
+        f: impl FnOnce() -> T,
+    ) -> Option<T> {
         let lock = self
             .key_locks
             .entry(name.to_string())
@@ -170,13 +186,27 @@ impl SharedStateContext {
             if tid == current {
                 break; // re-entrant: we hold the lock
             }
-            holder = lock.condvar.wait(holder).unwrap();
+            holder = match cancellation_flag {
+                Some(flag) => {
+                    if flag.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    lock.condvar
+                        .wait_timeout(holder, CANCELLATION_POLL_INTERVAL)
+                        .unwrap()
+                        .0
+                }
+                None => lock.condvar.wait(holder).unwrap(),
+            };
+        }
+        if cancellation_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return None;
         }
         // holder is either None or current thread — safe to proceed.
         // Keep the MutexGuard alive so no acquireLock can start mid-operation.
         let result = f();
         drop(holder);
-        result
+        Some(result)
     }
 
     pub fn set(&self, name: &str, value: serde_json::Value, persist: bool) {
@@ -200,6 +230,37 @@ impl SharedStateContext {
         });
     }
 
+    fn set_cancellable(
+        &self,
+        name: &str,
+        value: serde_json::Value,
+        persist: bool,
+        cancellation_flag: Option<&AtomicBool>,
+    ) -> Option<()> {
+        self.with_key_guard_cancellable(name, cancellation_flag, || {
+            self.removals.remove(name);
+            self.data
+                .insert(name.to_string(), StateEntry { value, persist });
+        })
+    }
+
+    fn get_cancellable(
+        &self,
+        name: &str,
+        cancellation_flag: Option<&AtomicBool>,
+    ) -> Option<Option<serde_json::Value>> {
+        self.with_key_guard_cancellable(name, cancellation_flag, || {
+            self.data.get(name).map(|entry| entry.value.clone())
+        })
+    }
+
+    fn unset_cancellable(&self, name: &str, cancellation_flag: Option<&AtomicBool>) -> Option<()> {
+        self.with_key_guard_cancellable(name, cancellation_flag, || {
+            self.data.remove(name);
+            self.removals.insert(name.to_string(), ());
+        })
+    }
+
     /// Return all entries where `persist == true`.
     pub fn get_persistable(&self) -> HashMap<String, serde_json::Value> {
         self.data
@@ -221,6 +282,20 @@ impl SharedStateContext {
     ///
     /// Returns an `Arc<SharedLockGuard>` — call `release()` or let it drop.
     pub fn acquire_lock(&self, name: &str) -> Arc<SharedLockGuard> {
+        self.acquire_lock_cancellable(name, None)
+            .expect("lock acquisition without cancellation cannot be cancelled")
+    }
+
+    /// Acquire a named lock while observing cooperative cancellation.
+    ///
+    /// The timed condition-variable wait is not an I/O poll. It only wakes a
+    /// blocked waiter periodically so a cancelled sandbox cannot remain stuck
+    /// behind a workflow that owns the key.
+    pub fn acquire_lock_cancellable(
+        &self,
+        name: &str,
+        cancellation_flag: Option<&AtomicBool>,
+    ) -> Option<Arc<SharedLockGuard>> {
         let key_lock = self
             .key_locks
             .entry(name.to_string())
@@ -239,20 +314,35 @@ impl SharedStateContext {
                 // Re-entrant: same thread already holds this lock.
                 // This is a programming error — return a no-op guard rather than deadlocking.
                 drop(holder);
-                return Arc::new(SharedLockGuard {
+                return Some(Arc::new(SharedLockGuard {
                     key_lock,
                     released: std::sync::atomic::AtomicBool::new(true), // already "released" — won't double-release
-                });
+                }));
             }
-            holder = key_lock.condvar.wait(holder).unwrap();
+            holder = match cancellation_flag {
+                Some(flag) => {
+                    if flag.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    key_lock
+                        .condvar
+                        .wait_timeout(holder, CANCELLATION_POLL_INTERVAL)
+                        .unwrap()
+                        .0
+                }
+                None => key_lock.condvar.wait(holder).unwrap(),
+            };
+        }
+        if cancellation_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return None;
         }
         *holder = Some(current);
         drop(holder);
 
-        Arc::new(SharedLockGuard {
+        Some(Arc::new(SharedLockGuard {
             key_lock,
             released: std::sync::atomic::AtomicBool::new(false),
-        })
+        }))
     }
 }
 
@@ -291,7 +381,17 @@ fn set_state_rjs(ctx: Ctx<'_>, name: String, value: JsValue, persist: Opt<bool>)
         Exception::throw_message(&ctx, "SharedStateContext not found in runtime userdata")
     })?;
     let persist = persist.0.unwrap_or(true);
-    shared_state.set(&name, value.0, persist);
+    let runtime_hooks = ctx.userdata::<RuntimeHooksContext>().ok_or_else(|| {
+        Exception::throw_message(&ctx, "RuntimeHooksContext not found in runtime userdata")
+    })?;
+    shared_state
+        .set_cancellable(
+            &name,
+            value.0,
+            persist,
+            runtime_hooks.cancellation_flag.as_deref(),
+        )
+        .ok_or_else(|| Exception::throw_message(&ctx, "Workflow state update cancelled"))?;
     Ok(())
 }
 
@@ -300,7 +400,12 @@ fn get_state_rjs<'js>(ctx: Ctx<'js>, name: String) -> Result<rquickjs::Value<'js
         let shared_state = ctx.userdata::<SharedStateContext>().ok_or_else(|| {
             Exception::throw_message(&ctx, "SharedStateContext not found in runtime userdata")
         })?;
-        shared_state.get(&name)
+        let runtime_hooks = ctx.userdata::<RuntimeHooksContext>().ok_or_else(|| {
+            Exception::throw_message(&ctx, "RuntimeHooksContext not found in runtime userdata")
+        })?;
+        shared_state
+            .get_cancellable(&name, runtime_hooks.cancellation_flag.as_deref())
+            .ok_or_else(|| Exception::throw_message(&ctx, "Workflow state read cancelled"))?
     };
     match value {
         Some(val) => JsValue(val).into_js(&ctx),
@@ -312,7 +417,12 @@ fn unset_state_rjs(ctx: Ctx<'_>, name: String) -> Result<()> {
     let shared_state = ctx.userdata::<SharedStateContext>().ok_or_else(|| {
         Exception::throw_message(&ctx, "SharedStateContext not found in runtime userdata")
     })?;
-    shared_state.unset(&name);
+    let runtime_hooks = ctx.userdata::<RuntimeHooksContext>().ok_or_else(|| {
+        Exception::throw_message(&ctx, "RuntimeHooksContext not found in runtime userdata")
+    })?;
+    shared_state
+        .unset_cancellable(&name, runtime_hooks.cancellation_flag.as_deref())
+        .ok_or_else(|| Exception::throw_message(&ctx, "Workflow state removal cancelled"))?;
     Ok(())
 }
 
@@ -321,7 +431,12 @@ fn acquire_lock_rjs<'js>(ctx: Ctx<'js>, name: String) -> Result<rquickjs::Functi
         let shared_state = ctx.userdata::<SharedStateContext>().ok_or_else(|| {
             Exception::throw_message(&ctx, "SharedStateContext not found in runtime userdata")
         })?;
-        shared_state.acquire_lock(&name)
+        let runtime_hooks = ctx.userdata::<RuntimeHooksContext>().ok_or_else(|| {
+            Exception::throw_message(&ctx, "RuntimeHooksContext not found in runtime userdata")
+        })?;
+        shared_state
+            .acquire_lock_cancellable(&name, runtime_hooks.cancellation_flag.as_deref())
+            .ok_or_else(|| Exception::throw_message(&ctx, "Workflow lock acquisition cancelled"))?
     };
 
     // Return a one-shot release function.
@@ -727,6 +842,55 @@ mod tests {
         }
 
         assert_eq!(counter.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn test_shared_state_lock_wait_observes_cancellation() {
+        let ctx = SharedStateContext::new();
+        let guard = ctx.acquire_lock("cancelled-lock");
+        let waiting_ctx = ctx.clone();
+        let cancellation_flag = Arc::new(AtomicBool::new(false));
+        let waiting_cancellation_flag = Arc::clone(&cancellation_flag);
+
+        let waiter = thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let acquired = waiting_ctx
+                .acquire_lock_cancellable("cancelled-lock", Some(&waiting_cancellation_flag));
+            (acquired, started.elapsed())
+        });
+
+        thread::sleep(std::time::Duration::from_millis(10));
+        cancellation_flag.store(true, Ordering::SeqCst);
+
+        let (acquired, elapsed) = waiter.join().unwrap();
+        assert!(acquired.is_none());
+        assert!(elapsed < std::time::Duration::from_millis(250));
+        guard.release();
+    }
+
+    #[test]
+    fn test_shared_state_access_wait_observes_cancellation() {
+        let ctx = SharedStateContext::new();
+        ctx.set("cancelled-state", serde_json::json!(1), true);
+        let guard = ctx.acquire_lock("cancelled-state");
+        let waiting_ctx = ctx.clone();
+        let cancellation_flag = Arc::new(AtomicBool::new(false));
+        let waiting_cancellation_flag = Arc::clone(&cancellation_flag);
+
+        let waiter = thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let value =
+                waiting_ctx.get_cancellable("cancelled-state", Some(&waiting_cancellation_flag));
+            (value, started.elapsed())
+        });
+
+        thread::sleep(std::time::Duration::from_millis(10));
+        cancellation_flag.store(true, Ordering::SeqCst);
+
+        let (value, elapsed) = waiter.join().unwrap();
+        assert!(value.is_none());
+        assert!(elapsed < std::time::Duration::from_millis(250));
+        guard.release();
     }
 
     #[test]
