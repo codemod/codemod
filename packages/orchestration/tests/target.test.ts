@@ -19,13 +19,18 @@ import {
   workflow,
   type Target,
 } from "../src/index.ts";
+import { ref } from "./helpers.ts";
 
 const web: Target = { root: "apps/web", include: ["src/**"], exclude: ["**/generated/**"] };
 
-const renameApi = jssg({ name: "rename-api", script: "rename-api.ts", language: "typescript" });
+const renameApi = jssg({
+  name: "rename-api",
+  transform: ref("rename-api"),
+  language: "typescript",
+});
 const updateImports = jssg({
   name: "update-imports",
-  script: "update-imports.ts",
+  transform: ref("update-imports"),
   language: "typescript",
 });
 const format = exec({ name: "format", command: "npm run format" });
@@ -36,7 +41,7 @@ const Project = guard(
 );
 const migrate = jssg({
   name: "migrate",
-  script: "migrate.ts",
+  transform: ref("migrate"),
   language: "typescript",
   input: Project,
 });
@@ -91,7 +96,7 @@ describe("JSSG invocation targets", () => {
     const operation = renameApi.toOperation(undefined, targeted.target);
     expect(operation).toEqual({
       kind: "jssg",
-      script: "rename-api.ts",
+      transform: ref("rename-api"),
       language: "typescript",
       target: { root: "apps/web", include: ["src/**"] },
     });
@@ -101,7 +106,10 @@ describe("JSSG invocation targets", () => {
   it("matches the shared jssg-target-request fixture", async () => {
     const fixtureRunnable = jssg({
       name: "rename-api",
-      script: "scripts/rename-api.ts",
+      transform: {
+        name: "rename-api",
+        hash: "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0",
+      },
       language: "typescript",
       include: ["**/*.ts"],
       exclude: ["**/*.d.ts"],
@@ -121,7 +129,7 @@ describe("JSSG invocation targets", () => {
     expect(renameApi).not.toHaveProperty("target");
     expect(renameApi.toOperation()).toEqual({
       kind: "jssg",
-      script: "rename-api.ts",
+      transform: ref("rename-api"),
       language: "typescript",
     });
     expect(renameApi()).not.toHaveProperty("target");
@@ -134,7 +142,7 @@ describe("JSSG invocation targets", () => {
     );
     expect(result.commands[0]?.operation).toEqual({
       kind: "jssg",
-      script: "migrate.ts",
+      transform: ref("migrate"),
       language: "typescript",
       target: { root: "packages/a" },
       input: { path: "packages/a" },
@@ -189,13 +197,13 @@ describe("targeted JSSG in plans and parallel groups", () => {
     const result = await h.run(fixed);
     expect(result.output).toEqual([{ changed: 3 }, { changed: 1 }, { stdout: "" }]);
     expect(result.commands.map((c) => c.operation)).toEqual([
-      { kind: "jssg", script: "rename-api.ts", language: "typescript", target: web },
-      { kind: "jssg", script: "update-imports.ts", language: "typescript", target: web },
+      { kind: "jssg", transform: ref("rename-api"), language: "typescript", target: web },
+      { kind: "jssg", transform: ref("update-imports"), language: "typescript", target: web },
       { kind: "exec", command: "npm run format" },
     ]);
     expect(h.executed[0]?.operation).toEqual({
       kind: "jssg",
-      script: "rename-api.ts",
+      transform: ref("rename-api"),
       language: "typescript",
       target: web,
     });
@@ -206,8 +214,16 @@ describe("targeted JSSG in plans and parallel groups", () => {
   });
 
   it("accepts targeted members in a parallel group", async () => {
-    const transformA = jssg({ name: "transform-a", script: "a.ts", language: "typescript" });
-    const transformB = jssg({ name: "transform-b", script: "b.ts", language: "typescript" });
+    const transformA = jssg({
+      name: "transform-a",
+      transform: ref("transform-a"),
+      language: "typescript",
+    });
+    const transformB = jssg({
+      name: "transform-b",
+      transform: ref("transform-b"),
+      language: "typescript",
+    });
     const group = parallel(transformA({ target: web }), transformB({ target: web }));
     expect(group.members.map((m) => m.target)).toEqual([web, web]);
 
@@ -262,7 +278,7 @@ describe("targets in dynamic workflows and replay", () => {
         "migrate:a",
         {
           kind: "jssg",
-          script: "migrate.ts",
+          transform: ref("migrate"),
           language: "typescript",
           target: { root: "packages/a" },
           input: { path: "packages/a" },
@@ -272,7 +288,7 @@ describe("targets in dynamic workflows and replay", () => {
         "migrate:b",
         {
           kind: "jssg",
-          script: "migrate.ts",
+          transform: ref("migrate"),
           language: "typescript",
           target: { root: "packages/b" },
           input: { path: "packages/b" },
@@ -326,7 +342,7 @@ describe("targets in dynamic workflows and replay", () => {
 
 describe("protocol validation of targets", () => {
   it("validates intrinsic JSSG applicability and semantic configuration", () => {
-    const base = { kind: "jssg", script: "x.ts", language: "typescript" };
+    const base = { kind: "jssg", transform: ref("x"), language: "typescript" };
     expect(
       isOperation({
         ...base,
@@ -346,7 +362,7 @@ describe("protocol validation of targets", () => {
   });
 
   it("accepts well-formed and rejects malformed jssg targets on the wire", () => {
-    const base = { kind: "jssg", script: "x.ts", language: "typescript" };
+    const base = { kind: "jssg", transform: ref("x"), language: "typescript" };
     expect(isOperation({ ...base, target: { root: "a" } })).toBe(true);
     expect(isOperation({ ...base, target: { include: ["a"], exclude: ["b"] } })).toBe(true);
     expect(isOperation({ ...base, target: {} })).toBe(true);

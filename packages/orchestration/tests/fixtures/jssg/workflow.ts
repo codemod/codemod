@@ -1,4 +1,5 @@
 import { guard, jssg, workflow } from "../../../src/index.ts";
+import { migrateText, posixPath } from "./helpers.ts";
 
 interface Finding {
   file: string;
@@ -16,16 +17,22 @@ const Findings = guard(
     ),
 );
 
-// `script` is relative to the executor's script root, which the local CLI
-// sets to this workflow's directory.
-const migrate = jssg<void, Finding[]>({
+// The transform is written inline; `codemod-workflow` bundles it (with the
+// helpers it imports) into a standalone artifact before this module runs.
+const migrate = jssg({
   name: "migrate",
-  script: "transform.ts",
   language: "typescript",
   include: ["**/*.ts"],
   exclude: ["**/*.d.ts"],
   semanticAnalysis: "workspace",
+  selector: { rule: { pattern: "oldApi($ARG)" } },
   output: Findings,
+  transform(root) {
+    return {
+      content: migrateText(root.root().text()),
+      output: { file: posixPath(root.relativeFilename()) },
+    };
+  },
 });
 
 export default workflow(() =>

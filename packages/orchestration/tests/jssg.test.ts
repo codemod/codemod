@@ -1,9 +1,9 @@
 /**
  * The TypeScript JSSG orchestrator against the scripted fake bridge
- * (`fixtures/fake-bridge.mjs`): selection, the batch request, validation of
- * returned edits, conflict rules, transactional commit, failure
- * classification, and cancellation. No Rust is involved; the real bridge is
- * exercised by `bridge.e2e.test.ts`.
+ * (`fixtures/fake-bridge.mjs`): selection, the batch request with the
+ * artifact source, validation of returned edits, conflict rules,
+ * transactional commit, failure classification, and cancellation. No Rust
+ * is involved; the real bridge is exercised by `bridge.e2e.test.ts`.
  */
 import {
   chmodSync,
@@ -20,8 +20,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CollectingSink, executeJssg, type JssgOperation } from "../src/index.ts";
+import { artifact } from "./helpers.ts";
 
 const bin = resolve(import.meta.dirname, "fixtures/fake-bridge.mjs");
+const built = artifact("transform", "export default () => null;\n");
 
 let repo: string;
 const write = (relative: string, content: string) => {
@@ -49,7 +51,7 @@ afterEach(() => rmSync(repo, { recursive: true, force: true }));
 
 const operation = (extra: Partial<JssgOperation> = {}): JssgOperation => ({
   kind: "jssg",
-  script: "transform.ts",
+  transform: { name: built.name, hash: built.hash },
   language: "typescript",
   ...extra,
 });
@@ -65,7 +67,7 @@ function run(
   return executeJssg({
     bin,
     cwd: repo,
-    scriptRoot: join(repo, "workflow"),
+    artifacts: new Map([[built.hash, built]]),
     commandId: "migrate",
     operation: op,
     signal: options.signal,
@@ -76,7 +78,7 @@ function run(
 }
 
 describe("executeJssg", () => {
-  it("selects by language, sends one batch with the roots and input, commits, and collects outputs", async () => {
+  it("selects by language, sends one batch with the root, source, and input, commits, and collects outputs", async () => {
     const { completion, events } = await run(
       operation({ semanticAnalysis: "workspace", input: { n: 1 } }),
     );
@@ -85,7 +87,7 @@ describe("executeJssg", () => {
     expect(completion.output).toEqual(
       ["a.ts", "b.ts", "c.js"].map((path) => ({
         path,
-        context: { scriptRoot: join(repo, "workflow"), targetRoot: repo },
+        context: { targetRoot: repo, artifact: { source: built.source } },
         input: { n: 1 },
       })),
     );

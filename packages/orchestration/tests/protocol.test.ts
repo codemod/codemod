@@ -9,8 +9,10 @@ import {
   isOperation,
   isOperationCompletion,
   isOperationRequest,
+  isSelector,
   parseCompletion,
 } from "../src/index.ts";
+import { ref } from "./helpers.ts";
 
 const dir = join(import.meta.dirname, "..", "fixtures", "protocol");
 const fixture = (name: string) => JSON.parse(readFileSync(join(dir, name), "utf8")) as unknown;
@@ -46,24 +48,30 @@ describe("protocol fixtures shared with crates/execution-bridge", () => {
 
 describe("strict validation", () => {
   const base = fixture("jssg-request.json") as Record<string, unknown>;
-  const jssg = { kind: "jssg", script: "scripts/x.ts", language: "typescript" };
+  const jssg = { kind: "jssg", transform: ref("x"), language: "typescript" };
 
   it.each<[string, unknown, boolean]>([
-    [
-      "a strict request context",
-      { ...base, context: { scriptRoot: "/w", targetRoot: "/r" } },
-      true,
-    ],
+    ["a strict request context", { ...base, context: { targetRoot: "/r" } }, true],
     ["an empty context", { ...base, context: {} }, true],
     [
-      "a batch of safe relative files",
-      { ...base, context: { files: [{ path: "src/a.ts", content: "" }] } },
+      "a batch of safe relative files and the artifact source",
+      {
+        ...base,
+        context: { files: [{ path: "src/a.ts", content: "" }], artifact: { source: "" } },
+      },
       true,
     ],
-    ["a blank script root", { ...base, context: { scriptRoot: " " } }, false],
+    ["a blank target root", { ...base, context: { targetRoot: " " } }, false],
+    ["the removed script root", { ...base, context: { scriptRoot: "/w" } }, false],
+    [
+      "an artifact with extra fields",
+      { ...base, context: { artifact: { source: "", hash: "h" } } },
+      false,
+    ],
+    ["an artifact without source", { ...base, context: { artifact: {} } }, false],
     ["an unknown context field", { ...base, context: { cwd: "/tmp" } }, false],
     ["a non-object context", { ...base, context: "/tmp" }, false],
-    ["a context field on the envelope", { ...base, scriptRoot: "/tmp" }, false],
+    ["a context field on the envelope", { ...base, targetRoot: "/tmp" }, false],
     [
       "an absolute batch path",
       { ...base, context: { files: [{ path: "/a.ts", content: "" }] } },
@@ -78,11 +86,21 @@ describe("strict validation", () => {
     expect(isOperationRequest(value)).toBe(expected);
   });
 
-  it("requires jssg script and roots to be safe relative paths on the wire", () => {
+  it("requires a well-formed transform reference and safe relative roots on the wire", () => {
     expect(isOperation(jssg)).toBe(true);
-    expect(isOperation({ ...jssg, script: "scripts/foo..bar.ts" })).toBe(true);
+    for (const transform of [
+      undefined,
+      "scripts/x.ts",
+      { name: "x" },
+      { name: "", hash: "a".repeat(64) },
+      { name: "x", hash: "a".repeat(63) },
+      { name: "x", hash: "A".repeat(64) },
+      { name: "x", hash: "a".repeat(64), source: "" },
+    ]) {
+      expect(isOperation({ ...jssg, transform }), JSON.stringify(transform)).toBe(false);
+    }
+    expect(isOperation({ ...jssg, script: "scripts/x.ts" })).toBe(false);
     for (const bad of ["/abs/x.ts", "\\\\server\\x.ts", "C:\\x.ts", "c:/x.ts", "../x.ts", " "]) {
-      expect(isOperation({ ...jssg, script: bad }), bad).toBe(false);
       expect(isOperation({ ...jssg, target: { root: bad } }), bad).toBe(false);
       expect(
         isOperation({ ...jssg, semanticAnalysis: { mode: "workspace", root: bad } }),
@@ -93,6 +111,30 @@ describe("strict validation", () => {
     expect(isOperation({ ...jssg, semanticAnalysis: { mode: "file" } })).toBe(true);
     expect(isOperation({ ...jssg, semanticAnalysis: { mode: "file", root: "src" } })).toBe(false);
     expect(isOperation({ kind: "exec", command: "true", target: { root: "a" } })).toBe(false);
+  });
+
+  it.each<[string, unknown, boolean]>([
+    ["a rule", { rule: { pattern: "a($B)" } }, true],
+    [
+      "a rule with constraints and utils",
+      {
+        rule: { matches: "u" },
+        constraints: { B: { kind: "string" } },
+        utils: { u: { kind: "call" } },
+      },
+      true,
+    ],
+    ["no rule", { constraints: {} }, false],
+    ["an empty rule", { rule: {} }, false],
+    ["a string rule", { rule: "a($B)" }, false],
+    ["an id", { rule: { pattern: "a" }, id: "s" }, false],
+    ["a language", { rule: { pattern: "a" }, language: "tsx" }, false],
+    ["a fix", { rule: { pattern: "a" }, fix: "b" }, false],
+    ["non-JSON data", { rule: { pattern: "a", when: () => true } }, false],
+    ["a non-object", "a($B)", false],
+  ])("selector with %s", (_name, value, expected) => {
+    expect(isSelector(value)).toBe(expected);
+    expect(isOperation({ ...jssg, selector: value })).toBe(expected);
   });
 
   it("validates batch outcomes including every returned path", () => {

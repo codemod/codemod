@@ -5,6 +5,7 @@ use std::process::Command;
 
 use butterflow_execution_bridge::{CompletionStatus, OperationCompletion, PROTOCOL_VERSION};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 const BIN: &str = env!("CARGO_BIN_EXE_butterflow-execution-bridge");
 
@@ -44,26 +45,25 @@ fn exec_writes_a_succeeded_completion() {
 #[test]
 fn jssg_transforms_the_supplied_files_and_writes_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let workflow = dir.path().join("workflow");
     let repo = dir.path().join("repo");
-    std::fs::create_dir_all(&workflow).expect("workflow");
     std::fs::create_dir_all(&repo).expect("repo");
-    std::fs::write(
-        workflow.join("transform.js"),
-        r#"export default async function transform(root) {
+    let source = r#"export default async function transform(root) {
   return { content: root.root().text().replaceAll("old", "new"), output: { file: root.relativeFilename() } };
-}"#,
-    )
-    .expect("script");
+}"#;
+    let hash = format!("{:x}", Sha256::digest(source.as_bytes()));
     std::fs::write(repo.join("a.ts"), "old();\n").expect("a");
     let request = json!({
         "protocolVersion": PROTOCOL_VERSION,
         "commandId": "migrate",
-        "operation": { "kind": "jssg", "script": "transform.js", "language": "typescript" },
+        "operation": {
+            "kind": "jssg",
+            "transform": { "name": "migrate", "hash": hash },
+            "language": "typescript",
+        },
         "context": {
-            "scriptRoot": workflow,
             "targetRoot": repo,
             "files": [{ "path": "a.ts", "content": "old();\n" }],
+            "artifact": { "source": source },
         },
     });
     let (code, completion) = run_bridge(dir.path(), &request.to_string());

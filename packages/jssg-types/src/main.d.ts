@@ -40,6 +40,10 @@ export type {
   FileReferences,
   TransformOptions,
   Transform,
+  Codemod,
+  CodemodResult,
+  StructuredTransformOptions,
+  StructuredCodemod,
   GetSelectorOptions,
   GetSelector,
 } from "codemod:ast-grep";

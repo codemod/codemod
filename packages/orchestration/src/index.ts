@@ -4,11 +4,21 @@ export type {
   ExecOutput,
   ExecRunnable,
   InputOf,
+  JssgOptions,
   JssgRunnable,
   OperationKind,
   OutputOf,
   Runnable,
 } from "./runnable.ts";
+export type {
+  JssgLanguages,
+  JssgSelector,
+  JssgTransform,
+  JssgTransformResult,
+  JssgTypes,
+} from "./transform.ts";
+export { BuildError, buildFile, buildModule, loadWorkflow } from "./build.ts";
+export type { ArtifactStore, BuiltModule, JssgArtifact, LoadedWorkflow } from "./build.ts";
 export { isCommand } from "./command.ts";
 export type { Command, Invocation, JssgInvocation } from "./command.ts";
 export { NoActiveWorkflowError } from "./context.ts";
@@ -31,16 +41,19 @@ export { canonicalJson } from "./json.ts";
 export type { Json } from "./json.ts";
 export {
   PROTOCOL_VERSION,
+  isArtifactRef,
   isFileOutcomes,
   isJson,
   isOperation,
   isOperationCompletion,
   isOperationRequest,
+  isSelector,
   isTarget,
   parseCompletion,
 } from "./protocol.ts";
 export type {
   AiOperation,
+  ArtifactRef,
   BatchFile,
   CompletionError,
   CompletionStatus,
@@ -52,6 +65,7 @@ export type {
   OperationCompletion,
   OperationRequest,
   RequestContext,
+  Selector,
   SemanticAnalysis,
   Target,
 } from "./protocol.ts";

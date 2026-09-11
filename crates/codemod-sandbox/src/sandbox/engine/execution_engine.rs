@@ -24,6 +24,7 @@ use ast_grep_core::AstGrep;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use language_core::SemanticProvider;
+use rquickjs::loader::Loader;
 use rquickjs::prelude::Rest;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime, Ctx, Object, Type, Value};
 use rquickjs::{CatchResultExt, Function, Module};
@@ -367,6 +368,23 @@ pub async fn execute_codemod_with_quickjs<'a, R>(
 where
     R: ModuleResolver + 'static,
 {
+    execute_codemod_with_loader(options, QuickJSLoader).await
+}
+
+/// [`execute_codemod_with_quickjs`] with the loader that serves the transform
+/// module and its non-builtin imports. The engine, CLI, and MCP load scripts
+/// from disk through [`QuickJSLoader`]; a host that holds a self-contained
+/// bundle in memory pairs an [`crate::sandbox::resolvers::InMemoryResolver`]
+/// with an [`crate::sandbox::resolvers::InMemoryLoader`], and `script_path`
+/// is then only the virtual module name the entry imports.
+pub async fn execute_codemod_with_loader<'a, R, L>(
+    options: JssgExecutionOptions<'a, R>,
+    loader: L,
+) -> Result<CodemodOutput, ExecutionError>
+where
+    R: ModuleResolver + 'static,
+    L: Loader + 'static,
+{
     let script_name = options
         .script_path
         .file_name()
@@ -465,14 +483,10 @@ where
     }
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
-    let fs_loader = QuickJSLoader;
 
     // Combine resolvers and loaders
     runtime
-        .set_loader(
-            (built_in_resolver, fs_resolver),
-            (built_in_loader, fs_loader),
-        )
+        .set_loader((built_in_resolver, fs_resolver), (built_in_loader, loader))
         .await;
 
     let context = AsyncContext::full(&runtime)
@@ -2311,5 +2325,70 @@ export default function shard(input) {
             }
             other => panic!("Expected runtime hook error, got: {:?}", other),
         }
+    }
+
+    /// A self-contained bundle runs from memory under a virtual module name:
+    /// nothing is read from disk, built-in `codemod:*` modules still resolve,
+    /// and errors name the virtual module.
+    #[tokio::test]
+    async fn test_execute_codemod_with_in_memory_loader() {
+        use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver};
+
+        let bundle = r#"import { jssgTransform } from "codemod:ast-grep";
+var greeting = "logger";
+export default function transform(root) {
+  if (root.root().text().includes("boom")) throw new Error("boom");
+  return root.root().text().replaceAll("console", greeting) + (typeof jssgTransform);
+}"#;
+        let mut resolver = InMemoryResolver::new();
+        resolver.add_module_with_source(
+            "./migrate.jssg.js".to_string(),
+            "migrate.jssg.js".to_string(),
+            bundle.to_string(),
+        );
+        let resolver = Arc::new(resolver);
+        let run = |content: &'static str| {
+            let resolver = Arc::clone(&resolver);
+            async move {
+                execute_codemod_with_loader(
+                    JssgExecutionOptions {
+                        script_path: Path::new("migrate.jssg.js"),
+                        resolver: Arc::clone(&resolver),
+                        language: js_lang(),
+                        file_path: Path::new("test.js"),
+                        content,
+                        selector_config: None,
+                        params: None,
+                        matrix_values: None,
+                        capabilities: None,
+                        semantic_provider: None,
+                        metrics_context: None,
+                        llm_request_handler: None,
+                        shared_state_context: None,
+                        runtime_event_callback: None,
+                        cancellation_flag: None,
+                        test_mode: false,
+                        dry_run: false,
+                        stage_writes: false,
+                        target_directory: Path::new("."),
+                    },
+                    InMemoryLoader::new(resolver),
+                )
+                .await
+            }
+        };
+
+        match run("console.log(1);").await.expect("bundle runs").primary {
+            ExecutionResult::Modified(modified) => {
+                assert_eq!(modified.content, "logger.log(1);function");
+            }
+            other => panic!("Expected modified result, got: {other:?}"),
+        }
+        let error = run("boom();").await.expect_err("transform throws");
+        let message = error.to_string();
+        assert!(
+            message.contains("boom") && message.contains("migrate.jssg.js"),
+            "{message}"
+        );
     }
 }

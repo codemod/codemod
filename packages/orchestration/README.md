@@ -4,13 +4,14 @@ TypeScript-first prototype of the Codemod orchestration runtime. Workflows are
 plain async TypeScript; calling a runnable creates a command, awaiting it inside
 a workflow issues it, and every issued command is recorded in an append-only
 history and replayed from that history on later runs. `exec` runs through a
-small Rust bridge over `butterflow_runners::DirectRunner`. Local JSSG commands
-are orchestrated here in TypeScript (file selection, ordering, conflict
-checks, transactional commit, output aggregation, failure classification)
-around one Rust bridge process per command that owns the QuickJS sandbox and
-semantic providers and transforms the whole batch (see `RUST_BRIDGE.md`). The
-evidence, problem statement, proposal, boundaries, and migration path are
-summarized in `DESIGN.md`.
+small Rust bridge over `butterflow_runners::DirectRunner`. JSSG transforms are
+written inline next to the workflow, split off into standalone bundles at
+build time, and orchestrated here in TypeScript (file selection, ordering,
+conflict checks, transactional commit, output aggregation, failure
+classification) around one Rust bridge process per command that owns the
+QuickJS sandbox and semantic providers and transforms the whole batch (see
+`RUST_BRIDGE.md`). The evidence, problem statement, proposal, boundaries, and
+migration path are summarized in `DESIGN.md`.
 
 ## Layout
 
@@ -18,9 +19,11 @@ summarized in `DESIGN.md`.
 packages/orchestration/
   DESIGN.md              problem statement, proposal, scope, and migration path
   RUST_BRIDGE.md         the Rust boundary: protocol, batch, security model, transactions
-  src/protocol.ts        versioned JSON OperationRequest / OperationCompletion (v4)
+  src/protocol.ts        versioned JSON OperationRequest / OperationCompletion (v5)
+  src/build.ts           build step: extract inline transforms, bundle, rewrite, loadWorkflow
+  src/transform.ts       author-facing transform/selector types per language (type-only)
   src/bridge.ts          spawnBridge: one bridge process per request over exchange files
-  src/jssg.ts            executeJssg: select, batch, validate, stage, commit, classify
+  src/jssg.ts            executeJssg: artifact, select, batch, validate, stage, commit, classify
   src/files.ts           file selection with the engine's walker semantics (npm `ignore`)
   src/languages.json     language -> extensions, pinned to the engine table by a cargo test
   src/paths.ts           safe-relative-path rules and root containment (realpath)
@@ -48,19 +51,25 @@ crates/execution-bridge/ protocol structs, exec through DirectRunner, one JSSG b
 
 ```ts
 import { exec, guard, jssg, plan, parallel, workflow } from "@codemod.com/orchestration";
+import { rewriteSignal } from "./helpers.ts"; // bundled into the transform
 
 const Project = guard("Project", (v: unknown): v is { needsMigration: boolean } => /* ... */);
 const Summaries = guard("Summaries", (v: unknown): v is { file: string }[] => Array.isArray(v));
 
 const inspect = exec({ name: "inspect", command: "node inspect.js", output: Project });
 const migrate = jssg({
-  name: "migrate",
-  script: "scripts/migrate.ts", // relative to the workflow file's directory
+  name: "migrate-signals",
   language: "tsx",
-  include: ["**/*.{ts,tsx}"],
+  include: ["src/**/*.tsx"],
   semanticAnalysis: "workspace",
+  selector: { rule: { pattern: "createSignal($VALUE)" } }, // optional static prefilter
   input: Project,
   output: Summaries,
+  transform(root, options) {
+    // root: SgRoot<TSX>, options.params.input: Project
+    const edits = root.root().findAll({ rule: { pattern: "createSignal($VALUE)" } }).map(rewriteSignal);
+    return { content: root.root().commitEdits(edits), output: { file: root.relativeFilename() } };
+  },
 });
 
 export default workflow(async () => {
@@ -126,38 +135,112 @@ export default workflow(async () => {
   on the wire as `operation.target`. Changing it under the same id replays as
   `changed`. There is no generic `target()` wrapper and no `shard()`/`scope()`
   helper; sharding and worker counts are scheduler behavior.
-- A JSSG definition supplies `script`, `language`, optional intrinsic
-  `include`/`exclude`, and optional `semanticAnalysis`: `"file"`,
-  `"workspace"`, or `{ mode: "file" | "workspace", root? }` where `root` is a
-  safe relative path beneath the target root and is only valid with
-  `workspace`. Without `include`, the definition applies to the language's
-  file extensions, exactly as a YAML `js-ast-grep` step without `include`; the
-  list is `src/languages.json`, which `cargo test -p butterflow-execution-bridge`
+- A JSSG definition supplies `name`, `language`, the inline `transform`,
+  optional intrinsic `include`/`exclude`, an optional static `selector`, and
+  optional `semanticAnalysis`: `"file"`, `"workspace"`, or
+  `{ mode: "file" | "workspace", root? }` where `root` is a safe relative path
+  beneath the target root and is only valid with `workspace`. Without
+  `include`, the definition applies to the language's file extensions, exactly
+  as a YAML `js-ast-grep` step without `include`; the list is
+  `src/languages.json`, which `cargo test -p butterflow-execution-bridge`
   checks against the engine's table so it cannot drift silently. Languages
   outside that table need an explicit `include`.
-- `script` is a safe relative path (no leading `/`, no drive letter, no `..`
-  segment). That relative path is the command identity recorded in history, so
-  a history replays on another checkout. The executor resolves it against its
-  script root: the workflow file's directory for `codemod-workflow`, or
-  `BridgeOptions.scriptRoot` for `BridgeExecutor`. The root travels only in
-  the request context and is never part of a recorded command; moving a
-  checkout and its script root replays without executing.
-- The script's default export may return the existing `string | null`
-  (`Codemod<T>` in `@codemod.com/jssg-types`) or `{ content?, output }`
-  (`StructuredCodemod<T, O>`). `content` is written like any JSSG result and
-  the present `output` values come back as an array in file order; a
-  `string | null` transform yields `[]`. Only the top-level transform may be
-  structured: `jssgTransform` accepts a plain `Codemod` and the sandbox
-  rejects a structured result from a secondary transform with an error rather
-  than discarding it. Invocation input reaches the transform as
-  `options.params.input` (typed by `StructuredTransformOptions`); the shipped
-  selector engine passes no params, so `getSelector` sees `{}` as before.
+
+### The inline transform
+
+`transform` is the one public transform function, with the same
+`(root, options)` contract as a standalone codemod's default export
+(https://docs.codemod.com/jssg/reference). `language` types it: `root` is
+`SgRoot<TSX>` for `language: "tsx"`, and so on for every language with a
+published type map in `@codemod.com/jssg-types`; other languages get the
+untyped `TypesMap`. It may return the existing `string | null | undefined`
+(`Codemod<T>`), or `{ content?, output }` (`StructuredCodemod<T, O>`) where
+`content` is written like any JSSG result and the present `output` values
+come back as an array in file order, typed as the element type of the
+definition's `output` schema. An existing `Codemod<T>` value is assignable.
+Invocation input reaches the transform as `options.params.input`. Only the
+top-level transform may be structured: `jssgTransform` accepts a plain
+`Codemod` and the sandbox rejects a structured result from a secondary
+transform.
+
+The workflow and its transforms are authored together but never run
+together. A transform runs in the bridge's QuickJS sandbox, the workflow body
+in Node; nothing is serialized with `Function.prototype.toString()` and no
+closure crosses the boundary. Instead, a build step splits the module before
+it runs (`src/build.ts`):
+
+1. The module is parsed with the TypeScript compiler. Every
+   `jssg({ ... })` call (an object literal with a string-literal `name` and a
+   `transform` that is a method, a function or arrow expression, or an
+   imported binding) is located by position.
+2. For each transform, a virtual entry `export default <transform>` plus
+   the import declarations it references is bundled with esbuild into one
+   self-contained ES module: helpers imported from other modules (and their
+   imports, including packages) are inlined; `codemod:*` modules and Node
+   built-ins that the sandbox provides stay as imports; types are erased.
+3. The artifact's identity is its `name` and the SHA-256 of the bundled
+   source. The module is rewritten so `transform` is that `{ name, hash }`
+   reference, and the rewritten module is what Node executes. Module comments
+   in the bundle are relative paths, so the hash is the same on every
+   checkout and changes whenever the transform or a bundled helper changes.
+
+Supported subset, checked at build time with a source position rather than
+failing in the sandbox:
+
+- A transform may use its own parameters and locals, globals, and bindings
+  the workflow module imports from other modules.
+- It may not use anything else declared in the workflow module: a top-level
+  `const`, `let`, `function`, or `class` is an unsupported lexical capture.
+  Move such helpers into a module and import them; dynamic values enter
+  through invocation input, never through capture.
+- It may not use bindings imported from `@codemod.com/orchestration`; the
+  orchestration runtime does not exist inside the sandbox.
+- `name` must be a string literal and the argument an object literal.
+  Generators are rejected. `jssg(options)` with a variable is not extracted.
+
+A transform function that reaches `jssg()` at runtime means the module was
+loaded without the build step; the call throws with that explanation.
+`loadWorkflow(path)` (used by the CLI) imports a module through a
+`node:module` load hook that applies the split to every module in its graph,
+including definitions in imported files and packages under `node_modules`,
+and returns the module namespace with the artifacts it collected.
+`buildModule(source, file)` and `buildFile(file)` do the split without
+importing anything. Artifacts are executor-side data (`BridgeExecutor({
+artifacts })`); a JSSG command whose artifact the executor does not hold
+fails in phase `artifact` before anything is spawned.
+
+`esbuild` is the one dependency added for this: it is the bundler the
+monorepo already resolves (through Vite), it bundles TypeScript and package
+imports without configuration, and its synchronous API runs inside the
+loader hook. `typescript`, already a development dependency, provides the
+parser; it moved to `dependencies` so the installed package can build.
+
+### The static selector
+
+`selector` is optional ast-grep rule data, `{ rule, constraints?, utils? }`,
+typed for the definition's language. The executor evaluates it natively,
+before any transform sandbox starts, on every selected file; files without a
+match are skipped and produce no edit and no output. It is an eligibility
+prefilter and nothing else: the transform finds its nodes with the normal
+`root.find` / `root.findAll` APIs, and `options.matches` is not populated.
+Without a selector every selected file runs. Workspace semantic indexing
+always covers the full selected set, so a matching transform can resolve
+definitions and references in files the selector skipped. The selector is
+part of the recorded command, like `include` and `exclude`.
+
+This differs from the legacy `getSelector()` export, which Butterflow, the
+`codemod jssg` commands, and `jssg list-applicable` continue to support
+unchanged: that function is executed in QuickJS to obtain the rule, and its
+matches are handed to the transform as `options.matches`. On this path the
+selector is data, is never executed, and the artifact's exports other than
+the default are ignored.
 
 ### How a JSSG command runs
 
-1. The target root is resolved beneath the executor's working directory and
+1. The executor looks up the artifact the operation names by hash.
+2. The target root is resolved beneath the executor's working directory and
    proven to stay there (symlinks out of the repository are rejected).
-2. TypeScript selects the effective file set: files under the target root
+3. TypeScript selects the effective file set: files under the target root
    accepted by the definition's applicability (repository-relative
    `include`/`exclude`, defaulting to `**/*<ext>` for the language) and by the
    invocation target (target-root-relative `include`/`exclude`). The walker
@@ -171,19 +254,20 @@ export default workflow(async () => {
    gitignored directory is never entered). Order is component-wise byte order.
    Every selected file is read; files that vanished or are not UTF-8 are
    skipped, as the engine does.
-3. One bridge process receives the whole batch. It loads the script and
-   selector once, builds one semantic provider, indexes the batch in workspace
-   mode, and transforms every file from the content it was given. Snapshot
-   semantics: no transform sees another transform's edits, unlike the
-   workflow engine, which writes each file before moving to the next. Disk
-   reads inside the sandbox (`jssgTransform`, the curated `fs`) see the same
-   pre-command snapshot.
-4. The returned edits (primary edits, `jssgTransform` and staged `write()`
+4. One bridge process receives the artifact source and the whole batch. It
+   verifies the source against the recorded hash, loads it from memory under
+   a virtual module name, builds one semantic provider, indexes the whole
+   batch in workspace mode, skips the files the selector does not match, and
+   transforms the rest from the content it was given. Snapshot semantics: no
+   transform sees another transform's edits, unlike the workflow engine, which
+   writes each file before moving to the next. Disk reads inside the sandbox
+   (`jssgTransform`, the curated `fs`) see the same pre-command snapshot.
+5. The returned edits (primary edits, `jssgTransform` and staged `write()`
    edits, renames) and JSON outputs are validated, merged into one write set,
    and checked for conflicts; then every destination is written and rename
    sources are removed.
 
-Nothing touches the repository before step 4's writes. A failure in any
+Nothing touches the repository before step 5's writes. A failure in any
 earlier step, or an abort, leaves every file unchanged (`failed` /
 `cancelled`). A commit that stops part-way is `unknown` with the applied and
 remaining paths in `error.details`.
@@ -209,13 +293,11 @@ npx codemod-workflow ./workflow.ts --target ./repository --bridge /path/to/butte
 ```
 
 ```text
-codemod-workflow <workflow.ts> [--target <directory>] [--script-root <directory>] [--bridge <binary>]
+codemod-workflow <workflow.ts> [--target <directory>] [--bridge <binary>]
 ```
 
 - `--target` (default: current directory) is where `exec` runs and the root
   JSSG targets are resolved beneath.
-- `--script-root` (default: the workflow file's directory) is what a JSSG
-  definition's relative `script` resolves against.
 - `--bridge` or `CODEMOD_BRIDGE_BIN` (default: the monorepo's
   `target/debug/butterflow-execution-bridge`) locates the bridge binary; the
   command fails early when it is missing.
@@ -224,19 +306,21 @@ The command prints the workflow's final value as JSON on stdout and errors on
 stderr with exit code 1; it is the only place that writes to the terminal.
 `SIGINT`/`SIGTERM` abort the run: the bridge process is killed and the command
 in flight is recorded as `cancelled` with nothing written. The bin re-spawns
-Node with `--experimental-transform-types`
-and a `node:module` hook that strips types from `.ts` files under
-`node_modules`, so it works both from this checkout and from a workspace or
+Node with `--experimental-transform-types` and a `node:module` hook that strips
+types from `.ts` files under `node_modules`, then loads the workflow through
+`loadWorkflow`, so it works both from this checkout and from a workspace or
 package installation of `@codemod.com/orchestration` (the e2e suite installs
-a copy under a consumer's `node_modules` to prove it). The workflow module
-and the sources it imports are expected to be ESM. No build step or `dist/`
-exists. This is a trusted-local runner: it does not sandbox the workflow body
-and makes no claim about untrusted registry packages.
+a copy under a consumer's `node_modules`, with `esbuild` and `typescript`
+beside it, to prove it). The workflow module and the sources it imports are
+expected to be ESM. No build output is written to disk. This is a
+trusted-local runner: it does not sandbox the workflow body and makes no claim
+about untrusted registry packages.
 
 Remaining work before Solid Migration Assistant can move onto this package:
 
-- add the package to that repository and author its workflow, its JSSG scripts
-  as relative `script` paths, and its structured outputs (`StructuredCodemod`);
+- add the package to that repository and author its workflow with inline
+  transforms and structured outputs; helpers it shares between transforms
+  must be imported modules, not top-level declarations of the workflow file;
 - ship the bridge binary with the package or as a `codemod` subcommand; today it
   must be built from this monorepo and pointed at with `--bridge`;
 - decide the cross-file edit policy Solid needs: today every transform sees
@@ -245,23 +329,32 @@ Remaining work before Solid Migration Assistant can move onto this package:
 - an AI executor adapter, `pipe()`, approvals, and durable history remain
   unimplemented, so any Solid step that needs them stays in YAML;
 - restricted QuickJS execution of the workflow body and registry loading are
-  still required before TypeScript workflows become an untrusted registry format.
+  still required before TypeScript workflows become an untrusted registry
+  format; the build split already keeps transform artifacts independent of
+  the workflow bundle so each can get its own bindings.
+
+Prototype limitations of the build step: sandbox errors report positions in
+the bundled artifact (named `<name>.jssg.js`), not the workflow source; a
+module is split the first time Node loads it in a process, so a second
+`loadWorkflow` of an already-imported module collects no artifacts; modules
+loaded lazily after `loadWorkflow` returns are not split.
 
 The programmatic API is:
 
 ```ts
-import { BridgeExecutor, MemoryHistoryStore, run } from "@codemod.com/orchestration";
+import { BridgeExecutor, MemoryHistoryStore, loadWorkflow, run } from "@codemod.com/orchestration";
 
+const { exports, artifacts } = await loadWorkflow("./workflow.ts");
 const controller = new AbortController();
 const executor = new BridgeExecutor({
   bin: "target/debug/butterflow-execution-bridge",
   cwd: repoDir, // exec cwd and JSSG target root
-  scriptRoot: workflowDir, // what relative jssg `script` paths resolve against
+  artifacts, // built transforms by hash; their source never enters history
   events: sink, // optional: bridge.spawned events
 });
 const history = new MemoryHistoryStore();
-const first = await run(workflowModule, { executor, history, signal: controller.signal });
-const again = await run(workflowModule, { executor, history: MemoryHistoryStore.fromJSON(history.serialize()) });
+const first = await run(exports.default, { executor, history, signal: controller.signal });
+const again = await run(exports.default, { executor, history: MemoryHistoryStore.fromJSON(history.serialize()) });
 // again.replayed === true, nothing was executed
 ```
 
@@ -283,7 +376,9 @@ whole command record. `ReplayGate` raises `NondeterminismError` with a `kind`:
 A command that was scheduled but never completed replays as `unknown`.
 An unfinalized history replays its recorded commands and then executes new
 ones, which is how a crashed run resumes. A `cancelled` or `unknown`
-completion is recorded like any other and replays as recorded.
+completion is recorded like any other and replays as recorded. A JSSG
+command's identity includes its artifact hash, so editing a transform (or a
+helper it bundles) replays as `changed`, while moving the checkout does not.
 
 ## How a command finds its workflow
 

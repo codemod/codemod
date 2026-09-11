@@ -4,7 +4,8 @@
 // succeeded completion. `jssg` requests answer a batch result shaped by
 // FAKE_BRIDGE_MODE:
 //   echo (default)  every file gets "// fake\n" appended and outputs
-//                   { path, context, input }
+//                   { path, context, input } where context is the request
+//                   context without files ({ targetRoot, artifact })
 //   fail            a failed completion, nothing else
 //   hang            never answers (cancellation tests)
 //   escape          every file renames to "../escaped.ts"
@@ -23,7 +24,7 @@ const mode = process.env.FAKE_BRIDGE_MODE ?? "echo";
 const reply = (completion) =>
   writeFileSync(
     responsePath,
-    JSON.stringify({ protocolVersion: 4, commandId: request.commandId, ...completion }),
+    JSON.stringify({ protocolVersion: 5, commandId: request.commandId, ...completion }),
   );
 
 if (request.operation.kind === "exec") {

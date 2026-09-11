@@ -8,7 +8,7 @@
 import type { Json } from "./json.ts";
 import { isSafeRelativePath } from "./paths.ts";
 
-export const PROTOCOL_VERSION = 4 as const;
+export const PROTOCOL_VERSION = 5 as const;
 
 export type CompletionStatus = "succeeded" | "failed" | "cancelled" | "unknown";
 
@@ -39,22 +39,41 @@ export interface Target {
 export type SemanticAnalysis = "file" | "workspace" | { mode: "file" | "workspace"; root?: string };
 
 /**
+ * Build-time identity of one transform artifact: the definition's `name` and
+ * the lowercase hex SHA-256 of the bundled source (`build.ts`). It carries no
+ * path, so the command identity recorded in history is the same on every
+ * checkout; the source itself travels in `RequestContext.artifact`.
+ */
+export interface ArtifactRef {
+  name: string;
+  hash: string;
+}
+
+/**
+ * Static eligibility prefilter: ast-grep rule data (`rule`, optional
+ * `constraints` and `utils`) evaluated natively by the executor before any
+ * transform sandbox starts. Files without a match are skipped. `id` and
+ * `language` are supplied by the executor and may not appear here.
+ */
+export interface Selector {
+  rule: { [key: string]: Json };
+  constraints?: { [key: string]: Json };
+  utils?: { [key: string]: Json };
+}
+
+/**
  * JSSG codemod invocation. Only this operation carries a `target`: a JSSG
  * adapter is the only executor that can enumerate and enforce a file set.
  * Definition fields are intrinsic applicability. `target` can only narrow them.
  */
 export interface JssgOperation {
   kind: "jssg";
-  /**
-   * Safe relative path to the transform, resolved by the executor against
-   * its script root. Never absolute, so the command identity recorded in
-   * history is the same on every checkout.
-   */
-  script: string;
+  transform: ArtifactRef;
   language: string;
   include?: string[];
   exclude?: string[];
   semanticAnalysis?: SemanticAnalysis;
+  selector?: Selector;
   target?: Target;
   input?: Json;
 }
@@ -77,16 +96,16 @@ export interface BatchFile {
 /**
  * Executor-side context. It is attached by the host that runs an executor,
  * never by workflow code, and it is not part of the command record that
- * history stores, so it may carry machine-specific absolute paths and file
- * contents.
+ * history stores, so it may carry machine-specific absolute paths, file
+ * contents, and the transform source.
  */
 export interface RequestContext {
-  /** Absolute directory that a relative JSSG `script` resolves against. */
-  scriptRoot?: string;
   /** Absolute directory every JSSG file path is relative to. */
   targetRoot?: string;
   /** The JSSG batch: selected files in transform order. */
   files?: BatchFile[];
+  /** The bundled transform whose hash `JssgOperation.transform` names. */
+  artifact?: { source: string };
 }
 
 export interface OperationRequest {
@@ -109,7 +128,8 @@ export interface Edit {
 /**
  * What one batch file's transform produced: its own edit if modified,
  * `jssgTransform` and `write()` edits, and the `StructuredCodemod` output.
- * The bridge returns `{ files: FileOutcome[] }` in batch order.
+ * A file the selector skipped has no edits and no output. The bridge returns
+ * `{ files: FileOutcome[] }` in batch order.
  */
 export interface FileOutcome {
   path: string;
@@ -123,8 +143,8 @@ export interface CompletionError {
   output?: string;
   /**
    * Structured failure detail. JSSG commands report the phase that failed
-   * (`select`, `transform`, `stage`, `commit`) and for commit failures which
-   * files were already applied.
+   * (`artifact`, `select`, `transform`, `stage`, `commit`) and for commit
+   * failures which files were already applied.
    */
   details?: Json;
 }
@@ -186,7 +206,17 @@ export function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly st
  */
 const OPERATION_FIELDS = {
   exec: ["kind", "command", "env"],
-  jssg: ["kind", "script", "language", "include", "exclude", "semanticAnalysis", "target", "input"],
+  jssg: [
+    "kind",
+    "transform",
+    "language",
+    "include",
+    "exclude",
+    "semanticAnalysis",
+    "selector",
+    "target",
+    "input",
+  ],
   ai: ["kind", "prompt", "input"],
 } as const satisfies Record<Operation["kind"], readonly string[]>;
 
@@ -218,6 +248,32 @@ export function isSemanticAnalysis(value: unknown): value is SemanticAnalysis {
   );
 }
 
+/** A non-empty name and a lowercase hex SHA-256; the bridge checks the same. */
+export function isArtifactRef(value: unknown): value is ArtifactRef {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["name", "hash"]) &&
+    isNonBlank(value.name) &&
+    typeof value.hash === "string" &&
+    /^[0-9a-f]{64}$/u.test(value.hash)
+  );
+}
+
+function isJsonRecord(value: unknown): value is { [key: string]: Json } {
+  return isRecord(value) && isJson(value);
+}
+
+export function isSelector(value: unknown): value is Selector {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["rule", "constraints", "utils"]) &&
+    isJsonRecord(value.rule) &&
+    Object.keys(value.rule).length > 0 &&
+    (value.constraints === undefined || isJsonRecord(value.constraints)) &&
+    (value.utils === undefined || isJsonRecord(value.utils))
+  );
+}
+
 function isBatchFile(value: unknown): value is BatchFile {
   return (
     isRecord(value) &&
@@ -231,10 +287,13 @@ function isBatchFile(value: unknown): value is BatchFile {
 function isRequestContext(value: unknown): value is RequestContext {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["scriptRoot", "targetRoot", "files"]) &&
-    (value.scriptRoot === undefined || isNonBlank(value.scriptRoot)) &&
+    hasOnlyKeys(value, ["targetRoot", "files", "artifact"]) &&
     (value.targetRoot === undefined || isNonBlank(value.targetRoot)) &&
-    (value.files === undefined || (Array.isArray(value.files) && value.files.every(isBatchFile)))
+    (value.files === undefined || (Array.isArray(value.files) && value.files.every(isBatchFile))) &&
+    (value.artifact === undefined ||
+      (isRecord(value.artifact) &&
+        hasOnlyKeys(value.artifact, ["source"]) &&
+        typeof value.artifact.source === "string"))
   );
 }
 
@@ -290,12 +349,12 @@ export function isOperation(value: unknown): value is Operation {
     case "jssg":
       return (
         hasOnlyKeys(value, OPERATION_FIELDS.jssg) &&
-        typeof value.script === "string" &&
-        isSafeRelativePath(value.script) &&
+        isArtifactRef(value.transform) &&
         isNonBlank(value.language) &&
         (value.include === undefined || isNonEmptyStringList(value.include)) &&
         (value.exclude === undefined || isNonEmptyStringList(value.exclude)) &&
         (value.semanticAnalysis === undefined || isSemanticAnalysis(value.semanticAnalysis)) &&
+        (value.selector === undefined || isSelector(value.selector)) &&
         (value.target === undefined || isTarget(value.target)) &&
         (value.input === undefined || isJson(value.input))
       );

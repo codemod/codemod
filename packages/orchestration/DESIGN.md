@@ -52,34 +52,43 @@ command reaches.
 | `shard` step and `max_threads` | automatic scheduler behavior, no public helper |
 
 The prototype defines all three operation shapes. The Rust bridge executes
-`exec()` and trusted local JSSG scripts; AI results remain scripted in tests.
+`exec()` and inline JSSG transforms that a build step has bundled; AI results
+remain scripted in tests.
 
 ### Single JSSG leaf
 
 The registry has 358 single AST-rule packages. In the proposed API, one can
-export the operation directly:
+export the operation directly, with the transform written next to it:
 
 ```ts
 export default jssg({
   name: "remove-old-api",
-  script: "scripts/remove-old-api.ts",
   language: "typescript",
   include: ["**/*.{ts,tsx}"],
+  selector: { rule: { pattern: "oldApi($ARG)" } },
+  transform(root) {
+    const edits = root.root().findAll({ rule: { pattern: "oldApi($ARG)" } }).map((n) => n.remove());
+    return root.root().commitEdits(edits);
+  },
 });
 ```
 
 `language`, `include`, and `exclude` are the definition's intrinsic applicability: what the
 transform can process at all. They travel with the package and are not an
 invocation choice; without `include`, the language's file extensions apply, as
-in a YAML `js-ast-grep` step. `script` is relative to the package (the
-workflow file's directory) so the recorded command identity is the same on
-every checkout. Where the transform runs is chosen by the caller through the
-invocation's `target` (see Targeting below). Scheduling controls such as the
-current YAML `max_threads` do not belong on a JSSG definition.
+in a YAML `js-ast-grep` step. `selector` is optional static rule data the
+executor uses to skip files before any sandbox starts. `transform` is the
+same single-function contract a standalone codemod exports; a build step
+bundles it (with the modules it imports) into a standalone artifact whose
+identity, the name plus a content hash, is what the recorded command carries,
+so it is the same on every checkout and changes with the code. Where the
+transform runs is chosen by the caller through the invocation's `target` (see
+Targeting below). Scheduling controls such as the current YAML `max_threads`
+do not belong on a JSSG definition.
 
 The prototype currently runs operations inside `plan()` or `workflow()`. Direct
-leaf exports remain proposed; applicability fields and local script execution
-are implemented.
+leaf exports remain proposed; applicability fields, the static selector, and
+inline transform execution are implemented.
 
 ## Proposal
 
@@ -126,11 +135,13 @@ depends on command output, a workflow passes the typed result directly:
 const inspect = exec({ name: "inspect", command: "node inspect.js", output: Project });
 const migrate = jssg({
   name: "migrate",
-  script: "scripts/migrate.ts",
   language: "tsx",
   include: ["**/*.{ts,tsx}"],
   input: Project,
   output: Summary,
+  transform(root, options) {
+    return { content: migrateFile(root, options.params.input), output: summarize(root) };
+  },
 });
 
 export default workflow(async () => {
@@ -312,10 +323,11 @@ const inspectPackage = exec({
 
 const writeReport = jssg({
   name: "write-report",
-  script: "scripts/write-report.ts",
   language: "typescript",
+  include: ["REPORT.md"],
   input: Findings,
   output: Summary,
+  transform: (root, options) => renderReport(root, options.params.input),
 });
 
 export default workflow(async () => {
@@ -347,9 +359,9 @@ normal data:
 ```ts
 const findIssues = jssg({
   name: "find-issues",
-  script: "scripts/find-issues.ts",
   language: "tsx",
   output: Findings,
+  transform: (root) => ({ content: null, output: collectIssues(root) }),
 });
 
 const writeGuide = ai({
@@ -374,31 +386,47 @@ TypeScript owns the author-facing model, every piece of orchestration policy,
 and the parts that need rapid iteration:
 
 - runnable definitions and schema-based typing
-- workflow and plan authoring
+- workflow and plan authoring, including the inline transform
+- the build step that splits a workflow module into the trusted workflow and
+  one bundled artifact per transform (TypeScript parser for extraction,
+  esbuild for bundling, SHA-256 for identity)
 - serializable plan data
 - the test harness
 - prototype replay and in-memory history
-- for JSSG: repository traversal and language-extension defaults, definition
-  and target intersection, deterministic ordering, reading sources,
-  cross-file conflict validation, the transactional commit, typed output
-  aggregation, cancellation, and failure classification
+- for JSSG: artifact lookup, repository traversal and language-extension
+  defaults, definition and target intersection, deterministic ordering,
+  reading sources, cross-file conflict validation, the transactional commit,
+  typed output aggregation, cancellation, and failure classification
 
 Rust owns only execution and the checks on its own side of the boundary. The
 versioned JSON bridge calls the existing `butterflow_runners::DirectRunner`
 for shell commands. For JSSG, one bridge process per command receives the
-selected files with their contents, loads the script and selector once, builds
-one semantic provider, transforms every file through the existing QuickJS
-sandbox, validates every path it receives or produces against the target
-root, and returns the edits and outputs as plain JSON. It never enumerates
-the repository and never writes repository files on this path. It does not
+bundled transform source and the selected files with their contents, verifies
+the source against the recorded hash, loads it from memory, builds one
+semantic provider, evaluates the static selector natively, transforms every
+eligible file through the existing QuickJS sandbox, validates every path it
+receives or produces against the target root, and returns the edits and
+outputs as plain JSON. It never reads author files, never enumerates the
+repository, and never writes repository files on this path. It does not
 implement planning, replay, or persistence, and it builds without the full
 Codemod CLI.
 
 ```text
+workflow.ts -> build step -> workflow module (Node) + transform artifacts (QuickJS)
 TypeScript workflow -> replay gate -> BridgeExecutor
     exec -> bridge process -> DirectRunner
-    jssg -> executeJssg (select, read) -> bridge process (one batch) -> executeJssg (validate, stage, commit)
+    jssg -> executeJssg (artifact, select, read) -> bridge process (one batch) -> executeJssg (validate, stage, commit)
 ```
+
+The workflow and its transforms are split because they will run in
+different sandboxes with different bindings: the workflow body sees the
+orchestration runtime, a transform sees `codemod:ast-grep` and the curated
+sandbox modules. The split happens before anything runs, on source text and
+positions, never on function values; a transform may use its own code,
+globals, and imported modules, and the build rejects any other capture from
+the workflow module with a position. Dynamic values enter through invocation
+input. History records the artifact's name and content hash; the executor
+carries the source in the request context, outside history.
 
 The split keeps the new authoring API and its policy easy to change while
 reusing the execution behavior we already have. It also avoids rewriting shell
@@ -407,7 +435,7 @@ TypeScript sends:
 
 ```json
 {
-  "protocolVersion": 3,
+  "protocolVersion": 5,
   "commandId": "format",
   "operation": { "kind": "exec", "command": "npm run format" }
 }
@@ -417,7 +445,7 @@ Rust returns plain data:
 
 ```json
 {
-  "protocolVersion": 3,
+  "protocolVersion": 5,
   "commandId": "format",
   "status": "succeeded",
   "output": { "stdout": "formatted 12 files\n" }
@@ -429,9 +457,11 @@ must not write protocol messages to the terminal. `RUST_BRIDGE.md` documents
 the protocol, the batch, the security model, and the transaction semantics.
 
 The existing YAML engine is untouched: Butterflow keeps its graph,
-scheduling, state, reporting, JSSG execution, and filesystem mutation path.
-The only shared change is a sandbox option (`stage_writes`) that the bridge
-turns on and the engine leaves off.
+scheduling, state, reporting, JSSG execution (including `getSelector`), and
+filesystem mutation path. The shared changes are additive sandbox
+primitives the bridge uses and the engine does not: the `stage_writes`
+option, a loader-generic `execute_codemod_with_loader` behind the unchanged
+`execute_codemod_with_quickjs`, and static selector helpers.
 
 ## Replay Model
 
@@ -488,8 +518,9 @@ Included:
 - append-only in-memory history and replay checks
 - scripted TypeScript tests
 - real `exec` calls through the existing Rust runner
-- real local JSSG calls through the existing sandbox as one Rust batch per
-  command, including workspace semantic analysis
+- inline JSSG transforms split into bundled artifacts at build time and run
+  through the existing sandbox as one Rust batch per command, with a static
+  selector prefilter and workspace semantic analysis
 - TypeScript-owned file selection with the engine's walker semantics,
   deterministic ordering, conflict checks, transactional commit, structured
   output aggregation, and failure classification
@@ -498,7 +529,11 @@ Included:
 
 Not included:
 
-- QuickJS workflow sandboxing and host-bound runtime (the prototype uses `AsyncLocalStorage`)
+- QuickJS workflow sandboxing and host-bound runtime (the prototype uses
+  `AsyncLocalStorage`; the workflow side of the build split runs in Node)
+- transform authoring beyond the supported subset: capturing the workflow
+  module's own declarations, `options.matches` from the static selector,
+  source-mapped sandbox errors
 - `pipe()`
 - AI execution
 - durable persistence or production scheduling

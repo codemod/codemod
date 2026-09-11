@@ -1,11 +1,14 @@
-//! One JSSG batch: the script, its module resolver and selector, the
-//! language, the invocation input, and one optional semantic provider are set
-//! up once; every supplied file is then transformed serially from the content
-//! the host sent (snapshot semantics: no transform sees another's edits, and
-//! the workspace index is built once from the supplied set before the first
-//! transform). Edits, renames, and JSON outputs come back as data with every
-//! path validated against the canonical target root. Nothing here reads a
-//! repository listing or writes repository files.
+//! One JSSG batch: the transform bundle (verified against its hash and
+//! loaded from memory under a virtual module name), the language, the
+//! optional static selector, the invocation input, and one optional semantic
+//! provider are set up once; every supplied file is then transformed serially
+//! from the content the host sent (snapshot semantics: no transform sees
+//! another's edits, and the workspace index is built once from the whole
+//! supplied set before the first transform). Files the selector does not
+//! match are skipped before any JavaScript runtime starts. Edits, renames,
+//! and JSON outputs come back as data with every path validated against the
+//! canonical target root. Nothing here reads an author file or a repository
+//! listing, and nothing writes repository files.
 
 use std::{
     collections::HashMap,
@@ -13,27 +16,27 @@ use std::{
     sync::Arc,
 };
 
-use codemod_sandbox::{
-    sandbox::{
-        engine::{
-            codemod_lang::CodemodLang, execute_codemod_with_quickjs, extract_selector_with_quickjs,
-            CodemodOutput, ExecutionResult, JssgExecutionOptions, SelectorEngineOptions,
-        },
-        resolvers::OxcResolver,
+use codemod_sandbox::sandbox::{
+    engine::{
+        codemod_lang::CodemodLang, execute_codemod_with_loader, selector_from_value,
+        selector_matches, CodemodOutput, ExecutionResult, JssgExecutionOptions,
     },
-    utils::project_discovery::find_tsconfig,
+    resolvers::{InMemoryLoader, InMemoryResolver},
 };
 use language_core::{ProviderMode, SemanticProvider};
 use semantic_factory::LazySemanticProvider;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
-use crate::{BatchFile, SemanticAnalysis, SemanticMode};
+use crate::{ArtifactRef, BatchFile, Selector, SemanticAnalysis, SemanticMode};
 
 pub struct Batch<'a> {
-    pub script: &'a str,
-    pub script_root: Option<&'a str>,
+    pub artifact: &'a ArtifactRef,
+    /// The bundled transform source from the request context.
+    pub source: Option<&'a str>,
     pub language: &'a str,
+    pub selector: Option<&'a Selector>,
     pub target_root: Option<&'a str>,
     pub semantic_analysis: Option<&'a SemanticAnalysis>,
     /// Exposed to the transform as `options.params.input`.
@@ -54,7 +57,8 @@ pub struct Edit {
 }
 
 /// What one supplied file's transform produced: its own edit (if modified),
-/// `jssgTransform` and staged `write()` edits, and the structured output.
+/// `jssgTransform` and staged `write()` edits, and the structured output. A
+/// file the selector skipped has no edits and no output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileOutcome {
@@ -66,39 +70,29 @@ pub struct FileOutcome {
 
 pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, String> {
     let root = canonical_dir(batch.target_root, "targetRoot")?;
-    let script_root = absolute(batch.script_root, "scriptRoot")?;
-    validate_relative_path(batch.script, "JSSG script")?;
-    let script_path = script_root.join(batch.script);
-    let script_path = script_path.canonicalize().map_err(|error| {
-        format!(
-            "failed to resolve JSSG script '{}': {error}",
-            script_path.display()
-        )
-    })?;
+    let (module, source) = verified_module(batch.artifact, batch.source)?;
     let language: CodemodLang = batch
         .language
         .parse()
         .map_err(|error| format!("invalid JSSG language '{}': {error}", batch.language))?;
-    let script_dir = script_path.parent().unwrap_or(Path::new("."));
-    let resolver = Arc::new(
-        OxcResolver::new(script_dir.to_path_buf(), find_tsconfig(script_dir))
-            .map_err(|error| format!("failed to create JSSG resolver: {error}"))?,
-    );
-    // The shipped selector engine passes no params, so `getSelector` sees `{}`.
-    let selector = extract_selector_with_quickjs(SelectorEngineOptions {
-        script_path: &script_path,
-        language,
-        resolver: Arc::clone(&resolver),
-        capabilities: None,
-        target_directory: Some(&root),
-    })
-    .await
-    .map_err(|error| format!("failed to load JSSG selector: {error}"))?
-    .map(Arc::from);
+    let selector = batch
+        .selector
+        .map(|selector| {
+            serde_json::to_value(selector)
+                .map_err(|error| error.to_string())
+                .and_then(|value| {
+                    selector_from_value(language, value).map_err(|error| error.to_string())
+                })
+        })
+        .transpose()
+        .map_err(|error| format!("invalid JSSG selector: {error}"))?;
     let provider = semantic_provider(batch.semantic_analysis, &root)?;
     let params = batch
         .input
         .map(|value| HashMap::from([("input".to_string(), value.clone())]));
+    let mut resolver = InMemoryResolver::new();
+    resolver.add_module_with_source(format!("./{module}"), module.clone(), source.to_string());
+    let resolver = Arc::new(resolver);
 
     // Every requested path is checked before anything runs.
     let sources = batch
@@ -106,6 +100,8 @@ pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, Strin
         .iter()
         .map(|file| resolve_source(&root, &file.path, "file path"))
         .collect::<Result<Vec<_>, _>>()?;
+    // The whole selected set is indexed, including files the selector will
+    // skip, so a matching transform can resolve definitions in them.
     if let Some(provider) = provider
         .as_ref()
         .filter(|provider| provider.mode() == ProviderMode::WorkspaceScope)
@@ -119,32 +115,94 @@ pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, Strin
 
     let mut outcomes = Vec::with_capacity(batch.files.len());
     for (file, source) in batch.files.iter().zip(&sources) {
-        let output = execute_codemod_with_quickjs(JssgExecutionOptions {
-            script_path: &script_path,
-            resolver: Arc::clone(&resolver),
-            language,
-            file_path: source,
-            content: &file.content,
-            selector_config: selector.clone(),
-            params: params.clone(),
-            matrix_values: None,
-            capabilities: None,
-            semantic_provider: provider.clone(),
-            metrics_context: None,
-            llm_request_handler: None,
-            shared_state_context: None,
-            runtime_event_callback: None,
-            cancellation_flag: None,
-            test_mode: false,
-            dry_run: false,
-            stage_writes: true,
-            target_directory: &root,
-        })
+        if selector
+            .as_ref()
+            .is_some_and(|selector| !selector_matches(selector, language, &file.content))
+        {
+            outcomes.push(FileOutcome {
+                path: file.path.clone(),
+                edits: vec![],
+                output: None,
+            });
+            continue;
+        }
+        let output = execute_codemod_with_loader(
+            JssgExecutionOptions {
+                script_path: Path::new(&module),
+                resolver: Arc::clone(&resolver),
+                language,
+                file_path: source,
+                content: &file.content,
+                selector_config: None,
+                params: params.clone(),
+                matrix_values: None,
+                capabilities: None,
+                semantic_provider: provider.clone(),
+                metrics_context: None,
+                llm_request_handler: None,
+                shared_state_context: None,
+                runtime_event_callback: None,
+                cancellation_flag: None,
+                test_mode: false,
+                dry_run: false,
+                stage_writes: true,
+                target_directory: &root,
+            },
+            InMemoryLoader::new(Arc::clone(&resolver)),
+        )
         .await
         .map_err(|error| format!("JSSG failed for '{}': {error}", file.path))?;
         outcomes.push(convert(&root, &file.path, output)?);
     }
     Ok(outcomes)
+}
+
+/// The artifact's virtual module name and source, once the source is present
+/// and its SHA-256 matches the hash the operation recorded. The name is
+/// derived from the definition name so sandbox errors point at the transform.
+fn verified_module<'a>(
+    artifact: &ArtifactRef,
+    source: Option<&'a str>,
+) -> Result<(String, &'a str), String> {
+    if artifact.name.trim().is_empty() {
+        return Err("JSSG transform name must not be empty".to_string());
+    }
+    let hash = &artifact.hash;
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(format!(
+            "JSSG transform '{}' hash must be lowercase hex SHA-256",
+            artifact.name
+        ));
+    }
+    let source = source.ok_or_else(|| {
+        format!(
+            "JSSG transform '{}' has no artifact source in the request context",
+            artifact.name
+        )
+    })?;
+    let actual = format!("{:x}", Sha256::digest(source.as_bytes()));
+    if actual != *hash {
+        return Err(format!(
+            "JSSG transform '{}' source hashes to {actual}, not the recorded {hash}",
+            artifact.name
+        ));
+    }
+    let stem: String = artifact
+        .name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Ok((format!("{stem}.jssg.js"), source))
 }
 
 fn convert(root: &Path, path: &str, output: CodemodOutput) -> Result<FileOutcome, String> {
@@ -219,15 +277,11 @@ fn semantic_provider(
 // `/`-separated form after the same check. TypeScript repeats its own checks
 // before writing; neither side trusts the other's validation.
 
-fn absolute(value: Option<&str>, name: &str) -> Result<PathBuf, String> {
-    match value.map(Path::new) {
-        Some(path) if path.is_absolute() => Ok(path.to_path_buf()),
-        _ => Err(format!("{name} must be an absolute path")),
-    }
-}
-
 fn canonical_dir(value: Option<&str>, name: &str) -> Result<PathBuf, String> {
-    let path = absolute(value, name)?;
+    let path = match value.map(Path::new) {
+        Some(path) if path.is_absolute() => path,
+        _ => return Err(format!("{name} must be an absolute path")),
+    };
     let canonical = path
         .canonicalize()
         .map_err(|error| format!("failed to resolve {name} '{}': {error}", path.display()))?;

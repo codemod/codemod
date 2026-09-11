@@ -1,6 +1,6 @@
 /**
- * Path rules shared by JSSG targets, JSSG definitions (`script`,
- * `semanticAnalysis.root`), the wire protocol, and the commit. The Rust
+ * Path rules shared by JSSG targets, JSSG definitions
+ * (`semanticAnalysis.root`), the wire protocol, and the commit. The Rust
  * bridge applies the same rules (`validate_relative_path` and the containment
  * checks in `crates/execution-bridge/src/jssg.rs`), so a value accepted here
  * is accepted there and every path is checked independently on both sides.

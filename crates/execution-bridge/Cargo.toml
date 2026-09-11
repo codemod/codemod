@@ -17,6 +17,9 @@ language-core = { workspace = true }
 semantic-factory = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Verifies that the artifact source in the request context is the one the
+# recorded command names.
+sha2 = "0.10"
 tokio = { workspace = true }
 
 [dev-dependencies]

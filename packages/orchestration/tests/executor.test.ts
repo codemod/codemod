@@ -1,7 +1,8 @@
 /**
- * Script identity and resolution: a JSSG `script` is a safe relative path on
- * the wire and in history, and the executor (not the operation) carries the
- * machine-specific root it resolves against, sending it only in the request context.
+ * Artifact identity through the runtime: a JSSG command records the transform
+ * as `{ name, hash }`, the executor supplies the source in the request
+ * context only, and a history replays on any checkout. Also the local CLI's
+ * argument parsing.
  */
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +11,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseArgs, USAGE } from "../src/cli.ts";
 import {
   BridgeExecutor,
+  CollectingSink,
   MemoryHistoryStore,
+  OperationError,
   exec,
   isSafeRelativePath,
   jssg,
@@ -18,6 +21,7 @@ import {
   workflow,
   type OperationRequest,
 } from "../src/index.ts";
+import { artifact, ref } from "./helpers.ts";
 
 const fakeBridge = resolve(import.meta.dirname, "fixtures/fake-bridge.mjs");
 
@@ -42,55 +46,75 @@ describe("safe relative paths", () => {
 });
 
 describe("jssg definitions", () => {
-  it("accept relative scripts and reject absolute or escaping ones", () => {
-    expect(jssg({ name: "ok", script: "scripts/a..b.ts", language: "typescript" }).script).toBe(
-      "scripts/a..b.ts",
+  it("refuse an unbuilt inline transform and malformed references", () => {
+    expect(() => jssg({ name: "inline", language: "typescript", transform: () => null })).toThrow(
+      /jssg 'inline': inline transform was not extracted; run the workflow with codemod-workflow/u,
     );
-    for (const script of ["/abs/x.ts", "C:\\x.ts", "../x.ts", "scripts/../x.ts"]) {
-      expect(() => jssg({ name: "bad", script, language: "typescript" })).toThrow(
-        /must be a relative path without '\.\.' segments/,
-      );
+    for (const transform of [
+      { name: "x", hash: "abc" },
+      { name: "x", hash: "A".repeat(64) },
+      { name: " ", hash: "a".repeat(64) },
+      { name: "x", hash: "a".repeat(64), source: "x" },
+    ]) {
+      expect(() =>
+        jssg({ name: "x", language: "typescript", transform: transform as never }),
+      ).toThrow(/must be the \{ name, hash \} reference the build produced/u);
     }
-    expect(() => jssg({ name: "bad", script: " ", language: "typescript" })).toThrow(
-      /must not be empty/,
-    );
   });
 
-  it("validate semanticAnalysis.root with the same path rules", () => {
-    const define = (root: string) =>
+  it("validate selector data and semanticAnalysis.root", () => {
+    const define = (selector: unknown) =>
+      jssg({ name: "x", language: "typescript", transform: ref("x"), selector: selector as never });
+    expect(
+      define({ rule: { pattern: "a($B)" }, constraints: { B: { kind: "string" } } }).selector,
+    ).toEqual({ rule: { pattern: "a($B)" }, constraints: { B: { kind: "string" } } });
+    expect(define(undefined)).not.toHaveProperty("selector");
+    for (const bad of [{}, { rule: {} }, { rule: "a" }, { rule: { pattern: "a" }, id: "s" }, "a"]) {
+      expect(() => define(bad), JSON.stringify(bad)).toThrow(
+        /selector must be JSON with a non-empty 'rule'/u,
+      );
+    }
+
+    const semantic = (root: string) =>
       jssg({
         name: "x",
-        script: "x.ts",
         language: "typescript",
+        transform: ref("x"),
         semanticAnalysis: { mode: "workspace", root },
       });
-    expect(define("src..gen").toOperation(undefined).semanticAnalysis).toEqual({
+    expect(semantic("src..gen").toOperation(undefined).semanticAnalysis).toEqual({
       mode: "workspace",
       root: "src..gen",
     });
     for (const root of ["/src", "C:\\src", "..", "src/../..", " "]) {
-      expect(() => define(root), root).toThrow(/must be a safe relative path/);
+      expect(() => semantic(root), root).toThrow(/must be a safe relative path/u);
     }
     expect(() =>
       jssg({
         name: "x",
-        script: "x.ts",
         language: "typescript",
+        transform: ref("x"),
         semanticAnalysis: { mode: "file", root: "src" },
       }),
-    ).toThrow(/requires workspace mode/);
+    ).toThrow(/requires workspace mode/u);
   });
 });
 
-const migrate = jssg({ name: "migrate", script: "scripts/migrate.ts", language: "typescript" });
+const SOURCE = "export default async function transform(root) { return null; }\n";
+const built = artifact("migrate", SOURCE);
+const migrate = jssg({
+  name: "migrate",
+  language: "typescript",
+  transform: { name: built.name, hash: built.hash },
+});
 const wf = workflow(() => migrate({ target: { root: "apps/web" } }));
 
 interface EchoOutput {
   path: string;
-  context: { scriptRoot: string; targetRoot: string };
+  context: { targetRoot: string; artifact: { source: string } };
 }
 
-describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () => {
+describe.skipIf(process.platform === "win32")("BridgeExecutor artifacts", () => {
   let repo: string;
   beforeEach(() => {
     chmodSync(fakeBridge, 0o755);
@@ -100,9 +124,12 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
   });
   afterEach(() => rmSync(repo, { recursive: true, force: true }));
 
-  it("sends scriptRoot in the request context, outside the operation and history", async () => {
-    const scriptRoot = resolve(import.meta.dirname, "fixtures");
-    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo, scriptRoot });
+  it("records the reference in history and sends the source only in the request context", async () => {
+    const executor = new BridgeExecutor({
+      bin: fakeBridge,
+      cwd: repo,
+      artifacts: new Map([[built.hash, built]]),
+    });
     const store = new MemoryHistoryStore();
 
     const first = await run(wf, { executor, history: store });
@@ -110,7 +137,7 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
     const [output] = first.output as EchoOutput[];
     expect(output).toMatchObject({
       path: "a.ts",
-      context: { scriptRoot, targetRoot: join(repo, "apps/web") },
+      context: { targetRoot: join(repo, "apps/web"), artifact: { source: SOURCE } },
     });
     const scheduled = first.history.events.find((event) => event.type === "scheduled");
     expect(scheduled).toEqual({
@@ -121,34 +148,20 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
         kind: "jssg",
         operation: {
           kind: "jssg",
-          script: "scripts/migrate.ts",
+          transform: { name: "migrate", hash: built.hash },
           language: "typescript",
           target: { root: "apps/web" },
         },
       },
     });
     // Only the completion (which this fake bridge fills with the echoed
-    // context) mentions the root; the recorded command that replay compares does not.
-    expect(JSON.stringify(scheduled)).not.toContain("scriptRoot");
-    expect(JSON.stringify(scheduled)).not.toContain(scriptRoot);
+    // context) mentions the source or the root; the recorded command does not.
+    expect(JSON.stringify(scheduled)).not.toContain("transform(root");
     expect(JSON.stringify(scheduled)).not.toContain(repo);
-  });
 
-  it("replays history recorded on another checkout without re-executing", async () => {
-    const recorded = new BridgeExecutor({
-      bin: fakeBridge,
-      cwd: repo,
-      scriptRoot: "/checkout/one",
-    });
-    const store = new MemoryHistoryStore();
-    const first = await run(wf, { executor: recorded, history: store });
-
+    // A replay needs neither the artifact nor the checkout it was built on.
     const executed: OperationRequest[] = [];
-    const elsewhere = new BridgeExecutor({
-      bin: fakeBridge,
-      cwd: repo,
-      scriptRoot: "/checkout/two",
-    });
+    const elsewhere = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
     const second = await run(wf, {
       executor: {
         execute(request, signal) {
@@ -158,17 +171,26 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
       },
       history: MemoryHistoryStore.fromJSON(store.serialize()),
     });
-
     expect(second.replayed).toBe(true);
     expect(second.output).toEqual(first.output);
     expect(executed).toHaveLength(0);
   });
 
-  it("defaults the script root to the working directory", async () => {
-    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
-    const result = await run(wf, { executor });
-    const [output] = result.output as EchoOutput[];
-    expect(output?.context.scriptRoot).toBe(repo);
+  it("fails a command whose artifact the executor does not hold, without spawning", async () => {
+    const events = new CollectingSink();
+    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo, events });
+    const store = new MemoryHistoryStore();
+    const error = await run(wf, { executor, history: store, events }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OperationError);
+    expect((error as OperationError).status).toBe("failed");
+    expect((error as OperationError).detail).toEqual({
+      message: expect.stringMatching(
+        /no built artifact for jssg 'migrate' \(hash [0-9a-f]{12}\); load the workflow with loadWorkflow\(\)/u,
+      ),
+      details: { phase: "artifact" },
+    });
+    expect(events.events.filter((e) => e.type === "bridge.spawned")).toHaveLength(0);
+    expect(store.toJSON().events.map((e) => e.type)).toEqual(["scheduled", "completed"]);
   });
 
   it("runs exec through the one-shot file protocol and refuses ai locally", async () => {
@@ -183,7 +205,7 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
     };
     expect(echoed.request.operation).toEqual({ kind: "exec", command: "true" });
     const ai = await executor.execute({
-      protocolVersion: 4,
+      protocolVersion: 5,
       commandId: "ai",
       operation: { kind: "ai", prompt: "x" },
     });
@@ -192,40 +214,29 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor script root", () =
 });
 
 describe("codemod-workflow argument parsing", () => {
-  it("defaults the script root to the workflow directory and resolves every path", () => {
+  it("resolves every path and defaults the target and bridge", () => {
     const options = parseArgs(["fixtures/jssg/workflow.ts"]);
     expect(options.workflow).toBe(resolve("fixtures/jssg/workflow.ts"));
-    expect(options.scriptRoot).toBe(resolve("fixtures/jssg"));
     expect(options.target).toBe(process.cwd());
     expect(options.bridge).toBe(
       process.env.CODEMOD_BRIDGE_BIN === undefined
         ? resolve(import.meta.dirname, "../../../target/debug/butterflow-execution-bridge")
         : resolve(process.env.CODEMOD_BRIDGE_BIN),
     );
-  });
-
-  it("accepts explicit target, script root, and bridge", () => {
-    const options = parseArgs([
-      "wf.ts",
-      "--target",
-      "repo",
-      "--script-root",
-      "pkg/scripts",
-      "--bridge",
-      "bin/bridge",
-    ]);
-    expect(options).toEqual({
+    expect(parseArgs(["wf.ts", "--target", "repo", "--bridge", "bin/bridge"])).toEqual({
       workflow: resolve("wf.ts"),
       target: resolve("repo"),
-      scriptRoot: resolve("pkg/scripts"),
       bridge: resolve("bin/bridge"),
     });
   });
 
-  it("rejects missing workflow, unknown options, and dangling values", () => {
+  it("rejects missing workflow, unknown or removed options, and dangling values", () => {
     expect(() => parseArgs([])).toThrow(USAGE);
     expect(() => parseArgs(["--target", "x"])).toThrow(USAGE);
-    expect(() => parseArgs(["wf.ts", "--nope", "x"])).toThrow(/unknown option: --nope/);
-    expect(() => parseArgs(["wf.ts", "--target"])).toThrow(/missing value for --target/);
+    expect(() => parseArgs(["wf.ts", "--nope", "x"])).toThrow(/unknown option: --nope/u);
+    expect(() => parseArgs(["wf.ts", "--script-root", "x"])).toThrow(
+      /unknown option: --script-root/u,
+    );
+    expect(() => parseArgs(["wf.ts", "--target"])).toThrow(/missing value for --target/u);
   });
 });

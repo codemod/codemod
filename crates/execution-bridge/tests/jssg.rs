@@ -1,15 +1,17 @@
-//! One JSSG batch through the real sandbox: outcomes as data, one shared
-//! runtime configuration and semantic provider, and path validation on both
-//! directions of the boundary. Every test uses a temporary repository and a
-//! separate workflow directory; nothing on disk changes.
+//! One JSSG batch through the real sandbox: the bundled transform runs from
+//! memory, outcomes come back as data, the static selector skips files before
+//! any runtime starts, one runtime configuration and semantic provider are
+//! shared, and paths are validated on both directions of the boundary. Every
+//! test uses a temporary repository; nothing on disk changes.
 
 use std::path::{Path, PathBuf};
 
 use butterflow_execution_bridge::{
     jssg::{transform_batch, Batch, Edit, FileOutcome},
-    BatchFile, SemanticAnalysis, SemanticAnalysisDetails, SemanticMode,
+    ArtifactRef, BatchFile, Selector, SemanticAnalysis, SemanticAnalysisDetails, SemanticMode,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 const REPLACE: &str = r#"export default async function transform(root, options) {
@@ -21,18 +23,22 @@ const REPLACE: &str = r#"export default async function transform(root, options) 
   };
 }"#;
 
+fn sha256(text: &str) -> String {
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
+
 struct Fixture {
     repo: TempDir,
-    workflow: TempDir,
+    source: String,
+    artifact: ArtifactRef,
     files: Vec<BatchFile>,
+    selector: Option<Selector>,
     semantic: Option<SemanticAnalysis>,
     input: Option<Value>,
 }
 
 impl Fixture {
-    fn new(script: &str, files: &[(&str, &str)]) -> Self {
-        let workflow = tempfile::tempdir().expect("workflow dir");
-        std::fs::write(workflow.path().join("transform.js"), script).expect("script");
+    fn new(source: &str, files: &[(&str, &str)]) -> Self {
         let repo = tempfile::tempdir().expect("repo dir");
         let files = files
             .iter()
@@ -46,8 +52,13 @@ impl Fixture {
             .collect();
         Self {
             repo,
-            workflow,
+            source: source.to_string(),
+            artifact: ArtifactRef {
+                name: "t".to_string(),
+                hash: sha256(source),
+            },
             files,
+            selector: None,
             semantic: None,
             input: None,
         }
@@ -57,18 +68,28 @@ impl Fixture {
         self.repo.path()
     }
 
+    fn selector(mut self, rule: Value) -> Self {
+        self.selector = Some(Selector {
+            rule,
+            constraints: None,
+            utils: None,
+        });
+        self
+    }
+
     async fn run_with(
         &self,
-        script_root: &Path,
+        artifact: &ArtifactRef,
+        source: Option<&str>,
         target_root: &Path,
-        script: &str,
         language: &str,
         files: &[BatchFile],
     ) -> Result<Vec<FileOutcome>, String> {
         transform_batch(Batch {
-            script,
-            script_root: script_root.to_str(),
+            artifact,
+            source,
             language,
+            selector: self.selector.as_ref(),
             target_root: target_root.to_str(),
             semantic_analysis: self.semantic.as_ref(),
             input: self.input.as_ref(),
@@ -77,15 +98,19 @@ impl Fixture {
         .await
     }
 
-    async fn run(&self) -> Result<Vec<FileOutcome>, String> {
+    async fn run_files(&self, files: &[BatchFile]) -> Result<Vec<FileOutcome>, String> {
         self.run_with(
-            self.workflow.path(),
+            &self.artifact,
+            Some(&self.source),
             self.root(),
-            "transform.js",
             "typescript",
-            &self.files,
+            files,
         )
         .await
+    }
+
+    async fn run(&self) -> Result<Vec<FileOutcome>, String> {
+        self.run_files(&self.files).await
     }
 
     /// Every file on disk still holds the content the batch was given.
@@ -112,6 +137,14 @@ fn edit(path: &str, content: &str, rename_to: Option<&str>) -> Edit {
         path: path.to_string(),
         content: content.to_string(),
         rename_to: rename_to.map(str::to_string),
+    }
+}
+
+fn skipped(path: &str) -> FileOutcome {
+    FileOutcome {
+        path: path.to_string(),
+        edits: vec![],
+        output: None,
     }
 }
 
@@ -144,12 +177,40 @@ async fn a_batch_returns_edits_and_outputs_in_order_without_writing() {
 }
 
 #[tokio::test]
-async fn legacy_returns_and_selectors_behave_as_in_the_engine() {
-    // string | null returns carry no output; a selector skips non-matching files.
+async fn the_bundle_runs_from_memory_with_builtin_imports_only() {
+    // No file on disk holds this source; `codemod:ast-grep` still resolves.
     let fixture = Fixture::new(
-        r#"export function getSelector() { return { rule: { pattern: "oldApi($A)" } }; }
-export default async function transform(root) {
+        r#"import { parse } from "codemod:ast-grep";
+var helper = (text) => parse("typescript", text).root().text().toUpperCase();
+export default function transform(root) { return helper(root.root().text()); }"#,
+        &[("a.ts", "abc;\n")],
+    );
+    let outcomes = fixture.run().await.expect("batch");
+    assert_eq!(outcomes[0].edits, vec![edit("a.ts", "ABC;\n", None)]);
+    assert_eq!(outcomes[0].output, None);
+
+    // Sandbox errors name the virtual module derived from the transform name.
+    let mut throwing = Fixture::new(
+        "export default function transform() { throw new Error('inside'); }",
+        &[("a.ts", "a();\n")],
+    );
+    throwing.artifact.name = "migrate signals/v2".to_string();
+    throwing.artifact.hash = sha256(&throwing.source);
+    let error = throwing.run().await.expect_err("throws");
+    assert!(
+        error.contains("inside") && error.contains("migrate_signals_v2.jssg.js"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn static_selectors_skip_files_before_the_sandbox_and_legacy_returns_hold() {
+    // The transform throws for any file without `oldApi`, so a skipped file
+    // proves the sandbox never ran for it; string | null returns carry no output.
+    let fixture = Fixture::new(
+        r#"export default async function transform(root) {
   const text = root.root().text();
+  if (!text.includes("oldApi")) throw new Error("ran on a non-matching file");
   return text.includes("skip") ? null : text.replaceAll("oldApi", "newApi");
 }"#,
         &[
@@ -157,16 +218,46 @@ export default async function transform(root) {
             ("skip.ts", "oldApi('skip');\n"),
             ("other.ts", "other();\n"),
         ],
-    );
+    )
+    .selector(json!({ "pattern": "oldApi($A)" }));
+
     let outcomes = fixture.run().await.expect("batch");
     assert_eq!(
-        outcomes
-            .iter()
-            .map(|outcome| (outcome.edits.len(), outcome.output.is_none()))
-            .collect::<Vec<_>>(),
-        vec![(1, true), (0, true), (0, true)]
+        outcomes,
+        vec![
+            FileOutcome {
+                path: "a.ts".to_string(),
+                edits: vec![edit("a.ts", "newApi('a');\n", None)],
+                output: None,
+            },
+            skipped("skip.ts"),
+            skipped("other.ts"),
+        ]
     );
-    assert_eq!(outcomes[0].edits[0].content, "newApi('a');\n");
+    fixture.assert_untouched();
+
+    // Without a selector every file runs, so the non-matching file throws.
+    let mut unfiltered = Fixture::new(&fixture.source, &[("other.ts", "other();\n")]);
+    unfiltered.selector = None;
+    let error = unfiltered.run().await.expect_err("transform ran");
+    assert!(error.contains("ran on a non-matching file"), "{error}");
+
+    // Constraints apply; an invalid rule fails setup before any file runs.
+    let constrained = Fixture::new(REPLACE, &[("a.ts", "oldApi(a);\n")]).selector(json!({}));
+    let mut constrained = constrained;
+    constrained.selector = Some(Selector {
+        rule: json!({ "pattern": "oldApi($A)" }),
+        constraints: Some(json!({ "A": { "kind": "string" } })),
+        utils: None,
+    });
+    assert_eq!(
+        constrained.run().await.expect("batch"),
+        vec![skipped("a.ts")]
+    );
+    let invalid = Fixture::new(REPLACE, &[("a.ts", "oldApi('a');\n")])
+        .selector(json!({ "nope": "oldApi($A)" }));
+    let error = invalid.run().await.expect_err("invalid rule");
+    assert!(error.contains("invalid JSSG selector"), "{error}");
 }
 
 #[tokio::test]
@@ -224,69 +315,80 @@ async fn setup_and_transform_failures_fail_the_batch_before_any_result() {
         "{error}"
     );
 
-    let workflow = fixture.workflow.path();
     let root = fixture.root();
     let missing_root = root.join("nope");
-    let cases: Vec<(&Path, &Path, &str, &str, &str)> = vec![
-        // (script root, target root, script, language, expected error)
+    let artifact = |name: &str, hash: &str| ArtifactRef {
+        name: name.to_string(),
+        hash: hash.to_string(),
+    };
+    let good = &fixture.artifact;
+    let source = fixture.source.as_str();
+    let cases: Vec<(ArtifactRef, Option<&str>, &Path, &str, &str)> = vec![
+        // (artifact, source, target root, language, expected error)
         (
-            workflow,
+            good.clone(),
+            Some(source),
             root,
-            "transform.js",
             "klingon",
             "invalid JSSG language",
         ),
         (
-            workflow,
+            good.clone(),
+            None,
             root,
-            "missing.js",
             "typescript",
-            "failed to resolve JSSG script",
+            "has no artifact source",
         ),
         (
-            workflow,
+            good.clone(),
+            Some("export default () => null;"),
             root,
-            "../transform.js",
             "typescript",
-            "safe relative path",
+            "not the recorded",
         ),
         (
+            artifact("t", "abc"),
+            Some(source),
+            root,
+            "typescript",
+            "must be lowercase hex SHA-256",
+        ),
+        (
+            artifact("t", &good.hash.to_uppercase()),
+            Some(source),
+            root,
+            "typescript",
+            "must be lowercase hex SHA-256",
+        ),
+        (
+            artifact(" ", &good.hash),
+            Some(source),
+            root,
+            "typescript",
+            "name must not be empty",
+        ),
+        (
+            good.clone(),
+            Some(source),
             Path::new("relative"),
-            root,
-            "transform.js",
-            "typescript",
-            "scriptRoot must be an absolute path",
-        ),
-        (
-            workflow,
-            Path::new("relative"),
-            "transform.js",
             "typescript",
             "targetRoot must be an absolute path",
         ),
         (
-            workflow,
+            good.clone(),
+            Some(source),
             &missing_root,
-            "transform.js",
             "typescript",
             "failed to resolve targetRoot",
         ),
     ];
-    for (script_root, target_root, script, language, expected) in cases {
+    for (artifact, source, target_root, language, expected) in cases {
         let error = fixture
-            .run_with(script_root, target_root, script, language, &fixture.files)
+            .run_with(&artifact, source, target_root, language, &fixture.files)
             .await
             .expect_err(expected);
         assert!(error.contains(expected), "{expected}: {error}");
     }
-
-    let selector = Fixture::new(
-        r#"export function getSelector() { throw new Error("selector exploded"); }
-export default async function transform() { return null; }"#,
-        &[("a.ts", "a();\n")],
-    );
-    let error = selector.run().await.expect_err("selector error");
-    assert!(error.contains("failed to load JSSG selector"), "{error}");
     fixture.assert_untouched();
 }
 
@@ -306,16 +408,7 @@ async fn requested_paths_must_stay_inside_the_target_root() {
             path: bad.to_string(),
             content: "a();\n".to_string(),
         }];
-        let error = fixture
-            .run_with(
-                fixture.workflow.path(),
-                fixture.root(),
-                "transform.js",
-                "typescript",
-                &files,
-            )
-            .await
-            .expect_err(bad);
+        let error = fixture.run_files(&files).await.expect_err(bad);
         assert!(
             error.contains("safe relative path") || error.contains("must not be empty"),
             "{bad:?}: {error}"
@@ -327,16 +420,7 @@ async fn requested_paths_must_stay_inside_the_target_root() {
         path: "brand/new/foo..bar.ts".to_string(),
         content: "oldApi('x');\n".to_string(),
     }];
-    let outcomes = fixture
-        .run_with(
-            fixture.workflow.path(),
-            fixture.root(),
-            "transform.js",
-            "typescript",
-            &files,
-        )
-        .await
-        .expect("new file");
+    let outcomes = fixture.run_files(&files).await.expect("new file");
     assert_eq!(outcomes[0].edits[0].path, "brand/new/foo..bar.ts");
     assert!(!fixture.root().join("brand").exists());
 }
@@ -357,13 +441,7 @@ export default async function transform(root, options) {
     );
     for file in &fixture.files {
         let error = fixture
-            .run_with(
-                fixture.workflow.path(),
-                fixture.root(),
-                "transform.js",
-                "typescript",
-                std::slice::from_ref(file),
-            )
+            .run_files(std::slice::from_ref(file))
             .await
             .expect_err(&file.path);
         assert!(
@@ -405,16 +483,7 @@ async fn symlinks_that_leave_the_root_are_rejected_on_both_directions() {
             path: path.to_string(),
             content: "secret();\n".to_string(),
         }];
-        let error = fixture
-            .run_with(
-                fixture.workflow.path(),
-                fixture.root(),
-                "transform.js",
-                "typescript",
-                &files,
-            )
-            .await
-            .expect_err(path);
+        let error = fixture.run_files(&files).await.expect_err(path);
         assert!(error.contains("escapes the target root"), "{path}: {error}");
     }
     // A rename into a symlinked directory that points outside is rejected by
@@ -429,7 +498,10 @@ async fn symlinks_that_leave_the_root_are_rejected_on_both_directions() {
 }
 
 #[tokio::test]
-async fn workspace_semantics_share_one_provider_and_stage_cross_file_writes() {
+async fn workspace_semantics_index_every_selected_file_and_stage_cross_file_writes() {
+    // The selector matches only `main.ts`; `utils.ts` is skipped but must
+    // still be indexed so the definition of `add` resolves and its file can
+    // be edited through the provider.
     let mut fixture = Fixture::new(
         r#"export default async function transform(root) {
   const file = root.relativeFilename().replaceAll("\\", "/");
@@ -454,7 +526,8 @@ async fn workspace_semantics_share_one_provider_and_stage_cross_file_writes() {
                 "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
             ),
         ],
-    );
+    )
+    .selector(json!({ "pattern": "add($A, $B)" }));
     fixture.semantic = Some(SemanticAnalysis::Mode(SemanticMode::Workspace));
 
     let outcomes = fixture.run().await.expect("batch");
@@ -467,7 +540,7 @@ async fn workspace_semantics_share_one_provider_and_stage_cross_file_writes() {
     assert_eq!(outcomes[0].edits[0].path, "utils.ts");
     assert!(outcomes[0].edits[0].content.contains("function sum"));
     assert_eq!(outcomes[0].edits[0].rename_to, None);
-    assert_eq!(outcomes[1].edits, vec![]);
+    assert_eq!(outcomes[1], skipped("utils.ts"));
     fixture.assert_untouched();
 
     // A root that requires workspace mode, or does not exist, fails setup.

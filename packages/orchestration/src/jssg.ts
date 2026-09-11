@@ -1,16 +1,18 @@
 /**
  * One JSSG command, in TypeScript around one bridge process:
  *
- * 1. resolve the target root beneath the working directory and select the
+ * 1. look up the built transform artifact the operation names by hash;
+ * 2. resolve the target root beneath the working directory and select the
  *    effective file set (definition applicability intersected with the
  *    invocation target, engine walker semantics), reading every file;
- * 2. send the whole batch to one `butterflow-execution-bridge` process, which
- *    loads the script once, indexes the batch for workspace semantics, and
- *    transforms every file from the content it was given (snapshot
- *    semantics: no transform sees another's edits);
- * 3. validate the returned edits, check cross-file conflicts, then commit.
+ * 3. send the artifact source and the whole batch to one
+ *    `butterflow-execution-bridge` process, which verifies the hash, indexes
+ *    the batch for workspace semantics, skips files the static selector does
+ *    not match, and transforms the rest from the content it was given
+ *    (snapshot semantics: no transform sees another's edits);
+ * 4. validate the returned edits, check cross-file conflicts, then commit.
  *
- * Nothing touches the repository before step 3's commit. Failures before it
+ * Nothing touches the repository before step 4's commit. Failures before it
  * are `failed` (or `cancelled` when the signal fired) with the repository
  * unchanged; a commit that stops part-way is `unknown` with the applied and
  * remaining paths.
@@ -18,6 +20,7 @@
 import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawnBridge } from "./bridge.ts";
+import type { ArtifactStore } from "./build.ts";
 import type { EventSink } from "./events.ts";
 import { comparePaths, selectFiles } from "./files.ts";
 import type { Json } from "./json.ts";
@@ -37,8 +40,8 @@ export interface JssgExecutionOptions {
   bin: string;
   /** Repository root: target roots resolve beneath it and definition globs are relative to it. */
   cwd: string;
-  /** Directory the operation's relative `script` resolves against. */
-  scriptRoot: string;
+  /** Built artifacts by hash; the operation's `transform.hash` must be present. */
+  artifacts?: ArtifactStore;
   commandId: string;
   operation: JssgOperation;
   signal?: AbortSignal;
@@ -78,6 +81,15 @@ export async function executeJssg(options: JssgExecutionOptions): Promise<Operat
     error: { message, details },
   });
 
+  const artifact = options.artifacts?.get(operation.transform.hash);
+  if (artifact === undefined) {
+    return fail(
+      "failed",
+      `no built artifact for jssg '${operation.transform.name}' (hash ${operation.transform.hash.slice(0, 12)}); load the workflow with loadWorkflow() or codemod-workflow and pass its artifacts to BridgeExecutor`,
+      { phase: "artifact" },
+    );
+  }
+
   let targetRoot: string;
   let files: BatchFile[];
   try {
@@ -108,7 +120,7 @@ export async function executeJssg(options: JssgExecutionOptions): Promise<Operat
       protocolVersion: PROTOCOL_VERSION,
       commandId,
       operation,
-      context: { scriptRoot: resolve(options.scriptRoot), targetRoot, files },
+      context: { targetRoot, files, artifact: { source: artifact.source } },
     },
     signal,
   );

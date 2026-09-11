@@ -1,9 +1,12 @@
 {
-  "protocolVersion": 4,
+  "protocolVersion": 5,
   "commandId": "rename-api",
   "operation": {
     "kind": "jssg",
-    "script": "scripts/rename-api.ts",
+    "transform": {
+      "name": "rename-api",
+      "hash": "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4d3c2b1a0"
+    },
     "language": "typescript",
     "include": ["**/*.ts"],
     "exclude": ["**/*.d.ts"],

@@ -21,6 +21,7 @@ import {
   type OperationCompletion,
   type OperationRequest,
 } from "../src/index.ts";
+import { ref } from "./helpers.ts";
 
 interface Package {
   name: string;
@@ -55,7 +56,7 @@ const inspectPackage = exec({
 });
 const writeReport = jssg({
   name: "write-report",
-  script: "write-report.ts",
+  transform: ref("write-report"),
   language: "typescript",
   input: guard("Findings", (v: unknown): v is string[] => Array.isArray(v)),
   output: Summary,

@@ -10,8 +10,18 @@
 import { createCommand, type Command, type InvokeArgs, type JssgInvokeArgs } from "./command.ts";
 import type { Json } from "./json.ts";
 import { isSafeRelativePath } from "./paths.ts";
-import type { JssgOperation, Operation, SemanticAnalysis, Target } from "./protocol.ts";
+import {
+  isArtifactRef,
+  isSelector,
+  type ArtifactRef,
+  type JssgOperation,
+  type Operation,
+  type Selector,
+  type SemanticAnalysis,
+  type Target,
+} from "./protocol.ts";
 import { validate, type StandardSchemaV1 } from "./schema.ts";
+import type { JssgSelector, JssgTransform, JssgTypes } from "./transform.ts";
 
 export type OperationKind = Operation["kind"];
 
@@ -106,42 +116,61 @@ interface DataOptions<I, O> {
 }
 
 /**
- * JSSG codemod package. The only runnable whose invocation may carry a
- * `target`. The target is command content (it travels on the wire and replay
- * compares it), not command identity. The bridge executes trusted local
- * scripts; the harness can script completions.
+ * A JSSG definition: the transform written inline next to the workflow.
+ * `language` types `root` and `options` for the transform (and the selector)
+ * exactly as the language modules of `codemod:ast-grep` do.
+ */
+export interface JssgOptions<L extends string, I, O> extends DataOptions<I, O> {
+  language: L;
+  include?: string[];
+  exclude?: string[];
+  semanticAnalysis?: SemanticAnalysis;
+  /**
+   * Optional static prefilter: files without a match never reach the
+   * sandbox. Plain ast-grep rule data; unlike a legacy `getSelector()` it is
+   * never executed and never fills `options.matches`.
+   */
+  selector?: JssgSelector<JssgTypes<L>>;
+  /**
+   * The one transform, with the documented `(root, options)` contract. The
+   * build step (`build.ts`) replaces it with an `ArtifactRef` before the
+   * module runs; a function reaching this call means the module was not
+   * built, which is refused.
+   */
+  transform: JssgTransform<JssgTypes<L>, I, O> | ArtifactRef;
+}
+
+/**
+ * JSSG codemod. The only runnable whose invocation may carry a `target`. The
+ * target is command content (it travels on the wire and replay compares it),
+ * not command identity.
  *
- * `script` is a safe relative path (`scripts/migrate.ts`), resolved by the
- * executor against its script root: the workflow file's directory for the
- * local CLI, or `BridgeOptions.scriptRoot`. It is never absolute so the
- * recorded command identity does not depend on where a checkout lives.
+ * `transform` is the artifact identity the build assigned (`{ name, hash }`,
+ * no path), so the recorded command is the same on every checkout; the
+ * executor supplies the source from its artifact store.
  */
 export interface JssgRunnable<I = void, O = unknown> extends Runnable<I, O, "jssg"> {
-  readonly script: string;
+  readonly transform: ArtifactRef;
+  readonly selector?: Selector;
   toOperation(input: I, target?: Target): JssgOperation;
   (...args: JssgInvokeArgs<I>): Command<O>;
 }
 
-export function jssg<I = void, O = unknown>(
-  options: DataOptions<I, O> & {
-    script: string;
-    language: string;
-    include?: string[];
-    exclude?: string[];
-    semanticAnalysis?: SemanticAnalysis;
-  },
+export function jssg<L extends string, I = void, O = unknown>(
+  options: JssgOptions<L, I, O>,
 ): JssgRunnable<I, O> {
-  assertJssgOptions(options);
+  const { transform, selector } = assertJssgOptions(options);
   return callable<I, O, "jssg", JssgRunnable<I, O>>({
     kind: "jssg",
-    script: options.script,
+    transform,
+    selector,
     name: options.name,
     input: options.input,
     output: options.output,
     toOperation(input, target) {
       const operation: JssgOperation = {
         kind: "jssg",
-        script: options.script,
+        transform: { name: transform.name, hash: transform.hash },
         language: options.language,
       };
       if (options.include !== undefined) operation.include = options.include;
@@ -149,6 +178,7 @@ export function jssg<I = void, O = unknown>(
       if (options.semanticAnalysis !== undefined) {
         operation.semanticAnalysis = options.semanticAnalysis;
       }
+      if (selector !== undefined) operation.selector = selector;
       if (target !== undefined) operation.target = target;
       if (input !== undefined) operation.input = input as Json;
       return operation;
@@ -158,17 +188,22 @@ export function jssg<I = void, O = unknown>(
 }
 
 function assertJssgOptions(options: {
-  script: string;
+  name: string;
   language: string;
   include?: string[];
   exclude?: string[];
   semanticAnalysis?: SemanticAnalysis;
-}): void {
-  if (options.script.trim() === "") throw new Error("jssg script must not be empty");
-  if (!isSafeRelativePath(options.script)) {
+  selector?: unknown;
+  transform: unknown;
+}): { transform: ArtifactRef; selector: Selector | undefined } {
+  const where = `jssg '${options.name}'`;
+  if (typeof options.transform === "function") {
     throw new Error(
-      `jssg script '${options.script}' must be a relative path without '..' segments; it is resolved against the executor's script root`,
+      `${where}: inline transform was not extracted; run the workflow with codemod-workflow or load it with loadWorkflow() so the build step can bundle it`,
     );
+  }
+  if (!isArtifactRef(options.transform)) {
+    throw new Error(`${where}: transform must be the { name, hash } reference the build produced`);
   }
   if (options.language.trim() === "") throw new Error("jssg language must not be empty");
   for (const [name, patterns] of [
@@ -188,6 +223,12 @@ function assertJssgOptions(options: {
       throw new Error("jssg semanticAnalysis.root must be a safe relative path");
     }
   }
+  if (options.selector !== undefined && !isSelector(options.selector)) {
+    throw new Error(
+      `${where}: selector must be JSON with a non-empty 'rule' and optional 'constraints' and 'utils'`,
+    );
+  }
+  return { transform: options.transform, selector: options.selector as Selector | undefined };
 }
 
 export interface AiRunnable<I = void, O = unknown> extends Runnable<I, O, "ai"> {
@@ -221,6 +262,7 @@ function callable<I, O, K extends OperationKind, R extends Runnable<I, O, K>>(
   const invoke = (options?: unknown) =>
     createCommand(invoke as unknown as Runnable<unknown, O>, options);
   for (const [key, value] of Object.entries(descriptor)) {
+    if (value === undefined) continue;
     Object.defineProperty(invoke, key, { value, enumerable: true, configurable: true });
   }
   return invoke as unknown as R;

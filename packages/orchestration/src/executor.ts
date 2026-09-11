@@ -5,6 +5,7 @@
  */
 import { resolve } from "node:path";
 import { spawnBridge } from "./bridge.ts";
+import type { ArtifactStore } from "./build.ts";
 import type { EventSink } from "./events.ts";
 import { executeJssg } from "./jssg.ts";
 import { PROTOCOL_VERSION, type OperationCompletion, type OperationRequest } from "./protocol.ts";
@@ -20,11 +21,12 @@ export interface BridgeOptions {
   /** Working directory: where `exec` runs and the repository root for JSSG targets. */
   cwd?: string;
   /**
-   * Directory that relative JSSG `script` paths resolve against, typically
-   * the workflow file's directory. Sent in the request context; it never
-   * enters history. Defaults to `cwd`.
+   * Built transform artifacts by hash, as `loadWorkflow()` collects them.
+   * They are executor-side data: the source is sent in the request context
+   * and never enters history. A JSSG command whose artifact is missing fails
+   * before anything is spawned.
    */
-  scriptRoot?: string;
+  artifacts?: ArtifactStore;
   env?: Record<string, string>;
   /** Receives `bridge.spawned` events. */
   events?: EventSink;
@@ -39,17 +41,15 @@ export interface BridgeOptions {
 export class BridgeExecutor implements OperationExecutor {
   private readonly bin: string;
   private readonly cwd: string;
-  private readonly scriptRoot: string;
 
   constructor(private readonly options: BridgeOptions) {
     this.bin = resolve(options.bin);
     this.cwd = resolve(options.cwd ?? process.cwd());
-    this.scriptRoot = options.scriptRoot === undefined ? this.cwd : resolve(options.scriptRoot);
   }
 
   async execute(request: OperationRequest, signal?: AbortSignal): Promise<OperationCompletion> {
     const { bin, cwd } = this;
-    const { env, events } = this.options;
+    const { artifacts, env, events } = this.options;
     switch (request.operation.kind) {
       case "exec":
         return spawnBridge({ bin, cwd, env, events }, request, signal);
@@ -57,7 +57,7 @@ export class BridgeExecutor implements OperationExecutor {
         return executeJssg({
           bin,
           cwd,
-          scriptRoot: this.scriptRoot,
+          artifacts,
           commandId: request.commandId,
           operation: request.operation,
           signal,

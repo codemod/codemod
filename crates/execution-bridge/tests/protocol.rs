@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use butterflow_execution_bridge::{
-    completion_from_result, execute, parse_request, CompletionStatus, Operation,
+    completion_from_result, execute, parse_request, ArtifactRef, CompletionStatus, Operation,
     OperationCompletion, RequestContext, SemanticAnalysis, SemanticMode, Target, PROTOCOL_VERSION,
 };
 use butterflow_models::Error;
@@ -17,6 +17,8 @@ const FIXTURES: &str = concat!(
     "/../../packages/orchestration/fixtures/protocol"
 );
 
+const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 fn fixture(name: &str) -> String {
     std::fs::read_to_string(Path::new(FIXTURES).join(name))
         .unwrap_or_else(|error| panic!("failed to read fixture {name}: {error}"))
@@ -24,6 +26,12 @@ fn fixture(name: &str) -> String {
 
 fn request(operation: &str) -> String {
     format!(r#"{{"protocolVersion":{PROTOCOL_VERSION},"commandId":"t","operation":{operation}}}"#)
+}
+
+fn jssg(extra: &str) -> String {
+    format!(
+        r#"{{"kind":"jssg","transform":{{"name":"migrate","hash":"{HASH}"}},"language":"typescript"{extra}}}"#
+    )
 }
 
 #[test]
@@ -65,10 +73,11 @@ fn jssg_fixtures_decode_every_field() {
     let plain = parse_request(&fixture("jssg-request.json")).expect("parse");
     assert_eq!(plain.context, None);
     let Operation::Jssg {
-        script,
+        transform,
         language,
         include,
         semantic_analysis,
+        selector,
         target,
         input,
         ..
@@ -76,20 +85,33 @@ fn jssg_fixtures_decode_every_field() {
     else {
         panic!("expected jssg");
     };
-    assert_eq!(script, "scripts/migrate.ts");
+    assert_eq!(
+        transform,
+        ArtifactRef {
+            name: "migrate".to_string(),
+            hash: "3a1b8c6d5e4f7a2b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b".to_string(),
+        }
+    );
     assert_eq!(language, "tsx");
     assert_eq!(include, Some(vec!["**/*.tsx".to_string()]));
     assert_eq!(
         semantic_analysis,
         Some(SemanticAnalysis::Mode(SemanticMode::Workspace))
     );
+    let selector = selector.expect("selector");
+    assert_eq!(selector.rule, json!({ "pattern": "createSignal($VALUE)" }));
+    assert_eq!(selector.constraints, None);
     assert_eq!(target, None);
     assert_eq!(input, Some(json!({ "needsMigration": true })));
 
     let targeted = parse_request(&fixture("jssg-target-request.json")).expect("parse");
-    let Operation::Jssg { target, .. } = targeted.operation else {
+    let Operation::Jssg {
+        selector, target, ..
+    } = targeted.operation
+    else {
         panic!("expected jssg");
     };
+    assert_eq!(selector, None);
     assert_eq!(
         target,
         Some(Target {
@@ -101,15 +123,19 @@ fn jssg_fixtures_decode_every_field() {
 }
 
 #[test]
-fn context_carries_roots_and_files_and_omits_absent_fields() {
+fn context_carries_root_files_and_artifact_and_omits_absent_fields() {
     let text = format!(
-        r#"{{"protocolVersion":{PROTOCOL_VERSION},"commandId":"t","operation":{{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{{"mode":"workspace"}}}},"context":{{"scriptRoot":"/w","targetRoot":"/r","files":[{{"path":"a.ts","content":"x"}}]}}}}"#
+        r#"{{"protocolVersion":{PROTOCOL_VERSION},"commandId":"t","operation":{},"context":{{"targetRoot":"/r","files":[{{"path":"a.ts","content":"x"}}],"artifact":{{"source":"export default () => null;"}}}}}}"#,
+        jssg(r#","semanticAnalysis":{"mode":"workspace"}"#)
     );
     let parsed = parse_request(&text).expect("parse");
     let context = parsed.context.clone().expect("context");
-    assert_eq!(context.script_root.as_deref(), Some("/w"));
     assert_eq!(context.target_root.as_deref(), Some("/r"));
     assert_eq!(context.files.as_ref().map(Vec::len), Some(1));
+    assert_eq!(
+        context.artifact.map(|artifact| artifact.source),
+        Some("export default () => null;".to_string())
+    );
     let value = serde_json::to_value(&parsed).expect("serialize");
     assert_eq!(
         value["operation"]["semanticAnalysis"],
@@ -141,24 +167,48 @@ fn decoding_is_strict() {
             request(r#"{"kind":"exec","command":"true","package":"p"}"#),
             "unknown field",
         ),
+        (request(&jssg(r#","command":"true""#)), "unknown field"),
+        // The path-based form is gone: a `script` field is unknown.
         (
-            request(r#"{"kind":"jssg","script":"p.ts","language":"typescript","command":"true"}"#),
-            "unknown field",
+            request(&jssg(r#","script":"p.ts""#)),
+            "unknown field `script`",
         ),
         (
-            request(r#"{"kind":"jssg","script":"p.ts","language":"typescript","target":"apps"}"#),
+            request(r#"{"kind":"jssg","language":"typescript"}"#),
+            "missing field `transform`",
+        ),
+        (
+            request(
+                r#"{"kind":"jssg","transform":{"name":"m","hash":"h","source":"x"},"language":"typescript"}"#,
+            ),
+            "unknown field `source`",
+        ),
+        (
+            request(r#"{"kind":"jssg","transform":{"name":"m"},"language":"typescript"}"#),
+            "missing field `hash`",
+        ),
+        (
+            request(&jssg(r#","selector":{"pattern":"x"}"#)),
+            "unknown field `pattern`",
+        ),
+        (
+            request(&jssg(
+                r#","selector":{"rule":{"pattern":"x"},"language":"tsx"}"#,
+            )),
+            "unknown field `language`",
+        ),
+        (
+            request(&jssg(r#","target":"apps""#)),
             "invalid request JSON",
         ),
         (
-            request(
-                r#"{"kind":"jssg","script":"p.ts","language":"typescript","target":{"root":"a","files":[]}}"#,
-            ),
+            request(&jssg(r#","target":{"root":"a","files":[]}"#)),
             "unknown field `files`",
         ),
         (
-            request(
-                r#"{"kind":"jssg","script":"p.ts","language":"typescript","semanticAnalysis":{"mode":"workspace","threads":4}}"#,
-            ),
+            request(&jssg(
+                r#","semanticAnalysis":{"mode":"workspace","threads":4}"#,
+            )),
             "invalid request JSON",
         ),
         (
@@ -169,9 +219,16 @@ fn decoding_is_strict() {
         (
             request(r#"{"kind":"exec","command":"true"}"#).replace(
                 r#""commandId":"t""#,
-                r#""commandId":"t","context":{"cwd":"/tmp"}"#,
+                r#""commandId":"t","context":{"scriptRoot":"/w"}"#,
             ),
-            "unknown field `cwd`",
+            "unknown field `scriptRoot`",
+        ),
+        (
+            request(r#"{"kind":"exec","command":"true"}"#).replace(
+                r#""commandId":"t""#,
+                r#""commandId":"t","context":{"artifact":{"source":"x","hash":"h"}}"#,
+            ),
+            "unknown field `hash`",
         ),
         (
             request(r#"{"kind":"exec","command":"true"}"#).replace(

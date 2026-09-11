@@ -26,12 +26,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "ignore": "^5.3.1"
+    "@codemod.com/jssg-types": "workspace:*",
+    "esbuild": "^0.27.2",
+    "ignore": "^5.3.1",
+    "typescript": "catalog:"
   },
   "devDependencies": {
     "@codemod.com/tsconfig": "workspace:*",
     "@types/node": "*",
-    "typescript": "catalog:",
     "vitest": "^1.6.0"
   }
 }

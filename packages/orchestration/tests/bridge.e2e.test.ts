@@ -1,36 +1,41 @@
 /**
  * Cross-language tests against the real Rust binary
  * (`butterflow-execution-bridge`): `exec` through butterflow_runners::DirectRunner
- * and JSSG through the TypeScript orchestrator around one batch process.
+ * and JSSG through the TypeScript orchestrator around one batch process,
+ * with transforms bundled by the build step.
  *
  * Run with: pnpm --filter @codemod.com/orchestration test:e2e
  * (builds only crates/execution-bridge, then runs this file).
  * Override the binary with CODEMOD_BRIDGE_BIN=/path/to/butterflow-execution-bridge.
  */
+import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
-  mkdtempSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   BridgeExecutor,
   CollectingSink,
   MemoryHistoryStore,
   OperationError,
+  buildFile,
   exec,
   guard,
   jssg,
   run,
   workflow,
+  type JssgArtifact,
+  type JssgOptions,
   type OperationCompletion,
   type OperationExecutor,
   type OperationRequest,
@@ -40,7 +45,7 @@ import {
 const bin =
   process.env.CODEMOD_BRIDGE_BIN ??
   resolve(import.meta.dirname, "../../../target/debug/butterflow-execution-bridge");
-const scripts = resolve(import.meta.dirname, "fixtures/jssg");
+const fixtures = resolve(import.meta.dirname, "fixtures/jssg");
 
 beforeAll(() => {
   if (!existsSync(bin)) {
@@ -146,11 +151,9 @@ function expectMigrated(target: string, stdout: string): void {
 }
 
 describe("local TypeScript JSSG workflow end-to-end", () => {
-  it("intersects targets, writes edits, aggregates output, and runs through the CLI", () => {
+  it("bundles the inline transform with its helpers, intersects targets, writes edits, and aggregates output", () => {
     const target = seedRepository();
-    // The fixture's `script: "transform.ts"` resolves against the workflow's
-    // directory, which is the CLI's default script root.
-    const workflowPath = resolve(import.meta.dirname, "fixtures/jssg/workflow.ts");
+    const workflowPath = join(fixtures, "workflow.ts");
 
     try {
       const result = spawnSync(
@@ -182,25 +185,38 @@ describe("local TypeScript JSSG workflow end-to-end", () => {
     for (const entry of ["package.json", "bin", "src"]) {
       cpSync(join(packageDir, entry), join(installed, entry), { recursive: true });
     }
-    // The package's one runtime dependency, as an install would place it.
-    cpSync(join(packageDir, "node_modules", "ignore"), join(installed, "node_modules", "ignore"), {
-      recursive: true,
-      dereference: true,
-    });
+    // The package's runtime dependencies, as an install would place them:
+    // `ignore`, `typescript`, and `esbuild` with its platform binary package.
+    const modules = join(installed, "node_modules");
+    for (const name of ["ignore", "typescript"]) {
+      cpSync(join(packageDir, "node_modules", name), join(modules, name), {
+        recursive: true,
+        dereference: true,
+      });
+    }
+    const esbuild = realpathSync(join(packageDir, "node_modules", "esbuild"));
+    cpSync(esbuild, join(modules, "esbuild"), { recursive: true, dereference: true });
+    const platforms = join(dirname(esbuild), "@esbuild");
+    for (const name of readdirSync(platforms)) {
+      cpSync(join(platforms, name), join(modules, "@esbuild", name), {
+        recursive: true,
+        dereference: true,
+      });
+    }
     writeFileSync(join(consumer, "package.json"), JSON.stringify({ type: "module" }));
-    mkdirSync(join(consumer, "scripts"));
-    cpSync(
-      resolve(import.meta.dirname, "fixtures/jssg/transform.ts"),
-      join(consumer, "scripts", "migrate.ts"),
-    );
+    cpSync(join(fixtures, "helpers.ts"), join(consumer, "helpers.ts"));
+    cpSync(join(fixtures, "format.ts"), join(consumer, "format.ts"));
     writeFileSync(
       join(consumer, "workflow.ts"),
       `import { jssg, workflow } from "@codemod.com/orchestration";
-const migrate = jssg<void, { file: string }[]>({
+import { migrateText, posixPath } from "./helpers.ts";
+const migrate = jssg({
   name: "migrate",
-  script: "scripts/migrate.ts",
   language: "typescript",
   include: ["**/*.ts"],
+  transform(root) {
+    return { content: migrateText(root.root().text()), output: { file: posixPath(root.relativeFilename()) } };
+  },
 });
 export default workflow(() =>
   migrate({ target: { include: ["src/**"], exclude: ["**/*.generated.ts"] } }),
@@ -233,13 +249,25 @@ export default workflow(() =>
 
 describe("TypeScript JSSG orchestration around one Rust batch process", () => {
   let repo: string;
+  let artifacts: Map<string, JssgArtifact>;
   const write = (relativePath: string, content: string) => {
     const path = join(repo, relativePath);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content);
   };
   const read = (relativePath: string) => readFileSync(join(repo, relativePath), "utf8");
+  /** The artifact reference of a definition in `fixtures/jssg/transforms.ts`. */
+  const built = (name: string) => {
+    const artifact = [...artifacts.values()].find((a) => a.name === name);
+    if (!artifact) throw new Error(`no fixture transform named ${name}`);
+    return { name: artifact.name, hash: artifact.hash };
+  };
 
+  beforeAll(() => {
+    artifacts = new Map(
+      buildFile(join(fixtures, "transforms.ts")).artifacts.map((a) => [a.hash, a]),
+    );
+  });
   beforeEach(() => {
     repo = realpathSync.native(mkdtempSync(join(tmpdir(), "codemod-batch-")));
   });
@@ -254,18 +282,13 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
 
   /** Run one JSSG command through `run()` and return its recorded completion. */
   async function runJssg(
-    definition: Parameters<typeof jssg<void, unknown>>[0],
+    definition: Omit<JssgOptions<string, void, unknown>, "transform"> & { transform: string },
     invocation: { target?: Target; id?: string } = {},
-    options: { scriptRoot?: string; signal?: AbortSignal; history?: MemoryHistoryStore } = {},
+    options: { signal?: AbortSignal; history?: MemoryHistoryStore } = {},
   ): Promise<RunOutcome> {
     const events = new CollectingSink();
-    const executor = new BridgeExecutor({
-      bin,
-      cwd: repo,
-      scriptRoot: options.scriptRoot ?? scripts,
-      events,
-    });
-    const command = jssg<void, unknown>(definition);
+    const executor = new BridgeExecutor({ bin, cwd: repo, artifacts, events });
+    const command = jssg({ ...definition, transform: built(definition.transform) });
     const body = workflow(() => command(invocation));
     const history = options.history ?? new MemoryHistoryStore();
     let output: unknown;
@@ -280,27 +303,54 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     return { completion: completed.completion, events, output, error };
   }
 
-  it("shares one provider: workspace semantics across files, staged write() edits, outputs together", async () => {
+  it("indexes the whole selection for workspace semantics even where the selector skips, and stages write() edits", async () => {
     write("main.ts", 'import { add } from "./utils";\nconst result = add(1, 2);\n');
     write("utils.ts", "export function add(a: number, b: number): number {\n  return a + b;\n}\n");
     write("other.ts", "export const unrelated = 1;\n");
 
+    // The selector matches only `main.ts`; the definition of `add` in
+    // `utils.ts` still resolves because the whole batch was indexed.
     const { completion, events } = await runJssg({
       name: "semantic",
-      script: "semantic.ts",
+      transform: "semantic",
       language: "typescript",
       semanticAnalysis: "workspace",
+      selector: { rule: { pattern: "add($A, $B)" } },
     });
 
     expect(completion.status, JSON.stringify(completion)).toBe("succeeded");
-    expect(completion.output).toEqual([
-      { file: "main.ts", definition: "utils.ts" },
-      { file: "other.ts", definition: null },
-      { file: "utils.ts", definition: null },
-    ]);
+    expect(completion.output).toEqual([{ file: "main.ts", definition: "utils.ts" }]);
     expect(read("utils.ts")).toContain("function sum");
     expect(read("main.ts")).toContain("add(1, 2)");
     expect(events.events.filter((e) => e.type === "bridge.spawned")).toHaveLength(1);
+  });
+
+  it("applies the static selector before any transform runs, and runs everything without one", async () => {
+    // The transform throws for a file without `oldApi(...)`, so success
+    // proves the selector skipped `plain.ts` before the sandbox saw it.
+    write("a.ts", "oldApi('a');\n");
+    write("plain.ts", "plain();\n");
+    const guarded = await runJssg({
+      name: "guarded",
+      transform: "guarded",
+      language: "typescript",
+      selector: { rule: { pattern: "oldApi($A)" } },
+    });
+    expect(guarded.completion.status, JSON.stringify(guarded.completion)).toBe("succeeded");
+    expect(guarded.completion.output).toEqual([]);
+    expect(read("a.ts")).toBe("newApi('a');\n");
+    expect(read("plain.ts")).toBe("plain();\n");
+
+    write("a.ts", "oldApi('a');\n");
+    const unguarded = await runJssg({
+      name: "guarded",
+      transform: "guarded",
+      language: "typescript",
+    });
+    expect(unguarded.completion.status).toBe("failed");
+    expect(unguarded.completion.error?.message).toContain("ran on a non-matching file");
+    expect(unguarded.completion.error?.message).toContain("plain.ts");
+    expect(read("a.ts")).toBe("oldApi('a');\n");
   });
 
   it("selects by the language's extensions when the definition has no include", async () => {
@@ -310,7 +360,7 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     write("d.md", "oldApi('d');\n");
     const { completion } = await runJssg({
       name: "t",
-      script: "transform.ts",
+      transform: "replace",
       language: "typescript",
     });
     expect(completion.status).toBe("succeeded");
@@ -328,7 +378,7 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     write("src/x.generated.ts", "oldApi('x');\n");
     // The language's default globs are include overrides, so like the engine
     // they whitelist a gitignored file; a gitignored directory stays pruned.
-    const plain = await runJssg({ name: "t", script: "transform.ts", language: "typescript" });
+    const plain = await runJssg({ name: "t", transform: "replace", language: "typescript" });
     expect(plain.completion.output).toEqual([
       { file: ".hidden/h.ts" },
       { file: "src/a.ts" },
@@ -342,7 +392,7 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     write("src/x.generated.ts", "oldApi('x');\n");
     const excluded = await runJssg({
       name: "t",
-      script: "transform.ts",
+      transform: "replace",
       language: "typescript",
       include: ["**/*.ts"],
       exclude: ["**/*.generated.ts"],
@@ -357,12 +407,13 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     write("src/b.ts", "oldApi('b');\n");
     const { completion, error } = await runJssg({
       name: "t",
-      script: "fail-second.ts",
+      transform: "fail-second",
       language: "typescript",
     });
     expect(completion.status).toBe("failed");
     expect(completion.error?.message).toContain("second file exploded");
     expect(completion.error?.message).toContain("src/b.ts");
+    expect(completion.error?.message).toContain("fail-second.jssg.js");
     expect(completion.error?.details).toEqual({ phase: "transform" });
     expect(error).toBeInstanceOf(OperationError);
     expect(read("src/a.ts")).toBe("oldApi('a');\n");
@@ -374,7 +425,7 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     write("b.ts", "b\n");
     const { completion } = await runJssg({
       name: "t",
-      script: "conflict.ts",
+      transform: "conflict",
       language: "typescript",
     });
     expect(completion.status).toBe("failed");
@@ -391,7 +442,7 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     write("src/y.old.ts", "oldApi('y');\n");
     const { completion } = await runJssg({
       name: "t",
-      script: "rename.ts",
+      transform: "rename",
       language: "typescript",
     });
     expect(completion.status, JSON.stringify(completion)).toBe("succeeded");
@@ -403,23 +454,31 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     expect(existsSync(join(repo, "src/y.old.ts"))).toBe(false);
   });
 
-  it("replays without executing after the checkout and script root move", async () => {
+  it("replays without executing after the checkout that built the artifact moves", async () => {
     write("src/a.ts", "oldApi('a');\n");
     const history = new MemoryHistoryStore();
     const first = await runJssg(
-      { name: "t", script: "transform.ts", language: "typescript" },
+      { name: "t", transform: "replace", language: "typescript" },
       { target: { root: "src" } },
       { history },
     );
     expect(first.completion.status).toBe("succeeded");
-    expect(JSON.stringify(await history.load())).not.toContain(scripts);
+    const recorded = JSON.stringify(await history.load());
+    expect(recorded).not.toContain(fixtures);
+    expect(recorded).not.toContain("migrateText");
 
+    // Rebuilt from a copy of the fixtures elsewhere: same hash, so the
+    // recorded command matches and nothing executes.
     const moved = mkdtempSync(join(tmpdir(), "codemod-moved-"));
     try {
-      cpSync(scripts, join(moved, "pkg"), { recursive: true });
+      cpSync(fixtures, join(moved, "pkg"), { recursive: true });
+      const rebuilt = new Map(
+        buildFile(join(moved, "pkg", "transforms.ts")).artifacts.map((a) => [a.hash, a]),
+      );
+      expect([...rebuilt.keys()].sort()).toEqual([...artifacts.keys()].sort());
       const executed: OperationRequest[] = [];
-      const inner = new BridgeExecutor({ bin, cwd: repo, scriptRoot: join(moved, "pkg") });
-      const command = jssg({ name: "t", script: "transform.ts", language: "typescript" });
+      const inner = new BridgeExecutor({ bin, cwd: repo, artifacts: rebuilt });
+      const command = jssg({ name: "t", transform: built("replace"), language: "typescript" });
       const second = await run(
         workflow(() => command({ target: { root: "src" } })),
         {
@@ -446,7 +505,7 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 500);
     const { completion, events, error } = await runJssg(
-      { name: "t", script: "hang.ts", language: "typescript" },
+      { name: "t", transform: "hang", language: "typescript" },
       {},
       { signal: controller.signal },
     );
@@ -470,7 +529,7 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     write("a.ts", "a\n");
     const { completion } = await runJssg({
       name: "t",
-      script: "escape.ts",
+      transform: "escape",
       language: "typescript",
     });
     expect(completion.status).toBe("failed");
