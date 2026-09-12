@@ -1,5 +1,6 @@
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
+use codemod_sandbox::sandbox::filesystem::codemod_walk_builder;
 use ignore::{
     overrides::{Override, OverrideBuilder},
     WalkBuilder, WalkState,
@@ -292,23 +293,13 @@ impl CodemodExecutionConfig {
         files
     }
 
-    /// Create a configured WalkBuilder with all the standard settings
+    /// Create a configured WalkBuilder with the shared codemod walk settings
     fn create_walk_builder(&self, base_path: &Path, overrides: Option<Override>) -> WalkBuilder {
-        let mut builder = WalkBuilder::new(base_path);
+        let mut builder = codemod_walk_builder(base_path);
 
         if let Some(overrides) = overrides {
             builder.overrides(overrides);
         }
-
-        builder
-            .follow_links(false)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .require_git(false)
-            .parents(true)
-            .ignore(true)
-            .hidden(false);
 
         builder
     }

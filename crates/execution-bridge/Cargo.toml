@@ -1,0 +1,29 @@
+[package]
+name = "butterflow-execution-bridge"
+version.workspace = true
+edition = "2021"
+authors.workspace = true
+description = "JSON request/completion bridge (exec and batched JSSG) for the TypeScript orchestration prototype"
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+butterflow-models = { workspace = true }
+butterflow-runners = { workspace = true }
+codemod-sandbox = { workspace = true, features = ["native"] }
+language-core = { workspace = true }
+semantic-factory = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Verifies that the artifact source in the request context is the one the
+# recorded command names.
+sha2 = "0.10"
+tokio = { workspace = true }
+
+[dev-dependencies]
+# Only the walker parity contract uses the walker; the bridge itself never
+# enumerates a repository.
+ignore = { workspace = true }
+tempfile = { workspace = true }

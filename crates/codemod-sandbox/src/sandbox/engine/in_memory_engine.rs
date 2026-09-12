@@ -3,7 +3,7 @@ use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModul
 use super::execution_engine::{map_transform_execution_error, CodemodOutput, ExecutionResult};
 use super::quickjs_adapters::QuickJSResolver;
 use super::transform_helpers::{
-    build_transform_options, process_transform_result, ModificationCheck,
+    build_transform_options, extract_transform_output, process_transform_result, ModificationCheck,
 };
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
@@ -411,7 +411,7 @@ where
                     .collect();
 
                 if ast_matches.is_empty() {
-                    return Ok(ExecutionResult::Skipped);
+                    return Ok((ExecutionResult::Skipped, None));
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
@@ -459,11 +459,13 @@ where
                 .catch(&ctx)
                 .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
-            process_transform_result(
-                &result_obj,
+            let (content_result, output) = extract_transform_output(&ctx, result_obj)?;
+            let primary = process_transform_result(
+                &content_result,
                 &sg_root_inner,
                 ModificationCheck::Sha256(options.original_sha256),
-            )
+            )?;
+            Ok((primary, output))
         };
         execution.await
     });
@@ -527,9 +529,10 @@ where
         });
     }
 
-    result.map(|primary| CodemodOutput {
+    result.map(|(primary, output)| CodemodOutput {
         primary,
         secondary: vec![],
+        output,
     })
 }
 
@@ -872,7 +875,7 @@ export default function transform(root) {
     const arg = node.getMatch("ARG").text();
     return node.replace(`logger.log(${arg})`);
   });
-  return rootNode.commitEdits(edits);
+  return { content: rootNode.commitEdits(edits), output: { changed: edits.length } };
 }
         "#
         .trim();
@@ -907,13 +910,16 @@ export default function transform(root) {
         });
 
         match result {
-            Ok(output) => match output.primary {
-                ExecutionResult::Modified(modified) => {
-                    assert!(modified.content.contains("logger.log('Hello, world!')"));
-                    assert!(modified.rename_to.is_none());
+            Ok(output) => {
+                assert_eq!(output.output, Some(serde_json::json!({ "changed": 1 })));
+                match output.primary {
+                    ExecutionResult::Modified(modified) => {
+                        assert!(modified.content.contains("logger.log('Hello, world!')"));
+                        assert!(modified.rename_to.is_none());
+                    }
+                    other => panic!("Expected modified result, got: {:?}", other),
                 }
-                other => panic!("Expected modified result, got: {:?}", other),
-            },
+            }
             Err(e) => panic!("Expected success, got error: {:?}", e),
         }
     }

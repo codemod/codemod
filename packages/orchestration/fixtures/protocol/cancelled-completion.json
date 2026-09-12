@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 5,
+  "commandId": "inspect",
+  "status": "cancelled",
+  "error": {
+    "message": "bridge killed by SIGTERM"
+  }
+}

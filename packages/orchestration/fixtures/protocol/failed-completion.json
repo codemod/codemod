@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 5,
+  "commandId": "inspect",
+  "status": "failed",
+  "error": {
+    "message": "Command failed with exit code 3: boom\n",
+    "exitCode": 3,
+    "output": "boom\n"
+  }
+}

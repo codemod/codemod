@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 5,
+  "commandId": "migrate",
+  "status": "unknown",
+  "error": {
+    "message": "commit failed after 1 of 2 files: EACCES",
+    "details": {
+      "phase": "commit",
+      "applied": ["src/a.ts"],
+      "failed": "src/b.ts",
+      "remaining": []
+    }
+  }
+}

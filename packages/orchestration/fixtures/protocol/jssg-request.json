@@ -1,0 +1,22 @@
+{
+  "protocolVersion": 5,
+  "commandId": "migrate",
+  "operation": {
+    "kind": "jssg",
+    "transform": {
+      "name": "migrate",
+      "hash": "3a1b8c6d5e4f7a2b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b"
+    },
+    "language": "tsx",
+    "include": ["**/*.tsx"],
+    "semanticAnalysis": "workspace",
+    "selector": {
+      "rule": {
+        "pattern": "createSignal($VALUE)"
+      }
+    },
+    "input": {
+      "needsMigration": true
+    }
+  }
+}

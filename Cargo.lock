@@ -747,6 +747,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "butterflow-execution-bridge"
+version = "1.13.18"
+dependencies = [
+ "butterflow-models",
+ "butterflow-runners",
+ "codemod-sandbox",
+ "ignore",
+ "language-core",
+ "semantic-factory",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "butterflow-models"
 version = "1.18.3"
 dependencies = [
