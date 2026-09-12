@@ -122,8 +122,9 @@ export function weightOf(
 }
 
 /**
- * Bounded by CPU and by memory, floored at the heaviest single weight so the
- * heaviest operation can always be admitted alone.
+ * Bounded by CPU and memory. A heavy operation is clamped to the available
+ * capacity when admitted, so small hosts do not need an artificial capacity
+ * floor just to make progress.
  */
 export function defaultCapacity(
   weights: OperationWeights = DEFAULT_WEIGHTS,
@@ -143,7 +144,7 @@ export function defaultCapacity(
   const workspacePasses = Math.floor(
     (host.totalmem() * MEMORY_BUDGET_FRACTION) / WORKSPACE_FOOTPRINT_BYTES,
   );
-  return Math.max(heaviest, Math.min(cpu, workspacePasses * heaviest));
+  return Math.max(1, Math.min(cpu, Math.max(1, workspacePasses) * heaviest));
 }
 
 interface Waiter {

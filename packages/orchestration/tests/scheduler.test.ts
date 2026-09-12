@@ -119,8 +119,9 @@ describe("default capacity", () => {
     // Plenty of memory: the CPU count decides.
     ["a large host", host(16, 64), 16],
     ["a laptop", host(10, 32), 10],
-    // Floored at the heaviest weight so one workspace pass can always run.
-    ["a tiny host", host(1, 8), 4],
+    // A heavy operation is clamped to this capacity and can still run alone.
+    ["a tiny host", host(1, 8), 1],
+    ["a three-core host", host(3, 8), 3],
     // 2 GiB budget / 512 MiB per workspace pass = 4 passes = 16 units, so memory does not bind.
     ["a small-memory host", host(8, 4), 8],
     // 0.5 GiB budget = 1 pass = 4 units, below the CPU count.

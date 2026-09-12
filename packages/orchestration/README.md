@@ -384,13 +384,14 @@ The model is a weighted semaphore with a strict FIFO queue:
 | `jssg` (no semantics or `"file"`) | 2 | a bridge process plus the whole selected file set in memory |
 | `jssg` with `"workspace"` semantics | 4 | the batch is also parsed and indexed as one workspace |
 
-Default capacity is `min(availableParallelism(), memory budget)`, floored at
-the heaviest single weight so the heaviest operation can always run alone. The
-memory budget is half of `totalmem()` divided by an assumed 512 MiB per
-concurrent workspace pass. On a 10-core host with plenty of memory the capacity
-is 10 units: two workspace passes, or five `exec` commands, at a time. Only the
-head of the queue is admitted, so a heavy command is never starved by lighter
-ones behind it.
+Default capacity is `min(availableParallelism(), memory budget)` and never
+exceeds the available CPU count. The memory budget is half of `totalmem()`
+divided by an assumed 512 MiB per concurrent workspace pass. On a host whose
+capacity is below an operation's nominal weight, that operation consumes the
+whole capacity and runs alone. On a 10-core host with plenty of memory the
+capacity is 10 units: two workspace passes, or ten `exec` commands, at a time.
+Only the head of the queue is admitted, so a heavy command is never starved by
+lighter ones behind it.
 
 Overrides are host configuration, not authoring. They never reach a workflow
 module and are not part of any command's identity or history:

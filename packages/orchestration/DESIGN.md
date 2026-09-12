@@ -220,9 +220,10 @@ semaphore with a strict FIFO queue. Weights charge a JSSG batch more than an
 `exec` because it reads and holds the whole selected file set, and charge a
 workspace-semantic batch more again because the bridge also parses and indexes
 that set as one workspace. Capacity is derived from `availableParallelism()`
-and host memory and floored at the heaviest weight, so the heaviest operation
-can always run alone. Strict FIFO trades some utilization for the guarantee
-that a heavy command is never overtaken forever.
+and host memory and never exceeds the available CPU count. On a host whose
+capacity is below an operation's nominal weight, that operation consumes the
+whole capacity and runs alone. Strict FIFO trades some utilization for the
+guarantee that a heavy command is never overtaken forever.
 
 Two properties matter beyond the bound itself. Because the permit is held
 around the executor call, and JSSG selection and reading happen inside it, a
