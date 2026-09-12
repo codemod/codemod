@@ -37,7 +37,8 @@ packages/orchestration/
   src/history.ts         HistoryStore seam + MemoryHistoryStore
   src/gate.ts            CommandGate seam + ReplayGate (replay matching, errors)
   src/executor.ts        OperationExecutor seam + BridgeExecutor (exec, jssg, ai refused)
-  src/events.ts          EventSink seam (+ bridge.spawned)
+  src/scheduler.ts       AdmissionScheduler: weighted, bounded admission at the executor
+  src/events.ts          EventSink seam (+ bridge.spawned, scheduler.*)
   src/harness.ts         test harness with scripted completions
   fixtures/protocol      shared JSON fixtures checked by TS and Rust tests
   fixtures/walker        file-walker contract checked by TS and Rust (engine walker) tests
@@ -125,8 +126,11 @@ export default workflow(async () => {
   one array (a group built inside a workflow, such as one command per
   discovered package). Members start in declaration order and outputs come
   back in that order.
-- `parallel(...)` is an author assertion. The prototype starts each member as a
-  whole concurrent operation; it does not implement per-file locking. Do not
+- `parallel(...)` is eligibility, not a worker count. Members may overlap; how
+  many actually do is the runtime's decision, so a group may hold any number of
+  independent members and there is no author-facing concurrency knob.
+- `parallel(...)` is also an author assertion about writes. The prototype
+  overlaps whole operations and does not implement per-file locking. Do not
   place dependent mutations or opaque commands that may conflict in one group.
   `DESIGN.md` describes the future JSSG file scheduler.
 - A JSSG `target` is `{ root?, include?, exclude? }`. It is validated when the
@@ -357,6 +361,53 @@ const first = await run(exports.default, { executor, history, signal: controller
 const again = await run(exports.default, { executor, history: MemoryHistoryStore.fromJSON(history.serialize()) });
 // again.replayed === true, nothing was executed
 ```
+
+## Bounded admission
+
+`parallel()` says which operations may overlap. It never says how many run at
+once: that is the runtime's decision, so a group can declare thirty-seven
+independent members and the host still admits a safe number of them.
+
+Each `run()` owns one `AdmissionScheduler` (`src/scheduler.ts`) and wraps the
+executor it was given in a `SchedulingExecutor`. Every operation that is really
+executed acquires a permit first; a replayed command never reaches the executor
+and therefore consumes no capacity. Because the permit is held around
+`OperationExecutor.execute`, and JSSG selection and file reading happen inside
+it, a queued command holds only its `OperationRequest`, never a repository
+snapshot.
+
+The model is a weighted semaphore with a strict FIFO queue:
+
+| operation | weight | why |
+| --- | --- | --- |
+| `exec`, `ai` | 1 | one child process |
+| `jssg` (no semantics or `"file"`) | 2 | a bridge process plus the whole selected file set in memory |
+| `jssg` with `"workspace"` semantics | 4 | the batch is also parsed and indexed as one workspace |
+
+Default capacity is `min(availableParallelism(), memory budget)`, floored at
+the heaviest single weight so the heaviest operation can always run alone. The
+memory budget is half of `totalmem()` divided by an assumed 512 MiB per
+concurrent workspace pass. On a 10-core host with plenty of memory the capacity
+is 10 units: two workspace passes, or five `exec` commands, at a time. Only the
+head of the queue is admitted, so a heavy command is never starved by lighter
+ones behind it.
+
+Overrides are host configuration, not authoring. They never reach a workflow
+module and are not part of any command's identity or history:
+
+- `CODEMOD_ORCHESTRATION_CAPACITY=<n>` for operators and CI;
+- `run(executable, { scheduler: new AdmissionScheduler({ capacity, weights, host }) })`
+  for tests and benchmarks. `scheduler.stats()` reports
+  `{ capacity, used, active, queued, peakActive, peakUsed }`, and the run's
+  `EventSink` receives `scheduler.queued`, `scheduler.admitted`, and
+  `scheduler.released`.
+
+Cancellation splits by admission state. A command aborted while queued is
+removed from the queue and completes `cancelled` without the executor ever
+being called, so nothing is spawned for it. A command that was already admitted
+keeps the existing behavior: the bridge process is killed and the completion is
+`cancelled` or `unknown`. Permits are released on success, on a non-success
+completion, on cancellation, and when the executor throws while launching.
 
 ## Replay semantics
 

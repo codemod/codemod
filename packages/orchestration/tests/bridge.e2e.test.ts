@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  AdmissionScheduler,
   BridgeExecutor,
   CollectingSink,
   MemoryHistoryStore,
@@ -32,6 +33,7 @@ import {
   exec,
   guard,
   jssg,
+  parallel,
   run,
   workflow,
   type JssgArtifact,
@@ -302,6 +304,31 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     if (!completed || completed.type !== "completed") throw new Error("no completion recorded");
     return { completion: completed.completion, events, output, error };
   }
+
+  it("bounds a parallel group of real JSSG commands without changing what each one does", async () => {
+    for (const area of ["alpha", "beta", "gamma"]) write(`${area}/a.ts`, `oldApi('${area}');\n`);
+    // Capacity 4 with a file-mode JSSG pass at 2 units admits two at a time,
+    // so the third really does wait for a permit before any bridge is spawned.
+    const scheduler = new AdmissionScheduler({ capacity: 4 });
+    const events = new CollectingSink();
+    const executor = new BridgeExecutor({ bin, cwd: repo, artifacts, events });
+    const replace = jssg({ name: "replace", transform: built("replace"), language: "typescript" });
+    const { output } = await run(
+      workflow(() =>
+        parallel(
+          ["alpha", "beta", "gamma"].map((area) => replace({ id: area, target: { root: area } })),
+        ),
+      ),
+      { executor, events, scheduler },
+    );
+
+    expect(output).toEqual([[{ file: "a.ts" }], [{ file: "a.ts" }], [{ file: "a.ts" }]]);
+    for (const area of ["alpha", "beta", "gamma"]) {
+      expect(read(`${area}/a.ts`)).toBe(`newApi('${area}');\n`);
+    }
+    expect(events.events.filter((e) => e.type === "bridge.spawned")).toHaveLength(3);
+    expect(scheduler.stats()).toMatchObject({ peakActive: 2, peakUsed: 4, used: 0, queued: 0 });
+  });
 
   it("indexes the whole selection for workspace semantics even where the selector skips, and stages write() edits", async () => {
     write("main.ts", 'import { add } from "./utils";\nconst result = add(1, 2);\n');

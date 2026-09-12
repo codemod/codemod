@@ -206,6 +206,36 @@ not the author's. `parallel()` says which transforms may overlap; it never says
 how many workers to use or how to partition a file set. See Targeting for why
 that partition is not a public helper.
 
+### Bounded admission
+
+The prototype implements the resource half of that split. `parallel()` is
+eligibility; a scheduler owned by the run decides how much of it overlaps, so a
+group of thirty-seven independent analyzers is authored as one group and no
+workflow ever names a concurrency number.
+
+The scheduler sits at the execution boundary rather than inside `parallel()`,
+so plans, procedural workflows, and dynamically built groups are all bounded by
+one budget, and a future Rust executor inherits the same seam. It is a weighted
+semaphore with a strict FIFO queue. Weights charge a JSSG batch more than an
+`exec` because it reads and holds the whole selected file set, and charge a
+workspace-semantic batch more again because the bridge also parses and indexes
+that set as one workspace. Capacity is derived from `availableParallelism()`
+and host memory and floored at the heaviest weight, so the heaviest operation
+can always run alone. Strict FIFO trades some utilization for the guarantee
+that a heavy command is never overtaken forever.
+
+Two properties matter beyond the bound itself. Because the permit is held
+around the executor call, and JSSG selection and reading happen inside it, a
+queued command retains only its operation metadata: thirty-seven queued
+analyzers do not hold thirty-seven repository snapshots. And because only
+executed commands reach the executor, replay consumes no capacity at all.
+
+Declaration order survives: members are issued and recorded in the order the
+author wrote them and their outputs are returned in that order, whatever order
+they are admitted or completed in. Bounded admission is a resource decision, not
+a write-safety mechanism; parallel mutating members remain the author's
+independence assertion, and the file-level scheduler above is still future work.
+
 ### Targeting
 
 Many registry packages run one transform over part of a repository: a single
@@ -524,7 +554,11 @@ Included:
 - TypeScript-owned file selection with the engine's walker semantics,
   deterministic ordering, conflict checks, transactional commit, structured
   output aggregation, and failure classification
-- cancellation of the operation in flight (bridge killed, nothing written)
+- cancellation of the operations in flight (bridge killed, nothing written) and
+  refusal of the ones still queued (never started)
+- weighted, host-derived bounded admission of parallel operations at the
+  execution boundary, with operator/test capacity overrides and no
+  author-facing concurrency knob
 - an experimental trusted-local TypeScript workflow CLI
 
 Not included:
@@ -536,7 +570,10 @@ Not included:
   source-mapped sandbox errors
 - `pipe()`
 - AI execution
-- durable persistence or production scheduling
+- durable persistence, a production Rust scheduler, or adaptive telemetry that
+  tunes capacity from observed load
+- group transactions or cross-command merge semantics for parallel mutating
+  members: independence is still the author's assertion
 - a parallel file-job scheduler, per-file locks, worktrees, or merge semantics
   (every transform sees the pre-command snapshot; conflicting cross-file
   edits fail the command instead of chaining or merging)

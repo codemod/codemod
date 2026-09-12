@@ -8,7 +8,26 @@ export type WorkflowEvent =
   | { type: "command.completed"; commandId: string; completion: OperationCompletion }
   | { type: "workflow.finished"; output: Json; replayed: boolean }
   /** One bridge process was spawned for a command. */
-  | { type: "bridge.spawned"; commandId: string; pid: number | undefined };
+  | { type: "bridge.spawned"; commandId: string; pid: number | undefined }
+  /** A command had to wait for execution capacity; nothing is spawned yet. */
+  | { type: "scheduler.queued"; commandId: string; weight: number }
+  /** A command took a permit. `active`/`used` are the totals including it. */
+  | {
+      type: "scheduler.admitted";
+      commandId: string;
+      weight: number;
+      active: number;
+      used: number;
+      capacity: number;
+    }
+  /** A command returned its permit. `active`/`used` are the totals without it. */
+  | {
+      type: "scheduler.released";
+      commandId: string;
+      weight: number;
+      active: number;
+      used: number;
+    };
 
 /** Migration seam: where engine events go (CLI, TUI, JSONL, ...). */
 export interface EventSink {

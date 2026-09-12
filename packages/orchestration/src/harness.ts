@@ -19,6 +19,7 @@ import {
   type OperationCompletion,
   type OperationRequest,
 } from "./protocol.ts";
+import type { AdmissionScheduler } from "./scheduler.ts";
 import { run, type Executable, type ExecutableOutput, type RunResult } from "./workflow.ts";
 
 export class Outcome {
@@ -35,16 +36,26 @@ export const cancelled = (message = "scripted cancellation"): Outcome =>
 export const unknown = (message = "scripted unknown outcome"): Outcome =>
   new Outcome("unknown", { message });
 
-/** A plain value succeeds. For exec runnables, non-string values are JSON-encoded into stdout. */
-export type ScriptValue = Json | Outcome | ((request: OperationRequest) => Json | Outcome);
+/**
+ * A plain value succeeds. For exec runnables, non-string values are
+ * JSON-encoded into stdout. A function may return a promise, which is how
+ * tests hold an operation open while others queue behind it.
+ */
+export type ScriptValue =
+  | Json
+  | Outcome
+  | ((request: OperationRequest) => Json | Outcome | Promise<Json | Outcome>);
 
 export interface HarnessOptions {
   /** Keyed by command id. */
   results?: Record<string, ScriptValue>;
   /** Used when no `results` entry matches. */
-  fallback?: (request: OperationRequest) => Json | Outcome;
+  fallback?: (request: OperationRequest) => Json | Outcome | Promise<Json | Outcome>;
   /** Start from a serialized or in-memory history instead of an empty one. */
   history?: string | History;
+  /** Bounded admission for the run; defaults to the host-derived scheduler. */
+  scheduler?: AdmissionScheduler;
+  signal?: AbortSignal;
 }
 
 export interface HarnessRun<R> extends RunResult<R> {
@@ -73,7 +84,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
   const executor: OperationExecutor = {
     async execute(request) {
       executed.push(request);
-      return toCompletion(request, script(options, request));
+      return toCompletion(request, await script(options, request));
     },
   };
 
@@ -82,7 +93,13 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     store,
     events,
     async run<T extends Executable>(executable: T) {
-      const result = await run(executable, { executor, history: store, events });
+      const result = await run(executable, {
+        executor,
+        history: store,
+        events,
+        ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+      });
       return {
         ...result,
         commands: scheduledCommands(result.history),
@@ -95,7 +112,10 @@ export function createHarness(options: HarnessOptions = {}): Harness {
   };
 }
 
-function script(options: HarnessOptions, request: OperationRequest): Json | Outcome {
+function script(
+  options: HarnessOptions,
+  request: OperationRequest,
+): Json | Outcome | Promise<Json | Outcome> {
   const entry = options.results?.[request.commandId];
   if (entry !== undefined) return typeof entry === "function" ? entry(request) : entry;
   if (options.fallback) return options.fallback(request);

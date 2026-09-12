@@ -20,6 +20,7 @@ import {
 } from "./history.ts";
 import type { Json } from "./json.ts";
 import { isPlan, runPlan, type Plan } from "./plan.ts";
+import { AdmissionScheduler, SchedulingExecutor } from "./scheduler.ts";
 import { validate } from "./schema.ts";
 
 export interface Workflow<R> {
@@ -51,6 +52,13 @@ export interface RunOptions {
    * recorded; the awaited command rejects with `OperationError`.
    */
   signal?: AbortSignal;
+  /**
+   * Bounded admission for this run. Defaults to a fresh `AdmissionScheduler`
+   * with host-derived capacity: `parallel()` declares eligibility, this decides
+   * how much of it actually overlaps. Pass one to observe it or to fix the
+   * capacity in a test; it is host configuration, never workflow authoring.
+   */
+  scheduler?: AdmissionScheduler;
 }
 
 export interface RunResult<R> {
@@ -66,7 +74,14 @@ export async function run<T extends Executable>(
 ): Promise<RunResult<ExecutableOutput<T>>> {
   const store = options.history ?? new MemoryHistoryStore();
   const events = options.events ?? new CollectingSink();
-  const gate = new ReplayGate(await store.load(), store, options.executor, events, options.signal);
+  // Only commands the gate actually executes pass through here, so a replayed
+  // command never takes a permit.
+  const executor = new SchedulingExecutor(
+    options.executor,
+    options.scheduler ?? new AdmissionScheduler(),
+    events,
+  );
+  const gate = new ReplayGate(await store.load(), store, executor, events, options.signal);
   const runtime = new WorkflowRuntime(gate);
   const subject: Executable = executable;
   let output: unknown;

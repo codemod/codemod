@@ -91,6 +91,22 @@ export {
 export type { History, HistoryEvent, HistoryStore, ScheduledCommand } from "./history.ts";
 export { BridgeExecutor } from "./executor.ts";
 export type { BridgeOptions, OperationExecutor } from "./executor.ts";
+export {
+  AdmissionScheduler,
+  CAPACITY_ENV,
+  DEFAULT_WEIGHTS,
+  SchedulingExecutor,
+  defaultCapacity,
+  nodeHost,
+  weightOf,
+} from "./scheduler.ts";
+export type {
+  OperationWeights,
+  Permit,
+  SchedulerHost,
+  SchedulerOptions,
+  SchedulerStats,
+} from "./scheduler.ts";
 export { ReplayGate } from "./gate.ts";
 export type { CommandGate } from "./gate.ts";
 export { CollectingSink, nullSink } from "./events.ts";
