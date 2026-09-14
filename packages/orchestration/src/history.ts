@@ -10,6 +10,8 @@ export interface ScheduledCommand {
   id: string;
   runnable: string;
   kind: Operation["kind"];
+  /** Static parallel scopes may issue this command in any sibling-completion order. */
+  concurrent?: true;
   input?: Json;
   operation: Operation;
 }

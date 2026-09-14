@@ -76,9 +76,9 @@ export class TargetValidationError extends Error {
   }
 }
 
-export class PlanValidationError extends Error {
+export class CompositionValidationError extends Error {
   constructor(message: string) {
-    super(`invalid plan: ${message}`);
-    this.name = "PlanValidationError";
+    super(`invalid composition: ${message}`);
+    this.name = "CompositionValidationError";
   }
 }

@@ -142,7 +142,7 @@ export function buildFile(file: string): BuiltModule {
 }
 
 export interface LoadedWorkflow {
-  /** The module namespace; `default` is the workflow or plan. */
+  /** The module namespace; `default` is an executable composition node. */
   exports: Record<string, unknown>;
   /** Every artifact extracted while the module graph loaded, by hash. */
   artifacts: Map<string, JssgArtifact>;

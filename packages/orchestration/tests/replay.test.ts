@@ -13,7 +13,7 @@ const sequence = (...steps: (typeof a)[]) =>
     return steps.map((s) => s.name).join("");
   });
 
-async function recorded(wf: Workflow<unknown>, finalize = true) {
+async function recorded(wf: Workflow<void, unknown>, finalize = true) {
   const h = createHarness({ fallback: () => "ok" });
   if (finalize) {
     await h.run(wf);
@@ -21,14 +21,14 @@ async function recorded(wf: Workflow<unknown>, finalize = true) {
   }
   // Record commands but stop before finalization by throwing from the body.
   const partial = workflow(async () => {
-    await wf.body();
+    await wf.body(undefined);
     throw new Error("crash before finalize");
   });
   await expect(h.run(partial)).rejects.toThrow("crash before finalize");
   return h;
 }
 
-async function replayError(wf: Workflow<unknown>, h: Awaited<ReturnType<typeof recorded>>) {
+async function replayError(wf: Workflow<void, unknown>, h: Awaited<ReturnType<typeof recorded>>) {
   const replay = h.reload({ fallback: () => failed("must not execute") });
   const error = await replay.run(wf).catch((e: unknown) => e);
   expect(error).toBeInstanceOf(NondeterminismError);

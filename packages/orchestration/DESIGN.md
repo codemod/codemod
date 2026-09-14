@@ -28,26 +28,24 @@ convert existing YAML packages:
 
 ```text
 Today:     workflow.yaml -> Rust graph and scheduler -> existing runners
-Proposed:  TypeScript plan or workflow -> command history -> existing runners
+Proposed:  TypeScript composition or workflow -> command history -> existing runners
 ```
 
 A runnable is a typed description of one operation. `jssg()`, `exec()`, and
 `ai()` define runnables. Invoking a runnable, `inspect()` or
 `migrate({ input, target, id })`, creates a lazy command: plain data that a
-plan can hold, and that executes when a workflow awaits it. The workflow body
-takes no context argument; the runtime executing the body is what an awaited
-command reaches.
+static composition can hold, and that executes when a workflow awaits it. The
+runtime executing the body is what an awaited command reaches.
 
 | Current workflow concept | Proposed TypeScript form |
 | --- | --- |
 | `run` action | `exec()` |
 | JSSG or AI action | `jssg()` or `ai()` |
-| fixed sequence | `plan()` |
-| fixed data flow | `pipe()` |
+| fixed sequence and data flow | `sequence()` |
 | independent work | `parallel()` |
 | condition based on an earlier result | normal `if` inside `workflow()` |
 | workflow-state handoff | operation return value passed as input |
-| nested codemod | imported runnable used in a plan or workflow |
+| nested codemod | imported runnable used in static composition or a workflow |
 | per-step `base_path`, `include`, `exclude` | `{ target }` on a JSSG invocation |
 | `shard` step and `max_threads` | automatic scheduler behavior, no public helper |
 
@@ -86,33 +84,39 @@ transform runs is chosen by the caller through the invocation's `target` (see
 Targeting below). Scheduling controls such as the current YAML `max_threads`
 do not belong on a JSSG definition.
 
-The prototype currently runs operations inside `plan()` or `workflow()`. Direct
+The prototype currently runs operations inside static composition or `workflow()`. Direct
 leaf exports remain proposed; applicability fields, the static selector, and
 inline transform execution are implemented.
 
 ## Proposal
 
-Use typed operations as the common unit and provide four composable forms:
+Use typed operations as the common unit and provide three composable forms:
 
-- `plan(...)` runs fixed steps in order. It does not pass return values between
-  them; repository changes are the usual handoff.
-- `pipe(...)` creates fixed typed data flow from each output to the next input.
-- `parallel(...)` declares that its members have no ordering dependency.
-- `workflow(async () => ...)` uses normal TypeScript for dynamic control flow.
+- `sequence(...)` is a static graph node that passes each output to the next
+  stage and returns the final output. A bound command ignores flowing input.
+- `parallel(...)` is a static graph node that gives every member the same input
+  and returns their outputs as a declaration-order tuple.
+- `workflow(...)` explicitly marks arbitrary TypeScript for dynamic control
+  flow or data computation. Raw functions are not composition stages.
+
+Both static nodes can be reimplemented with promises inside a workflow. Their
+purpose is ahead-of-time topology: construction builds inspectable IR without
+running workflow code, enables early type and shape checks, and lets a future
+host schedule static regions without starting the workflow sandbox. Workflow
+stages remain opaque in that IR until workflow bundles gain stable references.
 
 There is no separate form for file selection. A JSSG invocation carries its own
-`{ root, include, exclude }` target (see Targeting); nothing wraps plans or
+`{ root, include, exclude }` target (see Targeting); nothing wraps composition or
 other runnables.
 
 Operations return plain JSON checked by schemas such as Zod. One result can be
-passed directly to the next operation without workflow state. `pipe()` is
-proposed API work and is not implemented in the prototype; the other three
-forms are.
+passed directly to the next operation without workflow state. Intermediate
+values are retained explicitly by a workflow stage when data flow is not linear.
 
 ### Nested bundle
 
 Fifty-two parent packages contain 943 nested-codemod actions. Imported runnables
-turn a fixed bundle into a normal plan:
+turn a fixed bundle into a normal sequence:
 
 ```ts
 import renameApi from "@codemod/rename-api";
@@ -120,10 +124,10 @@ import updateImports from "@codemod/update-imports";
 
 const format = exec({ name: "format", command: "npm run format" });
 
-export default plan(renameApi, updateImports, format);
+export default sequence(renameApi(), updateImports(), format());
 ```
 
-The whole plan is known before execution, like a fixed YAML graph. It can be
+The whole sequence is known before execution, like a fixed YAML graph. It can be
 validated and sent to the existing scheduler later.
 
 ### Command and JSSG hybrid
@@ -153,8 +157,7 @@ export default workflow(async () => {
 
 A command returned from the body is awaited by the runtime before the workflow
 finalizes, so the last step needs no `await`. When the structure is fixed and
-has no branch, the same handoff would be shorter as a typed pipeline,
-`pipe(inspect, migrate)`, which remains proposed.
+has no branch, the same handoff is `sequence(inspect, migrate)`.
 
 ### Fixed parallel audit
 
@@ -166,7 +169,7 @@ const todos = exec({ name: "todos", command: "rg -c TODO" });
 const fixmes = exec({ name: "fixmes", command: "rg -c FIXME" });
 const format = exec({ name: "format", command: "npm run format" });
 
-export default plan(parallel(todos, fixmes), format);
+export default sequence(parallel(todos, fixmes), format());
 ```
 
 `parallel()` is an author assertion, not an inferred effect check. Runnables do
@@ -182,7 +185,7 @@ pipeline them without increasing the global worker limit:
 export default parallel(transformA, transformB, transformC);
 ```
 
-`plan(transformA, transformB, transformC)` places a global barrier after each
+`sequence(transformA(), transformB(), transformC())` places a global barrier after each
 transform. In the parallel form, the runner may start `transformB` on one file
 while `transformA` is still processing other files. It must lock a file before
 reading it and hold that lock through its write, so only one transform performs
@@ -196,7 +199,7 @@ worker pool to avoid oversubscription.
 
 The author remains responsible for semantic independence. Transforms that rely
 on repository-wide state, files created by an earlier transform, or a particular
-order must use `plan()`. File-level locking requires a runner such as the future
+order must use `sequence()`. File-level locking requires a runner such as the future
 JSSG adapter that mediates file access. The prototype runs parallel members as
 whole operations and provides no file locking; opaque shell commands cannot gain
 that guarantee without isolation or a more constrained adapter.
@@ -214,7 +217,7 @@ group of thirty-seven independent analyzers is authored as one group and no
 workflow ever names a concurrency number.
 
 The scheduler sits at the execution boundary rather than inside `parallel()`,
-so plans, procedural workflows, and dynamically built groups are all bounded by
+so sequences, procedural workflows, and dynamically built groups are all bounded by
 one budget, and a future Rust executor inherits the same seam. It is a weighted
 semaphore with a strict FIFO queue. Weights charge a JSSG batch more than an
 `exec` because it reads and holds the whole selected file set, and charge a
@@ -231,11 +234,13 @@ queued command retains only its operation metadata: thirty-seven queued
 analyzers do not hold thirty-seven repository snapshots. And because only
 executed commands reach the executor, replay consumes no capacity at all.
 
-Declaration order survives: members are issued and recorded in the order the
-author wrote them and their outputs are returned in that order, whatever order
-they are admitted or completed in. Bounded admission is a resource decision, not
-a write-safety mechanism; parallel mutating members remain the author's
-independence assertion, and the file-level scheduler above is still future work.
+Members begin in declaration order and outputs return in that order, whatever
+order they are admitted or completed in. A nested branch may issue its next
+stage before an earlier sibling does, so history marks commands under a static
+parallel scope as concurrent and replay accepts either sibling issue order.
+Bounded admission is a resource decision, not a write-safety mechanism;
+parallel mutating members remain the author's independence assertion, and the
+file-level scheduler above is still future work.
 
 ### Targeting
 
@@ -258,7 +263,7 @@ const web = { root: "apps/web", include: ["src/**"], exclude: ["**/generated/**"
 globs relative to `root`. Every field is optional, but an empty target is
 rejected because it would look like a narrowing while selecting everything.
 
-A static plan gives the same target to two JSSG steps and none to `exec`:
+A static sequence gives the same target to two JSSG steps and none to `exec`:
 
 ```ts
 import renameApi from "@codemod/rename-api";
@@ -266,7 +271,7 @@ import updateImports from "@codemod/update-imports";
 
 const format = exec({ name: "format", command: "npm run format" });
 
-export default plan(renameApi({ target: web }), updateImports({ target: web }), format);
+export default sequence(renameApi({ target: web }), updateImports({ target: web }), format());
 ```
 
 A dynamic workflow targets one invocation per discovered package, with an
@@ -281,8 +286,8 @@ export default workflow(async () => {
 });
 ```
 
-The same ids let a static plan target one definition twice:
-`plan(renameApi({ target: client, id: "rename-api:client" }), renameApi({ target: web, id: "rename-api:web" }))`.
+The same ids let a static sequence target one definition twice:
+`sequence(renameApi({ target: client, id: "rename-api:client" }), renameApi({ target: web, id: "rename-api:web" }))`.
 
 A parallel group states independence and per-member targets in one place:
 
@@ -302,7 +307,7 @@ The rules that make this coherent:
   compares, so the same id with a different target is a `changed` command, and
   adding a target to a previously untargeted command is also a change. It never
   creates an id. An invocation without `id` uses the runnable name, so one
-  definition invoked twice in a plan or a run needs explicit ids; positional
+  definition invoked twice in a composition or a run needs explicit ids; positional
   structural ids such as `rename-api#1` remain proposed.
 - **Targets do not partition work.** A target says "these files", never "these
   files on this worker". Splitting the effective file set into physical shards,
@@ -417,11 +422,11 @@ TypeScript owns the author-facing model, every piece of orchestration policy,
 and the parts that need rapid iteration:
 
 - runnable definitions and schema-based typing
-- workflow and plan authoring, including the inline transform
+- workflow and static-composition authoring, including the inline transform
 - the build step that splits a workflow module into the trusted workflow and
   one bundled artifact per transform (TypeScript parser for extraction,
   esbuild for bundling, SHA-256 for identity)
-- serializable plan data
+- serializable static topology with opaque workflow boundaries
 - the test harness
 - prototype replay and in-memory history
 - for JSSG: artifact lookup, repository traversal and language-extension
@@ -511,7 +516,10 @@ const second = await run(migration, { executor, history });
 Each issued command stores its command id, operation details, and completion.
 The workflow output is stored last. Changing, moving, adding, or removing a
 command causes `NondeterminismError` instead of mixing new code with old
-history. Repeated invocations need explicit ids:
+history. Ordered workflow commands must retain their order. Commands marked as
+concurrent by static `parallel()` may replay in another sibling-completion
+order, but their identities and contents must still match. Repeated invocations
+need explicit ids:
 
 ```ts
 await lint({ id: "lint:client" });
@@ -544,8 +552,8 @@ Included:
 
 - typed, callable `exec`, `jssg`, and `ai` descriptors that create lazy commands
 - JSSG invocation targets, validated when the command is created and carried on the wire
-- static plans and explicit parallel groups, fixed or built inside a workflow
-- procedural workflows that await commands directly, with no context argument
+- static sequences and explicit parallel groups, fixed or built inside a workflow
+- procedural workflows that await commands directly or accept flowing input
 - append-only in-memory history and replay checks
 - scripted TypeScript tests
 - real `exec` calls through the existing Rust runner
@@ -569,7 +577,6 @@ Not included:
 - transform authoring beyond the supported subset: capturing the workflow
   module's own declarations, `options.matches` from the static selector,
   source-mapped sandbox errors
-- `pipe()`
 - AI execution
 - durable persistence, a production Rust scheduler, or adaptive telemetry that
   tunes capacity from observed load
@@ -592,7 +599,7 @@ us move one part at a time:
 
 1. Move command ID calculation and file-backed history into Rust.
 2. Move replay comparisons and final output checks into Rust.
-3. Let Rust execute operations directly, then add AI and Plan adapters. JSSG
+3. Let Rust execute operations directly, then add AI and composition adapters. JSSG
    already runs through a narrow Rust batch; the orchestration around it
    (selection, conflict checks, commit) stays in TypeScript until the
    scheduler below exists.
@@ -603,7 +610,7 @@ us move one part at a time:
    host instead of `AsyncLocalStorage`, before treating them as durable or
    untrusted.
 
-Workflow bodies, runnable typing, schemas, plan authoring, and test ergonomics
+Workflow bodies, runnable typing, schemas, composition authoring, and test ergonomics
 should remain TypeScript. This keeps Rust focused on durable engine concerns
 without freezing the authoring API too early.
 

@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createHarness, failed } from "../src/harness.ts";
 import {
+  DuplicateCommandIdError,
   InvocationError,
   NondeterminismError,
-  PlanValidationError,
   TargetValidationError,
   ai,
   canonicalJson,
@@ -15,7 +15,7 @@ import {
   jssg,
   normalizeTarget,
   parallel,
-  plan,
+  sequence,
   workflow,
   type Target,
 } from "../src/index.ts";
@@ -182,20 +182,40 @@ describe("JSSG invocation targets", () => {
   });
 });
 
-describe("targeted JSSG in plans and parallel groups", () => {
-  it("carries the target into the plan IR, the command record, and the executor request", async () => {
-    const fixed = plan(renameApi({ target: web }), updateImports({ target: web }), format);
-    expect(fixed.ir.steps).toEqual([
-      { type: "run", id: "rename-api", name: "rename-api", kind: "jssg", target: web },
-      { type: "run", id: "update-imports", name: "update-imports", kind: "jssg", target: web },
-      { type: "run", id: "format", name: "format", kind: "exec" },
+describe("targeted JSSG in static composition", () => {
+  it("carries the target into sequence IR, history, and the executor request", async () => {
+    const fixed = sequence(renameApi({ target: web }), updateImports({ target: web }), format());
+    expect(fixed.ir.root.stages).toEqual([
+      {
+        type: "operation",
+        id: "rename-api",
+        name: "rename-api",
+        kind: "jssg",
+        input: "bound",
+        target: web,
+      },
+      {
+        type: "operation",
+        id: "update-imports",
+        name: "update-imports",
+        kind: "jssg",
+        input: "bound",
+        target: web,
+      },
+      {
+        type: "operation",
+        id: "format",
+        name: "format",
+        kind: "exec",
+        input: "bound",
+      },
     ]);
 
     const h = createHarness({
       results: { "rename-api": { changed: 3 }, "update-imports": { changed: 1 }, format: "" },
     });
     const result = await h.run(fixed);
-    expect(result.output).toEqual([{ changed: 3 }, { changed: 1 }, { stdout: "" }]);
+    expect(result.output).toEqual({ stdout: "" });
     expect(result.commands.map((c) => c.operation)).toEqual([
       { kind: "jssg", transform: ref("rename-api"), language: "typescript", target: web },
       { kind: "jssg", transform: ref("update-imports"), language: "typescript", target: web },
@@ -210,7 +230,7 @@ describe("targeted JSSG in plans and parallel groups", () => {
 
     const replay = await h.reload({ fallback: () => failed("must not execute") }).run(fixed);
     expect(replay.replayed).toBe(true);
-    expect(replay.output).toEqual(result.output);
+    expect(replay.output).toEqual({ stdout: "" });
   });
 
   it("accepts targeted members in a parallel group", async () => {
@@ -225,25 +245,34 @@ describe("targeted JSSG in plans and parallel groups", () => {
       language: "typescript",
     });
     const group = parallel(transformA({ target: web }), transformB({ target: web }));
-    expect(group.members.map((m) => m.target)).toEqual([web, web]);
+    expect(
+      group.ir.root.members.map((member) =>
+        member.type === "operation" ? member.target : undefined,
+      ),
+    ).toEqual([web, web]);
 
     const h = createHarness({ fallback: () => ({ ok: true }) });
-    const result = await h.run(plan(group));
+    const result = await h.run(group);
     expect(result.commands.map((c) => c.id)).toEqual(["transform-a", "transform-b"]);
     expect(result.commands.every((c) => c.operation.kind === "jssg" && c.operation.target)).toBe(
       true,
     );
   });
 
-  it("targets one definition twice in a plan when the invocations carry distinct ids", () => {
+  it("targets one definition twice when invocations carry distinct ids", () => {
     expect(() =>
-      plan(renameApi({ target: { root: "packages/client" } }), renameApi({ target: web })),
-    ).toThrow(PlanValidationError);
-    const fixed = plan(
+      sequence(renameApi({ target: { root: "packages/client" } }), renameApi({ target: web })),
+    ).toThrow(DuplicateCommandIdError);
+
+    const fixed = sequence(
       renameApi({ target: { root: "packages/client" }, id: "rename-api:client" }),
       renameApi({ target: web, id: "rename-api:web" }),
     );
-    expect(fixed.ir.steps.map((s) => (s.type === "run" ? [s.id, s.target] : []))).toEqual([
+    expect(
+      fixed.ir.root.stages.map((stage) =>
+        stage.type === "operation" ? [stage.id, stage.target] : [],
+      ),
+    ).toEqual([
       ["rename-api:client", { root: "packages/client" }],
       ["rename-api:web", web],
     ]);

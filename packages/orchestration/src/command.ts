@@ -1,7 +1,7 @@
 /**
  * Commands: one invocation of a runnable, created by calling the runnable
  * (`inspect()`, `migrate({ input, target, id })`). Creating a command never
- * executes anything. It is plain data that `plan()` and `parallel()` can hold,
+ * executes anything. It is plain data that `sequence()` and `parallel()` can hold,
  * and it is a thenable: awaiting it inside an active workflow issues it to the
  * runtime, which replays it from history or executes it and records it.
  */

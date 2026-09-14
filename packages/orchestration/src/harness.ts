@@ -20,7 +20,8 @@ import {
   type OperationRequest,
 } from "./protocol.ts";
 import type { AdmissionScheduler } from "./scheduler.ts";
-import { run, type Executable, type ExecutableOutput, type RunResult } from "./workflow.ts";
+import type { Executable, ExecutableOutput, StageInput } from "./composition.ts";
+import { run, type RunResult } from "./workflow.ts";
 
 export class Outcome {
   constructor(
@@ -68,7 +69,9 @@ export interface Harness {
   readonly executed: OperationRequest[];
   readonly store: MemoryHistoryStore;
   readonly events: CollectingSink;
-  run<T extends Executable>(executable: T): Promise<HarnessRun<ExecutableOutput<T>>>;
+  run<T extends Executable>(
+    executable: T & (undefined extends StageInput<T> ? unknown : never),
+  ): Promise<HarnessRun<ExecutableOutput<T>>>;
   serialize(): string;
   /** A fresh harness that starts from this harness's serialized history. */
   reload(overrides?: Omit<HarnessOptions, "history">): Harness;
@@ -92,8 +95,10 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     executed,
     store,
     events,
-    async run<T extends Executable>(executable: T) {
-      const result = await run(executable, {
+    async run<T extends Executable>(
+      executable: T & (undefined extends StageInput<T> ? unknown : never),
+    ) {
+      const result = await run<T>(executable, {
         executor,
         history: store,
         events,

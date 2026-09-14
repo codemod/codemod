@@ -16,8 +16,8 @@ import {
   exec,
   jssg,
   parallel,
-  plan,
   run,
+  sequence,
   weightOf,
   workflow,
   type Operation,
@@ -424,13 +424,13 @@ describe("group shapes", () => {
     expect(scheduler.stats()).toMatchObject({ peakActive: 2, used: 0, active: 0, queued: 0 });
   });
 
-  it("runs a plan's parallel steps under the same bound and keeps step order", async () => {
+  it("runs a sequence's parallel stages under the same bound and keeps order", async () => {
     const scheduler = new AdmissionScheduler({ capacity: 2 });
     const harness = createHarness({
       fallback: (request) => `ran ${request.commandId}`,
       scheduler,
     });
-    const fixed = plan(parallel(steps(3)), step("last"));
+    const fixed = sequence(parallel(steps(3)), step("last")());
     const result = await harness.run(fixed);
     expect(result.commands.map((command) => command.id)).toEqual(["s0", "s1", "s2", "last"]);
     expect(scheduler.stats()).toMatchObject({ peakActive: 2, used: 0, queued: 0 });

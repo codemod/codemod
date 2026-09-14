@@ -1,6 +1,6 @@
 /**
  * The callable runtime: calling a runnable creates a lazy command, awaiting it
- * inside a workflow issues it, and plans / parallel groups are awaitable data.
+ * inside a workflow issues it, and static composition nodes are awaitable data.
  */
 import { describe, expect, it } from "vitest";
 import { createHarness, failed } from "../src/harness.ts";
@@ -13,8 +13,8 @@ import {
   isCommand,
   jssg,
   parallel,
-  plan,
   run,
+  sequence,
   workflow,
   type Command,
   type Json,
@@ -119,10 +119,8 @@ describe("commands", () => {
     const _execTarget = () => inspectPackage({ input: packages[0]!, target: { root: "a" } });
     // @ts-expect-error ai does not take a target
     const _aiTarget = () => summarize({ input: packages[0]!, target: { root: "a" } });
-    // @ts-expect-error a runnable with required input cannot be a bare plan member
-    const _planNeedsInput = () => plan(inspectPackage);
-    // @ts-expect-error a runnable with required input cannot be a bare parallel member
-    const _parallelNeedsInput = () => parallel(inspectPackage, format);
+    // @ts-expect-error discover returns Package[], but inspectPackage consumes one Package
+    const _incompatibleSequence = () => sequence(discover, inspectPackage);
     expect([_ok, _okAi, _okJssg, _okVoid]).toHaveLength(4);
   });
 
@@ -260,15 +258,11 @@ describe("dynamic parallel groups", () => {
     ).rejects.toMatchObject({ name: "NondeterminismError", kind: "changed" });
   });
 
-  it("reject duplicate ids inside one group and still wait for the rest", async () => {
-    let releaseFirst!: () => void;
+  it("rejects duplicate ids in a dynamic group before anything executes", async () => {
+    let executed = 0;
     const executor = {
       async execute(request: OperationRequest): Promise<OperationCompletion> {
-        if (request.commandId === "lint:1") {
-          await new Promise<void>((resolve) => {
-            releaseFirst = resolve;
-          });
-        }
+        executed += 1;
         return {
           protocolVersion: PROTOCOL_VERSION,
           commandId: request.commandId,
@@ -278,20 +272,8 @@ describe("dynamic parallel groups", () => {
       },
     };
     const wf = workflow(async () => parallel([lint({ id: "lint:1" }), lint({ id: "lint:1" })]));
-    const attempt = run(wf, { executor });
-    let settled = false;
-    void attempt.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(settled).toBe(false);
-    releaseFirst();
-    await expect(attempt).rejects.toBeInstanceOf(DuplicateCommandIdError);
+    await expect(run(wf, { executor })).rejects.toBeInstanceOf(DuplicateCommandIdError);
+    expect(executed).toBe(0);
   });
 
   it("accept an empty dynamic result only through the author's own branch", async () => {
@@ -317,26 +299,26 @@ describe("dynamic parallel groups", () => {
   });
 });
 
-describe("plans as awaitable data", () => {
-  const fixed = plan(lint, parallel(format({ id: "format:a" }), format({ id: "format:b" })));
+describe("sequences as awaitable data", () => {
+  const fixed = sequence(lint, parallel(format({ id: "format:a" }), format({ id: "format:b" })));
 
   it("run through the workflow runtime when awaited in a body", async () => {
     const h = createHarness({ fallback: (r) => `did ${r.commandId}` });
     const wf = workflow(async () => {
-      const [first, group] = await fixed;
-      return [first.stdout, ...group.map((g) => g.stdout)];
+      const group = await fixed;
+      return group.map((output) => output.stdout);
     });
     const result = await h.run(wf);
-    expect(result.output).toEqual(["did lint", "did format:a", "did format:b"]);
+    expect(result.output).toEqual(["did format:a", "did format:b"]);
     expect(result.commands.map((c) => c.id)).toEqual(["lint", "format:a", "format:b"]);
   });
 
-  it("refuse to finalize when a plan built in the body is never awaited", async () => {
+  it("refuses to finalize when bound commands in a sequence are never awaited", async () => {
     const h = createHarness({ fallback: () => "ok" });
     await expect(
       h.run(
         workflow(async () => {
-          plan(lint, format);
+          sequence(lint(), format());
           return "done";
         }),
       ),

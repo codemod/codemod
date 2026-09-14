@@ -23,18 +23,26 @@ export { isCommand } from "./command.ts";
 export type { Command, Invocation, JssgInvocation } from "./command.ts";
 export { NoActiveWorkflowError } from "./context.ts";
 export { normalizeTarget } from "./target.ts";
-export { isParallel, isPlan, parallel, plan } from "./plan.ts";
+export { isExecutable, isParallel, isSequence, parallel, sequence } from "./composition.ts";
 export type {
+  CompositionIr,
+  CompositionIrNode,
+  Executable,
+  ExecutableOutput,
+  OperationIr,
   Parallel,
-  Plan,
-  PlanIr,
-  PlanIrEntry,
-  PlanIrStep,
-  PlanMember,
-  PlanStep,
-} from "./plan.ts";
-export { run, workflow } from "./workflow.ts";
-export type { Executable, ExecutableOutput, RunOptions, RunResult, Workflow } from "./workflow.ts";
+  ParallelIr,
+  Sequence,
+  SequenceIr,
+  Stage,
+  StageInput,
+  StageOutput,
+  WorkflowIr,
+} from "./composition.ts";
+export { workflow } from "./workflow-node.ts";
+export type { Awaitable, Workflow } from "./workflow-node.ts";
+export { run } from "./workflow.ts";
+export type { RunOptions, RunResult } from "./workflow.ts";
 export { guard, SchemaError } from "./schema.ts";
 export type { InferOutput, StandardSchemaV1 } from "./schema.ts";
 export { canonicalJson } from "./json.ts";
@@ -116,7 +124,7 @@ export {
   InvocationError,
   NondeterminismError,
   OperationError,
-  PlanValidationError,
+  CompositionValidationError,
   TargetValidationError,
 } from "./errors.ts";
 export type { NondeterminismKind } from "./errors.ts";

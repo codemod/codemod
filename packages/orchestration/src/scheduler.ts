@@ -283,7 +283,7 @@ export class AdmissionScheduler {
 
 /**
  * The execution boundary: an `OperationExecutor` that admits through a
- * scheduler before delegating. Every plan and workflow benefits because
+ * scheduler before delegating. Every composition and workflow benefits because
  * `run()` wraps the executor it is given, and nothing below this point is
  * aware of scheduling.
  *

@@ -29,6 +29,7 @@ export class ReplayGate implements CommandGate {
   private readonly recordedCompletions: Map<string, OperationCompletion>;
   private readonly recordedFinal: ReturnType<typeof finalOutput>;
   private readonly issued = new Set<string>();
+  private readonly consumed = new Set<number>();
   /** Recorded positions that were skipped over by a later recorded command. */
   private readonly skipped = new Map<number, string>();
   private cursor = 0;
@@ -68,19 +69,34 @@ export class ReplayGate implements CommandGate {
         { position, actualId: command.id },
       );
     }
-    for (let index = this.cursor; index < position; index++) {
-      this.skipped.set(index, this.recorded[index]!.id);
+    if (command.concurrent === true) {
+      this.consumed.add(position);
+      while (this.consumed.has(this.cursor)) this.cursor += 1;
+      const completion = this.completion(command.id);
+      this.events.emit({ type: "command.replayed", commandId: command.id, completion });
+      return completion;
     }
+    for (let index = this.cursor; index < position; index++) {
+      if (!this.consumed.has(index)) this.skipped.set(index, this.recorded[index]!.id);
+    }
+    this.consumed.add(position);
     this.cursor = Math.max(this.cursor, position + 1);
+    while (this.consumed.has(this.cursor)) this.cursor += 1;
 
-    const completion = this.recordedCompletions.get(command.id) ?? {
-      protocolVersion: PROTOCOL_VERSION,
-      commandId: command.id,
-      status: "unknown",
-      error: { message: "command was scheduled in history but never completed" },
-    };
+    const completion = this.completion(command.id);
     this.events.emit({ type: "command.replayed", commandId: command.id, completion });
     return completion;
+  }
+
+  private completion(commandId: string): OperationCompletion {
+    return (
+      this.recordedCompletions.get(commandId) ?? {
+        protocolVersion: PROTOCOL_VERSION,
+        commandId,
+        status: "unknown",
+        error: { message: "command was scheduled in history but never completed" },
+      }
+    );
   }
 
   private async executeNew(command: ScheduledCommand): Promise<OperationCompletion> {
@@ -141,7 +157,10 @@ export class ReplayGate implements CommandGate {
       );
     }
     if (this.cursor < this.recorded.length) {
-      const missing = this.recorded.slice(this.cursor).map((command) => command.id);
+      const missing = this.recorded
+        .map((command, index) => ({ command, index }))
+        .filter(({ index }) => !this.consumed.has(index))
+        .map(({ command }) => command.id);
       throw new NondeterminismError(
         "removed",
         `workflow finished before issuing recorded trailing commands: ${missing.join(", ")}`,

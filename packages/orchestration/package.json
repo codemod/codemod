@@ -2,7 +2,7 @@
   "name": "@codemod.com/orchestration",
   "version": "0.0.0",
   "private": true,
-  "description": "TypeScript prototype of the Codemod orchestration runtime (workflows, plans, replay history) over the Butterflow execution bridge",
+  "description": "TypeScript prototype of the Codemod orchestration runtime (static composition, workflows, replay history) over the Butterflow execution bridge",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {

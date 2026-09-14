@@ -14,9 +14,9 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadWorkflow } from "./build.ts";
+import { isExecutable } from "./composition.ts";
 import { BridgeExecutor } from "./executor.ts";
-import { isPlan } from "./plan.ts";
-import { run, type Executable } from "./workflow.ts";
+import { run } from "./workflow.ts";
 
 export interface CliOptions {
   /** Workflow module path. */
@@ -43,23 +43,15 @@ export async function runWorkflowCli(argv: string[], signal?: AbortSignal): Prom
   }
   const { exports, artifacts } = await loadWorkflow(options.workflow);
   if (!isExecutable(exports.default)) {
-    throw new Error("workflow module must default-export workflow(...) or plan(...)");
+    throw new Error(
+      "workflow module must default-export a command, workflow(...), sequence(...), or parallel(...)",
+    );
   }
   const result = await run(exports.default, {
     executor: new BridgeExecutor({ bin: options.bridge, cwd: options.target, artifacts }),
     signal,
   });
   return result.output;
-}
-
-function isExecutable(value: unknown): value is Executable {
-  if (isPlan(value)) return true;
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { type?: unknown }).type === "workflow" &&
-    typeof (value as { body?: unknown }).body === "function"
-  );
 }
 
 /**

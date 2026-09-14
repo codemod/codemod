@@ -1,8 +1,7 @@
 /**
- * Procedural workflows. The body is ordinary async TypeScript that awaits
- * commands (`await inspect()`), plans, and parallel groups. It receives no
- * context argument: the runtime for the current run is bound to the body's
- * async continuations (see `context.ts`). Determinism is NOT enforced by a
+ * Runtime and lifecycle for arbitrary workflows and static composition. The
+ * runtime for the current run is bound to async continuations (see
+ * `context.ts`). Determinism is NOT enforced by a
  * sandbox in this prototype: it is validated after the fact by replaying
  * history and comparing issued commands (see README).
  */
@@ -19,27 +18,14 @@ import {
   type ScheduledCommand,
 } from "./history.ts";
 import type { Json } from "./json.ts";
-import { isPlan, runPlan, type Plan } from "./plan.ts";
+import {
+  runStage,
+  type Executable,
+  type ExecutableOutput,
+  type StageInput,
+} from "./composition.ts";
 import { AdmissionScheduler, SchedulingExecutor } from "./scheduler.ts";
 import { validate } from "./schema.ts";
-
-export interface Workflow<R> {
-  readonly type: "workflow";
-  readonly body: () => PromiseLike<R>;
-}
-
-export function workflow<R>(body: () => PromiseLike<R>): Workflow<R> {
-  return { type: "workflow", body };
-}
-
-/**
- * Something `run()` can execute. Named `Executable` rather than "target" so it
- * is not confused with a JSSG invocation `Target`, which is file selection
- * inside one command, not something that runs (see DESIGN.md, "Targeting").
- */
-export type Executable = Workflow<unknown> | Plan;
-export type ExecutableOutput<T> =
-  T extends Workflow<infer R> ? R : T extends Plan<infer O> ? O : never;
 
 export interface RunOptions {
   executor: OperationExecutor;
@@ -69,7 +55,7 @@ export interface RunResult<R> {
 }
 
 export async function run<T extends Executable>(
-  executable: T,
+  executable: T & (undefined extends StageInput<T> ? unknown : never),
   options: RunOptions,
 ): Promise<RunResult<ExecutableOutput<T>>> {
   const store = options.history ?? new MemoryHistoryStore();
@@ -83,16 +69,13 @@ export async function run<T extends Executable>(
   );
   const gate = new ReplayGate(await store.load(), store, executor, events, options.signal);
   const runtime = new WorkflowRuntime(gate);
-  const subject: Executable = executable;
   let output: unknown;
   let bodyError: unknown;
   let bodySucceeded = false;
   try {
-    // The async wrapper keeps the runtime bound while the body's result,
-    // which may itself be a command, is adopted.
-    output = await withRuntime(runtime, async () =>
-      isPlan(subject) ? await runPlan(runtime, subject) : await subject.body(),
-    );
+    // The async wrapper keeps the runtime bound while nested workflows and
+    // composition nodes run and while their thenable results are adopted.
+    output = await withRuntime(runtime, async () => runStage(runtime, executable, undefined));
     bodySucceeded = true;
   } catch (error) {
     bodyError = error;
@@ -101,7 +84,7 @@ export async function run<T extends Executable>(
   const pending = runtime.close();
   await Promise.allSettled(pending.inFlight);
   if (!bodySucceeded) throw bodyError;
-  const unawaited = pending.inFlight.length + pending.unissued.length;
+  const unawaited = pending.ids.length;
   if (unawaited > 0) {
     throw new Error(
       `workflow body returned without awaiting ${unawaited} operation(s): ${pending.ids.join(", ")}`,
@@ -124,6 +107,9 @@ export async function run<T extends Executable>(
 class WorkflowRuntime implements Runtime {
   readonly #gate: CommandGate;
   readonly #created = new Set<Command>();
+  readonly #compositions = new Map<object, readonly string[]>();
+  readonly #startedCompositions = new Set<object>();
+  readonly #claimed = new Set<Command>();
   readonly #issued = new Map<Command, Promise<unknown>>();
   readonly #inFlight = new Set<Promise<unknown>>();
   #closed = false;
@@ -136,7 +122,19 @@ class WorkflowRuntime implements Runtime {
     if (!this.#closed) this.#created.add(command);
   }
 
-  issue<O>(command: Command<O>): Promise<O> {
+  createdComposition(composition: object, commandIds: readonly string[]): void {
+    if (!this.#closed) this.#compositions.set(composition, commandIds);
+  }
+
+  startedComposition(composition: object): void {
+    if (!this.#closed) this.#startedCompositions.add(composition);
+  }
+
+  claimed(command: Command): void {
+    if (!this.#closed) this.#claimed.add(command);
+  }
+
+  issue<O>(command: Command<O>, concurrent = false): Promise<O> {
     const existing = this.#issued.get(command);
     if (existing !== undefined) return existing as Promise<O>;
     if (this.#closed) {
@@ -144,7 +142,7 @@ class WorkflowRuntime implements Runtime {
         new Error(`command '${command.id}' was issued after the workflow body returned`),
       );
     }
-    const operation = this.#resolve(command);
+    const operation = this.#resolve(command, concurrent);
     this.#issued.set(command, operation);
     this.#inFlight.add(operation);
     void operation.then(
@@ -154,26 +152,35 @@ class WorkflowRuntime implements Runtime {
     return operation;
   }
 
-  close(): { inFlight: Promise<unknown>[]; unissued: Command[]; ids: string[] } {
+  close(): { inFlight: Promise<unknown>[]; ids: string[] } {
     this.#closed = true;
-    const unissued = [...this.#created].filter((command) => !this.#issued.has(command));
+    const unissued = [...this.#created].filter(
+      (command) => !this.#issued.has(command) && !this.#claimed.has(command),
+    );
     const inFlightIds = [...this.#issued]
       .filter(([, operation]) => this.#inFlight.has(operation))
       .map(([command]) => command.id);
+    const unstartedIds = [...this.#compositions]
+      .filter(([composition]) => !this.#startedCompositions.has(composition))
+      .flatMap(([composition, ids]) =>
+        ids.length > 0 ? ids : [`${String((composition as { type?: unknown }).type)} (opaque)`],
+      );
     return {
       inFlight: [...this.#inFlight],
-      unissued,
-      ids: [...inFlightIds, ...unissued.map((command) => command.id)],
+      ids: [
+        ...new Set([...inFlightIds, ...unissued.map((command) => command.id), ...unstartedIds]),
+      ],
     };
   }
 
-  async #resolve<O>(command: Command<O>): Promise<O> {
+  async #resolve<O>(command: Command<O>, concurrent: boolean): Promise<O> {
     const { runnable, id } = command;
     const input = await validate(runnable.input, command.input, `input of '${id}'`);
     const scheduled: ScheduledCommand = {
       id,
       runnable: runnable.name,
       kind: runnable.kind,
+      ...(concurrent ? { concurrent: true as const } : {}),
       operation: operationOf(command, input),
     };
     if (input !== undefined) scheduled.input = input as Json;

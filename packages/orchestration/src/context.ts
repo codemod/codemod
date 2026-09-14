@@ -9,12 +9,18 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Command } from "./command.ts";
 
-/** Internal runtime surface used by commands, plans, and parallel groups. */
+/** Internal runtime surface used by commands and composition nodes. */
 export interface Runtime {
   /** Note that a command was created while this workflow body is active. */
   created(command: Command): void;
+  /** Note a static node built while this workflow body is active. */
+  createdComposition(composition: object, commandIds: readonly string[]): void;
+  /** Mark a static node as awaited or returned. */
+  startedComposition(composition: object): void;
+  /** Mark a bound command as owned by a started static node. */
+  claimed(command: Command): void;
   /** Resolve a command (replay or execute). Memoized per command within one run. */
-  issue<O>(command: Command<O>): Promise<O>;
+  issue<O>(command: Command<O>, concurrent?: boolean): Promise<O>;
 }
 
 const storage = new AsyncLocalStorage<Runtime>();
@@ -30,7 +36,7 @@ export function withRuntime<T>(runtime: Runtime, fn: () => T): T {
 export class NoActiveWorkflowError extends Error {
   constructor(what: string) {
     super(
-      `${what} was awaited outside a workflow; await it inside workflow(async () => ...) or run it with run(plan(...))`,
+      `${what} was awaited outside a workflow; await it inside workflow(async () => ...) or pass it to run(...)`,
     );
     this.name = "NoActiveWorkflowError";
   }

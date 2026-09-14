@@ -32,8 +32,9 @@ packages/orchestration/
   src/context.ts         the active workflow runtime (AsyncLocalStorage in the Node prototype)
   src/target.ts          validation and normalization of a JSSG invocation Target
   src/cli.ts             experimental local runner behind bin/codemod-workflow.mjs
-  src/plan.ts            plan(...) and parallel(...) groups + JSON IR
-  src/workflow.ts        workflow(async () => ...) and run(executable, options)
+  src/composition.ts     sequence(...) and parallel(...) static graph nodes + IR
+  src/workflow-node.ts   explicit arbitrary-TypeScript workflow nodes
+  src/workflow.ts        run lifecycle, history, and command execution
   src/history.ts         HistoryStore seam + MemoryHistoryStore
   src/gate.ts            CommandGate seam + ReplayGate (replay matching, errors)
   src/executor.ts        OperationExecutor seam + BridgeExecutor (exec, jssg, ai refused)
@@ -51,7 +52,7 @@ crates/execution-bridge/ protocol structs, exec through DirectRunner, one JSSG b
 ## Authoring
 
 ```ts
-import { exec, guard, jssg, plan, parallel, workflow } from "@codemod.com/orchestration";
+import { exec, guard, jssg, parallel, sequence, workflow } from "@codemod.com/orchestration";
 import { rewriteSignal } from "./helpers.ts"; // bundled into the transform
 
 const Project = guard("Project", (v: unknown): v is { needsMigration: boolean } => /* ... */);
@@ -79,14 +80,17 @@ export default workflow(async () => {
   return project;
 });
 
-// fixed plan
-export default plan(rename, updateImports, format);
-// explicit assertion that these operations have no ordering dependency
-export default plan(parallel(countTodos, countFixmes), format);
+// Bound commands ignore preceding outputs.
+export default sequence(rename(), updateImports(), format());
+// A parallel tuple can flow into an explicit workflow computation.
+export default sequence(
+  parallel(countTodos, countFixmes),
+  workflow((counts) => counts.reduce((total, count) => total + count, 0)),
+);
 
 // JSSG invocations carry a file target; exec and ai never do
 const web = { root: "apps/web", include: ["src/**"], exclude: ["**/generated/**"] };
-export default plan(rename({ target: web }), updateImports({ target: web }), format);
+export default sequence(rename({ target: web }), updateImports({ target: web }), format());
 export default parallel(transformA({ target: web }), transformB({ target: web }));
 export default workflow(async () => {
   const project = await inspect();
@@ -120,15 +124,23 @@ export default workflow(async () => {
   structured data (for JSSG: the phase, and for commits the applied and
   remaining paths).
 - Workflow return values and operation outputs are plain JSON.
-- `plan(...)` and `parallel(...)` are data too. A bare runnable in either stands
-  for its default command. Both are awaitable inside a workflow; `run(plan)`
-  runs a plan on its own. `parallel` takes members spread (a fixed group) or as
-  one array (a group built inside a workflow, such as one command per
-  discovered package). Members start in declaration order and outputs come
-  back in that order.
+- `sequence(...)` and `parallel(...)` are static graph data. They can be root
+  executables; nodes that require no flowing input are also awaitable inside a
+  workflow. Input-requiring nodes must be nested where a preceding stage
+  supplies that input. A bare runnable consumes flowing input with its name as
+  command id; an invoked `Command` has bound input and ignores the preceding
+  value. `sequence` returns only its final output. `parallel` passes the same
+  input to every member and returns a tuple in declaration order. It accepts
+  members spread or as one dynamic array.
+- `workflow(...)` explicitly marks arbitrary TypeScript. It can be a root or a
+  stage in either static node; raw functions are rejected. Static IR leaves
+  workflow stages opaque until workflow bundling and sandboxing are added.
 - `parallel(...)` is eligibility, not a worker count. Members may overlap; how
   many actually do is the runtime's decision, so a group may hold any number of
   independent members and there is no author-facing concurrency knob.
+- History marks commands issued under static parallel scopes as concurrent.
+  Replay therefore accepts sibling issue orders caused by completion timing,
+  while still requiring the same command identities, contents, and outputs.
 - `parallel(...)` is also an author assertion about writes. The prototype
   overlaps whole operations and does not implement per-file locking. Do not
   place dependent mutations or opaque commands that may conflict in one group.
@@ -330,7 +342,7 @@ Remaining work before Solid Migration Assistant can move onto this package:
 - decide the cross-file edit policy Solid needs: today every transform sees
   the pre-command snapshot and two edits of one file in one command fail the
   command instead of chaining or merging;
-- an AI executor adapter, `pipe()`, approvals, and durable history remain
+- an AI executor adapter, approvals, and durable history remain
   unimplemented, so any Solid step that needs them stays in YAML;
 - restricted QuickJS execution of the workflow body and registry loading are
   still required before TypeScript workflows become an untrusted registry
@@ -434,9 +446,10 @@ helper it bundles) replays as `changed`, while moving the checkout does not.
 
 ## How a command finds its workflow
 
-The body receives no context argument. `run()` binds the run's runtime to the
-body with Node's `AsyncLocalStorage`, so `await inspect()` anywhere in the
-body's async continuations issues to that run, two concurrent runs never see
+The body may receive flowing data, but never a runtime context. `run()` binds
+the run's runtime to the body with Node's `AsyncLocalStorage`, so commands
+awaited anywhere in the body's async continuations issue to that run, two
+concurrent runs never see
 each other's runtime, and nothing is stored on a process-global. A command
 awaited outside any run rejects instead of running. In production the same
 binding belongs to the host: a restricted QuickJS instance would expose the

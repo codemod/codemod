@@ -11,7 +11,7 @@ import {
   guard,
   jssg,
   parallel,
-  plan,
+  sequence,
   run,
   workflow,
 } from "../src/index.ts";
@@ -196,7 +196,7 @@ describe("workflow execution", () => {
     const step = exec({ name: "step", command: "step" });
     await expect(step()).rejects.toThrow(NoActiveWorkflowError);
     await expect(step()).rejects.toThrow(/command 'step' was awaited outside a workflow/);
-    await expect(plan(step)).rejects.toThrow(/plan was awaited outside a workflow/);
+    await expect(sequence(step)).rejects.toThrow(/sequence was awaited outside a workflow/);
     await expect(parallel(step)).rejects.toThrow(/parallel group was awaited outside a workflow/);
   });
 
