@@ -4,7 +4,10 @@
 //! shared, and paths are validated on both directions of the boundary. Every
 //! test uses a temporary repository; nothing on disk changes.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 
 use butterflow_execution_bridge::{
     jssg::{transform_batch, Batch, Edit, FileOutcome},
@@ -130,6 +133,38 @@ fn write(dir: &Path, relative: &str, content: &str) -> PathBuf {
 
 fn read(dir: &Path, relative: &str) -> String {
     std::fs::read_to_string(dir.join(relative)).expect("read")
+}
+
+#[tokio::test]
+#[ignore = "manual performance benchmark"]
+async fn benchmark_quickjs_batch_startup() {
+    let paths: Vec<_> = (0..100).map(|index| format!("src/{index}.ts")).collect();
+    let files: Vec<_> = paths
+        .iter()
+        .map(|path| (path.as_str(), "const value = 1;\n"))
+        .collect();
+    let fixture = Fixture::new(
+        "export default function transform() { return null; }",
+        &files,
+    );
+
+    fixture.run().await.expect("warmup");
+    let mut samples = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let started = Instant::now();
+        fixture.run().await.expect("benchmark batch");
+        samples.push(started.elapsed());
+    }
+
+    let total: Duration = samples.iter().sum();
+    eprintln!(
+        "jssg-batch files=100 samples_us={:?} mean_us={}",
+        samples
+            .iter()
+            .map(|sample| sample.as_micros())
+            .collect::<Vec<_>>(),
+        total.as_micros() / samples.len() as u128
+    );
 }
 
 fn edit(path: &str, content: &str, rename_to: Option<&str>) -> Edit {
