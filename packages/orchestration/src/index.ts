@@ -1,29 +1,36 @@
-export { ai, exec, isRunnable, jssg } from "./runnable.ts";
+export { ai, isRunnable, jssg, shell } from "./authoring/runnable.ts";
 export type {
   AiRunnable,
-  ExecOutput,
-  ExecRunnable,
   InputOf,
   JssgOptions,
   JssgRunnable,
   OperationKind,
   OutputOf,
   Runnable,
-} from "./runnable.ts";
+  ShellOutput,
+  ShellRunnable,
+} from "./authoring/runnable.ts";
 export type {
   JssgLanguages,
   JssgSelector,
   JssgTransform,
   JssgTransformResult,
   JssgTypes,
-} from "./transform.ts";
-export { BuildError, buildFile, buildModule, loadWorkflow } from "./build.ts";
-export type { ArtifactStore, BuiltModule, JssgArtifact, LoadedWorkflow } from "./build.ts";
-export { isCommand } from "./command.ts";
-export type { Command, Invocation, JssgInvocation } from "./command.ts";
-export { NoActiveWorkflowError } from "./context.ts";
-export { normalizeTarget } from "./target.ts";
-export { isExecutable, isParallel, isSequence, parallel, sequence } from "./composition.ts";
+} from "./authoring/transform.ts";
+export { BuildError, buildFile, buildModule, loadWorkflow } from "./bundle/build.ts";
+export type { ArtifactStore, BuiltModule, JssgArtifact, LoadedWorkflow } from "./bundle/build.ts";
+export { isCommand } from "./authoring/command.ts";
+export type { Command, Invocation, JssgInvocation } from "./authoring/command.ts";
+export { NoActiveRunError } from "./authoring/context.ts";
+export { normalizeTarget } from "./authoring/target.ts";
+export {
+  executableRequiresInput,
+  isExecutable,
+  isParallel,
+  isSequence,
+  parallel,
+  sequence,
+} from "./authoring/composition.ts";
 export type {
   CompositionIr,
   CompositionIrNode,
@@ -37,16 +44,16 @@ export type {
   Stage,
   StageInput,
   StageOutput,
-  WorkflowIr,
-} from "./composition.ts";
-export { workflow } from "./workflow-node.ts";
-export type { Awaitable, Workflow } from "./workflow-node.ts";
-export { run } from "./workflow.ts";
-export type { RunOptions, RunResult } from "./workflow.ts";
-export { guard, SchemaError } from "./schema.ts";
-export type { InferOutput, StandardSchemaV1 } from "./schema.ts";
-export { canonicalJson } from "./json.ts";
-export type { Json } from "./json.ts";
+  DynamicIr,
+} from "./authoring/composition.ts";
+export { dynamic } from "./authoring/dynamic.ts";
+export type { Awaitable, Dynamic } from "./authoring/dynamic.ts";
+export { run } from "./runtime/run.ts";
+export type { RootInput, RunOptions, RunResult, RunSettings } from "./runtime/run.ts";
+export { guard, SchemaError } from "./authoring/schema.ts";
+export type { InferOutput, StandardSchemaV1 } from "./authoring/schema.ts";
+export { canonicalJson } from "./core/json.ts";
+export type { Json } from "./core/json.ts";
 export {
   PROTOCOL_VERSION,
   isArtifactRef,
@@ -58,7 +65,7 @@ export {
   isSelector,
   isTarget,
   parseCompletion,
-} from "./protocol.ts";
+} from "./core/protocol.ts";
 export type {
   AiOperation,
   ArtifactRef,
@@ -66,7 +73,7 @@ export type {
   CompletionError,
   CompletionStatus,
   Edit,
-  ExecOperation,
+  ShellOperation,
   FileOutcome,
   JssgOperation,
   Operation,
@@ -76,29 +83,29 @@ export type {
   Selector,
   SemanticAnalysis,
   Target,
-} from "./protocol.ts";
-export { PathEscapeError, isSafeRelativePath, resolveInsideRoot } from "./paths.ts";
+} from "./core/protocol.ts";
+export { PathEscapeError, isSafeRelativePath, resolveInsideRoot } from "./core/paths.ts";
 export {
   comparePaths,
   discoverGlobalExcludesPath,
   languageExtensions,
   selectFiles,
-} from "./files.ts";
-export type { Selection } from "./files.ts";
-export { spawnBridge } from "./bridge.ts";
-export type { BridgeProcessOptions } from "./bridge.ts";
-export { executeJssg } from "./jssg.ts";
-export type { JssgExecutionOptions } from "./jssg.ts";
+} from "./execution/files.ts";
+export type { Selection } from "./execution/files.ts";
+export { spawnBridge } from "./execution/bridge.ts";
+export type { BridgeProcessOptions } from "./execution/bridge.ts";
+export { executeJssg } from "./execution/jssg.ts";
+export type { JssgExecutionOptions } from "./execution/jssg.ts";
 export {
   MemoryHistoryStore,
   emptyHistory,
   scheduledCommands,
   completions,
   finalOutput,
-} from "./history.ts";
-export type { History, HistoryEvent, HistoryStore, ScheduledCommand } from "./history.ts";
-export { BridgeExecutor } from "./executor.ts";
-export type { BridgeOptions, OperationExecutor } from "./executor.ts";
+} from "./core/history.ts";
+export type { History, HistoryEvent, HistoryStore, ScheduledCommand } from "./core/history.ts";
+export { BridgeExecutor } from "./execution/executor.ts";
+export type { BridgeOptions, OperationExecutor } from "./execution/executor.ts";
 export {
   AdmissionScheduler,
   CAPACITY_ENV,
@@ -107,18 +114,18 @@ export {
   defaultCapacity,
   nodeHost,
   weightOf,
-} from "./scheduler.ts";
+} from "./execution/scheduler.ts";
 export type {
   OperationWeights,
   Permit,
   SchedulerHost,
   SchedulerOptions,
   SchedulerStats,
-} from "./scheduler.ts";
-export { ReplayGate } from "./gate.ts";
-export type { CommandGate } from "./gate.ts";
-export { CollectingSink, nullSink } from "./events.ts";
-export type { EventSink, WorkflowEvent } from "./events.ts";
+} from "./execution/scheduler.ts";
+export { ReplayGate } from "./runtime/gate.ts";
+export type { CommandGate } from "./runtime/gate.ts";
+export { CollectingSink, nullSink } from "./core/events.ts";
+export type { EventSink, RunEvent } from "./core/events.ts";
 export {
   DuplicateCommandIdError,
   InvocationError,
@@ -126,5 +133,5 @@ export {
   OperationError,
   CompositionValidationError,
   TargetValidationError,
-} from "./errors.ts";
-export type { NondeterminismKind } from "./errors.ts";
+} from "./core/errors.ts";
+export type { NondeterminismKind } from "./core/errors.ts";

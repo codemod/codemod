@@ -1,6 +1,6 @@
 /**
  * Cross-language tests against the real Rust binary
- * (`butterflow-execution-bridge`): `exec` through butterflow_runners::DirectRunner
+ * (`butterflow-execution-bridge`): `shell` through butterflow_runners::DirectRunner
  * and JSSG through the TypeScript orchestrator around one batch process,
  * with transforms bundled by the build step.
  *
@@ -30,12 +30,12 @@ import {
   MemoryHistoryStore,
   OperationError,
   buildFile,
-  exec,
+  shell,
   guard,
   jssg,
   parallel,
   run,
-  workflow,
+  dynamic,
   type JssgArtifact,
   type JssgOptions,
   type OperationCompletion,
@@ -61,19 +61,19 @@ const Runs = guard(
   "Runs",
   (v: unknown): v is { runs: number } => typeof v === "object" && v !== null,
 );
-const touch = exec({
+const touch = shell({
   name: "touch",
   command: `echo run >> marker.txt && printf '{"runs":%s}' "$(grep -c run marker.txt)"`,
   output: Runs,
 });
-const failing = exec({ name: "failing", command: "echo boom >&2; exit 3" });
-const envEcho = exec({
+const failing = shell({ name: "failing", command: "echo boom >&2; exit 3" });
+const envEcho = shell({
   name: "env",
   command: "printf '%s' \"$BRIDGE_TEST\"",
   env: { BRIDGE_TEST: "from-request" },
 });
 
-const wf = workflow(async () => {
+const wf = dynamic(async () => {
   const first = await touch();
   const env = await envEcho();
   let failure = "";
@@ -155,7 +155,7 @@ function expectMigrated(target: string, stdout: string): void {
 describe("local TypeScript JSSG workflow end-to-end", () => {
   it("bundles the inline transform with its helpers, intersects targets, writes edits, and aggregates output", () => {
     const target = seedRepository();
-    const workflowPath = join(fixtures, "workflow.ts");
+    const workflowPath = join(fixtures, "dynamic.ts");
 
     try {
       const result = spawnSync(
@@ -210,7 +210,7 @@ describe("local TypeScript JSSG workflow end-to-end", () => {
     cpSync(join(fixtures, "format.ts"), join(consumer, "format.ts"));
     writeFileSync(
       join(consumer, "workflow.ts"),
-      `import { jssg, workflow } from "@codemod.com/orchestration";
+      `import { dynamic, jssg } from "@codemod.com/orchestration";
 import { migrateText, posixPath } from "./helpers.ts";
 const migrate = jssg({
   name: "migrate",
@@ -220,7 +220,7 @@ const migrate = jssg({
     return { content: migrateText(root.root().text()), output: { file: posixPath(root.relativeFilename()) } };
   },
 });
-export default workflow(() =>
+export default dynamic(() =>
   migrate({ target: { include: ["src/**"], exclude: ["**/*.generated.ts"] } }),
 );
 `,
@@ -291,7 +291,7 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     const events = new CollectingSink();
     const executor = new BridgeExecutor({ bin, cwd: repo, artifacts, events });
     const command = jssg({ ...definition, transform: built(definition.transform) });
-    const body = workflow(() => command(invocation));
+    const body = dynamic(() => command(invocation));
     const history = options.history ?? new MemoryHistoryStore();
     let output: unknown;
     let error: unknown;
@@ -314,7 +314,7 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
     const executor = new BridgeExecutor({ bin, cwd: repo, artifacts, events });
     const replace = jssg({ name: "replace", transform: built("replace"), language: "typescript" });
     const { output } = await run(
-      workflow(() =>
+      dynamic(() =>
         parallel(
           ["alpha", "beta", "gamma"].map((area) => replace({ id: area, target: { root: area } })),
         ),
@@ -507,7 +507,7 @@ describe("TypeScript JSSG orchestration around one Rust batch process", () => {
       const inner = new BridgeExecutor({ bin, cwd: repo, artifacts: rebuilt });
       const command = jssg({ name: "t", transform: built("replace"), language: "typescript" });
       const second = await run(
-        workflow(() => command({ target: { root: "src" } })),
+        dynamic(() => command({ target: { root: "src" } })),
         {
           executor: {
             execute(request, signal) {

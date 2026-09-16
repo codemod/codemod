@@ -2,26 +2,26 @@
  * Test harness: scripted completions, run/replay, and inspection helpers.
  * Exercises only the public runtime API.
  */
-import { CollectingSink } from "./events.ts";
-import type { OperationExecutor } from "./executor.ts";
+import { CollectingSink } from "../core/events.ts";
+import type { OperationExecutor } from "../execution/executor.ts";
 import {
   MemoryHistoryStore,
   completions,
   scheduledCommands,
   type History,
   type ScheduledCommand,
-} from "./history.ts";
-import type { Json } from "./json.ts";
+} from "../core/history.ts";
+import type { Json } from "../core/json.ts";
 import {
   PROTOCOL_VERSION,
   type CompletionError,
   type CompletionStatus,
   type OperationCompletion,
   type OperationRequest,
-} from "./protocol.ts";
-import type { AdmissionScheduler } from "./scheduler.ts";
-import type { Executable, ExecutableOutput, StageInput } from "./composition.ts";
-import { run, type RunResult } from "./workflow.ts";
+} from "../core/protocol.ts";
+import type { AdmissionScheduler } from "../execution/scheduler.ts";
+import type { Executable, ExecutableOutput, StageInput } from "../authoring/composition.ts";
+import { run, type RunOptions, type RunResult } from "../runtime/run.ts";
 
 export class Outcome {
   constructor(
@@ -38,7 +38,7 @@ export const unknown = (message = "scripted unknown outcome"): Outcome =>
   new Outcome("unknown", { message });
 
 /**
- * A plain value succeeds. For exec runnables, non-string values are
+ * A plain value succeeds. For shell runnables, non-string values are
  * JSON-encoded into stdout. A function may return a promise, which is how
  * tests hold an operation open while others queue behind it.
  */
@@ -64,13 +64,23 @@ export interface HarnessRun<R> extends RunResult<R> {
   completions: Map<string, OperationCompletion>;
 }
 
+/**
+ * Per-run options: the root input, required exactly when the root declares
+ * one (see `RootInput`), so `h.run(noInput)` and `h.run(needsInput, { input })`
+ * both typecheck and `h.run(needsInput)` does not.
+ */
+export type HarnessRunArgs<I> = undefined extends I
+  ? [options?: { input?: I }]
+  : [options: { input: I }];
+
 export interface Harness {
   /** Requests that actually reached the executor (never populated by replay). */
   readonly executed: OperationRequest[];
   readonly store: MemoryHistoryStore;
   readonly events: CollectingSink;
   run<T extends Executable>(
-    executable: T & (undefined extends StageInput<T> ? unknown : never),
+    executable: T,
+    ...args: HarnessRunArgs<StageInput<T>>
   ): Promise<HarnessRun<ExecutableOutput<T>>>;
   serialize(): string;
   /** A fresh harness that starts from this harness's serialized history. */
@@ -95,16 +105,18 @@ export function createHarness(options: HarnessOptions = {}): Harness {
     executed,
     store,
     events,
-    async run<T extends Executable>(
-      executable: T & (undefined extends StageInput<T> ? unknown : never),
-    ) {
+    async run<T extends Executable>(executable: T, ...args: HarnessRunArgs<StageInput<T>>) {
+      const [runOptions] = args as [{ input?: unknown }?];
       const result = await run<T>(executable, {
         executor,
         history: store,
         events,
         ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
-      });
+        ...(runOptions === undefined || !("input" in runOptions)
+          ? {}
+          : { input: runOptions.input }),
+      } as RunOptions<StageInput<T>>);
       return {
         ...result,
         commands: scheduledCommands(result.history),
@@ -130,7 +142,7 @@ function script(
 function toCompletion(request: OperationRequest, value: Json | Outcome): OperationCompletion {
   const base = { protocolVersion: PROTOCOL_VERSION, commandId: request.commandId } as const;
   if (value instanceof Outcome) return { ...base, status: value.status, error: value.error };
-  if (request.operation.kind === "exec") {
+  if (request.operation.kind === "shell") {
     const stdout = typeof value === "string" ? value : JSON.stringify(value);
     return { ...base, status: "succeeded", output: { stdout } };
   }

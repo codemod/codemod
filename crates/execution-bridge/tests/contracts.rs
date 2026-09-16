@@ -5,7 +5,7 @@
 //!   include/exclude globs, as `CodemodExecutionConfig::build_globs` wires
 //!   them) must select exactly `expected`; `tests/files.test.ts` runs the
 //!   TypeScript walker against the same cases.
-//! - `packages/orchestration/src/languages.json`: the language-extension
+//! - `packages/orchestration/src/execution/languages.json`: the language-extension
 //!   table TypeScript uses for definitions without `include` must equal the
 //!   engine's `create_language_extension_map`.
 
@@ -93,7 +93,7 @@ fn engine_walker_matches_the_shared_contract() {
 
 #[test]
 fn language_extensions_match_the_engine_table() {
-    let text = std::fs::read_to_string(format!("{ORCHESTRATION}/src/languages.json"))
+    let text = std::fs::read_to_string(format!("{ORCHESTRATION}/src/execution/languages.json"))
         .expect("languages.json");
     let fixture: BTreeMap<String, Vec<String>> =
         serde_json::from_str(&text).expect("languages.json parses");

@@ -27,12 +27,12 @@ fn run_bridge(dir: &Path, request: &str) -> (i32, Option<OperationCompletion>) {
 
 #[cfg(unix)]
 #[test]
-fn exec_writes_a_succeeded_completion() {
+fn shell_writes_a_succeeded_completion() {
     let dir = tempfile::tempdir().expect("tempdir");
     let request = json!({
         "protocolVersion": PROTOCOL_VERSION,
         "commandId": "hello",
-        "operation": { "kind": "exec", "command": "printf ok" },
+        "operation": { "kind": "shell", "command": "printf ok" },
     });
     let (code, completion) = run_bridge(dir.path(), &request.to_string());
     let completion = completion.expect("response written");
@@ -88,7 +88,7 @@ fn jssg_transforms_the_supplied_files_and_writes_nothing() {
 fn malformed_requests_and_wrong_arguments_exit_nonzero() {
     let dir = tempfile::tempdir().expect("tempdir");
     let request =
-        r#"{"protocolVersion":7,"commandId":"bad","operation":{"kind":"exec","command":"true"}}"#;
+        r#"{"protocolVersion":7,"commandId":"bad","operation":{"kind":"shell","command":"true"}}"#;
     let (code, completion) = run_bridge(dir.path(), request);
     let completion = completion.expect("error response written");
     assert_eq!(code, 3);

@@ -1,26 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { createHarness, failed } from "../src/harness.ts";
-import { NondeterminismError, exec, workflow, type Workflow } from "../src/index.ts";
+import { createHarness, failed } from "../src/host/harness.ts";
+import { NondeterminismError, shell, dynamic, type Dynamic } from "../src/index.ts";
 
-const a = exec({ name: "a", command: "a" });
-const b = exec({ name: "b", command: "b" });
-const c = exec({ name: "c", command: "c" });
-const x = exec({ name: "x", command: "x" });
+const a = shell({ name: "a", command: "a" });
+const b = shell({ name: "b", command: "b" });
+const c = shell({ name: "c", command: "c" });
+const x = shell({ name: "x", command: "x" });
 
 const sequence = (...steps: (typeof a)[]) =>
-  workflow(async () => {
+  dynamic(async () => {
     for (const step of steps) await step();
     return steps.map((s) => s.name).join("");
   });
 
-async function recorded(wf: Workflow<void, unknown>, finalize = true) {
+async function recorded(wf: Dynamic<void, unknown>, finalize = true) {
   const h = createHarness({ fallback: () => "ok" });
   if (finalize) {
     await h.run(wf);
     return h;
   }
   // Record commands but stop before finalization by throwing from the body.
-  const partial = workflow(async () => {
+  const partial = dynamic(async () => {
     await wf.body(undefined);
     throw new Error("crash before finalize");
   });
@@ -28,7 +28,7 @@ async function recorded(wf: Workflow<void, unknown>, finalize = true) {
   return h;
 }
 
-async function replayError(wf: Workflow<void, unknown>, h: Awaited<ReturnType<typeof recorded>>) {
+async function replayError(wf: Dynamic<void, unknown>, h: Awaited<ReturnType<typeof recorded>>) {
   const replay = h.reload({ fallback: () => failed("must not execute") });
   const error = await replay.run(wf).catch((e: unknown) => e);
   expect(error).toBeInstanceOf(NondeterminismError);
@@ -39,7 +39,7 @@ async function replayError(wf: Workflow<void, unknown>, h: Awaited<ReturnType<ty
 describe("replay nondeterminism detection", () => {
   it("detects a changed command with the same id", async () => {
     const h = await recorded(sequence(a, b));
-    const aChanged = exec({ name: "a", command: "a --different" });
+    const aChanged = shell({ name: "a", command: "a --different" });
     const error = await replayError(sequence(aChanged, b), h);
     expect(error.kind).toBe("changed");
     expect(error.detail).toMatchObject({ position: 0, expectedId: "a", actualId: "a" });
@@ -89,7 +89,7 @@ describe("replay nondeterminism detection", () => {
 
   it("detects a different final output", async () => {
     const h = await recorded(sequence(a, b));
-    const differentOutput = workflow(async () => {
+    const differentOutput = dynamic(async () => {
       await a();
       await b();
       return "something else";

@@ -291,7 +291,7 @@ fn canonical_dir(value: Option<&str>, name: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-/// Same rules as `isSafeRelativePath` in `packages/orchestration/src/paths.ts`:
+/// Same rules as `isSafeRelativePath` in `packages/orchestration/src/core/paths.ts`:
 /// non-empty, not absolute on any platform (`/x`, `\x`, `C:\x`), and no `..`
 /// segment. A `..` inside a name such as `foo..bar` is allowed.
 pub fn validate_relative_path(value: &str, name: &str) -> Result<(), String> {

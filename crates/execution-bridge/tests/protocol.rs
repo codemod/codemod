@@ -1,5 +1,5 @@
-//! The wire contract shared with `packages/orchestration/src/protocol.ts`:
-//! the JSON fixtures both sides check, strict decoding, and `exec` through
+//! The wire contract shared with `packages/orchestration/src/core/protocol.ts`:
+//! the JSON fixtures both sides check, strict decoding, and `shell` through
 //! the real `DirectRunner`.
 
 use std::path::Path;
@@ -37,7 +37,7 @@ fn jssg(extra: &str) -> String {
 #[test]
 fn fixtures_round_trip_to_identical_json() {
     for name in [
-        "exec-request.json",
+        "shell-request.json",
         "jssg-request.json",
         "jssg-target-request.json",
     ] {
@@ -156,7 +156,11 @@ fn decoding_is_strict() {
     let cases = [
         // (request body, expected error fragment)
         (
-            request(r#"{"kind":"exec","command":"true","target":{"root":"apps"}}"#),
+            request(r#"{"kind":"exec","command":"true"}"#),
+            "unknown variant `exec`",
+        ),
+        (
+            request(r#"{"kind":"shell","command":"true","target":{"root":"apps"}}"#),
             "unknown field `target`",
         ),
         (
@@ -164,7 +168,7 @@ fn decoding_is_strict() {
             "unknown field `target`",
         ),
         (
-            request(r#"{"kind":"exec","command":"true","package":"p"}"#),
+            request(r#"{"kind":"shell","command":"true","package":"p"}"#),
             "unknown field",
         ),
         (request(&jssg(r#","command":"true""#)), "unknown field"),
@@ -212,33 +216,33 @@ fn decoding_is_strict() {
             "invalid request JSON",
         ),
         (
-            request(r#"{"kind":"exec","command":"true"}"#)
+            request(r#"{"kind":"shell","command":"true"}"#)
                 .replace(r#""commandId""#, r#""cwd":"/","commandId""#),
             "unknown field `cwd`",
         ),
         (
-            request(r#"{"kind":"exec","command":"true"}"#).replace(
+            request(r#"{"kind":"shell","command":"true"}"#).replace(
                 r#""commandId":"t""#,
                 r#""commandId":"t","context":{"scriptRoot":"/w"}"#,
             ),
             "unknown field `scriptRoot`",
         ),
         (
-            request(r#"{"kind":"exec","command":"true"}"#).replace(
+            request(r#"{"kind":"shell","command":"true"}"#).replace(
                 r#""commandId":"t""#,
                 r#""commandId":"t","context":{"artifact":{"source":"x","hash":"h"}}"#,
             ),
             "unknown field `hash`",
         ),
         (
-            request(r#"{"kind":"exec","command":"true"}"#).replace(
+            request(r#"{"kind":"shell","command":"true"}"#).replace(
                 r#""commandId":"t""#,
                 r#""commandId":"t","context":{"files":[{"path":"a","content":"","mode":1}]}"#,
             ),
             "unknown field `mode`",
         ),
         (
-            fixture("exec-request.json").replace(
+            fixture("shell-request.json").replace(
                 &format!("\"protocolVersion\": {PROTOCOL_VERSION}"),
                 "\"protocolVersion\": 99",
             ),
@@ -297,7 +301,7 @@ async fn ai_is_refused() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn exec_runs_through_direct_runner() {
+async fn shell_runs_through_direct_runner() {
     // (command, env, expected status, expected stdout / error output, exit code)
     let cases = [
         (
@@ -335,7 +339,7 @@ async fn exec_runs_through_direct_runner() {
             format!(r#","env":{{"BRIDGE_TEST":"{value}"}}"#)
         });
         let request = parse_request(&request(&format!(
-            r#"{{"kind":"exec","command":{}{env}}}"#,
+            r#"{{"kind":"shell","command":{}{env}}}"#,
             Value::String(command.to_string())
         )))
         .expect("parse");

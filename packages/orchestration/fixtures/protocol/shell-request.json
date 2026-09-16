@@ -1,8 +1,8 @@
 {
-  "protocolVersion": 5,
+  "protocolVersion": 6,
   "commandId": "inspect",
   "operation": {
-    "kind": "exec",
+    "kind": "shell",
     "command": "printf '{\"needsMigration\":true}'",
     "env": {
       "CI": "1"

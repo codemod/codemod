@@ -5,10 +5,14 @@
  */
 import { resolve } from "node:path";
 import { spawnBridge } from "./bridge.ts";
-import type { ArtifactStore } from "./build.ts";
-import type { EventSink } from "./events.ts";
+import type { ArtifactStore } from "../bundle/build.ts";
+import type { EventSink } from "../core/events.ts";
 import { executeJssg } from "./jssg.ts";
-import { PROTOCOL_VERSION, type OperationCompletion, type OperationRequest } from "./protocol.ts";
+import {
+  PROTOCOL_VERSION,
+  type OperationCompletion,
+  type OperationRequest,
+} from "../core/protocol.ts";
 
 export interface OperationExecutor {
   /** `signal` aborts the operation; the completion is then `cancelled` or `unknown`. */
@@ -18,7 +22,7 @@ export interface OperationExecutor {
 export interface BridgeOptions {
   /** Path to the `butterflow-execution-bridge` binary (cargo build -p butterflow-execution-bridge). */
   bin: string;
-  /** Working directory: where `exec` runs and the repository root for JSSG targets. */
+  /** Working directory: where `shell` runs and the repository root for JSSG targets. */
   cwd?: string;
   /**
    * Built transform artifacts by hash, as `loadWorkflow()` collects them.
@@ -33,7 +37,7 @@ export interface BridgeOptions {
 }
 
 /**
- * `exec`: one bridge process through `butterflow_runners::DirectRunner`.
+ * `shell`: one bridge process through `butterflow_runners::DirectRunner`.
  * `jssg`: the TypeScript orchestrator in `jssg.ts` around one bridge process.
  * `ai`: refused. Only this trusted host process spawns anything; workflow
  * code never can.
@@ -51,7 +55,7 @@ export class BridgeExecutor implements OperationExecutor {
     const { bin, cwd } = this;
     const { artifacts, env, events } = this.options;
     switch (request.operation.kind) {
-      case "exec":
+      case "shell":
         return spawnBridge({ bin, cwd, env, events }, request, signal);
       case "jssg":
         return executeJssg({

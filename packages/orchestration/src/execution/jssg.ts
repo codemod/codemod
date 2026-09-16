@@ -20,11 +20,11 @@
 import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { spawnBridge } from "./bridge.ts";
-import type { ArtifactStore } from "./build.ts";
-import type { EventSink } from "./events.ts";
+import type { ArtifactStore } from "../bundle/build.ts";
+import type { EventSink } from "../core/events.ts";
 import { comparePaths, selectFiles } from "./files.ts";
-import type { Json } from "./json.ts";
-import { lexists, resolveInsideRoot } from "./paths.ts";
+import type { Json } from "../core/json.ts";
+import { lexists, resolveInsideRoot } from "../core/paths.ts";
 import {
   PROTOCOL_VERSION,
   isFileOutcomes,
@@ -34,7 +34,7 @@ import {
   type FileOutcome,
   type JssgOperation,
   type OperationCompletion,
-} from "./protocol.ts";
+} from "../core/protocol.ts";
 
 export interface JssgExecutionOptions {
   bin: string;

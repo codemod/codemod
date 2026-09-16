@@ -1,6 +1,6 @@
 /**
  * Author-facing typing of an inline JSSG transform. Type-only: the runtime
- * never sees a transform function (see `build.ts`), so nothing here executes.
+ * never sees a transform function (see `bundle/build.ts`), so nothing here executes.
  *
  * `language` selects the ast-grep node types the transform sees, exactly as
  * `import type TSX from "codemod:ast-grep/langs/tsx"` does in a standalone
@@ -36,7 +36,7 @@ import type {
   TypesMap,
 } from "@codemod.com/jssg-types/main";
 
-/** Engine language names (`src/languages.json`) with a published type map. */
+/** Engine language names (`src/execution/languages.json`) with a published type map. */
 export interface JssgLanguages {
   angular: Angular;
   c: C;

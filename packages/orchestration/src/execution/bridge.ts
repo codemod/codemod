@@ -8,18 +8,18 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { nullSink, type EventSink } from "./events.ts";
+import { nullSink, type EventSink } from "../core/events.ts";
 import {
   PROTOCOL_VERSION,
   parseCompletion,
   type OperationCompletion,
   type OperationRequest,
-} from "./protocol.ts";
+} from "../core/protocol.ts";
 
 export interface BridgeProcessOptions {
   /** Absolute path to the bridge binary. */
   bin: string;
-  /** Working directory of the bridge process (where `exec` runs). */
+  /** Working directory of the bridge process (where `shell` runs). */
   cwd: string;
   env?: Record<string, string>;
   events?: EventSink;

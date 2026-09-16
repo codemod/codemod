@@ -31,7 +31,7 @@ Today:     workflow.yaml -> Rust graph and scheduler -> existing runners
 Proposed:  TypeScript composition or workflow -> command history -> existing runners
 ```
 
-A runnable is a typed description of one operation. `jssg()`, `exec()`, and
+A runnable is a typed description of one operation. `jssg()`, `shell()`, and
 `ai()` define runnables. Invoking a runnable, `inspect()` or
 `migrate({ input, target, id })`, creates a lazy command: plain data that a
 static composition can hold, and that executes when a workflow awaits it. The
@@ -39,18 +39,18 @@ runtime executing the body is what an awaited command reaches.
 
 | Current workflow concept | Proposed TypeScript form |
 | --- | --- |
-| `run` action | `exec()` |
+| `run` action | `shell()` |
 | JSSG or AI action | `jssg()` or `ai()` |
 | fixed sequence and data flow | `sequence()` |
 | independent work | `parallel()` |
-| condition based on an earlier result | normal `if` inside `workflow()` |
+| condition based on an earlier result | normal `if` inside `dynamic()` |
 | workflow-state handoff | operation return value passed as input |
 | nested codemod | imported runnable used in static composition or a workflow |
 | per-step `base_path`, `include`, `exclude` | `{ target }` on a JSSG invocation |
 | `shard` step and `max_threads` | automatic scheduler behavior, no public helper |
 
 The prototype defines all three operation shapes. The Rust bridge executes
-`exec()` and inline JSSG transforms that a build step has bundled; AI results
+`shell()` and inline JSSG transforms that a build step has bundled; AI results
 remain scripted in tests.
 
 ### Single JSSG leaf
@@ -84,7 +84,7 @@ transform runs is chosen by the caller through the invocation's `target` (see
 Targeting below). Scheduling controls such as the current YAML `max_threads`
 do not belong on a JSSG definition.
 
-The prototype currently runs operations inside static composition or `workflow()`. Direct
+The prototype currently runs operations inside static composition or `dynamic()`. Direct
 leaf exports remain proposed; applicability fields, the static selector, and
 inline transform execution are implemented.
 
@@ -93,10 +93,10 @@ inline transform execution are implemented.
 Use typed operations as the common unit and provide three composable forms:
 
 - `sequence(...)` is a static graph node that passes each output to the next
-  stage and returns the final output. A bound command ignores flowing input.
+  stage and returns the final output. An invocation with explicit `input` ignores flowing input.
 - `parallel(...)` is a static graph node that gives every member the same input
   and returns their outputs as a declaration-order tuple.
-- `workflow(...)` explicitly marks arbitrary TypeScript for dynamic control
+- `dynamic(...)` explicitly marks arbitrary TypeScript for dynamic control
   flow or data computation. Raw functions are not composition stages.
 
 Both static nodes can be reimplemented with promises inside a workflow. Their
@@ -122,7 +122,7 @@ turn a fixed bundle into a normal sequence:
 import renameApi from "@codemod/rename-api";
 import updateImports from "@codemod/update-imports";
 
-const format = exec({ name: "format", command: "npm run format" });
+const format = shell({ name: "format", command: "npm run format" });
 
 export default sequence(renameApi(), updateImports(), format());
 ```
@@ -136,7 +136,7 @@ Eleven current packages combine shell commands with AI or JSSG actions. When the
 depends on command output, a workflow passes the typed result directly:
 
 ```ts
-const inspect = exec({ name: "inspect", command: "node inspect.js", output: Project });
+const inspect = shell({ name: "inspect", command: "node inspect.js", output: Project });
 const migrate = jssg({
   name: "migrate",
   language: "tsx",
@@ -148,7 +148,7 @@ const migrate = jssg({
   },
 });
 
-export default workflow(async () => {
+export default dynamic(async () => {
   const project = await inspect();
   if (!project.needsMigration) return { migrated: 0 };
   return migrate({ input: project });
@@ -157,7 +157,7 @@ export default workflow(async () => {
 
 A command returned from the body is awaited by the runtime before the workflow
 finalizes, so the last step needs no `await`. When the structure is fixed and
-has no branch, the same handoff is `sequence(inspect, migrate)`.
+has no branch, the same handoff is `sequence(inspect(), migrate())`.
 
 ### Fixed parallel audit
 
@@ -165,11 +165,11 @@ Forty-four current workflows are parallel graphs with no dependencies. An
 explicit group tells the scheduler that no member depends on another:
 
 ```ts
-const todos = exec({ name: "todos", command: "rg -c TODO" });
-const fixmes = exec({ name: "fixmes", command: "rg -c FIXME" });
-const format = exec({ name: "format", command: "npm run format" });
+const todos = shell({ name: "todos", command: "rg -c TODO" });
+const fixmes = shell({ name: "fixmes", command: "rg -c FIXME" });
+const format = shell({ name: "format", command: "npm run format" });
 
-export default sequence(parallel(todos, fixmes), format());
+export default sequence(parallel(todos(), fixmes()), format());
 ```
 
 `parallel()` is an author assertion, not an inferred effect check. Runnables do
@@ -182,7 +182,7 @@ Writable JSSG transforms can also be independent. The future scheduler can
 pipeline them without increasing the global worker limit:
 
 ```ts
-export default parallel(transformA, transformB, transformC);
+export default parallel(transformA(), transformB(), transformC());
 ```
 
 `sequence(transformA(), transformB(), transformC())` places a global barrier after each
@@ -220,7 +220,7 @@ The scheduler sits at the execution boundary rather than inside `parallel()`,
 so sequences, procedural workflows, and dynamically built groups are all bounded by
 one budget, and a future Rust executor inherits the same seam. It is a weighted
 semaphore with a strict FIFO queue. Weights charge a JSSG batch more than an
-`exec` because it reads and holds the whole selected file set, and charge a
+`shell` because it reads and holds the whole selected file set, and charge a
 workspace-semantic batch more again because the bridge also parses and indexes
 that set as one workspace. Capacity is derived from `availableParallelism()`
 and host memory and never exceeds the available CPU count. On a host whose
@@ -250,7 +250,7 @@ Today each YAML JSSG step carries its own `base_path`, `include`, and
 `exclude`. In the proposed API that selection is data on the JSSG invocation
 itself. There is no generic `target()`, `scope()`, `within()`, or `shard()`
 wrapper: only a JSSG adapter can enumerate and enforce a file set, so only a
-JSSG invocation accepts one. `exec` runs a whole command and `ai` has no file
+JSSG invocation accepts one. `shell` runs a whole command and `ai` has no file
 set, and neither accepts target metadata.
 
 A target is a small plain object that can be shared between invocations:
@@ -263,13 +263,13 @@ const web = { root: "apps/web", include: ["src/**"], exclude: ["**/generated/**"
 globs relative to `root`. Every field is optional, but an empty target is
 rejected because it would look like a narrowing while selecting everything.
 
-A static sequence gives the same target to two JSSG steps and none to `exec`:
+A static sequence gives the same target to two JSSG steps and none to `shell`:
 
 ```ts
 import renameApi from "@codemod/rename-api";
 import updateImports from "@codemod/update-imports";
 
-const format = exec({ name: "format", command: "npm run format" });
+const format = shell({ name: "format", command: "npm run format" });
 
 export default sequence(renameApi({ target: web }), updateImports({ target: web }), format());
 ```
@@ -278,7 +278,7 @@ A dynamic workflow targets one invocation per discovered package, with an
 explicit id because the same definition runs repeatedly:
 
 ```ts
-export default workflow(async () => {
+export default dynamic(async () => {
   const project = await inspect();
   for (const pkg of project.packages) {
     await migrate({ input: project, target: { root: pkg.path }, id: `migrate:${pkg.name}` });
@@ -317,7 +317,7 @@ The rules that make this coherent:
   two selections, not for two workers; the scheduler may still run them on one.
 
 What the prototype implements: every example above runs as written. A JSSG
-invocation takes `{ input?, target?, id? }`; `exec` and `ai` invocations take
+invocation takes `{ input?, target?, id? }`; `shell` and `ai` invocations take
 `{ input?, id? }` and throw `TargetValidationError` when given a `target`, so a
 target is never silently dropped. The target is validated and normalized when
 the command is created (relative root without `..`, non-empty pattern lists, no
@@ -330,7 +330,7 @@ checks the returned edits for cross-file conflicts, commits all edits only
 after every transform succeeded, and returns the per-file structured outputs
 in that order.
 
-What the prototype does not implement: `exec` still runs in the executor's
+What the prototype does not implement: `shell` still runs in the executor's
 working directory with no file list, a transform's own `fs` access is limited
 to the target root rather than to the enumerated set, and there is no
 file-target scheduler, per-file locking, or parallel file execution.
@@ -343,13 +343,13 @@ findings. Here each operation returns data, then one writer receives
 the combined list:
 
 ```ts
-const discover = exec({
+const discover = shell({
   name: "discover",
   command: "node discover-packages.js",
   output: Packages,
 });
 
-const inspectPackage = exec({
+const inspectPackage = shell({
   name: "inspect-package",
   input: Package,
   output: Report,
@@ -366,7 +366,7 @@ const writeReport = jssg({
   transform: (root, options) => renderReport(root, options.params.input),
 });
 
-export default workflow(async () => {
+export default dynamic(async () => {
   const packages = await discover();
   const reports = await parallel(
     packages.map((pkg) => inspectPackage({ input: pkg, id: `inspect:${pkg.name}` })),
@@ -407,7 +407,7 @@ const writeGuide = ai({
   output: Guide,
 });
 
-export default workflow(async () => {
+export default dynamic(async () => {
   const findings = await findIssues();
   if (findings.length === 0) return null;
   return writeGuide({ input: findings });
@@ -450,7 +450,7 @@ Codemod CLI.
 ```text
 workflow.ts -> build step -> workflow module (Node) + transform artifacts (QuickJS)
 TypeScript workflow -> replay gate -> BridgeExecutor
-    exec -> bridge process -> DirectRunner
+    shell -> bridge process -> DirectRunner
     jssg -> executeJssg (artifact, select, read) -> bridge process (one batch) -> executeJssg (validate, stage, commit)
 ```
 
@@ -471,9 +471,9 @@ TypeScript sends:
 
 ```json
 {
-  "protocolVersion": 5,
+  "protocolVersion": 6,
   "commandId": "format",
-  "operation": { "kind": "exec", "command": "npm run format" }
+  "operation": { "kind": "shell", "command": "npm run format" }
 }
 ```
 
@@ -481,7 +481,7 @@ Rust returns plain data:
 
 ```json
 {
-  "protocolVersion": 5,
+  "protocolVersion": 6,
   "commandId": "format",
   "status": "succeeded",
   "output": { "stdout": "formatted 12 files\n" }
@@ -550,13 +550,13 @@ APIs and the bound runtime.
 
 Included:
 
-- typed, callable `exec`, `jssg`, and `ai` descriptors that create lazy commands
+- typed, callable `shell`, `jssg`, and `ai` descriptors that create lazy commands
 - JSSG invocation targets, validated when the command is created and carried on the wire
 - static sequences and explicit parallel groups, fixed or built inside a workflow
 - procedural workflows that await commands directly or accept flowing input
 - append-only in-memory history and replay checks
 - scripted TypeScript tests
-- real `exec` calls through the existing Rust runner
+- real `shell` calls through the existing Rust runner
 - inline JSSG transforms split into bundled artifacts at build time and run
   through the existing sandbox as one Rust batch per command, with a static
   selector prefilter and workspace semantic analysis

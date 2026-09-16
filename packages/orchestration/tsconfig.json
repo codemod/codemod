@@ -1,7 +1,7 @@
 {
   "extends": "@codemod.com/tsconfig/lib.json",
-  "include": ["./src", "./tests"],
-  "exclude": ["./dist", "./node_modules"],
+  "include": ["./src", "./tests", "./demo"],
+  "exclude": ["./dist", "./node_modules", "./demo/fixture", "./demo/target"],
   "compilerOptions": {
     "noEmit": true,
     "incremental": false,

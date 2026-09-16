@@ -3,19 +3,19 @@
  * inside a workflow issues it, and static composition nodes are awaitable data.
  */
 import { describe, expect, it } from "vitest";
-import { createHarness, failed } from "../src/harness.ts";
+import { createHarness, failed } from "../src/host/harness.ts";
 import {
   DuplicateCommandIdError,
   PROTOCOL_VERSION,
   ai,
-  exec,
+  shell,
   guard,
   isCommand,
   jssg,
   parallel,
   run,
   sequence,
-  workflow,
+  dynamic,
   type Command,
   type Json,
   type OperationCompletion,
@@ -46,8 +46,8 @@ const Summary = guard(
   (v: unknown): v is { total: number } => typeof v === "object" && v !== null,
 );
 
-const discover = exec({ name: "discover", command: "node discover.js", output: Packages });
-const inspectPackage = exec({
+const discover = shell({ name: "discover", command: "node discover.js", output: Packages });
+const inspectPackage = shell({
   name: "inspect-package",
   input: Package,
   output: Report,
@@ -61,8 +61,8 @@ const writeReport = jssg({
   input: guard("Findings", (v: unknown): v is string[] => Array.isArray(v)),
   output: Summary,
 });
-const format = exec({ name: "format", command: "npm run format" });
-const lint = exec({ name: "lint", command: "lint" });
+const format = shell({ name: "format", command: "npm run format" });
+const lint = shell({ name: "lint", command: "lint" });
 
 const packages: Package[] = [
   { name: "a", path: "packages/a" },
@@ -70,7 +70,7 @@ const packages: Package[] = [
   { name: "c", path: "packages/c" },
 ];
 
-const audit = workflow(async () => {
+const audit = dynamic(async () => {
   const found = await discover();
   const reports = await parallel(
     found.map((pkg) => inspectPackage({ input: pkg, id: `inspect:${pkg.name}` })),
@@ -94,11 +94,13 @@ describe("commands", () => {
     expect(bare.type).toBe("command");
     expect(bare.id).toBe("format");
     expect(bare.runnable).toBe(format);
+    expect(bare.inputMode).toBe("none");
     expect(bare.input).toBeUndefined();
     expect(bare).not.toHaveProperty("target");
 
     const bound = writeReport({ input: ["x"], id: "report:x", target: { root: "docs" } });
     expect(bound.id).toBe("report:x");
+    expect(bound.inputMode).toBe("bound");
     expect(bound.input).toEqual(["x"]);
     expect(bound.target).toEqual({ root: "docs" });
     expect(isCommand(format)).toBe(false);
@@ -111,23 +113,28 @@ describe("commands", () => {
     const _okAi: Command<unknown> = summarize({ input: { package: "a", findings: [] }, id: "s" });
     const _okJssg: Command<{ total: number }> = writeReport({ input: [], target: { root: "a" } });
     const _okVoid: Command<{ stdout: string }> = format({ id: "format:2" });
-    // @ts-expect-error input is required when the runnable has an input schema
-    const _missingInput = () => inspectPackage();
-    // @ts-expect-error input is required when the runnable has an input schema
-    const _missingAiInput = () => summarize({ id: "s" });
-    // @ts-expect-error exec does not take a target
+    const _flow: Command<Report, Package> = inspectPackage();
+    const _flowAi: Command<unknown, Report> = summarize({ id: "s" });
+    // @ts-expect-error shell does not take a target
     const _execTarget = () => inspectPackage({ input: packages[0]!, target: { root: "a" } });
     // @ts-expect-error ai does not take a target
     const _aiTarget = () => summarize({ input: packages[0]!, target: { root: "a" } });
     // @ts-expect-error discover returns Package[], but inspectPackage consumes one Package
     const _incompatibleSequence = () => sequence(discover, inspectPackage);
-    expect([_ok, _okAi, _okJssg, _okVoid]).toHaveLength(4);
+    expect([_ok, _okAi, _okJssg, _okVoid, _flow, _flowAi]).toHaveLength(6);
+  });
+
+  it("rejects a flow invocation awaited without static composition", async () => {
+    const definition = dynamic(() => inspectPackage());
+    await expect(createHarness().run(definition)).rejects.toThrow(
+      "requires flowing input; place it in sequence()/parallel() or invoke it with { input }",
+    );
   });
 
   it("do nothing until awaited inside a workflow", async () => {
     const h = createHarness({ fallback: () => "ok" });
     const created: Command[] = [];
-    const wf = workflow(async () => {
+    const wf = dynamic(async () => {
       const first = lint({ id: "lint:1" });
       const second = lint({ id: "lint:2" });
       created.push(first, second);
@@ -144,7 +151,7 @@ describe("commands", () => {
 
   it("issue once per run no matter how often they are awaited", async () => {
     const h = createHarness({ fallback: (r) => `ran ${r.commandId}` });
-    const wf = workflow(async () => {
+    const wf = dynamic(async () => {
       const command = lint();
       const [a, b] = await Promise.all([command, command]);
       const c = await command;
@@ -158,7 +165,7 @@ describe("commands", () => {
 
   it("created at module level can be awaited in several runs and replay per run", async () => {
     const shared = lint({ id: "lint:shared" });
-    const wf = workflow(async () => (await shared).stdout);
+    const wf = dynamic(async () => (await shared).stdout);
     const h = createHarness({ fallback: () => "first" });
     const first = await h.run(wf);
     expect(first.output).toBe("first");
@@ -184,7 +191,7 @@ describe("commands", () => {
       "write-report",
     ]);
     expect(result.commands[1]?.operation).toEqual({
-      kind: "exec",
+      kind: "shell",
       command: "node inspect-package.js",
       env: { PACKAGE_PATH: "packages/a" },
     });
@@ -196,7 +203,7 @@ describe("commands", () => {
     const h = createHarness({ fallback: () => ({}) });
     const bad = inspectPackage({ input: { name: "x" } as unknown as Package });
     expect(bad.input).toEqual({ name: "x" });
-    await expect(h.run(workflow(() => bad))).rejects.toThrow(
+    await expect(h.run(dynamic(() => bad))).rejects.toThrow(
       /input of 'inspect-package': expected Package/,
     );
     expect(h.executed).toHaveLength(0);
@@ -214,7 +221,7 @@ describe("dynamic parallel groups", () => {
         order.push(request.commandId);
         const value = auditResults[request.commandId] ?? null;
         const output: Json =
-          request.operation.kind === "exec" ? { stdout: JSON.stringify(value) } : value;
+          request.operation.kind === "shell" ? { stdout: JSON.stringify(value) } : value;
         return {
           protocolVersion: PROTOCOL_VERSION,
           commandId: request.commandId,
@@ -223,7 +230,7 @@ describe("dynamic parallel groups", () => {
         };
       },
     };
-    const perPackage = workflow(async () => {
+    const perPackage = dynamic(async () => {
       const found = await discover();
       const reports = await parallel(
         found.map((pkg) => inspectPackage({ input: pkg, id: `inspect:${pkg.name}` })),
@@ -245,7 +252,7 @@ describe("dynamic parallel groups", () => {
     expect(replay.replayed).toBe(true);
     expect(replay.output).toEqual(first.output);
 
-    const renamed = workflow(async () => {
+    const renamed = dynamic(async () => {
       const found = await discover();
       return parallel(
         found.map((pkg) =>
@@ -271,13 +278,13 @@ describe("dynamic parallel groups", () => {
         };
       },
     };
-    const wf = workflow(async () => parallel([lint({ id: "lint:1" }), lint({ id: "lint:1" })]));
+    const wf = dynamic(async () => parallel([lint({ id: "lint:1" }), lint({ id: "lint:1" })]));
     await expect(run(wf, { executor })).rejects.toBeInstanceOf(DuplicateCommandIdError);
     expect(executed).toBe(0);
   });
 
   it("accept an empty dynamic result only through the author's own branch", async () => {
-    const none = workflow(async () => {
+    const none = dynamic(async () => {
       const found: Package[] = [];
       if (found.length === 0) return [];
       return parallel(found.map((pkg) => inspectPackage({ input: pkg })));
@@ -288,8 +295,8 @@ describe("dynamic parallel groups", () => {
 
   it("run the same helper for fixed groups inside a workflow", async () => {
     const h = createHarness({ fallback: (r) => `did ${r.commandId}` });
-    const wf = workflow(async () => {
-      const [a, b] = await parallel(lint, format({ id: "format:pre" }));
+    const wf = dynamic(async () => {
+      const [a, b] = await parallel(lint(), format({ id: "format:pre" }));
       await format();
       return [a.stdout, b.stdout];
     });
@@ -300,11 +307,11 @@ describe("dynamic parallel groups", () => {
 });
 
 describe("sequences as awaitable data", () => {
-  const fixed = sequence(lint, parallel(format({ id: "format:a" }), format({ id: "format:b" })));
+  const fixed = sequence(lint(), parallel(format({ id: "format:a" }), format({ id: "format:b" })));
 
   it("run through the workflow runtime when awaited in a body", async () => {
     const h = createHarness({ fallback: (r) => `did ${r.commandId}` });
-    const wf = workflow(async () => {
+    const wf = dynamic(async () => {
       const group = await fixed;
       return group.map((output) => output.stdout);
     });
@@ -313,11 +320,11 @@ describe("sequences as awaitable data", () => {
     expect(result.commands.map((c) => c.id)).toEqual(["lint", "format:a", "format:b"]);
   });
 
-  it("refuses to finalize when bound commands in a sequence are never awaited", async () => {
+  it("refuses to finalize when commands in a sequence are never awaited", async () => {
     const h = createHarness({ fallback: () => "ok" });
     await expect(
       h.run(
-        workflow(async () => {
+        dynamic(async () => {
           sequence(lint(), format());
           return "done";
         }),

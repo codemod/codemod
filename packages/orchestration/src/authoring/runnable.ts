@@ -7,9 +7,14 @@
  * `command.ts`): `inspect()`, `lint({ id })`, `migrate({ input, target, id })`.
  * Only JSSG accepts `target`.
  */
-import { createCommand, type Command, type InvokeArgs, type JssgInvokeArgs } from "./command.ts";
-import type { Json } from "./json.ts";
-import { isSafeRelativePath } from "./paths.ts";
+import {
+  createCommand,
+  type BoundInvocation,
+  type Command,
+  type FlowInvocation,
+} from "./command.ts";
+import type { Json } from "../core/json.ts";
+import { isSafeRelativePath } from "../core/paths.ts";
 import {
   isArtifactRef,
   isSelector,
@@ -19,7 +24,7 @@ import {
   type Selector,
   type SemanticAnalysis,
   type Target,
-} from "./protocol.ts";
+} from "../core/protocol.ts";
 import { validate, type StandardSchemaV1 } from "./schema.ts";
 import type { JssgSelector, JssgTransform, JssgTypes } from "./transform.ts";
 
@@ -48,7 +53,7 @@ export function isRunnable(value: unknown): value is Runnable<unknown, unknown> 
   return typeof candidate.kind === "string" && typeof candidate.toOperation === "function";
 }
 
-interface ExecOptions<I, O> {
+interface ShellOptions<I, O> {
   name: string;
   /** Shell command, or a pure function of the validated input. */
   command: string | ((input: I) => string);
@@ -61,17 +66,19 @@ interface ExecOptions<I, O> {
   output?: StandardSchemaV1<unknown, O>;
 }
 
-export interface ExecOutput {
+export interface ShellOutput {
   stdout: string;
 }
 
-export interface ExecRunnable<I = void, O = ExecOutput> extends Runnable<I, O, "exec"> {
-  (...args: InvokeArgs<I>): Command<O>;
+export interface ShellRunnable<I = void, O = ShellOutput> extends Runnable<I, O, "shell"> {
+  (): Command<O, I>;
+  (options: FlowInvocation): Command<O, I>;
+  (options: BoundInvocation<I>): Command<O>;
 }
 
-export function exec<I = void, O = ExecOutput>(options: ExecOptions<I, O>): ExecRunnable<I, O> {
-  return callable<I, O, "exec", ExecRunnable<I, O>>({
-    kind: "exec",
+export function shell<I = void, O = ShellOutput>(options: ShellOptions<I, O>): ShellRunnable<I, O> {
+  return callable<I, O, "shell", ShellRunnable<I, O>>({
+    kind: "shell",
     name: options.name,
     input: options.input,
     output: options.output,
@@ -80,8 +87,8 @@ export function exec<I = void, O = ExecOutput>(options: ExecOptions<I, O>): Exec
         typeof options.command === "function" ? options.command(input) : options.command;
       const env = typeof options.env === "function" ? options.env(input) : options.env;
       return env && Object.keys(env).length > 0
-        ? { kind: "exec", command, env }
-        : { kind: "exec", command };
+        ? { kind: "shell", command, env }
+        : { kind: "shell", command };
     },
     async decode(output) {
       const stdout = readStdout(output);
@@ -90,9 +97,9 @@ export function exec<I = void, O = ExecOutput>(options: ExecOptions<I, O>): Exec
       try {
         parsed = JSON.parse(stdout);
       } catch (error) {
-        throw new Error(`exec '${options.name}' stdout is not JSON: ${(error as Error).message}`);
+        throw new Error(`shell '${options.name}' stdout is not JSON: ${(error as Error).message}`);
       }
-      return validate(options.output, parsed, `exec '${options.name}' output`);
+      return validate(options.output, parsed, `shell '${options.name}' output`);
     },
   });
 }
@@ -106,7 +113,7 @@ function readStdout(output: Json | undefined): string {
   ) {
     return output.stdout;
   }
-  throw new Error("exec completion did not contain string stdout");
+  throw new Error("shell completion did not contain string stdout");
 }
 
 interface DataOptions<I, O> {
@@ -133,7 +140,7 @@ export interface JssgOptions<L extends string, I, O> extends DataOptions<I, O> {
   selector?: JssgSelector<JssgTypes<L>>;
   /**
    * The one transform, with the documented `(root, options)` contract. The
-   * build step (`build.ts`) replaces it with an `ArtifactRef` before the
+   * build step (`bundle/build.ts`) replaces it with an `ArtifactRef` before the
    * module runs; a function reaching this call means the module was not
    * built, which is refused.
    */
@@ -153,7 +160,9 @@ export interface JssgRunnable<I = void, O = unknown> extends Runnable<I, O, "jss
   readonly transform: ArtifactRef;
   readonly selector?: Selector;
   toOperation(input: I, target?: Target): JssgOperation;
-  (...args: JssgInvokeArgs<I>): Command<O>;
+  (): Command<O, I>;
+  (options: FlowInvocation & { target?: Target }): Command<O, I>;
+  (options: BoundInvocation<I> & { target?: Target }): Command<O>;
 }
 
 export function jssg<L extends string, I = void, O = unknown>(
@@ -232,7 +241,9 @@ function assertJssgOptions(options: {
 }
 
 export interface AiRunnable<I = void, O = unknown> extends Runnable<I, O, "ai"> {
-  (...args: InvokeArgs<I>): Command<O>;
+  (): Command<O, I>;
+  (options: FlowInvocation): Command<O, I>;
+  (options: BoundInvocation<I>): Command<O>;
 }
 
 /** AI step. No executor adapter exists yet; see README. */

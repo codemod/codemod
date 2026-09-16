@@ -11,8 +11,8 @@
       "default": "./src/index.ts"
     },
     "./harness": {
-      "types": "./src/harness.ts",
-      "default": "./src/harness.ts"
+      "types": "./src/host/harness.ts",
+      "default": "./src/host/harness.ts"
     }
   },
   "bin": {

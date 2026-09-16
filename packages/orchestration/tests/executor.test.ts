@@ -8,17 +8,17 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseArgs, USAGE } from "../src/cli.ts";
+import { parseArgs, runWorkflowCli, USAGE } from "../src/host/cli.ts";
 import {
   BridgeExecutor,
   CollectingSink,
   MemoryHistoryStore,
   OperationError,
-  exec,
+  shell,
   isSafeRelativePath,
   jssg,
   run,
-  workflow,
+  dynamic,
   type OperationRequest,
 } from "../src/index.ts";
 import { artifact, ref } from "./helpers.ts";
@@ -107,7 +107,7 @@ const migrate = jssg({
   language: "typescript",
   transform: { name: built.name, hash: built.hash },
 });
-const wf = workflow(() => migrate({ target: { root: "apps/web" } }));
+const wf = dynamic(() => migrate({ target: { root: "apps/web" } }));
 
 interface EchoOutput {
   path: string;
@@ -118,7 +118,7 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor artifacts", () => 
   let repo: string;
   beforeEach(() => {
     chmodSync(fakeBridge, 0o755);
-    repo = realpathSync.native(mkdtempSync(join(tmpdir(), "codemod-exec-")));
+    repo = realpathSync.native(mkdtempSync(join(tmpdir(), "codemod-shell-")));
     mkdirSync(join(repo, "apps/web"), { recursive: true });
     writeFileSync(join(repo, "apps/web/a.ts"), "a\n");
   });
@@ -193,19 +193,19 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor artifacts", () => 
     expect(store.toJSON().events.map((e) => e.type)).toEqual(["scheduled", "completed"]);
   });
 
-  it("runs exec through the one-shot file protocol and refuses ai locally", async () => {
+  it("runs shell through the one-shot file protocol and refuses ai locally", async () => {
     const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
-    const inspect = exec({ name: "inspect", command: "true" });
+    const inspect = shell({ name: "inspect", command: "true" });
     const result = await run(
-      workflow(() => inspect()),
+      dynamic(() => inspect()),
       { executor },
     );
     const echoed = JSON.parse((result.output as { stdout: string }).stdout) as {
       request: OperationRequest;
     };
-    expect(echoed.request.operation).toEqual({ kind: "exec", command: "true" });
+    expect(echoed.request.operation).toEqual({ kind: "shell", command: "true" });
     const ai = await executor.execute({
-      protocolVersion: 5,
+      protocolVersion: 6,
       commandId: "ai",
       operation: { kind: "ai", prompt: "x" },
     });
@@ -215,8 +215,8 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor artifacts", () => 
 
 describe("codemod-workflow argument parsing", () => {
   it("resolves every path and defaults the target and bridge", () => {
-    const options = parseArgs(["fixtures/jssg/workflow.ts"]);
-    expect(options.workflow).toBe(resolve("fixtures/jssg/workflow.ts"));
+    const options = parseArgs(["fixtures/jssg/dynamic.ts"]);
+    expect(options.workflow).toBe(resolve("fixtures/jssg/dynamic.ts"));
     expect(options.target).toBe(process.cwd());
     expect(options.bridge).toBe(
       process.env.CODEMOD_BRIDGE_BIN === undefined
@@ -228,6 +228,24 @@ describe("codemod-workflow argument parsing", () => {
       target: resolve("repo"),
       bridge: resolve("bin/bridge"),
     });
+    expect(options).not.toHaveProperty("input");
+  });
+
+  it("parses --input as strict JSON and keeps an explicit null apart from no input", () => {
+    expect(parseArgs(["wf.ts", "--input", '{"replacement":"newApi"}']).input).toEqual({
+      replacement: "newApi",
+    });
+    expect(parseArgs(["wf.ts", "--input", "null"])).toHaveProperty("input", null);
+    expect(parseArgs(["wf.ts", "--input", "0"])).toHaveProperty("input", 0);
+    expect(parseArgs(["wf.ts", "--input", '"text"'])).toHaveProperty("input", "text");
+    expect(parseArgs(["wf.ts", "--input", "[1, 2]"]).input).toEqual([1, 2]);
+    expect(parseArgs(["wf.ts", "--target", "repo"])).not.toHaveProperty("input");
+    for (const malformed of ["", "{replacement: newApi}", "{'a': 1}", '{"a": 1,}', "undefined"]) {
+      expect(() => parseArgs(["wf.ts", "--input", malformed]), malformed).toThrow(
+        /--input must be valid JSON/u,
+      );
+    }
+    expect(() => parseArgs(["wf.ts", "--input"])).toThrow(/missing value for --input/u);
   });
 
   it("rejects missing workflow, unknown or removed options, and dangling values", () => {
@@ -238,5 +256,40 @@ describe("codemod-workflow argument parsing", () => {
       /unknown option: --script-root/u,
     );
     expect(() => parseArgs(["wf.ts", "--target"])).toThrow(/missing value for --target/u);
+    expect(USAGE).toContain("[--input <json>]");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("codemod-workflow runs", () => {
+  const load = (file: string) => resolve(import.meta.dirname, "fixtures/load", file);
+  const base = (file: string) => [
+    load(file),
+    "--target",
+    import.meta.dirname,
+    "--bridge",
+    fakeBridge,
+  ];
+  beforeEach(() => chmodSync(fakeBridge, 0o755));
+
+  it("runs a bare shell step as the root", async () => {
+    const output = (await runWorkflowCli(base("shell.ts"))) as { stdout: string };
+    const echoed = JSON.parse(output.stdout) as { request: OperationRequest };
+    expect(echoed.request.commandId).toBe("inspect");
+    expect(echoed.request.operation).toEqual({ kind: "shell", command: "true" });
+  });
+
+  it("requires --input for a root that declares input, and passes null and JSON through", async () => {
+    await expect(runWorkflowCli(base("input.ts"))).rejects.toThrow(
+      /workflow requires an input value; pass --input <json>/u,
+    );
+    expect(await runWorkflowCli([...base("input.ts"), "--input", "null"])).toEqual({
+      received: null,
+    });
+    expect(await runWorkflowCli([...base("input.ts"), "--input", '{"name":"x"}'])).toEqual({
+      received: { name: "x" },
+    });
+    await expect(runWorkflowCli([...base("input.ts"), "--input", "{name: x}"])).rejects.toThrow(
+      /--input must be valid JSON/u,
+    );
   });
 });

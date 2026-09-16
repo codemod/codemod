@@ -27,7 +27,7 @@ import { basename, dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildSync } from "esbuild";
 import ts from "typescript";
-import type { ArtifactRef } from "./protocol.ts";
+import type { ArtifactRef } from "../core/protocol.ts";
 
 /** One bundled transform. `source` is what the bridge executes; `hash` identifies it. */
 export interface JssgArtifact extends ArtifactRef {
@@ -159,8 +159,8 @@ export interface LoadedWorkflow {
 export async function loadWorkflow(file: string): Promise<LoadedWorkflow> {
   const absolute = resolve(file);
   const artifacts = new Map<string, JssgArtifact>();
-  // This package's own sources define `jssg`; they never call it.
-  const own = resolve(import.meta.dirname) + sep;
+  // This package's own sources (all of `src/`) define `jssg`; they never call it.
+  const own = resolve(import.meta.dirname, "..") + sep;
   const hooks = registerHooks({
     load(url, context, nextLoad) {
       if (!url.startsWith("file:")) return nextLoad(url, context);

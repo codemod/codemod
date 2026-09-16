@@ -1,12 +1,12 @@
 /**
  * Author-facing validation of a JSSG invocation target. The wire type lives in
- * `protocol.ts`; this module decides what an author may write and normalizes
+ * `core/protocol.ts`; this module decides what an author may write and normalizes
  * it so equivalent spellings produce identical command content for replay.
  */
 import { posix } from "node:path";
-import { TargetValidationError } from "./errors.ts";
-import { escapesRoot, isAbsolutePath } from "./paths.ts";
-import type { Target } from "./protocol.ts";
+import { TargetValidationError } from "../core/errors.ts";
+import { escapesRoot, isAbsolutePath } from "../core/paths.ts";
+import type { Target } from "../core/protocol.ts";
 
 const FIELDS: readonly string[] = ["root", "include", "exclude"];
 

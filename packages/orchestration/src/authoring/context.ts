@@ -12,15 +12,19 @@ import type { Command } from "./command.ts";
 /** Internal runtime surface used by commands and composition nodes. */
 export interface Runtime {
   /** Note that a command was created while this workflow body is active. */
-  created(command: Command): void;
+  created(command: Command<unknown, unknown>): void;
   /** Note a static node built while this workflow body is active. */
   createdComposition(composition: object, commandIds: readonly string[]): void;
   /** Mark a static node as awaited or returned. */
   startedComposition(composition: object): void;
-  /** Mark a bound command as owned by a started static node. */
-  claimed(command: Command): void;
+  /** Mark a command invocation as owned by a started static node. */
+  claimed(command: Command<unknown, unknown>): void;
   /** Resolve a command (replay or execute). Memoized per command within one run. */
-  issue<O>(command: Command<O>, concurrent?: boolean): Promise<O>;
+  issue<O>(
+    command: Command<O, unknown>,
+    concurrent?: boolean,
+    flow?: { input: unknown },
+  ): Promise<O>;
 }
 
 const storage = new AsyncLocalStorage<Runtime>();
@@ -33,11 +37,11 @@ export function withRuntime<T>(runtime: Runtime, fn: () => T): T {
   return storage.run(runtime, fn);
 }
 
-export class NoActiveWorkflowError extends Error {
+export class NoActiveRunError extends Error {
   constructor(what: string) {
     super(
-      `${what} was awaited outside a workflow; await it inside workflow(async () => ...) or pass it to run(...)`,
+      `${what} was awaited outside an active run; await it inside dynamic(async () => ...) or pass it to run(...)`,
     );
-    this.name = "NoActiveWorkflowError";
+    this.name = "NoActiveRunError";
   }
 }

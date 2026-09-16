@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   PROTOCOL_VERSION,
   canonicalJson,
-  exec,
+  shell,
   isFileOutcomes,
   isOperation,
   isOperationCompletion,
@@ -31,8 +31,8 @@ describe("protocol fixtures shared with crates/execution-bridge", () => {
     }
   });
 
-  it("exec runnables produce the fixture request shape", () => {
-    const inspect = exec({
+  it("shell runnables produce the fixture request shape", () => {
+    const inspect = shell({
       name: "inspect",
       command: `printf '{"needsMigration":true}'`,
       env: { CI: "1" },
@@ -42,7 +42,7 @@ describe("protocol fixtures shared with crates/execution-bridge", () => {
       commandId: "inspect",
       operation: inspect.toOperation(),
     };
-    expect(canonicalJson(request)).toBe(canonicalJson(fixture("exec-request.json")));
+    expect(canonicalJson(request)).toBe(canonicalJson(fixture("shell-request.json")));
   });
 });
 
@@ -110,7 +110,8 @@ describe("strict validation", () => {
     expect(isOperation({ ...jssg, target: { root: "apps/a..b" } })).toBe(true);
     expect(isOperation({ ...jssg, semanticAnalysis: { mode: "file" } })).toBe(true);
     expect(isOperation({ ...jssg, semanticAnalysis: { mode: "file", root: "src" } })).toBe(false);
-    expect(isOperation({ kind: "exec", command: "true", target: { root: "a" } })).toBe(false);
+    expect(isOperation({ kind: "exec", command: "true" })).toBe(false);
+    expect(isOperation({ kind: "shell", command: "true", target: { root: "a" } })).toBe(false);
   });
 
   it.each<[string, unknown, boolean]>([

@@ -4,7 +4,7 @@
  * executor the test releases by hand, so nothing here depends on durations.
  */
 import { describe, expect, it } from "vitest";
-import { createHarness, failed } from "../src/harness.ts";
+import { createHarness, failed } from "../src/host/harness.ts";
 import {
   AdmissionScheduler,
   CAPACITY_ENV,
@@ -13,19 +13,19 @@ import {
   OperationError,
   PROTOCOL_VERSION,
   defaultCapacity,
-  exec,
+  shell,
   jssg,
   parallel,
   run,
   sequence,
   weightOf,
-  workflow,
+  dynamic,
   type Operation,
   type OperationCompletion,
   type OperationExecutor,
   type OperationRequest,
   type SchedulerHost,
-  type WorkflowEvent,
+  type RunEvent,
 } from "../src/index.ts";
 import { ref } from "./helpers.ts";
 
@@ -77,7 +77,7 @@ function controllable(): {
   };
 }
 
-const step = (id: string) => exec({ name: id, command: id });
+const step = (id: string) => shell({ name: id, command: id });
 const steps = (count: number) => Array.from({ length: count }, (_, index) => step(`s${index}`));
 
 const fileJssg = jssg({ name: "file-pass", language: "typescript", transform: ref("file-pass") });
@@ -90,7 +90,7 @@ const workspaceJssg = jssg({
 
 describe("operation weights", () => {
   it.each<[string, Operation, number]>([
-    ["exec", { kind: "exec", command: "x" }, 1],
+    ["shell", { kind: "shell", command: "x" }, 1],
     ["ai", { kind: "ai", prompt: "x" }, 1],
     ["jssg without semantics", fileJssg.toOperation(undefined), DEFAULT_WEIGHTS.jssg],
     [
@@ -148,11 +148,11 @@ describe("default capacity", () => {
 
 describe("bounded admission", () => {
   it("never exceeds capacity however many members a group declares", async () => {
-    const members = steps(40);
+    const members = steps(40).map((runnable) => runnable());
     const scheduler = new AdmissionScheduler({ capacity: 5 });
     const { executor, started, finish } = controllable();
     const result = run(
-      workflow(() => parallel(members)),
+      dynamic(() => parallel(members)),
       { executor, scheduler },
     );
 
@@ -171,13 +171,13 @@ describe("bounded admission", () => {
     }
     const { output } = await result;
     expect((output as { stdout: string }[]).map((o) => o.stdout)).toEqual(
-      members.map((member) => member.name),
+      members.map((member) => member.runnable.name),
     );
     expect(scheduler.stats()).toMatchObject({ used: 0, active: 0, queued: 0, peakActive: 5 });
   });
 
   it("charges a workspace JSSG pass more than ordinary work", async () => {
-    // Capacity 5 fits one workspace pass (4) plus one exec (1), but never two
+    // Capacity 5 fits one workspace pass (4) plus one shell (1), but never two
     // workspace passes, where 40 ordinary execs would have fit five at a time.
     const scheduler = new AdmissionScheduler({ capacity: 5 });
     const { executor, started, finish } = controllable();
@@ -188,7 +188,7 @@ describe("bounded admission", () => {
       fileJssg({ id: "f0" }),
     );
     const result = run(
-      workflow(() => group),
+      dynamic(() => group),
       { executor, scheduler },
     );
 
@@ -200,7 +200,7 @@ describe("bounded admission", () => {
 
     finish("w0");
     await settle();
-    // The second workspace pass takes 4 of 5 units; only the exec fits beside it.
+    // The second workspace pass takes 4 of 5 units; only the shell fits beside it.
     expect(started).toEqual(["w0", "w1", "e0"]);
     expect(scheduler.stats()).toMatchObject({ used: 5, active: 2, queued: 1 });
 
@@ -219,7 +219,7 @@ describe("bounded admission", () => {
     const scheduler = new AdmissionScheduler({ capacity: 3 });
     const { executor, started, finish } = controllable();
     const result = run(
-      workflow(() => parallel(steps(3))),
+      dynamic(() => parallel(steps(3).map((runnable) => runnable()))),
       { executor, scheduler },
     );
 
@@ -244,10 +244,10 @@ describe("bounded admission", () => {
 
   it("does not reach the executor before a queued command is admitted", async () => {
     const scheduler = new AdmissionScheduler({ capacity: 1 });
-    const events: WorkflowEvent[] = [];
+    const events: RunEvent[] = [];
     const { executor, started, finish } = controllable();
     const result = run(
-      workflow(() => parallel(steps(3))),
+      dynamic(() => parallel(steps(3).map((runnable) => runnable()))),
       {
         executor,
         scheduler,
@@ -282,7 +282,7 @@ describe("cancellation", () => {
     const { executor, started, finish } = controllable();
     const history = new MemoryHistoryStore();
     const result = run(
-      workflow(() => parallel(steps(2))),
+      dynamic(() => parallel(steps(2).map((runnable) => runnable()))),
       {
         executor,
         scheduler,
@@ -329,7 +329,7 @@ describe("cancellation", () => {
     const { executor, started } = controllable();
     await expect(
       run(
-        workflow(() => step("only")()),
+        dynamic(() => step("only")()),
         { executor, scheduler, signal: controller.signal },
       ),
     ).rejects.toBeInstanceOf(OperationError);
@@ -350,7 +350,7 @@ describe("permits", () => {
     const controller = new AbortController();
     if (mode.launchError) throwOnLaunch.add("only");
     const result = run(
-      workflow(() => step("only")()),
+      dynamic(() => step("only")()),
       {
         executor,
         scheduler,
@@ -376,9 +376,9 @@ describe("permits", () => {
 
 describe("replay", () => {
   it("consumes no capacity and never reaches the executor", async () => {
-    const members = steps(4);
+    const members = steps(4).map((runnable) => runnable());
     const first = createHarness({ fallback: (request) => `ran ${request.commandId}` });
-    const body = workflow(() => parallel(members));
+    const body = dynamic(() => parallel(members));
     const recorded = await first.run(body);
 
     const scheduler = new AdmissionScheduler({ capacity: 1 });
@@ -404,7 +404,7 @@ describe("group shapes", () => {
     const early = steps(3);
     const late = steps(3).map((runnable, index) => runnable({ id: `late${index}` }));
     // Two groups awaited at once: the second is built from an array inside the body.
-    const body = workflow(async () => {
+    const body = dynamic(async () => {
       const [a, b] = await Promise.all([
         parallel(early.map((runnable, index) => runnable({ id: `early${index}` }))),
         parallel(late),
@@ -430,7 +430,7 @@ describe("group shapes", () => {
       fallback: (request) => `ran ${request.commandId}`,
       scheduler,
     });
-    const fixed = sequence(parallel(steps(3)), step("last")());
+    const fixed = sequence(parallel(steps(3).map((runnable) => runnable())), step("last")());
     const result = await harness.run(fixed);
     expect(result.commands.map((command) => command.id)).toEqual(["s0", "s1", "s2", "last"]);
     expect(scheduler.stats()).toMatchObject({ peakActive: 2, used: 0, queued: 0 });
@@ -445,7 +445,7 @@ describe("group shapes", () => {
       scheduler,
     });
     const result = await harness.run(
-      workflow(async () => [(await first()).stdout, (await second()).stdout]),
+      dynamic(async () => [(await first()).stdout, (await second()).stdout]),
     );
     expect(result.output).toEqual(["ran first", "ran second"]);
     expect(scheduler.stats()).toMatchObject({ peakActive: 1, used: 0 });
@@ -456,7 +456,7 @@ describe("group shapes", () => {
     const b = new AdmissionScheduler({ capacity: 3 });
     const left = controllable();
     const right = controllable();
-    const body = workflow(() => parallel(steps(3)));
+    const body = dynamic(() => parallel(steps(3).map((runnable) => runnable())));
     const first = run(body, { executor: left.executor, scheduler: a });
     const second = run(body, { executor: right.executor, scheduler: b });
 

@@ -3,7 +3,7 @@
 TypeScript-first prototype of the Codemod orchestration runtime. Workflows are
 plain async TypeScript; calling a runnable creates a command, awaiting it inside
 a workflow issues it, and every issued command is recorded in an append-only
-history and replayed from that history on later runs. `exec` runs through a
+history and replayed from that history on later runs. `shell` runs through a
 small Rust bridge over `butterflow_runners::DirectRunner`. JSSG transforms are
 written inline next to the workflow, split off into standalone bundles at
 build time, and orchestrated here in TypeScript (file selection, ordering,
@@ -19,46 +19,69 @@ migration path are summarized in `DESIGN.md`.
 packages/orchestration/
   DESIGN.md              problem statement, proposal, scope, and migration path
   RUST_BRIDGE.md         the Rust boundary: protocol, batch, security model, transactions
-  src/protocol.ts        versioned JSON OperationRequest / OperationCompletion (v5)
-  src/build.ts           build step: extract inline transforms, bundle, rewrite, loadWorkflow
-  src/transform.ts       author-facing transform/selector types per language (type-only)
-  src/bridge.ts          spawnBridge: one bridge process per request over exchange files
-  src/jssg.ts            executeJssg: artifact, select, batch, validate, stage, commit, classify
-  src/files.ts           file selection with the engine's walker semantics (npm `ignore`)
-  src/languages.json     language -> extensions, pinned to the engine table by a cargo test
-  src/paths.ts           safe-relative-path rules and root containment (realpath)
-  src/runnable.ts        callable exec / jssg / ai descriptors (typed via Standard Schema)
-  src/command.ts         Command: one invocation as data, awaitable inside a workflow
-  src/context.ts         the active workflow runtime (AsyncLocalStorage in the Node prototype)
-  src/target.ts          validation and normalization of a JSSG invocation Target
-  src/cli.ts             experimental local runner behind bin/codemod-workflow.mjs
-  src/composition.ts     sequence(...) and parallel(...) static graph nodes + IR
-  src/workflow-node.ts   explicit arbitrary-TypeScript workflow nodes
-  src/workflow.ts        run lifecycle, history, and command execution
-  src/history.ts         HistoryStore seam + MemoryHistoryStore
-  src/gate.ts            CommandGate seam + ReplayGate (replay matching, errors)
-  src/executor.ts        OperationExecutor seam + BridgeExecutor (exec, jssg, ai refused)
-  src/scheduler.ts       AdmissionScheduler: weighted, bounded admission at the executor
-  src/events.ts          EventSink seam (+ bridge.spawned, scheduler.*)
-  src/harness.ts         test harness with scripted completions
+  src/index.ts           public API: re-exports from the folders below
+  src/core/              plain data contracts shared by every layer
+    protocol.ts          versioned JSON OperationRequest / OperationCompletion (v6)
+    json.ts              Json type and canonical JSON (command identity)
+    paths.ts             safe-relative-path rules and root containment (realpath)
+    history.ts           HistoryStore seam + MemoryHistoryStore
+    events.ts            EventSink seam (+ bridge.spawned, scheduler.*)
+    errors.ts            error classes thrown across layers
+  src/authoring/         what workflow code writes; builds commands, executes nothing
+    runnable.ts          callable shell / jssg / ai descriptors (typed via Standard Schema)
+    command.ts           Command: one invocation as data, awaitable inside a workflow
+    context.ts           the active workflow runtime (AsyncLocalStorage in the Node prototype)
+    composition.ts       sequence(...) and parallel(...) static graph nodes + IR
+    dynamic.ts           explicit arbitrary-TypeScript dynamic nodes
+    target.ts            validation and normalization of a JSSG invocation Target
+    schema.ts            minimal Standard Schema surface and guard(...)
+    transform.ts         author-facing transform/selector types per language (type-only)
+  src/bundle/            splits inline JSSG transforms out of workflow modules
+    build.ts             build step: extract inline transforms, bundle, rewrite, loadWorkflow
+  src/execution/         how one OperationRequest becomes an OperationCompletion
+    executor.ts          OperationExecutor seam + BridgeExecutor (shell, jssg, ai refused)
+    scheduler.ts         AdmissionScheduler: weighted, bounded admission at the executor
+    bridge.ts            spawnBridge: one bridge process per request over exchange files
+    jssg.ts              executeJssg: artifact, select, batch, validate, stage, commit, classify
+    files.ts             file selection with the engine's walker semantics (npm `ignore`)
+    languages.json       language -> extensions, pinned to the engine table by a cargo test
+  src/runtime/           runs a workflow: issue commands, replay or execute, record history
+    run.ts               run lifecycle, history, and command execution
+    gate.ts              CommandGate seam + ReplayGate (replay matching, errors)
+  src/host/              entry points that assemble a run
+    cli.ts               experimental local runner behind bin/codemod-workflow.mjs
+    harness.ts           test harness with scripted completions (`./harness` export)
   fixtures/protocol      shared JSON fixtures checked by TS and Rust tests
   fixtures/walker        file-walker contract checked by TS and Rust (engine walker) tests
   tests/                 unit tests (fast, no Rust; fake bridge) + bridge.e2e.test.ts
   bin/                   codemod-workflow.mjs and its node_modules type-stripping hook
-crates/execution-bridge/ protocol structs, exec through DirectRunner, one JSSG batch
+crates/execution-bridge/ protocol structs, shell through DirectRunner, one JSSG batch
   src/main.rs            `butterflow-execution-bridge <request.json> <response.json>`
 ```
+
+Dependencies between `src/` folders point one way; a folder imports only from
+the folders on its row (`tests/layers.test.ts` enforces this):
+
+```
+core       (nothing)
+authoring  core
+bundle     core
+execution  core, bundle
+runtime    core, authoring, bundle, execution
+host       core, authoring, bundle, execution, runtime
+```
+
+`authoring` and `execution` never import each other: commands meet executors
+only in `runtime`, through the wire types in `core/protocol.ts`. `src/index.ts`
+sits above every folder and re-exports the public API.
 
 ## Authoring
 
 ```ts
-import { exec, guard, jssg, parallel, sequence, workflow } from "@codemod.com/orchestration";
+import { dynamic, jssg, parallel, sequence, shell } from "@codemod.com/orchestration";
 import { rewriteSignal } from "./helpers.ts"; // bundled into the transform
 
-const Project = guard("Project", (v: unknown): v is { needsMigration: boolean } => /* ... */);
-const Summaries = guard("Summaries", (v: unknown): v is { file: string }[] => Array.isArray(v));
-
-const inspect = exec({ name: "inspect", command: "node inspect.js", output: Project });
+const inspect = shell({ name: "inspect", command: "node inspect.js", output: Project });
 const migrate = jssg({
   name: "migrate-signals",
   language: "tsx",
@@ -74,25 +97,25 @@ const migrate = jssg({
   },
 });
 
-export default workflow(async () => {
+export default dynamic(async () => {
   const project = await inspect();
   if (project.needsMigration) await migrate({ input: project });
   return project;
 });
 
-// Bound commands ignore preceding outputs.
+// No-input invocations ignore preceding outputs.
 export default sequence(rename(), updateImports(), format());
 // A parallel tuple can flow into an explicit workflow computation.
 export default sequence(
-  parallel(countTodos, countFixmes),
-  workflow((counts) => counts.reduce((total, count) => total + count, 0)),
+  parallel(countTodos(), countFixmes()),
+  dynamic((counts) => counts.reduce((total, count) => total + count, 0)),
 );
 
-// JSSG invocations carry a file target; exec and ai never do
+// JSSG invocations carry a file target; shell and ai never do
 const web = { root: "apps/web", include: ["src/**"], exclude: ["**/generated/**"] };
 export default sequence(rename({ target: web }), updateImports({ target: web }), format());
 export default parallel(transformA({ target: web }), transformB({ target: web }));
-export default workflow(async () => {
+export default dynamic(async () => {
   const project = await inspect();
   const summaries = await parallel(
     project.packages.map((pkg) =>
@@ -104,15 +127,20 @@ export default workflow(async () => {
 ```
 
 - Calling a runnable creates a `Command`: `inspect()`, `lint({ id })`,
-  `migrate({ input, target, id })`. Creating one does nothing. Awaiting it
+  `migrate({ input, target, id })`. Parentheses consistently mean invocation;
+  adding `id` or `target` only adds metadata. An explicit `input` binds data.
+  Creating a command does nothing. Awaiting it
   inside a workflow body issues it (replay or execute) and returns its typed
-  output; awaiting it anywhere else rejects with `NoActiveWorkflowError`. A
+  output; awaiting it anywhere else rejects with `NoActiveRunError`. A
   command issues at most once per run however often it is awaited.
-- `exec` and `ai` invocations accept `id` and `input` only. `jssg` invocations
-  also accept `target`. A `target` on `exec` or `ai` throws
+- A bare runnable may be the root executable, so a one-step module can simply
+  `export default shell({...})` or `export default jssg({...})`. Static
+  `sequence(...)` and `parallel(...)` members always use invocation syntax.
+- `shell` and `ai` invocations accept `id` and `input` only. `jssg` invocations
+  also accept `target`. A `target` on `shell` or `ai` throws
   `TargetValidationError` when the command is created; any other unknown field
   throws `InvocationError`.
-- `exec` output: with an `output` schema, the runner's returned text is parsed
+- `shell` output: with an `output` schema, the runner's returned text is parsed
   as JSON and validated; without one the output is `{ stdout }`. The field name
   is provisional: the existing `DirectRunner` combines stdout and stderr on
   Unix but returns stdout alone on other platforms.
@@ -127,12 +155,14 @@ export default workflow(async () => {
 - `sequence(...)` and `parallel(...)` are static graph data. They can be root
   executables; nodes that require no flowing input are also awaitable inside a
   workflow. Input-requiring nodes must be nested where a preceding stage
-  supplies that input. A bare runnable consumes flowing input with its name as
-  command id; an invoked `Command` has bound input and ignores the preceding
-  value. `sequence` returns only its final output. `parallel` passes the same
+  supplies that input. Use invocation syntax in static plans: `step()` consumes
+  flowing input when the step has an input schema and ignores it otherwise.
+  `step({ id, target })` behaves the same. Only `step({ input })` binds input and
+  ignores the preceding value.
+  `sequence` returns only its final output. `parallel` passes the same
   input to every member and returns a tuple in declaration order. It accepts
   members spread or as one dynamic array.
-- `workflow(...)` explicitly marks arbitrary TypeScript. It can be a root or a
+- `dynamic(...)` explicitly marks arbitrary TypeScript. It can be a root or a
   stage in either static node; raw functions are rejected. Static IR leaves
   workflow stages opaque until workflow bundling and sandboxing are added.
 - `parallel(...)` is eligibility, not a worker count. Members may overlap; how
@@ -158,7 +188,7 @@ export default workflow(async () => {
   beneath the target root and is only valid with `workspace`. Without
   `include`, the definition applies to the language's file extensions, exactly
   as a YAML `js-ast-grep` step without `include`; the list is
-  `src/languages.json`, which `cargo test -p butterflow-execution-bridge`
+  `src/execution/languages.json`, which `cargo test -p butterflow-execution-bridge`
   checks against the engine's table so it cannot drift silently. Languages
   outside that table need an explicit `include`.
 
@@ -183,7 +213,7 @@ The workflow and its transforms are authored together but never run
 together. A transform runs in the bridge's QuickJS sandbox, the workflow body
 in Node; nothing is serialized with `Function.prototype.toString()` and no
 closure crosses the boundary. Instead, a build step splits the module before
-it runs (`src/build.ts`):
+it runs (`src/bundle/build.ts`):
 
 1. The module is parsed with the TypeScript compiler. Every
    `jssg({ ... })` call (an object literal with a string-literal `name` and a
@@ -312,7 +342,7 @@ npx codemod-workflow ./workflow.ts --target ./repository --bridge /path/to/butte
 codemod-workflow <workflow.ts> [--target <directory>] [--bridge <binary>]
 ```
 
-- `--target` (default: current directory) is where `exec` runs and the root
+- `--target` (default: current directory) is where `shell` runs and the root
   JSSG targets are resolved beneath.
 - `--bridge` or `CODEMOD_BRIDGE_BIN` (default: the monorepo's
   `target/debug/butterflow-execution-bridge`) locates the bridge binary; the
@@ -364,7 +394,7 @@ const { exports, artifacts } = await loadWorkflow("./workflow.ts");
 const controller = new AbortController();
 const executor = new BridgeExecutor({
   bin: "target/debug/butterflow-execution-bridge",
-  cwd: repoDir, // exec cwd and JSSG target root
+  cwd: repoDir, // shell cwd and JSSG target root
   artifacts, // built transforms by hash; their source never enters history
   events: sink, // optional: bridge.spawned events
 });
@@ -380,7 +410,7 @@ const again = await run(exports.default, { executor, history: MemoryHistoryStore
 once: that is the runtime's decision, so a group can declare thirty-seven
 independent members and the host still admits a safe number of them.
 
-Each `run()` owns one `AdmissionScheduler` (`src/scheduler.ts`) and wraps the
+Each `run()` owns one `AdmissionScheduler` (`src/execution/scheduler.ts`) and wraps the
 executor it was given in a `SchedulingExecutor`. Every operation that is really
 executed acquires a permit first; a replayed command never reaches the executor
 and therefore consumes no capacity. Because the permit is held around
@@ -392,7 +422,7 @@ The model is a weighted semaphore with a strict FIFO queue:
 
 | operation | weight | why |
 | --- | --- | --- |
-| `exec`, `ai` | 1 | one child process |
+| `shell`, `ai` | 1 | one child process |
 | `jssg` (no semantics or `"file"`) | 2 | a bridge process plus the whole selected file set in memory |
 | `jssg` with `"workspace"` semantics | 4 | the batch is also parsed and indexed as one workspace |
 
@@ -401,7 +431,7 @@ exceeds the available CPU count. The memory budget is half of `totalmem()`
 divided by an assumed 512 MiB per concurrent workspace pass. On a host whose
 capacity is below an operation's nominal weight, that operation consumes the
 whole capacity and runs alone. On a 10-core host with plenty of memory the
-capacity is 10 units: two workspace passes, or ten `exec` commands, at a time.
+capacity is 10 units: two workspace passes, or ten `shell` commands, at a time.
 Only the head of the queue is admitted, so a heavy command is never starved by
 lighter ones behind it.
 
@@ -467,7 +497,7 @@ replay comparison; if a workflow uses such inputs the replay will fail with
 
 `OperationExecutor`, `HistoryStore`, `CommandGate`, and `EventSink` are small
 interfaces with JSON-only inputs and outputs. Each in-memory implementation can
-move to Rust one at a time without changing workflow source. `exec` has a
+move to Rust one at a time without changing workflow source. `shell` has a
 bridge adapter, local `jssg` has the TypeScript orchestrator around the Rust
 batch, and `ai` remains protocol-only (the executor answers `failed` with "no
 executor adapter"); the harness can still script any operation in unit tests.

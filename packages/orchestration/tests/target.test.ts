@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createHarness, failed } from "../src/harness.ts";
+import { createHarness, failed } from "../src/host/harness.ts";
 import {
   DuplicateCommandIdError,
   InvocationError,
@@ -9,14 +9,14 @@ import {
   TargetValidationError,
   ai,
   canonicalJson,
-  exec,
+  shell,
   guard,
   isOperation,
   jssg,
   normalizeTarget,
   parallel,
   sequence,
-  workflow,
+  dynamic,
   type Target,
 } from "../src/index.ts";
 import { ref } from "./helpers.ts";
@@ -33,7 +33,7 @@ const updateImports = jssg({
   transform: ref("update-imports"),
   language: "typescript",
 });
-const format = exec({ name: "format", command: "npm run format" });
+const format = shell({ name: "format", command: "npm run format" });
 
 const Project = guard(
   "Project",
@@ -115,7 +115,7 @@ describe("JSSG invocation targets", () => {
       exclude: ["**/*.d.ts"],
     });
     const h = createHarness({ fallback: () => ({}) });
-    const result = await h.run(workflow(() => fixtureRunnable({ target: web })));
+    const result = await h.run(dynamic(() => fixtureRunnable({ target: web })));
     const fixture = readFileSync(
       join(import.meta.dirname, "..", "fixtures", "protocol", "jssg-target-request.json"),
       "utf8",
@@ -138,7 +138,7 @@ describe("JSSG invocation targets", () => {
   it("keeps the input alongside the target for typed invocations", async () => {
     const h = createHarness({ fallback: () => ({}) });
     const result = await h.run(
-      workflow(() => migrate({ target: { root: "packages/a" }, input: { path: "packages/a" } })),
+      dynamic(() => migrate({ target: { root: "packages/a" }, input: { path: "packages/a" } })),
     );
     expect(result.commands[0]?.operation).toEqual({
       kind: "jssg",
@@ -167,13 +167,13 @@ describe("JSSG invocation targets", () => {
     expect(() => renameApi({ id: 3 })).toThrow(/id must be a non-empty string/);
   });
 
-  it("is not available on exec or ai invocations", () => {
+  it("is not available on shell or ai invocations", () => {
     const summarize = ai({ name: "summarize", prompt: "summarize" });
-    // @ts-expect-error exec invocations never take a target
+    // @ts-expect-error shell invocations never take a target
     expect(() => format({ target: web })).toThrow(TargetValidationError);
-    // @ts-expect-error exec invocations never take a target
+    // @ts-expect-error shell invocations never take a target
     expect(() => format({ target: web })).toThrow(
-      /invalid target for exec 'format': exec does not accept a target; only JSSG invocations select files/,
+      /invalid target for shell 'format': shell does not accept a target; only JSSG invocations select files/,
     );
     // @ts-expect-error ai invocations never take a target
     expect(() => summarize({ target: web })).toThrow(TargetValidationError);
@@ -191,7 +191,7 @@ describe("targeted JSSG in static composition", () => {
         id: "rename-api",
         name: "rename-api",
         kind: "jssg",
-        input: "bound",
+        input: "none",
         target: web,
       },
       {
@@ -199,15 +199,15 @@ describe("targeted JSSG in static composition", () => {
         id: "update-imports",
         name: "update-imports",
         kind: "jssg",
-        input: "bound",
+        input: "none",
         target: web,
       },
       {
         type: "operation",
         id: "format",
         name: "format",
-        kind: "exec",
-        input: "bound",
+        kind: "shell",
+        input: "none",
       },
     ]);
 
@@ -219,7 +219,7 @@ describe("targeted JSSG in static composition", () => {
     expect(result.commands.map((c) => c.operation)).toEqual([
       { kind: "jssg", transform: ref("rename-api"), language: "typescript", target: web },
       { kind: "jssg", transform: ref("update-imports"), language: "typescript", target: web },
-      { kind: "exec", command: "npm run format" },
+      { kind: "shell", command: "npm run format" },
     ]);
     expect(h.executed[0]?.operation).toEqual({
       kind: "jssg",
@@ -281,7 +281,7 @@ describe("targeted JSSG in static composition", () => {
 
 describe("targets in dynamic workflows and replay", () => {
   const perPackage = (root: string) =>
-    workflow(async () => {
+    dynamic(async () => {
       const packages = [
         { name: "a", path: "packages/a" },
         { name: "b", path: root },
@@ -349,11 +349,11 @@ describe("targets in dynamic workflows and replay", () => {
 
   it("treats adding a target to a previously untargeted command as a change", async () => {
     const h = createHarness({ fallback: () => ({}) });
-    await h.run(workflow(() => renameApi()));
+    await h.run(dynamic(() => renameApi()));
 
     const replay = h.reload({ fallback: () => failed("must not execute") });
     const error = await replay
-      .run(workflow(() => renameApi({ target: web })))
+      .run(dynamic(() => renameApi({ target: web })))
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(NondeterminismError);
     expect((error as NondeterminismError).kind).toBe("changed");
@@ -361,10 +361,10 @@ describe("targets in dynamic workflows and replay", () => {
 
   it("produces identical commands for equivalent target spellings", async () => {
     const h = createHarness({ fallback: () => ({}) });
-    await h.run(workflow(() => renameApi({ target: { root: "apps/web" } })));
+    await h.run(dynamic(() => renameApi({ target: { root: "apps/web" } })));
     const replay = await h
       .reload({ fallback: () => failed("must not execute") })
-      .run(workflow(() => renameApi({ target: { root: "./apps/web/" } })));
+      .run(dynamic(() => renameApi({ target: { root: "./apps/web/" } })));
     expect(replay.replayed).toBe(true);
   });
 });
@@ -402,17 +402,17 @@ describe("protocol validation of targets", () => {
     expect(isOperation({ ...base, target: { root: "a", files: ["a.ts"] } })).toBe(false);
   });
 
-  it("rejects a target on exec and ai operations instead of ignoring it", () => {
-    expect(isOperation({ kind: "exec", command: "x" })).toBe(true);
-    expect(isOperation({ kind: "exec", command: "x", target: web })).toBe(false);
-    expect(isOperation({ kind: "exec", command: "x", target: {} })).toBe(false);
+  it("rejects a target on shell and ai operations instead of ignoring it", () => {
+    expect(isOperation({ kind: "shell", command: "x" })).toBe(true);
+    expect(isOperation({ kind: "shell", command: "x", target: web })).toBe(false);
+    expect(isOperation({ kind: "shell", command: "x", target: {} })).toBe(false);
     expect(isOperation({ kind: "ai", prompt: "p" })).toBe(true);
     expect(isOperation({ kind: "ai", prompt: "p", target: web })).toBe(false);
     expect(isOperation({ kind: "ai", prompt: "p", target: {} })).toBe(false);
   });
 
   it("rejects fields that belong to another operation kind", () => {
-    expect(isOperation({ kind: "exec", command: "x", package: "p" })).toBe(false);
+    expect(isOperation({ kind: "shell", command: "x", package: "p" })).toBe(false);
     expect(isOperation({ kind: "jssg", package: "p", command: "x" })).toBe(false);
     expect(isOperation({ kind: "ai", prompt: "p", env: {} })).toBe(false);
   });

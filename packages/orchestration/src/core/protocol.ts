@@ -8,12 +8,12 @@
 import type { Json } from "./json.ts";
 import { isSafeRelativePath } from "./paths.ts";
 
-export const PROTOCOL_VERSION = 5 as const;
+export const PROTOCOL_VERSION = 6 as const;
 
 export type CompletionStatus = "succeeded" | "failed" | "cancelled" | "unknown";
 
-export interface ExecOperation {
-  kind: "exec";
+export interface ShellOperation {
+  kind: "shell";
   command: string;
   env?: Record<string, string>;
 }
@@ -23,7 +23,7 @@ export interface ExecOperation {
  * relative to the executor's working directory; `include` and `exclude` are
  * glob patterns relative to `root`. The effective file set is the
  * intersection of this target with the JSSG definition's own applicability.
- * Author input is validated and normalized by `target.ts`; on the wire this is
+ * Author input is validated and normalized by `authoring/target.ts`; on the wire this is
  * plain data and part of the command content that replay compares.
  */
 export interface Target {
@@ -40,7 +40,7 @@ export type SemanticAnalysis = "file" | "workspace" | { mode: "file" | "workspac
 
 /**
  * Build-time identity of one transform artifact: the definition's `name` and
- * the lowercase hex SHA-256 of the bundled source (`build.ts`). It carries no
+ * the lowercase hex SHA-256 of the bundled source (`bundle/build.ts`). It carries no
  * path, so the command identity recorded in history is the same on every
  * checkout; the source itself travels in `RequestContext.artifact`.
  */
@@ -85,7 +85,7 @@ export interface AiOperation {
   input?: Json;
 }
 
-export type Operation = ExecOperation | JssgOperation | AiOperation;
+export type Operation = ShellOperation | JssgOperation | AiOperation;
 
 /** One selected file, already read by the host. `path` is target-root-relative. */
 export interface BatchFile {
@@ -154,7 +154,7 @@ export type OperationCompletion =
       protocolVersion: typeof PROTOCOL_VERSION;
       commandId: string;
       status: "succeeded";
-      /** For exec `{ stdout }`; for jssg the per-file structured outputs in file order. */
+      /** For shell `{ stdout }`; for jssg the per-file structured outputs in file order. */
       output: Json;
       error?: never;
     }
@@ -201,11 +201,11 @@ export function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly st
 
 /**
  * Field sets per operation kind. Validation is strict: a field from another
- * variant, most importantly a `target` on `exec` or `ai`, makes the operation
+ * variant, most importantly a `target` on `shell` or `ai`, makes the operation
  * invalid rather than being ignored. Mirrors `deny_unknown_fields` in the Rust bridge.
  */
 const OPERATION_FIELDS = {
-  exec: ["kind", "command", "env"],
+  shell: ["kind", "command", "env"],
   jssg: [
     "kind",
     "transform",
@@ -222,7 +222,7 @@ const OPERATION_FIELDS = {
 
 /**
  * Wire shape plus the path rule the bridge also enforces (`root` is a safe
- * relative path). Normalization and non-empty lists live in `target.ts`.
+ * relative path). Normalization and non-empty lists live in `authoring/target.ts`.
  */
 export function isTarget(value: unknown): value is Target {
   return (
@@ -340,9 +340,9 @@ function isCompletionError(value: unknown): value is CompletionError {
 export function isOperation(value: unknown): value is Operation {
   if (!isRecord(value)) return false;
   switch (value.kind) {
-    case "exec":
+    case "shell":
       return (
-        hasOnlyKeys(value, OPERATION_FIELDS.exec) &&
+        hasOnlyKeys(value, OPERATION_FIELDS.shell) &&
         typeof value.command === "string" &&
         (value.env === undefined || isStringMap(value.env))
       );

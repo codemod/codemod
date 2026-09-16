@@ -1,33 +1,33 @@
 /**
  * Runtime and lifecycle for arbitrary workflows and static composition. The
  * runtime for the current run is bound to async continuations (see
- * `context.ts`). Determinism is NOT enforced by a
+ * `authoring/context.ts`). Determinism is NOT enforced by a
  * sandbox in this prototype: it is validated after the fact by replaying
  * history and comparing issued commands (see README).
  */
-import { operationOf, type Command } from "./command.ts";
-import { withRuntime, type Runtime } from "./context.ts";
-import { OperationError } from "./errors.ts";
-import { CollectingSink, type EventSink } from "./events.ts";
-import type { OperationExecutor } from "./executor.ts";
+import { operationOf, type Command } from "../authoring/command.ts";
+import { withRuntime, type Runtime } from "../authoring/context.ts";
+import { OperationError } from "../core/errors.ts";
+import { CollectingSink, type EventSink } from "../core/events.ts";
+import type { OperationExecutor } from "../execution/executor.ts";
 import { ReplayGate, type CommandGate } from "./gate.ts";
 import {
   MemoryHistoryStore,
   type History,
   type HistoryStore,
   type ScheduledCommand,
-} from "./history.ts";
-import type { Json } from "./json.ts";
+} from "../core/history.ts";
+import type { Json } from "../core/json.ts";
 import {
   runStage,
   type Executable,
   type ExecutableOutput,
   type StageInput,
-} from "./composition.ts";
-import { AdmissionScheduler, SchedulingExecutor } from "./scheduler.ts";
-import { validate } from "./schema.ts";
+} from "../authoring/composition.ts";
+import { AdmissionScheduler, SchedulingExecutor } from "../execution/scheduler.ts";
+import { validate } from "../authoring/schema.ts";
 
-export interface RunOptions {
+export interface RunSettings {
   executor: OperationExecutor;
   /** Defaults to an empty in-memory store. */
   history?: HistoryStore;
@@ -47,6 +47,16 @@ export interface RunOptions {
   scheduler?: AdmissionScheduler;
 }
 
+/**
+ * The root's flowing input. Required when the root declares one (a runnable
+ * with an input schema, a dynamic step with a parameter, a static node whose
+ * first stage or any member does); otherwise optional and ignored by bound
+ * commands. `null` is a value; an absent `input` is `undefined`.
+ */
+export type RootInput<I> = undefined extends I ? { input?: I } : { input: I };
+
+export type RunOptions<I = unknown> = RunSettings & RootInput<I>;
+
 export interface RunResult<R> {
   output: R;
   /** True when the final output was already recorded and this run only replayed. */
@@ -55,8 +65,8 @@ export interface RunResult<R> {
 }
 
 export async function run<T extends Executable>(
-  executable: T & (undefined extends StageInput<T> ? unknown : never),
-  options: RunOptions,
+  executable: T,
+  options: RunOptions<StageInput<T>>,
 ): Promise<RunResult<ExecutableOutput<T>>> {
   const store = options.history ?? new MemoryHistoryStore();
   const events = options.events ?? new CollectingSink();
@@ -68,14 +78,15 @@ export async function run<T extends Executable>(
     events,
   );
   const gate = new ReplayGate(await store.load(), store, executor, events, options.signal);
-  const runtime = new WorkflowRuntime(gate);
+  const runtime = new RunRuntime(gate);
   let output: unknown;
   let bodyError: unknown;
   let bodySucceeded = false;
   try {
     // The async wrapper keeps the runtime bound while nested workflows and
     // composition nodes run and while their thenable results are adopted.
-    output = await withRuntime(runtime, async () => runStage(runtime, executable, undefined));
+    const input: unknown = (options as { input?: unknown }).input;
+    output = await withRuntime(runtime, async () => runStage(runtime, executable, input));
     bodySucceeded = true;
   } catch (error) {
     bodyError = error;
@@ -104,13 +115,13 @@ export async function run<T extends Executable>(
  * and every command issued, so a body that returns before awaiting its work
  * is refused finalization instead of leaving results to land afterwards.
  */
-class WorkflowRuntime implements Runtime {
+class RunRuntime implements Runtime {
   readonly #gate: CommandGate;
-  readonly #created = new Set<Command>();
+  readonly #created = new Set<Command<unknown, unknown>>();
   readonly #compositions = new Map<object, readonly string[]>();
   readonly #startedCompositions = new Set<object>();
-  readonly #claimed = new Set<Command>();
-  readonly #issued = new Map<Command, Promise<unknown>>();
+  readonly #claimed = new Set<Command<unknown, unknown>>();
+  readonly #issued = new Map<Command<unknown, unknown>, Promise<unknown>>();
   readonly #inFlight = new Set<Promise<unknown>>();
   #closed = false;
 
@@ -118,7 +129,7 @@ class WorkflowRuntime implements Runtime {
     this.#gate = gate;
   }
 
-  created(command: Command): void {
+  created(command: Command<unknown, unknown>): void {
     if (!this.#closed) this.#created.add(command);
   }
 
@@ -130,11 +141,15 @@ class WorkflowRuntime implements Runtime {
     if (!this.#closed) this.#startedCompositions.add(composition);
   }
 
-  claimed(command: Command): void {
+  claimed(command: Command<unknown, unknown>): void {
     if (!this.#closed) this.#claimed.add(command);
   }
 
-  issue<O>(command: Command<O>, concurrent = false): Promise<O> {
+  issue<O>(
+    command: Command<O, unknown>,
+    concurrent = false,
+    flow?: { input: unknown },
+  ): Promise<O> {
     const existing = this.#issued.get(command);
     if (existing !== undefined) return existing as Promise<O>;
     if (this.#closed) {
@@ -142,7 +157,7 @@ class WorkflowRuntime implements Runtime {
         new Error(`command '${command.id}' was issued after the workflow body returned`),
       );
     }
-    const operation = this.#resolve(command, concurrent);
+    const operation = this.#resolve(command, concurrent, flow);
     this.#issued.set(command, operation);
     this.#inFlight.add(operation);
     void operation.then(
@@ -173,9 +188,19 @@ class WorkflowRuntime implements Runtime {
     };
   }
 
-  async #resolve<O>(command: Command<O>, concurrent: boolean): Promise<O> {
+  async #resolve<O>(
+    command: Command<O, unknown>,
+    concurrent: boolean,
+    flow?: { input: unknown },
+  ): Promise<O> {
     const { runnable, id } = command;
-    const input = await validate(runnable.input, command.input, `input of '${id}'`);
+    if (command.inputMode === "flow" && flow === undefined) {
+      throw new Error(
+        `command '${id}' requires flowing input; place it in sequence()/parallel() or invoke it with { input }`,
+      );
+    }
+    const rawInput = command.inputMode === "flow" ? flow?.input : command.input;
+    const input = await validate(runnable.input, rawInput, `input of '${id}'`);
     const scheduled: ScheduledCommand = {
       id,
       runnable: runnable.name,

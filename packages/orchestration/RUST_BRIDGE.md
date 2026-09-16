@@ -9,15 +9,15 @@ outputs, or decides repository-level failure policy; all of that is
 execution and the checks on its own side of the boundary.
 
 ```text
-exec   TypeScript BridgeExecutor -> bridge process -> butterflow_runners::DirectRunner
+shell   TypeScript BridgeExecutor -> bridge process -> butterflow_runners::DirectRunner
 jssg   TypeScript executeJssg    -> bridge process -> one batch through the QuickJS sandbox
 ```
 
 ## Files
 
 - `crates/execution-bridge/src/lib.rs`: serde structs mirroring
-  `packages/orchestration/src/protocol.ts` (protocol version 5),
-  `parse_request`, `execute` (`exec` through the runner, `jssg` through
+  `packages/orchestration/src/core/protocol.ts` (protocol version 6),
+  `parse_request`, `execute` (`shell` through the runner, `jssg` through
   `jssg::transform_batch`, `ai` refused).
 - `crates/execution-bridge/src/jssg.rs`: one batch (verified artifact,
   language, static selector, input, optional semantic provider, then every
@@ -30,7 +30,7 @@ jssg   TypeScript executeJssg    -> bridge process -> one batch through the Quic
 - Tests: `tests/protocol.rs` (the shared `fixtures/protocol` and strictness),
   `tests/jssg.rs` (batches through the real sandbox), `tests/bin.rs`, and
   `tests/contracts.rs` (the engine side of `fixtures/walker/cases.json` and of
-  `src/languages.json`).
+  `src/execution/languages.json`).
 - In `crates/codemod-sandbox`, the primitives the bridge uses and the engine
   does not: `execute_codemod_with_loader` (the existing
   `execute_codemod_with_quickjs` with the module loader as a parameter, so a
@@ -40,13 +40,13 @@ jssg   TypeScript executeJssg    -> bridge process -> one batch through the Quic
   eligibility test, without a JavaScript runtime), and the `stage_writes`
   option.
 
-## Protocol (JSON files, version 5)
+## Protocol (JSON files, version 6)
 
 ```ts
 interface OperationRequest {
-  protocolVersion: 5;
+  protocolVersion: 6;
   commandId: string;
-  operation: ExecOperation | JssgOperation | AiOperation; // command identity, recorded in history
+  operation: ShellOperation | JssgOperation | AiOperation; // command identity, recorded in history
   context?: {
     targetRoot?: string; // absolute; every file path below is relative to it
     files?: { path: string; content: string }[]; // the jssg batch, in transform order
@@ -67,10 +67,10 @@ interface JssgOperation {
 }
 
 interface OperationCompletion {
-  protocolVersion: 5;
+  protocolVersion: 6;
   commandId: string;
   status: "succeeded" | "failed" | "cancelled" | "unknown";
-  output?: Json; // exec: { stdout }; jssg: { files: FileOutcome[] }
+  output?: Json; // shell: { stdout }; jssg: { files: FileOutcome[] }
   error?: { message: string; exitCode?: number; output?: string; details?: Json };
 }
 
@@ -82,7 +82,7 @@ interface FileOutcome {
 ```
 
 Every struct denies unknown fields on both sides (`deny_unknown_fields` in
-Rust, the `is*` guards in `protocol.ts`), so a `target` on `exec` or `ai`, a
+Rust, the `is*` guards in `protocol.ts`), so a `target` on `shell` or `ai`, a
 `script` path, a selector `id` or `language`, or a stray field in the
 context is a parse error rather than a dropped field. `context` is
 executor-side data: it is attached by the host that spawns the bridge and
@@ -237,4 +237,4 @@ cross-file transaction on ordinary filesystems.
   files on this path even if asked, and cannot run a transform whose source
   does not match the identity the workflow recorded.
 - One request and one response per command means cancellation is one
-  `SIGKILL`, and `exec` and `jssg` share the same spawn path (`bridge.ts`).
+  `SIGKILL`, and `shell` and `jssg` share the same spawn path (`bridge.ts`).

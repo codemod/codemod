@@ -1,29 +1,29 @@
 /** Static sequential and parallel composition around wire-operation runnables. */
 import { createCommand, isCommand, type Command } from "./command.ts";
-import { activeRuntime, NoActiveWorkflowError, withRuntime, type Runtime } from "./context.ts";
-import { CompositionValidationError, DuplicateCommandIdError } from "./errors.ts";
-import type { Target } from "./protocol.ts";
+import { activeRuntime, NoActiveRunError, withRuntime, type Runtime } from "./context.ts";
+import { CompositionValidationError, DuplicateCommandIdError } from "../core/errors.ts";
+import type { Target } from "../core/protocol.ts";
 import { isRunnable, type Runnable } from "./runnable.ts";
-import { isWorkflow, runWorkflow, workflowRequiresInput, type Workflow } from "./workflow-node.ts";
+import { dynamicRequiresInput, isDynamic, runDynamic, type Dynamic } from "./dynamic.ts";
 
 type AnyRunnable = Runnable<unknown, unknown>;
-type AnyWorkflow = Workflow<never, unknown>;
-type AnyCommand = Command<unknown>;
+type AnyDynamic = Dynamic<never, unknown>;
+type AnyCommand = Command<unknown, unknown>;
 type AnyParallel = ParallelNode<never, unknown[]>;
 type AnySequence = SequenceNode<never, unknown>;
 declare const stageInput: unique symbol;
 declare const stageOutput: unique symbol;
 const inputRequired = Symbol("inputRequired");
 
-/** A bound command ignores flowing input; every other stage receives it. */
-export type Stage = AnyRunnable | AnyCommand | AnyWorkflow | AnyParallel | AnySequence;
+/** Invocations consume flow unless they have no input or explicitly bind one. */
+export type Stage = AnyCommand | AnyDynamic | AnyParallel | AnySequence;
 
 export type StageInput<S> =
-  S extends Command<unknown>
-    ? unknown
+  S extends Command<unknown, infer I>
+    ? I
     : S extends Runnable<infer I, unknown>
       ? I
-      : S extends Workflow<infer I, unknown>
+      : S extends Dynamic<infer I, unknown>
         ? I
         : S extends ParallelNode<infer I, unknown[]>
           ? I
@@ -32,11 +32,11 @@ export type StageInput<S> =
             : never;
 
 export type StageOutput<S> =
-  S extends Command<infer O>
+  S extends Command<infer O, infer _I>
     ? O
     : S extends Runnable<infer _I, infer O>
       ? O
-      : S extends Workflow<infer _I, infer O>
+      : S extends Dynamic<infer _I, infer O>
         ? O
         : S extends ParallelNode<infer _I, infer O>
           ? O
@@ -47,8 +47,7 @@ export type StageOutput<S> =
 type StageOutputs<S extends readonly Stage[]> = { -readonly [K in keyof S]: StageOutput<S[K]> };
 type First<S extends readonly Stage[]> = S extends readonly [infer F, ...unknown[]] ? F : never;
 type Last<S extends readonly Stage[]> = S extends readonly [...unknown[], infer L] ? L : never;
-type FlowingInput<S> =
-  S extends Command<unknown> ? never : [StageInput<S>] extends [void] ? never : StageInput<S>;
+type FlowingInput<S> = [StageInput<S>] extends [void] ? never : StageInput<S>;
 type UnionToIntersection<U> = (U extends unknown ? (input: U) => void : never) extends (
   input: infer I,
 ) => void
@@ -76,13 +75,13 @@ export interface OperationIr {
   id: string;
   name: string;
   kind: string;
-  input: "flow" | "bound";
+  input: "none" | "flow" | "bound";
   target?: Target;
 }
 
-export interface WorkflowIr {
-  /** Opaque until workflow functions are bundled for the workflow sandbox. */
-  type: "workflow";
+export interface DynamicIr {
+  /** Opaque until dynamic functions are bundled for the sandbox. */
+  type: "dynamic";
 }
 
 export interface SequenceIr {
@@ -95,7 +94,7 @@ export interface ParallelIr {
   members: CompositionIrNode[];
 }
 
-export type CompositionIrNode = OperationIr | WorkflowIr | SequenceIr | ParallelIr;
+export type CompositionIrNode = OperationIr | DynamicIr | SequenceIr | ParallelIr;
 export interface CompositionIr<Root extends SequenceIr | ParallelIr = SequenceIr | ParallelIr> {
   version: 1;
   root: Root;
@@ -127,7 +126,10 @@ export type Parallel<I = unknown, Outputs extends unknown[] = unknown[]> = Paral
 > &
   AwaitableNode<I, Outputs>;
 
-export type Executable = AnyCommand | AnyWorkflow | AnyParallel | AnySequence;
+/**
+ * Anything `run()` accepts as a root. A bare runnable is an implicit single invocation.
+ */
+export type Executable = AnyRunnable | AnyCommand | AnyDynamic | AnyParallel | AnySequence;
 export type ExecutableOutput<T> = StageOutput<T>;
 
 /** Run stages in order, passing each output to the next stage. */
@@ -167,16 +169,38 @@ export function isParallel(value: unknown): value is AnyParallel {
 }
 
 export function isExecutable(value: unknown): value is Executable {
-  return isCommand(value) || isWorkflow(value) || isSequence(value) || isParallel(value);
+  return (
+    isRunnable(value) ||
+    isCommand(value) ||
+    isDynamic(value) ||
+    isSequence(value) ||
+    isParallel(value)
+  );
 }
 
-export async function runStage(runtime: Runtime, stage: Stage, input: unknown): Promise<unknown> {
-  if (isCommand(stage)) return runtime.issue(stage);
+/**
+ * Whether a root needs an input value before it can run: a flow invocation,
+ * a dynamic step whose body takes a parameter, or a static node
+ * whose first stage (sequence) or any member (parallel) does.
+ */
+export function executableRequiresInput(executable: Executable): boolean {
+  if (isRunnable(executable)) return executable.input !== undefined;
+  return stageRequiresInput(executable);
+}
+
+export async function runStage(
+  runtime: Runtime,
+  stage: Executable,
+  input: unknown,
+): Promise<unknown> {
   if (isRunnable(stage)) {
-    const command = createCommand(stage, input === undefined ? undefined : { input });
+    const command = createCommand(stage, stage.input === undefined ? undefined : { input });
     return runtime.issue(command);
   }
-  if (isWorkflow(stage)) return runWorkflow(stage, input as never);
+  if (isCommand(stage)) {
+    return runtime.issue(stage, false, stage.inputMode === "flow" ? { input } : undefined);
+  }
+  if (isDynamic(stage)) return runDynamic(stage, input as never);
   if (isSequence(stage)) return runSequence(runtime, stage, input);
   if (isParallel(stage)) return runParallel(runtime, stage, input);
   throw new CompositionValidationError("stage is not runnable");
@@ -230,24 +254,23 @@ function concurrentRuntime(runtime: Runtime): Runtime {
       runtime.createdComposition(composition, commandIds),
     startedComposition: (composition) => runtime.startedComposition(composition),
     claimed: (command) => runtime.claimed(command),
-    issue: (command) => runtime.issue(command, true),
+    issue: (command, _concurrent, flow) => runtime.issue(command, true, flow),
   };
 }
 
 function validateStages(stages: readonly Stage[]): void {
   for (const stage of stages) {
-    if (isCommand(stage) || isRunnable(stage) || isWorkflow(stage)) continue;
+    if (isCommand(stage) || isDynamic(stage)) continue;
     if (isSequence(stage) || isParallel(stage)) continue;
     throw new CompositionValidationError(
-      "members must be commands, runnables, workflows, sequences, or parallel groups",
+      "members must be command invocations, workflows, sequences, or parallel groups",
     );
   }
 }
 
 function stageRequiresInput(stage: Stage): boolean {
-  if (isCommand(stage)) return false;
-  if (isRunnable(stage)) return stage.input !== undefined;
-  if (isWorkflow(stage)) return workflowRequiresInput(stage);
+  if (isCommand(stage)) return stage.inputMode === "flow";
+  if (isDynamic(stage)) return dynamicRequiresInput(stage);
   return stage[inputRequired];
 }
 
@@ -259,7 +282,7 @@ function validateUniqueIds(stages: readonly Stage[]): void {
       seen.add(node.id);
       return;
     }
-    if (node.type === "workflow") return;
+    if (node.type === "dynamic") return;
     for (const child of node.type === "sequence" ? node.stages : node.members) visit(child);
   };
   for (const stage of stages) visit(irOf(stage));
@@ -267,7 +290,7 @@ function validateUniqueIds(stages: readonly Stage[]): void {
 
 function operationIds(node: CompositionIrNode): string[] {
   if (node.type === "operation") return [node.id];
-  if (node.type === "workflow") return [];
+  if (node.type === "dynamic") return [];
   return (node.type === "sequence" ? node.stages : node.members).flatMap(operationIds);
 }
 
@@ -287,26 +310,17 @@ function irOf(stage: Stage): CompositionIrNode {
       id: stage.id,
       name: stage.runnable.name,
       kind: stage.runnable.kind,
-      input: "bound",
+      input: stage.inputMode,
       ...(stage.target === undefined ? {} : { target: stage.target }),
     };
   }
-  if (isRunnable(stage)) {
-    return {
-      type: "operation",
-      id: stage.name,
-      name: stage.name,
-      kind: stage.kind,
-      input: "flow",
-    };
-  }
-  if (isWorkflow(stage)) return { type: "workflow" };
+  if (isDynamic(stage)) return { type: "dynamic" };
   return stage.ir.root;
 }
 
-function inActiveWorkflow<T>(what: string, body: (runtime: Runtime) => Promise<T>): Promise<T> {
+function inActiveDynamic<T>(what: string, body: (runtime: Runtime) => Promise<T>): Promise<T> {
   const runtime = activeRuntime();
-  if (runtime === undefined) return Promise.reject(new NoActiveWorkflowError(what));
+  if (runtime === undefined) return Promise.reject(new NoActiveRunError(what));
   return body(runtime);
 }
 
@@ -327,7 +341,7 @@ class SequenceImpl implements SequenceNode<never, unknown> {
     if (!requiresInput) {
       // oxlint-disable-next-line unicorn/no-thenable
       this.then = (onfulfilled, onrejected) =>
-        inActiveWorkflow("sequence", (runtime) => runSequence(runtime, this, undefined)).then(
+        inActiveDynamic("sequence", (runtime) => runSequence(runtime, this, undefined)).then(
           onfulfilled,
           onrejected,
         );
@@ -352,7 +366,7 @@ class ParallelImpl implements ParallelNode<never, unknown[]> {
     if (!requiresInput) {
       // oxlint-disable-next-line unicorn/no-thenable
       this.then = (onfulfilled, onrejected) =>
-        inActiveWorkflow("parallel group", (runtime) => runParallel(runtime, this, undefined)).then(
+        inActiveDynamic("parallel group", (runtime) => runParallel(runtime, this, undefined)).then(
           onfulfilled,
           onrejected,
         );

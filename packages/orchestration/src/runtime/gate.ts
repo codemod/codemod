@@ -3,9 +3,9 @@
  * a `resolve`, and the workflow's return becomes a `finish`. The gate is the
  * only place that reads or appends history.
  */
-import { NondeterminismError, DuplicateCommandIdError } from "./errors.ts";
-import { nullSink, type EventSink } from "./events.ts";
-import type { OperationExecutor } from "./executor.ts";
+import { NondeterminismError, DuplicateCommandIdError } from "../core/errors.ts";
+import { nullSink, type EventSink } from "../core/events.ts";
+import type { OperationExecutor } from "../execution/executor.ts";
 import {
   completions,
   finalOutput,
@@ -13,9 +13,9 @@ import {
   type History,
   type HistoryStore,
   type ScheduledCommand,
-} from "./history.ts";
-import { canonicalJson, type Json } from "./json.ts";
-import { PROTOCOL_VERSION, type OperationCompletion } from "./protocol.ts";
+} from "../core/history.ts";
+import { canonicalJson, type Json } from "../core/json.ts";
+import { PROTOCOL_VERSION, type OperationCompletion } from "../core/protocol.ts";
 
 /** Migration seam: resolve a command (replay or execute) and finish a run. */
 export interface CommandGate {
@@ -174,11 +174,11 @@ export class ReplayGate implements CommandGate {
           "workflow returned a different final output than recorded",
         );
       }
-      this.events.emit({ type: "workflow.finished", output, replayed: true });
+      this.events.emit({ type: "run.finished", output, replayed: true });
       return { replayed: true };
     }
     await this.store.append({ type: "finalized", output });
-    this.events.emit({ type: "workflow.finished", output, replayed: false });
+    this.events.emit({ type: "run.finished", output, replayed: false });
     return { replayed: false };
   }
 }

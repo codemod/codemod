@@ -1,4 +1,4 @@
-import { guard, jssg, workflow } from "../../../src/index.ts";
+import { guard, jssg, dynamic } from "../../../src/index.ts";
 import { migrateText, posixPath } from "./helpers.ts";
 
 interface Finding {
@@ -35,7 +35,7 @@ const migrate = jssg({
   },
 });
 
-export default workflow(() =>
+export default dynamic(() =>
   migrate({
     target: { include: ["src/**"], exclude: ["**/*.generated.ts"] },
   }),

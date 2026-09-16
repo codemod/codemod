@@ -28,7 +28,7 @@ const migrate = jssg({
     return { content: migrateText(root.root().text()), output: { input } };
   },
 });
-export default workflow(() => migrate());
+export default dynamic(() => migrate());
 `;
 
 let dir: string;
@@ -68,7 +68,7 @@ describe("buildModule", () => {
     expect(artifact!.source).toContain("options.params.input");
     expect(artifact!.source).toMatch(/export \{\s+transform as default\s+\}/u);
     expect(artifact!.source).not.toContain("unused");
-    expect(artifact!.source).not.toContain("workflow(");
+    expect(artifact!.source).not.toContain("dynamic(");
     expect(artifact!.source).not.toContain("orchestration");
     expect(artifact!.source).not.toContain(dir);
     // The module keeps everything else and now references the artifact.
@@ -76,7 +76,7 @@ describe("buildModule", () => {
       `transform: ${JSON.stringify({ name: "migrate", hash: artifact!.hash })}`,
     );
     expect(source).not.toContain("transform(root");
-    expect(source).toContain("export default workflow(() => migrate());");
+    expect(source).toContain("export default dynamic(() => migrate());");
   });
 
   it.each<[string, string, RegExp]>([
@@ -230,7 +230,7 @@ describe("loadWorkflow through codemod-workflow", () => {
     // without Rust still shows the loader's artifacts reaching the executor.
     const repo = mkdtempSync(join(tmpdir(), "codemod-load-"));
     writeFileSync(join(repo, "a.ts"), "a\n");
-    const workflowPath = resolve(import.meta.dirname, "fixtures/load/workflow.ts");
+    const workflowPath = resolve(import.meta.dirname, "fixtures/load/dynamic.ts");
     try {
       const result = spawnSync(
         process.execPath,

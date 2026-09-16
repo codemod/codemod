@@ -1,13 +1,13 @@
 //! Execution bridge for the TypeScript orchestration prototype.
 //!
 //! One binary, one exchange: an `OperationRequest` is read from a file, an
-//! `OperationCompletion` is written to another. `exec` runs through the
+//! `OperationCompletion` is written to another. `shell` runs through the
 //! existing `butterflow_runners::Runner`; `jssg` runs one batch of
 //! host-supplied files through a host-supplied transform bundle in the
 //! sandbox (see [`jssg`]). The bridge never reads author files, walks a
 //! repository, interprets globs, orders files, applies edits, or decides
 //! repository-level failure policy: TypeScript owns all of that
-//! (`packages/orchestration/src/jssg.ts`, `RUST_BRIDGE.md`).
+//! (`packages/orchestration/src/execution/jssg.ts`, `RUST_BRIDGE.md`).
 
 use std::collections::HashMap;
 
@@ -18,10 +18,10 @@ use serde_json::{json, Value};
 
 pub mod jssg;
 
-/// Must match `PROTOCOL_VERSION` in `packages/orchestration/src/protocol.ts`.
-pub const PROTOCOL_VERSION: u32 = 5;
+/// Must match `PROTOCOL_VERSION` in `packages/orchestration/src/core/protocol.ts`.
+pub const PROTOCOL_VERSION: u32 = 6;
 
-/// Every variant rejects fields it does not declare, so a `target` on `exec`
+/// Every variant rejects fields it does not declare, so a `target` on `shell`
 /// or `ai` is a parse error rather than a silently dropped field. `include`,
 /// `exclude`, and `target` are decoded for strictness only: TypeScript has
 /// already turned them into the file list in `RequestContext::files`.
@@ -37,7 +37,7 @@ pub const PROTOCOL_VERSION: u32 = 5;
     deny_unknown_fields
 )]
 pub enum Operation {
-    Exec {
+    Shell {
         command: String,
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         env: HashMap<String, String>,
@@ -243,13 +243,13 @@ pub fn parse_request(text: &str) -> Result<OperationRequest, String> {
     Ok(request)
 }
 
-/// Execute one request. `exec` runs in the process working directory (the
+/// Execute one request. `shell` runs in the process working directory (the
 /// runner owns that). `jssg` transforms `context.files` and returns the edits
 /// as data in `output.files`; it never writes to the repository.
 pub async fn execute(runner: &dyn Runner, request: &OperationRequest) -> OperationCompletion {
     let id = &request.command_id;
     match &request.operation {
-        Operation::Exec { command, env } => {
+        Operation::Shell { command, env } => {
             let mut merged: HashMap<String, String> = std::env::vars().collect();
             merged.extend(env.clone());
             completion_from_result(id, runner.run_command(command, &merged, None).await)

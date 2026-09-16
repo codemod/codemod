@@ -10,7 +10,7 @@
  * The model is a weighted semaphore with a strict FIFO queue. Weights make one
  * workspace-semantic JSSG command, which reads and retains the whole selected
  * file set and then has a bridge process parse and index it, cost more than an
- * ordinary `exec`. Strict FIFO (only the head of the queue may be admitted)
+ * ordinary `shell`. Strict FIFO (only the head of the queue may be admitted)
  * costs some utilization when a heavy command blocks lighter ones behind it,
  * and buys the guarantee that a heavy command is never starved.
  *
@@ -20,7 +20,7 @@
  * snapshot.
  */
 import { availableParallelism, totalmem } from "node:os";
-import { nullSink, type EventSink } from "./events.ts";
+import { nullSink, type EventSink } from "../core/events.ts";
 import type { OperationExecutor } from "./executor.ts";
 import {
   PROTOCOL_VERSION,
@@ -28,14 +28,14 @@ import {
   type OperationCompletion,
   type OperationRequest,
   type SemanticAnalysis,
-} from "./protocol.ts";
+} from "../core/protocol.ts";
 
 /**
  * Cost of one admitted operation, in units where 1 unit is roughly one
  * ordinary command holding one CPU.
  */
 export interface OperationWeights {
-  exec: number;
+  shell: number;
   ai: number;
   /** A JSSG batch: a bridge process plus the whole selected file set in memory. */
   jssg: number;
@@ -44,7 +44,7 @@ export interface OperationWeights {
 }
 
 export const DEFAULT_WEIGHTS: OperationWeights = {
-  exec: 1,
+  shell: 1,
   ai: 1,
   jssg: 2,
   jssgWorkspace: 4,
@@ -112,8 +112,8 @@ export function weightOf(
   weights: OperationWeights = DEFAULT_WEIGHTS,
 ): number {
   switch (operation.kind) {
-    case "exec":
-      return weights.exec;
+    case "shell":
+      return weights.shell;
     case "ai":
       return weights.ai;
     case "jssg":

@@ -64,7 +64,7 @@ export class InvocationError extends Error {
 
 /**
  * A JSSG invocation target is malformed, or a target was handed to a runnable
- * that cannot enforce it (`exec` or `ai`).
+ * that cannot enforce it (`shell` or `ai`).
  */
 export class TargetValidationError extends Error {
   constructor(

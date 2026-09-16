@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { cancelled, createHarness, failed, unknown } from "../src/harness.ts";
+import { cancelled, createHarness, failed, unknown } from "../src/host/harness.ts";
 import {
   DuplicateCommandIdError,
   BridgeExecutor,
   MemoryHistoryStore,
-  NoActiveWorkflowError,
+  NoActiveRunError,
   OperationError,
   PROTOCOL_VERSION,
-  exec,
+  shell,
   guard,
   jssg,
   parallel,
   sequence,
   run,
-  workflow,
+  dynamic,
 } from "../src/index.ts";
 import { ref } from "./helpers.ts";
 
@@ -30,7 +30,7 @@ const Summary = guard(
   (v: unknown): v is { migrated: number } => typeof v === "object" && v !== null,
 );
 
-const inspect = exec({ name: "inspect", command: "node inspect.js", output: Project });
+const inspect = shell({ name: "inspect", command: "node inspect.js", output: Project });
 const migrate = jssg({
   name: "migrate",
   transform: ref("migrate"),
@@ -39,7 +39,7 @@ const migrate = jssg({
   output: Summary,
 });
 
-const migration = workflow(async () => {
+const migration = dynamic(async () => {
   const project = await inspect();
   if (project.needsMigration) {
     const summary = await migrate({ input: project });
@@ -74,7 +74,7 @@ describe("workflow execution", () => {
     expect(result.commands.map((c) => c.id)).toEqual(["inspect"]);
   });
 
-  it("validates output schemas and rejects non-JSON exec stdout", async () => {
+  it("validates output schemas and rejects non-JSON shell stdout", async () => {
     const bad = createHarness({ results: { inspect: "not json" } });
     await expect(bad.run(migration)).rejects.toThrow(/stdout is not JSON/);
 
@@ -82,14 +82,14 @@ describe("workflow execution", () => {
     await expect(wrong.run(migration)).rejects.toThrow(/expected Project/);
   });
 
-  it("returns raw stdout when an exec runnable has no output schema", async () => {
-    const list = exec({ name: "list", command: "ls" });
+  it("returns raw stdout when an shell runnable has no output schema", async () => {
+    const list = shell({ name: "list", command: "ls" });
     const h = createHarness({ results: { list: "a\nb\n" } });
-    const result = await h.run(workflow(() => list()));
+    const result = await h.run(dynamic(() => list()));
     expect(result.output).toEqual({ stdout: "a\nb\n" });
   });
 
-  it("rejects a succeeded exec completion without string stdout", async () => {
+  it("rejects a succeeded shell completion without string stdout", async () => {
     const executor = {
       async execute(request: { commandId: string }) {
         return {
@@ -103,18 +103,18 @@ describe("workflow execution", () => {
 
     await expect(
       run(
-        workflow(() => exec({ name: "step", command: "step" })()),
+        dynamic(() => shell({ name: "step", command: "step" })()),
         { executor },
       ),
-    ).rejects.toThrow("exec completion did not contain string stdout");
+    ).rejects.toThrow("shell completion did not contain string stdout");
   });
 
   it("refuses to finalize when a created command was never awaited, and runs nothing", async () => {
     const h = createHarness({ fallback: () => "ok" });
-    const step = exec({ name: "step", command: "step" });
+    const step = shell({ name: "step", command: "step" });
     await expect(
       h.run(
-        workflow(async () => {
+        dynamic(async () => {
           step();
           return "done";
         }),
@@ -146,9 +146,9 @@ describe("workflow execution", () => {
       },
     };
     const result = run(
-      workflow(async () => {
+      dynamic(async () => {
         // Calling then() starts the command without waiting for it.
-        exec({ name: "step", command: "step" })().then(() => {});
+        shell({ name: "step", command: "step" })().then(() => {});
         return "done";
       }),
       { executor, history: store },
@@ -174,10 +174,10 @@ describe("workflow execution", () => {
 
   it("rejects a command issued from a stray callback after the body returned", async () => {
     const h = createHarness({ fallback: () => "ok" });
-    const late = exec({ name: "late", command: "late" });
+    const late = shell({ name: "late", command: "late" });
     let stray: Promise<unknown> | undefined;
     const result = await h.run(
-      workflow(async () => {
+      dynamic(async () => {
         // A timer callback still sees this run's runtime, but the run is closed by then.
         stray = new Promise<void>((resolve) => setTimeout(resolve, 0)).then(() => late());
         return "done";
@@ -192,12 +192,14 @@ describe("workflow execution", () => {
     expect(h.executed).toHaveLength(0);
   });
 
-  it("rejects a command that is awaited outside any workflow", async () => {
-    const step = exec({ name: "step", command: "step" });
-    await expect(step()).rejects.toThrow(NoActiveWorkflowError);
-    await expect(step()).rejects.toThrow(/command 'step' was awaited outside a workflow/);
-    await expect(sequence(step)).rejects.toThrow(/sequence was awaited outside a workflow/);
-    await expect(parallel(step)).rejects.toThrow(/parallel group was awaited outside a workflow/);
+  it("rejects a command that is awaited outside an active run", async () => {
+    const step = shell({ name: "step", command: "step" });
+    await expect(step()).rejects.toThrow(NoActiveRunError);
+    await expect(step()).rejects.toThrow(/command 'step' was awaited outside an active run/);
+    await expect(sequence(step())).rejects.toThrow(/sequence was awaited outside an active run/);
+    await expect(parallel(step())).rejects.toThrow(
+      /parallel group was awaited outside an active run/,
+    );
   });
 
   it("records a missing bridge binary as an unknown completion", async () => {
@@ -206,7 +208,7 @@ describe("workflow execution", () => {
 
     await expect(
       run(
-        workflow(() => exec({ name: "step", command: "step" })()),
+        dynamic(() => shell({ name: "step", command: "step" })()),
         {
           executor,
           history: store,
@@ -245,10 +247,10 @@ describe("workflow execution", () => {
 });
 
 describe("command ids", () => {
-  const lint = exec({ name: "lint", command: "lint" });
+  const lint = shell({ name: "lint", command: "lint" });
 
   it("uses explicit ids for repeated calls in a bounded loop and keeps them stable on replay", async () => {
-    const loop = workflow(async () => {
+    const loop = dynamic(async () => {
       const outputs: string[] = [];
       for (let i = 0; i < 3; i++) outputs.push((await lint({ id: `lint:${i}` })).stdout);
       return outputs;
@@ -263,7 +265,7 @@ describe("command ids", () => {
   });
 
   it("rejects repeated calls without an explicit id", async () => {
-    const twice = workflow(async () => {
+    const twice = dynamic(async () => {
       await lint();
       await lint();
     });
@@ -274,8 +276,8 @@ describe("command ids", () => {
 });
 
 describe("non-success outcomes", () => {
-  const step = exec({ name: "step", command: "step" });
-  const guarded = workflow(async () => {
+  const step = shell({ name: "step", command: "step" });
+  const guarded = dynamic(async () => {
     try {
       await step();
       return "ok";
@@ -309,8 +311,8 @@ describe("non-success outcomes", () => {
       command: {
         id: "step",
         runnable: "step",
-        kind: "exec",
-        operation: { kind: "exec", command: "step" },
+        kind: "shell",
+        operation: { kind: "shell", command: "step" },
       },
     });
     const h = createHarness({ history: store.toJSON(), results: { step: "must not execute" } });
@@ -321,7 +323,7 @@ describe("non-success outcomes", () => {
 
   it("propagates uncaught operation failures and leaves history unfinalized", async () => {
     const h = createHarness({ results: { step: failed("boom") } });
-    await expect(h.run(workflow(() => step()))).rejects.toBeInstanceOf(OperationError);
+    await expect(h.run(dynamic(() => step()))).rejects.toBeInstanceOf(OperationError);
     expect(h.store.toJSON().events.map((e) => e.type)).toEqual(["scheduled", "completed"]);
   });
 
@@ -340,7 +342,7 @@ describe("non-success outcomes", () => {
 
     await expect(
       run(
-        workflow(() => step()),
+        dynamic(() => step()),
         { executor, history: store },
       ),
     ).rejects.toThrow("executor returned completion for 'other' while running 'step'");
