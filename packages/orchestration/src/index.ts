@@ -11,8 +11,9 @@ export type {
   AgentOptions,
   AgentOutput,
   AgentRunnable,
-  AskResult,
+  AssessmentAskContext,
   AssessmentOptions,
+  AssessmentOutput,
   AssessmentRunnable,
   InputOf,
   JssgOptions,
@@ -71,13 +72,18 @@ export {
   NUMERIC_TOLERANCE,
   RESERVED_KEYS,
   assessmentResultProblem,
+  getAssessmentAsk,
   isAssessmentQuestions,
   questionsProblem,
+  setAssessmentAsk,
 } from "./core/assessment.ts";
 export type {
   AnswerFor,
   AssessmentAnswer,
+  AssessmentAskFn,
   AssessmentEntry,
+  AssessmentFile,
+  AssessmentFileResult,
   AssessmentQuestion,
   AssessmentQuestions,
   AssessmentResult,
@@ -158,9 +164,11 @@ export {
 } from "./core/history.ts";
 export type { History, HistoryEvent, HistoryStore, ScheduledCommand } from "./core/history.ts";
 export {
+  DEFAULT_ASSESSMENT_FILE_CONCURRENCY,
   DEFAULT_ASSESSMENT_TIMEOUT_MS,
   MAX_ASSESSMENT_RETRIES,
   executeAssessment,
+  executeFileAssessment,
 } from "./execution/assessment.ts";
 export type {
   AssessmentClient,

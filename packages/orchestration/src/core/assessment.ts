@@ -91,6 +91,59 @@ export interface AssessmentResult<Q extends AssessmentQuestions = AssessmentQues
   usage: AssessmentUsage;
 }
 
+/** One selected file as seen by the assessment: its root-relative path and UTF-8 content. */
+export interface AssessmentFile {
+  /** Root-relative `/`-separated path, in the deterministic walker order. */
+  path: string;
+  /** Full UTF-8 content of the file at selection time. */
+  content: string;
+}
+
+/**
+ * One entry in the ordered assessment result: the file that was assessed and its
+ * typed result. The array preserves the deterministic selector order regardless
+ * of completion order.
+ */
+export interface AssessmentFileResult<Q extends AssessmentQuestions = AssessmentQuestions> {
+  file: string;
+  assessment: AssessmentResult<Q>;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime-only hook: batch operation → per-file question resolver
+// ---------------------------------------------------------------------------
+
+/**
+ * The per-file question resolver the authoring layer attaches to a batch
+ * operation and the execution layer reads back. Stored in a module-scoped
+ * `WeakMap` — never as a property — so it cannot collide with wire fields,
+ * is invisible to every serialization path (`JSON.stringify`, `canonicalJson`,
+ * `cloneJson`, history), and is garbage-collected with the operation object.
+ *
+ * Operations deserialized from history have no entry; that is how the executor
+ * distinguishes a live batch from a replayed or single-file operation. The
+ * store lives in `core` so both the authoring layer (setter) and the execution
+ * layer (getter) can reach it without violating the one-way dependency rule
+ * (`authoring → core`, `execution → core`).
+ */
+export type AssessmentAskFn = (context: { file: AssessmentFile; input: unknown }) => unknown;
+
+const assessmentAskStore = new WeakMap<object, AssessmentAskFn>();
+
+/** Attach an ask resolver to a batch assessment operation (authoring layer). */
+export function setAssessmentAsk(operation: object, ask: AssessmentAskFn): void {
+  assessmentAskStore.set(operation, ask);
+}
+
+/** Retrieve the ask resolver, or `undefined` for single/replayed operations (execution layer). */
+export function getAssessmentAsk(operation: object): AssessmentAskFn | undefined {
+  return assessmentAskStore.get(operation);
+}
+
+// ---------------------------------------------------------------------------
+// Validation helpers
+// ---------------------------------------------------------------------------
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 

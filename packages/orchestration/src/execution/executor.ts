@@ -5,7 +5,12 @@
  */
 import { resolve } from "node:path";
 import { agentLaunch, externalAgentEnvProblem } from "./agent-env.ts";
-import { executeAssessment, type AssessmentExecutorOptions } from "./assessment.ts";
+import { getAssessmentAsk } from "../core/assessment.ts";
+import {
+  executeAssessment,
+  executeFileAssessment,
+  type AssessmentExecutorOptions,
+} from "./assessment.ts";
 import { spawnBridge } from "./bridge.ts";
 import type { ArtifactStore } from "../bundle/build.ts";
 import type { EventSink } from "../core/events.ts";
@@ -140,13 +145,26 @@ export class BridgeExecutor implements OperationExecutor {
           events,
           env,
         });
-      case "assessment":
+      case "assessment": {
+        // File-oriented batch: __ask carries the per-file question resolver.
+        const ask = getAssessmentAsk(request.operation);
+        if (ask !== undefined) {
+          return executeFileAssessment(
+            this.options.assessment ?? {},
+            this.cwd,
+            request.commandId,
+            request.operation,
+            ask,
+            signal,
+          );
+        }
         return executeAssessment(
           this.options.assessment ?? {},
           request.commandId,
           request.operation,
           signal,
         );
+      }
     }
   }
 }

@@ -15,12 +15,14 @@ import {
 } from "./command.ts";
 import {
   assessmentResultProblem,
-  isAssessmentEntry,
   questionsProblem,
+  setAssessmentAsk,
+  type AssessmentAskFn,
+  type AssessmentFileResult,
   type AssessmentQuestions,
   type AssessmentResult,
-  type AssessmentState,
 } from "../core/assessment.ts";
+import type { AssessmentFile } from "../core/assessment.ts";
 import { cloneJson, type Json } from "../core/json.ts";
 import { isSafeRelativePath } from "../core/paths.ts";
 import {
@@ -409,28 +411,33 @@ function excerpt(text: string, limit = 200): string {
 }
 
 /**
- * What `ask` returns: the explicit model state and the assessment questions,
- * resolved together from validated runtime input so that dynamic criteria
- * cannot diverge from state derivation.
+ * What `ask` receives per file: the selected file's path and content, plus
+ * the validated workflow input (or `undefined` when the assessment has no
+ * input schema). `ask` returns QUESTIONS ONLY — the model state (file
+ * content, path, and input) is assembled automatically.
  */
-export interface AskResult<Q extends AssessmentQuestions> {
-  /** Everything the model may see. Nothing else is sent. */
-  state: AssessmentState;
-  /** Named choice, score, and noul questions; answers come back under the same ids. */
-  questions: Q;
+export interface AssessmentAskContext<I = void> {
+  file: AssessmentFile;
+  input: I;
 }
 
 export interface AssessmentOptions<I, Q extends AssessmentQuestions> {
   name: string;
+  /** File selection globs relative to the working directory. At least one required. */
+  include: string[];
+  /** File exclusion globs relative to the working directory. */
+  exclude?: string[];
   input?: StandardSchemaV1<unknown, I>;
   /**
-   * Resolve the explicit model state and assessment questions from validated
-   * input. Both are returned together so that dynamic criteria (choice options
-   * derived from input, score levels computed at run time) stay in lockstep
-   * with the state the model evaluates. The resolved questions drive operation
-   * serialization, output validation, history, and replay.
+   * Define the assessment questions for one file. Receives the file (path and
+   * content) and the validated workflow input so that questions and choice
+   * options can be dynamic per file. Returns questions only — the model state
+   * is assembled automatically from `{ file: { path, content }, input? }`.
+   *
+   * The resolved questions drive per-file SDK calls and output validation.
+   * They are validated when the executor runs each file.
    */
-  ask: (input: I) => AskResult<Q>;
+  ask: (context: AssessmentAskContext<I>) => Q;
   /**
    * Pin a model or alias (e.g. `jev-1.13.0`). Omitted, the executor's default
    * answers: `TYPESAFE_DEFAULT_MODEL`, else `jev-latest`.
@@ -438,30 +445,68 @@ export interface AssessmentOptions<I, Q extends AssessmentQuestions> {
   model?: string;
 }
 
+/**
+ * The per-file assessment result: an ordered array with explicit file
+ * attribution, preserving deterministic selector order regardless of
+ * completion order.
+ */
+export type AssessmentOutput<Q extends AssessmentQuestions> = AssessmentFileResult<Q>[];
+
+/**
+ * A file-oriented assessment is a first-class `Runnable`: callable (creates
+ * a `Command`), composable in `sequence()`/`parallel()`, directly usable as
+ * root, and its single command replays from history with zero file I/O.
+ */
 export interface AssessmentRunnable<
   I = void,
   Q extends AssessmentQuestions = AssessmentQuestions,
-> extends Runnable<I, AssessmentResult<Q>, "assessment"> {
-  /** Resolve state and questions from input; exposed for tests and inspection. */
-  readonly ask: (input: I) => AskResult<Q>;
-  (): Command<AssessmentResult<Q>, I>;
-  (options: FlowInvocation): Command<AssessmentResult<Q>, I>;
-  (options: BoundInvocation<I>): Command<AssessmentResult<Q>>;
+> extends Runnable<I, AssessmentOutput<Q>, "assessment"> {
+  readonly include: readonly string[];
+  readonly exclude: readonly string[] | undefined;
+  /** Resolve questions for a given file; exposed for tests and inspection. */
+  readonly ask: (context: AssessmentAskContext<I>) => Q;
+  (): Command<AssessmentOutput<Q>, I>;
+  (options: FlowInvocation): Command<AssessmentOutput<Q>, I>;
+  (options: BoundInvocation<I>): Command<AssessmentOutput<Q>>;
 }
 
 /**
- * Read-only System One assessment: explicit state, typed questions, no
- * tools. The result carries every answer's probabilities and confidence, the
- * model that answered, and token usage; it decides nothing. Routing on those
- * numbers is workflow code.
+ * Sentinel questions for the batch operation. The real per-file questions are
+ * resolved by the executor at execution time (via the non-enumerable `__ask`
+ * on the operation) and embedded in the completion output alongside each
+ * file's result. The sentinel must pass `questionsProblem` so the operation
+ * is a valid `AssessmentOperation` on the wire.
+ */
+const BATCH_SENTINEL: AssessmentQuestions = {
+  __batch: { type: "noul", instructions: "file-oriented batch assessment" },
+};
+
+/**
+ * File-oriented read-only System One assessment. Selects files using
+ * JSSG-style include/exclude globs, reads each file's content, and runs one
+ * TypeSafe assessment per file. File selection, reading, and SDK calls happen
+ * entirely in the execution layer (using the `--target` root), never in the
+ * authoring layer.
  *
- * The `ask` function resolves both state and questions from validated input,
- * so dynamic criteria (choice options derived from input, score levels
- * computed at run time) cannot diverge from the state the model evaluates.
- * Questions are validated when the operation is built, not at definition
- * time, because they may depend on runtime input. The concrete resolved
- * questions are serialized in the operation, validated in the decoder, and
- * recorded in history for replay.
+ * Assessment is a proper `Runnable`: it can be a workflow root, compose in
+ * `sequence()`/`parallel()`, and its single command replays from history with
+ * zero file I/O or SDK calls.
+ *
+ * Each file's model state is automatically assembled as
+ * `{ file: { path, content }, input? }`. The `ask` function receives the
+ * file and input and defines QUESTIONS ONLY — it may produce dynamic
+ * criteria per file.
+ *
+ * The result is an ordered array of `{ file, assessment }` entries
+ * preserving the deterministic selector order regardless of completion
+ * order. Each file's response is validated against the exact questions
+ * resolved for that file.
+ *
+ * Assessment is read-only and tool-free. The include/exclude globs are the
+ * explicit privacy boundary: only matched file contents are sent to the
+ * model. Repository-level assessment is intentionally not supported; to
+ * assess a summary, have a preceding shell or JSSG step materialize a
+ * single summary file and assess that file.
  */
 export function assessment<I = void, Q extends AssessmentQuestions = AssessmentQuestions>(
   options: AssessmentOptions<I, Q>,
@@ -474,41 +519,90 @@ export function assessment<I = void, Q extends AssessmentQuestions = AssessmentQ
   if (options.model !== undefined && options.model.trim() === "") {
     throw new Error(`${where}: model must not be empty`);
   }
-  return callable<I, AssessmentResult<Q>, "assessment", AssessmentRunnable<I, Q>>({
+  if (!Array.isArray(options.include) || options.include.length === 0) {
+    throw new Error(`${where}: include must be a non-empty list of glob patterns`);
+  }
+  if (options.include.some((pattern) => typeof pattern !== "string" || pattern.trim() === "")) {
+    throw new Error(`${where}: include patterns must be non-empty strings`);
+  }
+  if (options.exclude !== undefined) {
+    if (!Array.isArray(options.exclude) || options.exclude.length === 0) {
+      throw new Error(`${where}: exclude must be a non-empty list of glob patterns`);
+    }
+    if (options.exclude.some((pattern) => typeof pattern !== "string" || pattern.trim() === "")) {
+      throw new Error(`${where}: exclude patterns must be non-empty strings`);
+    }
+  }
+  const include = [...options.include];
+  const exclude = options.exclude ? [...options.exclude] : undefined;
+
+  return callable<I, AssessmentOutput<Q>, "assessment", AssessmentRunnable<I, Q>>({
     kind: "assessment",
     name: options.name,
-    input: options.input,
+    include,
+    exclude,
     ask: options.ask,
-    toOperation(input) {
-      const result = options.ask(input);
-      if (
-        typeof result !== "object" ||
-        result === null ||
-        Array.isArray(result) ||
-        !("state" in result) ||
-        !("questions" in result)
-      ) {
-        throw new Error(`${where}: ask must return { state, questions }`);
-      }
-      if (!isAssessmentEntry(result.state)) {
-        throw new Error(`${where}: state must be non-empty text, a JSON object, or a JSON array`);
-      }
-      const qProblem = questionsProblem(result.questions);
-      if (qProblem !== undefined) throw new Error(`${where}: ${qProblem}`);
+    input: options.input,
+    toOperation(input: I): AssessmentOperation {
+      // State encodes the batch identity: include/exclude and optional input.
+      // This is what canonicalJson compares for replay.
+      const state: Record<string, Json> = {
+        include: cloneJson(include) as Json,
+      };
+      if (exclude !== undefined) state.exclude = cloneJson(exclude) as Json;
+      if (input !== undefined) state.input = cloneJson(input) as Json;
+
       const operation: AssessmentOperation = {
         kind: "assessment",
-        state: result.state,
-        questions: cloneJson(result.questions),
+        state,
+        questions: cloneJson(BATCH_SENTINEL),
       };
       if (options.model !== undefined) operation.model = options.model;
+
+      // Attach the per-file question resolver via the module-scoped WeakMap in
+      // core/assessment.ts. The WeakMap is invisible to every serialization path
+      // (JSON.stringify, canonicalJson, cloneJson, history) and cannot collide
+      // with wire fields. The execution layer reads it back via getAssessmentAsk
+      // to distinguish live batch operations from replayed/single-file ones.
+      setAssessmentAsk(operation, options.ask as AssessmentAskFn);
+
       return operation;
     },
-    async decode(output, operation) {
-      const invalid = assessmentResultProblem(operation.questions, output);
-      if (invalid !== undefined) throw new Error(`${where} output is invalid: ${invalid}`);
-      return output as unknown as AssessmentResult<Q>;
+    async decode(output: Json | undefined, _operation: AssessmentOperation) {
+      // Empty result: no files matched.
+      if (output === undefined || output === null) return [] as AssessmentOutput<Q>;
+      if (!Array.isArray(output)) {
+        throw new Error(`${where}: expected an array of per-file results`);
+      }
+      if (output.length === 0) return [] as AssessmentOutput<Q>;
+      const results: AssessmentFileResult<Q>[] = [];
+      for (const entry of output) {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+          throw new Error(`${where}: each result must be an object`);
+        }
+        const record = entry as Record<string, unknown>;
+        if (typeof record.file !== "string") {
+          throw new Error(`${where}: each result must have a string 'file' field`);
+        }
+        const qProblem = questionsProblem(record.questions);
+        if (qProblem !== undefined) {
+          throw new Error(`${where} output for '${record.file}': invalid questions: ${qProblem}`);
+        }
+        const rProblem = assessmentResultProblem(
+          record.questions as AssessmentQuestions,
+          record.assessment,
+        );
+        if (rProblem !== undefined) {
+          throw new Error(`${where} output for '${record.file}': ${rProblem}`);
+        }
+        results.push({
+          file: record.file,
+          assessment: record.assessment as unknown as AssessmentResult<Q>,
+        });
+      }
+      return results;
     },
-  });
+  } as Descriptor<AssessmentRunnable<I, Q>>);
 }
 
 /**

@@ -7,8 +7,11 @@ history and replayed from that history on later runs. `shell` runs through a
 small Rust bridge over `butterflow_runners::DirectRunner`, and `agent` runs
 through the same bridge on the built-in Butterflow agent (`codemod-ai`) or,
 when the step asks for it, the installed Claude Code or Codex CLI.
-`assessment` asks a System One model (TypeSafe Jev by default) typed questions
-about explicit state, from the host process, with no repository access. JSSG transforms are
+`assessment` is file-oriented: it selects files using JSSG-style
+include/exclude globs, reads each file, and asks a System One model (TypeSafe
+Jev by default) typed questions about each file individually, from the host
+process, with bounded concurrency and no repository access beyond the matched
+files. JSSG transforms are
 written inline next to the workflow, split off into standalone bundles at
 build time, and orchestrated here in TypeScript (file selection, ordering,
 conflict checks, transactional commit, output aggregation, failure
@@ -150,7 +153,9 @@ export default dynamic(async () => {
 - A bare runnable may be the root executable, so a one-step module can simply
   `export default shell({...})` or `export default jssg({...})`. Static
   `sequence(...)` and `parallel(...)` members always use invocation syntax.
-- `shell`, `agent`, and `assessment` invocations accept `id` and `input` only.
+- `shell` and `agent` invocations accept `id` and `input` only.
+  `assessment` is file-oriented and returns `Array<{ file, assessment }>`;
+  it accepts `id` and `input` but not `target`.
   `jssg` invocations also accept `target`. A `target` on any of them throws
   `TargetValidationError` when the command is created; any other unknown field
   throws `InvocationError`.
@@ -345,29 +350,38 @@ result and is not tracked.
 ```ts
 import { agent, assessment, dynamic } from "@codemod.com/orchestration";
 
-const review = assessment({
-  name: "review-diff",
-  input: Change,
-  // `ask` resolves both state and questions from validated input, so dynamic
-  // criteria (choice options derived from input, score levels computed at run
-  // time) cannot diverge from the state the model evaluates.
-  ask: (change) => ({
-    state: { package: change.package, diff: change.diff },
-    questions: {
-      risk: {
-        type: "choice" as const,
-        instructions: "How risky is this change to merge without review?",
-        criteria: { low: "Mechanical, behavior-preserving", medium: null, high: "May change behavior" },
+// File-oriented assessment. Each matched file is assessed individually by a
+// System One model. The model receives the file's path, content, and optional
+// validated input as state automatically — `ask` defines QUESTIONS ONLY.
+const assessSources = assessment({
+  name: "assess-sources",
+  include: ["src/**/*.ts"],
+  exclude: ["**/*.d.ts", "**/*.generated.ts"],
+  // model: "jev-1.13.0", // optional pin; default TYPESAFE_DEFAULT_MODEL, else jev-latest
+  ask: ({ file }) => ({
+    route: {
+      type: "choice" as const,
+      instructions: `Which migration route best fits ${file.path}?`,
+      criteria: {
+        codemod: "A mechanical AST transformation is sufficient",
+        agent: "Repository context or coordinated edits are needed",
+        manual: "The evidence is insufficient for safe automation",
       },
-      completeness: {
-        type: "score" as const,
-        instructions: "How completely does the diff perform the migration?",
-        criteria: ["Not started", "Partial", "Complete"],
+    },
+    risk: {
+      type: "score" as const,
+      instructions: "How risky is automatic migration of this file?",
+      criteria: ["Low", "Moderate", "High", "Manual review required"],
+    },
+    safeToAutomate: {
+      type: "noul" as const,
+      instructions: "Is there enough evidence to automate this file's migration?",
+      criteria: {
+        true: "The migration can be attempted and verified automatically",
+        false: "A person should inspect the file before any write",
       },
-      touchesTests: { type: "noul" as const, instructions: "Does the diff modify test files?" },
     },
   }),
-  // model: "jev-1.13.0", // optional pin; default TYPESAFE_DEFAULT_MODEL, else jev-latest
 });
 
 const finish = agent({
@@ -379,30 +393,65 @@ const finish = agent({
 });
 
 export default dynamic(async () => {
-  const change = await inspect();
-  const { answers, model, usage } = await review({ input: change });
+  // Returns Array<{ file: string; assessment: AssessmentResult<Q> }>,
+  // one entry per matched file in deterministic selector order.
+  const results = await assessSources();
+
   // Routing policy is workflow code: the assessment only reports probabilities.
-  if (answers.completeness.score < 1.5 && answers.risk.probabilities.high < 0.2) {
+  const anyManual = results.some(
+    (r) => r.assessment.answers.route.choice === "manual"
+      || r.assessment.answers.route.confidence < 0.75,
+  );
+  if (!anyManual) {
     await finish({ input: change });
   }
-  return { model, usage, risk: answers.risk.choice, confidence: answers.risk.confidence };
+  return {
+    files: results.length,
+    manual: anyManual,
+    routes: results.map((r) => ({ file: r.file, route: r.assessment.answers.route.choice })),
+  };
 });
 ```
 
-`assessment({ name, ask, input?, model? })` is a read-only System One
-judgment. It follows the TypeSafe System One API
-(<https://docs.typesafe.ai/api>) and calls it through TypeSafe's official
-JavaScript SDK:
+`assessment({ name, include, exclude?, ask, input?, model? })` is a
+file-oriented, read-only System One judgment. It selects files using
+JSSG-style include/exclude globs, reads each file's content, and runs one
+TypeSafe assessment per file with bounded concurrency through the scheduler.
+It follows the TypeSafe System One API (<https://docs.typesafe.ai/api>) and
+calls it through TypeSafe's official JavaScript SDK:
 
-- `ask` is a function that receives the validated input and returns
-  `{ state, questions }`. It resolves both the explicit model state and the
-  assessment questions together, so that dynamic criteria (choice options
-  derived from input, score levels computed at run time) cannot diverge from
-  the state the model evaluates.
-- `state` is text, a JSON object, or a JSON array. It is explicit: the step
-  has no repository access and no tools. Empty objects and arrays are sent as
-  is (the live API evaluates them); blank text is refused as an authoring
-  mistake.
+- **File selection.** `include` (required, non-empty) and `exclude` (optional)
+  are glob patterns relative to `process.cwd()`. They use the same JSSG-style
+  walker (`src/execution/files.ts`) with gitignore semantics: hidden files
+  visited, symlinks skipped and never followed, `.ignore`/`.gitignore`/
+  `.git/info/exclude` and global git excludes honored, include/exclude globs
+  taking precedence over ignore files. Order is deterministic component-wise
+  byte order. Each selected file is read as UTF-8; files that vanished or
+  cannot be read are silently skipped.
+- **`ask`** is a function that receives `{ file, input }` per file (where
+  `file` is `{ path, content }` and `input` is the validated workflow input)
+  and returns QUESTIONS ONLY. It may produce dynamic criteria per file (e.g.
+  choice options derived from the file's content). The model state is assembled
+  automatically as `{ file: { path, content }, input? }` — `ask` never
+  provides state.
+- **`include`/`exclude` is the privacy boundary.** Only matched file contents
+  are sent to the model. Assessment is read-only and tool-free.
+- **Result** is an ordered `Array<{ file: string; assessment: AssessmentResult<Q> }>`,
+  preserving the deterministic selector order regardless of completion order.
+  Each file's `assessment` contains `{ model, answers, usage }`, typed from the
+  questions. Each file's response is validated against the exact questions
+  resolved for that file.
+- **Concurrency** is bounded by the scheduler (weight 1 per file, same as any
+  assessment command). Files are issued concurrently through `runtime.issue()`
+  and results are collected with `Promise.allSettled`.
+- **Command IDs.** A single-file result uses the assessment name as the command
+  id. Multi-file results use `${name}:${file.path}` per file.
+- **Replay** uses the recorded operation and result without rereading files.
+  The command records `state`, `questions`, and pinned `model` as content, so
+  changing any of them replays as `changed`.
+- **Repository-level assessment is intentionally not supported.** To assess a
+  summary (build output, CI log, aggregated metrics), have a preceding shell
+  or dynamic step materialize a single summary file and assess that file.
 - `questions` are named. `choice` picks one of the `criteria` keys (at least
   two; values are descriptions or `null`); `score` rates against ordered
   `criteria` levels (at least two); `noul` is a yes/no question with optional
@@ -411,8 +460,8 @@ JavaScript SDK:
   command is issued), since questions may depend on runtime input. Question
   ids and choice options may not be `__proto__`, `constructor`, or
   `prototype`.
-- The result is `{ model, answers, usage }`, typed from the questions: a
-  choice answer has `choice` (one of the declared options), `probabilities`
+- The per-file result is `{ model, answers, usage }`, typed from the questions:
+  a choice answer has `choice` (one of the declared options), `probabilities`
   per option, and `confidence`; a score answer has `score` (may fall between
   levels), `legend`, `probabilities` per level, and `confidence`; a noul
   answer has `noul`, the probability of yes. `model` is the versioned model
@@ -423,9 +472,6 @@ JavaScript SDK:
   scores, probabilities, and confidence may exceed their range by
   floating-point noise (at most `1e-6`) and are kept unmodified.
 - It decides nothing. Thresholds, fallbacks, and routing are workflow code.
-- The command records the resolved `state`, `questions`, and a pinned `model`
-  as command content, so changing any of them replays as `changed`. An
-  unpinned default model is host configuration and not part of the command.
 - `BridgeExecutor` runs it in the host process through the official TypeSafe
   JavaScript SDK, `@typesafe-ai/sdk` (0.6.x): one `TypeSafeClient.systemOne()`
   call per command, no bridge process. The SDK owns authentication, the

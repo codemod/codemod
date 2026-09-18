@@ -13,7 +13,7 @@ and must move to `newApi({ name })`. Each file is a complete workflow that
 | `05-composed.ts` | shell, parallel analyses, migration, parallel verification, as one static plan                |
 | `06-dynamic.ts`  | a `dynamic` step that branches on shell output and awaits a static group                      |
 | `07-input.ts`    | a root that requires input, supplied with `--input <json>`                                    |
-| `08-assessment.ts` | JSSG evidence passed to a read-only TypeSafe assessment                                  |
+| `08-assessment.ts` | file-oriented read-only TypeSafe assessment (one question set per file)                   |
 | `09-agent.ts`      | a restricted Claude Code agent followed by deterministic verification                    |
 | `10-assisted.ts`   | assessment-driven routing to codemod, agent, or manual review                             |
 
@@ -231,20 +231,26 @@ node bin/codemod-workflow.mjs demo/07-input.ts --target /tmp/codemod-demo --inpu
 usage: codemod-workflow <workflow.ts> [--target <directory>] [--bridge <binary>] [--input <json>]
 ```
 
-## `08-assessment.ts`: evidence, then judgment
+## `08-assessment.ts`: file-oriented assessment
 
-This workflow runs the existing `legacyCalls` JSSG analysis and passes its
-typed findings to a read-only TypeSafe assessment. The model sees only the
-explicit state built in the workflow; it cannot read or change the repository.
+This workflow defines a file-oriented assessment that selects TypeScript
+sources, reads each one, and asks a System One model three typed questions per
+file. The model receives each file's path and content automatically — the
+`ask` function returns QUESTIONS ONLY. The include/exclude globs are the
+privacy boundary: only matched files are sent to the model.
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
 TYPESAFE_API_KEY=... node bin/codemod-workflow.mjs demo/08-assessment.ts --target /tmp/codemod-demo
 ```
 
-The result contains the model version, usage, and typed answers for `route`,
-`risk`, and `safeToAutomate`, including probabilities and confidence. It
-is evidence for later workflow code, not a command to mutate files.
+Assessment is a first-class Runnable — it can be the root directly (no
+`dynamic()` wrapper needed), and composes naturally in `sequence()` and
+`parallel()`. The result is an ordered `Array<{ file, assessment }>`, one entry
+per matched file. Each assessment contains the model version, usage, and typed
+answers for `route`, `risk`, and `safeToAutomate`, including probabilities and
+confidence. It is evidence for later workflow code, not a command to mutate
+files.
 
 ## `09-agent.ts`: agent work, deterministic verification
 
@@ -268,9 +274,10 @@ can explicitly omit the shell tool.
 
 ## `10-assisted.ts`: assessment-driven routing
 
-This dynamic workflow combines both primitives. JSSG collects candidates,
-`assessment()` returns typed probabilities, and ordinary TypeScript applies the
-policy: low-confidence or manual results stop for review; otherwise the
+This dynamic workflow combines both primitives. `assessment()` selects and
+evaluates each source file individually, returning typed per-file
+probabilities. Ordinary TypeScript applies the routing policy: if any file is
+low-confidence or manual, the whole batch stops for review; otherwise the
 workflow chooses the deterministic two-stage codemod or the agent. Both
 automatic paths finish with deterministic verification.
 

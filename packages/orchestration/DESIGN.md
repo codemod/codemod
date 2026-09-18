@@ -41,7 +41,7 @@ runtime executing the body is what an awaited command reaches.
 | --- | --- |
 | `run` action | `shell()` |
 | JSSG or AI action | `jssg()` or `agent()` |
-| typed judgment on explicit data (no YAML equivalent) | `assessment()` |
+| typed per-file judgment (no YAML equivalent) | `assessment()` with include/exclude |
 | fixed sequence and data flow | `sequence()` |
 | independent work | `parallel()` |
 | condition based on an earlier result | normal `if` inside `dynamic()` |
@@ -52,9 +52,10 @@ runtime executing the body is what an awaited command reaches.
 
 The prototype defines all four operation shapes. The Rust bridge executes
 `shell()`, inline JSSG transforms that a build step has bundled, and `agent()`
-through the built-in agent; the TypeScript host executes `assessment()` against
-the TypeSafe System One API through TypeSafe's official JavaScript SDK
-(`@typesafe-ai/sdk`), which owns authentication, transport, and retries.
+through the built-in agent; the TypeScript host executes `assessment()` as
+file-oriented per-file calls to the TypeSafe System One API through TypeSafe's
+official JavaScript SDK (`@typesafe-ai/sdk`), which owns authentication,
+transport, and retries.
 
 ### Single JSSG leaf
 
@@ -254,8 +255,9 @@ Today each YAML JSSG step carries its own `base_path`, `include`, and
 itself. There is no generic `target()`, `scope()`, `within()`, or `shard()`
 wrapper: only a JSSG adapter can enumerate and enforce a file set, so only a
 JSSG invocation accepts one. `shell` runs a whole command, `agent` works on the
-whole working directory, and `assessment` sees only explicit state; none of
-them accepts target metadata.
+whole working directory, and `assessment` has its own file selection (include/
+exclude on the definition, not a per-invocation target); none of them accepts
+JSSG-style target metadata.
 
 A target is a small plain object that can be shared between invocations:
 
@@ -321,8 +323,10 @@ The rules that make this coherent:
   two selections, not for two workers; the scheduler may still run them on one.
 
 What the prototype implements: every example above runs as written. A JSSG
-invocation takes `{ input?, target?, id? }`; `shell`, `agent`, and `assessment` invocations take
-`{ input?, id? }` and throw `TargetValidationError` when given a `target`, so a
+invocation takes `{ input?, target?, id? }`; `shell` and `agent` invocations take
+`{ input?, id? }` and throw `TargetValidationError` when given a `target`;
+`assessment` is file-oriented (include/exclude on the definition) and its
+invocations take `{ input?, id? }`, so a
 target is never silently dropped. The target is validated and normalized when
 the command is created (relative root without `..`, non-empty pattern lists, no
 unknown fields), recorded in history, sent on the wire as `operation.target`,
@@ -431,54 +435,68 @@ with a permission or sandbox bypass. The result is always the final response
 as `{ text }`, parsed and validated as JSON when the runnable declares
 `output`.
 
-### Assessment before routing
+### File-oriented assessment
 
 Many AI steps in current packages exist only to decide what happens next: is
 this package already migrated, is this diff safe to apply, which follow-up
 fits. A generative agent is the wrong tool for that decision. `assessment()`
-asks a System One model (TypeSafe's Jev by default) named, typed questions
-about state the workflow passes explicitly, and returns probabilities.
+is file-oriented: it selects files using JSSG-style include/exclude globs,
+reads each file, and asks a System One model (TypeSafe's Jev by default)
+named, typed questions about each file individually. One assessment per file,
+bounded concurrency, deterministic file order.
 
-The `ask` function resolves both the explicit model state and the assessment
-questions from validated runtime input. This ensures dynamic criteria (choice
-options derived from input, score levels computed at run time) cannot diverge
-from the state the model evaluates. The concrete resolved questions drive
-operation serialization, output validation, history, and replay:
+The `ask` function receives `{ file, input }` per file and returns QUESTIONS
+ONLY. The model state is assembled automatically from the file's path,
+content, and optional validated workflow input. This ensures the model always
+sees exactly what was selected — `ask` cannot smuggle state past the
+include/exclude privacy boundary. Dynamic criteria (choice options derived
+from file content) are resolved per file:
 
 ```ts
-const triage = assessment({
-  name: "triage",
-  input: Findings,
-  ask: (findings) => ({
-    state: { findings },
-    questions: {
-      action: {
-        type: "choice" as const,
-        instructions: "What should happen with these findings?",
-        criteria: { autofix: "Mechanical and safe", review: "Needs a human", ignore: null },
-      },
-      breaking: { type: "noul" as const, instructions: "Could fixing these change public behavior?" },
+const assessSources = assessment({
+  name: "assess-sources",
+  include: ["src/**/*.ts"],
+  exclude: ["**/*.d.ts"],
+  ask: ({ file }) => ({
+    action: {
+      type: "choice" as const,
+      instructions: `What should happen with ${file.path}?`,
+      criteria: { autofix: "Mechanical and safe", review: "Needs a human", ignore: null },
     },
+    breaking: { type: "noul" as const, instructions: "Could fixing this file change public behavior?" },
   }),
 });
 
-export default dynamic(async () => {
-  const findings = await findIssues();
-  const { answers } = await triage({ input: findings });
-  if (answers.action.choice === "autofix" && answers.action.confidence > 0.8 && answers.breaking.noul < 0.2) {
-    return fixIssues({ input: findings });
-  }
-  return writeGuide({ input: findings });
+// Assessment is a first-class Runnable — use it directly as a root:
+export default assessSources;
+
+// Or wrap in dynamic() when you need conditional routing based on results:
+export const routed = dynamic(async () => {
+  // Array<{ file: string; assessment: AssessmentResult<Q> }>
+  const results = await assessSources();
+  const safe = results.filter(
+    (r) => r.assessment.answers.action.choice === "autofix"
+      && r.assessment.answers.action.confidence > 0.8
+      && r.assessment.answers.breaking.noul < 0.2,
+  );
+  if (safe.length > 0) return fixIssues({ input: safe.map((r) => r.file) });
+  return writeGuide();
 });
 ```
 
-The assessment is read-only: no repository access, no tools, nothing but the
-state it is given. It returns every answer's probabilities and confidence, the
-model that answered, and token usage, and it decides nothing. The thresholds
-and the routing stay in workflow code, where they are replayed and reviewed
-like any other branch. The questions follow TypeSafe's primitives (`choice`,
-`score`, `noul`) directly; Jev is the default model, not part of the
-contract, and a command may pin another.
+The assessment is read-only: no tools, nothing but the matched file contents.
+The include/exclude globs are the explicit privacy boundary. It returns every
+answer's probabilities and confidence, the model that answered, and token
+usage, per file, and it decides nothing. The thresholds and the routing stay
+in workflow code, where they are replayed and reviewed like any other branch.
+
+Repository-level assessment is intentionally not supported. To assess a
+summary (build output, CI log, aggregated metrics), have a preceding step
+materialize a single summary file and assess that file.
+
+The questions follow TypeSafe's primitives (`choice`, `score`, `noul`)
+directly; Jev is the default model, not part of the contract, and a command
+may pin another.
 
 ## Ownership
 
