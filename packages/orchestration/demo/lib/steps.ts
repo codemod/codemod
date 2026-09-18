@@ -5,7 +5,7 @@
  * splits every module in the import graph.
  */
 import { jssg, shell } from "@codemod.com/orchestration";
-import { fileOf, rewriteCalls } from "./ast.ts";
+import { fileOf, rewriteCalls, wrapCalls } from "./ast.ts";
 import { Inventory, Migrations, Remaining, Verification } from "./schemas.ts";
 
 /** The sources every step considers: `src`, minus declarations and generated code. */
@@ -46,6 +46,22 @@ export const renameCalls = jssg({
   transform(root) {
     const { content, replaced } = rewriteCalls(root, "oldApi", "newApi");
     return { content, output: { file: fileOf(root), replaced } };
+  },
+});
+
+/** Wraps the renamed calls in the options object required by the new API. */
+export const wrapOptions = jssg({
+  name: "wrap-options",
+  language: "typescript",
+  ...sources,
+  input: Migrations,
+  output: Migrations,
+  transform(root, options) {
+    const file = fileOf(root);
+    const migrated = options.params.input ?? [];
+    if (!migrated.some((migration) => migration.file === file)) return null;
+    const { content, replaced } = wrapCalls(root, "newApi");
+    return { content, output: { file, replaced } };
   },
 });
 

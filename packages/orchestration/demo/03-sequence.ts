@@ -12,26 +12,7 @@
  * `verify-migrations` between the two migrations is a type error, because
  * its `Verification` output is not the `Migration[]` that `wrap-options` needs.
  */
-import { jssg, sequence } from "@codemod.com/orchestration";
-import { fileOf, wrapCalls } from "./lib/ast.ts";
-import { Migrations } from "./lib/schemas.ts";
-import { renameCalls, verifyMigrations } from "./lib/steps.ts";
-
-const wrapOptions = jssg({
-  name: "wrap-options",
-  language: "typescript",
-  include: ["src/**/*.ts"],
-  exclude: ["**/*.d.ts", "**/*.generated.ts"],
-  input: Migrations,
-  output: Migrations,
-  transform(root, options) {
-    const file = fileOf(root);
-    // The previous stage's output: only the files it migrated are touched.
-    const migrated = options.params.input ?? [];
-    if (!migrated.some((migration) => migration.file === file)) return null;
-    const { content, replaced } = wrapCalls(root, "newApi");
-    return { content, output: { file, replaced } };
-  },
-});
+import { sequence } from "@codemod.com/orchestration";
+import { renameCalls, verifyMigrations, wrapOptions } from "./lib/steps.ts";
 
 export default sequence(renameCalls(), wrapOptions(), verifyMigrations());

@@ -1,6 +1,6 @@
 # Orchestration demo
 
-Six small workflows over one story: a project calls a deprecated `oldApi(name)`
+Ten small workflows over one story: a project calls a deprecated `oldApi(name)`
 and must move to `newApi({ name })`. Each file is a complete workflow that
 `codemod-workflow` runs against a copy of `fixture/`.
 
@@ -13,6 +13,9 @@ and must move to `newApi({ name })`. Each file is a complete workflow that
 | `05-composed.ts` | shell, parallel analyses, migration, parallel verification, as one static plan                |
 | `06-dynamic.ts`  | a `dynamic` step that branches on shell output and awaits a static group                      |
 | `07-input.ts`    | a root that requires input, supplied with `--input <json>`                                    |
+| `08-assessment.ts` | JSSG evidence passed to a read-only TypeSafe assessment                                  |
+| `09-agent.ts`      | a restricted Claude Code agent followed by deterministic verification                    |
+| `10-assisted.ts`   | assessment-driven routing to codemod, agent, or manual review                             |
 
 Supporting modules: `lib/schemas.ts` (Standard Schema guards and the types they
 carry), `lib/ast.ts` (helpers the transforms call; bundled into the artifacts),
@@ -23,8 +26,10 @@ step.
 
 ## Setup
 
-Node 24 and a Rust toolchain. No network access and no installs are needed
-beyond the monorepo's existing `node_modules`.
+Node 24 and a Rust toolchain. Workflows 01-07 need no network access or installs
+beyond the monorepo's existing `node_modules`. Workflow 08 requires
+`TYPESAFE_API_KEY`, workflow 09 requires an authenticated local Claude Code
+CLI, and workflow 10 requires both.
 
 ```sh
 # from the repository root: build the Rust execution bridge (once)
@@ -225,6 +230,58 @@ node bin/codemod-workflow.mjs demo/07-input.ts --target /tmp/codemod-demo --inpu
 --input must be valid JSON (Expected property name or '}' in JSON at position 1 (line 1 column 2)); got: {replacement: newApi}
 usage: codemod-workflow <workflow.ts> [--target <directory>] [--bridge <binary>] [--input <json>]
 ```
+
+## `08-assessment.ts`: evidence, then judgment
+
+This workflow runs the existing `legacyCalls` JSSG analysis and passes its
+typed findings to a read-only TypeSafe assessment. The model sees only the
+explicit state built in the workflow; it cannot read or change the repository.
+
+```sh
+rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
+TYPESAFE_API_KEY=... node bin/codemod-workflow.mjs demo/08-assessment.ts --target /tmp/codemod-demo
+```
+
+The result contains the model version, usage, and typed answers for `route`,
+`risk`, and `safeToAutomate`, including probabilities and confidence. It
+is evidence for later workflow code, not a command to mutate files.
+
+## `09-agent.ts`: agent work, deterministic verification
+
+The installed Claude Code CLI receives only read and file-editing tools. It
+migrates the target, then `verifyNoLegacy` checks the repository without trusting
+the agent's final message.
+
+```sh
+claude auth status
+rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
+node bin/codemod-workflow.mjs demo/09-agent.ts --target /tmp/codemod-demo
+```
+
+```json
+{ "remaining": 0 }
+```
+
+The backend can be changed to `builtin` or `codex` in the workflow. Each
+backend has its own enforceable settings; the example uses Claude Code so it
+can explicitly omit the shell tool.
+
+## `10-assisted.ts`: assessment-driven routing
+
+This dynamic workflow combines both primitives. JSSG collects candidates,
+`assessment()` returns typed probabilities, and ordinary TypeScript applies the
+policy: low-confidence or manual results stop for review; otherwise the
+workflow chooses the deterministic two-stage codemod or the agent. Both
+automatic paths finish with deterministic verification.
+
+```sh
+rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
+TYPESAFE_API_KEY=... node bin/codemod-workflow.mjs demo/10-assisted.ts --target /tmp/codemod-demo
+```
+
+The exact route is intentionally not hard-coded: the assessment result and its
+confidence are part of the output. A `manual-review` result leaves the fixture
+unchanged.
 
 ## How the transforms run
 

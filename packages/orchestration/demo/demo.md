@@ -24,6 +24,12 @@ we can also use parallel inside dynamic to have steps running in parallel.
 we can also have dynamic steps called inside parallel or sequence workflows.
 so you can see how all of these primitives simply compose on top of each other giving you full flexibility in how you want to build your workflow.
 
+`08-assessment.ts` adds a different kind of primitive. the jssg step still does the repository analysis because syntax and file facts should be deterministic. its typed findings become the explicit state of an assessment step. the assessment is read only: it answers a choice, a score, and a yes-or-no probability, but it cannot inspect files or decide what the workflow does next.
+
+`09-agent.ts` shows the effectful side. an authenticated local claude code agent gets a restricted set of file tools and performs the migration. its final response is not treated as proof; the next shell step checks that no deprecated calls remain.
+
+`10-assisted.ts` combines them. normal typescript owns the policy: low confidence stops for manual review, a mechanical result runs the jssg codemod, and a contextual result runs the agent. every automatic path ends with deterministic verification. the useful split is: jssg establishes evidence, assessment supplies judgment, code decides, the agent handles open-ended work, and tests verify the result.
+
 for the simplest cases you can just export a single jssg function and not think about anything else.
 
 you can use sequence and parallel to construct a static plan for a workflow that can be executed by the workflow engine directly, and you can add dynamic flows wherever you want some dynamism.
