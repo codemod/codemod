@@ -1,0 +1,208 @@
+---
+title: "Codemod Studio"
+sidebarTitle: "Studio"
+icon: "wrench"
+---
+
+[Codemod Studio](https://go.codemod.com/studio) is a browser workspace for building codemod workflows. Use it to edit workflow files, test transformations against fixtures, inspect AST matches and diffs, ask Codemod AI for help, and package the result for CLI or pull request runs.
+
+Studio is best for the early loop: design the codemod, prove it on representative examples, then run it through the path that fits your rollout.
+
+<Info>
+  Studio is optimized for desktop. Sign in to save projects, share private or organization links, run against connected repositories, package a CLI command, or create pull requests.
+</Info>
+
+## What Studio creates
+
+A new Studio project starts with a small workflow-backed workspace:
+
+<Tree>
+  <Tree.Folder name="studio-project" defaultOpen>
+    <Tree.File name="workflow.yaml" />
+    <Tree.Folder name="rules" defaultOpen>
+      <Tree.File name="main-rule.yaml" />
+    </Tree.Folder>
+    <Tree.Folder name="codemod" defaultOpen>
+      <Tree.File name="main-codemod.ts" />
+    </Tree.Folder>
+    <Tree.Folder name="tests" defaultOpen>
+      <Tree.Folder name="main-codemod" defaultOpen>
+        <Tree.Folder name="test-1" defaultOpen>
+          <Tree.File name="input.tsx" />
+        </Tree.Folder>
+      </Tree.Folder>
+    </Tree.Folder>
+  </Tree.Folder>
+</Tree>
+
+`workflow.yaml` is the center of the project. It defines the workflow steps Studio can test and run. The starter workspace usually includes:
+
+- an `ast-grep` step that points to `rules/main-rule.yaml`
+- a `js-ast-grep` step that points to `codemod/main-codemod.ts`
+- fixture files under `tests/` that you can use as local examples
+
+You can add, rename, move, and delete project files from the Workspace panel. Keep `workflow.yaml` up to date when you change the files referenced by a workflow step.
+
+## Build and validate locally
+
+Use the local workspace to make the codemod correct before you run it on a repository.
+
+<Steps>
+  <Step title="Choose the language">
+    Pick the source language from the language selector. Studio uses that language for the starter files, AST parsing, ast-grep rules, and JS ast-grep execution.
+  </Step>
+
+  <Step title="Edit the workflow step">
+    Open the rule or codemod file you want to work on. Studio uses `workflow.yaml` and the open file to decide which step is being tested.
+  </Step>
+
+  <Step title="Add representative fixtures">
+    Add source files for the cases you care about. Keep them small and specific: one fixture for the common path, then separate fixtures for edge cases.
+  </Step>
+
+  <Step title="Inspect the result">
+    Use the source tabs to switch between the current source, rewritten output, and diff. Use the AST panel to inspect syntax nodes, and use the matches or debug panel to understand what the active step did.
+  </Step>
+
+  <Step title="Iterate until the examples are clean">
+    Update the rule, codemod script, or fixtures until the changed cases are correct and the unchanged cases stay unchanged.
+  </Step>
+</Steps>
+
+<Tip>
+  Prefer the simplest deterministic step that works. Use YAML ast-grep for structural search and rewrite patterns. Use JS ast-grep when the transform needs branching, custom edits, or more context.
+</Tip>
+
+## Use Codemod AI
+
+Codemod AI can help edit the Studio project, but you still review and apply the changes.
+
+Open **Codemod AI**, describe the focused change you want, and include before/after examples when they clarify the behavior. The assistant can inspect files, propose edits, and run codemod tests against the Studio workspace.
+
+When Codemod AI proposes file changes, review them before applying. If the change goes in the wrong direction, revert it and narrow the prompt or add a fixture that captures the missing behavior.
+
+Good prompts are specific:
+
+```text
+Replace explicit React.Fragment tags with shorthand fragments.
+
+Before:
+<React.Fragment>
+  <Header />
+  <Main />
+</React.Fragment>
+
+After:
+<>
+  <Header />
+  <Main />
+</>
+
+Only transform fragments with no props. Leave React.Fragment with key or other props unchanged.
+```
+
+## Run against a repository
+
+After the local examples look right, use the Results panel to run the selected workflow step against a connected repository.
+
+<Steps>
+  <Step title="Select a repository">
+    Choose a repository from the Results panel. You must be signed in and have repository access configured.
+  </Step>
+
+  <Step title="Choose the step">
+    If the workflow has multiple runnable steps, choose the rule or codemod step you want to run.
+  </Step>
+
+  <Step title="Run the search or transform">
+    Click **Run**. Studio runs the selected step remotely and streams results back into the panel.
+  </Step>
+
+  <Step title="Review affected files">
+    For ast-grep rules, review matched files and match counts. For JS ast-grep codemods, review the changed files and diffs. If the run finds false positives or misses expected cases, return to the local fixtures and tighten the codemod.
+  </Step>
+</Steps>
+
+<Info>
+  Repository runs from Studio are for validation. They do not directly commit changes to the repository.
+</Info>
+
+## Save, share, and deploy
+
+Use the project menu to create a new project, save the current project, delete saved projects, or share the current state.
+
+Shared Studio links include the project state. Signed-in users can share with public, private, or organization access when those options are available. Anonymous sharing creates a public link that anyone with the link can open.
+
+When the codemod is ready to leave Studio, use one of the action bar options:
+
+- **Run CLI** packages the current Studio project and gives you an `npx codemod@latest ...` command to run from your terminal.
+- **Create PR** packages the current Studio project and opens a pull request creation flow for selected repositories.
+
+For repeatable local, CI, or registry workflows, continue with the CLI and package docs.
+
+<CardGroup cols={2}>
+  <Card title="CLI" icon="terminal" href="/community/cli">
+    Validate and run codemod workflows from your terminal or CI.
+  </Card>
+  <Card title="Package Structure" icon="folder-tree" href="/community/package-structure">
+    Learn how workflow packages are organized.
+  </Card>
+  <Card title="Workflow Reference" icon="book" href="/community/workflows/reference">
+    Read the complete `workflow.yaml` reference.
+  </Card>
+  <Card title="JSSG" icon="code" href="/community/jssg/intro">
+    Write JavaScript and TypeScript codemods with JS ast-grep.
+  </Card>
+</CardGroup>
+
+## Tips for building better codemods
+
+1. **Clarity is Key**: Try to prompt clear requirements when using Codemod AI. Ensure that the transformation logic is clear for both humans and AI. Well-defined logic leads to more accurate codemods.
+2. **Follow the MECE Principle:** When designing test cases, aim for them to be Mutually Exclusive and Collectively Exhaustive (MECE). This means:
+
+   - **Mutually Exclusive:** Each test case should cover a unique scenario without overlap. Ideally, you only need one clear example with a proper description for each pattern. Break down complex transformations into smaller, more manageable parts.
+   - **Collectively Exhaustive:** Together, your test cases should cover all possible scenarios for the codemod.
+
+   For example, if you're writing a codemod to update function syntax:
+   - Test case 1: Regular function to arrow function
+   - Test case 2: Function with parameters
+   - Test case 3: Function with default parameters
+   - Test case 4: Async function
+
+   Each case covers a distinct scenario, and together they cover a wide range of function types.
+3. **Balance Simplicity and Complexity**: While it's possible to create complex transformation logics that support all cases, simpler, more focused codemods are often more maintainable and easier to understand.
+
+<AccordionGroup>
+<Accordion title="Example of a good Codemod AI prompt">
+Give Codemod AI a focused change and a small before/after example when the behavior might be ambiguous. This prompt generates [this codemod](https://app.codemod.com/studio?share_id=cb9b5202314548d682cbd7):
+
+````
+Replace explicit <React.Fragment> tags with shorthand fragments.
+
+Before:
+```
+<React.Fragment>
+  <Header />
+  <Main />
+</React.Fragment>
+```
+
+After:
+```
+<>
+  <Header />
+  <Main />
+</>
+```
+
+Note:
+- Transform only fragments **with no props**.  
+- Skip any <React.Fragment> that carries a prop such as `key`, `children`, etc.  
+- Do not alter indentation, surrounding code, or formatting beyond the tag swap.
+````
+
+**Why this prompt works**
+
+This prompt states one atomic transformation, shows concrete before/after examples, and spells out the minimal extra edits required—exactly what the _Clarity is Key_ and _Balance Simplicity and Complexity_ tips recommend.
+</Accordion>
+</AccordionGroup>
