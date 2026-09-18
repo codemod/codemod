@@ -96,7 +96,7 @@ A **codemod package** is a directory containing:
 
 Packages can be as simple as a single transformation or as complex as multi-step migration workflows combining JavaScript codemods, YAML rules, shell scripts, and AI-assisted steps.
 
-[Learn more about codemod packages →](https://docs.codemod.com/cli/packages)
+[Learn more about codemod packages →](https://docs.codemod.com/community/package-structure)
 
 ### jssg (JavaScript ast-grep)
 
@@ -133,7 +133,7 @@ export default codemod;
 
 jssg combines the power of AST transformations with the flexibility of JavaScript, making complex transformations intuitive and testable.
 
-[Learn more about jssg →](https://docs.codemod.com/jssg)
+[Learn more about jssg →](https://docs.codemod.com/community/jssg/intro)
 
 ### Workflow Orchestration
 
@@ -161,7 +161,7 @@ nodes:
         run: npm test
 ```
 
-[Learn more about workflows →](https://docs.codemod.com/cli/packages/building-workflows)
+[Learn more about workflows →](https://docs.codemod.com/community/workflows/reference)
 
 ## CLI Commands
 
@@ -204,7 +204,7 @@ nodes:
 | `npx codemod cache clear [package]` | Clear cache for package or all |
 | `npx codemod cache prune` | Remove old or unused cache entries |
 
-**For detailed options and examples, see the [full CLI reference →](https://docs.codemod.com/cli/cli-reference)**
+**For detailed options and examples, see the [full CLI reference →](https://docs.codemod.com/community/cli)**
 
 ## Ecosystem & Platform
 
@@ -212,7 +212,7 @@ The Codemod CLI is part of a larger ecosystem designed to help teams modernize c
 
 ### Open-Source Tools
 
-- **[Codemod CLI](https://docs.codemod.com/cli)** (this package) – Build, test, and run codemod packages
+- **[Codemod CLI](https://docs.codemod.com/community/cli)** (this package) – Build, test, and run codemod packages
 - **[Codemod MCP](https://go.codemod.com/mcp-docs)** – Build codemods with AI assistance in your IDE
 - **[Public Registry](https://go.codemod.com/registry)** – Discover and share community codemods
 
@@ -221,8 +221,8 @@ The Codemod CLI is part of a larger ecosystem designed to help teams modernize c
 For teams coordinating migrations across multiple repositories:
 
 - **[Codemod Studio](https://go.codemod.com/studio)** – AI-powered web interface for creating codemods
-- **[Campaigns](https://docs.codemod.com/migrations)** – Multi-repo orchestration with progress tracking
-- **[Insights](https://docs.codemod.com/insights)** – Analytics dashboards for measuring migration impact
+- **[Campaigns](https://docs.codemod.com/enterprise/campaigns)** – Multi-repo orchestration with progress tracking
+- **[Insights](https://docs.codemod.com/enterprise/insights)** – Analytics dashboards for measuring migration impact
 - **Private Registry** – Secure, organization-scoped codemod packages
 
 [Learn more about the platform →](https://app.codemod.com)
@@ -231,9 +231,9 @@ For teams coordinating migrations across multiple repositories:
 
 ### Documentation
 - **[Full Documentation](https://docs.codemod.com)** – Comprehensive guides and tutorials
-- **[CLI Reference](https://docs.codemod.com/cli/cli-reference)** – Detailed command documentation
-- **[Codemod Packages](https://docs.codemod.com/cli/packages)** – Learn more about codemod packages and workflows
-- **[jssg Documentation](https://docs.codemod.com/jssg)** – JavaScript ast-grep reference
+- **[CLI Reference](https://docs.codemod.com/community/cli)** – Detailed command documentation
+- **[Codemod Packages](https://docs.codemod.com/community/package-structure)** – Learn more about codemod packages and workflows
+- **[jssg Documentation](https://docs.codemod.com/community/jssg/intro)** – JavaScript ast-grep reference
 
 ### Get Help
 - **[Slack Community](https://go.codemod.com/community)** – Ask questions and share codemods

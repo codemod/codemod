@@ -12,7 +12,7 @@ Community contributions are welcome. Use this repository to create, validate, an
 4. Configure a [trusted publisher](https://docs.codemod.com) in Codemod so GitHub Actions can publish with OIDC.
 5. {scope_guidance}
 
-Use [Codemod MCP](https://docs.codemod.com/model-context-protocol) and `npx codemod init` to create new codemods from this monorepo.
+Use [Codemod MCP](https://docs.codemod.com/community/model-context-protocol) and `npx codemod init` to create new codemods from this monorepo.
 
 ## Repository layout
 
