@@ -91,7 +91,12 @@ const workspaceJssg = jssg({
 describe("operation weights", () => {
   it.each<[string, Operation, number]>([
     ["shell", { kind: "shell", command: "x" }, 1],
-    ["ai", { kind: "ai", prompt: "x" }, 1],
+    ["agent", { kind: "agent", prompt: "x", backend: { kind: "builtin", tools: [] } }, 1],
+    [
+      "assessment",
+      { kind: "assessment", state: "s", questions: { ok: { type: "noul", instructions: "ok?" } } },
+      1,
+    ],
     ["jssg without semantics", fileJssg.toOperation(undefined), DEFAULT_WEIGHTS.jssg],
     [
       "jssg with file semantics",
@@ -335,6 +340,97 @@ describe("cancellation", () => {
     ).rejects.toBeInstanceOf(OperationError);
     expect(started).toEqual([]);
     expect(scheduler.stats()).toMatchObject({ used: 0, active: 0, peakActive: 0 });
+  });
+});
+
+describe("pause and resume", () => {
+  it("holds every admission while paused and admits in declaration order on resume", async () => {
+    const events: RunEvent[] = [];
+    const sink = { emit: (event: RunEvent) => events.push(event) };
+    const scheduler = new AdmissionScheduler({ capacity: 3, events: sink });
+    const { executor, started, finish } = controllable();
+    scheduler.pause();
+    const result = run(
+      dynamic(() => parallel(steps(3).map((runnable) => runnable()))),
+      { executor, scheduler, events: sink },
+    );
+
+    await settle();
+    // Capacity is free, but nothing is admitted: the commands are queued.
+    expect(started).toEqual([]);
+    expect(scheduler.stats()).toMatchObject({ paused: true, queued: 3, active: 0, used: 0 });
+    expect(events.filter((e) => e.type === "scheduler.queued")).toHaveLength(3);
+    expect(events.find((e) => e.type === "scheduler.paused")).toEqual({
+      type: "scheduler.paused",
+      queued: 0,
+      active: 0,
+    });
+
+    scheduler.resume();
+    await settle();
+    expect(started).toEqual(["s0", "s1", "s2"]);
+    expect(events.find((e) => e.type === "scheduler.resumed")).toEqual({
+      type: "scheduler.resumed",
+      queued: 3,
+      active: 0,
+    });
+    expect(scheduler.stats()).toMatchObject({ paused: false, queued: 0, active: 3 });
+    for (const id of ["s0", "s1", "s2"]) finish(id);
+    await expect(result).resolves.toBeDefined();
+  });
+
+  it("lets admitted operations finish without admitting the next one", async () => {
+    const scheduler = new AdmissionScheduler({ capacity: 1 });
+    const { executor, started, finish } = controllable();
+    const result = run(
+      dynamic(() => parallel(steps(2).map((runnable) => runnable()))),
+      { executor, scheduler },
+    );
+
+    await settle();
+    expect(started).toEqual(["s0"]);
+    scheduler.pause();
+    finish("s0");
+    await settle();
+    // s0 completed and returned its permit, but s1 stays queued.
+    expect(started).toEqual(["s0"]);
+    expect(scheduler.stats()).toMatchObject({ paused: true, used: 0, active: 0, queued: 1 });
+
+    scheduler.resume();
+    await settle();
+    expect(started).toEqual(["s0", "s1"]);
+    finish("s1");
+    await expect(result).resolves.toBeDefined();
+  });
+
+  it("is idempotent and still refuses a queued command that is aborted while paused", async () => {
+    const events: RunEvent[] = [];
+    const sink = { emit: (event: RunEvent) => events.push(event) };
+    const controller = new AbortController();
+    const scheduler = new AdmissionScheduler({ capacity: 1, events: sink });
+    const { executor, started, finish } = controllable();
+    const result = run(
+      dynamic(() => parallel(steps(2).map((runnable) => runnable()))),
+      { executor, scheduler, signal: controller.signal, events: sink },
+    );
+    const caught = result.catch((error: unknown) => error);
+
+    await settle();
+    scheduler.pause();
+    scheduler.pause();
+    scheduler.resume();
+    scheduler.resume();
+    scheduler.pause();
+    expect(events.filter((e) => e.type === "scheduler.paused")).toHaveLength(2);
+    expect(events.filter((e) => e.type === "scheduler.resumed")).toHaveLength(1);
+
+    controller.abort();
+    await settle();
+    expect(started).toEqual(["s0"]);
+    expect(scheduler.stats()).toMatchObject({ paused: true, queued: 0, active: 1 });
+    finish("s0", { status: "cancelled", error: { message: "killed" }, output: undefined });
+    expect(await caught).toBeInstanceOf(OperationError);
+    expect(scheduler.stats()).toMatchObject({ used: 0, active: 0, queued: 0 });
   });
 });
 

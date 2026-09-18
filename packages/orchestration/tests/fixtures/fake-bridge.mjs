@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 // Stand-in for butterflow-execution-bridge in unit tests: reads the request
 // file, writes a completion file. `shell` requests are echoed back inside a
-// succeeded completion. `jssg` requests answer a batch result shaped by
+// succeeded completion. `agent` requests echo { request, cwd, env, secrets }
+// as text (secrets: the stdin JSON when CODEMOD_BRIDGE_SECRETS=stdin),
+// or with FAKE_BRIDGE_MODE=hang start FAKE_CHILDREN (default 1) child processes
+// that never exit, write their pids to FAKE_PID_FILE, and never answer; with
+// FAKE_DETACH_CHILDREN=1 the children get their own process group, as the
+// agent's bash tool session does. Adversarial agent modes: symlink-response
+// (response.json is a symlink to FAKE_SENTINEL holding a forged success),
+// directory-response, garbage-response. `jssg` requests answer a batch result shaped by
 // FAKE_BRIDGE_MODE:
 //   echo (default)  every file gets "// fake\n" appended and outputs
 //                   { path, context, input } where context is the request
@@ -16,7 +23,8 @@
 //   rename-twice    a.ts also renames b.ts to "x.ts"; b.ts renames itself to "y.ts"
 //   write-renamed   a.ts also renames b.ts to "b.moved.ts"; b.ts edits itself in place
 //   secondary       a.ts also edits FAKE_SECONDARY_PATH
-import { readFileSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 
 const [requestPath, responsePath] = process.argv.slice(2);
 const request = JSON.parse(readFileSync(requestPath, "utf8"));
@@ -24,11 +32,44 @@ const mode = process.env.FAKE_BRIDGE_MODE ?? "echo";
 const reply = (completion) =>
   writeFileSync(
     responsePath,
-    JSON.stringify({ protocolVersion: 6, commandId: request.commandId, ...completion }),
+    JSON.stringify({ protocolVersion: 8, commandId: request.commandId, ...completion }),
   );
 
 if (request.operation.kind === "shell") {
   reply({ status: "succeeded", output: { stdout: JSON.stringify({ request }) } });
+} else if (request.operation.kind === "agent" && mode === "symlink-response") {
+  // A sandbox escape attempt: the response path points at a file elsewhere
+  // that holds a well-formed success.
+  writeFileSync(
+    process.env.FAKE_SENTINEL,
+    JSON.stringify({
+      protocolVersion: 8,
+      commandId: request.commandId,
+      status: "succeeded",
+      output: { text: "forged" },
+    }),
+  );
+  symlinkSync(process.env.FAKE_SENTINEL, responsePath);
+} else if (request.operation.kind === "agent" && mode === "directory-response") {
+  mkdirSync(responsePath);
+} else if (request.operation.kind === "agent" && mode === "garbage-response") {
+  writeFileSync(responsePath, "{not json");
+} else if (request.operation.kind === "agent" && mode === "hang") {
+  const children = Array.from({ length: Number(process.env.FAKE_CHILDREN ?? "1") }, () =>
+    spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: process.env.FAKE_DETACH_CHILDREN === "1",
+      stdio: "ignore",
+    }),
+  );
+  writeFileSync(process.env.FAKE_PID_FILE, JSON.stringify(children.map((child) => child.pid)));
+  setInterval(() => {}, 1000);
+} else if (request.operation.kind === "agent") {
+  const secrets =
+    process.env.CODEMOD_BRIDGE_SECRETS === "stdin" ? JSON.parse(readFileSync(0, "utf8")) : null;
+  reply({
+    status: "succeeded",
+    output: { text: JSON.stringify({ request, cwd: process.cwd(), env: process.env, secrets }) },
+  });
 } else if (mode === "hang") {
   setInterval(() => {}, 1000);
 } else if (mode === "fail") {

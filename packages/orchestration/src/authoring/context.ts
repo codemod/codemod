@@ -24,6 +24,7 @@ export interface Runtime {
     command: Command<O, unknown>,
     concurrent?: boolean,
     flow?: { input: unknown },
+    dynamicId?: string,
   ): Promise<O>;
 }
 

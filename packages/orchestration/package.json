@@ -10,6 +10,10 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./dashboard": {
+      "types": "./src/host/dashboard/index.ts",
+      "default": "./src/host/dashboard/index.ts"
+    },
     "./harness": {
       "types": "./src/host/harness.ts",
       "default": "./src/host/harness.ts"
@@ -22,11 +26,16 @@
     "test": "vitest run",
     "build:bridge": "cargo build -p butterflow-execution-bridge",
     "test:e2e": "pnpm build:bridge && CODEMOD_BRIDGE_E2E=1 vitest run tests/bridge.e2e.test.ts",
+    "test:live:agent:builtin": "pnpm build:bridge && CODEMOD_LIVE_AGENT_BUILTIN=1 vitest run tests/agent.builtin.live.test.ts",
+    "test:live:agent:claude-code": "pnpm build:bridge && CODEMOD_LIVE_AGENT_CLAUDE_CODE=1 vitest run tests/agent.claude-code.live.test.ts",
+    "test:live:agent:codex": "pnpm build:bridge && CODEMOD_LIVE_AGENT_CODEX=1 vitest run tests/agent.codex.live.test.ts",
+    "test:live:assessment": "CODEMOD_LIVE_ASSESSMENT=1 vitest run tests/assessment.live.test.ts",
     "workflow": "node bin/codemod-workflow.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@codemod.com/jssg-types": "workspace:*",
+    "@typesafe-ai/sdk": "^0.6.0",
     "esbuild": "^0.27.2",
     "ignore": "^5.3.1",
     "typescript": "catalog:"

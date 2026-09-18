@@ -7,7 +7,7 @@ import { createHarness, failed } from "../src/host/harness.ts";
 import {
   DuplicateCommandIdError,
   PROTOCOL_VERSION,
-  ai,
+  agent,
   shell,
   guard,
   isCommand,
@@ -16,6 +16,7 @@ import {
   run,
   sequence,
   dynamic,
+  type AgentOutput,
   type Command,
   type Json,
   type OperationCompletion,
@@ -108,20 +109,23 @@ describe("commands", () => {
   });
 
   it("type-checks invocation options per runnable kind", () => {
-    const summarize = ai({ name: "summarize", prompt: "summarize", input: Report });
+    const summarize = agent({ name: "summarize", prompt: "summarize", input: Report });
     const _ok: Command<Report> = inspectPackage({ input: packages[0]! });
-    const _okAi: Command<unknown> = summarize({ input: { package: "a", findings: [] }, id: "s" });
+    const _okAgent: Command<AgentOutput> = summarize({
+      input: { package: "a", findings: [] },
+      id: "s",
+    });
     const _okJssg: Command<{ total: number }> = writeReport({ input: [], target: { root: "a" } });
     const _okVoid: Command<{ stdout: string }> = format({ id: "format:2" });
     const _flow: Command<Report, Package> = inspectPackage();
-    const _flowAi: Command<unknown, Report> = summarize({ id: "s" });
+    const _flowAgent: Command<AgentOutput, Report> = summarize({ id: "s" });
     // @ts-expect-error shell does not take a target
     const _execTarget = () => inspectPackage({ input: packages[0]!, target: { root: "a" } });
-    // @ts-expect-error ai does not take a target
-    const _aiTarget = () => summarize({ input: packages[0]!, target: { root: "a" } });
+    // @ts-expect-error agent does not take a target
+    const _agentTarget = () => summarize({ input: packages[0]!, target: { root: "a" } });
     // @ts-expect-error discover returns Package[], but inspectPackage consumes one Package
     const _incompatibleSequence = () => sequence(discover, inspectPackage);
-    expect([_ok, _okAi, _okJssg, _okVoid, _flow, _flowAi]).toHaveLength(6);
+    expect([_ok, _okAgent, _okJssg, _okVoid, _flow, _flowAgent]).toHaveLength(6);
   });
 
   it("rejects a flow invocation awaited without static composition", async () => {

@@ -751,6 +751,7 @@ version = "1.13.18"
 dependencies = [
  "butterflow-models",
  "butterflow-runners",
+ "codemod-ai",
  "codemod-sandbox",
  "ignore",
  "language-core",

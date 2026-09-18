@@ -40,8 +40,9 @@ export interface RunSettings {
   signal?: AbortSignal;
   /**
    * Bounded admission for this run. Defaults to a fresh `AdmissionScheduler`
-   * with host-derived capacity: `parallel()` declares eligibility, this decides
-   * how much of it actually overlaps. Pass one to observe it or to fix the
+   * with host-derived capacity that reports to `events`: `parallel()` declares
+   * eligibility, this decides how much of it actually overlaps. Pass one to
+   * observe it, to pause and resume admission from the host, or to fix the
    * capacity in a test; it is host configuration, never workflow authoring.
    */
   scheduler?: AdmissionScheduler;
@@ -74,7 +75,7 @@ export async function run<T extends Executable>(
   // command never takes a permit.
   const executor = new SchedulingExecutor(
     options.executor,
-    options.scheduler ?? new AdmissionScheduler(),
+    options.scheduler ?? new AdmissionScheduler({ events }),
     events,
   );
   const gate = new ReplayGate(await store.load(), store, executor, events, options.signal);
@@ -149,6 +150,7 @@ class RunRuntime implements Runtime {
     command: Command<O, unknown>,
     concurrent = false,
     flow?: { input: unknown },
+    dynamicId?: string,
   ): Promise<O> {
     const existing = this.#issued.get(command);
     if (existing !== undefined) return existing as Promise<O>;
@@ -157,7 +159,7 @@ class RunRuntime implements Runtime {
         new Error(`command '${command.id}' was issued after the workflow body returned`),
       );
     }
-    const operation = this.#resolve(command, concurrent, flow);
+    const operation = this.#resolve(command, concurrent, flow, dynamicId);
     this.#issued.set(command, operation);
     this.#inFlight.add(operation);
     void operation.then(
@@ -192,6 +194,7 @@ class RunRuntime implements Runtime {
     command: Command<O, unknown>,
     concurrent: boolean,
     flow?: { input: unknown },
+    dynamicId?: string,
   ): Promise<O> {
     const { runnable, id } = command;
     if (command.inputMode === "flow" && flow === undefined) {
@@ -209,10 +212,10 @@ class RunRuntime implements Runtime {
       operation: operationOf(command, input),
     };
     if (input !== undefined) scheduled.input = input as Json;
-    const completion = await this.#gate.resolve(scheduled);
+    const completion = await this.#gate.resolve(scheduled, dynamicId);
     if (completion.status !== "succeeded") {
       throw new OperationError(id, completion.status, completion.error);
     }
-    return runnable.decode(completion.output);
+    return runnable.decode(completion.output, scheduled.operation);
   }
 }

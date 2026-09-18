@@ -8,7 +8,8 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseArgs, runWorkflowCli, USAGE } from "../src/host/cli.ts";
+import { ABORT_SIGNALS, parseArgs, runWorkflowCli, USAGE, type CliHooks } from "../src/host/cli.ts";
+import type { DashboardSession } from "../src/host/dashboard/index.ts";
 import {
   BridgeExecutor,
   CollectingSink,
@@ -21,9 +22,11 @@ import {
   dynamic,
   type OperationRequest,
 } from "../src/index.ts";
-import { artifact, ref } from "./helpers.ts";
+import { artifact, canListen, ref } from "./helpers.ts";
 
 const fakeBridge = resolve(import.meta.dirname, "fixtures/fake-bridge.mjs");
+/** `--dashboard` opens a loopback listener, which a sandbox may deny. */
+const listenable = await canListen();
 
 describe("safe relative paths", () => {
   it.each([
@@ -193,7 +196,7 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor artifacts", () => 
     expect(store.toJSON().events.map((e) => e.type)).toEqual(["scheduled", "completed"]);
   });
 
-  it("runs shell through the one-shot file protocol and refuses ai locally", async () => {
+  it("runs shell through the one-shot file protocol", async () => {
     const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
     const inspect = shell({ name: "inspect", command: "true" });
     const result = await run(
@@ -204,16 +207,14 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor artifacts", () => 
       request: OperationRequest;
     };
     expect(echoed.request.operation).toEqual({ kind: "shell", command: "true" });
-    const ai = await executor.execute({
-      protocolVersion: 6,
-      commandId: "ai",
-      operation: { kind: "ai", prompt: "x" },
-    });
-    expect(ai.status).toBe("failed");
   });
 });
 
 describe("codemod-workflow argument parsing", () => {
+  it("aborts the run on SIGINT, SIGTERM, and SIGHUP", () => {
+    expect([...ABORT_SIGNALS].sort()).toEqual(["SIGHUP", "SIGINT", "SIGTERM"]);
+  });
+
   it("resolves every path and defaults the target and bridge", () => {
     const options = parseArgs(["fixtures/jssg/dynamic.ts"]);
     expect(options.workflow).toBe(resolve("fixtures/jssg/dynamic.ts"));
@@ -227,8 +228,19 @@ describe("codemod-workflow argument parsing", () => {
       workflow: resolve("wf.ts"),
       target: resolve("repo"),
       bridge: resolve("bin/bridge"),
+      dashboard: false,
     });
     expect(options).not.toHaveProperty("input");
+  });
+
+  it("treats --dashboard as a value-less opt-in flag", () => {
+    expect(parseArgs(["wf.ts", "--dashboard"]).dashboard).toBe(true);
+    expect(parseArgs(["wf.ts", "--dashboard", "--target", "repo"])).toMatchObject({
+      dashboard: true,
+      target: resolve("repo"),
+    });
+    expect(parseArgs(["wf.ts", "--target", "repo", "--dashboard"]).dashboard).toBe(true);
+    expect(USAGE).toContain("[--dashboard]");
   });
 
   it("parses --input as strict JSON and keeps an explicit null apart from no input", () => {
@@ -276,6 +288,136 @@ describe.skipIf(process.platform === "win32")("codemod-workflow runs", () => {
     const echoed = JSON.parse(output.stdout) as { request: OperationRequest };
     expect(echoed.request.commandId).toBe("inspect");
     expect(echoed.request.operation).toEqual({ kind: "shell", command: "true" });
+  });
+
+  /**
+   * Seams into a `--dashboard` host: the session as soon as it exists, a
+   * promise for the first run's creation, and (when asked) a server stand-in
+   * so the test needs no socket.
+   */
+  function dashboardHooks(fakeServer: boolean) {
+    let session: DashboardSession | undefined;
+    let closed = 0;
+    const hooks: CliHooks = {};
+    const firstRun = new Promise<string>((resolve) => {
+      hooks.onSession = (s) => {
+        session = s;
+        s.subscribe((notice) => {
+          if (notice.type === "run.created") resolve(notice.run.runId);
+        });
+      };
+    });
+    if (fakeServer) {
+      hooks.serve = async () => ({
+        url: "http://127.0.0.1:0/",
+        port: 0,
+        close: async () => {
+          closed += 1;
+        },
+      });
+    }
+    return {
+      hooks,
+      firstRun,
+      session: () => session!,
+      closed: () => closed,
+    };
+  }
+
+  it.skipIf(!listenable)(
+    "announces the dashboard out of band and still returns the result",
+    async () => {
+      const lines: string[] = [];
+      const controller = new AbortController();
+      const seams = dashboardHooks(false);
+      const finished = runWorkflowCli(
+        [...base("shell.ts"), "--dashboard"],
+        controller.signal,
+        (line) => lines.push(line),
+        seams.hooks,
+      );
+      const firstRun = await seams.firstRun;
+      await seams.session().settled(firstRun);
+      controller.abort();
+      const output = (await finished) as { stdout: string };
+      expect(lines[0]).toMatch(/^dashboard: http:\/\/127\.0\.0\.1:\d+\/$/u);
+      const echoed = JSON.parse(output.stdout) as { request: OperationRequest };
+      expect(echoed.request.commandId).toBe("inspect");
+    },
+  );
+
+  it("keeps the dashboard host alive after a run and exits cleanly on the signal", async () => {
+    const lines: string[] = [];
+    const controller = new AbortController();
+    const seams = dashboardHooks(true);
+    const finished = runWorkflowCli(
+      [...base("shell.ts"), "--dashboard"],
+      controller.signal,
+      (line) => lines.push(line),
+      seams.hooks,
+    );
+    let settled = false;
+    void finished.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    // The first run starts on its own and finishes, and the host stays up.
+    const first = await seams.firstRun;
+    const session = seams.session();
+    await session.settled(first);
+    expect(session.run(first)).toMatchObject({ number: 1, status: "completed" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+    expect(session.isClosed).toBe(false);
+    expect(seams.closed()).toBe(0);
+
+    // Run again works while hosting, with a fresh run id.
+    const second = await session.start();
+    expect(second.runId).not.toBe(first);
+    await session.settled(second.runId);
+    expect(session.runs().map((r) => r.status)).toEqual(["completed", "completed"]);
+
+    // Ctrl-C: the session closes, the server closes, and the newest result is the answer.
+    controller.abort();
+    const output = (await finished) as { stdout: string };
+    expect(session.isClosed).toBe(true);
+    expect(seams.closed()).toBe(1);
+    expect(JSON.parse(output.stdout).request.commandId).toBe("inspect");
+    expect(lines).toEqual([
+      "dashboard: http://127.0.0.1:0/",
+      "run 1 started",
+      expect.stringMatching(/^run 1 done in \d+\.\ds$/u),
+      "run 2 started",
+      expect.stringMatching(/^run 2 done in \d+\.\ds$/u),
+    ]);
+  });
+
+  it("fails like a plain run when the newest run did not complete", async () => {
+    const lines: string[] = [];
+    const controller = new AbortController();
+    const seams = dashboardHooks(true);
+    const finished = runWorkflowCli(
+      [...base("shell.ts"), "--dashboard"],
+      controller.signal,
+      (line) => lines.push(line),
+      seams.hooks,
+    );
+    const first = await seams.firstRun;
+    const session = seams.session();
+    await session.settled(first);
+    // Stop the host while a second run is active: the abort lands before its
+    // bridge process can answer, so that run is cancelled and reported as such.
+    const second = await session.start();
+    controller.abort();
+    await expect(finished).rejects.toThrow(/cancelled|aborted/iu);
+    expect(session.run(second.runId)).toMatchObject({ status: "cancelled" });
+    expect(seams.closed()).toBe(1);
+    expect(lines.at(-1)).toMatch(/^run 2 stopped after/u);
   });
 
   it("requires --input for a root that declares input, and passes null and JSON through", async () => {

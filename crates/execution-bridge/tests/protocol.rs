@@ -4,9 +4,11 @@
 
 use std::path::Path;
 
+use butterflow_execution_bridge::external::{ClaudeCodeTool, CodexSandbox};
 use butterflow_execution_bridge::{
-    completion_from_result, execute, parse_request, ArtifactRef, CompletionStatus, Operation,
-    OperationCompletion, RequestContext, SemanticAnalysis, SemanticMode, Target, PROTOCOL_VERSION,
+    agent, completion_from_result, execute, parse_request, ArtifactRef, AssessmentQuestion,
+    CompletionStatus, Operation, OperationCompletion, RequestContext, SemanticAnalysis,
+    SemanticMode, Target, PROTOCOL_VERSION,
 };
 use butterflow_models::Error;
 use butterflow_runners::direct_runner::DirectRunner;
@@ -40,6 +42,10 @@ fn fixtures_round_trip_to_identical_json() {
         "shell-request.json",
         "jssg-request.json",
         "jssg-target-request.json",
+        "agent-request.json",
+        "agent-claude-code-request.json",
+        "agent-codex-request.json",
+        "assessment-request.json",
     ] {
         let text = fixture(name);
         let parsed = parse_request(&text).expect(name);
@@ -55,6 +61,7 @@ fn fixtures_round_trip_to_identical_json() {
         ("failed-completion.json", CompletionStatus::Failed),
         ("cancelled-completion.json", CompletionStatus::Cancelled),
         ("unknown-completion.json", CompletionStatus::Unknown),
+        ("assessment-completion.json", CompletionStatus::Succeeded),
     ] {
         let text = fixture(name);
         let completion: OperationCompletion = serde_json::from_str(&text).expect(name);
@@ -164,8 +171,96 @@ fn decoding_is_strict() {
             "unknown field `target`",
         ),
         (
-            request(r#"{"kind":"ai","prompt":"x","target":{"root":"apps"}}"#),
+            request(r#"{"kind":"ai","prompt":"x"}"#),
+            "unknown variant `ai`",
+        ),
+        (
+            request(
+                r#"{"kind":"agent","prompt":"x","backend":{"kind":"builtin","tools":[]},"target":{"root":"apps"}}"#,
+            ),
             "unknown field `target`",
+        ),
+        (
+            request(r#"{"kind":"agent","prompt":"x"}"#),
+            "missing field `backend`",
+        ),
+        // The pre-v8 shape: settings are backend-scoped now.
+        (
+            request(r#"{"kind":"agent","prompt":"x","tools":[]}"#),
+            "unknown field `tools`",
+        ),
+        (
+            request(
+                r#"{"kind":"agent","prompt":"x","backend":{"kind":"builtin","tools":["shell"]}}"#,
+            ),
+            "unknown variant `shell`",
+        ),
+        (
+            request(
+                r#"{"kind":"agent","prompt":"x","backend":{"kind":"builtin","tools":[]},"responseFormat":"xml"}"#,
+            ),
+            "unknown variant `xml`",
+        ),
+        (
+            request(
+                r#"{"kind":"agent","prompt":"x","backend":{"kind":"builtin","tools":[],"maxSteps":-1}}"#,
+            ),
+            "invalid request JSON",
+        ),
+        // Unsupported backend settings are parse errors, not ignored.
+        (
+            request(r#"{"kind":"agent","prompt":"x","backend":{"kind":"lm-studio"}}"#),
+            "unknown variant `lm-studio`",
+        ),
+        (
+            request(
+                r#"{"kind":"agent","prompt":"x","backend":{"kind":"claude-code","tools":["Read"],"maxSteps":3}}"#,
+            ),
+            "unknown field `maxSteps`",
+        ),
+        (
+            request(
+                r#"{"kind":"agent","prompt":"x","backend":{"kind":"claude-code","tools":["bash"]}}"#,
+            ),
+            "unknown variant `bash`",
+        ),
+        (
+            request(
+                r#"{"kind":"agent","prompt":"x","backend":{"kind":"codex","sandbox":"workspace-write","tools":[]}}"#,
+            ),
+            "unknown field `tools`",
+        ),
+        (
+            request(
+                r#"{"kind":"agent","prompt":"x","backend":{"kind":"codex","sandbox":"danger-full-access"}}"#,
+            ),
+            "unknown variant `danger-full-access`",
+        ),
+        (
+            request(r#"{"kind":"agent","prompt":"x","backend":{"kind":"codex"}}"#),
+            "missing field `sandbox`",
+        ),
+        (
+            request(r#"{"kind":"assessment","state":"s","questions":{},"target":{"root":"apps"}}"#),
+            "unknown field `target`",
+        ),
+        (
+            request(
+                r#"{"kind":"assessment","state":"s","questions":{"q":{"type":"rank","instructions":"x"}}}"#,
+            ),
+            "unknown variant `rank`",
+        ),
+        (
+            request(
+                r#"{"kind":"assessment","state":"s","questions":{"q":{"type":"noul","instructions":"x","options":[]}}}"#,
+            ),
+            "unknown field `options`",
+        ),
+        (
+            request(
+                r#"{"kind":"assessment","state":"s","questions":{"q":{"type":"score","instructions":"x","criteria":{"a":null}}}}"#,
+            ),
+            "invalid request JSON",
         ),
         (
             request(r#"{"kind":"shell","command":"true","package":"p"}"#),
@@ -287,74 +382,264 @@ fn runner_results_convert_to_completions() {
     );
 }
 
+#[test]
+fn assessment_fixture_decodes_every_question_type() {
+    let parsed = parse_request(&fixture("assessment-request.json")).expect("parse");
+    let Operation::Assessment {
+        state,
+        questions,
+        model,
+    } = parsed.operation
+    else {
+        panic!("expected assessment");
+    };
+    assert_eq!(state["package"], json!("web"));
+    assert_eq!(model.as_deref(), Some("jev-latest"));
+    assert!(matches!(
+        &questions["risk"],
+        AssessmentQuestion::Choice { criteria, .. } if criteria.len() == 3 && criteria["medium"].is_null()
+    ));
+    assert!(matches!(
+        &questions["completeness"],
+        AssessmentQuestion::Score { criteria, .. } if criteria.len() == 3
+    ));
+    assert!(matches!(
+        &questions["touchesTests"],
+        AssessmentQuestion::Noul {
+            criteria: Some(_),
+            ..
+        }
+    ));
+}
+
 #[tokio::test]
-async fn ai_is_refused() {
-    let request = parse_request(&request(r#"{"kind":"ai","prompt":"summarize"}"#)).expect("parse");
+async fn assessment_is_refused_by_the_bridge() {
+    let request = parse_request(&fixture("assessment-request.json")).expect("parse");
     let completion = execute(&DirectRunner::with_quiet(true), &request).await;
     assert_eq!(completion.status, CompletionStatus::Failed);
     assert!(completion
         .error
         .expect("error")
         .message
-        .contains("no executor adapter"));
+        .contains("executed by the TypeScript host"));
 }
 
-#[cfg(unix)]
+#[test]
+fn agent_settings_follow_the_engine_llm_environment() {
+    let env = |pairs: &'static [(&'static str, &'static str)]| {
+        move |name: &str| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        }
+    };
+    assert_eq!(
+        agent::settings_from_env(env(&[])),
+        Err("agent requires LLM_API_KEY".to_string())
+    );
+    assert_eq!(
+        agent::settings_from_env(env(&[("LLM_API_KEY", "  ")])),
+        Err("agent requires LLM_API_KEY".to_string())
+    );
+    assert_eq!(
+        agent::settings_from_env(env(&[("LLM_API_KEY", "k")])),
+        Ok(agent::AgentSettings {
+            api_key: "k".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+            endpoint: "https://api.openai.com/v1".to_string(),
+        })
+    );
+    assert_eq!(
+        agent::settings_from_env(env(&[
+            ("LLM_API_KEY", "k"),
+            ("LLM_PROVIDER", "anthropic"),
+            ("LLM_MODEL", "claude-sonnet-4-5"),
+        ])),
+        Ok(agent::AgentSettings {
+            api_key: "k".to_string(),
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-5".to_string(),
+            endpoint: "https://api.anthropic.com".to_string(),
+        })
+    );
+    let custom = agent::settings_from_env(env(&[
+        ("LLM_API_KEY", "k"),
+        ("LLM_BASE_URL", "http://127.0.0.1:1/v1"),
+    ]))
+    .expect("settings");
+    assert_eq!(custom.endpoint, "http://127.0.0.1:1/v1");
+}
+
+#[test]
+fn agent_task_prompt_appends_input_and_the_json_requirement() {
+    assert_eq!(agent::task_prompt("Fix it.", None, None), "Fix it.");
+    assert_eq!(
+        agent::task_prompt("Fix it.", Some(&json!({ "packages": ["web"] })), None),
+        "Fix it.\n\nInput (JSON):\n```json\n{\n  \"packages\": [\n    \"web\"\n  ]\n}\n```"
+    );
+    assert_eq!(
+        agent::task_prompt("Fix it.", None, Some(agent::ResponseFormat::Json)),
+        format!("Fix it.\n\n{}", agent::JSON_RESPONSE_INSTRUCTION)
+    );
+}
+
+#[test]
+fn agent_fixtures_decode_each_backend() {
+    let request = parse_request(&fixture("agent-request.json")).expect("parse");
+    let task = agent::Task::from_operation(&request.operation).expect("agent");
+    let agent::AgentBackend::Builtin { tools, max_steps } = task.backend else {
+        panic!("expected builtin");
+    };
+    assert_eq!(
+        tools.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
+        [
+            "str_replace_based_edit_tool",
+            "json_edit_tool",
+            "glob",
+            "sequentialthinking",
+            "task_done"
+        ]
+    );
+    assert!(!tools.contains(&agent::AgentTool::Bash));
+    assert_eq!(*max_steps, Some(40));
+    assert_eq!(task.response_format, Some(agent::ResponseFormat::Json));
+    assert_eq!(task.input, Some(&json!({ "packages": ["web", "api"] })));
+    for tool in [
+        agent::AgentTool::Bash,
+        agent::AgentTool::Edit,
+        agent::AgentTool::JsonEdit,
+        agent::AgentTool::Glob,
+        agent::AgentTool::SequentialThinking,
+        agent::AgentTool::TaskDone,
+        agent::AgentTool::Ckg,
+        agent::AgentTool::Mcp,
+    ] {
+        assert_eq!(
+            serde_json::to_value(tool).expect("serializes"),
+            json!(tool.name())
+        );
+    }
+
+    let claude = parse_request(&fixture("agent-claude-code-request.json")).expect("parse");
+    let task = agent::Task::from_operation(&claude.operation).expect("agent");
+    assert_eq!(
+        task.backend,
+        &agent::AgentBackend::ClaudeCode {
+            tools: vec![
+                ClaudeCodeTool::Read,
+                ClaudeCodeTool::Glob,
+                ClaudeCodeTool::Grep
+            ]
+        }
+    );
+    assert!(!task.backend.is_builtin());
+    for tool in [
+        ClaudeCodeTool::Read,
+        ClaudeCodeTool::Edit,
+        ClaudeCodeTool::Write,
+        ClaudeCodeTool::Glob,
+        ClaudeCodeTool::Grep,
+        ClaudeCodeTool::Bash,
+    ] {
+        assert_eq!(
+            serde_json::to_value(tool).expect("serializes"),
+            json!(tool.name())
+        );
+    }
+
+    let codex = parse_request(&fixture("agent-codex-request.json")).expect("parse");
+    let task = agent::Task::from_operation(&codex.operation).expect("agent");
+    assert_eq!(
+        task.backend,
+        &agent::AgentBackend::Codex {
+            sandbox: CodexSandbox::WorkspaceWrite
+        }
+    );
+    for sandbox in [CodexSandbox::ReadOnly, CodexSandbox::WorkspaceWrite] {
+        assert_eq!(
+            serde_json::to_value(sandbox).expect("serializes"),
+            json!(sandbox.name())
+        );
+    }
+}
+
 #[tokio::test]
-async fn shell_runs_through_direct_runner() {
-    // (command, env, expected status, expected stdout / error output, exit code)
+async fn agent_config_failures_report_an_untouched_repository() {
+    let request = parse_request(&fixture("agent-request.json")).expect("parse");
+    let task = agent::Task::from_operation(&request.operation).expect("agent");
+    let settings = || agent::settings_from_env(|_| Some("k".to_string()));
+    let repeated = agent::AgentBackend::Builtin {
+        tools: vec![agent::AgentTool::Glob, agent::AgentTool::Glob],
+        max_steps: None,
+    };
+    let zero_steps = agent::AgentBackend::Builtin {
+        tools: vec![],
+        max_steps: Some(0),
+    };
+    let repeated_claude = agent::AgentBackend::ClaudeCode {
+        tools: vec![ClaudeCodeTool::Read, ClaudeCodeTool::Read],
+    };
     let cases = [
         (
-            "printf '{\"ok\":true}'",
-            None,
-            CompletionStatus::Succeeded,
-            "{\"ok\":true}\n",
-            None,
-        ),
-        // DirectRunner combines stdout and stderr on Unix.
-        (
-            "printf out; printf err >&2",
-            None,
-            CompletionStatus::Succeeded,
-            "outerr\n",
-            None,
+            agent::run(
+                &request.command_id,
+                task,
+                || agent::settings_from_env(|_| None),
+                std::env::current_dir(),
+            )
+            .await,
+            "agent requires LLM_API_KEY",
         ),
         (
-            "printf '%s' \"$BRIDGE_TEST\"",
-            Some("from-request"),
-            CompletionStatus::Succeeded,
-            "from-request\n",
-            None,
+            agent::run(
+                &request.command_id,
+                agent::Task {
+                    backend: &repeated,
+                    ..task
+                },
+                settings,
+                std::env::current_dir(),
+            )
+            .await,
+            "agent tools must not repeat",
         ),
         (
-            "echo boom >&2; exit 3",
-            None,
-            CompletionStatus::Failed,
-            "boom\n",
-            Some(3),
+            agent::run(
+                &request.command_id,
+                agent::Task {
+                    backend: &zero_steps,
+                    ..task
+                },
+                settings,
+                std::env::current_dir(),
+            )
+            .await,
+            "agent maxSteps must be at least 1",
+        ),
+        (
+            agent::run(
+                &request.command_id,
+                agent::Task {
+                    backend: &repeated_claude,
+                    ..task
+                },
+                || panic!("external backends never read LLM settings"),
+                std::env::current_dir(),
+            )
+            .await,
+            "claude-code tools must not repeat",
         ),
     ];
-    for (command, env, status, text, exit_code) in cases {
-        let env = env.map_or_else(String::new, |value| {
-            format!(r#","env":{{"BRIDGE_TEST":"{value}"}}"#)
-        });
-        let request = parse_request(&request(&format!(
-            r#"{{"kind":"shell","command":{}{env}}}"#,
-            Value::String(command.to_string())
-        )))
-        .expect("parse");
-        let completion = execute(&DirectRunner::with_quiet(true), &request).await;
-        assert_eq!(completion.status, status, "{command}");
-        assert_eq!(completion.command_id, "t");
-        match status {
-            CompletionStatus::Succeeded => {
-                assert_eq!(completion.output.unwrap()["stdout"], text, "{command}");
-            }
-            _ => {
-                let error = completion.error.unwrap();
-                assert_eq!(error.exit_code, exit_code, "{command}");
-                assert_eq!(error.output.as_deref(), Some(text), "{command}");
-            }
-        }
+    for (completion, message) in cases {
+        assert_eq!(completion.status, CompletionStatus::Failed);
+        assert_eq!(completion.command_id, "fix-tests");
+        let error = completion.error.expect("error");
+        assert_eq!(error.message, message);
+        assert_eq!(
+            error.details,
+            Some(json!({ "phase": "config", "repositoryMayBeModified": false }))
+        );
     }
 }

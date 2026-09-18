@@ -5,10 +5,16 @@
  * functions on the wire. The Rust serde structs mirror these shapes exactly;
  * `fixtures/protocol/*.json` are the shared conformance fixtures.
  */
+import {
+  isAssessmentEntry,
+  isAssessmentQuestions,
+  type AssessmentQuestions,
+  type AssessmentState,
+} from "./assessment.ts";
 import type { Json } from "./json.ts";
 import { isSafeRelativePath } from "./paths.ts";
 
-export const PROTOCOL_VERSION = 6 as const;
+export const PROTOCOL_VERSION = 8 as const;
 
 export type CompletionStatus = "succeeded" | "failed" | "cancelled" | "unknown";
 
@@ -78,14 +84,117 @@ export interface JssgOperation {
   input?: Json;
 }
 
-/** Placeholder for the future AI OperationExecutor adapter. Not executed by the bridge. */
-export interface AiOperation {
-  kind: "ai";
+/**
+ * The built-in agent's tools, by their `codemod-ai` names (the YAML `ai` step
+ * `tools` list). `bash` runs arbitrary commands and `mcp_tool` starts
+ * arbitrary server processes; neither is confined to the repository.
+ */
+export const BUILTIN_AGENT_TOOLS = [
+  "bash",
+  "str_replace_based_edit_tool",
+  "json_edit_tool",
+  "glob",
+  "sequentialthinking",
+  "task_done",
+  "ckg_tool",
+  "mcp_tool",
+] as const;
+
+export type BuiltinAgentTool = (typeof BUILTIN_AGENT_TOOLS)[number];
+
+/**
+ * What a builtin agent gets when it names no tools: file viewing and editing,
+ * globbing, planning, and completion. No shell, no MCP servers, no code
+ * knowledge graph database written into the repository.
+ */
+export const DEFAULT_BUILTIN_AGENT_TOOLS: readonly BuiltinAgentTool[] = [
+  "str_replace_based_edit_tool",
+  "json_edit_tool",
+  "glob",
+  "sequentialthinking",
+  "task_done",
+];
+
+/**
+ * Claude Code built-in tools a `claude-code` agent may be given. The bridge
+ * passes the list as both `--tools` (what exists) and `--allowedTools` (what
+ * runs without a prompt); nothing else is available, and anything that would
+ * still ask for permission is denied. `Bash` runs arbitrary commands.
+ */
+export const CLAUDE_CODE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash"] as const;
+
+export type ClaudeCodeTool = (typeof CLAUDE_CODE_TOOLS)[number];
+
+/** Read and edit files in the working directory; no shell. */
+export const DEFAULT_CLAUDE_CODE_TOOLS: readonly ClaudeCodeTool[] = [
+  "Read",
+  "Edit",
+  "Write",
+  "Glob",
+  "Grep",
+];
+
+/**
+ * Codex `exec --sandbox` modes a `codex` agent may use. `danger-full-access`
+ * is deliberately not representable.
+ */
+export const CODEX_SANDBOXES = ["read-only", "workspace-write"] as const;
+
+export type CodexSandbox = (typeof CODEX_SANDBOXES)[number];
+
+export const DEFAULT_CODEX_SANDBOX: CodexSandbox = "workspace-write";
+
+/**
+ * Which agent loop runs the task, with only the settings that backend
+ * enforces:
+ *
+ * - `builtin`: `codemod-ai` (Rig) with exactly `tools`; `maxSteps` bounds its
+ *   turns (its own default is 30). Uses `LLM_API_KEY`.
+ * - `claude-code`: the installed, logged-in `claude` CLI with exactly `tools`.
+ * - `codex`: the installed, logged-in `codex` CLI in `sandbox`.
+ *
+ * External backends own their agent loop, use the CLI's own login and quota,
+ * and never see `LLM_API_KEY`.
+ */
+export type AgentBackend =
+  | { kind: "builtin"; tools: BuiltinAgentTool[]; maxSteps?: number }
+  | { kind: "claude-code"; tools: ClaudeCodeTool[] }
+  | { kind: "codex"; sandbox: CodexSandbox };
+
+export const AGENT_BACKENDS = ["builtin", "claude-code", "codex"] as const;
+
+export type AgentBackendKind = AgentBackend["kind"];
+
+/**
+ * An agent task: a prompt plus optional input, run by the bridge in the
+ * executor's working directory through `backend`. It may change files. A
+ * succeeded completion's output is `{ text }`, the agent's final response;
+ * `responseFormat: "json"` makes the bridge ask the agent for a JSON reply;
+ * the bridge does not check the reply, TypeScript decoding
+ * (`parseAgentJson` plus the step's output schema) enforces it.
+ */
+export interface AgentOperation {
+  kind: "agent";
   prompt: string;
   input?: Json;
+  backend: AgentBackend;
+  responseFormat?: "json";
 }
 
-export type Operation = ShellOperation | JssgOperation | AiOperation;
+/**
+ * A read-only System One assessment (`core/assessment.ts`): explicit `state`
+ * and named typed questions, no repository access, no tools. `model` pins a
+ * model; without it the executor's default answers (`jev-latest` unless
+ * configured). A succeeded completion's output is an `AssessmentResult`.
+ */
+export interface AssessmentOperation {
+  kind: "assessment";
+  state: AssessmentState;
+  questions: AssessmentQuestions;
+  model?: string;
+}
+
+export type Operation = ShellOperation | JssgOperation | AgentOperation | AssessmentOperation;
 
 /** One selected file, already read by the host. `path` is target-root-relative. */
 export interface BatchFile {
@@ -154,7 +263,10 @@ export type OperationCompletion =
       protocolVersion: typeof PROTOCOL_VERSION;
       commandId: string;
       status: "succeeded";
-      /** For shell `{ stdout }`; for jssg the per-file structured outputs in file order. */
+      /**
+       * Shell `{ stdout }`; jssg the per-file structured outputs in file order;
+       * agent `{ text }`; assessment `{ model, answers, usage }`.
+       */
       output: Json;
       error?: never;
     }
@@ -201,7 +313,7 @@ export function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly st
 
 /**
  * Field sets per operation kind. Validation is strict: a field from another
- * variant, most importantly a `target` on `shell` or `ai`, makes the operation
+ * variant, most importantly a `target` on `shell`, `agent`, or `assessment`, makes the operation
  * invalid rather than being ignored. Mirrors `deny_unknown_fields` in the Rust bridge.
  */
 const OPERATION_FIELDS = {
@@ -217,7 +329,8 @@ const OPERATION_FIELDS = {
     "target",
     "input",
   ],
-  ai: ["kind", "prompt", "input"],
+  agent: ["kind", "prompt", "input", "backend", "responseFormat"],
+  assessment: ["kind", "state", "questions", "model"],
 } as const satisfies Record<Operation["kind"], readonly string[]>;
 
 /**
@@ -337,6 +450,63 @@ function isCompletionError(value: unknown): value is CompletionError {
   );
 }
 
+/** Names from `known`, each at most once. An empty list is a tool-less agent. */
+export function isToolList<T extends string>(value: unknown, known: readonly T[]): value is T[] {
+  return (
+    Array.isArray(value) &&
+    value.every((tool) => (known as readonly unknown[]).includes(tool)) &&
+    new Set(value).size === value.length
+  );
+}
+
+/**
+ * Why a backend is malformed or asks for a setting its backend cannot
+ * enforce, or `undefined` when it is valid.
+ */
+export function agentBackendProblem(value: unknown): string | undefined {
+  if (!isRecord(value)) return "backend must be an object";
+  const only = (allowed: readonly string[]) =>
+    Object.keys(value).find((key) => !allowed.includes(key));
+  const list = (known: readonly string[]) => known.map((name) => `'${name}'`).join(", ");
+  switch (value.kind) {
+    case "builtin": {
+      const extra = only(["kind", "tools", "maxSteps"]);
+      if (extra !== undefined) return `backend 'builtin' does not support '${extra}'`;
+      if (!isToolList(value.tools, BUILTIN_AGENT_TOOLS)) {
+        return `builtin tools must be distinct names from ${list(BUILTIN_AGENT_TOOLS)}`;
+      }
+      if (value.maxSteps !== undefined && !isMaxSteps(value.maxSteps)) {
+        return "builtin maxSteps must be a positive integer";
+      }
+      return undefined;
+    }
+    case "claude-code": {
+      const extra = only(["kind", "tools"]);
+      if (extra !== undefined) return `backend 'claude-code' does not support '${extra}'`;
+      return isToolList(value.tools, CLAUDE_CODE_TOOLS)
+        ? undefined
+        : `claude-code tools must be distinct names from ${list(CLAUDE_CODE_TOOLS)}`;
+    }
+    case "codex": {
+      const extra = only(["kind", "sandbox"]);
+      if (extra !== undefined) return `backend 'codex' does not support '${extra}'`;
+      return (CODEX_SANDBOXES as readonly unknown[]).includes(value.sandbox)
+        ? undefined
+        : `codex sandbox must be one of ${list(CODEX_SANDBOXES)}`;
+    }
+    default:
+      return `backend kind must be one of ${list(AGENT_BACKENDS)}`;
+  }
+}
+
+export function isAgentBackend(value: unknown): value is AgentBackend {
+  return agentBackendProblem(value) === undefined;
+}
+
+export function isMaxSteps(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
 export function isOperation(value: unknown): value is Operation {
   if (!isRecord(value)) return false;
   switch (value.kind) {
@@ -358,11 +528,20 @@ export function isOperation(value: unknown): value is Operation {
         (value.target === undefined || isTarget(value.target)) &&
         (value.input === undefined || isJson(value.input))
       );
-    case "ai":
+    case "agent":
       return (
-        hasOnlyKeys(value, OPERATION_FIELDS.ai) &&
+        hasOnlyKeys(value, OPERATION_FIELDS.agent) &&
         typeof value.prompt === "string" &&
-        (value.input === undefined || isJson(value.input))
+        (value.input === undefined || isJson(value.input)) &&
+        isAgentBackend(value.backend) &&
+        (value.responseFormat === undefined || value.responseFormat === "json")
+      );
+    case "assessment":
+      return (
+        hasOnlyKeys(value, OPERATION_FIELDS.assessment) &&
+        isAssessmentEntry(value.state) &&
+        isAssessmentQuestions(value.questions) &&
+        (value.model === undefined || isNonBlank(value.model))
       );
     default:
       return false;

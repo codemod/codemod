@@ -1,5 +1,5 @@
 {
-  "protocolVersion": 6,
+  "protocolVersion": 8,
   "commandId": "migrate",
   "operation": {
     "kind": "jssg",

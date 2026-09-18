@@ -19,7 +19,7 @@ import { PROTOCOL_VERSION, type OperationCompletion } from "../core/protocol.ts"
 
 /** Migration seam: resolve a command (replay or execute) and finish a run. */
 export interface CommandGate {
-  resolve(command: ScheduledCommand): Promise<OperationCompletion>;
+  resolve(command: ScheduledCommand, dynamicId?: string): Promise<OperationCompletion>;
   finish(output: Json): Promise<{ replayed: boolean }>;
 }
 
@@ -47,12 +47,12 @@ export class ReplayGate implements CommandGate {
     this.recordedFinal = finalOutput(history);
   }
 
-  async resolve(command: ScheduledCommand): Promise<OperationCompletion> {
+  async resolve(command: ScheduledCommand, dynamicId?: string): Promise<OperationCompletion> {
     if (this.issued.has(command.id)) throw new DuplicateCommandIdError(command.id);
     this.issued.add(command.id);
 
     const position = this.recordedIndex.get(command.id);
-    if (position === undefined) return this.executeNew(command);
+    if (position === undefined) return this.executeNew(command, dynamicId);
 
     const recorded = this.recorded[position]!;
     if (canonicalJson(recorded) !== canonicalJson(command)) {
@@ -73,7 +73,12 @@ export class ReplayGate implements CommandGate {
       this.consumed.add(position);
       while (this.consumed.has(this.cursor)) this.cursor += 1;
       const completion = this.completion(command.id);
-      this.events.emit({ type: "command.replayed", commandId: command.id, completion });
+      this.events.emit({
+        type: "command.replayed",
+        commandId: command.id,
+        completion,
+        ...(dynamicId === undefined ? {} : { dynamicId }),
+      });
       return completion;
     }
     for (let index = this.cursor; index < position; index++) {
@@ -84,7 +89,12 @@ export class ReplayGate implements CommandGate {
     while (this.consumed.has(this.cursor)) this.cursor += 1;
 
     const completion = this.completion(command.id);
-    this.events.emit({ type: "command.replayed", commandId: command.id, completion });
+    this.events.emit({
+      type: "command.replayed",
+      commandId: command.id,
+      completion,
+      ...(dynamicId === undefined ? {} : { dynamicId }),
+    });
     return completion;
   }
 
@@ -99,7 +109,10 @@ export class ReplayGate implements CommandGate {
     );
   }
 
-  private async executeNew(command: ScheduledCommand): Promise<OperationCompletion> {
+  private async executeNew(
+    command: ScheduledCommand,
+    dynamicId?: string,
+  ): Promise<OperationCompletion> {
     if (this.recordedFinal.finalized) {
       throw new NondeterminismError(
         "added",
@@ -126,7 +139,11 @@ export class ReplayGate implements CommandGate {
     }
 
     await this.store.append({ type: "scheduled", command });
-    this.events.emit({ type: "command.scheduled", command });
+    this.events.emit({
+      type: "command.scheduled",
+      command,
+      ...(dynamicId === undefined ? {} : { dynamicId }),
+    });
     const completion = await this.executor.execute(
       {
         protocolVersion: PROTOCOL_VERSION,

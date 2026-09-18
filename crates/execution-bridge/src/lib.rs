@@ -4,25 +4,29 @@
 //! `OperationCompletion` is written to another. `shell` runs through the
 //! existing `butterflow_runners::Runner`; `jssg` runs one batch of
 //! host-supplied files through a host-supplied transform bundle in the
-//! sandbox (see [`jssg`]). The bridge never reads author files, walks a
+//! sandbox (see [`jssg`]); `agent` runs one task through the built-in agent
+//! (see [`agent`]). `assessment` is decoded for protocol parity only: the
+//! TypeScript host calls the System One API itself. The bridge never reads author files, walks a
 //! repository, interprets globs, orders files, applies edits, or decides
 //! repository-level failure policy: TypeScript owns all of that
 //! (`packages/orchestration/src/execution/jssg.ts`, `RUST_BRIDGE.md`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use butterflow_models::Error;
 use butterflow_runners::Runner;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+pub mod agent;
+pub mod external;
 pub mod jssg;
 
 /// Must match `PROTOCOL_VERSION` in `packages/orchestration/src/core/protocol.ts`.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 8;
 
-/// Every variant rejects fields it does not declare, so a `target` on `shell`
-/// or `ai` is a parse error rather than a silently dropped field. `include`,
+/// Every variant rejects fields it does not declare, so a `target` on `shell`,
+/// `agent`, or `assessment` is a parse error rather than a silently dropped field. `include`,
 /// `exclude`, and `target` are decoded for strictness only: TypeScript has
 /// already turned them into the file list in `RequestContext::files`.
 ///
@@ -62,11 +66,45 @@ pub enum Operation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<Value>,
     },
-    /// Decoded for protocol parity only; no executor adapter exists yet.
-    Ai {
+    /// A task for an agent backend, run in the working directory (see
+    /// [`agent`] and [`external`]).
+    Agent {
         prompt: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<Value>,
+        backend: agent::AgentBackend,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response_format: Option<agent::ResponseFormat>,
+    },
+    /// A read-only System One assessment. Executed by the TypeScript host
+    /// (`packages/orchestration/src/execution/assessment.ts`), never here.
+    Assessment {
+        /// Text, a JSON object, or a JSON array.
+        state: Value,
+        questions: BTreeMap<String, AssessmentQuestion>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+    },
+}
+
+/// One named System One question, mirroring `core/assessment.ts`. Content
+/// rules (non-empty text, at least two options or levels) are checked by
+/// TypeScript; the bridge only enforces the shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+pub enum AssessmentQuestion {
+    Noul {
+        instructions: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        criteria: Option<Value>,
+    },
+    Choice {
+        instructions: Value,
+        criteria: serde_json::Map<String, Value>,
+    },
+    Score {
+        instructions: Value,
+        criteria: Vec<Value>,
     },
 }
 
@@ -243,8 +281,8 @@ pub fn parse_request(text: &str) -> Result<OperationRequest, String> {
     Ok(request)
 }
 
-/// Execute one request. `shell` runs in the process working directory (the
-/// runner owns that). `jssg` transforms `context.files` and returns the edits
+/// Execute one request. `shell` and `agent` run in the process working
+/// directory (the runner and the agent own that). `jssg` transforms `context.files` and returns the edits
 /// as data in `output.files`; it never writes to the repository.
 pub async fn execute(runner: &dyn Runner, request: &OperationRequest) -> OperationCompletion {
     let id = &request.command_id;
@@ -284,10 +322,25 @@ pub async fn execute(runner: &dyn Runner, request: &OperationRequest) -> Operati
                 }
             }
         }
-        Operation::Ai { .. } => OperationCompletion::not_succeeded(
+        // Library use reads `LLM_API_KEY` from the environment and leaves it
+        // there, so builtin tool processes inherit it (external CLIs are
+        // started without it); the binary uses `agent::take_process_settings`
+        // instead (see `agent`).
+        Operation::Agent { .. } => {
+            let task = agent::Task::from_operation(&request.operation).expect("agent operation");
+            agent::run(
+                id,
+                task,
+                || agent::settings_from_env(|name| std::env::var(name).ok()),
+                std::env::current_dir(),
+            )
+            .await
+        }
+        Operation::Assessment { .. } => OperationCompletion::not_succeeded(
             id,
             CompletionStatus::Failed,
-            "operation kind 'ai' has no executor adapter in the execution bridge".to_string(),
+            "operation kind 'assessment' is executed by the TypeScript host, not the execution bridge"
+                .to_string(),
         ),
     }
 }

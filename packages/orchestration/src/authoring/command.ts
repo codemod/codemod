@@ -37,7 +37,7 @@ export interface BoundInvocation<I> extends FlowInvocation {
   input: I;
 }
 
-/** Invocation options for shell and AI steps: identity and optional bound data. */
+/** Invocation options for shell, agent, and assessment steps: identity and optional bound data. */
 export type Invocation<I> = FlowInvocation | BoundInvocation<I>;
 
 /** A JSSG invocation may also select the repository area it applies to. */

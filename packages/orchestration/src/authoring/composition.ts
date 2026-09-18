@@ -188,10 +188,30 @@ export function executableRequiresInput(executable: Executable): boolean {
   return stageRequiresInput(executable);
 }
 
+/**
+ * The static topology of anything `run()` accepts, as plain data: a bare
+ * runnable is one operation node, a dynamic root stays opaque, and static
+ * nodes expose their IR. Commands issued at runtime that this tree does not
+ * name (everything inside `dynamic()`) are visible only through run events.
+ */
+export function executableIr(executable: Executable): CompositionIrNode {
+  if (isRunnable(executable)) {
+    return {
+      type: "operation",
+      id: executable.name,
+      name: executable.name,
+      kind: executable.kind,
+      input: executable.input === undefined ? "none" : "flow",
+    };
+  }
+  return irOf(executable);
+}
+
 export async function runStage(
   runtime: Runtime,
   stage: Executable,
   input: unknown,
+  path = "0",
 ): Promise<unknown> {
   if (isRunnable(stage)) {
     const command = createCommand(stage, stage.input === undefined ? undefined : { input });
@@ -200,9 +220,12 @@ export async function runStage(
   if (isCommand(stage)) {
     return runtime.issue(stage, false, stage.inputMode === "flow" ? { input } : undefined);
   }
-  if (isDynamic(stage)) return runDynamic(stage, input as never);
-  if (isSequence(stage)) return runSequence(runtime, stage, input);
-  if (isParallel(stage)) return runParallel(runtime, stage, input);
+  if (isDynamic(stage)) {
+    const child = dynamicRuntime(runtime, `dynamic:${path}`);
+    return withRuntime(child, () => runDynamic(stage, input as never));
+  }
+  if (isSequence(stage)) return runSequence(runtime, stage, input, path);
+  if (isParallel(stage)) return runParallel(runtime, stage, input, path);
   throw new CompositionValidationError("stage is not runnable");
 }
 
@@ -210,10 +233,13 @@ export async function runSequence(
   runtime: Runtime,
   definition: AnySequence,
   input: unknown,
+  path = "0",
 ): Promise<unknown> {
   startComposition(runtime, definition);
   let output = input;
-  for (const stage of definition.stages) output = await runStage(runtime, stage, output);
+  for (const [index, stage] of definition.stages.entries()) {
+    output = await runStage(runtime, stage, output, `${path}.${index}`);
+  }
   return output;
 }
 
@@ -221,11 +247,14 @@ export function runParallel(
   runtime: Runtime,
   definition: AnyParallel,
   input: unknown,
+  path = "0",
 ): Promise<unknown[]> {
   startComposition(runtime, definition);
   const child = concurrentRuntime(runtime);
   return settleParallel(
-    definition.members.map((member) => withRuntime(child, () => runStage(child, member, input))),
+    definition.members.map((member, index) =>
+      withRuntime(child, () => runStage(child, member, input, `${path}.${index}`)),
+    ),
   );
 }
 
@@ -254,7 +283,19 @@ function concurrentRuntime(runtime: Runtime): Runtime {
       runtime.createdComposition(composition, commandIds),
     startedComposition: (composition) => runtime.startedComposition(composition),
     claimed: (command) => runtime.claimed(command),
-    issue: (command, _concurrent, flow) => runtime.issue(command, true, flow),
+    issue: (command, _concurrent, flow, dynamicId) => runtime.issue(command, true, flow, dynamicId),
+  };
+}
+
+function dynamicRuntime(runtime: Runtime, id: string): Runtime {
+  return {
+    created: (command) => runtime.created(command),
+    createdComposition: (composition, commandIds) =>
+      runtime.createdComposition(composition, commandIds),
+    startedComposition: (composition) => runtime.startedComposition(composition),
+    claimed: (command) => runtime.claimed(command),
+    issue: (command, concurrent, flow, dynamicId) =>
+      runtime.issue(command, concurrent, flow, dynamicId ?? id),
   };
 }
 

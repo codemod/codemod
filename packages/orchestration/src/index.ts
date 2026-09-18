@@ -1,9 +1,23 @@
-export { ai, isRunnable, jssg, shell } from "./authoring/runnable.ts";
+export {
+  agent,
+  assessment,
+  isRunnable,
+  jssg,
+  parseAgentJson,
+  shell,
+} from "./authoring/runnable.ts";
 export type {
-  AiRunnable,
+  AgentBackendOptions,
+  AgentOptions,
+  AgentOutput,
+  AgentRunnable,
+  AskResult,
+  AssessmentOptions,
+  AssessmentRunnable,
   InputOf,
   JssgOptions,
   JssgRunnable,
+  OperationFor,
   OperationKind,
   OutputOf,
   Runnable,
@@ -24,6 +38,7 @@ export type { Command, Invocation, JssgInvocation } from "./authoring/command.ts
 export { NoActiveRunError } from "./authoring/context.ts";
 export { normalizeTarget } from "./authoring/target.ts";
 export {
+  executableIr,
   executableRequiresInput,
   isExecutable,
   isParallel,
@@ -52,10 +67,42 @@ export { run } from "./runtime/run.ts";
 export type { RootInput, RunOptions, RunResult, RunSettings } from "./runtime/run.ts";
 export { guard, SchemaError } from "./authoring/schema.ts";
 export type { InferOutput, StandardSchemaV1 } from "./authoring/schema.ts";
+export {
+  NUMERIC_TOLERANCE,
+  RESERVED_KEYS,
+  assessmentResultProblem,
+  isAssessmentQuestions,
+  questionsProblem,
+} from "./core/assessment.ts";
+export type {
+  AnswerFor,
+  AssessmentAnswer,
+  AssessmentEntry,
+  AssessmentQuestion,
+  AssessmentQuestions,
+  AssessmentResult,
+  AssessmentState,
+  AssessmentUsage,
+  ChoiceAnswer,
+  ChoiceQuestion,
+  NoulAnswer,
+  NoulQuestion,
+  ScoreAnswer,
+  ScoreQuestion,
+} from "./core/assessment.ts";
 export { canonicalJson } from "./core/json.ts";
 export type { Json } from "./core/json.ts";
 export {
+  AGENT_BACKENDS,
+  BUILTIN_AGENT_TOOLS,
+  CLAUDE_CODE_TOOLS,
+  CODEX_SANDBOXES,
+  DEFAULT_BUILTIN_AGENT_TOOLS,
+  DEFAULT_CLAUDE_CODE_TOOLS,
+  DEFAULT_CODEX_SANDBOX,
   PROTOCOL_VERSION,
+  agentBackendProblem,
+  isAgentBackend,
   isArtifactRef,
   isFileOutcomes,
   isJson,
@@ -67,7 +114,13 @@ export {
   parseCompletion,
 } from "./core/protocol.ts";
 export type {
-  AiOperation,
+  AgentBackend,
+  AgentBackendKind,
+  AgentOperation,
+  BuiltinAgentTool,
+  ClaudeCodeTool,
+  CodexSandbox,
+  AssessmentOperation,
   ArtifactRef,
   BatchFile,
   CompletionError,
@@ -104,7 +157,33 @@ export {
   finalOutput,
 } from "./core/history.ts";
 export type { History, HistoryEvent, HistoryStore, ScheduledCommand } from "./core/history.ts";
-export { BridgeExecutor } from "./execution/executor.ts";
+export {
+  DEFAULT_ASSESSMENT_TIMEOUT_MS,
+  MAX_ASSESSMENT_RETRIES,
+  executeAssessment,
+} from "./execution/assessment.ts";
+export type {
+  AssessmentClient,
+  AssessmentClientFactory,
+  AssessmentExecutorOptions,
+} from "./execution/assessment.ts";
+export {
+  AGENT_ENV_ALLOWLIST,
+  AGENT_ENV_PREFIXES,
+  BRIDGE_SECRETS_ENV,
+  EXTERNAL_ENV_ALLOWED,
+  agentEnvironment,
+  agentLaunch,
+  externalAgentEnvProblem,
+  isSecretEnvName,
+} from "./execution/agent-env.ts";
+export { BridgeExecutor, DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS } from "./execution/executor.ts";
+export {
+  EXCHANGE_DIR_ENV,
+  exchangeRootCandidates,
+  readResponse,
+  resolveExchangeRoot,
+} from "./execution/exchange.ts";
 export type { BridgeOptions, OperationExecutor } from "./execution/executor.ts";
 export {
   AdmissionScheduler,

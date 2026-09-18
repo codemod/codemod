@@ -3,8 +3,13 @@ import type { Json } from "./json.ts";
 import type { OperationCompletion } from "./protocol.ts";
 
 export type RunEvent =
-  | { type: "command.scheduled"; command: ScheduledCommand }
-  | { type: "command.replayed"; commandId: string; completion: OperationCompletion }
+  | { type: "command.scheduled"; command: ScheduledCommand; dynamicId?: string }
+  | {
+      type: "command.replayed";
+      commandId: string;
+      completion: OperationCompletion;
+      dynamicId?: string;
+    }
   | { type: "command.completed"; commandId: string; completion: OperationCompletion }
   | { type: "run.finished"; output: Json; replayed: boolean }
   /** One bridge process was spawned for a command. */
@@ -27,7 +32,11 @@ export type RunEvent =
       weight: number;
       active: number;
       used: number;
-    };
+    }
+  /** Admission paused: queued commands stay queued, admitted ones run to completion. */
+  | { type: "scheduler.paused"; queued: number; active: number }
+  /** Admission resumed: the queue is pumped again in FIFO order. */
+  | { type: "scheduler.resumed"; queued: number; active: number };
 
 /** Migration seam: where engine events go (CLI, TUI, JSONL, ...). */
 export interface EventSink {

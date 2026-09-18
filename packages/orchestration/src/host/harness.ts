@@ -38,8 +38,8 @@ export const unknown = (message = "scripted unknown outcome"): Outcome =>
   new Outcome("unknown", { message });
 
 /**
- * A plain value succeeds. For shell runnables, non-string values are
- * JSON-encoded into stdout. A function may return a promise, which is how
+ * A plain value succeeds. For shell and agent runnables, non-string values
+ * are JSON-encoded into stdout or text. A function may return a promise, which is how
  * tests hold an operation open while others queue behind it.
  */
 export type ScriptValue =
@@ -145,6 +145,10 @@ function toCompletion(request: OperationRequest, value: Json | Outcome): Operati
   if (request.operation.kind === "shell") {
     const stdout = typeof value === "string" ? value : JSON.stringify(value);
     return { ...base, status: "succeeded", output: { stdout } };
+  }
+  if (request.operation.kind === "agent") {
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    return { ...base, status: "succeeded", output: { text } };
   }
   return { ...base, status: "succeeded", output: value };
 }

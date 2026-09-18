@@ -7,7 +7,7 @@ import {
   InvocationError,
   NondeterminismError,
   TargetValidationError,
-  ai,
+  agent,
   canonicalJson,
   shell,
   guard,
@@ -167,15 +167,15 @@ describe("JSSG invocation targets", () => {
     expect(() => renameApi({ id: 3 })).toThrow(/id must be a non-empty string/);
   });
 
-  it("is not available on shell or ai invocations", () => {
-    const summarize = ai({ name: "summarize", prompt: "summarize" });
+  it("is not available on shell or agent invocations", () => {
+    const summarize = agent({ name: "summarize", prompt: "summarize" });
     // @ts-expect-error shell invocations never take a target
     expect(() => format({ target: web })).toThrow(TargetValidationError);
     // @ts-expect-error shell invocations never take a target
     expect(() => format({ target: web })).toThrow(
       /invalid target for shell 'format': shell does not accept a target; only JSSG invocations select files/,
     );
-    // @ts-expect-error ai invocations never take a target
+    // @ts-expect-error agent invocations never take a target
     expect(() => summarize({ target: web })).toThrow(TargetValidationError);
     expect(format.toOperation()).not.toHaveProperty("target");
     expect(summarize.toOperation()).not.toHaveProperty("target");
@@ -402,18 +402,45 @@ describe("protocol validation of targets", () => {
     expect(isOperation({ ...base, target: { root: "a", files: ["a.ts"] } })).toBe(false);
   });
 
-  it("rejects a target on shell and ai operations instead of ignoring it", () => {
+  it("rejects a target on shell, agent, and assessment operations instead of ignoring it", () => {
     expect(isOperation({ kind: "shell", command: "x" })).toBe(true);
     expect(isOperation({ kind: "shell", command: "x", target: web })).toBe(false);
     expect(isOperation({ kind: "shell", command: "x", target: {} })).toBe(false);
-    expect(isOperation({ kind: "ai", prompt: "p" })).toBe(true);
-    expect(isOperation({ kind: "ai", prompt: "p", target: web })).toBe(false);
-    expect(isOperation({ kind: "ai", prompt: "p", target: {} })).toBe(false);
+    expect(
+      isOperation({ kind: "agent", prompt: "p", backend: { kind: "builtin", tools: [] } }),
+    ).toBe(true);
+    expect(
+      isOperation({
+        kind: "agent",
+        prompt: "p",
+        backend: { kind: "builtin", tools: [] },
+        target: web,
+      }),
+    ).toBe(false);
+    expect(
+      isOperation({
+        kind: "agent",
+        prompt: "p",
+        backend: { kind: "builtin", tools: [] },
+        target: {},
+      }),
+    ).toBe(false);
+    const assessment = {
+      kind: "assessment",
+      state: "s",
+      questions: { ok: { type: "noul", instructions: "ok?" } },
+    };
+    expect(isOperation(assessment)).toBe(true);
+    expect(isOperation({ ...assessment, target: web })).toBe(false);
+    expect(isOperation({ ...assessment, target: {} })).toBe(false);
   });
 
   it("rejects fields that belong to another operation kind", () => {
     expect(isOperation({ kind: "shell", command: "x", package: "p" })).toBe(false);
     expect(isOperation({ kind: "jssg", package: "p", command: "x" })).toBe(false);
-    expect(isOperation({ kind: "ai", prompt: "p", env: {} })).toBe(false);
+    expect(
+      isOperation({ kind: "agent", prompt: "p", backend: { kind: "builtin", tools: [] }, env: {} }),
+    ).toBe(false);
+    expect(isOperation({ kind: "ai", prompt: "p" })).toBe(false);
   });
 });
