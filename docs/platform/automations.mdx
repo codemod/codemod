@@ -63,7 +63,7 @@ Use actions to start the next unit of work:
 - **Run Workflow** starts the linked workflow for the task associated with the incoming event.
 - **Update Issue Status** moves the mapped Jira or Linear issue to a selected status.
 - **Coding Agent** checks out one or more repositories, follows a prompt, and can commit changes or open a pull request when configured.
-- **Scan Codebase** runs an ast-grep or JSSG query against selected repositories.
+- **Scan Codebase** runs an ast-grep, JSSG, or Smart query against selected repositories.
 - **Create Campaign** creates a follow-up campaign project with a templated title and optional description.
 - **Webhook** sends an HTTP request with the automation context or a custom body.
 
@@ -71,12 +71,12 @@ Use **If / Switch** to branch on event data and **Delay** to wait before later s
 
 ## Scan code before acting
 
-The **Scan Codebase** action uses the same query model as [Insights](/platform/insights). It can run ast-grep rules or JSSG queries and return either:
+The **Scan Codebase** action uses the same query model as [Insights](/platform/insights). It can run ast-grep rules, JSSG queries, or [Smart](/platform/insights#smart-queries) natural-language file checks and return either:
 
 - A scalar result available as `scan.totalCount`
 - Table rows available as `scan.rows`
 
-Use scan output in later templates to decide whether to create a campaign, send a webhook, or ask a coding agent to work only when the query finds matching code.
+Smart scans always return file counts. Use scan output in later templates to decide whether to create a campaign, send a webhook, or ask a coding agent to work only when the query finds matching code.
 
 ## Before you start
 
