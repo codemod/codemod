@@ -71,12 +71,14 @@ Use **If / Switch** to branch on event data and **Delay** to wait before later s
 
 ## Scan code before acting
 
-The **Scan Codebase** action uses the same query model as [Insights](/platform/insights). It can run ast-grep rules, JSSG queries, or [Smart](/platform/insights#smart-queries) natural-language file checks and return either:
+The **Scan Codebase** action uses the same query model as [Insights](/platform/insights). It can run ast-grep rules, JSSG queries, or [Smart](/platform/insights#smart-queries) natural-language file checks.
 
-- A scalar result available as `scan.totalCount`
-- Table rows available as `scan.rows`
+The action's **Result** setting, not the query source, decides the shape of the output:
 
-Smart scans always return file counts. Use scan output in later templates to decide whether to create a campaign, send a webhook, or ask a coding agent to work only when the query finds matching code.
+- **Scalar** sets `scan.totalCount` and leaves `scan.rows` empty.
+- **Table** sets `scan.rows` to the grouped rows and `scan.totalCount` to their sum.
+
+Smart measures file counts only, so a Smart `scan.totalCount` is always a file count, while ast-grep can also count matches. Use scan output in later templates to decide whether to create a campaign, send a webhook, or ask a coding agent to work only when the query finds matching code.
 
 ## Before you start
 
