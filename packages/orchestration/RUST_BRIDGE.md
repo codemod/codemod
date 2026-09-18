@@ -9,21 +9,72 @@ outputs, or decides repository-level failure policy; all of that is
 execution and the checks on its own side of the boundary.
 
 ```text
-shell   TypeScript BridgeExecutor -> bridge process -> butterflow_runners::DirectRunner
-jssg   TypeScript executeJssg    -> bridge process -> one batch through the QuickJS sandbox
+shell       TypeScript BridgeExecutor -> bridge process -> butterflow_runners::DirectRunner
+jssg        TypeScript executeJssg    -> bridge process -> one batch through the QuickJS sandbox
+agent       TypeScript BridgeExecutor -> bridge process -> codemod_ai::execute::execute_ai_step (builtin)
+                                                        -> `claude` / `codex` CLI process (claude-code, codex)
+assessment  TypeScript executeAssessment -> @typesafe-ai/sdk TypeSafeClient.systemOne() (no bridge process)
 ```
 
 ## Files
 
 - `crates/execution-bridge/src/lib.rs`: serde structs mirroring
-  `packages/orchestration/src/core/protocol.ts` (protocol version 6),
+  `packages/orchestration/src/core/protocol.ts` (protocol version 8),
   `parse_request`, `execute` (`shell` through the runner, `jssg` through
-  `jssg::transform_batch`, `ai` refused).
+  `jssg::transform_batch`, `agent` through `agent::run`, `assessment` decoded
+  for parity and refused: the TypeScript host executes it).
+- `crates/execution-bridge/src/agent.rs`: `agent` settings from the engine's
+  AI step environment (`LLM_API_KEY` required; `LLM_PROVIDER` default
+  `openai`, `LLM_MODEL` default `gpt-4o`, `LLM_BASE_URL` default per
+  provider), the task prompt (the operation's prompt, its input as pretty
+  JSON, and the JSON reply instruction when `responseFormat` is `json`), and
+  dispatch on `backend`: `builtin` is one `execute_ai_step` run in the
+  process working directory with exactly the backend's `tools` and
+  `maxSteps`; `claude-code` and `codex` go to `external.rs`. For `builtin`,
+  `main.rs` calls
+  `agent::take_process_settings` before the tokio runtime (and any tool
+  process) starts: with `CODEMOD_BRIDGE_SECRETS=stdin` (how the TypeScript
+  host launches it) the key is read from stdin as `{"LLM_API_KEY": "..."}`,
+  otherwise from the environment, and `LLM_API_KEY` and the marker are
+  removed from the process environment either way. The library `execute()`
+  reads the key from the environment and does not remove it. For external
+  backends `main.rs` only removes the key and marker (`scrub_process_env`), and
+  CLI processes are started with both removed even on the library path.
+  Output `{ text }`; failures are `failed` with
+  `details: { phase: "config" | "execute", repositoryMayBeModified }`.
+- `crates/execution-bridge/src/external.rs`: the Claude Code and Codex
+  harnesses. Lookup on absolute `PATH` entries only; a private directory per
+  run holding an empty login-check directory and the CLI's `TMPDIR`; one
+  `Launch` (credential-looking variables removed per `is_secret_env_name`,
+  `TMPDIR`/`TMP`/`TEMP` set) shared by the login check (30 s timeout, run from
+  the empty directory; only `claude auth status --json`'s `loggedIn` or
+  `codex login status`'s exit code is used) and the task; argv built from
+  `claude --help` / `codex exec --help` with no bypass flag
+  (`FORBIDDEN_FLAG_FRAGMENTS` is asserted in tests), including Codex's
+  `shell_environment_policy.inherit="core"` and
+  `sandbox_workspace_write.exclude_slash_tmp=true`; the prompt on stdin;
+  pipes read by background tasks, with at most `PIPE_DRAIN_GRACE` (2 s) of
+  further reading once the CLI exits so a descendant holding stdout cannot
+  hang the bridge; Claude's stdout kept up to 16 MiB and the final text taken
+  from its `{"type":"result"}` object; Codex's `--json` stream scanned line by
+  line (lines over 16 MiB skipped) keeping only the last `agent_message` text
+  and the last error message; the stderr tail up to 8 KiB. Missing CLI, logged out, a failed
+  or timed-out login check, a spawn failure, or (Codex) no git repository are
+  `config` failures; anything after the task process starts is `execute`
+  with `repositoryMayBeModified: true`. The child is killed if the bridge
+  drops it; host cancellation kills the bridge's process tree as for any
+  bridge. This is deliberately separate from `butterflow-core`'s
+  `ai_handoff.rs` / `ai_agent_stream.rs`, which launch interactive handoffs
+  with bypass flags and normalize progress streams for the TUI; the only
+  logic in common is a PATH lookup, and depending on `butterflow-core` would
+  invert the bridge's crate boundary.
 - `crates/execution-bridge/src/jssg.rs`: one batch (verified artifact,
   language, static selector, input, optional semantic provider, then every
   file in order) and the path containment applied on both directions.
 - `crates/execution-bridge/src/main.rs`: `butterflow-execution-bridge
-  <request.json> <response.json>`. Exit codes: 0 completion written, 2 wrong
+  <request.json> <response.json>`. The request must be a regular file (not a
+  symlink); the response is created with `create_new` (`O_CREAT|O_EXCL`,
+  mode 0600) and never opened if something exists at the path. Exit codes: 0 completion written, 2 wrong
   arguments, 3 unreadable or malformed request (an error completion is still
   written), 4 runtime failure. Files are the channel because non-CLI crates
   must not write to the process streams.
@@ -40,13 +91,14 @@ jssg   TypeScript executeJssg    -> bridge process -> one batch through the Quic
   eligibility test, without a JavaScript runtime), and the `stage_writes`
   option.
 
-## Protocol (JSON files, version 6)
+## Protocol (JSON files, version 8)
 
 ```ts
 interface OperationRequest {
-  protocolVersion: 6;
+  protocolVersion: 8;
   commandId: string;
-  operation: ShellOperation | JssgOperation | AiOperation; // command identity, recorded in history
+  // command identity, recorded in history
+  operation: ShellOperation | JssgOperation | AgentOperation | AssessmentOperation;
   context?: {
     targetRoot?: string; // absolute; every file path below is relative to it
     files?: { path: string; content: string }[]; // the jssg batch, in transform order
@@ -66,11 +118,43 @@ interface JssgOperation {
   input?: Json;
 }
 
+interface AgentOperation {
+  kind: "agent";
+  prompt: string;
+  input?: Json;
+  // always present; each variant allows only its own settings
+  backend:
+    | {
+        kind: "builtin";
+        // codemod-ai tool names; `[]` is a tool-less agent
+        tools: ("bash" | "str_replace_based_edit_tool" | "json_edit_tool" | "glob"
+          | "sequentialthinking" | "task_done" | "ckg_tool" | "mcp_tool")[];
+        maxSteps?: number; // positive integer
+      }
+    | { kind: "claude-code"; tools: ("Read" | "Edit" | "Write" | "Glob" | "Grep" | "Bash")[] }
+    | { kind: "codex"; sandbox: "read-only" | "workspace-write" };
+  responseFormat?: "json";
+}
+
+interface AssessmentOperation {
+  kind: "assessment"; // never executed by the bridge
+  state: string | Json[] | { [key: string]: Json };
+  questions: {
+    [id: string]:
+      | { type: "noul"; instructions: Json; criteria?: { true?: Json; false?: Json } }
+      | { type: "choice"; instructions: Json; criteria: { [option: string]: Json } }
+      | { type: "score"; instructions: Json; criteria: Json[] };
+  };
+  model?: string;
+}
+
 interface OperationCompletion {
-  protocolVersion: 6;
+  protocolVersion: 8;
   commandId: string;
   status: "succeeded" | "failed" | "cancelled" | "unknown";
-  output?: Json; // shell: { stdout }; jssg: { files: FileOutcome[] }
+  // shell: { stdout }; jssg: { files: FileOutcome[] }; agent: { text };
+  // assessment: { model, answers, usage: { inputTokens, outputTokens } }
+  output?: Json;
   error?: { message: string; exitCode?: number; output?: string; details?: Json };
 }
 
@@ -82,7 +166,7 @@ interface FileOutcome {
 ```
 
 Every struct denies unknown fields on both sides (`deny_unknown_fields` in
-Rust, the `is*` guards in `protocol.ts`), so a `target` on `shell` or `ai`, a
+Rust, the `is*` guards in `protocol.ts`), so a `target` on `shell`, `agent`, or `assessment`, an unknown question `type`, a
 `script` path, a selector `id` or `language`, or a stray field in the
 context is a parse error rather than a dropped field. `context` is
 executor-side data: it is attached by the host that spawns the bridge and
@@ -90,6 +174,18 @@ never enters the command record that replay compares. The artifact source
 lives only there; the operation carries its name and hash, which is why the
 recorded command is the same on every checkout and changes when the
 transform or a bundled helper changes.
+
+TypeScript validation is authoritative. `isOperation`, `questionsProblem`,
+`assessmentResultProblem`, and the runnable constructors in
+`packages/orchestration/src` decide what a valid command and a valid result
+are, and every command is validated there before it reaches any executor.
+The Rust structs mirror the shape (field names, required fields, variant
+names, tool names, `responseFormat`) so a malformed request is still a parse
+error, but they do not re-check content rules: non-empty or reserved
+question ids, at least two choice options or score levels, non-blank
+instructions and state, duplicate tool names (checked when the agent runs,
+as a `config` failure), or answer ranges. The bridge never executes
+`assessment` and never validates assessment answers.
 
 ### A jssg batch
 

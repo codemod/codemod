@@ -31,8 +31,8 @@ Today:     workflow.yaml -> Rust graph and scheduler -> existing runners
 Proposed:  TypeScript composition or workflow -> command history -> existing runners
 ```
 
-A runnable is a typed description of one operation. `jssg()`, `shell()`, and
-`ai()` define runnables. Invoking a runnable, `inspect()` or
+A runnable is a typed description of one operation. `jssg()`, `shell()`,
+`agent()`, and `assessment()` define runnables. Invoking a runnable, `inspect()` or
 `migrate({ input, target, id })`, creates a lazy command: plain data that a
 static composition can hold, and that executes when a workflow awaits it. The
 runtime executing the body is what an awaited command reaches.
@@ -40,7 +40,8 @@ runtime executing the body is what an awaited command reaches.
 | Current workflow concept | Proposed TypeScript form |
 | --- | --- |
 | `run` action | `shell()` |
-| JSSG or AI action | `jssg()` or `ai()` |
+| JSSG or AI action | `jssg()` or `agent()` |
+| typed judgment on explicit data (no YAML equivalent) | `assessment()` |
 | fixed sequence and data flow | `sequence()` |
 | independent work | `parallel()` |
 | condition based on an earlier result | normal `if` inside `dynamic()` |
@@ -49,9 +50,11 @@ runtime executing the body is what an awaited command reaches.
 | per-step `base_path`, `include`, `exclude` | `{ target }` on a JSSG invocation |
 | `shard` step and `max_threads` | automatic scheduler behavior, no public helper |
 
-The prototype defines all three operation shapes. The Rust bridge executes
-`shell()` and inline JSSG transforms that a build step has bundled; AI results
-remain scripted in tests.
+The prototype defines all four operation shapes. The Rust bridge executes
+`shell()`, inline JSSG transforms that a build step has bundled, and `agent()`
+through the built-in agent; the TypeScript host executes `assessment()` against
+the TypeSafe System One API through TypeSafe's official JavaScript SDK
+(`@typesafe-ai/sdk`), which owns authentication, transport, and retries.
 
 ### Single JSSG leaf
 
@@ -250,8 +253,9 @@ Today each YAML JSSG step carries its own `base_path`, `include`, and
 `exclude`. In the proposed API that selection is data on the JSSG invocation
 itself. There is no generic `target()`, `scope()`, `within()`, or `shard()`
 wrapper: only a JSSG adapter can enumerate and enforce a file set, so only a
-JSSG invocation accepts one. `shell` runs a whole command and `ai` has no file
-set, and neither accepts target metadata.
+JSSG invocation accepts one. `shell` runs a whole command, `agent` works on the
+whole working directory, and `assessment` sees only explicit state; none of
+them accepts target metadata.
 
 A target is a small plain object that can be shared between invocations:
 
@@ -317,7 +321,7 @@ The rules that make this coherent:
   two selections, not for two workers; the scheduler may still run them on one.
 
 What the prototype implements: every example above runs as written. A JSSG
-invocation takes `{ input?, target?, id? }`; `shell` and `ai` invocations take
+invocation takes `{ input?, target?, id? }`; `shell`, `agent`, and `assessment` invocations take
 `{ input?, id? }` and throw `TargetValidationError` when given a `target`, so a
 target is never silently dropped. The target is validated and normalized when
 the command is created (relative root without `..`, non-empty pattern lists, no
@@ -400,9 +404,9 @@ const findIssues = jssg({
   transform: (root) => ({ content: null, output: collectIssues(root) }),
 });
 
-const writeGuide = ai({
+const writeGuide = agent({
   name: "write-guide",
-  prompt: "Write a migration guide for these findings",
+  prompt: "Write a migration guide for these findings. Reply with the guide as JSON.",
   input: Findings,
   output: Guide,
 });
@@ -414,7 +418,67 @@ export default dynamic(async () => {
 });
 ```
 
-The AI adapter is future work; the TypeScript harness scripts this result today.
+`agent()` runs through the bridge, in the target directory, on the backend the
+step names; the backend is part of the recorded command. The default,
+`builtin`, is the Butterflow agent (`codemod-ai`, the Rig runtime behind YAML
+`ai` steps) with a recorded tool list and step limit. `claude-code` and
+`codex` hand the task to the installed, logged-in Claude Code or Codex CLI
+instead. Those are local harnesses with their own agent loop, tools, and
+subscription quota; they may load repository instructions and do not
+exercise codemod-ai or Rig. Each backend exposes only settings it can
+enforce (Claude Code a tool set, Codex a sandbox mode), and none of them runs
+with a permission or sandbox bypass. The result is always the final response
+as `{ text }`, parsed and validated as JSON when the runnable declares
+`output`.
+
+### Assessment before routing
+
+Many AI steps in current packages exist only to decide what happens next: is
+this package already migrated, is this diff safe to apply, which follow-up
+fits. A generative agent is the wrong tool for that decision. `assessment()`
+asks a System One model (TypeSafe's Jev by default) named, typed questions
+about state the workflow passes explicitly, and returns probabilities.
+
+The `ask` function resolves both the explicit model state and the assessment
+questions from validated runtime input. This ensures dynamic criteria (choice
+options derived from input, score levels computed at run time) cannot diverge
+from the state the model evaluates. The concrete resolved questions drive
+operation serialization, output validation, history, and replay:
+
+```ts
+const triage = assessment({
+  name: "triage",
+  input: Findings,
+  ask: (findings) => ({
+    state: { findings },
+    questions: {
+      action: {
+        type: "choice" as const,
+        instructions: "What should happen with these findings?",
+        criteria: { autofix: "Mechanical and safe", review: "Needs a human", ignore: null },
+      },
+      breaking: { type: "noul" as const, instructions: "Could fixing these change public behavior?" },
+    },
+  }),
+});
+
+export default dynamic(async () => {
+  const findings = await findIssues();
+  const { answers } = await triage({ input: findings });
+  if (answers.action.choice === "autofix" && answers.action.confidence > 0.8 && answers.breaking.noul < 0.2) {
+    return fixIssues({ input: findings });
+  }
+  return writeGuide({ input: findings });
+});
+```
+
+The assessment is read-only: no repository access, no tools, nothing but the
+state it is given. It returns every answer's probabilities and confidence, the
+model that answered, and token usage, and it decides nothing. The thresholds
+and the routing stay in workflow code, where they are replayed and reviewed
+like any other branch. The questions follow TypeSafe's primitives (`choice`,
+`score`, `noul`) directly; Jev is the default model, not part of the
+contract, and a command may pin another.
 
 ## Ownership
 
@@ -471,7 +535,7 @@ TypeScript sends:
 
 ```json
 {
-  "protocolVersion": 6,
+  "protocolVersion": 8,
   "commandId": "format",
   "operation": { "kind": "shell", "command": "npm run format" }
 }
@@ -481,7 +545,7 @@ Rust returns plain data:
 
 ```json
 {
-  "protocolVersion": 6,
+  "protocolVersion": 8,
   "commandId": "format",
   "status": "succeeded",
   "output": { "stdout": "formatted 12 files\n" }
@@ -550,13 +614,23 @@ APIs and the bound runtime.
 
 Included:
 
-- typed, callable `shell`, `jssg`, and `ai` descriptors that create lazy commands
+- typed, callable `shell`, `jssg`, `agent`, and `assessment` descriptors that create lazy commands
 - JSSG invocation targets, validated when the command is created and carried on the wire
 - static sequences and explicit parallel groups, fixed or built inside a workflow
 - procedural workflows that await commands directly or accept flowing input
 - append-only in-memory history and replay checks
 - scripted TypeScript tests
 - real `shell` calls through the existing Rust runner
+- real `agent` tasks through the bridge on a recorded backend: the existing
+  `codemod-ai` agent with a recorded tool list whose default has no shell, or
+  the installed Claude Code or Codex CLI run non-interactively with their own
+  login, restricted settings loading, credential-free tool environments, a
+  host wall-clock limit, and no bypass flags; all with an allowlisted bridge
+  environment, exchange files outside the target and any agent sandbox's
+  writable roots, and best-effort process-tree cleanup on cancellation
+- read-only `assessment` calls to the TypeSafe System One API from the host
+  through the official `@typesafe-ai/sdk` client,
+  with answers validated against the questions
 - inline JSSG transforms split into bundled artifacts at build time and run
   through the existing sandbox as one Rust batch per command, with a static
   selector prefilter and workspace semantic analysis
@@ -569,6 +643,12 @@ Included:
   execution boundary, with operator/test capacity overrides and no
   author-facing concurrency knob
 - an experimental trusted-local TypeScript workflow CLI
+- a loopback-only dashboard behind that CLI's `--dashboard`: live command
+  status, the static topology with dynamic stages left opaque, an operator
+  admission pause/resume at the scheduler seam, and a host-layer session that
+  restarts or re-runs the loaded configuration (abort, settle, then a fresh
+  run with a new id, scheduler, and empty history) and keeps the last 20 runs
+  of the process for read-only viewing (in-process only, not durable)
 
 Not included:
 
@@ -577,7 +657,9 @@ Not included:
 - transform authoring beyond the supported subset: capturing the workflow
   module's own declarations, `options.matches` from the static selector,
   source-mapped sandbox errors
-- AI execution
+- agent sandboxing: agent file tools accept any absolute path, and opted-in
+  `bash`/`mcp_tool` run arbitrary commands; approvals and streaming agent
+  progress into events are also missing
 - durable persistence, a production Rust scheduler, or adaptive telemetry that
   tunes capacity from observed load
 - group transactions or cross-command merge semantics for parallel mutating
@@ -599,7 +681,7 @@ us move one part at a time:
 
 1. Move command ID calculation and file-backed history into Rust.
 2. Move replay comparisons and final output checks into Rust.
-3. Let Rust execute operations directly, then add AI and composition adapters. JSSG
+3. Let Rust execute operations directly, then add assessment and composition adapters. JSSG
    already runs through a narrow Rust batch; the orchestration around it
    (selection, conflict checks, commit) stays in TypeScript until the
    scheduler below exists.
