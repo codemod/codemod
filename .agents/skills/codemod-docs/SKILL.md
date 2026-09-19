@@ -1,6 +1,11 @@
 ---
 name: codemod-docs
-description: Use when editing Codemod documentation, Mintlify MDX, docs navigation, CLI/JSSG/workflow/platform docs, docs snippets, examples, troubleshooting, or technical writing under docs/.
+description: >-
+  Codemod Mintlify docs and end-of-dev docs gate: editing docs/ MDX, docs.json,
+  CLI/JSSG/workflow/platform product docs, MECE boundary vs Wish skill-docs in
+  codemod-app, and required user heads-up when the other repo's skill-docs also
+  need updating. Use when shipping user-facing CLI or product changes, editing
+  documentation, or finishing work that changes human-facing behavior.
 ---
 
 # Codemod Docs
@@ -13,6 +18,62 @@ description: Use when editing Codemod documentation, Mintlify MDX, docs navigati
 - Update `docs/docs.json` when adding, removing, renaming, or moving pages.
 - Prefer real command snippets that can be validated against the repo.
 - Use Mintlify components only when they make the page easier to scan or safer to follow.
+- Also follow the **Docs gate** in root `AGENTS.md` and `docs/AGENTS.md`.
+
+## Mintlify vs Wish skill-docs (MECE)
+
+Partition by **audience and contract**, not by product topic.
+
+| Corpus | Location | Audience | Purpose |
+|--------|----------|----------|---------|
+| **Product docs (this skill)** | `docs/` in this repo | Humans | Goals, UI/CLI how-tos, concepts, public APIs |
+| **Wish skill-docs** | `codemod-app` repo: `packages/modern-ai/src/global-chat/skill-docs/` | Wish only | Runtime SDK/tool contracts, agent policy, schemas |
+
+### Update Mintlify when
+
+- User-visible product behavior, UI flow, CLI flag, or public API changes
+- You add/rename a user-facing concept
+- MDX snippets would otherwise lie
+
+### Do not put in Mintlify
+
+- Wish tool names (`load_skill`, `execute`, `execute_server`)
+- In-page SDK method dumps (`insights.*`, `automation.*`, `forms.*`)
+- Agent consent/privacy/operating policy for chat
+- Embedded Zod JSON Schema for Wish tools
+
+A short human-facing Wish overview page is allowed. Agent contracts live in `codemod-app`; use the
+`wish-skill-docs` skill there when editing them.
+
+### Decision rule
+
+Human needs it to succeed in the product/CLI → Mintlify here. Wish needs it to call the right
+tool/SDK → skill-docs in `codemod-app`. If both, write concepts/how-to here and the agent contract
+there; cross-link conceptually without copying prose.
+
+## End of development (mandatory)
+
+Before claiming feature or bugfix work done:
+
+1. **Classify** the change: human product/CLI surface, Wish agent contract, both, or neither.
+2. **Update in-repo Mintlify** that this workspace owns (`docs/`, `docs/docs.json`).
+3. **If Wish skill-docs in `codemod-app` may need updates**, give an explicit **heads-up** to the
+   user. Do not silently skip. Agents here usually cannot edit the other repo.
+4. If neither corpus applies, say so in one line so the gate is visibly considered.
+
+### Heads-up template (other repo)
+
+> **Docs follow-up (`codemod-app` repo):** This change affects Wish / in-app agent contracts.
+> Please update `packages/modern-ai/src/global-chat/skill-docs/` (and `skillRegistry` if needed).
+> Open the `codemod-app` workspace (or ask me there) to apply the `wish-skill-docs` skill.
+
+### Definition of done checklist
+
+- [ ] User-facing CLI/product change? Matching Mintlify page(s) updated
+- [ ] Nav add/rename/move? `docs/docs.json` updated
+- [ ] Snippets match current CLI names and paths
+- [ ] Wish/agent contract also changed? User heads-up for `codemod-app` skill-docs (or confirmed N/A)
+- [ ] Did not put Wish SDK/policy dumps into Mintlify
 
 
 # Mintlify technical writing rule
