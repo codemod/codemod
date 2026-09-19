@@ -368,6 +368,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     cancellation_flag: None,
                     test_mode: true,
                     dry_run: false,
+                    stage_writes: false,
                     target_directory: &target_directory,
                 };
                 let execution_result = execute_codemod_with_quickjs(options)

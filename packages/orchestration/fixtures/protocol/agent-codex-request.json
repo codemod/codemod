@@ -1,0 +1,11 @@
+{
+  "protocolVersion": 8,
+  "commandId": "bump-version",
+  "operation": {
+    "kind": "agent",
+    "prompt": "Set the version in VERSION to 2.0.0.",
+    "input": { "version": "2.0.0" },
+    "backend": { "kind": "codex", "sandbox": "workspace-write" },
+    "responseFormat": "json"
+  }
+}

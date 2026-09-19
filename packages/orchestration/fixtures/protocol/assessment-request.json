@@ -1,0 +1,33 @@
+{
+  "protocolVersion": 8,
+  "commandId": "review-diff",
+  "operation": {
+    "kind": "assessment",
+    "state": {
+      "package": "web",
+      "diff": "- import { a } from 'old'\n+ import { a } from 'new'"
+    },
+    "questions": {
+      "risk": {
+        "type": "choice",
+        "instructions": "How risky is this change to merge without review?",
+        "criteria": {
+          "low": "Mechanical, behavior-preserving",
+          "medium": null,
+          "high": "Could change runtime behavior"
+        }
+      },
+      "completeness": {
+        "type": "score",
+        "instructions": "How completely does the diff perform the migration?",
+        "criteria": ["Not started", "Partial", "Complete"]
+      },
+      "touchesTests": {
+        "type": "noul",
+        "instructions": "Does the diff modify test files?",
+        "criteria": { "true": "At least one test file changed", "false": "No test files changed" }
+      }
+    },
+    "model": "jev-latest"
+  }
+}
