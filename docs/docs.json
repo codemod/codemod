@@ -39,17 +39,17 @@
               "community/package-structure",
               {
                 "group": "Workflows",
+                "root": "community/workflows",
                 "pages": [
-                  "community/workflows/introduction",
                   "community/workflows/reference",
-                  "community/workflows/sharding",
-                  "community/workflows/ai-harness-rig"
+                  "community/workflows/ai-harness-rig",
+                  "community/workflows/sharding"
                 ]
               },
               {
                 "group": "JSSG",
+                "root": "community/jssg",
                 "pages": [
-                  "community/jssg/intro",
                   "community/jssg/reference",
                   "community/jssg/security",
                   "community/jssg/semantic-analysis",
@@ -59,8 +59,8 @@
                   "community/jssg/metrics"
                 ]
               },
-              "community/publishing",
               "community/model-context-protocol",
+              "community/publishing",
               "community/oss"
             ]
           },
@@ -69,7 +69,17 @@
             "pages": [
               "enterprise/quickstart",
               "enterprise/codemod-wish",
-              "enterprise/insights",
+              {
+                "icon": "chart-simple",
+                "group": "Insights",
+                "root": "enterprise/insights",
+                "pages": [
+                  "enterprise/insights/jssg-queries",
+                  "enterprise/insights/ast-grep-queries",
+                  "enterprise/insights/dependency-queries",
+                  "enterprise/insights/smart-queries"
+                ]
+              },
               "enterprise/campaigns",
               "enterprise/automations",
               "enterprise/codemod-studio",
@@ -210,11 +220,19 @@
     },
     {
       "source": "/workflows/introduction",
-      "destination": "/community/workflows/introduction"
+      "destination": "/community/workflows"
     },
     {
       "source": "/workflows/introduction.md",
-      "destination": "/community/workflows/introduction.md"
+      "destination": "/community/workflows.md"
+    },
+    {
+      "source": "/community/workflows/introduction",
+      "destination": "/community/workflows"
+    },
+    {
+      "source": "/community/workflows/introduction.md",
+      "destination": "/community/workflows.md"
     },
     {
       "source": "/workflows/reference",
@@ -242,11 +260,19 @@
     },
     {
       "source": "/jssg/intro",
-      "destination": "/community/jssg/intro"
+      "destination": "/community/jssg"
     },
     {
       "source": "/jssg/intro.md",
-      "destination": "/community/jssg/intro.md"
+      "destination": "/community/jssg.md"
+    },
+    {
+      "source": "/community/jssg/intro",
+      "destination": "/community/jssg"
+    },
+    {
+      "source": "/community/jssg/intro.md",
+      "destination": "/community/jssg.md"
     },
     {
       "source": "/jssg/reference",
@@ -306,11 +332,11 @@
     },
     {
       "source": "/jssg/quickstart",
-      "destination": "/community/jssg/intro"
+      "destination": "/community/jssg"
     },
     {
       "source": "/jssg/quickstart.md",
-      "destination": "/community/jssg/intro.md"
+      "destination": "/community/jssg.md"
     },
     {
       "source": "/platform/quickstart",
@@ -478,7 +504,7 @@
     },
     {
       "source": "/cli/packages/quickstart",
-      "destination": "/community/workflows/introduction"
+      "destination": "/community/workflows"
     },
     {
       "source": "/cli/packages/building-workflows",
@@ -490,7 +516,7 @@
     },
     {
       "source": "/workflows/quickstart",
-      "destination": "/community/workflows/introduction"
+      "destination": "/community/workflows"
     },
     {
       "source": "/workflows/building-workflows",
@@ -514,7 +540,7 @@
     },
     {
       "source": "/cli/workflows/quickstart",
-      "destination": "/community/workflows/introduction"
+      "destination": "/community/workflows"
     },
     {
       "source": "/cli/workflows/package-structure",
@@ -526,7 +552,7 @@
     },
     {
       "source": "/cli/workflows",
-      "destination": "/community/workflows/introduction"
+      "destination": "/community/workflows"
     },
     {
       "source": "/cli/mcp",
@@ -542,7 +568,7 @@
     },
     {
       "source": "/building-codemods/codemod2",
-      "destination": "/community/workflows/introduction"
+      "destination": "/community/workflows"
     },
     {
       "source": "/scanner",

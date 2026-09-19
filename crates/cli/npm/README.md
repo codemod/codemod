@@ -133,7 +133,7 @@ export default codemod;
 
 jssg combines the power of AST transformations with the flexibility of JavaScript, making complex transformations intuitive and testable.
 
-[Learn more about jssg →](https://docs.codemod.com/community/jssg/intro)
+[Learn more about jssg →](https://docs.codemod.com/community/jssg)
 
 ### Workflow Orchestration
 
@@ -233,7 +233,7 @@ For teams coordinating migrations across multiple repositories:
 - **[Full Documentation](https://docs.codemod.com)** – Comprehensive guides and tutorials
 - **[CLI Reference](https://docs.codemod.com/community/cli)** – Detailed command documentation
 - **[Codemod Packages](https://docs.codemod.com/community/package-structure)** – Learn more about codemod packages and workflows
-- **[jssg Documentation](https://docs.codemod.com/community/jssg/intro)** – JavaScript ast-grep reference
+- **[jssg Documentation](https://docs.codemod.com/community/jssg)** – JavaScript ast-grep reference
 
 ### Get Help
 - **[Slack Community](https://go.codemod.com/community)** – Ask questions and share codemods
