@@ -1,0 +1,34 @@
+---
+title: "JSSG (JS ast-grep) queries"
+sidebarTitle: "JSSG (JS ast-grep) queries"
+---
+
+JSSG codemod queries use [JSSG](/community/jssg) for static analysis and custom metrics. Use them when you need programmatic logic, package-backed metrics, semantic analysis, or dimensions beyond a simple syntax match.
+
+The JSSG source can come from:
+
+- **Inline source** - write JSSG code directly in the editor.
+- **A codemod package** - select an existing JSSG codemod package from [Codemod Registry](/enterprise/registry).
+- **A template variable** - reuse a JSSG source defined at the dashboard level.
+
+| Configuration | Description |
+|---|---|
+| **Source** | Inline JSSG source, a JSSG codemod package, or a JSSG source template variable |
+| **Semantic mode** | `Auto`, `Workspace`, or `File only` for supported JSSG sources |
+| **Select** | `File count` or `Metric` |
+| **Metric** | A named metric emitted by the JSSG source, with suggestions when Insights can extract them |
+| **Repository** | One or more repositories, or a repository template variable |
+| **Group by** | `repository`, `codeowner`, or metric cardinality keys |
+| **Dimension filters** | Filter metric results by cardinality key-value pairs with equals, not-equals, or regex operators |
+| **File path filter** | Include or exclude files using glob patterns |
+| **Snapshot base** | A specific date or commit hash to analyze at a point in time, available for single number and table widgets |
+| **Query alias** | A label for the query result, available for timeseries and table widgets |
+
+When a JSSG metric includes cardinality keys, table widgets can use those keys to break down results by the dimension that matters to the migration, such as component name, API name, package, or risk category.
+
+## Related
+
+- [ast-grep YAML queries](/enterprise/insights/ast-grep-queries)
+- [Package dependency queries](/enterprise/insights/dependency-queries)
+- [Smart (Jev-powered) queries](/enterprise/insights/smart-queries)
+- [Template variables](/enterprise/insights#template-variables)

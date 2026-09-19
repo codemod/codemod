@@ -47,10 +47,10 @@ Timeseries chart, single number, and table view widgets are query-backed. They r
 
 Each query-backed widget can contain up to 10 queries. Use the query source selector to choose the data source for each query:
 
-- **JSSG Codemod** - runs inline JSSG source, a JSSG codemod package, or a JSSG source template variable.
-- **ast-grep (YAML)** - runs an ast-grep YAML rule against selected repositories.
-- **Smart** - describes a file characteristic in natural language and returns a file count.
-- **Dependencies** - queries indexed dependency data from selected repositories.
+- **[JSSG Codemod](/enterprise/insights/jssg-queries)** - runs inline JSSG source, a JSSG codemod package, or a JSSG source template variable.
+- **[ast-grep (YAML)](/enterprise/insights/ast-grep-queries)** - runs an ast-grep YAML rule against selected repositories.
+- **[Smart](/enterprise/insights/smart-queries)** - describes a file characteristic in natural language and returns a file count.
+- **[Dependencies](/enterprise/insights/dependency-queries)** - queries indexed dependency data from selected repositories.
 
 You can select the query source from the dropdown at the start of each query.
 
@@ -88,120 +88,22 @@ The time range picker supports:
 
 ## Queries
 
-### JSSG codemod queries
+Insights supports four query sources. Each source has its own configuration options and best-fit use cases:
 
-JSSG codemod queries use [JSSG](/community/jssg/intro) for static analysis and custom metrics. Use them when you need programmatic logic, package-backed metrics, semantic analysis, or dimensions beyond a simple syntax match.
-
-The JSSG source can come from:
-
-- **Inline source** - write JSSG code directly in the editor.
-- **A codemod package** - select an existing JSSG codemod package from [Codemod Registry](/enterprise/registry).
-- **A template variable** - reuse a JSSG source defined at the dashboard level.
-
-| Configuration | Description |
-|---|---|
-| **Source** | Inline JSSG source, a JSSG codemod package, or a JSSG source template variable |
-| **Semantic mode** | `Auto`, `Workspace`, or `File only` for supported JSSG sources |
-| **Select** | `File count` or `Metric` |
-| **Metric** | A named metric emitted by the JSSG source, with suggestions when Insights can extract them |
-| **Repository** | One or more repositories, or a repository template variable |
-| **Group by** | `repository`, `codeowner`, or metric cardinality keys |
-| **Dimension filters** | Filter metric results by cardinality key-value pairs with equals, not-equals, or regex operators |
-| **File path filter** | Include or exclude files using glob patterns |
-| **Snapshot base** | A specific date or commit hash to analyze at a point in time, available for single number and table widgets |
-| **Query alias** | A label for the query result, available for timeseries and table widgets |
-
-When a JSSG metric includes cardinality keys, table widgets can use those keys to break down results by the dimension that matters to the migration, such as component name, API name, package, or risk category.
-
-### ast-grep YAML queries
-
-ast-grep YAML queries use [ast-grep YAML rules](https://ast-grep.github.io/reference/yaml.html) to match code patterns. Use them for syntax-level counts that do not need custom JSSG logic.
-
-You can generate ast-grep rules with the help of AI [using Codemod Studio](/enterprise/codemod-studio#use-codemod-ai).
-
-| Configuration | Description |
-|---|---|
-| **Rule** | An ast-grep YAML rule, or a rule template variable |
-| **Select** | `Match count` or `File count` |
-| **Repository** | One or more repositories, or a repository template variable |
-| **Group by** | `repository` and/or `codeowner` |
-| **File path filter** | Include or exclude files using glob patterns |
-| **Snapshot base** | A specific date or commit hash to analyze at a point in time, available for single number and table widgets |
-| **Query alias** | A label for the query result, available for timeseries and table widgets |
-
-### Dependency queries
-
-Dependency queries use indexed dependency data from selected repositories. Use them to track package adoption, vulnerable package exposure, or dependency drift across teams.
-
-| Configuration | Description |
-|---|---|
-| **Ecosystem** | Filter to `npm`, `PyPI`, `Cargo`, `Go`, or `RubyGems` |
-| **Package** | Filter by package name |
-| **Version** | Filter by a semver range, such as `^16.0.0`, `>=16.0.0`, or an exact version |
-| **Depth** | Filter to direct, transitive, or all dependencies |
-| **Select** | `Dep count` or `Unique pkgs` |
-| **Repository** | One or more repositories, or a repository template variable |
-| **Group by** | `ecosystem`, `package`, `version`, `lock file`, `repository`, `workspace`, or `parent pkg` |
-| **Snapshot base** | A specific date or commit hash to analyze at a point in time, available for single number and table widgets |
-
-### Smart queries
-
-Smart queries count files that match a natural-language description of a code characteristic. Use them when you want a file-count signal for security smells, environment-variable usage, missing error handling, or similar characteristics before you have an exact ast-grep rule or JSSG metric.
-
-Prefer a different source when you need:
-
-- Exact syntax matches → [ast-grep YAML](#ast-grep-yaml-queries)
-- Custom metrics or programmatic analysis → [JSSG](#jssg-codemod-queries)
-- Package inventory → [Dependencies](#dependency-queries)
-
-Smart is an Insights query source over indexed repository snapshots. It is not a grep search and does not return line matches or code snippets.
-
-<Steps>
-  <Step title="Choose Smart as the query source">
-    In a timeseries, single-number, or table widget, open the query source selector and choose **Smart**.
-  </Step>
-  <Step title="Describe the characteristic">
-    Enter a prompt such as "Find files that read or depend on environment variables", or start from **Examples** (security issue finder, environment variable usage, missing error handling).
-  </Step>
-  <Step title="Optionally run interpret">
-    Click **Run** to draft match rules, probability, globs, and group-by from your prompt. **Run** does not execute analysis. If you edit the prompt while interpret is running, Codemod discards the draft result.
-  </Step>
-  <Step title="Tune probability and match rules">
-    Set **Probability** to Low (60%), Medium (85%, default), or High (90%). Only files at or above that confidence count as matches. Optionally add **Match rules** for "Count as a match when" and "Do not match when".
-  </Step>
-  <Step title="Select repositories and breakdowns">
-    Choose repositories, optional include and exclude globs, and group-by dimensions. Save the widget. Smart widgets show **Analyzing code** with progress such as `N of M checks` while file judgments run.
-  </Step>
-</Steps>
-
-| Configuration | Description |
-|---|---|
-| **Prompt** | Natural-language description of the file characteristic (up to 4,000 characters). You can bind a dashboard **String** template variable instead of a fixed prompt. |
-| **Probability** | Minimum match confidence: Low `60%`, Medium `85%` (default), or High `90%` |
-| **Match rules** | Optional include and exclude criteria that refine what counts as a match |
-| **Select** | File count only |
-| **Repository** | One or more repositories, or a repository template variable |
-| **Group by** | `file path`, `language`, `repository`, `codeowner`, `directory` (depth 1–5), or a semantic category. Available for table and timeseries widgets; single-number widgets ignore grouping. |
-| **Semantic category** | Built-in **OWASP 2025** preset, or a **Custom category…** with 2–50 labels. Used when you group by that category. |
-| **File path filter** | Include and exclude globs together (Smart supports both in one filter) |
-| **Snapshot base** | A specific date or commit hash to analyze at a point in time, available for single number and table widgets |
-| **Query alias** | A label for the query result, available for timeseries and table widgets |
-
-<Tip>
-  Codemod Wish can help add or edit widgets on a dashboard. Smart queries follow the live dashboard schema (`type: "smart"`). There is no separate CLI or MCP command for Smart queries.
-</Tip>
-
-#### Behavior to expect
-
-- Analysis can continue in the background if a widget times out. Refresh the widget to pick up progress; completed file judgments stay cached.
-- Files that are too large to analyze are skipped and reported as partial results.
-- Changing the prompt or match rules invalidates cached judgments. Changing **Probability**, globs, or group-by reuses existing judgments for the same matcher.
-
-#### Example recipes
-
-- **Security breakdown** — prompt for insecure patterns, group by the **OWASP 2025** semantic category in a table widget.
-- **Environment usage** — prompt for environment-variable reads, group by file path.
-- **Error-handling trend** — prompt for operations that can fail without handling, use a timeseries widget over your dashboard time range.
+<CardGroup cols={2}>
+  <Card title="JSSG (JS ast-grep) queries" icon="code" href="/enterprise/insights/jssg-queries">
+    Programmatic analysis, package-backed metrics, and semantic dimensions.
+  </Card>
+  <Card title="ast-grep YAML queries" icon="file-code" href="/enterprise/insights/ast-grep-queries">
+    Syntax-level pattern counts with ast-grep YAML rules.
+  </Card>
+  <Card title="Package dependency queries" icon="cube" href="/enterprise/insights/dependency-queries">
+    Track package adoption, exposure, and dependency drift.
+  </Card>
+  <Card title="Smart (Jev-powered) queries" icon="sparkles" href="/enterprise/insights/smart-queries">
+    Natural-language file-count signals before you have an exact rule.
+  </Card>
+</CardGroup>
 
 ## Template variables
 
@@ -254,36 +156,3 @@ You can replace the default with a dashboard you built. If the package is publis
     When the dashboard looks right, click the three-dot menu next to the dashboard name and select **Update package template**.
   </Step>
 </Steps>
-
-## Next steps
-
-<CardGroup cols={2}>
-  <Card
-    title="JSSG intro"
-    href="/community/jssg/intro"
-    icon="code"
-  >
-    Build your first JSSG codemod.
-  </Card>
-  <Card
-    title="Codemod Studio"
-    href="/enterprise/codemod-studio"
-    icon="wand-magic-sparkles"
-  >
-    Generate ast-grep rules with the help of AI.
-  </Card>
-  <Card
-    title="Campaigns"
-    href="/enterprise/campaigns"
-    icon="rocket"
-  >
-    Run codemod packages at scale across your repositories.
-  </Card>
-  <Card
-    title="Codemod Registry"
-    href="/enterprise/registry"
-    icon="box"
-  >
-    Discover and publish reusable codemods.
-  </Card>
-</CardGroup>

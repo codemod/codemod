@@ -40,16 +40,14 @@ const LOCAL_WORKFLOW_REFERENCE_DOC: &str = include_str!(concat!(
     env!("OUT_DIR"),
     "/docs/community/workflows/reference.mdx"
 ));
-const LOCAL_WORKFLOW_INTRODUCTION_DOC: &str = include_str!(concat!(
-    env!("OUT_DIR"),
-    "/docs/community/workflows/introduction.mdx"
-));
+const LOCAL_WORKFLOW_INTRODUCTION_DOC: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/docs/community/workflows.mdx"));
 const LOCAL_SHARDING_DOC: &str = include_str!(concat!(
     env!("OUT_DIR"),
     "/docs/community/workflows/sharding.mdx"
 ));
 const LOCAL_JSSG_INTRO_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/community/jssg/intro.mdx"));
+    include_str!(concat!(env!("OUT_DIR"), "/docs/community/jssg.mdx"));
 const LOCAL_JSSG_REFERENCE_DOC: &str = include_str!(concat!(
     env!("OUT_DIR"),
     "/docs/community/jssg/reference.mdx"
@@ -79,7 +77,7 @@ const PACKAGE_STRUCTURE_DOC_URL: &str = "https://docs.codemod.com/community/pack
 const WORKFLOW_REFERENCE_DOC_URL: &str =
     "https://docs.codemod.com/community/workflows/reference.md";
 const SHARDING_DOC_URL: &str = "https://docs.codemod.com/community/workflows/sharding.md";
-const JSSG_QUICKSTART_DOC_URL: &str = "https://docs.codemod.com/community/jssg/intro.md";
+const JSSG_QUICKSTART_DOC_URL: &str = "https://docs.codemod.com/community/jssg.md";
 const JSSG_REFERENCE_DOC_URL: &str = "https://docs.codemod.com/community/jssg/reference.md";
 const JSSG_ADVANCED_DOC_URL: &str = "https://docs.codemod.com/community/jssg/advanced.md";
 const JSSG_TESTING_DOC_URL: &str = "https://docs.codemod.com/community/jssg/testing.md";
@@ -661,7 +659,7 @@ fn local_jssg_docs_bundle() -> &'static str {
                 "Canonical JSSG Documentation",
                 &[
                     LocalDocSource {
-                        path: "docs/community/jssg/intro.mdx",
+                        path: "docs/community/jssg.mdx",
                         content: LOCAL_JSSG_INTRO_DOC,
                     },
                     LocalDocSource {
@@ -697,7 +695,7 @@ fn local_jssg_gotchas_docs_bundle() -> &'static str {
                 "Canonical JSSG Gotchas Documentation",
                 &[
                     LocalDocSource {
-                        path: "docs/community/jssg/intro.mdx",
+                        path: "docs/community/jssg.mdx",
                         content: LOCAL_JSSG_INTRO_DOC,
                     },
                     LocalDocSource {
@@ -729,7 +727,7 @@ fn local_ast_grep_gotchas_docs_bundle() -> &'static str {
                 "Canonical ast-grep Usage Documentation",
                 &[
                     LocalDocSource {
-                        path: "docs/community/jssg/intro.mdx",
+                        path: "docs/community/jssg.mdx",
                         content: LOCAL_JSSG_INTRO_DOC,
                     },
                     LocalDocSource {
@@ -893,7 +891,7 @@ fn local_codemod_maintainer_monorepo_docs_bundle() -> &'static str {
                         content: LOCAL_OSS_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/community/workflows/introduction.mdx",
+                        path: "docs/community/workflows.mdx",
                         content: LOCAL_WORKFLOW_INTRODUCTION_DOC,
                     },
                     LocalDocSource {
