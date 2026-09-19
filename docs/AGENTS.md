@@ -30,13 +30,14 @@ This tree is **human product documentation** only.
 
 ## End of development
 
-After shipping a user-facing CLI/platform change in this repo:
+Before claiming a change done:
 
-1. Update the matching Mintlify pages (and `docs/docs.json` if needed) in the same effort when
-   practical.
+1. If the change is user-facing (CLI/platform/product behavior or concepts), **update the matching
+   Mintlify pages before claiming done**. Also update `docs/docs.json` when adding, removing,
+   renaming, or moving pages.
 2. If Wish / in-app agent contracts also changed, **heads-up the user** to update skill-docs in
    `codemod-app` — do not silently skip.
-3. If no docs apply, say so briefly.
+3. If no docs apply (internal/test-only, or Wish-only with no human surface), say so briefly.
 
 Heads-up example:
 

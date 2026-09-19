@@ -56,7 +56,9 @@ there; cross-link conceptually without copying prose.
 Before claiming feature or bugfix work done:
 
 1. **Classify** the change: human product/CLI surface, Wish agent contract, both, or neither.
-2. **Update in-repo Mintlify** that this workspace owns (`docs/`, `docs/docs.json`).
+2. **If the change has a human-facing product/CLI surface**, update the matching in-repo Mintlify
+   pages this workspace owns (`docs/`). Update `docs/docs.json` when adding, removing, renaming,
+   or moving pages. Wish-only or internal/test-only changes must **not** edit Mintlify.
 3. **If Wish skill-docs in `codemod-app` may need updates**, give an explicit **heads-up** to the
    user. Do not silently skip. Agents here usually cannot edit the other repo.
 4. If neither corpus applies, say so in one line so the gate is visibly considered.
