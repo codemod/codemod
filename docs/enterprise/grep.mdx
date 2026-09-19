@@ -1,0 +1,171 @@
+---
+title: 'Grep'
+sidebarTitle: 'Grep'
+icon: 'magnifying-glass'
+description: 'Search indexed private repositories with patterns, regex, or ast-grep YAML rules.'
+tag: 'NEW'
+---
+
+Grep searches the latest indexed snapshots of repositories you can access in Codemod. Use it to find structural code patterns, text matches, or advanced ast-grep rules across your organization or personal Git account.
+
+Open Grep at [app.codemod.com/grep](https://app.codemod.com/grep).
+
+<Info>
+  Codemod Grep searches **private and organization repositories** you have granted Codemod access to. Public structural search across open-source repositories lives at [grep.codemod.com](https://grep.codemod.com/).
+</Info>
+
+## Prerequisites
+
+- Sign in to Codemod.
+- Connect [GitHub](/enterprise/integrations/github) or [GitLab](/enterprise/integrations/gitlab) so repositories appear in your scope.
+- Index the repositories you want to search. Listing and searching never start indexing automatically.
+
+Repository scope follows the app context: the active organization when one is selected, or your personal Git repositories otherwise.
+
+## Search indexed code
+
+<Steps>
+  <Step title="Open Grep">
+    Go to **[Grep](https://app.codemod.com/grep)** in the Codemod app.
+  </Step>
+
+  <Step title="Index repositories (first run)">
+    If no repositories are searchable yet, select the repositories to index and start indexing. Wait until they show as searchable before you run a query.
+
+    When some repositories are already searchable, use **Add repositories** to index more without leaving the search studio.
+  </Step>
+
+  <Step title="Choose a mode and write a query">
+    Pick **Pattern**, **Regex**, or **YAML**, then enter the query. Optionally narrow by language, repository, and path filter.
+  </Step>
+
+  <Step title="Review matches">
+    Results group by repository and file, with snippets, exact line ranges, and links back to GitHub or GitLab. Use pagination to load more files when the result set continues.
+  </Step>
+</Steps>
+
+## Query modes
+
+| Mode | Use when | Example |
+| ---- | -------- | ------- |
+| **Pattern** | You want structural matches with ast-grep pattern syntax and metavariables | `console.log($$$ARGS)` |
+| **Regex** | You want text, names, or messages (PostgreSQL regular expressions) | `class\s+StandardScaler` |
+| **YAML** | You need a full ast-grep rule with `language` and `rule` (optional `constraints` / `utils`) | A single YAML document containing `language` and `rule` |
+
+<Tip>
+  Prefer **Regex** for discovery and names. Prefer **Pattern** when the match must respect syntax (for example, a call expression rather than the same text in a comment). Prefer **YAML** for multi-condition or constrained ast-grep rules.
+</Tip>
+
+Pattern and YAML run through Codemod's indexed ast-grep engine. Regex runs as a PostgreSQL regular expression against decrypted snapshot content inside the database. Interactive Grep does not execute user-authored JavaScript.
+
+## Filters
+
+- **Language**: search all indexed languages in scope, or limit to one or more parsers.
+- **Repositories**: omit the filter to search every searchable repository in the current scope, or select a subset.
+- **Path**: optional `glob`, `contains`, `prefix`, or `basename` filter to limit which files are considered.
+
+YAML mode uses the language declared in the YAML document. That top-level `language` is authoritative for the rule.
+
+## Results
+
+Successful searches return:
+
+- Match counts and truncated state when limits apply
+- File-grouped snippets with exact ranges (not full source files)
+- Provider links to the indexed commit on GitHub or GitLab
+- Partial failures for repositories that are not indexed, lack the selected language, or fail during execution
+
+## Grep MCP
+
+MCP clients can search the same repository scope through the Grep MCP endpoint:
+
+```text
+https://app.codemod.com/api/v1/grep/mcp
+```
+
+Authenticate with a Codemod API key that has **Use Grep** enabled:
+
+```json
+{
+  "mcpServers": {
+    "codemod-grep": {
+      "type": "http",
+      "url": "https://app.codemod.com/api/v1/grep/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CODEMOD_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+The server is read-only. It can list repositories, search indexed code, and read focused source ranges around matches. It does not start indexing or modify code. Index repositories in the Grep UI before searching from an MCP client.
+
+Store the key in a secret or environment variable. Do not commit it into MCP configuration files.
+
+## Create Insights dashboards from Grep
+
+Use Grep for exploratory searches, then promote a useful query into a persistent [Insights](/enterprise/insights) dashboard. The dashboard keeps the query and repository scope as editable configuration so you can track the same pattern over time—with Insights features such as timeseries trends, table breakdowns, and group-by dimensions like repository or codeowner (team ownership).
+
+Grep finds the matches. Insights turns that search into ongoing visibility.
+
+<Steps>
+  <Step title="Run a Grep search">
+    Complete a Pattern, Regex, or YAML search against the repositories you care about. Refine language and path filters until the results look right.
+  </Step>
+
+  <Step title="Create an Insights dashboard">
+    After results load, choose **Create Insights dashboard**. Name the dashboard, confirm which repositories to include (up to 10), and select the languages to track.
+  </Step>
+
+  <Step title="Review and extend in Insights">
+    Open the new dashboard to see the generated match-total and repository-breakdown widgets. From there, add timeseries charts, ownership breakdowns, formulas, or additional queries using the normal Insights editor.
+  </Step>
+</Steps>
+
+What Grep hands off:
+
+- The exact query, mode, optional path filter, and selected repositories
+- Count-oriented widgets for total matches and per-repository breakdown
+- Languages you chose at creation time (fewer languages usually compute faster)
+
+What it does not copy into Insights:
+
+- Match snippets, file paths, or individual result rows from the Grep UI
+
+After creation, the dashboard is a normal Insights dashboard: you can edit widgets, change repositories, and use template variables under the usual Insights permissions.
+
+<Tip>
+  Prefer a focused language selection when creating the dashboard. Searching with language `all` in Grep is fine for discovery; for tracking, choose only the languages you need so Insights stays faster.
+</Tip>
+
+<Note>
+  Regex dashboards use Insights/JSSG regex semantics, which can differ slightly from interactive Grep's PostgreSQL regex results.
+</Note>
+
+## Troubleshooting
+
+| Symptom | What to try |
+| ------- | ----------- |
+| No repositories appear | Connect GitHub or GitLab, confirm app install permissions, and switch to the correct organization if you work in one. |
+| Search returns not indexed | Index the repository from Grep, wait until it is searchable, then retry. |
+| Unsupported language failures | Narrow the language filter to languages present in the indexed snapshot, or search with `all`. |
+| Pattern finds nothing that Regex finds | Confirm the Pattern query is complete, valid syntax for the language, and not a bare text fragment. |
+| MCP searches fail with auth errors | Use an API key with **Use Grep** enabled. Organization keys require the creator to still be a member. |
+
+## Related docs
+
+<CardGroup cols={2}>
+  <Card title="Insights" icon="chart-simple" href="/enterprise/insights">
+    Track pattern adoption and migration progress with dashboards.
+  </Card>
+  <Card title="ast-grep YAML queries" icon="file-code" href="/enterprise/insights/ast-grep-queries">
+    Reuse ast-grep rules in Insights widgets.
+  </Card>
+  <Card title="Wish" icon="wand-magic-sparkles" href="/enterprise/codemod-wish">
+    Ask Codemod Wish to search or index repositories from chat.
+  </Card>
+  <Card title="GitHub integration" icon="github" href="/enterprise/integrations/github">
+    Grant repository access so Grep can index and search your code.
+  </Card>
+</CardGroup>

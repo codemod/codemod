@@ -69,6 +69,7 @@
             "pages": [
               "enterprise/quickstart",
               "enterprise/codemod-wish",
+              "enterprise/grep",
               {
                 "icon": "chart-simple",
                 "group": "Insights",
@@ -469,6 +470,10 @@
     {
       "source": "/automations",
       "destination": "/enterprise/automations"
+    },
+    {
+      "source": "/grep",
+      "destination": "/enterprise/grep"
     },
     {
       "source": "/registry",
