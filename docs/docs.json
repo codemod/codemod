@@ -224,7 +224,7 @@
     },
     {
       "source": "/workflows/introduction.md",
-      "destination": "/community/workflows"
+      "destination": "/community/workflows.md"
     },
     {
       "source": "/community/workflows/introduction",
@@ -232,7 +232,7 @@
     },
     {
       "source": "/community/workflows/introduction.md",
-      "destination": "/community/workflows"
+      "destination": "/community/workflows.md"
     },
     {
       "source": "/workflows/reference",
@@ -264,7 +264,7 @@
     },
     {
       "source": "/jssg/intro.md",
-      "destination": "/community/jssg"
+      "destination": "/community/jssg.md"
     },
     {
       "source": "/community/jssg/intro",
@@ -272,7 +272,7 @@
     },
     {
       "source": "/community/jssg/intro.md",
-      "destination": "/community/jssg"
+      "destination": "/community/jssg.md"
     },
     {
       "source": "/jssg/reference",
@@ -336,7 +336,7 @@
     },
     {
       "source": "/jssg/quickstart.md",
-      "destination": "/community/jssg"
+      "destination": "/community/jssg.md"
     },
     {
       "source": "/platform/quickstart",
