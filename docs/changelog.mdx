@@ -7,6 +7,52 @@ mode: "center"
 
 <Update label="September 2026">
 - **Smart Insights queries**: Insights widgets can now use **Smart**, a natural-language query source that counts files matching a code characteristic you describe. Set probability and match rules, group by path, repository, codeowner, directory, language, or semantic categories (including an **OWASP 2025** preset), and reuse prompts with string template variables. Automations **Scan Codebase** supports the same Smart query model. [Learn more →](/enterprise/insights/smart-queries)
+
+- **Grep is ready for everyday use**: Private-repository Grep gained clearer setup empty states, organization switching, progress and pagination, language filters, and repository-selection fixes. Signed-in users can search indexed repos with Pattern, Regex, or YAML Rule modes, then create an Insights dashboard from the same query. [Learn more →](/enterprise/grep)
+
+- **Connected repositories page**: Organization settings now include a dedicated Connected Repos view with sorting, column visibility, and clearer row display so you can see which repositories Codemod can index and search.
+
+- **Simpler app chrome and in-app feedback**: Sidebar navigation is leaner, and you can send product feedback from inside the app. Marketing Platform and Solutions mega-menus were also refreshed.
+</Update>
+
+<Update label="August 2026">
+- **Private repository Grep**: Codemod Grep now searches encrypted snapshots of private and organization repositories you have granted access to. Index repositories, filter by language and path, browse grouped results with syntax highlighting, and hand off a completed search into an Insights dashboard. [Learn more →](/enterprise/grep)
+
+- **Share frozen Insights snapshots**: Insights dashboards can be shared as read-only snapshot links with public or organization access, optional expiry (up to three months), and independent revocation. Recipients see cached widget results without starting new computation or exposing query configuration.
+
+- **Insights authoring and tables**:
+  - Add-widget modal and query builder received a clearer overhaul, with better widget-card error handling
+  - Table widgets support resizable columns and a header indicator when some queries return partial errors
+  - Package publishers can update Insights dashboard templates from a live dashboard, including multi-child bundle templates
+
+- **Registry release channels and Builder Git source**:
+  - Packages now use `latest` and `codemod-builder` dist-tags so stable discovery stays separate from Builder preview versions
+  - `codemod publish --tag` supports SemVer prereleases and release-channel selection
+  - Builder can push generated packages to a GitHub repo (direct push for empty repos, otherwise a PR), install a stable publish workflow, and keep connected source in sync through Git PRs
+  - Registry owners can preview Builder builds, and list/package navigation is much snappier
+
+- **CLI capability prompts and report polish**: Interactive runs can approve elevated JSSG capabilities at runtime (including dry-run), local execution reports gained richer UI components, and Wish chat recovers more reliably when a stream disconnects.
+
+- **Theme and onboarding polish**: Theme selection lives in the user menu, GitHub App setup during organization creation shows clearer permissions and verification steps, and registry hero copy/layout were simplified.
+</Update>
+
+<Update label="July 2026">
+- **Registry Insights dashboard templates**: Publishing a package with JSSG steps now attaches a ready-to-use Insights dashboard template. Starting Insights from a registry package loads that template with your repository preselected. You can also save a live dashboard back as the package template, and Wish can apply preset widgets when generating templates. [Learn more →](/enterprise/insights#dashboard-templates)
+
+- **Migration recommendations from repository radars**: Organizations can discover migration opportunities without knowing which repos are affected first. Scheduled radar scans surface draft recommendations above the Insights list that authorized users can preview and promote into normal dashboards.
+
+- **Campaign creation is faster**: Creating a campaign uses clearer modals and loading states, with a simpler flow from package selection through repository targeting and launch.
+
+- **Registry and Studio clarity**:
+  - Registry package CTAs consolidate around **View Impact on Repo** so discovery leads straight into Insights
+  - Codemod Studio promotes Wish from the top banner
+  - Editors warn before you leave pages with unsaved changes
+  - Pull request lists sort by date and collapse closed PRs
+
+- **CLI report and nested-run improvements**:
+  - Local execution reports add a **Registry** action alongside Share and Feedback
+  - Nested JSSG/codemod capabilities and dry-run sandbox writes behave more reliably
+  - Nested codemod LLM usage is metered, and JSSG runtime events emit clearer structured logs
 </Update>
 
 <Update label="June 2026">
