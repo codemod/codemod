@@ -55,6 +55,16 @@ type RemoveImportOptions =
   | { type: "namespace"; from: string }
   | { type: "named"; specifiers: string[]; from: string };
 
+type UpdateImportOptions = {
+  type: "named";
+  from: string;
+  specifiers: Array<{
+    name: string;
+    to: string;
+    alias?: string;
+  }>;
+};
+
 interface Edit {
   startPos: number;
   endPos: number;
@@ -1041,48 +1051,111 @@ function hasTrailingComma<T extends Language>(nodes: SgNode<T>[]) {
   return false;
 }
 
+type ClauseItem = { kind: "comment" | "specifier"; text: string };
+
+/**
+ * Rebuild a `named_imports` / `object_pattern` clause from an ordered list of
+ * items (specifiers and comments), preserving the original single/multi-line
+ * layout and trailing comma. Returns a single edit that replaces the whole
+ * clause node, so callers never produce overlapping edits.
+ */
+function serializeSpecifierClause<T extends Language>(
+  parentNode: SgNode<T>,
+  items: ClauseItem[],
+): Edit {
+  const isMultiline = parentNode.range().start.line !== parentNode.range().end.line;
+  const lastItem = items[items.length - 1];
+  const trailingComma =
+    hasTrailingComma(parentNode.children()) && lastItem?.kind === "specifier" ? "," : "";
+
+  let body = "";
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    const next = items[i + 1];
+
+    if (!next) {
+      body += item.text;
+      continue;
+    }
+
+    if (!isMultiline) {
+      body += item.text + ", ";
+      continue;
+    }
+
+    if (item.kind === "comment") {
+      body += item.text + "\n  ";
+      continue;
+    }
+
+    body += item.text + (next.kind === "comment" ? "," : ",\n  ");
+  }
+
+  body += trailingComma;
+
+  return isMultiline ? parentNode.replace(`{\n  ${body}\n}`) : parentNode.replace(`{ ${body} }`);
+}
+
+/**
+ * Read the existing children of a specifier clause as items, keeping comments
+ * in place.
+ */
+function readClauseItems<T extends Language>(
+  parentNode: SgNode<T>,
+): Array<ClauseItem & { node: SgNode<T> }> {
+  return parentNode
+    .children()
+    .filter((n) => n.isNamed() || n.is("comment"))
+    .map((n) => ({ kind: n.is("comment") ? "comment" : "specifier", text: n.text(), node: n }));
+}
+
 function mergeSpecifiers<T extends Language>(
   parentNode: SgNode<T>,
   newSpecifiers: ImportSpecifier[],
 ) {
-  const parentNodeKind =
-    parentNode.kind() === "object_pattern" ? "object_pattern" : "named_imports";
-  const isMultiline = parentNode.range().start.line !== parentNode.range().end.line;
-  const separator = isMultiline ? `,\n  ` : ", ";
+  const kind = parentNode.kind() === "object_pattern" ? "object_pattern" : "named_imports";
 
-  const trailingComma = hasTrailingComma(parentNode.children()) ? "," : "";
+  const items: ClauseItem[] = [
+    ...readClauseItems(parentNode),
+    ...newSpecifiers.map((spec) => ({
+      kind: "specifier" as const,
+      text: formatSpecifier(spec, kind),
+    })),
+  ];
+  return serializeSpecifierClause(parentNode, items);
+}
 
-  const namedImportNodes = parentNode.children().filter((n) => n.isNamed() || n.is("comment"));
+/**
+ * Resolve the imported name and local alias of a specifier node:
+ * - `import_specifier`: `foo` / `foo as f`
+ * - `pair_pattern`: `foo: f`
+ * - `shorthand_property_identifier_pattern`: `foo`
+ */
+function readSpecifier<T extends Language>(
+  node: SgNode<T>,
+): { name: string; alias?: string } | null {
+  const tsNode = node as unknown as SgNode<TS>;
+  const kind = tsNode.kind();
 
-  const namedImportsText: string[] = [];
-
-  for (let i = 0; i < namedImportNodes.length; i++) {
-    if (isMultiline) {
-      if (namedImportNodes[i + 1]?.is("comment")) {
-        namedImportsText[i] = namedImportNodes[i]?.text() + ",";
-        continue;
-      }
-
-      if (namedImportNodes[i]?.is("comment")) {
-        namedImportsText[i] = namedImportNodes[i]?.text() + "\n  ";
-        continue;
-      }
-
-      namedImportsText[i] = namedImportNodes[i]?.text() + ",\n  ";
-      continue;
-    }
-
-    namedImportsText[i] = namedImportNodes[i]?.text() + ", ";
+  if (kind === "import_specifier") {
+    const name = tsNode.field("name")?.text();
+    if (!name) return null;
+    const alias = tsNode.field("alias")?.text();
+    return alias ? { name, alias } : { name };
   }
 
-  const specifierStr = newSpecifiers.map((spec) => formatSpecifier(spec, parentNodeKind));
+  if (kind === "pair_pattern") {
+    const name = tsNode.field("key")?.text();
+    const alias = tsNode.field("value")?.text();
+    if (!name) return null;
+    return alias ? { name, alias } : { name };
+  }
 
-  const importsUpdatedStr =
-    namedImportsText.join("") + specifierStr.join(separator) + trailingComma;
+  if (kind === "shorthand_property_identifier_pattern") {
+    return { name: tsNode.text() };
+  }
 
-  return isMultiline
-    ? parentNode.replace(`{\n  ${importsUpdatedStr}\n}`)
-    : parentNode.replace(`{ ${importsUpdatedStr} }`);
+  return null;
 }
 
 // ============================================================================
@@ -1647,4 +1720,84 @@ export function removeImport<T extends Language>(
   }
 
   return null;
+}
+
+/**
+ * Replace named specifiers of an existing import/require in place
+ *
+ * - `import { foo } from 'mod'` + `{ name: "foo", to: "bar" }` -> `import { bar } from 'mod'`
+ * - If `to` is already imported in the same clause, the old specifier is dropped instead of duplicated
+ *
+ * The whole clause is rewritten as a single edit, so it never overlaps.
+ *
+ * @returns Edit to apply, or null if none of the specifiers is found
+ */
+export function updateImport<T extends Language>(
+  program: SgNode<T, "program">,
+  options: UpdateImportOptions,
+): Edit | null {
+  if (options.type !== "named" || options.specifiers.length === 0) {
+    return null;
+  }
+
+  // Locate the clause via the first specifier we can find.
+  let clause: SgNode<T> | null = null;
+  for (const spec of options.specifiers) {
+    const found = findImportStatementForSpecifier(program, spec.name, options.from);
+    if (!found) continue;
+
+    const specNode = found.specifier as unknown as SgNode<TS>;
+
+    // For dynamic imports, getImport returns the binding identifier rather than
+    // the specifier node; walk up until we reach the clause in every case.
+    const parent = specNode
+      .ancestors()
+      .find((a) => a.is("named_imports") || a.is("object_pattern"));
+
+    if (parent) {
+      clause = parent as unknown as SgNode<T>;
+      break;
+    }
+  }
+
+  if (!clause) return null;
+
+  const renames = new Map(options.specifiers.map((spec) => [spec.name, spec]));
+
+  const existingItems = readClauseItems(clause);
+  const importedNames = new Set<string>();
+  let changed = false;
+  const items: ClauseItem[] = [];
+
+  for (const item of existingItems) {
+    if (item.kind === "comment") {
+      items.push(item);
+      continue;
+    }
+
+    const specifierNode = readSpecifier(item.node);
+    if (specifierNode && importedNames.has(specifierNode.name)) continue;
+
+    const rename = specifierNode ? renames.get(specifierNode.name) : undefined;
+    if (!specifierNode || !rename) {
+      items.push(item);
+      importedNames.add(item.text);
+      continue;
+    }
+
+    changed = true;
+
+    const alias = rename.alias ?? specifierNode.alias;
+    const kind = clause.kind() === "object_pattern" ? "object_pattern" : "named_imports";
+    importedNames.add(rename.to);
+
+    items.push({
+      kind: "specifier",
+      text: formatSpecifier({ name: rename.to, alias }, kind),
+    });
+  }
+
+  if (!changed) return null;
+
+  return serializeSpecifierClause(clause, items);
 }

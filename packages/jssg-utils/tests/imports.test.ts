@@ -5,6 +5,7 @@ import {
   addImport,
   removeImport,
   getAllImports,
+  updateImport,
 } from "../src/javascript/exports/imports.ts";
 import type JS from "@codemod.com/jssg-types/langs/javascript";
 import type TS from "@codemod.com/jssg-types/langs/typescript";
@@ -1340,6 +1341,175 @@ function testRemoveImportDoesNotRemoveUnrelatedModule() {
   assert(edit === null, "Should return null");
 }
 
+// ============================================================================
+// updateImport tests
+// ============================================================================
+function testUpdateNamedImportESM() {
+  const program = parseProgram("javascript", "import { foo } from 'mod';\nconsole.log('hello');\n");
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar" }],
+  });
+  assert(edit !== null, "Should return an update edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import { bar } from 'mod';\nconsole.log('hello');\n",
+    "foo should be replaced with bar",
+  );
+}
+
+function testUpdateNamedImportPreservesSiblingsAndOrder() {
+  const program = parseProgram("javascript", "import { a, foo, c } from 'mod';\n");
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar" }],
+  });
+  assert(edit !== null, "Should return an update edit");
+  const result = program.commitEdits([edit!]);
+  assert(result === "import { a, bar, c } from 'mod';\n", "Should keep siblings in place");
+}
+
+function testUpdateNamedImportPreservesAlias() {
+  const program = parseProgram("javascript", "import { foo as f } from 'mod';\nf();\n");
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar" }],
+  });
+  assert(edit !== null, "Should return an update edit");
+  const result = program.commitEdits([edit!]);
+  assert(result === "import { bar as f } from 'mod';\nf();\n", "Should keep local alias");
+}
+
+function testUpdateNamedImportExplicitAlias() {
+  const program = parseProgram("javascript", "import { foo } from 'mod';\n");
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar", alias: "foo" }],
+  });
+  assert(edit !== null, "Should return an update edit");
+  const result = program.commitEdits([edit!]);
+  assert(result === "import { bar as foo } from 'mod';\n", "Should apply explicit alias");
+}
+
+function testUpdateNamedImportMultipleSpecifiers() {
+  const program = parseProgram("javascript", "import { foo, baz } from 'mod';\n");
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [
+      { name: "foo", to: "bar" },
+      { name: "baz", to: "qux" },
+    ],
+  });
+  assert(edit !== null, "Should return an update edit");
+  const result = program.commitEdits([edit!]);
+  assert(result === "import { bar, qux } from 'mod';\n", "Should rename both in one edit");
+}
+
+function testUpdateNamedImportDedupesExistingTarget() {
+  const program = parseProgram("javascript", "import { foo, bar } from 'mod';\n");
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar" }],
+  });
+  assert(edit !== null, "Should return an update edit");
+  const result = program.commitEdits([edit!]);
+  assert(result === "import { bar } from 'mod';\n", "Should drop foo instead of duplicating bar");
+}
+
+function testUpdateNamedImportMultiline() {
+  const program = parseProgram(
+    "javascript",
+    "import {\n  a,\n  foo,// keep me\n  c,\n} from 'mod';\n",
+  );
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar" }],
+  });
+  assert(edit !== null, "Should return an update edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "import {\n  a,\n  bar,// keep me\n  c,\n} from 'mod';\n",
+    "Should keep multiline layout, comment and trailing comma",
+  );
+}
+
+function testUpdateNamedImportCJS() {
+  const program = parseProgram("javascript", "const { foo, baz: b } = require('mod');\n");
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [
+      { name: "foo", to: "bar" },
+      { name: "baz", to: "qux" },
+    ],
+  });
+  assert(edit !== null, "Should return an update edit");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result === "const { bar, qux: b } = require('mod');\n",
+    "Should rename destructured require keys and keep the alias",
+  );
+}
+
+function testUpdateNamedImportDynamicImport() {
+  const program = parseProgram("javascript", "const { foo } = await import('mod');\n");
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar" }],
+  });
+  assert(edit !== null, "Should return an update edit");
+  const result = program.commitEdits([edit!]);
+  assert(result === "const { bar } = await import('mod');\n", "Should rename dynamic import key");
+}
+
+function testUpdateNamedImportComposesWithOtherEdits() {
+  const program = parseProgram(
+    "javascript",
+    "import { foo } from 'mod';\nimport { x } from 'other';\n",
+  );
+  const update = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar" }],
+  });
+  const remove = removeImport(program, { type: "named", from: "other", specifiers: ["x"] });
+  assert(update !== null && remove !== null, "Both edits should exist");
+  const result = program.commitEdits([update!, remove!]);
+  assert(result === "import { bar } from 'mod';\n", "Should apply both edits without overlap");
+}
+
+function testUpdateNamedImportNotFoundReturnsNull() {
+  const program = parseProgram("javascript", "import { foo } from 'mod';\n");
+  assert(
+    updateImport(program, {
+      type: "named",
+      from: "mod",
+      specifiers: [{ name: "nope", to: "bar" }],
+    }) === null,
+    "Should return null when the specifier is missing",
+  );
+  assert(
+    updateImport(program, {
+      type: "named",
+      from: "other",
+      specifiers: [{ name: "foo", to: "bar" }],
+    }) === null,
+    "Should return null when the module is not imported",
+  );
+  assert(
+    updateImport(program, { type: "named", from: "mod", specifiers: [] }) === null,
+    "Should return null with no specifiers",
+  );
+}
+
 function run() {
   testReturnsEmptyArrayWhenNoImports();
   testReturnsEmptyArrayWhenModuleNotImported();
@@ -1440,12 +1610,19 @@ function run() {
   testRemoveDefaultDynamicImportMultiDeclaratorReturnsNull();
   testRemoveImportDoesNotRemoveUnrelatedModule();
 
+  testUpdateNamedImportESM();
+  testUpdateNamedImportPreservesSiblingsAndOrder();
+  testUpdateNamedImportPreservesAlias();
+  testUpdateNamedImportExplicitAlias();
+  testUpdateNamedImportMultipleSpecifiers();
+  testUpdateNamedImportDedupesExistingTarget();
+  testUpdateNamedImportMultiline();
+  testUpdateNamedImportCJS();
+  testUpdateNamedImportDynamicImport();
+  testUpdateNamedImportComposesWithOtherEdits();
+  testUpdateNamedImportNotFoundReturnsNull();
+
   console.log("imports.test.ts: all assertions passed");
 }
 
-try {
-  run();
-} catch (error) {
-  console.error(error);
-  process.exit(1);
-}
+run();
