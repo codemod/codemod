@@ -1510,6 +1510,22 @@ function testUpdateNamedImportNotFoundReturnsNull() {
   );
 }
 
+function testUpdateNamedImportDoesNotAddExtraCommas() {
+  const program = parseProgram("javascript", `import { /* keep */ foo } from "mod";\n`);
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar" }],
+  });
+
+  const result = program.commitEdits([edit!]);
+
+  assert(
+    result === `import { /* keep */ bar } from "mod";\n`,
+    "Should rename specifier and preserve comment without adding extra comma",
+  );
+}
+
 function run() {
   testReturnsEmptyArrayWhenNoImports();
   testReturnsEmptyArrayWhenModuleNotImported();
@@ -1621,8 +1637,14 @@ function run() {
   testUpdateNamedImportDynamicImport();
   testUpdateNamedImportComposesWithOtherEdits();
   testUpdateNamedImportNotFoundReturnsNull();
+  testUpdateNamedImportDoesNotAddExtraCommas();
 
   console.log("imports.test.ts: all assertions passed");
 }
 
-run();
+try {
+  run();
+} catch (error) {
+  console.error(error);
+  process.exit(1);
+}

@@ -1079,7 +1079,12 @@ function serializeSpecifierClause<T extends Language>(
     }
 
     if (!isMultiline) {
-      body += item.text + ", ";
+      body += item.text;
+      if (item.kind === "comment") {
+        body += " ";
+      } else {
+        body += ", ";
+      }
       continue;
     }
 
@@ -1781,7 +1786,7 @@ export function updateImport<T extends Language>(
     const rename = specifierNode ? renames.get(specifierNode.name) : undefined;
     if (!specifierNode || !rename) {
       items.push(item);
-      importedNames.add(item.text);
+      importedNames.add(specifierNode?.name ?? item.text);
       continue;
     }
 
