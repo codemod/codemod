@@ -1526,6 +1526,22 @@ function testUpdateNamedImportDoesNotAddExtraCommas() {
   );
 }
 
+function testUpdateImportTypeKeyword() {
+  const program = parseProgram("typescript", `import { type Foo } from "mod";\n`);
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "Foo", to: "Bar" }],
+  });
+
+  const result = program.commitEdits([edit!]);
+
+  assert(
+    result === `import { type Bar } from "mod";\n`,
+    "Should rename specifier and preserve comment without adding extra comma",
+  );
+}
+
 function run() {
   testReturnsEmptyArrayWhenNoImports();
   testReturnsEmptyArrayWhenModuleNotImported();
@@ -1638,6 +1654,7 @@ function run() {
   testUpdateNamedImportComposesWithOtherEdits();
   testUpdateNamedImportNotFoundReturnsNull();
   testUpdateNamedImportDoesNotAddExtraCommas();
+  testUpdateImportTypeKeyword();
 
   console.log("imports.test.ts: all assertions passed");
 }

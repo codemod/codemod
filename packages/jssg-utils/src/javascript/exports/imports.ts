@@ -1781,6 +1781,7 @@ export function updateImport<T extends Language>(
     }
 
     const specifierNode = readSpecifier(item.node);
+
     if (specifierNode && importedNames.has(specifierNode.name)) continue;
 
     const rename = specifierNode ? renames.get(specifierNode.name) : undefined;
@@ -1793,12 +1794,15 @@ export function updateImport<T extends Language>(
     changed = true;
 
     const alias = rename.alias ?? specifierNode.alias;
+    const isImportType = item.node.child(0)?.kind() === "type";
+    const newImportName = isImportType ? `type ${rename.to}` : rename.to;
+
     const kind = clause.kind() === "object_pattern" ? "object_pattern" : "named_imports";
-    importedNames.add(rename.to);
+    importedNames.add(newImportName);
 
     items.push({
       kind: "specifier",
-      text: formatSpecifier({ name: rename.to, alias }, kind),
+      text: formatSpecifier({ name: newImportName, alias }, kind),
     });
   }
 
