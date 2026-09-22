@@ -7,7 +7,7 @@ Utilities used by the JSSG codemod engine.
 Import from:
 
 ```ts
-import { getImport, addImport, removeImport } from "@jssg/utils/javascript/imports";
+import { getImport, addImport, removeImport, updateImport } from "@jssg/utils/javascript/imports";
 ```
 
 These helpers work on a `program` AST node (from `codemod:ast-grep` / `@codemod.com/jssg-types`) and return either **lookup info** (`getImport`) or a single **text edit** you can apply with `program.commitEdits([edit])`.
@@ -86,6 +86,38 @@ Behavior:
 - Named: removes a specifier; if you’re removing the last specifier(s), removes the entire statement
 
 Note: this function returns a **single edit**. For named removals, it removes the first matching specifier it finds unless it can remove the whole statement.
+
+### `updateImport(program, options)`
+
+Replaces named specifiers of an existing import/require and returns an edit, or `null` if none of the specifiers is found.
+
+Options:
+
+- **Named**: `{ type: 'named', specifiers: { name; to; alias? }[], from }`
+
+Behavior:
+
+- `import { foo } from 'mod'` + `{ name: 'foo', to: 'bar' }` becomes `import { bar } from 'mod'`
+- Preserves the local alias: `import { foo as f }` becomes `import { bar as f }` (pass `alias` to override)
+- Works for ESM, destructured `require()`, and destructured dynamic `import()`
+- If `to` is already imported in the same clause, the old specifier is dropped instead of duplicated
+
+Example:
+
+```ts
+const program = parse<TS>("typescript", "import { foo as f } from 'mod';\n").root();
+
+const edit = updateImport(program, {
+  type: "named",
+  from: "mod",
+  specifiers: [{ name: "foo", to: "bar" }],
+});
+
+if (edit) {
+  const next = program.commitEdits([edit]);
+  // import { bar as f } from 'mod';
+}
+```
 
 ## XML element helpers
 
