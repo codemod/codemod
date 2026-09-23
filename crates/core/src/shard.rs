@@ -1,6 +1,6 @@
 use butterflow_models::step::{BuiltinShardType, UseShard};
+use codemod_sandbox::sandbox::filesystem::codemod_walk_builder;
 use ignore::overrides::OverrideBuilder;
-use ignore::WalkBuilder;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -360,17 +360,8 @@ pub fn collect_files_with_pattern(
         .build()
         .map_err(|e| format!("Failed to build glob overrides: {}", e))?;
 
-    let mut builder = WalkBuilder::new(base_path);
-    builder
-        .overrides(overrides)
-        .follow_links(false)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .require_git(false)
-        .parents(true)
-        .ignore(true)
-        .hidden(false);
+    let mut builder = codemod_walk_builder(base_path);
+    builder.overrides(overrides);
 
     let walker = builder.threads(1).build();
     let mut files = Vec::new();

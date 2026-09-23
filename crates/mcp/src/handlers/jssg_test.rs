@@ -322,6 +322,7 @@ impl JssgTestHandler {
                         cancellation_flag: None,
                         test_mode: true,
                         dry_run: false,
+                        stage_writes: false,
                         target_directory: &target_directory,
                     };
                     let CodemodOutput { primary, .. } =
