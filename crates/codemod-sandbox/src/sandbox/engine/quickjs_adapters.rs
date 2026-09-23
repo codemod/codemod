@@ -1,8 +1,9 @@
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::transpiler;
 use rquickjs::{
+    Ctx, Error, Module, Result,
     loader::{Loader, Resolver},
-    module, Ctx, Error, Module, Result,
+    module,
 };
 use std::sync::Arc;
 

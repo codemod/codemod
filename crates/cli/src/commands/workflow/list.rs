@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use butterflow_core::utils;
 use clap::Args;
-use tabled::settings::{object::Columns, Alignment, Modify, Style};
+use tabled::settings::{Alignment, Modify, Style, object::Columns};
 use tabled::{Table, Tabled};
 
 use crate::engine::create_engine;

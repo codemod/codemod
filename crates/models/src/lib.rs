@@ -12,7 +12,7 @@ pub mod variable;
 pub mod workflow;
 
 // Re-export types
-pub use error::Error;
+pub use error::{Error, WorkflowParseError};
 pub use node::Node;
 pub use runtime::{Runtime, RuntimeType};
 pub use schema::{SimpleSchema, SimpleSchemaProperty, SimpleSchemaType, SimpleSchemaVariant};
@@ -23,8 +23,8 @@ pub use task::{Task, TaskErrorDetails, TaskStatus};
 pub use template::{Template, TemplateInput, TemplateOutput};
 pub use trigger::{Trigger, TriggerType};
 pub use variable::{
-    evaluate_condition, resolve_expressions, resolve_string_list, resolve_string_with_expression,
-    resolve_usize_value, TaskExpressionContext,
+    TaskExpressionContext, evaluate_condition, resolve_expressions, resolve_string_list,
+    resolve_string_with_expression, resolve_usize_value,
 };
 pub use workflow::{Workflow, WorkflowRun, WorkflowState, WorkflowStatus};
 

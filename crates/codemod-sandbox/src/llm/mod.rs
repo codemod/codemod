@@ -1,5 +1,5 @@
 use rquickjs::module::{Declarations, Exports, ModuleDef};
-use rquickjs::{prelude::Async, Ctx, Exception, Function, JsLifetime, Result, Value};
+use rquickjs::{Ctx, Exception, Function, JsLifetime, Result, Value, prelude::Async};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::future::Future;

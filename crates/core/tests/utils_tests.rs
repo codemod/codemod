@@ -3,8 +3,8 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use butterflow_core::utils;
 use butterflow_core::NodeType;
+use butterflow_core::utils;
 use butterflow_models::step::SemanticAnalysisConfig;
 use butterflow_models::step::SemanticAnalysisMode;
 use butterflow_models::step::StepAction;
@@ -12,6 +12,7 @@ use butterflow_models::step::UseAstGrep;
 use butterflow_models::step::UseJSAstGrep;
 use butterflow_models::strategy::StrategyType;
 use butterflow_models::{Error, Node, Step, Strategy, Template, TemplateOutput, Workflow};
+use serial_test::serial;
 
 #[test]
 fn test_parse_workflow_file_yaml() {
@@ -109,8 +110,8 @@ fn test_parse_workflow_file_invalid() {
     // Verify that parsing fails
     assert!(result.is_err());
     match result {
-        Err(Error::WorkflowParse { path, .. }) => {
-            assert_eq!(path, file_path);
+        Err(Error::WorkflowParse(parse_error)) => {
+            assert_eq!(parse_error.path, file_path);
         }
         _ => panic!("Expected WorkflowParse error"),
     }
@@ -138,10 +139,12 @@ nodes:
 
     let result = utils::validate_workflow(&workflow, temp_dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("invalid install-skill package value"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid install-skill package value")
+    );
 }
 
 #[test]
@@ -167,10 +170,12 @@ nodes:
 
     let result = utils::validate_workflow(&workflow, temp_dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("invalid install-skill path value"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid install-skill path value")
+    );
 }
 
 #[test]
@@ -196,10 +201,12 @@ nodes:
 
     let result = utils::validate_workflow(&workflow, temp_dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("parent-directory traversal is not allowed"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("parent-directory traversal is not allowed")
+    );
 }
 
 #[test]
@@ -674,9 +681,13 @@ fn test_validate_workflow_complex_cyclic_dependency() {
 }
 
 #[test]
+#[serial]
 fn test_get_env_vars() {
     // Set a test environment variable
-    env::set_var("BUTTERFLOW_TEST_VAR", "test_value");
+    // SAFETY: test is #[serial], so no other test touches the env concurrently.
+    unsafe {
+        env::set_var("BUTTERFLOW_TEST_VAR", "test_value");
+    }
 
     // Get environment variables
     let env_vars = utils::get_env_vars();
@@ -688,7 +699,10 @@ fn test_get_env_vars() {
     );
 
     // Clean up
-    env::remove_var("BUTTERFLOW_TEST_VAR");
+    // SAFETY: test is #[serial], so no other test touches the env concurrently.
+    unsafe {
+        env::remove_var("BUTTERFLOW_TEST_VAR");
+    }
 }
 
 #[test]

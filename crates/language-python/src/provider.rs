@@ -2,8 +2,8 @@
 
 use crate::analyzer::{FileScopeAnalyzer, WorkspaceScopeAnalyzer};
 use language_core::{
-    filesystem, ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
-    SemanticProvider, SemanticResult,
+    ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
+    SemanticProvider, SemanticResult, filesystem,
 };
 use std::path::{Path, PathBuf};
 use vfs::VfsPath;

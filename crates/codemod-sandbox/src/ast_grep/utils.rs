@@ -5,9 +5,9 @@ use crate::ast_grep::wasm_lang::WasmLang as SupportLang;
 use crate::sandbox::engine::codemod_lang::CodemodLang as SupportLang;
 use ast_grep_config::{DeserializeEnv, RuleCore, SerializableRuleCore};
 use ast_grep_core::{
+    Doc, Node, Pattern,
     matcher::{KindMatcher, Matcher},
     meta_var::MetaVarEnv,
-    Doc, Node, Pattern,
 };
 #[cfg(all(
     not(all(feature = "wasm", target_arch = "wasm32")),
@@ -164,9 +164,11 @@ mod tests {
         let error = detect_language_from_extension_with_xml_availability("csproj", || false)
             .expect_err("csproj should require the XML parser");
 
-        assert!(error
-            .to_string()
-            .contains("Unsupported file extension: XML parser is not available"));
+        assert!(
+            error
+                .to_string()
+                .contains("Unsupported file extension: XML parser is not available")
+        );
     }
 
     #[test]

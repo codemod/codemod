@@ -1,5 +1,5 @@
 use evalexpr::{
-    eval_with_context, Context, ContextWithMutableVariables, HashMapContext, Value as EvalValue,
+    Context, ContextWithMutableVariables, HashMapContext, Value as EvalValue, eval_with_context,
 };
 use regex::Regex;
 use serde_json::Value;
@@ -21,8 +21,8 @@ fn task_var_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"task\.([a-zA-Z_][a-zA-Z0-9_]*)").expect("valid task var regex"))
 }
 
-use crate::error::Error;
 use crate::Result;
+use crate::error::Error;
 
 fn convert_value_to_eval_value(value: &Value) -> EvalValue {
     match value {
@@ -1021,25 +1021,29 @@ mod tests {
         let matrix = create_test_matrix();
 
         // Should use expression evaluation for complex conditions
-        assert!(evaluate_condition(
-            r#"params.environment == "production" && params.skip_tests != "true""#,
-            &params,
-            &state,
-            Some(&matrix),
-            None,
-            None,
-        )
-        .unwrap());
+        assert!(
+            evaluate_condition(
+                r#"params.environment == "production" && params.skip_tests != "true""#,
+                &params,
+                &state,
+                Some(&matrix),
+                None,
+                None,
+            )
+            .unwrap()
+        );
 
-        assert!(!evaluate_condition(
-            r#"params.environment == "staging""#,
-            &params,
-            &state,
-            Some(&matrix),
-            None,
-            None,
-        )
-        .unwrap());
+        assert!(
+            !evaluate_condition(
+                r#"params.environment == "staging""#,
+                &params,
+                &state,
+                Some(&matrix),
+                None,
+                None,
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -1072,15 +1076,17 @@ mod tests {
         // Test string "false" should be falsy
         let mut test_params = HashMap::new();
         test_params.insert("false_string".to_string(), json!("false"));
-        assert!(!evaluate_condition(
-            "params.false_string",
-            &test_params,
-            &HashMap::new(),
-            None,
-            None,
-            None
-        )
-        .unwrap());
+        assert!(
+            !evaluate_condition(
+                "params.false_string",
+                &test_params,
+                &HashMap::new(),
+                None,
+                None,
+                None
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -1106,24 +1112,28 @@ mod tests {
         assert!(!evaluate_condition("params.empty", &params, &state, None, None, None).unwrap());
 
         // Test with comparison expressions to ensure they return proper booleans
-        assert!(evaluate_condition(
-            r#"params.flag == "true""#,
-            &params,
-            &state,
-            None,
-            None,
-            None
-        )
-        .unwrap());
-        assert!(!evaluate_condition(
-            r#"params.flag == "false""#,
-            &params,
-            &state,
-            None,
-            None,
-            None
-        )
-        .unwrap());
+        assert!(
+            evaluate_condition(
+                r#"params.flag == "true""#,
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .unwrap()
+        );
+        assert!(
+            !evaluate_condition(
+                r#"params.flag == "false""#,
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -1132,37 +1142,43 @@ mod tests {
         let state = create_test_state();
 
         // Invalid syntax should return an error
-        assert!(resolve_expressions(
-            "params.environment == ", // Invalid syntax
-            &params,
-            &state,
-            None,
-            None,
-            None
-        )
-        .is_err());
+        assert!(
+            resolve_expressions(
+                "params.environment == ", // Invalid syntax
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
 
         // Undefined variable should return an error
-        assert!(resolve_expressions(
-            "params.nonexistent == true",
-            &params,
-            &state,
-            None,
-            None,
-            None
-        )
-        .is_err());
+        assert!(
+            resolve_expressions(
+                "params.nonexistent == true",
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
 
         // Test that evaluate_condition handles errors from resolve_expressions properly
-        assert!(evaluate_condition(
-            "params.nonexistent == true",
-            &params,
-            &state,
-            None,
-            None,
-            None
-        )
-        .is_err());
+        assert!(
+            evaluate_condition(
+                "params.nonexistent == true",
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1416,26 +1432,30 @@ mod tests {
         let state = HashMap::new();
 
         // Invalid expression should return error
-        assert!(resolve_string_with_expression(
-            "Invalid: ${{ params.nonexistent }}",
-            &params,
-            &state,
-            None,
-            None,
-            None
-        )
-        .is_err());
+        assert!(
+            resolve_string_with_expression(
+                "Invalid: ${{ params.nonexistent }}",
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
 
         // Invalid syntax should return error
-        assert!(resolve_string_with_expression(
-            "Invalid syntax: ${{ 1 + }}",
-            &params,
-            &state,
-            None,
-            None,
-            None
-        )
-        .is_err());
+        assert!(
+            resolve_string_with_expression(
+                "Invalid syntax: ${{ 1 + }}",
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1480,15 +1500,17 @@ mod tests {
         let params = HashMap::new();
         let state = HashMap::new();
 
-        assert!(resolve_string_with_expression(
-            "Hello ${{ params.name }}",
-            &params,
-            &state,
-            None,
-            None,
-            None
-        )
-        .is_err());
+        assert!(
+            resolve_string_with_expression(
+                "Hello ${{ params.name }}",
+                &params,
+                &state,
+                None,
+                None,
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1795,14 +1817,16 @@ mod tests {
             extra: HashMap::new(),
         };
 
-        assert!(!evaluate_condition(
-            "task.missing_var",
-            &params,
-            &state,
-            None,
-            None,
-            Some(&task_ctx)
-        )
-        .unwrap());
+        assert!(
+            !evaluate_condition(
+                "task.missing_var",
+                &params,
+                &state,
+                None,
+                None,
+                Some(&task_ctx)
+            )
+            .unwrap()
+        );
     }
 }

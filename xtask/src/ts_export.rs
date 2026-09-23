@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
 };
 
-use ts_rs::{Config, TypeVisitor, TS};
+use ts_rs::{Config, TS, TypeVisitor};
 
 struct Visit<'a> {
     type_hash_map: &'a mut HashMap<TypeId, String>,

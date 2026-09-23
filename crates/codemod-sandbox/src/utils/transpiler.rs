@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use swc_core::common::{errors::Handler, SourceMap};
+use swc_core::common::{SourceMap, errors::Handler};
 use swc_ts_fast_strip::{Mode, Options};
 struct NullEmitter;
 impl swc_core::common::errors::Emitter for NullEmitter {

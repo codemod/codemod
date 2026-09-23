@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::ExecutionResult;
-use libtest_mimic::{run, Trial};
+use libtest_mimic::{Trial, run};
 use similar::TextDiff;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
@@ -1215,18 +1215,24 @@ mod tests {
 
         assert!(summary.is_success());
         assert_eq!(summary.total, 3);
-        assert!(summary
-            .details
-            .iter()
-            .any(|detail| detail.name == "multi_main.js" && detail.passed));
-        assert!(summary
-            .details
-            .iter()
-            .any(|detail| detail.name == "multi_new.js" && detail.passed));
-        assert!(summary
-            .details
-            .iter()
-            .any(|detail| detail.name == "multi_old.js" && detail.passed));
+        assert!(
+            summary
+                .details
+                .iter()
+                .any(|detail| detail.name == "multi_main.js" && detail.passed)
+        );
+        assert!(
+            summary
+                .details
+                .iter()
+                .any(|detail| detail.name == "multi_new.js" && detail.passed)
+        );
+        assert!(
+            summary
+                .details
+                .iter()
+                .any(|detail| detail.name == "multi_old.js" && detail.passed)
+        );
     }
 
     #[tokio::test]
@@ -1253,15 +1259,14 @@ mod tests {
             .expect("run tests");
 
         assert!(!summary.is_success());
-        assert!(summary
-            .details
-            .iter()
-            .any(|detail| detail.name == "unexpected_extra.js"
+        assert!(summary.details.iter().any(|detail| {
+            detail.name == "unexpected_extra.js"
                 && detail
                     .error_message
                     .as_deref()
                     .unwrap_or_default()
-                    .contains("Unexpected output file")));
+                    .contains("Unexpected output file")
+        }));
     }
 
     #[tokio::test]
@@ -1373,8 +1378,8 @@ mod tests {
     #[tokio::test]
     async fn filter_skips_unmatched_directory_fixtures() {
         use std::sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         };
 
         let temp = TempDir::new().expect("temp dir");
@@ -1423,8 +1428,8 @@ mod tests {
     #[tokio::test]
     async fn fail_fast_stops_directory_fixture_after_first_failure() {
         use std::sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         };
 
         let temp = TempDir::new().expect("temp dir");

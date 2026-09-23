@@ -1,7 +1,7 @@
 //! OXC integration for parsing and semantic analysis.
 
 use crate::cache::{
-    hash_content, ExportedSymbol, FileSymbols, ImportedSymbol, Symbol, SymbolReference,
+    ExportedSymbol, FileSymbols, ImportedSymbol, Symbol, SymbolReference, hash_content,
 };
 use crate::error::JsSemanticError;
 use language_core::{ByteRange, SymbolKind};

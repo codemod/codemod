@@ -3,9 +3,9 @@ use std::path::Path;
 use std::str::FromStr;
 use std::{fs, panic};
 
-use ast_grep_config::{from_yaml_string, CombinedScan, RuleConfig};
-use ast_grep_core::tree_sitter::StrDoc;
+use ast_grep_config::{CombinedScan, RuleConfig, from_yaml_string};
 use ast_grep_core::AstGrep;
+use ast_grep_core::tree_sitter::StrDoc;
 
 use crate::sandbox::engine::codemod_lang::CodemodLang;
 type SupportLang = CodemodLang;

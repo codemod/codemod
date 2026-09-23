@@ -1,16 +1,16 @@
 use crate::ast_grep::wasm_lang::{WasmDoc, WasmLang};
 use ast_grep_config::{Fixer, RuleConfig, SerializableRuleConfig};
 use ast_grep_core::{
+    AstGrep, Language, NodeMatch as SgNodeMatch, Pattern,
     matcher::PatternNode,
     meta_var::{MetaVarEnv, MetaVariable},
     replacer::Replacer,
-    AstGrep, Language, NodeMatch as SgNodeMatch, Pattern,
 };
 use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::from_value as from_js_val;
 use std::collections::BTreeMap;
 use std::error::Error;
-use wasm_bindgen::{prelude::JsError, JsValue};
+use wasm_bindgen::{JsValue, prelude::JsError};
 use web_tree_sitter_sg::{Point, TreeCursor};
 
 type NodeMatch<'a> = SgNodeMatch<'a, WasmDoc>;

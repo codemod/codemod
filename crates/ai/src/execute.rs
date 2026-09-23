@@ -8,13 +8,13 @@ use rig::completion::{Message, Prompt, PromptError, Usage};
 use thiserror::Error;
 
 use crate::memory::controller::{
+    CompactionResult, CompactionStats, MAX_COMPACTION_ATTEMPTS, MemoryTrigger,
+    SOFT_CONTEXT_CHAR_BUDGET, SOFT_CONTEXT_TOKEN_BUDGET, TokenUsageSnapshot,
     compact_history_for_retry, is_context_limit_error_text, is_proactive_cancel_reason,
-    maybe_proactive_budget, proactive_cancel_reason, CompactionResult, CompactionStats,
-    MemoryTrigger, TokenUsageSnapshot, MAX_COMPACTION_ATTEMPTS, SOFT_CONTEXT_CHAR_BUDGET,
-    SOFT_CONTEXT_TOKEN_BUDGET,
+    maybe_proactive_budget, proactive_cancel_reason,
 };
 use crate::memory::history::estimate_context_chars;
-use crate::memory::semantic::{build_dynamic_context_index, DynamicContextIndex, SemanticDocument};
+use crate::memory::semantic::{DynamicContextIndex, SemanticDocument, build_dynamic_context_index};
 use crate::prompt::{build_system_context, build_system_prompt_with_context, build_user_message};
 use crate::tools::registry::{create_cli_tool_server_handle, get_default_cli_tools};
 
@@ -42,7 +42,9 @@ pub struct ExecuteAiStepResult {
 pub enum ExecuteAiStepError {
     #[error("AI execution failed: {0}")]
     Execution(String),
-    #[error("AI execution failed: Memory exhaustion: unable to compact context within limit. {diagnostics}")]
+    #[error(
+        "AI execution failed: Memory exhaustion: unable to compact context within limit. {diagnostics}"
+    )]
     MemoryExhaustion {
         diagnostics: MemoryExhaustionDiagnostics,
     },

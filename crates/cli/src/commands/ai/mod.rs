@@ -1,19 +1,19 @@
+use crate::commands::TelemetrySenderExt;
 use crate::commands::harness_adapter::{
-    install_restart_hint, mcs_install_requires_force, persist_managed_install_state,
-    read_managed_install_state, resolve_adapter, resolve_install_scope,
-    runtime_paths_for_execution, skill_discovery_guide_paths,
+    Harness, HarnessAdapterError, InstallRequest, InstallScope, InstalledSkill,
+    ManagedComponentKind, ManagedComponentSnapshot, OutputFormat, PeriodicUpdatePolicy,
+    ResolvedAdapter, VerificationStatus, install_restart_hint, mcs_install_requires_force,
+    persist_managed_install_state, read_managed_install_state, resolve_adapter,
+    resolve_install_scope, runtime_paths_for_execution, skill_discovery_guide_paths,
     upsert_mcs_command_entrypoints_with_runtime, upsert_periodic_update_trigger,
-    upsert_skill_discovery_guides_with_command_status, Harness, HarnessAdapterError,
-    InstallRequest, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
-    OutputFormat, PeriodicUpdatePolicy, ResolvedAdapter, VerificationStatus,
+    upsert_skill_discovery_guides_with_command_status,
 };
 use crate::commands::output::{
     exit_adapter_error, format_output_path, prompt_for_overwrite_confirmation,
 };
-use crate::commands::TelemetrySenderExt;
 use crate::feedback;
-use crate::{TelemetrySenderMutex, CLI_VERSION};
-use anyhow::{bail, Result};
+use crate::{CLI_VERSION, TelemetrySenderMutex};
+use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 use codemod_telemetry::send_event::BaseEvent;
 use inquire::Select;
@@ -27,14 +27,14 @@ mod update;
 
 use update::auto_safe::maybe_apply_auto_safe_updates;
 use update::output::{
-    build_install_output, build_list_output, print_install_output, print_list_output,
-    BuildInstallOutputInput,
+    BuildInstallOutputInput, build_install_output, build_list_output, print_install_output,
+    print_list_output,
 };
 use update::policy::{
-    resolve_update_policy_context, UpdatePolicyResolveOptions, DEFAULT_UPDATE_SOURCE,
+    DEFAULT_UPDATE_SOURCE, UpdatePolicyResolveOptions, resolve_update_policy_context,
 };
 use update::reconcile::{build_component_reconcile_decisions, update_policy_runtime_message};
-use update::types::{UpdatePolicyMode, MANAGED_UPDATE_POLICY_LOCAL_SOURCE};
+use update::types::{MANAGED_UPDATE_POLICY_LOCAL_SOURCE, UpdatePolicyMode};
 #[derive(Args, Debug)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 #[command(
@@ -293,7 +293,9 @@ async fn handle_feedback_command(command: &FeedbackCommand) -> Result<()> {
             character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
         })
     {
-        bail!("Feedback category must be 64 characters or fewer and contain only letters, numbers, '.', '_', or '-'.");
+        bail!(
+            "Feedback category must be 64 characters or fewer and contain only letters, numbers, '.', '_', or '-'."
+        );
     }
 
     if message.is_empty() {

@@ -231,15 +231,21 @@ async fn test_calculate_initial_tasks_matrix_values() {
         .filter(|t| t.node_id == "node2" && !t.is_master)
         .collect();
     assert_eq!(child_tasks.len(), 2);
-    assert!(child_tasks
-        .iter()
-        .all(|t| t.master_task_id == Some(master_task_id)));
-    assert!(child_tasks
-        .iter()
-        .any(|t| t.matrix_values == Some(matrix_values[0].clone())));
-    assert!(child_tasks
-        .iter()
-        .any(|t| t.matrix_values == Some(matrix_values[1].clone())));
+    assert!(
+        child_tasks
+            .iter()
+            .all(|t| t.master_task_id == Some(master_task_id))
+    );
+    assert!(
+        child_tasks
+            .iter()
+            .any(|t| t.matrix_values == Some(matrix_values[0].clone()))
+    );
+    assert!(
+        child_tasks
+            .iter()
+            .any(|t| t.matrix_values == Some(matrix_values[1].clone()))
+    );
 }
 
 #[tokio::test]
@@ -288,31 +294,37 @@ async fn test_calculate_matrix_task_changes_no_master_yet() {
         .unwrap();
 
     assert_eq!(changes.new_tasks.len(), 3); // Master task + 2 child tasks
-    assert!(changes
-        .new_tasks
-        .iter()
-        .any(|t| t.is_master && t.node_id == "node2"));
+    assert!(
+        changes
+            .new_tasks
+            .iter()
+            .any(|t| t.is_master && t.node_id == "node2")
+    );
     assert_eq!(changes.tasks_to_mark_wont_do.len(), 0);
     assert_eq!(changes.master_tasks_to_update.len(), 1); // The new master task
     assert_eq!(changes.new_tasks.iter().filter(|t| !t.is_master).count(), 2);
-    assert!(changes
-        .new_tasks
-        .iter()
-        .filter(|t| !t.is_master)
-        .any(|t| t.matrix_values
-            == Some(HashMap::from([(
-                "id".to_string(),
-                serde_json::Value::String("a".to_string())
-            )]))));
-    assert!(changes
-        .new_tasks
-        .iter()
-        .filter(|t| !t.is_master)
-        .any(|t| t.matrix_values
-            == Some(HashMap::from([(
-                "id".to_string(),
-                serde_json::Value::String("b".to_string())
-            )]))));
+    assert!(
+        changes
+            .new_tasks
+            .iter()
+            .filter(|t| !t.is_master)
+            .any(|t| t.matrix_values
+                == Some(HashMap::from([(
+                    "id".to_string(),
+                    serde_json::Value::String("a".to_string())
+                )])))
+    );
+    assert!(
+        changes
+            .new_tasks
+            .iter()
+            .filter(|t| !t.is_master)
+            .any(|t| t.matrix_values
+                == Some(HashMap::from([(
+                    "id".to_string(),
+                    serde_json::Value::String("b".to_string())
+                )])))
+    );
 }
 
 #[tokio::test]
@@ -498,7 +510,7 @@ async fn test_find_runnable_tasks_matrix_dependency() {
     let mut tasks3 = tasks1.clone();
     tasks3[1].status = TaskStatus::Completed; // child1 completed
     tasks3[2].status = TaskStatus::Completed; // child2 completed
-                                              // We also need to update the master task status manually for the test scenario
+    // We also need to update the master task status manually for the test scenario
     tasks3[0].status = TaskStatus::Completed;
 
     let runnable3 = scheduler.find_runnable_tasks(&run, &tasks3).await.unwrap();

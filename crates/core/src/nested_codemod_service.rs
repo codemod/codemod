@@ -1,5 +1,5 @@
 use butterflow_models::{Error, Result, Workflow};
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use log::warn;
 use std::collections::HashSet;
 
@@ -169,10 +169,10 @@ impl<'a> NestedCodemodService<'a> {
 
         for node in &workflow.nodes {
             for step in &node.steps {
-                if let butterflow_models::step::StepAction::Codemod(codemod) = &step.action {
-                    if seen.insert(codemod.source.clone()) {
-                        sources.push(codemod.source.clone());
-                    }
+                if let butterflow_models::step::StepAction::Codemod(codemod) = &step.action
+                    && seen.insert(codemod.source.clone())
+                {
+                    sources.push(codemod.source.clone());
                 }
             }
         }
@@ -227,13 +227,13 @@ impl<'a> NestedCodemodService<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::{write::GzEncoder, Compression};
+    use flate2::{Compression, write::GzEncoder};
     use std::{
         collections::HashMap,
         io::Write,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
         time::Duration,
     };
