@@ -1,5 +1,11 @@
 # @jssg/utils
 
+## 0.0.10
+
+### Patch Changes
+
+- b0a81ce: add updateImport utility function
+
 ## 0.0.9
 
 ### Patch Changes
