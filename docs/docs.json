@@ -69,6 +69,7 @@
             "pages": [
               "enterprise/quickstart",
               "enterprise/codemod-wish",
+              "enterprise/wish-investigation",
               "enterprise/grep",
               {
                 "icon": "chart-simple",

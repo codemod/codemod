@@ -18,6 +18,7 @@ Wish can help with work across the Codemod platform:
 - **Grep**: search indexed repositories with Pattern, Regex, or YAML queries, and create Insights dashboards from a completed search.
 - **Registry packages**: search for relevant codemods and inspect package details before applying them.
 - **Repositories**: use indexed repository context to search files, dependencies, and code patterns when repository access is available.
+- **Investigations**: answer behavioral questions with source-backed findings, reproducible searches, relationship maps, and explicit limitations.
 - **Codemod creation**: turn repeatable transformations or analysis ideas into generated codemod packages.
 
 <Info>
@@ -38,6 +39,12 @@ Wish can help with work across the Codemod platform:
   </Step>
 </Steps>
 
+## Investigate repository behavior
+
+Add `@investigate` and one or more repository mentions to ask a source-backed question about code behavior. Wish records the Grep searches it uses, links findings to precise source excerpts, maps related code concepts, and separates unresolved questions into limitations.
+
+See [Investigate codebases with Wish](/enterprise/wish-investigation) for a complete walkthrough of the report and its evidence checks.
+
 ## Build codemod packages
 
 For repeatable code transformations or reusable analysis, Wish can generate a codemod package and publish it to the registry.
@@ -51,6 +58,9 @@ The same prompting guidance for [building better codemods in Studio](/enterprise
 ## Related docs
 
 <CardGroup cols={2}>
+  <Card title="Investigation mode" icon="microscope" href="/enterprise/wish-investigation">
+    Answer codebase questions with inspectable source evidence.
+  </Card>
   <Card title="Campaigns" icon="arrow-up-right-dots" href="/enterprise/campaigns">
     Run codemods with automated PRs and centralized tracking.
   </Card>
