@@ -1,0 +1,105 @@
+---
+title: 'Investigate codebases with Wish'
+sidebarTitle: 'Investigation mode'
+description: 'Answer codebase questions with source-backed findings, reproducible Grep queries, relationship maps, and explicit limitations.'
+icon: 'microscope'
+tag: 'NEW'
+---
+
+Investigation mode helps you answer behavioral questions about one or more repositories. Wish searches the indexed source, reads the relevant ranges, and returns a report that separates supported findings from unresolved questions.
+
+Use it when you need an answer you can inspect and reproduce, such as:
+
+- Where is a feature enabled, and which permission or feature-flag checks control it?
+- What happens when an API request fails?
+- Which components, functions, and services participate in a behavior?
+- Do several repositories implement the same contract consistently?
+
+## Before you start
+
+You need access to at least one connected repository with an available code index. Investigation mode reads the indexed revision; it does not clone or execute the repository.
+
+## Run an investigation
+
+<Steps>
+  <Step title="Open Wish">
+    Click **Ask Codemod Wish** in the bottom-right corner of the app. You can also use `Cmd+J` on macOS or `Ctrl+J` on Windows and Linux.
+  </Step>
+  <Step title="Add Investigation mode">
+    Type `@investigate` and select **Investigate** from the menu.
+  </Step>
+  <Step title="Tag the repositories">
+    Use `@` to tag every repository that should be in scope. You can investigate one repository or compare behavior across several repositories in the same request.
+  </Step>
+  <Step title="Ask a focused question">
+    Describe the behavior you want Wish to trace. Include concrete names such as a feature, API route, flag, component, or error condition when you know them.
+
+    For example:
+
+    > Trace how dashboard saved views are enabled, authorized, loaded, and handled when loading fails.
+  </Step>
+  <Step title="Explore the report">
+    Wish shows a concise answer in the conversation. Select **Explore evidence** to inspect the findings, searches, relationship map, and remaining uncertainty.
+  </Step>
+</Steps>
+
+<Info>
+  Investigations run as durable background work. If the live connection is interrupted, Wish reconnects to the existing investigation instead of starting the analysis again.
+  To cancel an active investigation, select **Stop** in the message composer.
+</Info>
+
+## Read the investigation report
+
+The report keeps the answer and its supporting material together.
+
+| Section | What it shows | How to use it |
+| --- | --- | --- |
+| **Findings** | Source-backed claims classified as an **observation** or **inference** | Select a source button, labeled with its file and cited lines, to inspect the claim-specific excerpt. Select the file name to open the original source at the indexed revision. |
+| **Queries** | The valid searches and source reads used during the investigation | Select a search to open it in Grep and explore the results. **More results available** means the investigation captured a full page but additional matches may remain. Wish paginates or narrows searches when the answer requires exhaustive coverage. Grep runs against the current index, while the report keeps the source captured from its pinned revision. |
+| **Map** | Components, functions, and other code concepts connected by observed or inferred relationships | Select a source-backed node to inspect the code that establishes it. Use the map to understand a behavior before following individual findings. |
+| **Limitations** | Unresolved questions, partial coverage, and recommended next checks | Review this section before relying on absence claims. Select any attached evidence to inspect why the limitation applies. |
+
+### Observations and inferences
+
+An **observation** states what the cited source directly shows. An **inference** connects cited source into a scoped interpretation, such as the likely effect of two checks used together.
+
+New reports do not turn unsupported statements into findings. Wish places unresolved or insufficiently supported points in **Limitations** and **Next checks** instead.
+
+## How Wish checks the answer
+
+Wish uses [Grep](/enterprise/grep) to discover source and preserves the exact repository revision, file path, and line range for each captured excerpt. Before saving a report, it checks whether findings and map entries have matching source support and can revise claims that are broader than their evidence.
+
+These checks reduce unsupported claims, but they do not prove runtime behavior. Dynamic configuration, generated code, external services, and source outside the selected repositories can affect the result. The report calls out those gaps in **Limitations**.
+
+<Warning>
+  A search with no matches does not always prove that code is absent. If a search was limited or failed, the report marks its coverage as partial. Review **Queries** and **Limitations** before relying on a negative conclusion.
+</Warning>
+
+## Investigate multiple repositories
+
+Tag multiple repositories when a behavior crosses repository boundaries or when you want to compare implementations. Wish keeps the repository identity attached to every source range and can search all selected repositories or narrow an individual query to one of them.
+
+Good multi-repository questions include:
+
+- Where is this shared API produced, and which consumers depend on it?
+- Which repositories still use the deprecated contract?
+- How do authorization checks differ between these services?
+
+Keep the question specific enough that the relationship between repositories is clear. For broad requests, begin with the shared symbol, route, package, or configuration key that connects them.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Wish asks you to tag a repository">
+    Add one or more repository mentions to the same message as `@investigate`. Investigation mode only searches repositories that you explicitly include.
+  </Accordion>
+  <Accordion title="The report includes limitations">
+    Review **Limitations** for the specific parts of the question that remain unresolved and their suggested next checks. Limited or failed exploratory searches remain visible under **Queries** for transparency, but they do not make the report incomplete when the investigation recovered another way.
+  </Accordion>
+  <Accordion title="A map node does not open source">
+    Only nodes with a precise, claim-specific source range open the source inspector. Use the related findings and limitations to locate supporting evidence when a conceptual node has no precise range.
+  </Accordion>
+  <Accordion title="Opening a query shows different results">
+    The saved report keeps evidence from the indexed revision used during the investigation. Opening a query in Grep reruns it against the current index, which may have changed since the report was created.
+  </Accordion>
+</AccordionGroup>

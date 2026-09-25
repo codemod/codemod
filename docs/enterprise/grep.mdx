@@ -53,7 +53,7 @@ Repository scope follows the app context: the active organization when one is se
 | **YAML** | You need a full ast-grep rule with `language` and `rule` (optional `constraints` / `utils`) | A single YAML document containing `language` and `rule` |
 
 <Tip>
-  Prefer **Regex** for discovery and names. Prefer **Pattern** when the match must respect syntax (for example, a call expression rather than the same text in a comment). Prefer **YAML** for multi-condition or constrained ast-grep rules.
+  Prefer **Pattern** for source-code searches and **YAML** for multi-condition or constrained ast-grep rules. Use **Regex** when the target is genuinely textual, the language parser is unsupported, or a precise ast-grep query cannot be formed.
 </Tip>
 
 Pattern and YAML run through Codemod's indexed ast-grep engine. Regex runs as a PostgreSQL regular expression against decrypted snapshot content inside the database. Interactive Grep does not execute user-authored JavaScript.
@@ -162,8 +162,8 @@ After creation, the dashboard is a normal Insights dashboard: you can edit widge
   <Card title="ast-grep YAML queries" icon="file-code" href="/enterprise/insights/ast-grep-queries">
     Reuse ast-grep rules in Insights widgets.
   </Card>
-  <Card title="Wish" icon="wand-magic-sparkles" href="/enterprise/codemod-wish">
-    Ask Codemod Wish to search or index repositories from chat.
+  <Card title="Investigation mode" icon="microscope" href="/enterprise/wish-investigation">
+    Turn Grep searches into a source-backed answer about code behavior.
   </Card>
   <Card title="GitHub integration" icon="github" href="/enterprise/integrations/github">
     Grant repository access so Grep can index and search your code.
