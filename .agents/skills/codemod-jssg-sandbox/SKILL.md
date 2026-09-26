@@ -25,6 +25,9 @@ description: Use when working on JSSG, Codemod's JavaScript/TypeScript sandbox, 
 - Do not print directly to stdout/stderr from sandbox internals or JSSG packages. Return output,
   diagnostics, metrics, and logs to callers so `crates/cli` can route TUI, text, and JSONL modes.
 - JSSG utility functions should produce predictable edits and clear types for codemod authors.
+- A new or changed export under `packages/jssg-utils/src/*/exports/` updates the matching
+  language page under `docs/community/jssg/utils/` in the same change. Those pages are the
+  `jssg-utils-instructions` MCP resource. `node scripts/check-jssg-utils-docs.mjs` enforces it.
 
 ## Validation
 

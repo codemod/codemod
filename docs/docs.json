@@ -54,7 +54,15 @@
                   "community/jssg/security",
                   "community/jssg/semantic-analysis",
                   "community/jssg/advanced",
-                  "community/jssg/utils",
+                  {
+                    "group": "Utilities",
+                    "root": "community/jssg/utils",
+                    "pages": [
+                      "community/jssg/utils/javascript",
+                      "community/jssg/utils/java",
+                      "community/jssg/utils/xml"
+                    ]
+                  },
                   "community/jssg/testing",
                   "community/jssg/metrics"
                 ]
