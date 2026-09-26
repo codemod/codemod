@@ -7,7 +7,8 @@ const exportsRoot = join(root, "packages/jssg-utils/src");
 const docsDir = join(root, "docs/community/jssg/utils");
 const docsLabel = "docs/community/jssg/utils/";
 
-const declarationPattern = /^export\s+(?:async\s+)?(?:function|const|class)\s+([A-Za-z0-9_]+)/gm;
+const declarationPattern =
+  /^export\s+(?:async\s+)?(?:function\*?|const|let|class|enum)\s+([A-Za-z0-9_]+)/gm;
 const exportListPattern = /export\s+\{([^}]+)\}\s*(?:from\s+["'][^"']+["'])?\s*;?/g;
 
 function readNames(pattern, source) {
