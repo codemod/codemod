@@ -56,7 +56,7 @@ Returns `null` if the import is not found.
 | ESM named | `import { bar } from "module"` |
 | ESM aliased | `import { bar as baz } from "module"` |
 | ESM namespace | `import * as foo from "module"` |
-| ESM bare | `import "module"` |
+| ESM bare | `import "module"` — no binding, so `getImport` returns `null`. Remove it with `removeImport` and `removeSideEffectForms: true`. |
 | CJS default | `const foo = require("module")` |
 | CJS destructured | `const { bar } = require("module")` |
 | CJS aliased | `const { bar: baz } = require("module")` |

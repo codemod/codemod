@@ -7,8 +7,8 @@ const exportsRoot = join(root, "packages/jssg-utils/src");
 const docsDir = join(root, "docs/community/jssg/utils");
 const docsLabel = "docs/community/jssg/utils/";
 
-const declarationPattern = /^export\s+(?:async\s+)?(?:function|const)\s+([A-Za-z0-9_]+)/gm;
-const exportListPattern = /^export\s+\{([^}]+)\}\s*(?:from\s+["'][^"']+["'])?\s*;?\s*$/gm;
+const declarationPattern = /^export\s+(?:async\s+)?(?:function|const|class)\s+([A-Za-z0-9_]+)/gm;
+const exportListPattern = /export\s+\{([^}]+)\}\s*(?:from\s+["'][^"']+["'])?\s*;?/g;
 
 function readNames(pattern, source) {
   const names = new Set();
@@ -32,8 +32,8 @@ function readExportListNames(source) {
   return names;
 }
 
-function collectExports() {
-  const names = new Set();
+function collectExportsByLanguage() {
+  const byLanguage = new Map();
   for (const languageDir of readdirSync(exportsRoot)) {
     const exportsDir = join(exportsRoot, languageDir, "exports");
     let entries;
@@ -44,14 +44,16 @@ function collectExports() {
       continue;
     }
 
+    const names = new Set();
     for (const fileName of entries) {
       if (!fileName.endsWith(".ts")) continue;
       const source = readFileSync(join(exportsDir, fileName), "utf8");
       for (const name of readNames(declarationPattern, source)) names.add(name);
       for (const name of readExportListNames(source)) names.add(name);
     }
+    if (names.size > 0) byLanguage.set(languageDir, names);
   }
-  return names;
+  return byLanguage;
 }
 
 function collectHeadings(source) {
@@ -65,33 +67,40 @@ function formatList(names) {
     .join("\n");
 }
 
-function collectDocsHeadings() {
-  const names = new Set();
+function collectDocsHeadingsByPage() {
+  const byPage = new Map();
   for (const fileName of readdirSync(docsDir)) {
     if (!fileName.endsWith(".mdx")) continue;
-    for (const name of collectHeadings(readFileSync(join(docsDir, fileName), "utf8"))) {
-      names.add(name);
-    }
+    const page = fileName.slice(0, -".mdx".length);
+    byPage.set(page, collectHeadings(readFileSync(join(docsDir, fileName), "utf8")));
   }
-  return names;
+  return byPage;
 }
 
-const exports = collectExports();
-const headings = collectDocsHeadings();
+const exportsByLanguage = collectExportsByLanguage();
+const headingsByPage = collectDocsHeadingsByPage();
 const errors = [];
+let exportCount = 0;
 
-const missingHeadings = [...exports].filter((name) => !headings.has(name));
-if (missingHeadings.length > 0) {
-  errors.push(
-    `These exports have no ## or ### \`name\` heading under ${docsLabel}. Add the heading on that language page:\n${formatList(missingHeadings)}`,
-  );
+for (const [language, names] of exportsByLanguage) {
+  exportCount += names.size;
+  const headings = headingsByPage.get(language) ?? new Set();
+  const missingHeadings = [...names].filter((name) => !headings.has(name));
+  if (missingHeadings.length > 0) {
+    errors.push(
+      `These ${language} exports have no ## or ### \`name\` heading in ${docsLabel}${language}.mdx:\n${formatList(missingHeadings)}`,
+    );
+  }
 }
 
-const headingsWithoutExport = [...headings].filter((name) => !exports.has(name));
-if (headingsWithoutExport.length > 0) {
-  errors.push(
-    `${docsLabel} has headings that are not exported from packages/jssg-utils/src/*/exports:\n${formatList(headingsWithoutExport)}`,
-  );
+for (const [page, headings] of headingsByPage) {
+  const names = exportsByLanguage.get(page) ?? new Set();
+  const headingsWithoutExport = [...headings].filter((name) => !names.has(name));
+  if (headingsWithoutExport.length > 0) {
+    errors.push(
+      `${docsLabel}${page}.mdx has headings that are not exported from packages/jssg-utils/src/${page}/exports:\n${formatList(headingsWithoutExport)}`,
+    );
+  }
 }
 
 if (errors.length > 0) {
@@ -99,4 +108,4 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
-console.log(`jssg utils docs match ${exports.size} exports.`);
+console.log(`jssg utils docs match ${exportCount} exports.`);
