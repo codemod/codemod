@@ -66,6 +66,18 @@ const LOCAL_JSSG_METRICS_DOC: &str =
     include_str!(concat!(env!("OUT_DIR"), "/docs/community/jssg/metrics.mdx"));
 const LOCAL_JSSG_UTILS_DOC: &str =
     include_str!(concat!(env!("OUT_DIR"), "/docs/community/jssg/utils.mdx"));
+const LOCAL_JSSG_UTILS_JAVASCRIPT_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/utils/javascript.mdx"
+));
+const LOCAL_JSSG_UTILS_JAVA_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/utils/java.mdx"
+));
+const LOCAL_JSSG_UTILS_XML_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/utils/xml.mdx"
+));
 const LOCAL_JSSG_SEMANTIC_ANALYSIS_DOC: &str = include_str!(concat!(
     env!("OUT_DIR"),
     "/docs/community/jssg/semantic-analysis.mdx"
@@ -83,6 +95,10 @@ const JSSG_ADVANCED_DOC_URL: &str = "https://docs.codemod.com/community/jssg/adv
 const JSSG_TESTING_DOC_URL: &str = "https://docs.codemod.com/community/jssg/testing.md";
 const JSSG_METRICS_DOC_URL: &str = "https://docs.codemod.com/community/jssg/metrics.md";
 const JSSG_UTILS_DOC_URL: &str = "https://docs.codemod.com/community/jssg/utils.md";
+const JSSG_UTILS_JAVASCRIPT_DOC_URL: &str =
+    "https://docs.codemod.com/community/jssg/utils/javascript.md";
+const JSSG_UTILS_JAVA_DOC_URL: &str = "https://docs.codemod.com/community/jssg/utils/java.md";
+const JSSG_UTILS_XML_DOC_URL: &str = "https://docs.codemod.com/community/jssg/utils/xml.md";
 const JSSG_SEMANTIC_ANALYSIS_DOC_URL: &str =
     "https://docs.codemod.com/community/jssg/semantic-analysis.md";
 
@@ -749,10 +765,24 @@ fn local_jssg_utils_docs_bundle() -> &'static str {
         .get_or_init(|| {
             build_local_docs_bundle(
                 "Canonical JSSG Utilities Documentation",
-                &[LocalDocSource {
-                    path: "docs/community/jssg/utils.mdx",
-                    content: LOCAL_JSSG_UTILS_DOC,
-                }],
+                &[
+                    LocalDocSource {
+                        path: "docs/community/jssg/utils.mdx",
+                        content: LOCAL_JSSG_UTILS_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/utils/javascript.mdx",
+                        content: LOCAL_JSSG_UTILS_JAVASCRIPT_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/utils/java.mdx",
+                        content: LOCAL_JSSG_UTILS_JAVA_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/utils/xml.mdx",
+                        content: LOCAL_JSSG_UTILS_XML_DOC,
+                    },
+                ],
             )
         })
         .as_str()
@@ -1260,8 +1290,13 @@ impl CodemodMcpServer {
                     initial_wait,
                     move || async move {
                         build_public_docs_bundle(
-                            "Canonical JSSG Import Utilities Documentation",
-                            &[JSSG_UTILS_DOC_URL],
+                            "Canonical JSSG Utilities Documentation",
+                            &[
+                                JSSG_UTILS_DOC_URL,
+                                JSSG_UTILS_JAVASCRIPT_DOC_URL,
+                                JSSG_UTILS_JAVA_DOC_URL,
+                                JSSG_UTILS_XML_DOC_URL,
+                            ],
                             fallback,
                         )
                         .await
