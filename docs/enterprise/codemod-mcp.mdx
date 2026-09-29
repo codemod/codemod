@@ -30,7 +30,15 @@ Once connected, you can ask your assistant things like:
 
 <Steps>
   <Step title="Add the server">
-    Add `https://app.codemod.com/api/v1/mcp` as a remote MCP server in your client.
+    The quickest way is [`add-mcp`](https://www.npmjs.com/package/add-mcp), which adds the server to the coding agents it detects, such as Claude Code, Cursor, Codex, and VS Code:
+
+    ```bash
+    npx add-mcp https://app.codemod.com/api/v1/mcp --name codemod
+    ```
+
+    `add-mcp` asks which agents to configure. Add `-g` to install for all your projects instead of only the current one.
+
+    To add the server yourself, use `https://app.codemod.com/api/v1/mcp` as a remote MCP server in your client:
 
     <Tabs>
       <Tab title="Claude Code">
