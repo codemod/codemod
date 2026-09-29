@@ -4,7 +4,6 @@ use dashmap::DashMap;
 use rquickjs::module::{Declarations, Exports, ModuleDef};
 use rquickjs::{Ctx, Exception, Object, Result, prelude::Func, prelude::Opt};
 use std::collections::HashMap;
-use std::env;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 

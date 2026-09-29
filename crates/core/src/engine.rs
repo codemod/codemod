@@ -4562,6 +4562,11 @@ author: test
         );
     }
 
+    /// SAFETY (env mutation): the process environment is process-global state.
+    /// Tests touching it are marked `#[serial]`, which serializes them against
+    /// other `#[serial]` tests; this narrows — but does not eliminate — the
+    /// race window, because unmarked tests may still read or write the
+    /// environment concurrently on other harness threads.
     struct EnvVarGuard {
         key: &'static str,
         original: Option<String>,
@@ -4569,10 +4574,9 @@ author: test
 
     impl EnvVarGuard {
         /// Unset `key` for the duration of the test, restoring it on drop.
-        /// Callers' tests must be `#[serial]` so no other test touches the env.
         fn unset(key: &'static str) -> Self {
             let original = std::env::var(key).ok();
-            // SAFETY: caller's test is #[serial], so no concurrent env access.
+            // SAFETY: see the env-mutation note on `EnvVarGuard` above.
             unsafe {
                 std::env::remove_var(key);
             }
@@ -4582,7 +4586,7 @@ author: test
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
-            // SAFETY: creating test is #[serial] and holds the guard through this drop.
+            // SAFETY: see the env-mutation note on `EnvVarGuard` above.
             unsafe {
                 if let Some(original) = &self.original {
                     std::env::set_var(self.key, original);
@@ -4596,16 +4600,24 @@ author: test
     #[test]
     #[serial]
     fn js_ast_grep_idle_timeout_uses_default_and_respects_env_override() {
-        let _guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
+        let guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
         assert_eq!(
             js_ast_grep_idle_timeout(),
             Duration::from_millis(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT)
         );
-        // SAFETY: test is #[serial], so no concurrent env access.
+        // SAFETY: see the env-mutation note on `EnvVarGuard` above.
         unsafe {
             std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
         }
         assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
+        // Restore before the next read so the default is observed strictly
+        // after the env mutation is undone, not concurrent with drop-side
+        // restore work on other keys.
+        drop(guard);
+        assert_eq!(
+            js_ast_grep_idle_timeout(),
+            Duration::from_millis(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT)
+        );
     }
 
     #[test]
@@ -4618,7 +4630,7 @@ author: test
         let _git_askpass_guard = EnvVarGuard::unset("GIT_ASKPASS");
         let _http_proxy_guard = EnvVarGuard::unset("HTTP_PROXY");
 
-        // SAFETY: test is #[serial], so no concurrent env access.
+        // SAFETY: see the env-mutation note on `EnvVarGuard` above.
         unsafe {
             std::env::set_var("BUTTERFLOW_API_AUTH_TOKEN", "local-token");
             std::env::set_var("LLM_API_KEY", "local-llm-key");
@@ -4641,7 +4653,7 @@ author: test
             Some("http://local-llm.example/v1")
         );
 
-        // SAFETY: test is #[serial], so no concurrent env access.
+        // SAFETY: see the env-mutation note on `EnvVarGuard` above.
         unsafe {
             std::env::set_var("BUTTERFLOW_STATE_BACKEND", "cloud");
             std::env::set_var("GIT_ASKPASS", "/tmp/codemod-git-askpass");

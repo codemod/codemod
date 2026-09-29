@@ -56,7 +56,6 @@ ast-grep-dynamic = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-serial_test = "3.2.0"
 
 [features]
 default = ["native", "real-fs"]

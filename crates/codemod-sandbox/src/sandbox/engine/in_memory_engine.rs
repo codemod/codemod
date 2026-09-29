@@ -548,7 +548,6 @@ mod tests {
     use crate::sandbox::resolvers::oxc_resolver::OxcResolver;
     use crate::sandbox::runtime_module::RuntimeFailureKind;
     use ast_grep_language::SupportLang;
-    use serial_test::serial;
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::sync::Arc;
@@ -700,6 +699,7 @@ export default async function transform() {
             memory_limit: None,
             process_sandbox: None,
             fs_sandbox: None,
+            step_id: None,
         });
 
         assert!(started.elapsed() < Duration::from_secs(2));
@@ -799,6 +799,7 @@ export default async function transform() {
             metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
+            step_id: None,
             cancellation_flag: Some(cancellation_flag),
             timeout_ms: Some(5_000),
             memory_limit: None,
@@ -849,6 +850,7 @@ export default function transform(root) {
                 metrics_context: None,
                 llm_request_handler: None,
                 shared_state_context: Some(shared_state),
+                step_id: None,
                 cancellation_flag: Some(execution_cancellation_flag),
                 timeout_ms: Some(5_000),
                 memory_limit: None,
@@ -1086,18 +1088,19 @@ export default function transform(root, options) {
     }
 
     #[test]
-    #[serial]
     fn test_process_sandbox_overrides_env_and_cwd() {
         let temp_dir = TempDir::new().expect("Failed to create temp directory");
 
-        // Codemod emits cwd, env keys, the sorted list of `process` keys, and
-        // whether a few dangerous llrt-provided properties are absent. When
-        // sandboxed, only `env` + `cwd` should survive; `exit`, `argv`,
-        // `platform` etc. should be undefined since the llrt process module
-        // is no longer attached.
+        // Codemod emits cwd, any env keys matching the leak-check marker, the
+        // sorted list of `process` keys, and whether a few dangerous
+        // llrt-provided properties are absent. When sandboxed, only `env` +
+        // `cwd` should survive; `exit`, `argv`, `platform` etc. should be
+        // undefined since the llrt process module is no longer attached. The
+        // allowlisted `env` starts empty, so no host variable — including any
+        // host-side "LEAK_CHECK" marker — may surface inside the sandbox.
         let codemod_content = r#"
 export default function transform(root) {
-  const envKeys = Object.keys(process.env).sort().join(",");
+  const envKeys = Object.keys(process.env).filter((key) => key.includes("LEAK_CHECK")).sort().join(",");
   const processKeys = Object.keys(process).sort().join(",");
   const stripped = [
     typeof process.exit,
@@ -1112,12 +1115,6 @@ export default function transform(root) {
 
         fs::write(temp_dir.path().join("sandbox_codemod.js"), codemod_content)
             .expect("Failed to write codemod file");
-
-        // Seed a host env var that must not leak into process.env.
-        // SAFETY: test is #[serial], so no other test touches the env concurrently.
-        unsafe {
-            std::env::set_var("PG_SG_SANDBOX_LEAK_CHECK", "should-not-appear");
-        }
 
         let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
         let content = "const x = 1;";

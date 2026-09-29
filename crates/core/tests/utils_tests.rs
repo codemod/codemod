@@ -683,8 +683,10 @@ fn test_validate_workflow_complex_cyclic_dependency() {
 #[test]
 #[serial]
 fn test_get_env_vars() {
-    // Set a test environment variable
-    // SAFETY: test is #[serial], so no other test touches the env concurrently.
+    // Set a test environment variable.
+    // SAFETY: the process environment is process-global state; `#[serial]`
+    // serializes this against other `#[serial]` tests but unmarked tests may
+    // still read the environment concurrently on other harness threads.
     unsafe {
         env::set_var("BUTTERFLOW_TEST_VAR", "test_value");
     }
@@ -698,11 +700,13 @@ fn test_get_env_vars() {
         Some(&"test_value".to_string())
     );
 
-    // Clean up
-    // SAFETY: test is #[serial], so no other test touches the env concurrently.
+    // Clean up before the final read so the restore is observed strictly
+    // after it happens, not concurrent with cleanup work on other threads.
+    // SAFETY: see the note above on process-global env state.
     unsafe {
         env::remove_var("BUTTERFLOW_TEST_VAR");
     }
+    assert_eq!(utils::get_env_vars().get("BUTTERFLOW_TEST_VAR"), None);
 }
 
 #[test]

@@ -3,10 +3,25 @@ use crate::auth::TokenStorage;
 use anyhow::{Result, bail};
 use codemod_mcp::AnonymousFeedbackClient;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 const FEEDBACK_ENDPOINT_PATH: &str = "/api/v1/ai/feedback";
 
+/// Whether analytics/feedback is disabled. Seeded exactly once by the CLI
+/// entrypoint (from `--disable-analytics` or an inherited `DISABLE_ANALYTICS`
+/// env var); the environment remains the fallback source so the flag can be
+/// read from any thread without mutating process-wide state.
+static ANALYTICS_DISABLED: OnceLock<bool> = OnceLock::new();
+
+/// Seed the analytics-disabled flag. Later calls are no-ops.
+pub fn set_analytics_disabled(disabled: bool) {
+    let _ = ANALYTICS_DISABLED.set(disabled);
+}
+
 pub fn feedback_disabled() -> bool {
+    if let Some(disabled) = ANALYTICS_DISABLED.get() {
+        return *disabled;
+    }
     matches!(
         std::env::var("DISABLE_ANALYTICS").as_deref(),
         Ok("true") | Ok("1")

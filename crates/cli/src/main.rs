@@ -409,17 +409,16 @@ async fn run_cli() -> Result<()> {
         || implicit_cli_params
             .map(|params| params.disable_analytics)
             .unwrap_or(false)
+        || matches!(
+            std::env::var("DISABLE_ANALYTICS").as_deref(),
+            Ok("true") | Ok("1")
+        )
     {
-        // SAFETY: runs on the main thread during CLI startup, before threads spawn.
-        unsafe {
-            std::env::set_var("DISABLE_ANALYTICS", "true");
-        }
+        feedback::set_analytics_disabled(true);
     }
 
     let telemetry_sender: Arc<Box<dyn TelemetrySender + Send + Sync>> =
-        if std::env::var("DISABLE_ANALYTICS") == Ok("true".to_string())
-            || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
-        {
+        if feedback::feedback_disabled() {
             Arc::new(Box::new(NullSender {}))
         } else {
             let storage = TokenStorage::new()?;

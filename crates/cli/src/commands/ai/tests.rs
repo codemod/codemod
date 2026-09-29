@@ -135,18 +135,23 @@ impl TestHttpServer {
     }
 }
 
+/// SAFETY (env mutation): the process environment is process-global state.
+/// Tests touching it hold `ENV_GUARD`, a process-global mutex; this serializes
+/// env mutation against other guard-holding tests in this binary, but tests
+/// that never take the lock — or any host thread reading the environment —
+/// are still uncoordinated.
 struct EnvRestoreGuard {
     saved: Vec<(&'static str, Option<String>)>,
 }
 
 impl EnvRestoreGuard {
     /// Set `vars` for the duration of the test, restoring prior values on drop.
-    /// Callers must hold `ENV_GUARD` so no other test touches the env concurrently.
+    /// Callers must hold `ENV_GUARD`.
     fn set(vars: &[(&'static str, String)]) -> Self {
         let mut saved = Vec::with_capacity(vars.len());
         for (key, value) in vars {
             saved.push((*key, std::env::var(key).ok()));
-            // SAFETY: caller holds ENV_GUARD, so no concurrent env access.
+            // SAFETY: see the env-mutation note on `EnvRestoreGuard` above.
             unsafe {
                 std::env::set_var(key, value);
             }
@@ -158,7 +163,7 @@ impl EnvRestoreGuard {
 impl Drop for EnvRestoreGuard {
     fn drop(&mut self) {
         for (key, previous_value) in &self.saved {
-            // SAFETY: the creating test held ENV_GUARD through this drop.
+            // SAFETY: see the env-mutation note on `EnvRestoreGuard` above.
             unsafe {
                 match previous_value {
                     Some(value) => std::env::set_var(key, value),

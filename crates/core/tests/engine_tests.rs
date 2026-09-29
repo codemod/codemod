@@ -98,16 +98,21 @@ fn debarrel_bundle_path() -> Option<PathBuf> {
     configured.exists().then_some(configured)
 }
 
+/// SAFETY (env mutation): the process environment is process-global state.
+/// Tests touching it are marked `#[serial]`, which serializes them against
+/// other `#[serial]` tests; this narrows — but does not eliminate — the
+/// race window, because unmarked tests may still read or write the
+/// environment concurrently on other harness threads.
 struct EnvVarGuard {
     key: String,
     original: Option<String>,
 }
 
 impl EnvVarGuard {
-    /// Callers' tests must be `#[serial]` so no other test touches the env.
+    /// Unset `key` for the duration of the test, restoring it on drop.
     fn unset(key: &str) -> Self {
         let original = std::env::var(key).ok();
-        // SAFETY: caller's test is #[serial], so no concurrent env access.
+        // SAFETY: see the env-mutation note on `EnvVarGuard` above.
         unsafe {
             std::env::remove_var(key);
         }
@@ -117,10 +122,10 @@ impl EnvVarGuard {
         }
     }
 
-    /// Same requirement as [`EnvVarGuard::unset`]: caller's test must be `#[serial]`.
+    /// Set `key` to `value` for the duration of the test, restoring it on drop.
     fn set(key: &str, value: &str) -> Self {
         let original = std::env::var(key).ok();
-        // SAFETY: caller's test is #[serial], so no concurrent env access.
+        // SAFETY: see the env-mutation note on `EnvVarGuard` above.
         unsafe {
             std::env::set_var(key, value);
         }
@@ -133,8 +138,7 @@ impl EnvVarGuard {
 
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
-        // SAFETY: the test that created this guard is #[serial] and holds the
-        // guard until after this drop, so no concurrent env access.
+        // SAFETY: see the env-mutation note on `EnvVarGuard` above.
         unsafe {
             if let Some(value) = &self.original {
                 std::env::set_var(&self.key, value);
@@ -7943,16 +7947,24 @@ async fn test_expression_resolution_nonexistent_variable() {
 #[test]
 #[serial]
 fn js_ast_grep_idle_timeout_uses_default_and_respects_env_override() {
-    let _guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
+    let guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
     assert_eq!(
         js_ast_grep_idle_timeout(),
         Duration::from_millis(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT)
     );
-    // SAFETY: test is #[serial], so no concurrent env access.
+    // SAFETY: see the env-mutation note on `EnvVarGuard` above.
     unsafe {
         std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
     }
     assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
+    // Restore before the next read so the default is observed strictly
+    // after the env mutation is undone, not concurrent with drop-side
+    // restore work on other keys.
+    drop(guard);
+    assert_eq!(
+        js_ast_grep_idle_timeout(),
+        Duration::from_millis(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT)
+    );
 }
 
 #[test]
