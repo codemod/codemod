@@ -78,6 +78,7 @@
               "enterprise/quickstart",
               "enterprise/codemod-wish",
               "enterprise/grep",
+              "enterprise/codemod-mcp",
               {
                 "icon": "chart-simple",
                 "group": "Insights",

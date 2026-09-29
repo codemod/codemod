@@ -1,0 +1,230 @@
+---
+title: 'Platform MCP'
+sidebarTitle: 'Platform MCP'
+icon: 'server'
+description: 'Connect Claude, Cursor, and other MCP clients to your Codemod platform data.'
+---
+
+The Platform MCP is a remote [Model Context Protocol](https://modelcontextprotocol.io) server hosted by Codemod. It lets AI assistants work with the data in your Codemod account: Insights dashboards, repositories, indexed code, the registry, campaigns, organizations, and automations.
+
+Each tool runs as you. It applies the same permissions, organization roles, and rate limits as the Codemod app.
+
+<Info>
+  This page covers the hosted server at `https://app.codemod.com/api/v1/mcp`. To give your coding agent tools for building and testing codemods locally, see [Codemod MCP (CLI)](/community/model-context-protocol).
+</Info>
+
+## What you can do
+
+Once connected, you can ask your assistant things like:
+
+- "List my Insights dashboards and show which widgets are still pending."
+- "Find the repositories in my organization that use `moment` and preview a widget that counts the imports."
+- "Search the registry for a React 19 migration codemod and create a campaign for `acme/web`."
+
+## Prerequisites
+
+- A Codemod account with access to the organization you want to use
+- An MCP client that supports remote (HTTP) servers and OAuth sign-in, such as Claude or Cursor
+
+## Connect your client
+
+<Steps>
+  <Step title="Add the server">
+    Add `https://app.codemod.com/api/v1/mcp` as a remote MCP server in your client.
+
+    <Tabs>
+      <Tab title="Claude Code">
+        ```bash
+        claude mcp add --transport http codemod https://app.codemod.com/api/v1/mcp
+        ```
+      </Tab>
+      <Tab title="Cursor">
+        Add the server to `~/.cursor/mcp.json` (or `.cursor/mcp.json` in a project):
+
+        ```json
+        {
+          "mcpServers": {
+            "codemod": {
+              "url": "https://app.codemod.com/api/v1/mcp"
+            }
+          }
+        }
+        ```
+      </Tab>
+      <Tab title="Other clients">
+        Use the server URL and select the streamable HTTP transport. The exact setting name depends on your client. No API key or header is required: the client signs in with OAuth.
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Sign in">
+    Your client opens a browser window. Sign in to Codemod if you aren't already.
+  </Step>
+  <Step title="Approve access">
+    The consent screen lists the [scopes](#scopes) the client is requesting. Review them and select **Allow**.
+  </Step>
+  <Step title="Verify the connection">
+    Ask your assistant "List my Codemod organizations." It calls `organizations_get_user_organizations` and returns the organizations you belong to.
+  </Step>
+</Steps>
+
+<Note>
+  The server registers clients with [Client ID Metadata Documents](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) (CIMD). It does not support dynamic client registration. Use a current version of your MCP client.
+</Note>
+
+## Scopes
+
+Access tokens are limited to the scopes you approve. Each tool requires one scope, so you can approve read access only.
+
+| Scope | Access granted |
+| --- | --- |
+| `insights:read` | Read your Insights dashboards and widget data |
+| `insights:write` | Create and update your Insights dashboards |
+| `repositories:read` | List your connected repositories and git accounts |
+| `code:read` | Search and list files in your indexed repositories |
+| `grep:read` | Run Grep searches across your repositories |
+| `grep:write` | Index repositories for Grep and create dashboards from searches |
+| `registry:read` | Search and read registry packages |
+| `campaigns:read` | Read your campaigns |
+| `campaigns:write` | Create campaigns from registry packages |
+| `organizations:read` | Read your organizations and their members |
+| `automations:read` | Read your automations |
+
+If a client calls a tool outside its granted scopes, the server responds with `insufficient_scope` and the client asks you to approve the missing scope.
+
+## Available tools
+
+Tool names follow the pattern `<area>_<action>`. Tools with a `:read` scope don't change your data, except where noted. Tools marked **Asks first** request your confirmation before they run. See [Approvals](#approvals).
+
+### Insights
+
+| Tool | Scope | Description |
+| --- | --- | --- |
+| `insights_dashboard_list` | `insights:read` | List Insights dashboards |
+| `insights_dashboard_get` | `insights:read` | Get a dashboard with its cached widget data |
+| `insights_dashboard_preview_widget` | `insights:read` | Preview an Insights widget. Waits up to 90 seconds and returns `ready`, `error`, or `pending` |
+| `insights_dashboard_list_recommended` | `insights:read` | List recommended dashboards |
+| `insights_dashboard_describe_package_metrics` | `insights:read` | Describe a package's metrics |
+| `insights_dashboard_get_packages_with_jssg` | `insights:read` | List packages usable as widget sources |
+| `insights_dashboard_get_package_default_template` | `insights:read` | Get a package's default dashboard template |
+| `insights_dashboard_create` | `insights:write` | Create an Insights dashboard. Asks first when supported |
+| `insights_dashboard_update` | `insights:write` | Update an Insights dashboard. Asks first when supported |
+| `insights_dashboard_promote_recommended` | `insights:write` | Promote a recommended dashboard. Asks first when supported |
+
+### Repositories and code
+
+| Tool | Scope | Description |
+| --- | --- | --- |
+| `git_providers_list_connected_repositories` | `repositories:read` | List repositories |
+| `git_providers_list_installations` | `repositories:read` | List git accounts |
+| `git_providers_list_repositories_for_installation` | `repositories:read` | List repositories of a git account |
+| `git_providers_get_repository_with_owner` | `repositories:read` | Get a repository |
+| `global_code_check_index` | `code:read` | Check a repository's code index. Can start indexing |
+| `global_code_list_files` | `code:read` | List indexed files |
+| `global_code_search_text` | `code:read` | Search repository text |
+| `global_code_search_ast` | `code:read` | Search repository AST |
+| `global_code_list_dependencies` | `code:read` | List repository dependencies |
+
+### Grep
+
+These tools use the same indexed repositories as [Grep](/enterprise/grep).
+
+| Tool | Scope | Description |
+| --- | --- | --- |
+| `grep_list_repositories` | `grep:read` | List Grep repositories |
+| `grep_search` | `grep:read` | Run a Grep search |
+| `grep_insights_dashboard_options` | `grep:read` | Resolve options for turning a Grep search into an Insights dashboard |
+| `grep_index_repository` | `grep:write` | Index a repository for Grep. **Asks first** |
+| `grep_create_insights_dashboard` | `grep:write` | Create an Insights dashboard from a Grep search. Asks first when supported |
+
+### Registry
+
+| Tool | Scope | Description |
+| --- | --- | --- |
+| `registry_search` | `registry:read` | Search registry packages |
+| `registry_get_package` | `registry:read` | Get a registry package |
+| `registry_list_version_workflows` | `registry:read` | List a package version's workflows |
+| `registry_find_editable_source` | `registry:read` | Find a package's editable source |
+
+### Campaigns
+
+| Tool | Scope | Description |
+| --- | --- | --- |
+| `project_all_by_user` | `campaigns:read` | List campaigns |
+| `project_by_id` | `campaigns:read` | Get a campaign |
+| `project_create_from_package` | `campaigns:write` | Create a campaign from a package. Opens pull requests. **Asks first** |
+
+### Organizations and automations
+
+| Tool | Scope | Description |
+| --- | --- | --- |
+| `organizations_get_user_organizations` | `organizations:read` | List organizations |
+| `organizations_get_details` | `organizations:read` | Get an organization |
+| `organizations_get_members` | `organizations:read` | List organization members |
+| `automation_list` | `automations:read` | List automations |
+| `automation_get` | `automations:read` | Get an automation |
+
+<Note>
+  `insights_dashboard_preview_widget` and `global_code_check_index` are not marked read-only, because they can start widget computations or indexing jobs.
+</Note>
+
+## Approvals
+
+Some tools change data or start long-running work. The server asks you to confirm these through MCP elicitation, so your client shows a prompt with the tool name and its arguments. The tool runs only if you accept.
+
+| Tools | If your client supports elicitation | If it doesn't |
+| --- | --- | --- |
+| `project_create_from_package`, `grep_index_repository` | Asks, then runs on approval | Refused. The tool needs your approval |
+| Dashboard create, update, and promote, and `grep_create_insights_dashboard` | Asks, then runs on approval | Runs without asking |
+
+If you decline or cancel, nothing changes.
+
+<Warning>
+  A confirmation prompt is not a permission boundary. Token scopes and your organization role decide what a tool can do. Approve only the scopes you want the assistant to use.
+</Warning>
+
+## Permissions and security
+
+- **Organization roles apply.** A tool succeeds only if your role in the organization allows the action. For example, creating a campaign requires the `campaign:create` role.
+- **Tokens are scoped to this server.** Access tokens are issued for `https://app.codemod.com/api/v1/mcp` and are rejected by other Codemod API routes.
+- **Organization context comes from your sign-in.** The server uses the organization you were signed into when you approved the connection.
+- **Updates are conflict-checked.** `insights_dashboard_update` accepts `expectedUpdatedAt`, the `updatedAt` value from `insights_dashboard_get`. If the dashboard changed since, the update fails with a `CONFLICT` error instead of overwriting it.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="The client can't complete sign-in">
+    The server does not support dynamic client registration. Update your MCP client to a version that supports the current MCP authorization flow, then remove and re-add the server.
+  </Accordion>
+  <Accordion title="A tool returns insufficient_scope">
+    The token doesn't include the scope the tool needs. Reconnect the server and approve the scope listed in the [scopes table](#scopes).
+  </Accordion>
+  <Accordion title="A tool asks you to reconnect from the browser">
+    You belong to several organizations and your browser session has ended, so the server can't tell which organization to use. Sign in to [Codemod](https://app.codemod.com) in the browser, then reconnect the server.
+  </Accordion>
+  <Accordion title="A tool is refused because it needs your approval">
+    Your client doesn't support MCP elicitation, and the tool requires confirmation. Run the action in the [Codemod app](https://app.codemod.com), or use a client that supports elicitation.
+  </Accordion>
+  <Accordion title="A dashboard update returns CONFLICT">
+    The dashboard changed after your assistant read it. Ask the assistant to fetch the dashboard again with `insights_dashboard_get` and retry the update.
+  </Accordion>
+  <Accordion title="A permission error on an action that works in the app">
+    Confirm you approved the matching `:write` scope and that your role in the active organization allows the action.
+  </Accordion>
+</AccordionGroup>
+
+## Related docs
+
+<CardGroup cols={2}>
+  <Card title="Insights" icon="chart-simple" href="/enterprise/insights">
+    Dashboards and widgets you can read and create through MCP.
+  </Card>
+  <Card title="Campaigns" icon="arrow-up-right-dots" href="/enterprise/campaigns">
+    Run codemods with automated PRs and centralized tracking.
+  </Card>
+  <Card title="Codemod Wish" icon="wand-magic-sparkles" href="/enterprise/codemod-wish">
+    Ask Codemod AI for help inside the platform.
+  </Card>
+  <Card title="Codemod MCP (CLI)" icon="screwdriver-wrench" href="/community/model-context-protocol">
+    Local MCP tools for building and testing codemods.
+  </Card>
+</CardGroup>
