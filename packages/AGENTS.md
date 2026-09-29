@@ -9,6 +9,9 @@ This subtree contains shared TypeScript packages used by codemod authors and int
   contract changes intentionally.
 - `packages/jssg-utils` helpers should return predictable ast-grep edits and avoid hidden global
   state.
+- A new or changed export under `packages/jssg-utils/src/*/exports/` updates the matching
+  language page under `docs/community/jssg/utils/` in the same change. Those pages are the
+  `jssg-utils-instructions` MCP resource. `node scripts/check-jssg-utils-docs.mjs` enforces it.
 - Use the shared `@codemod.com/tsconfig` configs unless a package has a concrete reason to diverge.
 - Keep type declarations synchronized with runtime modules in `crates/codemod-sandbox` when changing
   JSSG APIs.

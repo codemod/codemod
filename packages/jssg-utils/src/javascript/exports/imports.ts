@@ -4,6 +4,8 @@ import type TS from "@codemod.com/jssg-types/langs/typescript";
 import type { Rule, SgNode } from "@codemod.com/jssg-types/main";
 import { stringToExactRegexString } from "../../utils";
 
+export { stringToExactRegexString };
+
 type GetImportOptions =
   | {
       type: "default";

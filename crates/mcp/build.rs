@@ -19,6 +19,9 @@ const DOCS: &[&str] = &[
     "community/jssg/testing.mdx",
     "community/jssg/metrics.mdx",
     "community/jssg/utils.mdx",
+    "community/jssg/utils/javascript.mdx",
+    "community/jssg/utils/java.mdx",
+    "community/jssg/utils/xml.mdx",
     "community/jssg/semantic-analysis.mdx",
 ];
 
