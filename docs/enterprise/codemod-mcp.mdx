@@ -101,7 +101,7 @@ If a client calls a tool outside its granted scopes, the server responds with `i
 
 ## Available tools
 
-Tool names follow the pattern `<area>_<action>`. Tools with a `:read` scope don't change your data, except where noted. Tools marked **Asks first** request your confirmation before they run. See [Approvals](#approvals).
+Tool names follow the pattern `<area>_<action>`. Tools with a `:read` scope don't change your data, except where noted. Tools marked **Requires approval** never run without your confirmation. Tools marked **Asks first when supported** ask for your confirmation only if your client can show a prompt, and otherwise run without one. See [Approvals](#approvals).
 
 ### Insights
 
@@ -114,9 +114,9 @@ Tool names follow the pattern `<area>_<action>`. Tools with a `:read` scope don'
 | `insights_dashboard_describe_package_metrics` | `insights:read` | Describe a package's metrics |
 | `insights_dashboard_get_packages_with_jssg` | `insights:read` | List packages usable as widget sources |
 | `insights_dashboard_get_package_default_template` | `insights:read` | Get a package's default dashboard template |
-| `insights_dashboard_create` | `insights:write` | Create an Insights dashboard. Asks first when supported |
-| `insights_dashboard_update` | `insights:write` | Update an Insights dashboard. Asks first when supported |
-| `insights_dashboard_promote_recommended` | `insights:write` | Promote a recommended dashboard. Asks first when supported |
+| `insights_dashboard_create` | `insights:write` | Create an Insights dashboard. **Asks first when supported** |
+| `insights_dashboard_update` | `insights:write` | Update an Insights dashboard. **Asks first when supported** |
+| `insights_dashboard_promote_recommended` | `insights:write` | Promote a recommended dashboard. **Asks first when supported** |
 
 ### Repositories and code
 
@@ -141,8 +141,8 @@ These tools use the same indexed repositories as [Grep](/enterprise/grep).
 | `grep_list_repositories` | `grep:read` | List Grep repositories |
 | `grep_search` | `grep:read` | Run a Grep search |
 | `grep_insights_dashboard_options` | `grep:read` | Resolve options for turning a Grep search into an Insights dashboard |
-| `grep_index_repository` | `grep:write` | Index a repository for Grep. **Asks first** |
-| `grep_create_insights_dashboard` | `grep:write` | Create an Insights dashboard from a Grep search. Asks first when supported |
+| `grep_index_repository` | `grep:write` | Index a repository for Grep. **Requires approval** |
+| `grep_create_insights_dashboard` | `grep:write` | Create an Insights dashboard from a Grep search. **Asks first when supported** |
 
 ### Registry
 
@@ -159,7 +159,7 @@ These tools use the same indexed repositories as [Grep](/enterprise/grep).
 | --- | --- | --- |
 | `project_all_by_user` | `campaigns:read` | List campaigns |
 | `project_by_id` | `campaigns:read` | Get a campaign |
-| `project_create_from_package` | `campaigns:write` | Create a campaign from a package. Opens pull requests. **Asks first** |
+| `project_create_from_package` | `campaigns:write` | Create a campaign from a package. Opens pull requests. **Requires approval** |
 
 ### Organizations and automations
 
@@ -177,14 +177,21 @@ These tools use the same indexed repositories as [Grep](/enterprise/grep).
 
 ## Approvals
 
-Some tools change data or start long-running work. The server asks you to confirm these through MCP elicitation, so your client shows a prompt with the tool name and its arguments. The tool runs only if you accept.
+Some tools change data or start long-running work. The server asks you to confirm them through MCP elicitation, so your client shows a prompt with the tool name and its arguments. Whether a tool can run without that prompt depends on the tool:
+
+- **Requires approval:** `project_create_from_package` and `grep_index_repository` run only if you accept. If your client can't show the prompt, the server refuses the call.
+- **Asks first when supported:** dashboard create, update, and promote, and `grep_create_insights_dashboard`, ask when your client can show the prompt and run only if you accept. If your client can't, they run **without asking**.
 
 | Tools | If your client supports elicitation | If it doesn't |
 | --- | --- | --- |
 | `project_create_from_package`, `grep_index_repository` | Asks, then runs on approval | Refused. The tool needs your approval |
 | Dashboard create, update, and promote, and `grep_create_insights_dashboard` | Asks, then runs on approval | Runs without asking |
 
-If you decline or cancel, nothing changes.
+If you decline or cancel a prompt, nothing changes.
+
+<Tip>
+  If you want a confirmation before any dashboard is created or changed, use a client that supports MCP elicitation, or approve only the read scopes (`insights:read`, `grep:read`) when you connect.
+</Tip>
 
 <Warning>
   A confirmation prompt is not a permission boundary. Token scopes and your organization role decide what a tool can do. Approve only the scopes you want the assistant to use.
