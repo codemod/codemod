@@ -2,10 +2,10 @@
 title: 'Platform MCP'
 sidebarTitle: 'Platform MCP'
 icon: 'server'
-description: 'Connect Claude, Cursor, and other MCP clients to your Codemod platform data.'
+description: 'Let Claude, Cursor, and other AI assistants search your code and manage migrations with Codemod.'
 ---
 
-The Platform MCP is a remote [Model Context Protocol](https://modelcontextprotocol.io) server hosted by Codemod. It lets AI assistants work with the data in your Codemod account: Insights dashboards, repositories, indexed code, the registry, campaigns, organizations, and automations.
+The Platform MCP is a remote [Model Context Protocol](https://modelcontextprotocol.io) server hosted by Codemod. It lets AI assistants search your code, track migration progress, find codemods, and start migrations, using the repositories and data in your Codemod account.
 
 Each tool runs as you. It applies the same permissions, organization roles, and rate limits as the Codemod app.
 
@@ -17,9 +17,9 @@ Each tool runs as you. It applies the same permissions, organization roles, and 
 
 Once connected, you can ask your assistant things like:
 
-- "Which of our repositories still call the deprecated `fetchUser` API? Show me the files."
-- "Build an Insights dashboard that tracks how many `moment` imports we have left across our repositories."
-- "Find a React 19 migration codemod in the registry and open a campaign for `acme/web`."
+- "Which of our repositories still use the deprecated `fetchUser` function? Show me the files."
+- "Track how many `moment` imports we have left across our codebase over time."
+- "Find a codemod for the React 19 upgrade and start the migration for `acme/web`."
 
 ## Prerequisites
 
