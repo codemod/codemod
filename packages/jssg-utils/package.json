@@ -21,7 +21,7 @@
     }
   },
   "scripts": {
-    "test": "pnpx codemod jssg exec ./tests/imports.test.ts && pnpx codemod jssg exec ./tests/java.test.ts && pnpx codemod jssg exec ./tests/xml.test.ts",
+    "test": "pnpx codemod jssg exec ./tests/imports.test.ts && pnpx codemod jssg exec ./tests/style.test.ts && pnpx codemod jssg exec ./tests/bindings-safe.test.ts && pnpx codemod jssg exec ./tests/java.test.ts && pnpx codemod jssg exec ./tests/xml.test.ts && pnpx codemod jssg test -l tsx ./tests/bindings/transform.ts ./tests/bindings/file && pnpx codemod jssg test -l tsx ./tests/bindings/transform.ts ./tests/bindings/workspace --semantic-workspace",
     "check-types": "npx tsc --noEmit",
     "typecheck": "tsc --noEmit"
   },

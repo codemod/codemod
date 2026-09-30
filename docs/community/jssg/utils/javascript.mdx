@@ -1,9 +1,9 @@
 ---
 title: "JavaScript and TypeScript"
-description: "Locate, add, remove, and rename JavaScript and TypeScript imports with @jssg/utils."
+description: "Locate, add, remove, and rename JavaScript and TypeScript imports, match file style, and resolve bindings with @jssg/utils."
 ---
 
-These helpers locate, add, remove, and rename imports in JavaScript and TypeScript programs.
+These helpers locate, add, remove, and rename imports in JavaScript and TypeScript programs, copy a file's quote and indent, and resolve a use back to the binding that defines it.
 
 ```typescript
 import {
@@ -153,6 +153,42 @@ export default transform;
 
 ---
 
+## `listImports`
+
+List the import statements and `require()` / `import()` declarations in a file. `getAllImports` asks for one exported name. `listImports` answers "what does this file import from these packages?", which is the question a barrel split asks (`lodash`, `date-fns`, `rxjs`, `@mui/material`).
+
+**Parameters**
+
+<ParamField body="program" type="SgNode<T, 'program'>" required>
+  The root program node.
+</ParamField>
+
+<ParamField body="options" type="ListImportsOptions">
+  `{ from?: string | readonly string[] }`. When set, only statements whose module specifier is exactly one of those strings are returned. `"mod"` does not match `"mod/extra"`. Quotes on the specifier do not matter.
+</ParamField>
+
+**Returns**
+
+An array of statements in source order. Each record has:
+
+| Field | Description |
+|-------|-------------|
+| `node` | The statement node |
+| `source` | Unquoted module specifier |
+| `quote` | The quote character used for that specifier |
+| `hasSemicolon` | Whether the statement text ends with `;` |
+| `moduleType` | `"esm"` or `"cjs"` |
+| `isTypeOnly` | True only for a statement-level `import type` |
+| `defaultName` | Local name of a default import, or of `const name = require(...)` / `await import(...)`. Otherwise `null` |
+| `namespaceName` | Local name of `import * as name` or of an `import().then(name => ...)` callback. Otherwise `null` |
+| `specifiers` | Named bindings: `importedName`, `localName`, `isTypeOnly`, `node` |
+
+`specifiers[].isTypeOnly` is true for both `import type { Foo }` and `import { type Foo }`. The statement flag `isTypeOnly` is only the first form.
+
+The same statements `removeImport` can edit are listed. A multi-declarator `const a = require("mod"), b = 1` is omitted, so a later deletion cannot drop `b`. `const x = import("mod")` without `await` is omitted. `import("mod").then(...)` is included.
+
+---
+
 ## `addImport`
 
 Add an import to the program. Smart behavior:
@@ -160,6 +196,8 @@ Add an import to the program. Smart behavior:
 - **Merges** named specifiers into an existing import statement from the same source
 - **Creates** a new import statement otherwise
 - Inserts after the last existing import (or at file start if no imports exist)
+- A **new** statement copies the quote and semicolon of the first module specifier already in the file. A file with none keeps `'` and `;`. A merge does not rewrite the existing clause.
+- A named specifier with `isTypeOnly: true` is written as inline `type` (`import { type Foo }`), not `import type`. A value specifier is not merged into an existing `import type` statement; it becomes a second statement. Type-only specifiers merged into `import type` do not repeat the `type` keyword.
 
 **Parameters**
 
@@ -171,7 +209,7 @@ Add an import to the program. Smart behavior:
   One of:
   - `{ type: "default", name: string, from: string, moduleType?: "esm" | "cjs" }` — Add a default import.
   - `{ type: "namespace", name: string, from: string }` — Add a namespace import (`import * as name`).
-  - `{ type: "named", specifiers: Array<{ name: string, alias?: string }>, from: string, moduleType?: "esm" | "cjs" }` — Add named imports.
+  - `{ type: "named", specifiers: Array<{ name: string, alias?: string, isTypeOnly?: boolean }>, from: string, moduleType?: "esm" | "cjs" }` — Add named imports. `isTypeOnly` emits an inline `type` modifier.
 </ParamField>
 
 **Returns**
@@ -333,6 +371,110 @@ import { stringToExactRegexString } from "@jssg/utils/javascript/imports";
 // Returns "^my\\.module$"
 const regex = stringToExactRegexString("my.module");
 ```
+
+---
+
+## `getFileStyle`
+
+Quote, semicolon, and indent of a JavaScript or TypeScript file.
+
+```typescript
+import { getFileStyle } from "@jssg/utils/javascript/style";
+```
+
+`addImport` uses the quote and semicolon when it creates a statement. Call `getFileStyle` yourself when you insert other code.
+
+| Field | Rule |
+|-------|------|
+| `quote` | Quote of the first `import` or `require()` / `import()` specifier. `'` when the file has none. |
+| `semicolon` | `";"` when that statement ends with one, otherwise `""`. A file with no module specifier stays `";"`, even if other statements omit semicolons. |
+| `indentUnit` | One indent level, from the first non-comment statement in a block. A column-zero comment is skipped. Tabs stay tabs. Two spaces when no block shows a deeper line. |
+
+The first module specifier wins. Later imports that use a different quote are ignored. This does not read Prettier or EditorConfig.
+
+## `getLineIndent`
+
+Leading spaces or tabs on the line a node starts on. Returns `""` when any other character sits before the node on that line, so `foo(bar)` does not treat `foo(` as indent. A carriage return is not part of the indent.
+
+```typescript
+import { getLineIndent } from "@jssg/utils/javascript/style";
+
+const indent = getLineIndent(rootNode.text(), statement);
+```
+
+## `indentText`
+
+Prefix every non-empty line. Blank lines stay blank, so an inserted block does not grow trailing whitespace.
+
+```typescript
+import { indentText } from "@jssg/utils/javascript/style";
+
+const body = indentText("server.listen()\n", indent);
+```
+
+---
+
+## `importBindingOf`
+
+The import that defines this use, or `null` when the name is local. This is the opposite of `getImport`: the call site is known and the package is not.
+
+```typescript
+import { importBindingOf } from "@jssg/utils/javascript/bindings";
+```
+
+| Field | Meaning |
+|-------|---------|
+| `importedName` | Exported name. `"default"` for a default import. `"*"` for `import * as`. |
+| `localName` | Name at the use site. `import { setup as create }` reports local name `create`. |
+| `source` | Module specifier of the import in the file that contains the use. |
+
+`setup()` is rewritten only when `importedName` is `"setup"` and `source` is the package you mean. A parameter named `setup`, or the same name imported from another package, returns a different binding or `null`.
+
+The lookup stops at the import in the file that contains the use. `import { server } from "./browser"` reports source `"./browser"`, not the package `./browser` imported from. `ns.graphql` after `import * as ns` is not resolved; call this on `ns` and read the property text yourself.
+
+Returns `null` when semantic analysis is unavailable. `definition()` can throw in that case; this function does not.
+
+## `resolveDefinition`
+
+The node that defines this use, following one import into another project file.
+
+- A local declaration returns that node.
+- An import the workspace can resolve returns that file's definition. In the semantic API this kind is `"external"`, which means another project file, not a package on npm.
+- An unresolved package import returns the import specifier.
+- `const a = setup(); const b = a` resolves `b` to `b`, not to `setup()`. A second hop is out of scope.
+
+Returns `null` when semantic analysis is unavailable.
+
+## `resolvesToFactory`
+
+True when the binding is a variable initialized by a direct call, or `new`, of `importedName` from one of `sources`.
+
+```typescript
+import { resolvesToFactory } from "@jssg/utils/javascript/bindings";
+
+if (resolvesToFactory(receiver, "setupServer", ["msw/node", "msw/native"])) {
+  // receiver.stop(), not some other object that also has stop()
+}
+```
+
+`new QueryClient()`, `new PrismaClient()`, and `express()` are the same shape. One hop includes a binding imported from another project file (`export const server = setupServer()` in `browser.ts`, `server.listen()` in the file that imports it).
+
+These stay false:
+
+- `const { listen } = setupServer()`
+- `lib.setupServer()`
+- `const a = setupServer(); const b = a`
+- a shadowed local with the same spelling, such as `const server = app.listen()` inside a function
+
+## `renameReferences`
+
+Edits that rename references of one binding in `currentFile`. Pass `root.filename()`.
+
+Shadowed names stay. `references()` only returns this binding, so a parameter spelled the same as the import is not renamed. Comments, string literals, and property names such as `record.cleanUrl` are not references and stay. A shorthand property is an identifier, so `{ cleanUrl }` becomes `{ getCleanUrlString }` and the key changes. The import clause is not renamed; use `updateImport` for that.
+
+Workspace `references()` also returns other files. Those edits are omitted. Writing them onto the file currently being committed targets the wrong tree. Cross-file renames stay with the caller, via `root.write` on the other file.
+
+Returns `[]` when semantic analysis is unavailable.
 
 ---
 
