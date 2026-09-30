@@ -56,11 +56,32 @@ function testLineIndentIgnoresMidLineNodesAndCarriageReturn() {
   assert(bar !== undefined, "Should find the argument identifier");
   assert(getLineIndent(call.text(), bar!) === "", "A mid-line node has no indent");
 
+  const indented = parseProgram("  foo(bar);\n");
+  const indentedBar = indented
+    .findAll({ rule: { kind: "identifier" } })
+    .find((node) => node.text() === "bar");
+  assert(indentedBar !== undefined, "Should find the indented argument");
+  assert(
+    getLineIndent(indented.text(), indentedBar!) === "",
+    "Leading whitespace does not indent a mid-line node",
+  );
+
   const source = "function f() {\r\n  return 1;\r\n}\r\n";
   const block = parseProgram(source);
   const statement = block.find({ rule: { kind: "return_statement" } });
   assert(statement !== null, "Should find the return");
   assert(getLineIndent(source, statement!) === "  ", "CRLF indent is spaces only");
+}
+
+function testLineIndentUsesByteOffsetAfterNonAscii() {
+  const source = "const café = 1;\n  return 1;\n";
+  const program = parseProgram(source);
+  const statement = program.find({ rule: { kind: "return_statement" } });
+  assert(statement !== null, "Should find the return");
+  assert(
+    getLineIndent(program.text(), statement!) === "  ",
+    "Non-ASCII text does not shift the indent",
+  );
 }
 
 function testIndentTextLeavesBlankLinesBlank() {
@@ -74,6 +95,7 @@ function run() {
   testRequireCallSetsStyleWhenThereIsNoImportStatement();
   testIndentUnitSkipsLeadingCommentAndKeepsTabs();
   testLineIndentIgnoresMidLineNodesAndCarriageReturn();
+  testLineIndentUsesByteOffsetAfterNonAscii();
   testIndentTextLeavesBlankLinesBlank();
   console.log("style.test.ts: all assertions passed");
 }

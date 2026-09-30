@@ -1627,6 +1627,101 @@ function testAddImportValueDoesNotMergeIntoImportType() {
   assert(!result.includes("import type { Foo, bar }"), "A value is not merged into import type");
 }
 
+function testAddImportPromotesInlineTypeToValue() {
+  const program = parseProgram("typescript", 'import { type Foo } from "mod";\n');
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "Foo" }],
+    from: "mod",
+  });
+  assert(edit !== null, "A type-only specifier does not satisfy a value import");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result.includes('import { Foo } from "mod";'),
+    `Inline type should be promoted: ${result}`,
+  );
+  assert(!result.includes("type Foo"), "The inline type modifier is removed");
+}
+
+function testAddImportPromotesImportTypeSpecifier() {
+  const only = parseProgram("typescript", 'import type { Foo } from "mod";\n');
+  const onlyEdit = addImport(only, {
+    type: "named",
+    specifiers: [{ name: "Foo" }],
+    from: "mod",
+  });
+  assert(onlyEdit !== null, "import type Foo does not satisfy a value import");
+  const onlyResult = only.commitEdits([onlyEdit!]);
+  assert(
+    onlyResult.includes('import { Foo } from "mod";'),
+    `The statement should become a value import: ${onlyResult}`,
+  );
+  assert(!onlyResult.includes("import type"), "The type keyword is removed");
+  assert(!onlyResult.includes('import { Foo } from "mod";\nimport'), "Foo is not imported twice");
+
+  const mixed = parseProgram("typescript", 'import type { Foo, Bar } from "mod";\n');
+  const mixedEdit = addImport(mixed, {
+    type: "named",
+    specifiers: [{ name: "Foo" }],
+    from: "mod",
+  });
+  assert(mixedEdit !== null, "One type specifier can be promoted");
+  const mixedResult = mixed.commitEdits([mixedEdit!]);
+  assert(
+    mixedResult.includes('import { Foo, type Bar } from "mod";'),
+    `The sibling stays type-only: ${mixedResult}`,
+  );
+}
+
+function testAddImportPromotesAndAddsOnSameStatement() {
+  const program = parseProgram("typescript", 'import type { Foo } from "mod";\n');
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "Foo" }, { name: "baz" }],
+    from: "mod",
+  });
+  assert(edit !== null, "Promotion can include a new specifier");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result.includes('import { Foo, baz } from "mod";'),
+    `Foo and baz share one value import: ${result}`,
+  );
+  assert(!result.includes("import type"), "The statement is no longer import type");
+}
+
+function testAddImportValueMergesPastEarlierImportType() {
+  const program = parseProgram(
+    "typescript",
+    'import type { Foo } from "mod";\nimport { bar } from "mod";\n',
+  );
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "baz" }],
+    from: "mod",
+  });
+  assert(edit !== null, "Should merge into the value import");
+  const result = program.commitEdits([edit!]);
+  assert(result.includes('import type { Foo } from "mod";'), "The type import stays");
+  assert(result.includes('import { bar, baz } from "mod";'), "The later value import gains baz");
+  assert(
+    result.indexOf("import { baz }") === -1 && result.split('from "mod"').length === 3,
+    `No third import from mod: ${result}`,
+  );
+}
+
+function testAddImportValueDoesNotPromoteDifferentLocalName() {
+  const program = parseProgram("typescript", 'import type { Foo as F } from "mod";\n');
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "Foo" }],
+    from: "mod",
+  });
+  assert(edit !== null, "A different local name still needs a value binding");
+  const result = program.commitEdits([edit!]);
+  assert(result.includes('import type { Foo as F } from "mod";'), "The alias stays type-only");
+  assert(result.includes('import { Foo } from "mod";'), "The value binding is a new statement");
+}
+
 function testAddNamedImportCJSMatchesRequireQuotes() {
   const program = parseProgram("javascript", 'const fs = require("node:fs");\n');
   const edit = addImport(program, {
@@ -1747,6 +1842,38 @@ function testListImportsFiltersExactSources() {
   assert(
     many.map((item) => item.defaultName).join(",") === "a,c",
     "Filtered imports stay in source order",
+  );
+}
+
+function testListImportsIgnoresNonThenCallbacks() {
+  const program = parseProgram(
+    "typescript",
+    [
+      'import("mod").catch((err) => err);',
+      'import("mod").then((mod) => mod.fn()).catch((err) => err);',
+      'import("mod").finally((done) => done);',
+      'import("mod").then((mod) => { const inner = (cb) => cb; return mod; });',
+      "",
+    ].join("\n"),
+  );
+  const listed = listImports(program, { from: "mod" });
+
+  assert(listed.length === 4, `Every import() expression is listed, got ${listed.length}`);
+  assert(
+    listed[0]!.namespaceName === null && listed[0]!.specifiers.length === 0,
+    "catch(err) is not a namespace binding",
+  );
+  assert(
+    listed[1]!.namespaceName === "mod" && listed[1]!.specifiers.length === 0,
+    "then(mod) wins over the later catch callback",
+  );
+  assert(
+    listed[2]!.namespaceName === null && listed[2]!.specifiers.length === 0,
+    "finally(done) is not a namespace binding",
+  );
+  assert(
+    listed[3]!.namespaceName === "mod" && listed[3]!.specifiers.length === 0,
+    "A nested callback is not the imported namespace",
   );
 }
 
@@ -1880,10 +2007,16 @@ function run() {
   testAddImportInlineTypeSpecifier();
   testAddImportTypeIntoImportTypeOmitsInlineModifier();
   testAddImportValueDoesNotMergeIntoImportType();
+  testAddImportPromotesInlineTypeToValue();
+  testAddImportPromotesImportTypeSpecifier();
+  testAddImportPromotesAndAddsOnSameStatement();
+  testAddImportValueMergesPastEarlierImportType();
+  testAddImportValueDoesNotPromoteDifferentLocalName();
   testAddNamedImportCJSMatchesRequireQuotes();
 
   testListImportsReadsStatementShapes();
   testListImportsFiltersExactSources();
+  testListImportsIgnoresNonThenCallbacks();
   testListImportsOmitsMultiDeclaratorRequire();
 
   console.log("imports.test.ts: all assertions passed");

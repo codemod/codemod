@@ -19,19 +19,44 @@ const FALLBACK_SEMICOLON = ";";
 const FALLBACK_INDENT = "  ";
 
 /**
+ * `range().index` is a UTF-8 byte offset. String indexes are UTF-16 code units,
+ * so a raw byte offset lands on the wrong character once non-ASCII text precedes it.
+ */
+function utf16IndexAtByte(src: string, byteOffset: number): number {
+  let bytes = 0;
+  let index = 0;
+  while (index < src.length && bytes < byteOffset) {
+    const code = src.charCodeAt(index);
+    if (code < 0x80) {
+      bytes += 1;
+      index += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+      index += 1;
+    } else if (code >= 0xd800 && code <= 0xdbff) {
+      bytes += 4;
+      index += 2;
+    } else {
+      bytes += 3;
+      index += 1;
+    }
+  }
+  return index;
+}
+
+/**
  * Leading spaces or tabs of the line `node` starts on.
  * Returns `""` when any other character appears before the node on that line,
  * so a mid-line node is not given the code that precedes it as its indent.
  */
 export function getLineIndent<T extends Language>(src: string, node: SgNode<T>): string {
-  const start = node.range().start.index;
+  const start = utf16IndexAtByte(src, node.range().start.index);
   let lineStart = start;
   while (lineStart > 0 && src[lineStart - 1] !== "\n") {
     lineStart--;
   }
   const linePrefix = src.slice(lineStart, start);
-  const indent = linePrefix.match(/^[ \t]*/)?.[0];
-  return indent ?? "";
+  return /^[ \t]*$/.test(linePrefix) ? linePrefix : "";
 }
 
 /**

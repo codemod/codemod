@@ -180,7 +180,7 @@ An array of statements in source order. Each record has:
 | `moduleType` | `"esm"` or `"cjs"` |
 | `isTypeOnly` | True only for a statement-level `import type` |
 | `defaultName` | Local name of a default import, or of `const name = require(...)` / `await import(...)`. Otherwise `null` |
-| `namespaceName` | Local name of `import * as name` or of an `import().then(name => ...)` callback. Otherwise `null` |
+| `namespaceName` | Local name of `import * as name` or of the `import().then(name => ...)` callback. Otherwise `null`. A `.catch` or `.finally` callback is not a binding. |
 | `specifiers` | Named bindings: `importedName`, `localName`, `isTypeOnly`, `node` |
 
 `specifiers[].isTypeOnly` is true for both `import type { Foo }` and `import { type Foo }`. The statement flag `isTypeOnly` is only the first form.
@@ -197,7 +197,8 @@ Add an import to the program. Smart behavior:
 - **Creates** a new import statement otherwise
 - Inserts after the last existing import (or at file start if no imports exist)
 - A **new** statement copies the quote and semicolon of the first module specifier already in the file. A file with none keeps `'` and `;`. A merge does not rewrite the existing clause.
-- A named specifier with `isTypeOnly: true` is written as inline `type` (`import { type Foo }`), not `import type`. A value specifier is not merged into an existing `import type` statement; it becomes a second statement. Type-only specifiers merged into `import type` do not repeat the `type` keyword.
+- A named specifier with `isTypeOnly: true` is written as inline `type` (`import { type Foo }`), not `import type`. A value specifier is not merged into an existing `import type` statement. When a value import from the same module already exists, the specifier merges into that statement even if an `import type` line comes first. Otherwise it becomes a second statement. Type-only specifiers merged into `import type` do not repeat the `type` keyword.
+- A type-only binding does not count as the value. `import { type Foo }` drops the `type` modifier, and `import type { Foo, Bar }` becomes `import { Foo, type Bar }`, when the local name matches. A different local name (`import type { Foo as F }` plus a value `Foo`) stays a separate statement.
 
 **Parameters**
 
@@ -394,7 +395,7 @@ The first module specifier wins. Later imports that use a different quote are ig
 
 ## `getLineIndent`
 
-Leading spaces or tabs on the line a node starts on. Returns `""` when any other character sits before the node on that line, so `foo(bar)` does not treat `foo(` as indent. A carriage return is not part of the indent.
+Leading spaces or tabs on the line a node starts on. Returns `""` when any other character sits before the node on that line, so `foo(bar)` and an indented `foo(bar)` do not treat the preceding code as indent. The node's position is a UTF-8 byte offset, so non-ASCII text earlier in the file does not shift the line. A carriage return is not part of the indent.
 
 ```typescript
 import { getLineIndent } from "@jssg/utils/javascript/style";
