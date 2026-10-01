@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::send_event::{
-    install_panic_hook, BaseEvent, PartialTelemetrySenderOptions, TelemetryError, TelemetrySender,
+    BaseEvent, PartialTelemetrySenderOptions, TelemetryError, TelemetrySender, install_panic_hook,
 };
 
 /// Fans an event out to several backends at once.

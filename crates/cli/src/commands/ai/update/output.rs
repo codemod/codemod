@@ -1,7 +1,7 @@
 use super::reconcile::update_policy_behavior;
 use super::types::{
-    AutoSafeApplyResult, ComponentReconcileDecision, UpdatePolicyContext,
-    MANAGED_UPDATE_POLICY_TRIGGER,
+    AutoSafeApplyResult, ComponentReconcileDecision, MANAGED_UPDATE_POLICY_TRIGGER,
+    UpdatePolicyContext,
 };
 use crate::commands::harness_adapter::{
     Harness, InstallScope, InstalledSkill, ManagedStateWriteResult, OutputFormat,
@@ -12,7 +12,7 @@ use console::style;
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
-use tabled::settings::{object::Columns, Alignment, Modify, Style};
+use tabled::settings::{Alignment, Modify, Style, object::Columns};
 use tabled::{Table, Tabled};
 
 #[derive(Serialize)]

@@ -1,5 +1,5 @@
 use crate::commands::TelemetrySenderExt;
-use crate::{TelemetrySenderMutex, CLI_VERSION};
+use crate::{CLI_VERSION, TelemetrySenderMutex};
 use butterflow_core::nested_codemod_run::{
     NestedCodemodRun, NestedCodemodRunEvent, NestedCodemodRunObserver, NestedCodemodRunOutcome,
 };
@@ -317,7 +317,7 @@ impl NestedCodemodRunObserver for NestedCodemodTelemetryObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use butterflow_models::{workflow::Workflow, WorkflowStatus};
+    use butterflow_models::{WorkflowStatus, workflow::Workflow};
     use chrono::Utc;
     use codemod_telemetry::send_event::{PartialTelemetrySenderOptions, TelemetrySender};
     use std::path::PathBuf;
@@ -595,9 +595,11 @@ mod tests {
 
         let events = events.lock().expect("events lock");
         assert_eq!(events.len(), 3);
-        assert!(events
-            .iter()
-            .all(|event| !event.properties.contains_key("dryRun")));
+        assert!(
+            events
+                .iter()
+                .all(|event| !event.properties.contains_key("dryRun"))
+        );
     }
 
     #[tokio::test]

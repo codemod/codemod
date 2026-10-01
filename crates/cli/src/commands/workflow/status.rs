@@ -3,7 +3,7 @@ use butterflow_core::utils;
 use butterflow_models::{Task, TaskStatus};
 use clap::Args;
 use std::collections::HashMap;
-use tabled::settings::{object::Columns, Alignment, Modify, Style};
+use tabled::settings::{Alignment, Modify, Style, object::Columns};
 use tabled::{Table, Tabled};
 use uuid::Uuid;
 

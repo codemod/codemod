@@ -3,8 +3,8 @@
 use crate::accurate::{AccurateAnalyzer, WorkspaceWalker};
 use crate::lightweight::LightweightAnalyzer;
 use language_core::{
-    filesystem, ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
-    SemanticProvider, SemanticResult,
+    ByteRange, DefinitionOptions, DefinitionResult, ProviderMode, ReferencesResult,
+    SemanticProvider, SemanticResult, filesystem,
 };
 use std::path::{Path, PathBuf};
 use vfs::VfsPath;

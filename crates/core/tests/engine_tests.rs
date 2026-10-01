@@ -15,10 +15,10 @@ use tempfile::TempDir;
 use tokio::sync::Notify;
 
 use butterflow_core::engine::{
-    await_js_ast_grep_execution_task, build_js_ast_grep_idle_timeout_message, finish_unit_progress,
-    js_ast_grep_idle_timeout, record_output_progress, record_unit_progress,
-    select_shard_scan_eligible_files, CapabilitiesData, Engine, StepPhase, StepProgressState,
-    UnitProgressState, JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT,
+    CapabilitiesData, Engine, JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT, StepPhase, StepProgressState,
+    UnitProgressState, await_js_ast_grep_execution_task, build_js_ast_grep_idle_timeout_message,
+    finish_unit_progress, js_ast_grep_idle_timeout, record_output_progress, record_unit_progress,
+    select_shard_scan_eligible_files,
 };
 use butterflow_core::structured_log::{OutputFormat, StructuredLogger};
 use butterflow_core::workflow_runtime::{WorkflowCommand, WorkflowSession};
@@ -37,8 +37,8 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::{CodemodOutput, ExecutionResult};
 
 use butterflow_models::{DiffOperation, FieldDiff, TaskDiff};
-use butterflow_state::local_adapter::LocalStateAdapter;
 use butterflow_state::StateAdapter;
+use butterflow_state::local_adapter::LocalStateAdapter;
 use serde_json::json;
 use serial_test::serial;
 use uuid::Uuid;
@@ -98,24 +98,37 @@ fn debarrel_bundle_path() -> Option<PathBuf> {
     configured.exists().then_some(configured)
 }
 
+/// SAFETY (env mutation): the process environment is process-global state.
+/// Tests touching it are marked `#[serial]`, which serializes them against
+/// other `#[serial]` tests; this narrows — but does not eliminate — the
+/// race window, because unmarked tests may still read or write the
+/// environment concurrently on other harness threads.
 struct EnvVarGuard {
     key: String,
     original: Option<String>,
 }
 
 impl EnvVarGuard {
+    /// Unset `key` for the duration of the test, restoring it on drop.
     fn unset(key: &str) -> Self {
         let original = std::env::var(key).ok();
-        std::env::remove_var(key);
+        // SAFETY: see the env-mutation note on `EnvVarGuard` above.
+        unsafe {
+            std::env::remove_var(key);
+        }
         Self {
             key: key.to_string(),
             original,
         }
     }
 
+    /// Set `key` to `value` for the duration of the test, restoring it on drop.
     fn set(key: &str, value: &str) -> Self {
         let original = std::env::var(key).ok();
-        std::env::set_var(key, value);
+        // SAFETY: see the env-mutation note on `EnvVarGuard` above.
+        unsafe {
+            std::env::set_var(key, value);
+        }
         Self {
             key: key.to_string(),
             original,
@@ -125,10 +138,13 @@ impl EnvVarGuard {
 
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
-        if let Some(value) = &self.original {
-            std::env::set_var(&self.key, value);
-        } else {
-            std::env::remove_var(&self.key);
+        // SAFETY: see the env-mutation note on `EnvVarGuard` above.
+        unsafe {
+            if let Some(value) = &self.original {
+                std::env::set_var(&self.key, value);
+            } else {
+                std::env::remove_var(&self.key);
+            }
         }
     }
 }
@@ -1697,11 +1713,12 @@ async fn test_run_script_approval_callback_can_reject_execution() {
         .expect("shell-node task should exist");
 
     assert_eq!(task.status, TaskStatus::Failed);
-    assert!(task
-        .error
-        .as_deref()
-        .unwrap_or_default()
-        .contains("declined by the user"));
+    assert!(
+        task.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("declined by the user")
+    );
     assert!(
         !output_path.exists(),
         "rejected shell command should not create files"
@@ -2035,9 +2052,11 @@ async fn test_manual_matrix_master_tracks_child_trigger_state() {
         .filter(|task| task.master_task_id == Some(master_task.id))
         .collect();
     assert_eq!(awaiting_children.len(), 2);
-    assert!(awaiting_children
-        .iter()
-        .all(|task| task.status == TaskStatus::AwaitingTrigger));
+    assert!(
+        awaiting_children
+            .iter()
+            .all(|task| task.status == TaskStatus::AwaitingTrigger)
+    );
 }
 
 #[tokio::test]
@@ -4760,10 +4779,12 @@ async fn test_execute_ast_grep_step_nonexistent_config() {
 
     // Should fail gracefully
     assert!(result.is_err(), "Should fail with nonexistent config file");
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("AST grep config file not found"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("AST grep config file not found")
+    );
 }
 
 #[tokio::test]
@@ -4999,10 +5020,10 @@ async fn test_execute_js_ast_grep_step_with_typescript() {
         r#"
 export default function transform(ast) {
   return ast
-    .findAll({ 
-      rule: { 
-        pattern: 'interface $NAME { $$$ }' 
-      } 
+    .findAll({
+      rule: {
+        pattern: 'interface $NAME { $$$ }'
+      }
     })
     .replace('type $NAME = { $$$ }');
 }
@@ -6450,7 +6471,7 @@ echo "Writing to state at: $STATE_OUTPUTS"
 # Write TypeScript shards to state
 echo 'i18nShardsTs=[{"team": "frontend", "shardId": "shard-1"}, {"team": "backend", "shardId": "shard-2"}]' >> $STATE_OUTPUTS
 
-# Write HTML shards to state  
+# Write HTML shards to state
 echo 'i18nShardsHtml=[{"team": "ui", "shardId": "shard-a"}, {"team": "docs", "shardId": "shard-b"}, {"team": "marketing", "shardId": "shard-c"}]' >> $STATE_OUTPUTS
 
 echo "State written successfully"
@@ -7924,15 +7945,26 @@ async fn test_expression_resolution_nonexistent_variable() {
 // TODO: test_runtime_cycle_detection
 
 #[test]
+#[serial]
 fn js_ast_grep_idle_timeout_uses_default_and_respects_env_override() {
-    let _guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
+    let guard = EnvVarGuard::unset("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS");
     assert_eq!(
         js_ast_grep_idle_timeout(),
         Duration::from_millis(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT)
     );
-
-    std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
+    // SAFETY: see the env-mutation note on `EnvVarGuard` above.
+    unsafe {
+        std::env::set_var("CODEMOD_JS_AST_GREP_IDLE_TIMEOUT_MS", "1234");
+    }
     assert_eq!(js_ast_grep_idle_timeout(), Duration::from_millis(1234));
+    // Restore before the next read so the default is observed strictly
+    // after the env mutation is undone, not concurrent with drop-side
+    // restore work on other keys.
+    drop(guard);
+    assert_eq!(
+        js_ast_grep_idle_timeout(),
+        Duration::from_millis(JS_AST_GREP_IDLE_TIMEOUT_MS_DEFAULT)
+    );
 }
 
 #[test]

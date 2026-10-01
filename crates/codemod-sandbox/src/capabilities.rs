@@ -4,9 +4,9 @@ mod wasm_capabilities {
     use std::future::Future;
 
     use rquickjs::{
+        Ctx, Function, Result, Value,
         module::{Declarations, Exports, ModuleDef},
         prelude::Async,
-        Ctx, Function, Result, Value,
     };
     use wasm_bindgen::prelude::*;
 

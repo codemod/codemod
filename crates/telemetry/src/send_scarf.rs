@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 use crate::send_event::{
-    install_panic_hook, BaseEvent, PartialTelemetrySenderOptions, TelemetryError, TelemetrySender,
-    TelemetrySenderOptions, MAX_CAPTURE_ATTEMPTS, REQUEST_TIMEOUT_SECONDS,
-    RETRY_INITIAL_BACKOFF_MS, RETRY_MAX_BACKOFF_MS,
+    BaseEvent, MAX_CAPTURE_ATTEMPTS, PartialTelemetrySenderOptions, REQUEST_TIMEOUT_SECONDS,
+    RETRY_INITIAL_BACKOFF_MS, RETRY_MAX_BACKOFF_MS, TelemetryError, TelemetrySender,
+    TelemetrySenderOptions, install_panic_hook,
 };
 
 /// Scarf gateway base URL, e.g. `https://codemod.gateway.scarf.sh/telemetry`.

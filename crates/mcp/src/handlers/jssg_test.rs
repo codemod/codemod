@@ -1,6 +1,6 @@
 use codemod_sandbox::sandbox::engine::{CodemodOutput, JssgExecutionOptions};
-use rmcp::{handler::server::wrapper::Parameters, model::*, schemars, tool, ErrorData as McpError};
-use serde::{de, Deserialize, Serialize};
+use rmcp::{ErrorData as McpError, handler::server::wrapper::Parameters, model::*, schemars, tool};
+use serde::{Deserialize, Serialize, de};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -18,8 +18,8 @@ use codemod_sandbox::{
     utils::project_discovery::find_tsconfig,
 };
 use testing_utils::{
-    map_execution_result, ExecutionRequest, ReporterType, TestOptions, TestRunner, TestSource,
-    TransformationResult, TransformationTestCase,
+    ExecutionRequest, ReporterType, TestOptions, TestRunner, TestSource, TransformationResult,
+    TransformationTestCase, map_execution_result,
 };
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -318,6 +318,7 @@ impl JssgTestHandler {
                         metrics_context: Some(metrics_context),
                         llm_request_handler: None,
                         shared_state_context: None,
+                        step_id: None,
                         runtime_event_callback: None,
                         cancellation_flag: None,
                         test_mode: true,
@@ -332,8 +333,8 @@ impl JssgTestHandler {
                     as Pin<
                         Box<
                             dyn std::future::Future<
-                                Output = Result<TransformationResult, anyhow::Error>,
-                            >,
+                                    Output = Result<TransformationResult, anyhow::Error>,
+                                >,
                         >,
                     >
             },

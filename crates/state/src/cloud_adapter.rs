@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use log::warn;
-use reqwest::{header, Client, RequestBuilder, Response};
+use reqwest::{Client, RequestBuilder, Response, header};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;

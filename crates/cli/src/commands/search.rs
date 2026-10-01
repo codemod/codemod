@@ -4,9 +4,9 @@ use serde::Serialize;
 use tabled::{Table, Tabled};
 
 use crate::suitability::{
-    evaluate_threshold_route, search_registry, summarize_search_coverage, MetadataCoverage,
-    RegistrySearchPackage, RegistrySearchRequest, RegistrySearchResponse, SearchCoverageSummary,
-    SuitabilityRouteDecision,
+    MetadataCoverage, RegistrySearchPackage, RegistrySearchRequest, RegistrySearchResponse,
+    SearchCoverageSummary, SuitabilityRouteDecision, evaluate_threshold_route, search_registry,
+    summarize_search_coverage,
 };
 
 #[derive(Args, Debug)]
@@ -117,7 +117,7 @@ struct PackageRow {
 }
 
 fn print_table(result: &RegistrySearchResponse, args: &Command) -> Result<()> {
-    use tabled::settings::{object::Columns, Alignment, Modify, Style};
+    use tabled::settings::{Alignment, Modify, Style, object::Columns};
 
     if result.packages.is_empty() {
         println!("No packages found.");

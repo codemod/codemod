@@ -3,7 +3,7 @@
 use crate::tools::core::Result;
 use crate::tools::core::{ToolCall, ToolResult};
 use crate::tools::utils::validate_absolute_path;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::Path;
@@ -194,12 +194,11 @@ impl CkgDatabase {
         let node_type = node.kind();
 
         // Extract symbol based on node type (simplified)
-        if self.is_symbol_node(node_type, language) {
-            if let Some(symbol) =
+        if self.is_symbol_node(node_type, language)
+            && let Some(symbol) =
                 self.extract_symbol_from_node(node, content, file_path, language, parent.clone())
-            {
-                symbols.push(symbol);
-            }
+        {
+            symbols.push(symbol);
         }
 
         // Recursively process children
@@ -521,24 +520,23 @@ impl CkgTool {
         for entry in walker {
             match entry {
                 Ok(entry) => {
-                    if entry.file_type().is_file() {
-                        if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
-                            if extensions.contains(&ext.to_string()) {
-                                total_files += 1;
+                    if entry.file_type().is_file()
+                        && let Some(ext) = entry.path().extension().and_then(|e| e.to_str())
+                        && extensions.contains(&ext.to_string())
+                    {
+                        total_files += 1;
 
-                                match self.process_file(entry.path()).await {
-                                    Ok(symbol_count) => {
-                                        processed_files += 1;
-                                        total_symbols += symbol_count;
-                                    }
-                                    Err(e) => {
-                                        errors.push(format!(
-                                            "Error processing {}: {}",
-                                            entry.path().display(),
-                                            e
-                                        ));
-                                    }
-                                }
+                        match self.process_file(entry.path()).await {
+                            Ok(symbol_count) => {
+                                processed_files += 1;
+                                total_symbols += symbol_count;
+                            }
+                            Err(e) => {
+                                errors.push(format!(
+                                    "Error processing {}: {}",
+                                    entry.path().display(),
+                                    e
+                                ));
                             }
                         }
                     }

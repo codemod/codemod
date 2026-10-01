@@ -1,9 +1,9 @@
 use crate::utils::skill_layout::{
-    expected_authored_skill_relative_file, AGENTS_SKILL_ROOT_RELATIVE_PATH,
+    AGENTS_SKILL_ROOT_RELATIVE_PATH, expected_authored_skill_relative_file,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use clap::Args;
-use console::{style, Emoji};
+use console::{Emoji, style};
 use inquire::{Confirm, Select, Text};
 use log::info;
 use std::fs;
@@ -2171,8 +2171,10 @@ mod tests {
         create_project(&project_path, &config).unwrap();
 
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
-        assert!(readme
-            .contains("Document the exact migration this codemod performs before publishing."));
+        assert!(
+            readme
+                .contains("Document the exact migration this codemod performs before publishing.")
+        );
         assert!(readme.contains("pnpm test"));
         assert!(readme.contains("codemod workflow validate -w workflow.yaml"));
         assert!(!readme.contains("Converting `var` declarations to `const`/`let`"));

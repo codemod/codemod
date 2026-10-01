@@ -1,7 +1,7 @@
 /// in-memory module resolver for memory-only execution
 use crate::sandbox::errors::ResolverError;
 use crate::sandbox::resolvers::ModuleResolver;
-use rquickjs::{loader::Loader, module, Ctx, Error, Module};
+use rquickjs::{Ctx, Error, Module, loader::Loader, module};
 use std::collections::HashMap;
 use std::sync::Arc;
 

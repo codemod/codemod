@@ -5,12 +5,12 @@ use crate::tools::core::{ToolCall, ToolResult};
 use rmcp::model::{CallToolRequestParam, Tool};
 use rmcp::service::{RoleClient, RunningService, ServiceExt};
 use rmcp::transport::TokioChildProcess;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::Mutex;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 /// MCP server configuration
 #[derive(Debug, Clone)]
@@ -479,9 +479,11 @@ mod tests {
 
         let result = tool.execute(call).await.unwrap();
         assert!(result.success);
-        assert!(result
-            .content
-            .contains("No MCP servers are currently running"));
+        assert!(
+            result
+                .content
+                .contains("No MCP servers are currently running")
+        );
     }
 
     #[tokio::test]

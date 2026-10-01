@@ -236,24 +236,16 @@ fn render_workflow_config_error(error: &anyhow::Error) -> Option<String> {
 
 fn workflow_parse_error_from_chain(error: &anyhow::Error) -> Option<WorkflowParseDetails> {
     error.chain().find_map(|cause| {
-        let ModelError::WorkflowParse {
-            path,
-            yaml_error,
-            yaml_line,
-            yaml_column,
-            json_error,
-            ..
-        } = cause.downcast_ref::<ModelError>()?
-        else {
+        let ModelError::WorkflowParse(parse_error) = cause.downcast_ref::<ModelError>()? else {
             return None;
         };
 
         Some(WorkflowParseDetails {
-            path: path.clone(),
-            yaml_error: yaml_error.to_string(),
-            yaml_line: *yaml_line,
-            yaml_column: *yaml_column,
-            json_error: json_error.to_string(),
+            path: parse_error.path.clone(),
+            yaml_error: parse_error.yaml_error.to_string(),
+            yaml_line: parse_error.yaml_line,
+            yaml_column: parse_error.yaml_column,
+            json_error: parse_error.json_error.to_string(),
         })
     })
 }
@@ -630,10 +622,10 @@ fn parse_js_stack_location(error_text: &str) -> Option<JsStackLocation> {
             }
         }
 
-        if let Some(location) = line.strip_prefix("at ") {
-            if let Some(parsed) = parse_js_location(location.trim()) {
-                return Some(parsed);
-            }
+        if let Some(location) = line.strip_prefix("at ")
+            && let Some(parsed) = parse_js_location(location.trim())
+        {
+            return Some(parsed);
         }
     }
     None
@@ -853,15 +845,17 @@ mod tests {
             "nodes:\n  - id: apply-transforms\n    name: Apply AST Transformations\n    trigger: manual\n    type: automatic\n",
         )
         .expect("write workflow");
-        let error = anyhow::anyhow!(ModelError::WorkflowParse {
-            path: file.path().to_path_buf(),
-            yaml_error: "nodes[0].trigger: invalid type: string \"manual\", expected struct Trigger at line 4 column 14".into(),
-            yaml_line: Some(4),
-            yaml_column: Some(14),
-            json_error: "expected value at line 1 column 1".into(),
-            json_line: Some(1),
-            json_column: Some(1),
-        });
+        let error = anyhow::anyhow!(ModelError::WorkflowParse(Box::new(
+            butterflow_models::WorkflowParseError {
+                path: file.path().to_path_buf(),
+                yaml_error: "nodes[0].trigger: invalid type: string \"manual\", expected struct Trigger at line 4 column 14".into(),
+                yaml_line: Some(4),
+                yaml_column: Some(14),
+                json_error: "expected value at line 1 column 1".into(),
+                json_line: Some(1),
+                json_column: Some(1),
+            }
+        )));
         let rendered = render_error_text(&error);
 
         assert!(rendered.contains("codemod::workflow::config"));
