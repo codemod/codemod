@@ -196,7 +196,7 @@ Add an import to the program. Smart behavior:
 - **Merges** named specifiers into an existing import statement from the same source
 - **Creates** a new import statement otherwise
 - Inserts after the last existing import (or at file start if no imports exist)
-- A **new** statement copies the quote and semicolon of the first module specifier already in the file. A file with none keeps `'` and `;`. A merge does not rewrite the existing clause.
+- A **new** statement copies the quote and semicolon of the first module specifier already in the file. When the file has none, it copies the first string literal and the first semicolon-style statement, and keeps `'` and `;` only when those are absent. A merge does not rewrite the existing clause.
 - A named specifier with `isTypeOnly: true` is written as inline `type` (`import { type Foo }`), not `import type`. A value specifier is not merged into an existing `import type` statement. When a value import from the same module already exists, the specifier merges into that statement even if an `import type` line comes first. Otherwise it becomes a second statement. Type-only specifiers merged into `import type` do not repeat the `type` keyword.
 - A type-only binding does not count as the value. `import { type Foo }` drops the `type` modifier, and `import type { Foo, Bar }` becomes `import { Foo, type Bar }`, when the local name matches. A different local name (`import type { Foo as F }` plus a value `Foo`) stays a separate statement.
 
@@ -387,11 +387,11 @@ import { getFileStyle } from "@jssg/utils/javascript/style";
 
 | Field | Rule |
 |-------|------|
-| `quote` | Quote of the first `import` or `require()` / `import()` specifier. `'` when the file has none. |
-| `semicolon` | `";"` when that statement ends with one, otherwise `""`. A file with no module specifier stays `";"`, even if other statements omit semicolons. |
+| `quote` | Quote of the first `import`, `export … from`, `require()`, or `import()` specifier. When the file has none, quote of the first string literal. `'` when the file has neither. |
+| `semicolon` | `";"` when that specifier's statement ends with one, otherwise `""`. When the file has no specifier, the same rule applies to the first semicolon-style statement (`const`, `return`, `export { }`, a type alias, and similar). A function or class on its own does not count. `";"` when the file has no such statement. |
 | `indentUnit` | One indent level, from the first non-comment statement in a block. A column-zero comment is skipped. Tabs stay tabs. Two spaces when no block shows a deeper line. |
 
-The first module specifier wins. Later imports that use a different quote are ignored. This does not read Prettier or EditorConfig.
+The first module specifier wins. Later imports, and strings elsewhere in the file, are ignored while a specifier exists. This does not read Prettier or EditorConfig.
 
 ## `getLineIndent`
 

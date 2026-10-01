@@ -6,9 +6,15 @@ import type { SgNode } from "@codemod.com/jssg-types/main";
 type Language = JS | TS | TSX;
 
 export interface FileStyle {
-  /** Quote used by the first module specifier. `'` when the file has none. */
+  /**
+   * Quote of the first module specifier. When the file has none, quote of the
+   * first string literal. `'` when the file has neither.
+   */
   quote: string;
-  /** `";"` when the first module specifier's statement ends with one, otherwise `""`. */
+  /**
+   * `";"` or `""` from that specifier's statement. With no specifier, from the
+   * first semicolon-style statement. `";"` when the file has neither.
+   */
   semicolon: string;
   /** Whitespace of one indent level. Two spaces when the file has no indented block. */
   indentUnit: string;
@@ -112,10 +118,22 @@ interface StyleHit {
   semicolon: string;
 }
 
+const SEMICOLON_STATEMENT_KINDS = [
+  "expression_statement",
+  "lexical_declaration",
+  "variable_declaration",
+  "return_statement",
+  "throw_statement",
+  "break_statement",
+  "continue_statement",
+  "debugger_statement",
+  "export_statement",
+] as const;
+
 /**
- * Quote and semicolon of the first import or require/import() call in the file.
- * A file with no module specifier keeps `'` and `;`, including when other
- * statements omit semicolons.
+ * Quote and semicolon of the first module specifier in the file.
+ * With none, the first string literal and the first semicolon-style statement.
+ * `'` and `;` remain only when the file has nothing to sample.
  */
 function detectQuoteAndSemicolon<T extends Language>(
   program: SgNode<T, "program">,
@@ -126,14 +144,17 @@ function detectQuoteAndSemicolon<T extends Language>(
   const hits: StyleHit[] = [];
   const root = program as unknown as SgNode<Language, "program">;
 
-  for (const statement of root.findAll({ rule: { kind: "import_statement" } })) {
-    const sourceNode = statement.field("source");
-    if (!sourceNode) continue;
-    hits.push({
-      index: statement.range().start.index,
-      quote: quoteOf(sourceNode as SgNode<Language>),
-      semicolon: semicolonOf(statement as SgNode<Language>),
-    });
+  for (const kind of ["import_statement", "export_statement"] as const) {
+    for (const statement of root.findAll({ rule: { kind } })) {
+      const typed = statement as unknown as SgNode<TS>;
+      const sourceNode = typed.field("source");
+      if (!sourceNode) continue;
+      hits.push({
+        index: typed.range().start.index,
+        quote: quoteOf(sourceNode as SgNode<Language>),
+        semicolon: semicolonOf(typed as SgNode<Language>),
+      });
+    }
   }
 
   const calls = root.findAll({
@@ -169,10 +190,73 @@ function detectQuoteAndSemicolon<T extends Language>(
 
   hits.sort((left, right) => left.index - right.index);
   const first = hits[0];
-  if (!first) {
-    return { quote: FALLBACK_QUOTE, semicolon: FALLBACK_SEMICOLON };
+  if (first) {
+    return { quote: first.quote, semicolon: first.semicolon };
   }
-  return { quote: first.quote, semicolon: first.semicolon };
+
+  return {
+    quote: firstStringQuote(root) ?? FALLBACK_QUOTE,
+    semicolon: firstStatementSemicolon(root) ?? FALLBACK_SEMICOLON,
+  };
+}
+
+/**
+ * A declaration export ends with `}` and does not choose semicolon style.
+ * An export clause does, including one that omits the semicolon.
+ */
+function exportStatesSemicolonStyle(statement: SgNode<Language>): boolean {
+  if (statement.find({ rule: { kind: "export_clause" } })) return true;
+  return !statement.text().trimEnd().endsWith("}");
+}
+
+function firstStringQuote(root: SgNode<Language>): string | null {
+  let quote: string | null = null;
+  let index = Number.POSITIVE_INFINITY;
+
+  for (const node of root.findAll({ rule: { kind: "string" } })) {
+    const start = node.range().start.index;
+    if (start >= index) continue;
+    index = start;
+    quote = quoteOf(node as SgNode<Language>);
+  }
+
+  return quote;
+}
+
+function considerStatement(
+  node: SgNode<Language>,
+  best: { index: number; semicolon: string | null },
+): void {
+  if (node.kind() === "export_statement" && !exportStatesSemicolonStyle(node)) return;
+
+  const start = node.range().start.index;
+  if (start >= best.index) return;
+  best.index = start;
+  best.semicolon = semicolonOf(node);
+}
+
+function firstStatementSemicolon(root: SgNode<Language>): string | null {
+  const best: { index: number; semicolon: string | null } = {
+    index: Number.POSITIVE_INFINITY,
+    semicolon: null,
+  };
+
+  for (const kind of SEMICOLON_STATEMENT_KINDS) {
+    for (const node of root.findAll({ rule: { kind } })) {
+      considerStatement(node as SgNode<Language>, best);
+    }
+  }
+
+  // JavaScript has no type-alias node. A missing kind rejects the rule.
+  try {
+    for (const node of root.findAll({ rule: { kind: "type_alias_declaration" } })) {
+      considerStatement(node as SgNode<Language>, best);
+    }
+  } catch {
+    return best.semicolon;
+  }
+
+  return best.semicolon;
 }
 
 /**
@@ -203,7 +287,8 @@ function detectIndentUnit<T extends Language>(program: SgNode<T, "program">): st
 
 /**
  * Quote, semicolon, and indent used by this file.
- * The first module specifier wins. Later imports that disagree are ignored.
+ * The first module specifier wins. With none, the first string and the first
+ * semicolon-style statement do.
  */
 export function getFileStyle<T extends Language>(program: SgNode<T, "program">): FileStyle {
   return {

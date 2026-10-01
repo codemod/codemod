@@ -7,13 +7,55 @@ function parseProgram(src: string) {
   return parse<TS>("typescript", src).root();
 }
 
-function testFallbackWhenFileHasNoImport() {
-  const program = parseProgram("const x = 1\n");
-  const style = getFileStyle(program);
+function testFileWithoutSpecifierUsesItsOwnStatements() {
+  const bare = getFileStyle(parseProgram("const x = 1\n"));
+  assert(bare.quote === "'", "A file with no string keeps single quotes");
+  assert(bare.semicolon === "", "A statement that omits the semicolon is sampled");
+  assert(bare.indentUnit === "  ", "A file with no block uses two spaces");
 
-  assert(style.quote === "'", "A file with no import keeps single quotes");
-  assert(style.semicolon === ";", "A file with no import keeps a semicolon");
-  assert(style.indentUnit === "  ", "A file with no block uses two spaces");
+  const styled = getFileStyle(
+    parseProgram('const msg = "hello"\n\nexport function f() {\n  return 1\n}\n'),
+  );
+  assert(styled.quote === '"', "The first string literal provides the quote");
+  assert(styled.semicolon === "", "The first semicolon-style statement provides the semicolon");
+
+  const withSemicolon = getFileStyle(parseProgram("const x = 1;\n"));
+  assert(withSemicolon.quote === "'", "No string still keeps single quotes");
+  assert(withSemicolon.semicolon === ";", "A statement that ends with a semicolon is sampled");
+}
+
+function testNothingToSampleKeepsFallbacks() {
+  const style = getFileStyle(parseProgram("function f() {}\n"));
+
+  assert(style.quote === "'", "A file with no string keeps single quotes");
+  assert(style.semicolon === ";", "A function declaration does not choose semicolon style");
+}
+
+function testFirstStringWinsWhenThereIsNoSpecifier() {
+  const style = getFileStyle(parseProgram("const a = \"one\"\nconst b = 'two';\n"));
+
+  assert(style.quote === '"', "The first string literal wins");
+  assert(style.semicolon === "", "The first statement wins over a later semicolon");
+}
+
+function testReturnAndExportClauseSetSemicolon() {
+  const returned = getFileStyle(parseProgram("function f() {\n  return 1;\n}\n"));
+  assert(returned.semicolon === ";", "A return statement inside a function is sampled");
+
+  const clause = getFileStyle(parseProgram("export { a }\n"));
+  assert(clause.quote === "'", "An export clause with no string keeps single quotes");
+  assert(clause.semicolon === "", "An export clause can omit the semicolon");
+
+  const typeAlias = getFileStyle(parseProgram('type Foo = "bar"\n'));
+  assert(typeAlias.quote === '"', "A type alias string provides the quote");
+  assert(typeAlias.semicolon === "", "A type alias can omit the semicolon");
+}
+
+function testReexportSpecifierWinsOverLaterCode() {
+  const style = getFileStyle(parseProgram("const name = 'local'\nexport { a } from \"mod\";\n"));
+
+  assert(style.quote === '"', "The re-export specifier wins over an earlier string");
+  assert(style.semicolon === ";", "The re-export statement wins over an earlier statement");
 }
 
 function testFirstImportWinsOverLaterQuotes() {
@@ -89,7 +131,11 @@ function testIndentTextLeavesBlankLinesBlank() {
 }
 
 function run() {
-  testFallbackWhenFileHasNoImport();
+  testFileWithoutSpecifierUsesItsOwnStatements();
+  testNothingToSampleKeepsFallbacks();
+  testFirstStringWinsWhenThereIsNoSpecifier();
+  testReturnAndExportClauseSetSemicolon();
+  testReexportSpecifierWinsOverLaterCode();
   testFirstImportWinsOverLaterQuotes();
   testTypeOnlyAndSideEffectImportsStillSetStyle();
   testRequireCallSetsStyleWhenThereIsNoImportStatement();
