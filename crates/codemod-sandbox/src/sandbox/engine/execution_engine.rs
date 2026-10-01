@@ -5,7 +5,7 @@ use super::curated_fs::{
 };
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use super::transform_helpers::{
-    build_transform_options, process_transform_result, ModificationCheck,
+    build_transform_options, extract_transform_output, process_transform_result, ModificationCheck,
 };
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
@@ -24,6 +24,7 @@ use ast_grep_core::AstGrep;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use language_core::SemanticProvider;
+use rquickjs::loader::Loader;
 use rquickjs::prelude::Rest;
 use rquickjs::{async_with, AsyncContext, AsyncRuntime, Ctx, Object, Type, Value};
 use rquickjs::{CatchResultExt, Function, Module};
@@ -50,6 +51,17 @@ pub struct DryRunExecutionFlag(pub bool);
 
 unsafe impl<'js> rquickjs::JsLifetime<'js> for DryRunExecutionFlag {
     type Changed<'to> = DryRunExecutionFlag;
+}
+
+/// When set, `SgRoot.write()` on a semantic definition/reference root records
+/// a `FileChange` in `JssgFileChanges` instead of writing to disk, so a host
+/// that stages edits (the TypeScript orchestration worker) sees every edit
+/// as data. Absent or `false` keeps the engine's direct write.
+#[derive(Debug, Clone, Copy)]
+pub struct StageFileWrites(pub bool);
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for StageFileWrites {
+    type Changed<'to> = StageFileWrites;
 }
 
 fn install_console_bridge(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
@@ -159,6 +171,8 @@ pub struct FileChange {
 pub struct CodemodOutput {
     pub primary: ExecutionResult,
     pub secondary: Vec<FileChange>,
+    /// JSON data returned by `{ content, output }`; independent of file edits.
+    pub output: Option<serde_json::Value>,
 }
 
 /// Shared accumulator for file changes produced by `jssgTransform`.
@@ -250,6 +264,10 @@ pub struct JssgExecutionOptions<'a, R> {
     pub test_mode: bool,
     /// Whether this is a dry-run execution (passed to codemod via options.dryRun)
     pub dry_run: bool,
+    /// Route `SgRoot.write()` on semantic roots into `CodemodOutput::secondary`
+    /// instead of writing to disk. Hosts that stage and commit edits themselves
+    /// set this; the workflow engine leaves it `false`.
+    pub stage_writes: bool,
     /// The target directory the codemod is running against.
     /// Used to validate that `jssgTransform` and `rename()` only access files within this directory.
     pub target_directory: &'a Path,
@@ -349,6 +367,23 @@ pub async fn execute_codemod_with_quickjs<'a, R>(
 ) -> Result<CodemodOutput, ExecutionError>
 where
     R: ModuleResolver + 'static,
+{
+    execute_codemod_with_loader(options, QuickJSLoader).await
+}
+
+/// [`execute_codemod_with_quickjs`] with the loader that serves the transform
+/// module and its non-builtin imports. The engine, CLI, and MCP load scripts
+/// from disk through [`QuickJSLoader`]; a host that holds a self-contained
+/// bundle in memory pairs an [`crate::sandbox::resolvers::InMemoryResolver`]
+/// with an [`crate::sandbox::resolvers::InMemoryLoader`], and `script_path`
+/// is then only the virtual module name the entry imports.
+pub async fn execute_codemod_with_loader<'a, R, L>(
+    options: JssgExecutionOptions<'a, R>,
+    loader: L,
+) -> Result<CodemodOutput, ExecutionError>
+where
+    R: ModuleResolver + 'static,
+    L: Loader + 'static,
 {
     let script_name = options
         .script_path
@@ -450,14 +485,10 @@ where
     }
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
-    let fs_loader = QuickJSLoader;
 
     // Combine resolvers and loaders
     runtime
-        .set_loader(
-            (built_in_resolver, fs_resolver),
-            (built_in_loader, fs_loader),
-        )
+        .set_loader((built_in_resolver, fs_resolver), (built_in_loader, loader))
         .await;
 
     let context = AsyncContext::full(&runtime)
@@ -494,6 +525,12 @@ where
         ctx.store_userdata(DryRunExecutionFlag(options.dry_run)).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store DryRunExecutionFlag: {:?}", e),
+            },
+        })?;
+
+        ctx.store_userdata(StageFileWrites(options.stage_writes)).map_err(|e| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
+                message: format!("Failed to store StageFileWrites: {:?}", e),
             },
         })?;
 
@@ -659,7 +696,11 @@ where
                     .collect();
 
                 if ast_matches.is_empty() {
-                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![] });
+                    return Ok(CodemodOutput {
+                        primary: ExecutionResult::Skipped,
+                        secondary: vec![],
+                        output: None,
+                    });
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
@@ -702,8 +743,10 @@ where
                 .catch(&ctx)
                 .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
+            let (content_result, output) = extract_transform_output(&ctx, result_obj)?;
+
             let primary = process_transform_result(
-                &result_obj,
+                &content_result,
                 &sg_root_inner,
                 ModificationCheck::StringEquality { original_content: options.content },
             )?;
@@ -712,7 +755,7 @@ where
                 .map(|guard| guard.clone())
                 .unwrap_or_default();
 
-            Ok(CodemodOutput { primary, secondary })
+            Ok(CodemodOutput { primary, secondary, output })
         };
         execution.await
     })
@@ -1219,6 +1262,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1293,6 +1337,7 @@ export default async function transform() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1363,6 +1408,7 @@ export default async function transform() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1438,6 +1484,7 @@ export default function transform(root, options) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: true,
+            stage_writes: false,
             target_directory: &target_dir,
         };
 
@@ -1552,6 +1599,7 @@ export default function transform(root, options) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: &target_dir,
         };
 
@@ -1615,6 +1663,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1668,6 +1717,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1721,6 +1771,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1766,6 +1817,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1783,6 +1835,112 @@ function example() {
             ),
             Err(e) => panic!("Expected specific runtime error, got: {:?}", e),
         }
+    }
+
+    fn structured_options<'a>(
+        codemod_path: &'a Path,
+        resolver: Arc<OxcResolver>,
+        content: &'a str,
+        target_directory: &'a Path,
+    ) -> JssgExecutionOptions<'a, OxcResolver> {
+        JssgExecutionOptions {
+            script_path: codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content,
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            llm_request_handler: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            stage_writes: false,
+            target_directory,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_top_level_structured_result_returns_content_and_output() {
+        let codemod_content = r#"
+export default function transform(root) {
+  return { content: root.root().text().replace("old", "new"), output: { changed: true } };
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = structured_options(&codemod_path, resolver, "old();", temp_dir.path());
+
+        let output = execute_codemod_with_quickjs(options)
+            .await
+            .expect("structured result executes");
+        assert_eq!(output.output, Some(serde_json::json!({ "changed": true })));
+        match output.primary {
+            ExecutionResult::Modified(modified) => assert_eq!(modified.content, "new();"),
+            other => panic!("Expected modified result, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_top_level_structured_result_without_output_is_rejected() {
+        let codemod_content = r#"
+export default function transform(root) {
+  return { content: root.root().text() };
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = structured_options(&codemod_path, resolver, "old();", temp_dir.path());
+
+        let error = execute_codemod_with_quickjs(options)
+            .await
+            .expect_err("object without output must fail");
+        assert!(
+            error.to_string().contains("must contain an 'output' field"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jssg_transform_rejects_structured_results() {
+        let codemod_content = r#"
+import { jssgTransform } from "codemod:ast-grep";
+export default async function transform(root, options) {
+  await jssgTransform(
+    async (secondary) => ({ content: secondary.root().text(), output: 1 }),
+    options.targetDir + "/secondary.js",
+    "javascript",
+  );
+  return null;
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        fs::write(temp_dir.path().join("secondary.js"), "old();").expect("secondary file");
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = structured_options(&codemod_path, resolver, "primary();", temp_dir.path());
+
+        let error = execute_codemod_with_quickjs(options)
+            .await
+            .expect_err("structured secondary result must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("jssgTransform() transforms must return a string or null"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read_to_string(temp_dir.path().join("secondary.js")).expect("secondary"),
+            "old();"
+        );
     }
 
     #[tokio::test]
@@ -1816,6 +1974,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1927,6 +2086,7 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2007,6 +2167,7 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2055,6 +2216,7 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2103,6 +2265,7 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2151,6 +2314,7 @@ export default async function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
+            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2201,5 +2365,70 @@ export default function shard(input) {
             }
             other => panic!("Expected runtime hook error, got: {:?}", other),
         }
+    }
+
+    /// A self-contained bundle runs from memory under a virtual module name:
+    /// nothing is read from disk, built-in `codemod:*` modules still resolve,
+    /// and errors name the virtual module.
+    #[tokio::test]
+    async fn test_execute_codemod_with_in_memory_loader() {
+        use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver};
+
+        let bundle = r#"import { jssgTransform } from "codemod:ast-grep";
+var greeting = "logger";
+export default function transform(root) {
+  if (root.root().text().includes("boom")) throw new Error("boom");
+  return root.root().text().replaceAll("console", greeting) + (typeof jssgTransform);
+}"#;
+        let mut resolver = InMemoryResolver::new();
+        resolver.add_module_with_source(
+            "./migrate.jssg.js".to_string(),
+            "migrate.jssg.js".to_string(),
+            bundle.to_string(),
+        );
+        let resolver = Arc::new(resolver);
+        let run = |content: &'static str| {
+            let resolver = Arc::clone(&resolver);
+            async move {
+                execute_codemod_with_loader(
+                    JssgExecutionOptions {
+                        script_path: Path::new("migrate.jssg.js"),
+                        resolver: Arc::clone(&resolver),
+                        language: js_lang(),
+                        file_path: Path::new("test.js"),
+                        content,
+                        selector_config: None,
+                        params: None,
+                        matrix_values: None,
+                        capabilities: None,
+                        semantic_provider: None,
+                        metrics_context: None,
+                        llm_request_handler: None,
+                        shared_state_context: None,
+                        runtime_event_callback: None,
+                        cancellation_flag: None,
+                        test_mode: false,
+                        dry_run: false,
+                        stage_writes: false,
+                        target_directory: Path::new("."),
+                    },
+                    InMemoryLoader::new(resolver),
+                )
+                .await
+            }
+        };
+
+        match run("console.log(1);").await.expect("bundle runs").primary {
+            ExecutionResult::Modified(modified) => {
+                assert_eq!(modified.content, "logger.log(1);function");
+            }
+            other => panic!("Expected modified result, got: {other:?}"),
+        }
+        let error = run("boom();").await.expect_err("transform throws");
+        let message = error.to_string();
+        assert!(
+            message.contains("boom") && message.contains("migrate.jssg.js"),
+            "{message}"
+        );
     }
 }

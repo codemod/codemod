@@ -1,0 +1,25 @@
+{
+  "protocolVersion": 8,
+  "commandId": "review-diff",
+  "status": "succeeded",
+  "output": {
+    "model": "jev-1.13.0",
+    "answers": {
+      "risk": {
+        "type": "choice",
+        "choice": "low",
+        "probabilities": { "low": 0.86, "medium": 0.1, "high": 0.04 },
+        "confidence": 0.81
+      },
+      "completeness": {
+        "type": "score",
+        "score": 1.9,
+        "legend": { "0": "Not started", "1": "Partial", "2": "Complete" },
+        "probabilities": { "0": 0.02, "1": 0.06, "2": 0.92 },
+        "confidence": 0.87
+      },
+      "touchesTests": { "type": "noul", "noul": 0.03 }
+    },
+    "usage": { "inputTokens": 312, "outputTokens": 48 }
+  }
+}

@@ -259,6 +259,17 @@ fn jssg_transform_rjs<'js>(
             .await
             .map_err(|e| Exception::throw_message(&ctx2, &format!("Transform failed: {e}")))?;
 
+        // Structured `{ content, output }` results are only understood for the
+        // top-level transform, where the engine collects `output`. A secondary
+        // transform has nowhere to deliver structured data, so it is rejected
+        // rather than silently discarded.
+        if result.is_object() {
+            return Err(Exception::throw_message(
+                &ctx2,
+                "jssgTransform() transforms must return a string or null; structured { content, output } results are only supported from the top-level transform",
+            ));
+        }
+
         let exec_result = process_transform_result(
             &result,
             &sg_root_inner,

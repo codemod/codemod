@@ -1,0 +1,150 @@
+{
+  "description": "File-walker parity contract. Both crates/execution-bridge/tests/walker_parity.rs (codemod_walk_builder + OverrideBuilder, the workflow engine's walker) and packages/orchestration/tests/walker.test.ts (the TypeScript walker) materialize `files` and `symlinks` into a temporary directory and must produce exactly `expected` for every case. Paths are relative to the root, `/`-separated, sorted component-wise.",
+  "files": {
+    ".gitignore": "ignored/\n*.generated.ts\n!keep.generated.ts\nbuild\n/top-only.ts\n# comment\n\n",
+    ".ignore": "scratch/\n",
+    "kept.ts": "",
+    "top-only.ts": "",
+    "src/top-only.ts": "",
+    ".hidden/h.ts": "",
+    "ignored/i.ts": "",
+    "scratch/s.ts": "",
+    "src/a.ts": "",
+    "src/b.ts": "",
+    "src/x.generated.ts": "",
+    "src/keep.generated.ts": "",
+    "src/nested/.gitignore": "deep.ts\n",
+    "src/nested/deep.ts": "",
+    "src/nested/kept.ts": "",
+    "src/build/o.ts": "",
+    "build/out.ts": "",
+    "docs/readme.md": "",
+    "app/src/c.tsx": "",
+    "a-b/c.ts": "",
+    "a/b.ts": "",
+    "sub/.git/HEAD": "ref: refs/heads/main\n",
+    "sub/.git/info/exclude": "local.ts\n",
+    "sub/.gitignore": "",
+    "sub/local.ts": "",
+    "sub/keep.ts": "",
+    "sub/y.generated.ts": "",
+    "sub/scratch/t.ts": ""
+  },
+  "symlinks": {
+    "link-to-kept.ts": "kept.ts",
+    "linkdir": "src"
+  },
+  "cases": [
+    {
+      "name": "no overrides: hidden files and .git contents visited, .gitignore/.ignore/.git-info-exclude honored without require_git, symlinks skipped, parent ignore files apply across a nested .git",
+      "expected": [
+        ".gitignore",
+        ".hidden/h.ts",
+        ".ignore",
+        "a/b.ts",
+        "a-b/c.ts",
+        "app/src/c.tsx",
+        "docs/readme.md",
+        "kept.ts",
+        "src/a.ts",
+        "src/b.ts",
+        "src/keep.generated.ts",
+        "src/nested/.gitignore",
+        "src/nested/kept.ts",
+        "src/top-only.ts",
+        "sub/.git/HEAD",
+        "sub/.git/info/exclude",
+        "sub/.gitignore",
+        "sub/keep.ts"
+      ]
+    },
+    {
+      "name": "include glob whitelists files even when an ignore file matches them, but pruned directories stay pruned",
+      "include": ["**/*.ts"],
+      "expected": [
+        ".hidden/h.ts",
+        "a/b.ts",
+        "a-b/c.ts",
+        "kept.ts",
+        "src/a.ts",
+        "src/b.ts",
+        "src/keep.generated.ts",
+        "src/nested/deep.ts",
+        "src/nested/kept.ts",
+        "src/top-only.ts",
+        "src/x.generated.ts",
+        "sub/keep.ts",
+        "sub/local.ts",
+        "sub/y.generated.ts",
+        "top-only.ts"
+      ]
+    },
+    {
+      "name": "extension-only include matches at any depth",
+      "include": ["*.tsx"],
+      "expected": ["app/src/c.tsx"]
+    },
+    {
+      "name": "basename exclude prunes directories at any depth",
+      "include": ["**/*.ts"],
+      "exclude": ["nested"],
+      "expected": [
+        ".hidden/h.ts",
+        "a/b.ts",
+        "a-b/c.ts",
+        "kept.ts",
+        "src/a.ts",
+        "src/b.ts",
+        "src/keep.generated.ts",
+        "src/top-only.ts",
+        "src/x.generated.ts",
+        "sub/keep.ts",
+        "sub/local.ts",
+        "sub/y.generated.ts",
+        "top-only.ts"
+      ]
+    },
+    {
+      "name": "anchored directory include with trailing /** whitelists directories too (src/build ignores its gitignore rule), and a later exclude wins",
+      "include": ["src/**"],
+      "exclude": ["**/*.generated.ts"],
+      "expected": [
+        "src/a.ts",
+        "src/b.ts",
+        "src/build/o.ts",
+        "src/nested/.gitignore",
+        "src/nested/deep.ts",
+        "src/nested/kept.ts",
+        "src/top-only.ts"
+      ]
+    },
+    {
+      "name": "brace alternation and question mark",
+      "include": ["**/*.{md,tsx}", "src/?.ts"],
+      "expected": ["app/src/c.tsx", "docs/readme.md", "src/a.ts", "src/b.ts"]
+    },
+    {
+      "name": "exclude-only overrides do not whitelist, so ignore files still apply",
+      "exclude": ["docs/**"],
+      "expected": [
+        ".gitignore",
+        ".hidden/h.ts",
+        ".ignore",
+        "a/b.ts",
+        "a-b/c.ts",
+        "app/src/c.tsx",
+        "kept.ts",
+        "src/a.ts",
+        "src/b.ts",
+        "src/keep.generated.ts",
+        "src/nested/.gitignore",
+        "src/nested/kept.ts",
+        "src/top-only.ts",
+        "sub/.git/HEAD",
+        "sub/.git/info/exclude",
+        "sub/.gitignore",
+        "sub/keep.ts"
+      ]
+    }
+  ]
+}
