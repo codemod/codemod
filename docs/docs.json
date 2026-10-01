@@ -68,8 +68,12 @@
             "group": "Enterprise",
             "pages": [
               "enterprise/quickstart",
-              "enterprise/codemod-wish",
-              "enterprise/wish-investigation",
+              {
+                "icon": "wand-magic-sparkles",
+                "group": "Wish",
+                "root": "enterprise/codemod-wish",
+                "pages": ["enterprise/wish-investigation"]
+              },
               "enterprise/grep",
               {
                 "icon": "chart-simple",

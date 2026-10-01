@@ -1,12 +1,12 @@
 ---
-title: 'Investigate codebases with Wish'
-sidebarTitle: 'Investigation mode'
+title: 'Investigation mode'
+sidebarTitle: 'Investigation'
 description: 'Answer codebase questions with source-backed findings, reproducible Grep queries, relationship maps, and explicit limitations.'
 icon: 'microscope'
 tag: 'NEW'
 ---
 
-Investigation mode helps you answer behavioral questions about one or more repositories. Wish searches the indexed source, reads the relevant ranges, and returns a report that separates supported findings from unresolved questions.
+Investigation helps you answer behavioral questions about one or more repositories. Wish searches the indexed source, reads the relevant ranges, and returns a report that separates supported findings from unresolved questions.
 
 Use it when you need an answer you can inspect and reproduce, such as:
 
@@ -17,7 +17,7 @@ Use it when you need an answer you can inspect and reproduce, such as:
 
 ## Before you start
 
-You need access to at least one connected repository with an available code index. Investigation mode reads the indexed revision; it does not clone or execute the repository.
+You need access to at least one connected repository with an available code index. Investigation reads the indexed revision; it does not clone or execute the repository.
 
 ## Run an investigation
 
@@ -25,7 +25,7 @@ You need access to at least one connected repository with an available code inde
   <Step title="Open Wish">
     Click **Ask Codemod Wish** in the bottom-right corner of the app. You can also use `Cmd+J` on macOS or `Ctrl+J` on Windows and Linux.
   </Step>
-  <Step title="Add Investigation mode">
+  <Step title="Add Investigation">
     Type `@investigate` and select **Investigate** from the menu.
   </Step>
   <Step title="Tag the repositories">
@@ -91,7 +91,7 @@ Keep the question specific enough that the relationship between repositories is 
 
 <AccordionGroup>
   <Accordion title="Wish asks you to tag a repository">
-    Add one or more repository mentions to the same message as `@investigate`. Investigation mode only searches repositories that you explicitly include.
+    Add one or more repository mentions to the same message as `@investigate`. Investigation only searches repositories that you explicitly include.
   </Accordion>
   <Accordion title="The report includes limitations">
     Review **Limitations** for the specific parts of the question that remain unresolved and their suggested next checks. Limited or failed exploratory searches remain visible under **Queries** for transparency, but they do not make the report incomplete when the investigation recovered another way.
