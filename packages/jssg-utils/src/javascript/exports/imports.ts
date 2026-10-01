@@ -3,6 +3,7 @@ import type TSX from "@codemod.com/jssg-types/langs/tsx";
 import type TS from "@codemod.com/jssg-types/langs/typescript";
 import type { Rule, SgNode } from "@codemod.com/jssg-types/main";
 import { stringToExactRegexString } from "../../utils";
+import { getFileStyle } from "./style";
 
 export { stringToExactRegexString };
 
@@ -32,7 +33,7 @@ type ResolvedImport<T extends Language> = NonNullable<GetImportResult<T>>;
 // Import Manipulation Types
 // ============================================================================
 
-type ImportSpecifier = { name: string; alias?: string };
+type ImportSpecifier = { name: string; alias?: string; isTypeOnly?: boolean };
 
 type AddImportOptions =
   | { type: "default"; name: string; from: string; moduleType?: "esm" | "cjs" }
@@ -619,15 +620,15 @@ function findAllImportStatements<T extends Language>(program: SgNode<T, "program
 }
 
 /**
- * Find an existing ESM import statement from a specific source.
+ * Every ESM import of `source`, in source order.
+ * Callers that merge a value specifier must skip an earlier `import type`.
  */
-function findExistingEsmImport<T extends Language>(
+function findEsmImportsFrom<T extends Language>(
   program: SgNode<T, "program">,
   source: string,
-): SgNode<T, "import_statement"> | null {
+): Array<SgNode<T, "import_statement">> {
   const tsProgram = program as unknown as SgNode<TS, "program">;
-
-  const importStmt = tsProgram.find({
+  const imports = tsProgram.findAll({
     rule: {
       kind: "import_statement",
       has: {
@@ -640,7 +641,11 @@ function findExistingEsmImport<T extends Language>(
     },
   });
 
-  return importStmt as unknown as SgNode<T, "import_statement"> | null;
+  return imports
+    .slice()
+    .sort(
+      (left, right) => left.range().start.index - right.range().start.index,
+    ) as unknown as Array<SgNode<T, "import_statement">>;
 }
 
 /**
@@ -661,45 +666,58 @@ function formatSpecifier(
   spec: ImportSpecifier,
   kind: "named_imports" | "object_pattern" = "named_imports",
 ): string {
+  const typePrefix = spec.isTypeOnly && kind === "named_imports" ? "type " : "";
   if (spec.alias && spec.alias !== spec.name) {
-    if (kind === "named_imports") return `${spec.name} as ${spec.alias}`;
+    if (kind === "named_imports") return `${typePrefix}${spec.name} as ${spec.alias}`;
     if (kind === "object_pattern") return `${spec.name}: ${spec.alias}`;
   }
-  return spec.name;
+  return `${typePrefix}${spec.name}`;
+}
+
+interface StatementStyle {
+  quote: string;
+  semicolon: string;
+}
+
+function quoteSource(source: string, quote: string): string {
+  return `${quote}${source}${quote}`;
 }
 
 /**
  * Generate ESM import statement text.
+ * Type-only named specifiers use an inline `type` modifier, not `import type`,
+ * so a later value specifier can still join the same statement.
  */
-function generateEsmImport(options: AddImportOptions): string {
-  const source = options.from;
+function generateEsmImport(options: AddImportOptions, style: StatementStyle): string {
+  const source = quoteSource(options.from, style.quote);
+  const semicolon = style.semicolon;
 
   if (options.type === "default") {
-    return `import ${options.name} from '${source}';\n`;
+    return `import ${options.name} from ${source}${semicolon}\n`;
   }
 
   if (options.type === "namespace") {
-    return `import * as ${options.name} from '${source}';\n`;
+    return `import * as ${options.name} from ${source}${semicolon}\n`;
   }
 
-  // Named imports
   const specifierStr = options.specifiers.map((spec) => formatSpecifier(spec)).join(", ");
-  return `import { ${specifierStr} } from '${source}';\n`;
+  return `import { ${specifierStr} } from ${source}${semicolon}\n`;
 }
 
 /**
  * Generate CJS require statement text.
  */
-function generateCjsRequire(options: AddImportOptions): string {
-  const source = options.from;
+function generateCjsRequire(options: AddImportOptions, style: StatementStyle): string {
+  const source = quoteSource(options.from, style.quote);
+  const semicolon = style.semicolon;
 
   if (options.type === "default") {
-    return `const ${options.name} = require('${source}');\n`;
+    return `const ${options.name} = require(${source})${semicolon}\n`;
   }
 
   if (options.type === "namespace") {
     // Namespace-like for CJS
-    return `const ${options.name} = require('${source}');\n`;
+    return `const ${options.name} = require(${source})${semicolon}\n`;
   }
 
   // Named imports (destructured require)
@@ -711,7 +729,7 @@ function generateCjsRequire(options: AddImportOptions): string {
       return spec.name;
     })
     .join(", ");
-  return `const { ${specifierStr} } = require('${source}');\n`;
+  return `const { ${specifierStr} } = require(${source})${semicolon}\n`;
 }
 
 /**
@@ -1240,11 +1258,608 @@ export const getAllImports = <T extends Language>(
   return results;
 };
 
+export interface ListedSpecifier<T extends Language> {
+  importedName: string;
+  localName: string;
+  /** True for `import type` and for an inline `type` modifier. */
+  isTypeOnly: boolean;
+  node: SgNode<T>;
+}
+
+export interface ListedImport<T extends Language> {
+  node: SgNode<T>;
+  source: string;
+  quote: string;
+  hasSemicolon: boolean;
+  moduleType: "esm" | "cjs";
+  /** True only for a statement-level `import type`, not an inline `type` modifier. */
+  isTypeOnly: boolean;
+  defaultName: string | null;
+  namespaceName: string | null;
+  specifiers: Array<ListedSpecifier<T>>;
+}
+
+export type ListImportsOptions = {
+  /** Exact module specifier, or a list of them. `"mod"` does not match `"mod/extra"`. */
+  from?: string | readonly string[];
+};
+
+function stringLiteralParts(stringNode: SgNode<TS>): { source: string; quote: string } | null {
+  const fragments = stringNode.findAll({ rule: { kind: "string_fragment" } });
+  if (fragments.length === 0) return null;
+  const quote = stringNode.text().charAt(0);
+  return {
+    source: fragments.map((fragment) => fragment.text()).join(""),
+    quote: quote === "'" || quote === '"' || quote === "`" ? quote : "'",
+  };
+}
+
+function statementHasSemicolon(statement: SgNode<TS>): boolean {
+  return statement.text().trimEnd().endsWith(";");
+}
+
+function literalSpecifierOfCall(call: SgNode<TS>): { source: string; quote: string } | null {
+  const args = call.field("arguments");
+  if (!args || args.kind() !== "arguments") return null;
+
+  let first: SgNode<TS> | null = null;
+  for (const child of args.children()) {
+    const kind = child.kind();
+    if (kind === "(" || kind === ")" || kind === ",") continue;
+    first = child as SgNode<TS>;
+    break;
+  }
+  if (!first) return null;
+
+  const arg = unwrapParentheses(first);
+  if (arg.kind() !== "string") return null;
+  return stringLiteralParts(arg);
+}
+
+function moduleTypeOfCall(call: SgNode<TS>): "esm" | "cjs" | null {
+  const fn = call.field("function");
+  if (!fn) return null;
+  if (fn.text() === "require") return "cjs";
+  if (fn.text() === "import" || fn.kind() === "import") return "esm";
+  return null;
+}
+
+function specifiersFromObjectPattern(pattern: SgNode<TS>): Array<ListedSpecifier<TS>> {
+  const specifiers: Array<ListedSpecifier<TS>> = [];
+  for (const child of pattern.children()) {
+    if (
+      child.kind() !== "shorthand_property_identifier_pattern" &&
+      child.kind() !== "pair_pattern"
+    ) {
+      continue;
+    }
+    const read = readSpecifier(child);
+    if (!read) continue;
+    specifiers.push({
+      importedName: read.name,
+      localName: read.alias ?? read.name,
+      isTypeOnly: false,
+      node: child,
+    });
+  }
+  return specifiers;
+}
+
+function describeEsmImport(statement: SgNode<TS>): ListedImport<TS> | null {
+  const sourceNode = statement.field("source");
+  if (!sourceNode || sourceNode.kind() !== "string") return null;
+  const literal = stringLiteralParts(sourceNode as SgNode<TS>);
+  if (!literal) return null;
+
+  const isTypeOnly = statement.children().some((child) => child.kind() === "type");
+  let defaultName: string | null = null;
+  let namespaceName: string | null = null;
+  const clause = statement.find({ rule: { kind: "import_clause" } });
+  if (clause) {
+    for (const child of clause.children()) {
+      if (child.kind() === "identifier" && defaultName === null) {
+        defaultName = child.text();
+      } else if (child.kind() === "namespace_import") {
+        const identifier = child.children().find((inner) => inner.kind() === "identifier");
+        namespaceName = identifier?.text() ?? null;
+      }
+    }
+  }
+
+  const specifiers: Array<ListedSpecifier<TS>> = [];
+  const named = findNamedImports(statement);
+  if (named) {
+    for (const specifier of named.findAll({ rule: { kind: "import_specifier" } })) {
+      const read = readSpecifier(specifier);
+      if (!read) continue;
+      const inlineType = specifier.children().some((child) => child.kind() === "type");
+      specifiers.push({
+        importedName: read.name,
+        localName: read.alias ?? read.name,
+        isTypeOnly: isTypeOnly || inlineType,
+        node: specifier,
+      });
+    }
+  }
+
+  return {
+    node: statement,
+    source: literal.source,
+    quote: literal.quote,
+    hasSemicolon: statementHasSemicolon(statement),
+    moduleType: "esm",
+    isTypeOnly,
+    defaultName,
+    namespaceName,
+    specifiers,
+  };
+}
+
+function asImportCall(value: SgNode<TS>): { call: SgNode<TS>; moduleType: "esm" | "cjs" } | null {
+  let current = value;
+  if (current.kind() === "await_expression") {
+    const inner = current.children().find((child) => child.kind() === "call_expression");
+    if (!inner) return null;
+    current = inner as SgNode<TS>;
+  }
+  if (current.kind() !== "call_expression") return null;
+  const moduleType = moduleTypeOfCall(current);
+  if (!moduleType) return null;
+  return { call: current, moduleType };
+}
+
+function describeDeclaration(statement: SgNode<TS>): ListedImport<TS> | null {
+  const declarator = statement.find({ rule: { kind: "variable_declarator" } }) as SgNode<TS> | null;
+  if (!declarator) return null;
+  const name = declarator.field("name");
+  const value = declarator.field("value");
+  if (!name || !value) return null;
+
+  const imported = asImportCall(value as SgNode<TS>);
+  if (!imported) return null;
+  const literal = literalSpecifierOfCall(imported.call);
+  if (!literal) return null;
+
+  let defaultName: string | null = null;
+  let specifiers: Array<ListedSpecifier<TS>> = [];
+  if (name.kind() === "identifier") {
+    defaultName = name.text();
+  } else if (name.kind() === "object_pattern") {
+    specifiers = specifiersFromObjectPattern(name as SgNode<TS>);
+  }
+
+  return {
+    node: statement,
+    source: literal.source,
+    quote: literal.quote,
+    hasSemicolon: statementHasSemicolon(statement),
+    moduleType: imported.moduleType,
+    isTypeOnly: false,
+    defaultName,
+    namespaceName: null,
+    specifiers,
+  };
+}
+
+function describeCallbackBindings(fn: SgNode<TS>): {
+  namespaceName: string | null;
+  specifiers: Array<ListedSpecifier<TS>>;
+} {
+  const direct = fn.field("parameter");
+  if (direct?.kind() === "identifier") {
+    return { namespaceName: direct.text(), specifiers: [] };
+  }
+
+  const params = fn.field("parameters");
+  if (!params) return { namespaceName: null, specifiers: [] };
+
+  let namespaceName: string | null = null;
+  const specifiers: Array<ListedSpecifier<TS>> = [];
+  for (const child of params.children()) {
+    const binding =
+      child.kind() === "required_parameter"
+        ? (child.children().find((inner) => inner.isNamed()) ?? null)
+        : child;
+    if (!binding) continue;
+    if (binding.kind() === "identifier") {
+      namespaceName = binding.text();
+    } else if (binding.kind() === "object_pattern") {
+      specifiers.push(...specifiersFromObjectPattern(binding));
+    }
+  }
+  return { namespaceName, specifiers };
+}
+
+/**
+ * The callback of `import(...).then(...)`, not a `.catch` / `.finally` callback
+ * or an unrelated function in the same statement.
+ */
+function thenCallbackOfImport(importCall: SgNode<TS>): SgNode<TS> | null {
+  const ancestors = importCall.ancestors() as SgNode<TS>[];
+  let cursor = 0;
+  let receiver: SgNode<TS> = importCall;
+  while (ancestors[cursor]?.kind() === "parenthesized_expression") {
+    receiver = ancestors[cursor]!;
+    cursor += 1;
+  }
+
+  const member = ancestors[cursor];
+  if (!member || member.kind() !== "member_expression") return null;
+  const object = member.field("object");
+  const property = member.field("property");
+  if (!object || object.range().start.index !== receiver.range().start.index) return null;
+  if (property?.text() !== "then") return null;
+
+  const thenCall = ancestors[cursor + 1];
+  if (!thenCall || thenCall.kind() !== "call_expression") return null;
+  const called = thenCall.field("function");
+  if (!called || called.range().start.index !== member.range().start.index) return null;
+
+  const args = thenCall.field("arguments");
+  if (!args) return null;
+  for (const child of args.children()) {
+    const kind = child.kind();
+    if (kind === "(" || kind === ")" || kind === ",") continue;
+    if (kind === "arrow_function" || kind === "function_expression") {
+      return child as SgNode<TS>;
+    }
+    return null;
+  }
+  return null;
+}
+
+function describeDynamicExpression(statement: SgNode<TS>): ListedImport<TS> | null {
+  const importCall = statement.find({
+    rule: {
+      kind: "call_expression",
+      has: { field: "function", regex: "^import$" },
+    },
+  }) as SgNode<TS> | null;
+  if (!importCall) return null;
+  const literal = literalSpecifierOfCall(importCall);
+  if (!literal) return null;
+
+  const callback = thenCallbackOfImport(importCall);
+  const bindings = callback
+    ? describeCallbackBindings(callback)
+    : { namespaceName: null, specifiers: [] as Array<ListedSpecifier<TS>> };
+
+  return {
+    node: statement,
+    source: literal.source,
+    quote: literal.quote,
+    hasSemicolon: statementHasSemicolon(statement),
+    moduleType: "esm",
+    isTypeOnly: false,
+    defaultName: null,
+    namespaceName: bindings.namespaceName,
+    specifiers: bindings.specifiers,
+  };
+}
+
+function describeImportStatement(statement: SgNode<TS>): ListedImport<TS> | null {
+  const kind = statement.kind();
+  if (kind === "import_statement") return describeEsmImport(statement);
+  if (kind === "lexical_declaration" || kind === "variable_declaration") {
+    return describeDeclaration(statement);
+  }
+  if (kind === "expression_statement") return describeDynamicExpression(statement);
+  return null;
+}
+
+/**
+ * List import statements and the require/import() declarations this module
+ * already knows how to edit.
+ *
+ * Unlike `getAllImports`, this does not ask for a specifier name. Pass `from`
+ * to keep statements whose module specifier is exactly one of those strings.
+ *
+ * Multi-declarator CommonJS (`const a = require("mod"), b = 1`) is omitted,
+ * matching `removeImport`, so a later deletion cannot drop `b`.
+ * `const x = import("mod")` without `await` is omitted. `import("mod").then(...)`
+ * is included. A `.catch` or `.finally` callback is not an imported binding.
+ */
+export function listImports<T extends Language>(
+  program: SgNode<T, "program">,
+  options?: ListImportsOptions,
+): Array<ListedImport<T>> {
+  const from = options?.from;
+  const allowed = from === undefined ? null : new Set(typeof from === "string" ? [from] : from);
+  const listed: Array<ListedImport<T>> = [];
+
+  for (const statement of findAllImportStatements(program)) {
+    const described = describeImportStatement(statement as unknown as SgNode<TS>);
+    if (!described) continue;
+    if (allowed && !allowed.has(described.source)) continue;
+    listed.push(described as unknown as ListedImport<T>);
+  }
+
+  listed.sort((left, right) => left.node.range().start.index - right.node.range().start.index);
+  return listed;
+}
+
+function statementIsImportType<T extends Language>(importStmt: SgNode<T>): boolean {
+  return importStmt.children().some((child) => child.kind() === "type");
+}
+
+function withoutInlineType(specifiers: ImportSpecifier[]): ImportSpecifier[] {
+  return specifiers.map((spec) => ({ name: spec.name, alias: spec.alias }));
+}
+
+function bindingKey(importedName: string, localName: string): string {
+  return `${importedName}\0${localName}`;
+}
+
+function requestedLocalName(spec: ImportSpecifier): string {
+  return spec.alias ?? spec.name;
+}
+
+/**
+ * True when `node` is the local name of `import type` or `import { type X }`.
+ * A value import of the same specifier is a different binding.
+ */
+function importSpecifierIsTypeOnly(node: SgNode<TS>): boolean {
+  const specifier =
+    node.kind() === "import_specifier"
+      ? node
+      : ((node.ancestors().find((ancestor) => ancestor.kind() === "import_specifier") as
+          | SgNode<TS>
+          | undefined) ?? null);
+  if (!specifier) return false;
+  if (specifier.children().some((child) => child.kind() === "type")) return true;
+  const statement = specifier
+    .ancestors()
+    .find((ancestor) => ancestor.kind() === "import_statement") as SgNode<TS> | undefined;
+  return statement?.children().some((child) => child.kind() === "type") ?? false;
+}
+
+function dropStatementTypeKeyword(statement: SgNode<TS>): Edit | null {
+  const typeToken = statement.children().find((child) => child.kind() === "type");
+  const clause = statement.find({ rule: { kind: "import_clause" } });
+  if (!typeToken || !clause) return null;
+  return {
+    startPos: typeToken.range().start.index,
+    endPos: clause.range().start.index,
+    insertedText: "",
+  };
+}
+
+function dropInlineTypeKeyword(specifier: SgNode<TS>): Edit | null {
+  const typeToken = specifier.children().find((child) => child.kind() === "type");
+  const name = specifier.field("name");
+  if (!typeToken || !name) return null;
+  return {
+    startPos: typeToken.range().start.index,
+    endPos: name.range().start.index,
+    insertedText: "",
+  };
+}
+
+function renderPromotedImport(
+  described: ListedImport<TS>,
+  keys: Set<string>,
+  extras: ImportSpecifier[],
+): string {
+  const specTexts = described.specifiers.map((spec) => {
+    const promoted = keys.has(bindingKey(spec.importedName, spec.localName));
+    const alias = spec.localName !== spec.importedName ? ` as ${spec.localName}` : "";
+    const typePrefix = spec.isTypeOnly && !promoted ? "type " : "";
+    return `${typePrefix}${spec.importedName}${alias}`;
+  });
+  for (const spec of extras) {
+    specTexts.push(formatSpecifier(spec));
+  }
+
+  const source = `${described.quote}${described.source}${described.quote}`;
+  const semi = described.hasSemicolon ? ";" : "";
+  const named = `{ ${specTexts.join(", ")} }`;
+  if (described.defaultName) {
+    return `import ${described.defaultName}, ${named} from ${source}${semi}`;
+  }
+  return `import ${named} from ${source}${semi}`;
+}
+
+interface PromotionTarget {
+  statement: SgNode<TS>;
+  described: ListedImport<TS>;
+  keys: Set<string>;
+}
+
+/**
+ * Turn a type-only binding into a value binding when the local name matches.
+ * `import { type Foo }` drops `type`. `import type { Foo, Bar }` becomes
+ * `import { Foo, type Bar }`. A different local name is left for a new statement.
+ */
+function promotionEdit<T extends Language>(
+  program: SgNode<T, "program">,
+  from: string,
+  pending: ImportSpecifier[],
+): Edit | null {
+  const targets = new Map<number, PromotionTarget>();
+  for (const spec of pending) {
+    if (spec.isTypeOnly) continue;
+    const local = requestedLocalName(spec);
+    const key = bindingKey(spec.name, local);
+    for (const item of listImports(program, { from })) {
+      if (item.moduleType !== "esm") continue;
+      const match = item.specifiers.some(
+        (existing) =>
+          existing.isTypeOnly &&
+          existing.importedName === spec.name &&
+          existing.localName === local,
+      );
+      if (!match) continue;
+      const id = item.node.range().start.index;
+      const target = targets.get(id) ?? {
+        statement: item.node as unknown as SgNode<TS>,
+        described: item as unknown as ListedImport<TS>,
+        keys: new Set<string>(),
+      };
+      target.keys.add(key);
+      targets.set(id, target);
+      break;
+    }
+  }
+
+  const first = [...targets.values()].sort(
+    (left, right) => left.statement.range().start.index - right.statement.range().start.index,
+  )[0];
+  if (!first) return null;
+
+  const extras = pending.filter((spec) => {
+    const key = bindingKey(spec.name, requestedLocalName(spec));
+    for (const target of targets.values()) {
+      if (target.keys.has(key)) return false;
+    }
+    return true;
+  });
+
+  const { statement, described, keys } = first;
+  const allPromoted = described.specifiers.every((spec) =>
+    keys.has(bindingKey(spec.importedName, spec.localName)),
+  );
+
+  if (described.isTypeOnly && allPromoted && extras.length === 0) {
+    const dropped = dropStatementTypeKeyword(statement);
+    if (dropped) return dropped;
+  }
+
+  if (described.isTypeOnly) {
+    return statement.replace(renderPromotedImport(described, keys, extras));
+  }
+
+  const named = findNamedImports(statement);
+  if (!named) {
+    return statement.replace(renderPromotedImport(described, keys, extras));
+  }
+
+  if (extras.length === 0 && keys.size === 1) {
+    const match = described.specifiers.find((spec) =>
+      keys.has(bindingKey(spec.importedName, spec.localName)),
+    );
+    if (match) {
+      const dropped = dropInlineTypeKeyword(match.node as unknown as SgNode<TS>);
+      if (dropped) return dropped;
+    }
+  }
+
+  const items: ClauseItem[] = readClauseItems(named).map((item) => {
+    if (item.kind !== "specifier") return { kind: item.kind, text: item.text };
+    const read = readSpecifier(item.node);
+    if (!read) return { kind: item.kind, text: item.text };
+    const local = read.alias ?? read.name;
+    if (keys.has(bindingKey(read.name, local))) {
+      return { kind: "specifier" as const, text: item.text.replace(/^type\s+/, "") };
+    }
+    return { kind: item.kind, text: item.text };
+  });
+  for (const spec of extras) {
+    items.push({ kind: "specifier", text: formatSpecifier(spec) });
+  }
+  return serializeSpecifierClause(named, items);
+}
+
+/**
+ * Merge named specifiers into an existing ESM import or dynamic import()
+ * callback. Returns null when the caller should insert a new statement.
+ *
+ * A value specifier is not merged into `import type`: that statement cannot
+ * later hold a value. An earlier `import type` does not hide a later value
+ * import from the same module. Type-only specifiers are not merged into a
+ * dynamic `import().then(({ ... }) => ...)` pattern, which has no `type` modifier.
+ */
+function mergeNamedIntoExisting<T extends Language>(
+  program: SgNode<T, "program">,
+  from: string,
+  newSpecifiers: ImportSpecifier[],
+): Edit | null {
+  const hasValue = newSpecifiers.some((spec) => !spec.isTypeOnly);
+  const existingImport =
+    findEsmImportsFrom(program, from).find(
+      (statement) => !(statementIsImportType(statement) && hasValue),
+    ) ?? null;
+  if (existingImport) {
+    const importType = statementIsImportType(existingImport);
+    const specs = importType ? withoutInlineType(newSpecifiers) : newSpecifiers;
+    const namedImports = findNamedImports(existingImport);
+    if (namedImports) {
+      return mergeSpecifiers(namedImports, specs);
+    }
+
+    // import foo from 'mod' -> import foo, { bar } from 'mod'
+    const importClause = (existingImport as unknown as SgNode<TS>).find({
+      rule: { kind: "import_clause" },
+    });
+    if (importClause) {
+      const specifierStr = specs.map((spec) => formatSpecifier(spec)).join(", ");
+      const insertPos = importClause.range().end.index;
+      return {
+        startPos: insertPos,
+        endPos: insertPos,
+        insertedText: `, { ${specifierStr} }`,
+      };
+    }
+  }
+
+  if (newSpecifiers.some((spec) => spec.isTypeOnly)) {
+    return null;
+  }
+
+  const dynamicImportObjectPattern = (program as unknown as SgNode<TS, "program">).find({
+    rule: {
+      kind: "object_pattern",
+      inside: {
+        stopBy: "end",
+        kind: "call_expression",
+        has: {
+          kind: "member_expression",
+          has: {
+            kind: "call_expression",
+            all: [
+              {
+                has: {
+                  field: "function",
+                  kind: "import",
+                },
+              },
+              {
+                has: {
+                  field: "arguments",
+                  kind: "arguments",
+                  has: {
+                    kind: "string",
+                    has: {
+                      kind: "string_fragment",
+                      regex: stringToExactRegexString(from),
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  if (dynamicImportObjectPattern) {
+    return mergeSpecifiers(dynamicImportObjectPattern, newSpecifiers);
+  }
+
+  return null;
+}
+
 /**
  * Add an import to the program. Smart behavior:
  * - Skip if the import already exists
  * - Merge into existing import statement for named imports
  * - Create new import statement otherwise
+ * - A new statement copies the file's quote and semicolon. A file with no
+ *   import yet gets `'` and `;`. Merges leave the existing clause unchanged.
+ * - `isTypeOnly` on a named specifier emits inline `type`, not `import type`
+ * - A type-only binding does not count as the value. The same local name is
+ *   promoted (`import { type Foo }` drops `type`; `import type { Foo, Bar }`
+ *   becomes `import { Foo, type Bar }`). A different local name is a new statement.
  *
  * @returns Edit to apply, or null if import already exists
  */
@@ -1266,93 +1881,44 @@ export function addImport<T extends Language>(
       return null; // Already has namespace import
     }
   } else if (options.type === "named") {
-    // Filter out specifiers that already exist
-    const newSpecifiers: ImportSpecifier[] = [];
+    // A value binding satisfies a value or type request. `import type` and
+    // `import { type X }` do not satisfy a value request. A namespace import
+    // still counts as the name already existing, matching `getImport`.
+    const pending: ImportSpecifier[] = [];
     for (const spec of options.specifiers) {
       const existing = getImport(program, {
         type: "named",
         name: spec.name,
         from: options.from,
       });
-
       if (!existing) {
-        newSpecifiers.push(spec);
+        pending.push(spec);
+        continue;
+      }
+      if (
+        !spec.isTypeOnly &&
+        !existing.isNamespace &&
+        importSpecifierIsTypeOnly(existing.node as unknown as SgNode<TS>)
+      ) {
+        pending.push(spec);
       }
     }
 
-    if (newSpecifiers.length === 0) {
+    if (pending.length === 0) {
       return null; // All specifiers already exist
     }
 
+    const promoted = promotionEdit(program, options.from, pending);
+    if (promoted) return promoted;
+
     // For ESM named imports, try to merge into existing import
     if (moduleType === "esm") {
-      const existingImport = findExistingEsmImport(program, options.from);
-      if (existingImport) {
-        const namedImports = findNamedImports(existingImport);
-        if (namedImports) {
-          return mergeSpecifiers(namedImports, newSpecifiers);
-        } else {
-          // Import exists but has no named_imports (e.g., default import only)
-          // Add named imports to it: import foo from 'mod' -> import foo, { bar } from 'mod'
-          const importClause = (existingImport as unknown as SgNode<TS>).find({
-            rule: { kind: "import_clause" },
-          });
-          if (importClause) {
-            const specifierStr = newSpecifiers.map((spec) => formatSpecifier(spec)).join(", ");
-            const insertPos = importClause.range().end.index;
-            return {
-              startPos: insertPos,
-              endPos: insertPos,
-              insertedText: `, { ${specifierStr} }`,
-            };
-          }
-        }
-      }
-
-      const dynamicImportObjectPattern = (program as unknown as SgNode<TS, "program">).find({
-        rule: {
-          kind: "object_pattern",
-          inside: {
-            stopBy: "end",
-            kind: "call_expression",
-            has: {
-              kind: "member_expression",
-              has: {
-                kind: "call_expression",
-                all: [
-                  {
-                    has: {
-                      field: "function",
-                      kind: "import",
-                    },
-                  },
-                  {
-                    has: {
-                      field: "arguments",
-                      kind: "arguments",
-                      has: {
-                        kind: "string",
-                        has: {
-                          kind: "string_fragment",
-                          regex: stringToExactRegexString(options.from),
-                        },
-                      },
-                    },
-                  },
-                ],
-              },
-            },
-          },
-        },
-      });
-
-      if (dynamicImportObjectPattern) {
-        return mergeSpecifiers(dynamicImportObjectPattern, newSpecifiers);
-      }
+      const merged = mergeNamedIntoExisting(program, options.from, pending);
+      if (merged) return merged;
     }
 
     // Update options with filtered specifiers for new import creation
-    options = { ...options, specifiers: newSpecifiers };
+    options = { ...options, specifiers: pending };
   }
 
   // Find insertion position (after last import, or at file start)
@@ -1373,9 +1939,15 @@ export function addImport<T extends Language>(
     }
   }
 
-  // Generate import text
-  const importText =
-    moduleType === "esm" ? generateEsmImport(options) : generateCjsRequire(options);
+  // A type modifier is ESM syntax. A new statement copies the file's quotes
+  // and semicolon; merges above do not reach this path.
+  const style = getFileStyle(program);
+  const createAsEsm =
+    moduleType === "esm" ||
+    (options.type === "named" && options.specifiers.some((spec) => spec.isTypeOnly));
+  const importText = createAsEsm
+    ? generateEsmImport(options, style)
+    : generateCjsRequire(options, style);
 
   return {
     startPos: insertPos,

@@ -10,11 +10,19 @@ Author-facing helpers are documented in [JSSG utilities](https://docs.codemod.co
 import {
   getImport,
   getAllImports,
+  listImports,
   addImport,
   removeImport,
   updateImport,
   stringToExactRegexString,
 } from "@jssg/utils/javascript/imports";
+import { getFileStyle, getLineIndent, indentText } from "@jssg/utils/javascript/style";
+import {
+  importBindingOf,
+  resolveDefinition,
+  resolvesToFactory,
+  renameReferences,
+} from "@jssg/utils/javascript/bindings";
 ```
 
 ## XML elements

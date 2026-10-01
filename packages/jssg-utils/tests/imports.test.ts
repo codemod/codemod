@@ -5,6 +5,7 @@ import {
   addImport,
   removeImport,
   getAllImports,
+  listImports,
   updateImport,
 } from "../src/javascript/exports/imports.ts";
 import type JS from "@codemod.com/jssg-types/langs/javascript";
@@ -1542,6 +1543,351 @@ function testUpdateImportTypeKeyword() {
   );
 }
 
+function testAddImportMatchesFileQuoteAndOmitsSemicolon() {
+  const program = parseProgram("typescript", 'import x from "mod"\nconsole.log(x)\n');
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "y" }],
+    from: "other",
+  });
+  assert(edit !== null, "Should add a new import");
+  const result = program.commitEdits([edit!]);
+  assert(result.includes('import { y } from "other"\n'), "New import copies double quotes");
+  assert(!result.includes('from "other";'), "New import omits the semicolon");
+}
+
+function testAddImportMergeDoesNotRewriteQuotes() {
+  const program = parseProgram("typescript", 'import { foo } from "mod"\nconsole.log(foo)\n');
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "bar" }],
+    from: "mod",
+  });
+  assert(edit !== null, "Should merge the specifier");
+  const result = program.commitEdits([edit!]);
+  assert(result.includes('import { foo, bar } from "mod"'), "Merge keeps the existing quotes");
+  assert(!result.includes("from 'mod'"), "Merge does not rewrite the clause to single quotes");
+}
+
+function testAddImportInlineTypeSpecifier() {
+  const fresh = parseProgram("typescript", "console.log(1);\n");
+  const freshEdit = addImport(fresh, {
+    type: "named",
+    specifiers: [{ name: "Foo", alias: "Bar", isTypeOnly: true }],
+    from: "mod",
+  });
+  assert(freshEdit !== null, "Should add a type specifier");
+  const freshResult = fresh.commitEdits([freshEdit!]);
+  assert(
+    freshResult.includes("import { type Foo as Bar } from 'mod';"),
+    "A new type specifier uses inline type, the fallback quote, and a semicolon",
+  );
+
+  const existing = parseProgram("typescript", 'import { foo } from "mod";\n');
+  const edit = addImport(existing, {
+    type: "named",
+    specifiers: [{ name: "Bar", isTypeOnly: true }],
+    from: "mod",
+  });
+  assert(edit !== null, "Should merge a type specifier into a value import");
+  const result = existing.commitEdits([edit!]);
+  assert(
+    result.includes('import { foo, type Bar } from "mod";'),
+    "Inline type joins the value import",
+  );
+}
+
+function testAddImportTypeIntoImportTypeOmitsInlineModifier() {
+  const program = parseProgram("typescript", 'import type { Foo } from "mod";\n');
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "Bar", isTypeOnly: true }],
+    from: "mod",
+  });
+  assert(edit !== null, "Should merge into import type");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result.includes('import type { Foo, Bar } from "mod";'),
+    "import type does not repeat type",
+  );
+  assert(!result.includes("type Bar"), "The merged specifier has no inline type modifier");
+}
+
+function testAddImportValueDoesNotMergeIntoImportType() {
+  const program = parseProgram("typescript", 'import type { Foo } from "mod";\n');
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "bar" }],
+    from: "mod",
+  });
+  assert(edit !== null, "Should add a separate value import");
+  const result = program.commitEdits([edit!]);
+  assert(result.includes('import type { Foo } from "mod";'), "The type import stays");
+  assert(result.includes('import { bar } from "mod";'), "The value import is a new statement");
+  assert(!result.includes("import type { Foo, bar }"), "A value is not merged into import type");
+}
+
+function testAddImportPromotesInlineTypeToValue() {
+  const program = parseProgram("typescript", 'import { type Foo } from "mod";\n');
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "Foo" }],
+    from: "mod",
+  });
+  assert(edit !== null, "A type-only specifier does not satisfy a value import");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result.includes('import { Foo } from "mod";'),
+    `Inline type should be promoted: ${result}`,
+  );
+  assert(!result.includes("type Foo"), "The inline type modifier is removed");
+}
+
+function testAddImportPromotesImportTypeSpecifier() {
+  const only = parseProgram("typescript", 'import type { Foo } from "mod";\n');
+  const onlyEdit = addImport(only, {
+    type: "named",
+    specifiers: [{ name: "Foo" }],
+    from: "mod",
+  });
+  assert(onlyEdit !== null, "import type Foo does not satisfy a value import");
+  const onlyResult = only.commitEdits([onlyEdit!]);
+  assert(
+    onlyResult.includes('import { Foo } from "mod";'),
+    `The statement should become a value import: ${onlyResult}`,
+  );
+  assert(!onlyResult.includes("import type"), "The type keyword is removed");
+  assert(!onlyResult.includes('import { Foo } from "mod";\nimport'), "Foo is not imported twice");
+
+  const mixed = parseProgram("typescript", 'import type { Foo, Bar } from "mod";\n');
+  const mixedEdit = addImport(mixed, {
+    type: "named",
+    specifiers: [{ name: "Foo" }],
+    from: "mod",
+  });
+  assert(mixedEdit !== null, "One type specifier can be promoted");
+  const mixedResult = mixed.commitEdits([mixedEdit!]);
+  assert(
+    mixedResult.includes('import { Foo, type Bar } from "mod";'),
+    `The sibling stays type-only: ${mixedResult}`,
+  );
+}
+
+function testAddImportPromotesAndAddsOnSameStatement() {
+  const program = parseProgram("typescript", 'import type { Foo } from "mod";\n');
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "Foo" }, { name: "baz" }],
+    from: "mod",
+  });
+  assert(edit !== null, "Promotion can include a new specifier");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result.includes('import { Foo, baz } from "mod";'),
+    `Foo and baz share one value import: ${result}`,
+  );
+  assert(!result.includes("import type"), "The statement is no longer import type");
+}
+
+function testAddImportValueMergesPastEarlierImportType() {
+  const program = parseProgram(
+    "typescript",
+    'import type { Foo } from "mod";\nimport { bar } from "mod";\n',
+  );
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "baz" }],
+    from: "mod",
+  });
+  assert(edit !== null, "Should merge into the value import");
+  const result = program.commitEdits([edit!]);
+  assert(result.includes('import type { Foo } from "mod";'), "The type import stays");
+  assert(result.includes('import { bar, baz } from "mod";'), "The later value import gains baz");
+  assert(
+    result.indexOf("import { baz }") === -1 && result.split('from "mod"').length === 3,
+    `No third import from mod: ${result}`,
+  );
+}
+
+function testAddImportValueDoesNotPromoteDifferentLocalName() {
+  const program = parseProgram("typescript", 'import type { Foo as F } from "mod";\n');
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "Foo" }],
+    from: "mod",
+  });
+  assert(edit !== null, "A different local name still needs a value binding");
+  const result = program.commitEdits([edit!]);
+  assert(result.includes('import type { Foo as F } from "mod";'), "The alias stays type-only");
+  assert(result.includes('import { Foo } from "mod";'), "The value binding is a new statement");
+}
+
+function testAddNamedImportCJSMatchesRequireQuotes() {
+  const program = parseProgram("javascript", 'const fs = require("node:fs");\n');
+  const edit = addImport(program, {
+    type: "named",
+    specifiers: [{ name: "readFile" }],
+    from: "node:fs",
+    moduleType: "cjs",
+  });
+  assert(edit !== null, "Should add a require");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result.includes('const { readFile } = require("node:fs");'),
+    "A new require copies the existing quote",
+  );
+}
+
+function testListImportsReadsStatementShapes() {
+  const program = parseProgram(
+    "typescript",
+    [
+      'import Foo, { bar as b, type Id } from "mod";',
+      "import * as ns from 'ns';",
+      'import type { T } from "types"',
+      'import "side-effect";',
+      'const { foo: renamed } = require("cjs");',
+      'var legacy = require("legacy")',
+      'const loaded = await import("dynamic");',
+      'import("then").then(({ fn }) => fn());',
+      'import("mod").then(mod => mod.fn());',
+      "",
+    ].join("\n"),
+  );
+
+  const listed = listImports(program);
+  assert(listed.length === 9, `Should list every recognized statement, got ${listed.length}`);
+
+  const mixed = listed[0]!;
+  assert(
+    mixed.source === "mod" && mixed.quote === '"' && mixed.hasSemicolon,
+    "Mixed import source",
+  );
+  assert(mixed.defaultName === "Foo", "Default name of a mixed import");
+  assert(mixed.namespaceName === null, "Mixed import is not a namespace import");
+  assert(mixed.isTypeOnly === false, "Mixed import is not import type");
+  assert(mixed.specifiers.length === 2, "Mixed import has two named specifiers");
+  assert(
+    mixed.specifiers[0]!.importedName === "bar" && mixed.specifiers[0]!.localName === "b",
+    "Alias is the local name",
+  );
+  assert(
+    mixed.specifiers[1]!.isTypeOnly && mixed.specifiers[1]!.importedName === "Id",
+    "Inline type",
+  );
+
+  const namespace = listed[1]!;
+  assert(namespace.namespaceName === "ns" && namespace.quote === "'", "Namespace import");
+  assert(namespace.hasSemicolon, "Namespace import keeps its semicolon");
+
+  const typeOnly = listed[2]!;
+  assert(typeOnly.isTypeOnly && typeOnly.specifiers[0]!.isTypeOnly, "Statement-level import type");
+  assert(!typeOnly.hasSemicolon, "Type import omitted the semicolon");
+
+  const sideEffect = listed[3]!;
+  assert(
+    sideEffect.source === "side-effect" &&
+      sideEffect.defaultName === null &&
+      sideEffect.specifiers.length === 0,
+    "Side-effect import has no bindings",
+  );
+
+  const cjs = listed[4]!;
+  assert(cjs.moduleType === "cjs", "Destructured require is CJS");
+  assert(
+    cjs.specifiers[0]!.importedName === "foo" && cjs.specifiers[0]!.localName === "renamed",
+    "CJS alias uses the local name",
+  );
+
+  const legacy = listed[5]!;
+  assert(
+    legacy.defaultName === "legacy" && legacy.moduleType === "cjs",
+    "var require is a default binding",
+  );
+  assert(!legacy.hasSemicolon, "var require omitted the semicolon");
+
+  const awaited = listed[6]!;
+  assert(
+    awaited.moduleType === "esm" &&
+      awaited.defaultName === "loaded" &&
+      awaited.source === "dynamic",
+    "await import() is an ESM default binding",
+  );
+
+  const destructuredThen = listed[7]!;
+  assert(
+    destructuredThen.specifiers[0]!.importedName === "fn" &&
+      destructuredThen.namespaceName === null,
+    "import().then destructure is a named specifier",
+  );
+
+  const namespaceThen = listed[8]!;
+  assert(
+    namespaceThen.namespaceName === "mod" && namespaceThen.specifiers.length === 0,
+    "then(mod =>) is a namespace",
+  );
+}
+
+function testListImportsFiltersExactSources() {
+  const program = parseProgram(
+    "javascript",
+    'import a from "mod";\nimport b from "mod/extra";\nimport c from "other";\n',
+  );
+
+  const one = listImports(program, { from: "mod" });
+  assert(one.length === 1 && one[0]!.defaultName === "a", "A string filter is exact");
+
+  const many = listImports(program, { from: ["mod", "other"] });
+  assert(many.length === 2, "A list filter keeps each exact source");
+  assert(
+    many.map((item) => item.defaultName).join(",") === "a,c",
+    "Filtered imports stay in source order",
+  );
+}
+
+function testListImportsIgnoresNonThenCallbacks() {
+  const program = parseProgram(
+    "typescript",
+    [
+      'import("mod").catch((err) => err);',
+      'import("mod").then((mod) => mod.fn()).catch((err) => err);',
+      'import("mod").finally((done) => done);',
+      'import("mod").then((mod) => { const inner = (cb) => cb; return mod; });',
+      "",
+    ].join("\n"),
+  );
+  const listed = listImports(program, { from: "mod" });
+
+  assert(listed.length === 4, `Every import() expression is listed, got ${listed.length}`);
+  assert(
+    listed[0]!.namespaceName === null && listed[0]!.specifiers.length === 0,
+    "catch(err) is not a namespace binding",
+  );
+  assert(
+    listed[1]!.namespaceName === "mod" && listed[1]!.specifiers.length === 0,
+    "then(mod) wins over the later catch callback",
+  );
+  assert(
+    listed[2]!.namespaceName === null && listed[2]!.specifiers.length === 0,
+    "finally(done) is not a namespace binding",
+  );
+  assert(
+    listed[3]!.namespaceName === "mod" && listed[3]!.specifiers.length === 0,
+    "A nested callback is not the imported namespace",
+  );
+}
+
+function testListImportsOmitsMultiDeclaratorRequire() {
+  const program = parseProgram(
+    "javascript",
+    'const a = require("mod"), b = 1;\nimport kept from "mod";\n',
+  );
+  const listed = listImports(program, { from: "mod" });
+
+  assert(listed.length === 1, "The multi-declarator require is omitted");
+  assert(listed[0]!.defaultName === "kept", "The ESM import from the same module remains");
+}
+
 function run() {
   testReturnsEmptyArrayWhenNoImports();
   testReturnsEmptyArrayWhenModuleNotImported();
@@ -1655,6 +2001,23 @@ function run() {
   testUpdateNamedImportNotFoundReturnsNull();
   testUpdateNamedImportDoesNotAddExtraCommas();
   testUpdateImportTypeKeyword();
+
+  testAddImportMatchesFileQuoteAndOmitsSemicolon();
+  testAddImportMergeDoesNotRewriteQuotes();
+  testAddImportInlineTypeSpecifier();
+  testAddImportTypeIntoImportTypeOmitsInlineModifier();
+  testAddImportValueDoesNotMergeIntoImportType();
+  testAddImportPromotesInlineTypeToValue();
+  testAddImportPromotesImportTypeSpecifier();
+  testAddImportPromotesAndAddsOnSameStatement();
+  testAddImportValueMergesPastEarlierImportType();
+  testAddImportValueDoesNotPromoteDifferentLocalName();
+  testAddNamedImportCJSMatchesRequireQuotes();
+
+  testListImportsReadsStatementShapes();
+  testListImportsFiltersExactSources();
+  testListImportsIgnoresNonThenCallbacks();
+  testListImportsOmitsMultiDeclaratorRequire();
 
   console.log("imports.test.ts: all assertions passed");
 }
