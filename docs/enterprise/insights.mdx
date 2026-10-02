@@ -62,7 +62,8 @@ You can select the query source from the dropdown at the start of each query.
 
 Configure your query and select repositories. The widget editor automatically checks a
 small random sample from existing indexed snapshots after you finish editing. You do
-not need to click Run.
+not need to click Run. An empty query shows setup guidance; analysis starts only after
+you pause editing a valid query.
 
 - A useful match stops the preview immediately and appears as a partial result.
 - An empty batch tries another sample, up to five batches and twenty file checks shared
@@ -71,8 +72,9 @@ not need to click Run.
   preview. Changing the widget name, formula, or appearance does not rerun analysis.
 
 Choose **Save Widget** to run the query across the selected files and display full
-results on the dashboard. Save the dashboard separately to persist your edits. Preview
-results are sample values; they do not apply your widget formula or represent full
+results on the dashboard. Full-result coverage shows analyzed, skipped, and excluded
+files without exposing cache counts. Save the dashboard separately to persist your
+edits. Preview results are sample values; they do not apply your widget formula or represent full
 repository totals. A timeseries preview samples one indexed snapshot per repository,
 rather than calculating the entire historical series.
 
@@ -82,8 +84,8 @@ rather than calculating the entire historical series.
   widget when you want to run their full analysis.
 </Note>
 
-If a query is expensive to preview or reaches its sample budget without matches, the
-editor stops and explains how to run the full query. Smart previews show a countdown
+If a preview reaches its sample or time limit without matches, the editor stops and
+explains how to run the full query. Smart previews show a countdown
 when provider capacity is temporarily unavailable and resume automatically. A terminal
 service failure preserves completed work and offers an explicit retry; it does not
 keep dispatching more batches.
