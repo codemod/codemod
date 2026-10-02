@@ -20,14 +20,14 @@ Smart is an Insights query source over indexed repository snapshots. It is not a
   <Step title="Describe the characteristic">
     Enter a prompt such as "Find files that read or depend on environment variables", or start from **Examples** (security issue finder, environment variable usage, missing error handling).
   </Step>
-  <Step title="Optionally run interpret">
-    Click **Run** to draft match rules, probability, globs, and group-by from your prompt. **Run** does not execute analysis. If you edit the prompt while interpret is running, Codemod discards the draft result.
-  </Step>
   <Step title="Tune probability and match rules">
     Set **Probability** to Low (60%), Medium (85%, default), or High (90%). Only files at or above that confidence count as matches. Optionally add **Match rules** for "Count as a match when" and "Do not match when".
   </Step>
   <Step title="Select repositories and breakdowns">
-    Choose repositories, optional include and exclude globs, and group-by dimensions. Save the widget. Smart widgets show **Analyzing code** with progress such as `N of M checks` while file judgments run.
+    Choose repositories, optional include and exclude globs, and group-by dimensions. The editor automatically previews a small sample.
+  </Step>
+  <Step title="Review the sample and save">
+    Adjust your prompt using the partial preview. An empty sample does not prove there are no matches. Save the widget to analyze all selected files; the dashboard shows **Analyzing code** with progress such as `N of M checks` while file judgments run.
   </Step>
 </Steps>
 
