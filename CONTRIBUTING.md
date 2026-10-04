@@ -75,7 +75,7 @@ The best way to contribute to the registry is by **publishing codemods**:
 - **Improve existing codemods** – Submit improvements to community codemods
 - **Document codemods** – Help others discover and use codemods effectively
 
-Learn more about publishing codemods in the [Registry documentation](https://docs.codemod.com/platform/registry).
+Learn more about publishing codemods in the [Registry documentation](https://docs.codemod.com/enterprise/registry).
 
 [Explore Codemod Registry ->](https://codemod.com/registry)
 

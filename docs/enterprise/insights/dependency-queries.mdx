@@ -1,0 +1,24 @@
+---
+title: "Package dependency queries"
+sidebarTitle: "Package dependency queries"
+---
+
+Dependency queries use indexed dependency data from selected repositories. Use them to track package adoption, vulnerable package exposure, or dependency drift across teams.
+
+| Configuration | Description |
+|---|---|
+| **Ecosystem** | Filter to `npm`, `PyPI`, `Cargo`, `Go`, or `RubyGems` |
+| **Package** | Filter by package name |
+| **Version** | Filter by a semver range, such as `^16.0.0`, `>=16.0.0`, or an exact version |
+| **Depth** | Filter to direct, transitive, or all dependencies |
+| **Select** | `Dep count` or `Unique pkgs` |
+| **Repository** | One or more repositories, or a repository template variable |
+| **Group by** | `ecosystem`, `package`, `version`, `lock file`, `repository`, `workspace`, or `parent pkg` |
+| **Snapshot base** | A specific date or commit hash to analyze at a point in time, available for single number and table widgets |
+
+## Related
+
+- [JSSG (JS ast-grep) queries](/enterprise/insights/jssg-queries)
+- [ast-grep YAML queries](/enterprise/insights/ast-grep-queries)
+- [Smart (Jev-powered) queries](/enterprise/insights/smart-queries)
+- [Template variables](/enterprise/insights#template-variables)

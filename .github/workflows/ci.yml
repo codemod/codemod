@@ -14,6 +14,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       js: ${{ steps.filter.outputs.js }}
+      jssg_utils_docs: ${{ steps.filter.outputs.jssg_utils_docs }}
     steps:
       - uses: actions/checkout@v3
       - uses: dorny/paths-filter@v3
@@ -28,6 +29,11 @@ jobs:
               - 'packages/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
+            jssg_utils_docs:
+              - 'packages/jssg-utils/**'
+              - 'docs/community/jssg/utils.mdx'
+              - 'docs/community/jssg/utils/**'
+              - 'scripts/check-jssg-utils-docs.mjs'
 
   rust-lint:
     name: Rust Lint
@@ -102,6 +108,19 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm format
+
+  jssg-utils-docs:
+    name: JSSG Utils Docs
+    needs: changes
+    if: needs.changes.outputs.jssg_utils_docs == 'true'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node scripts/check-jssg-utils-docs.mjs
 
   rust-test:
     name: Rust Test

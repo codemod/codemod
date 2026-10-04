@@ -75,6 +75,9 @@ pub enum RuntimeError {
     #[error("Execution timeout: exceeded {timeout_ms}ms limit")]
     ExecutionTimeout { timeout_ms: u64 },
 
+    #[error("Execution cancelled")]
+    ExecutionCancelled,
+
     #[error("Memory limit exceeded")]
     MemoryLimitExceeded,
 }

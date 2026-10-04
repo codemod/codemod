@@ -35,6 +35,32 @@ JSSG sandbox, shared TypeScript packages, semantic-analysis providers, and Mintl
 - Prefer targeted validation first, then broader validation when the change crosses crate or package
   boundaries.
 
+## Docs gate (end of every user-facing change)
+
+Before claiming feature or bugfix work done, classify impact and update docs. Load
+`.agents/skills/codemod-docs/SKILL.md` when editing Mintlify or deciding the docs corpus.
+See also `docs/AGENTS.md`.
+
+| If the change affects… | Update in this repo | Also required |
+|------------------------|---------------------|---------------|
+| Human-facing CLI, JSSG, workflows, registry, or enterprise product behavior/concepts | Matching pages under `docs/` (+ `docs/docs.json` if nav changes) | — |
+| Wish / in-app agent SDK, chat tools, or agent operating policy | — (skill-docs live in `codemod-app`) | **Heads-up the user** to update `codemod-app` → `packages/modern-ai/src/global-chat/skill-docs/` |
+| Both | Mintlify here | Heads-up for Wish skill-docs in `codemod-app` |
+| Neither (internal refactors, tests-only, no user/Wish surface) | Skip docs | Say so briefly |
+
+### Cross-repo heads-up (required when Wish skill-docs may need changes)
+
+Agents in this workspace usually cannot edit `codemod-app`. When Wish skill-docs may need an
+update, **do not silently skip**. End the response with an explicit heads-up, for example:
+
+> **Docs follow-up (`codemod-app` repo):** This change affects Wish / in-app agent contracts.
+> Please update skill-docs under `packages/modern-ai/src/global-chat/skill-docs/` (and
+> `skillRegistry` if needed). Open the `codemod-app` workspace (or ask me there) to apply the
+> `wish-skill-docs` skill.
+
+Never put Wish SDK method dumps, `load_skill` / `execute` contracts, or agent consent policy into
+Mintlify beyond a short human Wish overview.
+
 ## Standard Validation
 
 - Rust formatting: `cargo fmt --check`
@@ -70,4 +96,6 @@ Use these skills when the task matches the area:
   runtime modules, JSSG TypeScript packages, and codemod author APIs.
 - `.agents/skills/codemod-semantic-providers/SKILL.md`: semantic analysis providers, language
   factory, tree-sitter loader, goto-definition/reference behavior, and provider tests.
-- `.agents/skills/codemod-docs/SKILL.md`: Mintlify documentation and docs navigation.
+- `.agents/skills/codemod-docs/SKILL.md`: Mintlify documentation, docs navigation, end-of-dev docs
+  gate, and cross-repo heads-up when Wish skill-docs in `codemod-app` also need updates. Human
+  product docs only for in-repo edits (see `docs/AGENTS.md`).
