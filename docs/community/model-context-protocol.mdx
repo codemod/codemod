@@ -74,7 +74,7 @@ The Codemod MCP server provides these operational tools for AI assistants:
 The Codemod MCP server provides these guidance resources for AI assistants:
 
 - **`jssg-instructions`** - Docs-backed JSSG guidance for creating and testing transformation scripts
-- **`jssg-gotchas`** - Highest-priority JSSG gotchas before implementing transforms
+- **`jssg-gotchas`** - Highest-priority JSSG gotchas before implementing transforms, including metrics API and Performant codemods
 - **`ast-grep-gotchas`** - Highest-priority ast-grep gotchas before implementing transforms
 - **`jssg-utils-instructions`** - Docs-backed JSSG utility guidance, including JavaScript imports, Java helpers, and XML helpers
 - **`jssg-runtime-capabilities-instructions`** - Runtime and capability guidance for LLRT/Node APIs and multi-file JSSG work
@@ -84,7 +84,7 @@ The Codemod MCP server provides these guidance resources for AI assistants:
 - **`codemod-maintainer-monorepo-instructions`** - Maintainer guidance for codemod monorepos and version-hop workspaces
 - **`sharding-instructions`** - Docs-backed sharding guidance
 
-For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code.
+For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code. Follow the Performant codemods section inside `jssg-gotchas` (no per-file full-repo walks; time `jssg run --language` against a no-op). For Insights metrics, put `useMetricAtom` in the workflow `js_file` and `return null`.
 
 When registry discovery does not find an exact package, agents should scaffold with direct `codemod init`. In non-interactive flows, agents should pass only values supplied by the user or task and rely on the CLI defaults/auth-derived author handling for optional metadata.
 

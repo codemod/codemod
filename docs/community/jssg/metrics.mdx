@@ -101,3 +101,7 @@ Metrics:
     propName=disabled: 15
     propName=variant: 12
 ```
+
+## Insights
+
+Insights widgets bind to a **single** workflow `js_file`. Put `useMetricAtom` and `increment` in that file; later collect/analyze steps and discovery shims are invisible. For scale (transforms or mining), see [Performant codemods](/community/jssg/advanced/performance#performant-codemods).

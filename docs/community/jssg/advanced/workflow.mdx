@@ -1,0 +1,375 @@
+---
+title: "Workflow Context"
+description: "Parameters, matrix values, shared state, and runtime hooks for JSSG steps."
+---
+
+Wire a transform into a workflow: user parameters, matrix sharding values, cross-file state, and structured runtime signals.
+
+## Parameters and Configuration
+
+Parameters make your codemods flexible and reusable by allowing you to pass configuration values at runtime. This enables you to create codemods that adapt their behavior based on user input or different execution contexts.
+
+<Info>
+**Enterprise Features**: In the [Codemod app](https://go.codemod.com/app), parameters are configured through a visual UI. The Codemod app provides centralized state management for large-scale refactoring across many repos.
+</Info>
+
+You can access parameters via `options.params`.
+
+<CodeGroup>
+```ts codemod.ts
+import type { Codemod } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+
+const codemod: Codemod<TSX> = async (root, options) => {
+  // Access user-configured parameters
+  const library = options.params?.library || "next-intl";
+  const shardingMethod = options.params?.shardingMethod || "directory";
+  const prSize = options.params?.prSize || "50";
+  
+  // Use parameters in your transformation logic
+  if (library === "react-i18next") {
+    // Apply react-i18next specific transformations
+  }
+};
+
+export default codemod;
+```
+
+```yaml workflow.yaml
+# --- Basic schema example ---
+version: "1"
+params:
+  schema:
+    library:
+      name: "Library"
+      description: "Internationalization library to use"
+      type: string
+      default: "next-intl"
+    shardingMethod:
+      name: "Sharding Method"
+      type: string
+      default: "directory"
+    prSize:
+      name: "PR Size"
+      type: string
+      default: "50"
+
+---
+# --- Enum schema example (multi-document YAML) ---
+version: "1"
+params:
+  schema:
+    format:
+      name: "Module format"
+      type: string
+      default: "esm"
+      oneOf:
+        - type: string
+          enum: ["esm", "cjs"]
+```
+</CodeGroup>
+
+<Tip>
+How to pass params when executing your workflow:
+<a href="/community/cli#codemod-workflow">Passing parameters (--param)</a>.
+</Tip>
+
+
+## Matrix Strategy Integration
+
+Matrix strategies enable you to run the same codemod with different configurations or to split large codebases into manageable chunks for parallel processing.
+
+Matrix values are particularly useful for:
+
+- **Sharding**: Distributing work across multiple processes or machines
+- **Multi-variant transforms**: Running the same logic with different parameters
+- **Team-based processing**: Applying different rules based on team ownership
+
+### Accessing Matrix Values
+
+Access matrix values via `options.matrixValues`:
+
+```ts
+import type { Codemod } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";    
+
+const codemod: Codemod<TSX> = async (root, options) => {
+  // Access matrix values passed from the workflow (if matrix strategy is used)
+  const team = (options.matrixValues as any)?.team;
+  const shardId = (options.matrixValues as any)?.shardId;
+
+  const filename = root.filename();
+
+  // fitsInShard is an example sharding predicate provided by your orchestrator or custom code
+  if (options.matrixValues && fitsInShard(filename, options.matrixValues)) {
+    console.log(`Processing ${filename} for team ${team} in shard ${shardId}`);
+
+    // Apply your transformations here and return committed edits
+    // const edits = [...];
+    // return root.root().commitEdits(edits);
+  }
+
+  // Skip files that don't belong to this shard (or when no matrix values are present)
+  return null;
+};
+
+export default codemod;
+```
+
+<Info>
+`options.matrixValues` is only defined when your workflow uses a matrix strategy. Otherwise it is `undefined`.
+</Info>
+
+<Tip>
+Prefer checking sharding against a project-relative path (e.g., `path.relative(process.cwd(), root.filename())`) to avoid mismatches across environments.
+</Tip>
+
+### Matrix Strategy Configuration
+
+Matrix strategy is defined in your workflow:
+
+```yaml workflow.yaml
+version: "1"
+state:
+  schema:
+    shards:
+      type: array
+      items:
+        type: object
+        properties:
+          team: { type: string }
+          shard: { type: string }
+          shardId: { type: string }
+```
+
+<Note>
+**Parameters vs Matrix Values**: `options.params` contains user-configured workflow settings, while `options.matrixValues` contains values from matrix strategy (e.g., `team`, `shard`, `shardId` from the `shards` state array). See [Matrix Strategy](/community/workflows/reference#matrix-strategy) for details.
+</Note>
+
+
+## State Management
+
+The `codemod:workflow` module provides shared state that is accessible across all parallel file executions within a step, and can be persisted across workflow steps.
+
+### API Reference
+
+```ts
+import { setState, getState, unsetState, acquireLock } from "codemod:workflow";
+```
+
+<ParamField path="setState" type="<T>(name: string, value: T, persist?: boolean) => void">
+  Sets a named state value. Values are stored as native JavaScript objects (no manual JSON serialization needed). When `persist` is `true` (the default), the value is saved at the end of the execution batch and available to subsequent workflow steps.
+</ParamField>
+
+<ParamField path="getState" type="<T>(name: string) => T | undefined">
+  Gets a named state value, or `undefined` if it doesn't exist.
+</ParamField>
+
+<ParamField path="unsetState" type="(name: string) => void">
+  Removes a named state value. If the key was persisted, a removal is propagated to persistent storage.
+</ParamField>
+
+<ParamField path="acquireLock" type="(name: string) => () => void">
+  Acquires a named mutex lock. Returns a `release` function that **must** be called when done. While held, other threads' `getState`, `setState`, and `unsetState` calls on the same key block until released.
+</ParamField>
+
+### Basic Usage
+
+State is shared across all files processed in parallel within a single step:
+
+<Warning>
+Do not rebuild a repo-wide index, list the scan root, or rewrite the full `setState` payload on every file. That is O(n²) on large scans. Build once (module cache + `acquireLock` + one `setState`), then edit or emit. See [Performant codemods](/community/jssg/advanced/performance#performant-codemods).
+</Warning>
+
+```ts codemod.ts
+import type { Codemod } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import { setState, getState, acquireLock } from "codemod:workflow";
+
+const codemod: Codemod<TSX> = async (root) => {
+  const rootNode = root.root();
+  const imports = rootNode.findAll({ rule: { kind: "import_statement" } });
+
+  // Safely accumulate results across parallel file executions
+  const release = acquireLock("results");
+  try {
+    const results = getState<string[]>("importedFiles") ?? [];
+    results.push(root.filename());
+    setState("importedFiles", results);
+  } finally {
+    release();
+  }
+
+  return null;
+};
+
+export default codemod;
+```
+
+### When to Use Locks
+
+Use `acquireLock` when you need to read-modify-write shared state from parallel threads. Without it, concurrent `getState` → `setState` sequences can overwrite each other:
+
+```ts
+// Without lock — RACE CONDITION:
+// Thread A reads count=0, Thread B reads count=0,
+// both write count=1 instead of count=2
+const count = getState<number>("count") ?? 0;
+setState("count", count + 1);
+
+// With lock — SAFE:
+const release = acquireLock("count");
+try {
+  const count = getState<number>("count") ?? 0;
+  setState("count", count + 1);
+} finally {
+  release();
+}
+```
+
+<Warning>
+Always call `release()` in a `finally` block. Failing to release a lock will block all other threads waiting on that key.
+</Warning>
+
+<Info>
+Simple `setState` calls that don't depend on the current value (e.g., `setState("status", "done")`) don't need locking — they are individually atomic.
+</Info>
+
+### Persisting State Across Workflow Steps
+
+State set with `persist: true` (the default) is automatically saved after a `js-ast-grep` step completes. Subsequent steps in the same workflow node can read this state:
+
+<CodeGroup>
+```yaml workflow.yaml
+nodes:
+  - id: analyze
+    steps:
+      - name: "Scan files"
+        js-ast-grep:
+          js_file: scripts/scan.ts
+          language: "tsx"
+      - name: "Process results"
+        run: |
+          codemod jssg exec $CODEMOD_PATH/scripts/process.ts
+```
+
+```ts scripts/scan.ts
+import type { Codemod } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import { setState, getState, acquireLock } from "codemod:workflow";
+
+const codemod: Codemod<TSX> = async (root) => {
+  // Collect file paths that match criteria
+  const release = acquireLock("files");
+  try {
+    const files = getState<string[]>("filesToProcess") ?? [];
+    files.push(root.filename());
+    setState("filesToProcess", files); // persisted by default
+  } finally {
+    release();
+  }
+  return null;
+};
+
+export default codemod;
+```
+
+```ts scripts/process.ts
+import { getState } from "codemod:workflow";
+
+// This runs in a subsequent "run" step via jssg exec.
+// State from the previous js-ast-grep step is available.
+const files = getState<string[]>("filesToProcess") ?? [];
+console.log(`Processing ${files.length} files`);
+```
+</CodeGroup>
+
+### Transient State
+
+Pass `persist: false` to keep state only for the current step execution (useful for in-memory coordination that doesn't need to survive across steps):
+
+```ts
+setState("processingQueue", queue, false); // not persisted
+```
+
+
+## Runtime Hooks
+
+The `codemod:runtime` module lets a codemod send structured execution signals to the engine without relying on `console.log` parsing.
+
+```ts
+import runtime from "codemod:runtime";
+```
+
+Use runtime hooks when you want to:
+- show meaningful progress in workflow task logs
+- warn without failing the task
+- improve watchdog diagnostics by naming the active unit or file
+- fail the current step explicitly instead of returning a generic exception
+- stop cooperatively when the task has been canceled
+
+### API Reference
+
+<ParamField path="progress" type="(message: string, meta?: RuntimeMeta) => void">
+  Emits a structured progress event. Progress updates appear in task logs and refresh the step heartbeat so long-running transforms can prove they are still alive.
+</ParamField>
+
+<ParamField path="warn" type="(message: string, meta?: RuntimeMeta) => void">
+  Emits a non-fatal warning event. Warnings are appended to task logs but do not change task state.
+</ParamField>
+
+<ParamField path="setCurrentUnit" type="(unitId: string, meta?: RuntimeMeta) => void">
+  Overrides the current logical execution unit for diagnostics. For file-based transforms, this is usually the relative file path.
+</ParamField>
+
+<ParamField path="failFile" type="(message: string, meta?: RuntimeMeta) => never">
+  Fails the current file or unit immediately. The runtime currently treats this as terminal for the running task.
+</ParamField>
+
+<ParamField path="failStep" type="(message: string, meta?: RuntimeMeta) => never">
+  Fails the current step immediately. This is always terminal for the running task.
+</ParamField>
+
+<ParamField path="isCanceled" type="() => boolean">
+  Returns `true` if the current task has been canceled. Use it to stop long-running work cooperatively.
+</ParamField>
+
+### Example: Report progress and fail explicitly
+
+```ts codemod.ts
+import type { Codemod } from "codemod:ast-grep";
+import type TSX from "codemod:ast-grep/langs/tsx";
+import runtime from "codemod:runtime";
+
+const codemod: Codemod<TSX> = async (root) => {
+  const relativeFile = root.filename();
+
+  runtime.setCurrentUnit(relativeFile);
+  runtime.progress("Scanning file");
+
+  try {
+    // Your transform logic here
+    runtime.progress("Generating translation keys", { file: relativeFile });
+    return null;
+  } catch (error) {
+    runtime.failStep(`Transform failed for ${relativeFile}`, {
+      file: relativeFile,
+      cause: error instanceof Error ? error.message : String(error),
+    });
+  }
+};
+
+export default codemod;
+```
+
+### When to use hooks vs exceptions
+
+- Use `runtime.progress(...)` and `runtime.warn(...)` for structured observability.
+- Use `runtime.failStep(...)` when the codemod has decided the task should stop immediately.
+- Plain thrown errors still fail the task if they escape the codemod, but hooks give better logs and clearer intent.
+- The engine's idle timeout is only a backstop for silent hangs. Hooks are the preferred way to report semantic failures.
+
+<Warning>
+`codemod:runtime` requires a runtime version that supports runtime hooks. If a codemod must run in mixed-version environments, prefer a dynamic import with a clear upgrade error message when the module is unavailable.
+</Warning>
+

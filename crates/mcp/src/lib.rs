@@ -60,6 +60,22 @@ const LOCAL_JSSG_ADVANCED_DOC: &str = include_str!(concat!(
     env!("OUT_DIR"),
     "/docs/community/jssg/advanced.mdx"
 ));
+const LOCAL_JSSG_ADVANCED_TRANSFORMS_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/advanced/transforms.mdx"
+));
+const LOCAL_JSSG_ADVANCED_WORKFLOW_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/advanced/workflow.mdx"
+));
+const LOCAL_JSSG_ADVANCED_MULTI_FILE_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/advanced/multi-file.mdx"
+));
+const LOCAL_JSSG_ADVANCED_PERFORMANCE_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/advanced/performance.mdx"
+));
 const LOCAL_JSSG_TESTING_DOC: &str =
     include_str!(concat!(env!("OUT_DIR"), "/docs/community/jssg/testing.mdx"));
 const LOCAL_JSSG_METRICS_DOC: &str =
@@ -338,7 +354,7 @@ fn resource_infos() -> &'static [CliResourceInfo] {
         CliResourceInfo {
             uri: "jssg-gotchas://instructions",
             name: "jssg-gotchas",
-            description: Some("Highest-priority JSSG gotchas for codemod authoring"),
+            description: Some("Highest-priority JSSG gotchas for codemod authoring, including performant codemods"),
             mime_type: "text/markdown",
         },
         CliResourceInfo {
@@ -687,6 +703,22 @@ fn local_jssg_docs_bundle() -> &'static str {
                         content: LOCAL_JSSG_ADVANCED_DOC,
                     },
                     LocalDocSource {
+                        path: "docs/community/jssg/advanced/transforms.mdx",
+                        content: LOCAL_JSSG_ADVANCED_TRANSFORMS_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/workflow.mdx",
+                        content: LOCAL_JSSG_ADVANCED_WORKFLOW_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/multi-file.mdx",
+                        content: LOCAL_JSSG_ADVANCED_MULTI_FILE_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/performance.mdx",
+                        content: LOCAL_JSSG_ADVANCED_PERFORMANCE_DOC,
+                    },
+                    LocalDocSource {
                         path: "docs/community/jssg/testing.mdx",
                         content: LOCAL_JSSG_TESTING_DOC,
                     },
@@ -723,8 +755,28 @@ fn local_jssg_gotchas_docs_bundle() -> &'static str {
                         content: LOCAL_JSSG_ADVANCED_DOC,
                     },
                     LocalDocSource {
+                        path: "docs/community/jssg/advanced/transforms.mdx",
+                        content: LOCAL_JSSG_ADVANCED_TRANSFORMS_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/workflow.mdx",
+                        content: LOCAL_JSSG_ADVANCED_WORKFLOW_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/multi-file.mdx",
+                        content: LOCAL_JSSG_ADVANCED_MULTI_FILE_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/performance.mdx",
+                        content: LOCAL_JSSG_ADVANCED_PERFORMANCE_DOC,
+                    },
+                    LocalDocSource {
                         path: "docs/community/jssg/testing.mdx",
                         content: LOCAL_JSSG_TESTING_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/metrics.mdx",
+                        content: LOCAL_JSSG_METRICS_DOC,
                     },
                     LocalDocSource {
                         path: "docs/community/jssg/security.mdx",
@@ -753,6 +805,14 @@ fn local_ast_grep_gotchas_docs_bundle() -> &'static str {
                     LocalDocSource {
                         path: "docs/community/jssg/advanced.mdx",
                         content: LOCAL_JSSG_ADVANCED_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/transforms.mdx",
+                        content: LOCAL_JSSG_ADVANCED_TRANSFORMS_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/performance.mdx",
+                        content: LOCAL_JSSG_ADVANCED_PERFORMANCE_DOC,
                     },
                 ],
             )
@@ -805,6 +865,22 @@ fn local_jssg_runtime_capabilities_docs_bundle() -> &'static str {
                     LocalDocSource {
                         path: "docs/community/jssg/advanced.mdx",
                         content: LOCAL_JSSG_ADVANCED_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/transforms.mdx",
+                        content: LOCAL_JSSG_ADVANCED_TRANSFORMS_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/workflow.mdx",
+                        content: LOCAL_JSSG_ADVANCED_WORKFLOW_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/multi-file.mdx",
+                        content: LOCAL_JSSG_ADVANCED_MULTI_FILE_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/performance.mdx",
+                        content: LOCAL_JSSG_ADVANCED_PERFORMANCE_DOC,
                     },
                 ],
             )
@@ -1648,7 +1724,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG test execution, and Codemod package validation. Available tools: dump_ast, get_node_types, run_jssg_tests, validate_codemod_package. Available resources: jssg-instructions, jssg-gotchas, ast-grep-gotchas, jssg-utils-instructions, jssg-runtime-capabilities-instructions, codemod-cli-instructions, sharding-instructions, codemod-troubleshooting-instructions, codemod-creation-workflow-instructions, codemod-maintainer-monorepo-instructions. For codemod authoring, read codemod-creation-workflow-instructions first, then read jssg-gotchas and ast-grep-gotchas before writing source-transform code. If registry search finds no exact existing package, run direct codemod init immediately; in non-interactive flows, pass only user- or task-provided metadata flags and rely on CLI defaults/auth-derived author handling for the rest. Call validate_codemod_package before you stop work on a codemod package. Use dump_ast when pattern shape is unclear. If symbol origin matters, use semantic analysis and binding-aware checks. If you discover a Codemod platform gap, ask the user for explicit consent before submitting anonymous feedback. With consent, run `codemod ai feedback --category <category> --message <short message>` using categories like jssg, workflow, ai-docs, mcp, cli, registry, package-validation, or other. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG test execution, and Codemod package validation. Available tools: dump_ast, get_node_types, run_jssg_tests, validate_codemod_package. Available resources: jssg-instructions, jssg-gotchas, ast-grep-gotchas, jssg-utils-instructions, jssg-runtime-capabilities-instructions, codemod-cli-instructions, sharding-instructions, codemod-troubleshooting-instructions, codemod-creation-workflow-instructions, codemod-maintainer-monorepo-instructions. For codemod authoring, read codemod-creation-workflow-instructions first, then read jssg-gotchas and ast-grep-gotchas before writing source-transform code. jssg-gotchas includes Performant codemods for transforms and mining (do not rebuild a repo index per file; time jssg run --language vs a no-op). For Insights metrics packages, put useMetricAtom in the step js_file and return null. If registry search finds no exact existing package, run direct codemod init immediately; in non-interactive flows, pass only user- or task-provided metadata flags and rely on CLI defaults/auth-derived author handling for the rest. Call validate_codemod_package before you stop work on a codemod package. Use dump_ast when pattern shape is unclear. If symbol origin matters, use semantic analysis and binding-aware checks. If you discover a Codemod platform gap, ask the user for explicit consent before submitting anonymous feedback. With consent, run `codemod ai feedback --category <category> --message <short message>` using categories like jssg, workflow, ai-docs, mcp, cli, registry, package-validation, or other. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.".to_string()),
         }
     }
 
@@ -1891,6 +1967,8 @@ mod tests {
         assert!(!instructions.contains("scaffold_codemod_package"));
         assert!(instructions.contains("jssg-gotchas"));
         assert!(instructions.contains("codemod-creation-workflow-instructions"));
+        assert!(instructions.contains("Insights metrics"));
+        assert!(instructions.contains("Performant codemods"));
         assert!(instructions.contains("direct codemod init"));
         assert!(instructions.contains("auth-derived author"));
         assert!(instructions.contains("anonymous feedback"));
@@ -2016,6 +2094,8 @@ mod tests {
             .expect("expected ast-grep gotchas");
 
         assert!(jssg_gotchas.contains("Canonical JSSG Gotchas Documentation"));
+        assert!(jssg_gotchas.contains("Performant codemods"));
+        assert!(jssg_gotchas.contains("useMetricAtom"));
         assert!(ast_grep_gotchas.contains("Canonical ast-grep Usage Documentation"));
     }
 

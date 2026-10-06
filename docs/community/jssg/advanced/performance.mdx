@@ -1,0 +1,103 @@
+---
+title: "Performance"
+description: "Keep transforms and miners fast at scale: selectors, once-per-scan indexes, and wall-clock checks."
+---
+
+## Performant codemods
+
+JSSG already calls your function once per matching file, so cost is `files × work_per_file`. Anything that walks or parses the rest of the repo *inside* that callback is quadratic. That is true for source transforms and for read-only miners.
+
+Use this diagnostic before you rewrite queries:
+
+```
+Codemod is slow
+    |
+    v
+Is a no-op (return null) also slow?
+    |
+    +-- YES --> Most cost is outside your analysis
+    |             |
+    |             +--> Many irrelevant files?
+    |             |       -> tighten workflow include/exclude
+    |             |
+    |             +--> Multiple substantial analyses
+    |                     parsing the same files?
+    |                     -> CLI: test a shared language step
+    |                     -> Insights mining: keep one js_file (see below)
+    |
+    +-- NO --> Does each file redo repo-wide I/O (list/parse/setState)?
+    |             -> YES: you are O(n²). Build the index once, then edit or emit.
+    |
+    +-- else --> Analysis itself is expensive
+                  |
+                  +--> Can a cheap necessary condition reject files?
+                  |       -> getSelector and/or a discriminating token gate
+                  |
+                  +--> Are queries returning many nodes?
+                  |       -> increase selectivity; keep filtering in the rule
+                  |
+                  +--> Is JavaScript traversing large parts of the AST?
+                  |       -> shrink the candidate set first
+                  |
+                  +--> Is analysis project-wide (set-diff, indexes)?
+                          -> eligibility checks first
+                          -> complete amortize-once index (not per-file rebuild)
+```
+
+### Local vs project-wide
+
+| Finding | Fast shape |
+|---------|------------|
+| Local to this file | Token gate or `getSelector` → targeted `find`/`findAll` → edit or `increment` |
+| Repo-wide set-diff (declared unused, unused export, packwerk) | Build the index **once** per scan root (module cache + one `getState`/`setState`), then look up for **this** file |
+
+Do **not** `readdir`, `parse()` other files, or rewrite the full site list on every invocation. Distinguish “not built yet” (`undefined`) from “built empty” (`[]`) so workers do not rebuild forever.
+
+For set-diff, a **complete** index built once is correct. A partial/lazy index that grows as files are visited will edit or emit from incomplete sets.
+
+### Token gates must discriminate
+
+A prefilter that still matches most of the repo is a parse tax. Prefer syntax-shaped checks such as `featureFlags\s*:` or a literal `isActive('…')` call over `includes('featureFlags')` when that substring also appears in plumbing names. Skip `node_modules`, tests, and generated dirs in both workflow `exclude` and any disk walk.
+
+### Insights (mining)
+
+Codemod Insights binds widgets to a **single** workflow `js_file` and runs that file alone. Put `useMetricAtom` and `increment` in that file; `return null`. Later collect/analyze steps and discovery shims are invisible to Insights.
+
+CLI workflows may use multiple JSSG steps or a shared language step so one parse serves several analyses. That does not apply to Insights: collapse to one step with a cached index.
+
+See [Metrics](/community/jssg/metrics) for the `useMetricAtom` API.
+
+### Verify wall clock before you ship
+
+`jssg test` on a handful of fixtures proves correctness, not scale.
+
+1. Time a no-op (`return null`) on a few thousand mostly inert files.
+2. Time the real package on the same target with `codemod jssg run --language <lang>` (`--language`, not `-l`; `-l` is only valid for `jssg test`).
+3. Optionally time a deliberate per-file full-repo walk so you know what quadratic looks like.
+
+The package should sit near the no-op, not 10–100× it. Check edit or metric **counts** on that corpus, not only that the command exits 0.
+
+## Best Practices
+
+### Consistent Patterns
+
+1. **Use `const codemod: Codemod<TSX> = async (root, options) => {}` with `export default codemod`**
+2. **Import proper types** - use `Codemod`, `GetSelector`, and language-specific types from `codemod:ast-grep`
+3. **Handle edge cases** - always check for null/undefined values and use try-catch for async operations
+4. **Use early returns** - skip processing when possible, especially for sharding
+5. **Batch operations** - collect edits before committing
+6. **Export getSelector** - provide a selector function for performance optimization
+7. **Optimization strategies** - prefer early returns, single traversals, and batching edits; use specific patterns to reduce backtracking and false positives
+
+### Enterprise Considerations
+
+- **Idempotent transforms**: Ensure transforms can be run multiple times safely
+- **Progress reporting**: Log progress for long-running migrations
+- **Error handling**: Gracefully handle unexpected input
+- **Performance**: Optimize for large codebases. Follow [Performant codemods](#performant-codemods): no-op first, then token gates, then a once-per-scan index.
+- **Coordination**: Use state for multi-repo coordination
+
+<Tip>
+If you're working on a large-scale enterprise migration, feel free to [reach out to us](https://go.codemod.com/contact) to learn more about pro and enterprise plans and features.
+</Tip>
+

@@ -10,7 +10,7 @@ argument-hint: "<migration-intent>"
 # Codemod Migration Assistant
 
 codemod-compatibility: mcs-v1
-codemod-skill-version: 1.1.0
+codemod-skill-version: 1.1.3
 
 Use this skill to orchestrate migration execution, codemod package authoring, and Codemod CLI AI inspection.
 
@@ -20,6 +20,7 @@ Trigger this skill when the user asks to:
 - apply a breaking-change migration, deprecation migration, or version bump rollout
 - perform a large mechanical refactor that may already exist as a Codemod Registry package
 - inspect AST shape, tree-sitter node types, Codemod documentation, or Codemod MCP-equivalent tools/resources from the CLI
+- build a read-only mining / Insights metrics package (detect patterns, emit metrics, leave source unchanged)
 
 When the intent is migration/update/upgrade oriented, use Codemod first before defaulting to a fully open-ended AI rewrite.
 
@@ -37,7 +38,8 @@ Codemod AI tools must be usable without MCP. Prefer the CLI commands below when 
 If MCP is available, direct MCP calls are acceptable. If MCP is unavailable, do not stop authoring only because MCP is missing; use the `codemod ai` CLI equivalents.
 
 When the user:
-- **Creates a codemod or does a large refactor** — Read `codemod-creation-workflow-instructions` first via MCP or `npx codemod ai docs codemod-creation-workflow`. Before writing source-transform code, read `jssg-gotchas` and `ast-grep-gotchas` via MCP or `npx codemod ai docs jssg-gotchas` / `npx codemod ai docs ast-grep-gotchas`. Read `codemod-cli-instructions` only when you need exact command syntax. Read `jssg-instructions` once a package exists and you are implementing the transform.
+- **Creates a codemod or does a large refactor** — Read `codemod-creation-workflow-instructions` first via MCP or `npx codemod ai docs codemod-creation-workflow`. Before writing source-transform code, read `jssg-gotchas` and `ast-grep-gotchas` via MCP or `npx codemod ai docs jssg-gotchas` / `npx codemod ai docs ast-grep-gotchas`. Treat the Performant codemods section in `jssg-gotchas` (from `docs/community/jssg/advanced/performance.mdx`) as required: discriminating selectors or token gates, no per-file full-repo walks, timed `jssg run --language` vs a no-op before you claim it is done. Read `codemod-cli-instructions` only when you need exact command syntax. Read `jssg-instructions` once a package exists and you are implementing the transform.
+- **Creates a mining / Insights metrics package** — Same as authoring. Insights only sees `useMetricAtom` + `increment` in the workflow `js_file`; `return null`. Do not put metrics only in a discovery shim. Or `npx codemod ai docs jssg-gotchas`.
 - **Needs to know whether a codemod package is still a starter scaffold or incomplete** — Call MCP `validate_codemod_package` or run `npx codemod ai call validate_codemod_package --input '{"package_path":"."}'` before stopping.
 - **Needs Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work** — Read `jssg-runtime-capabilities-instructions` via MCP or `npx codemod ai docs jssg-runtime-capabilities`.
 - **Maintains a codemod monorepo** — Read `codemod-maintainer-monorepo-instructions` via MCP or `npx codemod ai docs codemod-maintainer-monorepo`.
