@@ -27,7 +27,7 @@ The starter package gives your agent a concrete structure to refine or replace w
 
 Once the package is scaffolded, you can ask your AI agent to help you build codemods for things like framework upgrades, design system migrations, i18n work, code-mining tasks, and more.
 
-Tell the agent to follow [Performant codemods](/community/jssg/advanced/performance#performant-codemods) in `jssg-gotchas`: discriminating selectors or token gates, no per-file full-repo walks, and a timed no-op vs real run on the same entry path before publish. For **read-only mining**, also put `useMetricAtom` in the workflow `js_file` and `return null`.
+Tell the agent to follow [Performant codemods](/community/jssg/advanced/performance#performant-codemods) in `jssg-gotchas`: discriminating selectors or token gates, no per-file full-repo walks, and a timed no-op vs real run on the same entry path before publish. For **read-only mining**, also put `useMetricAtom` in each Insights-bound step script and `return null`.
 
 For example:
 
