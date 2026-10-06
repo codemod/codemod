@@ -61,9 +61,9 @@ A prefilter that still matches most of the repo is a parse tax. Prefer syntax-sh
 
 ### Insights (mining)
 
-Codemod Insights binds widgets to a **single** workflow `js_file` and runs that file alone. Put `useMetricAtom` and `increment` in that file; `return null`. Later collect/analyze steps and discovery shims are invisible to Insights.
+Codemod Insights assumes each JSSG workflow step is self-describing: `useMetricAtom` and `increment` must appear in that step’s `js_file` from `workflow.yaml`, because discovery and dashboard binding are per-step, not package-wide. For mining, `return null`.
 
-CLI workflows may use multiple JSSG steps or a shared language step so one parse serves several analyses. That does not apply to Insights: collapse to one step with a cached index.
+CLI workflows may use multiple JSSG steps or a shared language step so one parse serves several analyses. That does not apply to Insights: keep the metric emit in the bound step’s `js_file`, with a cached index when analysis is project-wide.
 
 See [Metrics](/community/jssg/metrics) for the `useMetricAtom` API.
 

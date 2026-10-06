@@ -104,4 +104,4 @@ Metrics:
 
 ## Insights
 
-Insights widgets bind to a **single** workflow `js_file`. Put `useMetricAtom` and `increment` in that file; later collect/analyze steps and discovery shims are invisible. For scale (transforms or mining), see [Performant codemods](/community/jssg/advanced/performance#performant-codemods).
+Codemod Insights assumes each JSSG workflow step is self-describing: `useMetricAtom` and `increment` must appear in that step’s `js_file` from `workflow.yaml`, because discovery and dashboard binding are per-step, not package-wide. For scale (transforms or mining), see [Performant codemods](/community/jssg/advanced/performance#performant-codemods).
