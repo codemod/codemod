@@ -23,10 +23,28 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read # Route trusted and fork reviews using PR metadata.
+      issues: write # Acknowledge the command comment with a reaction.
     outputs:
       is_draft: ${{ steps.resolve.outputs.is_draft }}
       is_fork: ${{ steps.resolve.outputs.is_fork }}
     steps:
+      - name: Acknowledge command
+        uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
+        with:
+          github-token: ${{ github.token }}
+          retries: 3
+          script: |
+            try {
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: "eyes",
+              });
+            } catch (error) {
+              core.warning(`Could not acknowledge /codex-review: ${error.message}`);
+            }
+
       - name: Resolve pull request trust level
         id: resolve
         uses: actions/github-script@373c709c69115d41ff229c7e5df9f8788daa9553 # v9
