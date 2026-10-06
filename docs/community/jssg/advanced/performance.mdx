@@ -7,6 +7,8 @@ description: "Keep transforms and miners fast at scale: selectors, once-per-scan
 
 JSSG already calls your function once per matching file, so cost is `files × work_per_file`. Anything that walks or parses the rest of the repo *inside* that callback is quadratic. That is true for source transforms and for read-only miners.
 
+Each file callback runs in a **fresh QuickJS runtime**. Module-level variables do not survive from one file to the next. Cross-file coordination must use `codemod:workflow` state (or the filesystem), not a module cache.
+
 Use this diagnostic before you rewrite queries:
 
 ```
@@ -26,7 +28,7 @@ Is a no-op (return null) also slow?
     |                     -> Insights mining: keep one js_file (see below)
     |
     +-- NO --> Does each file redo repo-wide I/O (list/parse/setState)?
-    |             -> YES: you are O(n²). Build the index once, then edit or emit.
+    |             -> YES: you are O(n²). Build once under a lock, then look up.
     |
     +-- else --> Analysis itself is expensive
                   |
@@ -41,7 +43,7 @@ Is a no-op (return null) also slow?
                   |
                   +--> Is analysis project-wide (set-diff, indexes)?
                           -> eligibility checks first
-                          -> complete amortize-once index (not per-file rebuild)
+                          -> complete amortize-once index with small per-file reads
 ```
 
 ### Local vs project-wide
@@ -49,9 +51,9 @@ Is a no-op (return null) also slow?
 | Finding | Fast shape |
 |---------|------------|
 | Local to this file | Token gate or `getSelector` → targeted `find`/`findAll` → edit or `increment` |
-| Repo-wide set-diff (declared unused, unused export, packwerk) | Build the index **once** per scan root (module cache + one `getState`/`setState`), then look up for **this** file |
+| Repo-wide set-diff (declared unused, unused export, packwerk) | Under `acquireLock`, build the **complete** index once, store a built sentinel plus **small per-file shards** (or emit everything in the builder and mark done), then each later file reads only its own O(1)-sized entry |
 
-Do **not** `readdir`, `parse()` other files, or rewrite the full site list on every invocation. Distinguish “not built yet” (`undefined`) from “built empty” (`[]`) so workers do not rebuild forever.
+Do **not** `readdir` or `parse()` other files on every invocation. Do **not** `getState` a single repo-sized blob on every file: `getState` clones and reconstitutes the full JSON value, so a large shared index is still quadratic. Distinguish “not built yet” (`undefined`) from “built empty” so workers do not rebuild forever.
 
 For set-diff, a **complete** index built once is correct. A partial/lazy index that grows as files are visited will edit or emit from incomplete sets.
 
@@ -63,7 +65,7 @@ A prefilter that still matches most of the repo is a parse tax. Prefer syntax-sh
 
 Codemod Insights assumes each JSSG workflow step is self-describing: `useMetricAtom` and `increment` must appear in that step’s `js_file` from `workflow.yaml`, because discovery and dashboard binding are per-step, not package-wide. For mining, `return null`.
 
-CLI workflows may use multiple JSSG steps or a shared language step so one parse serves several analyses. That does not apply to Insights: keep the metric emit in the bound step’s `js_file`, with a cached index when analysis is project-wide.
+CLI workflows may use multiple JSSG steps or a shared language step so one parse serves several analyses. That does not apply to Insights: keep the metric emit in the bound step’s `js_file`, with a once-built sharded index when analysis is project-wide.
 
 See [Metrics](/community/jssg/metrics) for the `useMetricAtom` API.
 
@@ -71,8 +73,10 @@ See [Metrics](/community/jssg/metrics) for the `useMetricAtom` API.
 
 `jssg test` on a handful of fixtures proves correctness, not scale.
 
-1. Time a no-op (`return null`) on a few thousand mostly inert files.
-2. Time the real package on the same target with `codemod jssg run --language <lang>` (`--language`, not `-l`; `-l` is only valid for `jssg test`).
+1. Time a no-op (`return null`) on a few thousand mostly inert files, using the **same entry path** you will ship (workflow vs direct script).
+2. Time the real package on that same target:
+   - Prefer `codemod workflow run -w workflow.yaml --target <dir>` for packages that rely on `getSelector`, workflow `include`/`exclude`, or `options.matches`. Direct `codemod jssg run` does not load the workflow selector or those globs.
+   - For a standalone script with no workflow filters, `codemod jssg run --language <lang>` is enough (`--language`, not `-l`; `-l` is only valid for `jssg test`).
 3. Optionally time a deliberate per-file full-repo walk so you know what quadratic looks like.
 
 The package should sit near the no-op, not 10–100× it. Check edit or metric **counts** on that corpus, not only that the command exits 0.
@@ -94,10 +98,9 @@ The package should sit near the no-op, not 10–100× it. Check edit or metric *
 - **Idempotent transforms**: Ensure transforms can be run multiple times safely
 - **Progress reporting**: Log progress for long-running migrations
 - **Error handling**: Gracefully handle unexpected input
-- **Performance**: Optimize for large codebases. Follow [Performant codemods](#performant-codemods): no-op first, then token gates, then a once-per-scan index.
+- **Performance**: Optimize for large codebases. Follow [Performant codemods](#performant-codemods): no-op first, then token gates, then a once-per-scan sharded index.
 - **Coordination**: Use state for multi-repo coordination
 
 <Tip>
 If you're working on a large-scale enterprise migration, feel free to [reach out to us](https://go.codemod.com/contact) to learn more about pro and enterprise plans and features.
 </Tip>
-

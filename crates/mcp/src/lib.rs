@@ -108,6 +108,14 @@ const SHARDING_DOC_URL: &str = "https://docs.codemod.com/community/workflows/sha
 const JSSG_QUICKSTART_DOC_URL: &str = "https://docs.codemod.com/community/jssg.md";
 const JSSG_REFERENCE_DOC_URL: &str = "https://docs.codemod.com/community/jssg/reference.md";
 const JSSG_ADVANCED_DOC_URL: &str = "https://docs.codemod.com/community/jssg/advanced.md";
+const JSSG_ADVANCED_TRANSFORMS_DOC_URL: &str =
+    "https://docs.codemod.com/community/jssg/advanced/transforms.md";
+const JSSG_ADVANCED_WORKFLOW_DOC_URL: &str =
+    "https://docs.codemod.com/community/jssg/advanced/workflow.md";
+const JSSG_ADVANCED_MULTI_FILE_DOC_URL: &str =
+    "https://docs.codemod.com/community/jssg/advanced/multi-file.md";
+const JSSG_ADVANCED_PERFORMANCE_DOC_URL: &str =
+    "https://docs.codemod.com/community/jssg/advanced/performance.md";
 const JSSG_TESTING_DOC_URL: &str = "https://docs.codemod.com/community/jssg/testing.md";
 const JSSG_METRICS_DOC_URL: &str = "https://docs.codemod.com/community/jssg/metrics.md";
 const JSSG_UTILS_DOC_URL: &str = "https://docs.codemod.com/community/jssg/utils.md";
@@ -682,6 +690,21 @@ fn build_local_docs_bundle(title: &str, sources: &[LocalDocSource]) -> String {
         &sections,
         "",
     )
+}
+
+fn jssg_public_doc_urls() -> &'static [&'static str] {
+    &[
+        JSSG_QUICKSTART_DOC_URL,
+        JSSG_REFERENCE_DOC_URL,
+        JSSG_ADVANCED_DOC_URL,
+        JSSG_ADVANCED_TRANSFORMS_DOC_URL,
+        JSSG_ADVANCED_WORKFLOW_DOC_URL,
+        JSSG_ADVANCED_MULTI_FILE_DOC_URL,
+        JSSG_ADVANCED_PERFORMANCE_DOC_URL,
+        JSSG_TESTING_DOC_URL,
+        JSSG_METRICS_DOC_URL,
+        JSSG_SEMANTIC_ANALYSIS_DOC_URL,
+    ]
 }
 
 fn local_jssg_docs_bundle() -> &'static str {
@@ -1338,14 +1361,7 @@ impl CodemodMcpServer {
                     move || async move {
                         build_public_docs_bundle(
                             "Canonical JSSG Documentation",
-                            &[
-                                JSSG_QUICKSTART_DOC_URL,
-                                JSSG_REFERENCE_DOC_URL,
-                                JSSG_ADVANCED_DOC_URL,
-                                JSSG_TESTING_DOC_URL,
-                                JSSG_METRICS_DOC_URL,
-                                JSSG_SEMANTIC_ANALYSIS_DOC_URL,
-                            ],
+                            jssg_public_doc_urls(),
                             fallback,
                         )
                         .await
@@ -1724,7 +1740,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG test execution, and Codemod package validation. Available tools: dump_ast, get_node_types, run_jssg_tests, validate_codemod_package. Available resources: jssg-instructions, jssg-gotchas, ast-grep-gotchas, jssg-utils-instructions, jssg-runtime-capabilities-instructions, codemod-cli-instructions, sharding-instructions, codemod-troubleshooting-instructions, codemod-creation-workflow-instructions, codemod-maintainer-monorepo-instructions. For codemod authoring, read codemod-creation-workflow-instructions first, then read jssg-gotchas and ast-grep-gotchas before writing source-transform code. jssg-gotchas includes Performant codemods for transforms and mining (do not rebuild a repo index per file; time jssg run --language vs a no-op). For Insights metrics packages, put useMetricAtom in the step js_file and return null. If registry search finds no exact existing package, run direct codemod init immediately; in non-interactive flows, pass only user- or task-provided metadata flags and rely on CLI defaults/auth-derived author handling for the rest. Call validate_codemod_package before you stop work on a codemod package. Use dump_ast when pattern shape is unclear. If symbol origin matters, use semantic analysis and binding-aware checks. If you discover a Codemod platform gap, ask the user for explicit consent before submitting anonymous feedback. With consent, run `codemod ai feedback --category <category> --message <short message>` using categories like jssg, workflow, ai-docs, mcp, cli, registry, package-validation, or other. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG test execution, and Codemod package validation. Available tools: dump_ast, get_node_types, run_jssg_tests, validate_codemod_package. Available resources: jssg-instructions, jssg-gotchas, ast-grep-gotchas, jssg-utils-instructions, jssg-runtime-capabilities-instructions, codemod-cli-instructions, sharding-instructions, codemod-troubleshooting-instructions, codemod-creation-workflow-instructions, codemod-maintainer-monorepo-instructions. For codemod authoring, read codemod-creation-workflow-instructions first, then read jssg-gotchas and ast-grep-gotchas before writing source-transform code. jssg-gotchas includes Performant codemods for transforms and mining (do not rebuild a repo index per file; time a no-op vs the real package on the same entry path). For Insights metrics packages, put useMetricAtom in the step js_file and return null. If registry search finds no exact existing package, run direct codemod init immediately; in non-interactive flows, pass only user- or task-provided metadata flags and rely on CLI defaults/auth-derived author handling for the rest. Call validate_codemod_package before you stop work on a codemod package. Use dump_ast when pattern shape is unclear. If symbol origin matters, use semantic analysis and binding-aware checks. If you discover a Codemod platform gap, ask the user for explicit consent before submitting anonymous feedback. With consent, run `codemod ai feedback --category <category> --message <short message>` using categories like jssg, workflow, ai-docs, mcp, cli, registry, package-validation, or other. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.".to_string()),
         }
     }
 
@@ -2095,8 +2111,21 @@ mod tests {
 
         assert!(jssg_gotchas.contains("Canonical JSSG Gotchas Documentation"));
         assert!(jssg_gotchas.contains("Performant codemods"));
+        // Unique to advanced/performance.mdx (hub only links here).
+        assert!(jssg_gotchas.contains("Verify wall clock before you ship"));
+        assert!(jssg_gotchas.contains("fresh QuickJS runtime"));
         assert!(jssg_gotchas.contains("useMetricAtom"));
         assert!(ast_grep_gotchas.contains("Canonical ast-grep Usage Documentation"));
+    }
+
+    #[test]
+    fn jssg_public_doc_urls_include_advanced_topic_children() {
+        let urls = jssg_public_doc_urls();
+        assert!(urls.contains(&JSSG_ADVANCED_DOC_URL));
+        assert!(urls.contains(&JSSG_ADVANCED_TRANSFORMS_DOC_URL));
+        assert!(urls.contains(&JSSG_ADVANCED_WORKFLOW_DOC_URL));
+        assert!(urls.contains(&JSSG_ADVANCED_MULTI_FILE_DOC_URL));
+        assert!(urls.contains(&JSSG_ADVANCED_PERFORMANCE_DOC_URL));
     }
 
     #[tokio::test]

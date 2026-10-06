@@ -178,7 +178,7 @@ import { setState, getState, unsetState, acquireLock } from "codemod:workflow";
 State is shared across all files processed in parallel within a single step:
 
 <Warning>
-Do not rebuild a repo-wide index, list the scan root, or rewrite the full `setState` payload on every file. That is O(n²) on large scans. Build once (module cache + `acquireLock` + one `setState`), then edit or emit. See [Performant codemods](/community/jssg/advanced/performance#performant-codemods).
+Do not rebuild a repo-wide index or rewrite a full-repo `setState` payload on every file. Each file runs in a fresh QuickJS runtime (module caches reset), and `getState` clones the entire JSON value. Build once under `acquireLock`, store a built sentinel plus small per-file shards, then look up. See [Performant codemods](/community/jssg/advanced/performance#performant-codemods).
 </Warning>
 
 ```ts codemod.ts
