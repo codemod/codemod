@@ -53,7 +53,6 @@
                   "community/jssg/reference",
                   "community/jssg/security",
                   "community/jssg/semantic-analysis",
-                  "community/jssg/advanced",
                   {
                     "group": "Utilities",
                     "root": "community/jssg/utils",
@@ -64,7 +63,17 @@
                     ]
                   },
                   "community/jssg/testing",
-                  "community/jssg/metrics"
+                  "community/jssg/metrics",
+                  {
+                    "group": "Advanced Topics",
+                    "root": "community/jssg/advanced",
+                    "pages": [
+                      "community/jssg/advanced/transforms",
+                      "community/jssg/advanced/workflow",
+                      "community/jssg/advanced/multi-file",
+                      "community/jssg/advanced/performance"
+                    ]
+                  }
                 ]
               },
               "community/model-context-protocol",
@@ -320,6 +329,22 @@
     {
       "source": "/jssg/advanced.md",
       "destination": "/community/jssg/advanced.md"
+    },
+    {
+      "source": "/jssg/advanced/transforms",
+      "destination": "/community/jssg/advanced/transforms"
+    },
+    {
+      "source": "/jssg/advanced/workflow",
+      "destination": "/community/jssg/advanced/workflow"
+    },
+    {
+      "source": "/jssg/advanced/multi-file",
+      "destination": "/community/jssg/advanced/multi-file"
+    },
+    {
+      "source": "/jssg/advanced/performance",
+      "destination": "/community/jssg/advanced/performance"
     },
     {
       "source": "/jssg/utils",

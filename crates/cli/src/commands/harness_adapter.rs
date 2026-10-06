@@ -18,12 +18,12 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
-const MCS_SKILL_VERSION: &str = "1.1.0";
+const MCS_SKILL_VERSION: &str = "1.1.3";
 const MCS_COMMAND_NAME: &str = "codemod";
 const SKILL_PACKAGE_COMPATIBILITY_MARKER: &str = "codemod-compatibility: skill-package-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
-const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.1.0";
+const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.1.3";
 const CODEMOD_VERSION_MARKER_PREFIX: &str = "codemod-skill-version:";
 const MCP_SERVER_NAME: &str = "codemod";
 const CODEMOD_CLI_COMMAND: &str = "codemod";
@@ -5179,6 +5179,8 @@ codemod-skill-version: 0.1.0
         assert!(MCS_SKILL_MD.contains("codemod-cli-instructions"));
         assert!(MCS_SKILL_MD.contains("jssg-gotchas"));
         assert!(MCS_SKILL_MD.contains("ast-grep-gotchas"));
+        assert!(MCS_SKILL_MD.contains("Creates a mining / Insights metrics package"));
+        assert!(MCS_SKILL_MD.contains("Performant codemods"));
         assert!(MCS_SKILL_MD.contains("validate_codemod_package"));
         assert!(MCS_SKILL_MD.contains("npx codemod ai dump-ast"));
         assert!(MCS_SKILL_MD.contains("npx codemod ai node-types"));
@@ -5196,6 +5198,7 @@ codemod-skill-version: 0.1.0
         assert!(MCS_COMMAND_MD.contains("jssg-runtime-capabilities-instructions"));
         assert!(MCS_COMMAND_MD.contains("codemod-creation-workflow-instructions"));
         assert!(MCS_COMMAND_MD.contains("jssg-gotchas"));
+        assert!(MCS_COMMAND_MD.contains("Performant codemods"));
         assert!(MCS_COMMAND_MD.contains("codemod init"));
         assert!(MCS_COMMAND_MD.contains("do not invent author"));
         assert!(MCS_COMMAND_MD.contains("authenticated user"));
