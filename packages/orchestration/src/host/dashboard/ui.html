@@ -1,0 +1,1172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Workflow</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --page: #f9f9f7;
+        --ink: #0b0b0b;
+        --ink-2: #52514e;
+        --muted: #898781;
+        --line: #e1e0d9;
+        --accent: #2a78d6;
+        --good: #0c8a0c;
+        --warning: #c98a00;
+        --critical: #c93434;
+        --button: #0b0b0b;
+        --button-ink: #ffffff;
+        --surface: #ffffff;
+        --surface-2: #f3f3ef;
+        --tint: #fff3d6;
+        --tint-ink: #5a4200;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --page: #0d0d0d;
+          --ink: #f4f4f1;
+          --ink-2: #c3c2b7;
+          --muted: #8f8e87;
+          --line: #2c2c2a;
+          --accent: #3987e5;
+          --good: #3fb83f;
+          --warning: #fab219;
+          --critical: #ef6262;
+          --button: #f4f4f1;
+          --button-ink: #0b0b0b;
+          --surface: #171716;
+          --surface-2: #20201e;
+          --tint: #3a2e08;
+          --tint-ink: #ffe3a1;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          16px/1.45 system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        background: var(--page);
+        color: var(--ink);
+        -webkit-text-size-adjust: 100%;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .page {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: calc(20px + env(safe-area-inset-top)) max(18px, env(safe-area-inset-right))
+          calc(132px + env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+      }
+      .banner {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: calc(-20px - env(safe-area-inset-top)) -18px 20px;
+        padding: calc(10px + env(safe-area-inset-top)) 18px 10px;
+        background: var(--tint);
+        color: var(--tint-ink);
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .banner button {
+        flex: none;
+        min-height: 44px;
+        padding: 0 16px;
+        border: 0;
+        border-radius: 12px;
+        font: inherit;
+        font-weight: 600;
+        background: var(--tint-ink);
+        color: var(--tint);
+        cursor: pointer;
+      }
+      h1 {
+        margin: 0;
+        font-size: 24px;
+        line-height: 1.2;
+        font-weight: 650;
+        overflow-wrap: anywhere;
+      }
+      h2 {
+        margin: 0 0 6px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      h2 .aside {
+        font-weight: 400;
+      }
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 8px 0 0;
+        font-size: 17px;
+        font-weight: 600;
+      }
+      .status .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex: none;
+      }
+      .status[data-tone="running"] .dot {
+        background: var(--accent);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      .status[data-tone="paused"] .dot {
+        background: var(--warning);
+      }
+      .status[data-tone="done"] .dot {
+        background: var(--good);
+      }
+      .status[data-tone="failed"] .dot {
+        background: var(--critical);
+      }
+      .status .time {
+        font-weight: 400;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .line {
+        margin: 4px 0 0;
+        color: var(--ink-2);
+      }
+      .error {
+        margin: 8px 0 0;
+        color: var(--critical);
+        overflow-wrap: anywhere;
+      }
+      .quiet {
+        color: var(--muted);
+      }
+      .actions {
+        position: fixed;
+        z-index: 2;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 12px max(18px, env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom))
+          max(18px, env(safe-area-inset-left));
+        background: color-mix(in srgb, var(--page) 92%, transparent);
+        -webkit-backdrop-filter: blur(12px);
+        backdrop-filter: blur(12px);
+        text-align: center;
+      }
+      .actions button {
+        display: block;
+        width: 100%;
+        min-height: 54px;
+        border: 0;
+        border-radius: 14px;
+        font: inherit;
+        font-size: 18px;
+        font-weight: 600;
+        background: var(--button);
+        color: var(--button-ink);
+        cursor: pointer;
+      }
+      .actions button[data-action="resume"] {
+        background: var(--accent);
+        color: #fff;
+      }
+      .actions button.secondary {
+        margin-top: 8px;
+        min-height: 48px;
+        font-size: 16px;
+        background: transparent;
+        color: var(--ink);
+        border: 1.5px solid var(--line);
+      }
+      .actions button:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .actions p {
+        margin: 8px 0 0;
+        font-size: 14px;
+        color: var(--ink-2);
+      }
+      .actions p.error {
+        color: var(--critical);
+      }
+      section {
+        margin-top: 28px;
+      }
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .item {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        padding: 5px 0;
+        min-width: 0;
+      }
+      .item .name {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .item .state {
+        flex: none;
+        font-size: 14px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .item .mark {
+        flex: none;
+        width: 14px;
+        text-align: center;
+        font-size: 13px;
+        line-height: 1;
+        color: var(--muted);
+      }
+      .item .why {
+        flex-basis: 100%;
+        margin: 0 0 0 24px;
+        font-size: 14px;
+        color: var(--critical);
+        overflow-wrap: anywhere;
+      }
+      .item {
+        flex-wrap: wrap;
+      }
+      .item[data-state="planned"] .name {
+        color: var(--ink-2);
+      }
+      .item[data-state="running"] .mark {
+        color: var(--accent);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      .item[data-state="running"] .state {
+        color: var(--accent);
+      }
+      .item[data-state="done"] .mark {
+        color: var(--good);
+      }
+      .item[data-state="failed"] .mark,
+      .item[data-state="failed"] .state {
+        color: var(--critical);
+      }
+      .item[data-state="unsure"] .mark {
+        color: var(--warning);
+      }
+      .more {
+        padding: 4px 0 0 24px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .flow-chart {
+        padding-top: 8px;
+      }
+      .flow-group {
+        min-width: 0;
+      }
+      .flow-group-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .flow-group-label::after {
+        content: "";
+        height: 1px;
+        flex: 1;
+        background: var(--line);
+      }
+      .flow-sequence {
+        display: grid;
+        gap: 20px;
+      }
+      .flow-sequence-stage {
+        position: relative;
+        min-width: 0;
+      }
+      .flow-sequence-stage:not(:last-child)::after {
+        content: "";
+        position: absolute;
+        z-index: 0;
+        left: 23px;
+        bottom: -20px;
+        width: 2px;
+        height: 20px;
+        background: var(--line);
+      }
+      .flow-parallel {
+        padding: 12px;
+        border: 1.5px solid var(--line);
+        border-radius: 16px;
+        background: var(--surface-2);
+      }
+      .flow-parallel-branches {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(180px, 1fr);
+        gap: 10px;
+        overflow-x: auto;
+        overscroll-behavior-inline: contain;
+        padding: 2px 0 4px;
+      }
+      .flow-branch {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-top: 3px solid var(--muted);
+        border-radius: 12px;
+        background: var(--page);
+      }
+      .flow-step,
+      .flow-dynamic {
+        position: relative;
+        z-index: 1;
+        min-width: 0;
+        padding: 12px 14px;
+        border: 1.5px solid var(--line);
+        border-radius: 12px;
+        background: var(--surface);
+      }
+      .flow-step-head {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-width: 0;
+      }
+      .flow-step .name,
+      .flow-command .name {
+        min-width: 0;
+        flex: 1;
+        overflow-wrap: anywhere;
+        font-weight: 600;
+      }
+      .flow-step .state,
+      .flow-command .state {
+        flex: none;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .flow-mark {
+        flex: none;
+        width: 16px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .flow-step[data-state="running"],
+      .flow-command[data-state="running"] {
+        border-color: var(--accent);
+      }
+      .flow-step[data-state="running"] .flow-mark,
+      .flow-command[data-state="running"] .flow-mark,
+      .flow-step[data-state="running"] .state,
+      .flow-command[data-state="running"] .state {
+        color: var(--accent);
+      }
+      .flow-step[data-state="done"] .flow-mark,
+      .flow-command[data-state="done"] .flow-mark {
+        color: var(--good);
+      }
+      .flow-step[data-state="failed"],
+      .flow-command[data-state="failed"] {
+        border-color: var(--critical);
+      }
+      .flow-step[data-state="failed"] .flow-mark,
+      .flow-command[data-state="failed"] .flow-mark,
+      .flow-step[data-state="failed"] .state,
+      .flow-command[data-state="failed"] .state {
+        color: var(--critical);
+      }
+      .flow-error {
+        margin: 8px 0 0 25px;
+        color: var(--critical);
+        font-size: 13px;
+        overflow-wrap: anywhere;
+      }
+      .flow-dynamic {
+        border-style: dashed;
+      }
+      .flow-dynamic.has-commands {
+        border-style: solid;
+      }
+      .flow-dynamic-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        font-weight: 650;
+      }
+      .flow-dynamic-title span:last-child {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .flow-dynamic-empty {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .flow-dynamic-commands {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .flow-command {
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: var(--surface-2);
+      }
+      details {
+        margin-top: 32px;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+        color: var(--ink-2);
+        font-size: 14px;
+      }
+      summary {
+        cursor: pointer;
+        padding: 6px 0;
+        color: var(--muted);
+      }
+      .runs li {
+        margin-top: 6px;
+      }
+      .runs button {
+        display: flex;
+        width: 100%;
+        min-height: 56px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 14px;
+        border: 1.5px solid var(--line);
+        border-radius: 12px;
+        background: transparent;
+        color: var(--ink);
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .runs button[aria-current] {
+        border-color: var(--ink);
+      }
+      .runs .run-name {
+        font-weight: 600;
+      }
+      .runs .run-meta {
+        flex: none;
+        color: var(--muted);
+        font-size: 14px;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+        gap: 4px 14px;
+        margin: 8px 0 16px;
+      }
+      dt {
+        color: var(--muted);
+      }
+      dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .activity li {
+        display: flex;
+        gap: 10px;
+        padding: 2px 0;
+      }
+      .activity time {
+        flex: none;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .activity span {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.35;
+        }
+      }
+      @media (min-width: 900px) {
+        body {
+          font-size: 15px;
+        }
+        .page {
+          padding: 40px 32px 48px;
+        }
+        .banner {
+          position: static;
+          margin: 0 0 20px;
+          padding: 10px 16px;
+          border-radius: 12px;
+        }
+        header {
+          display: flex;
+          align-items: flex-start;
+          gap: 32px;
+        }
+        header .who {
+          flex: 1 1 auto;
+          min-width: 0;
+        }
+        .actions {
+          position: static;
+          flex: none;
+          width: 220px;
+          padding: 0;
+          background: none;
+          -webkit-backdrop-filter: none;
+          backdrop-filter: none;
+        }
+        .actions button {
+          min-height: 48px;
+          font-size: 16px;
+        }
+        .actions button.secondary {
+          min-height: 44px;
+          font-size: 15px;
+        }
+        .layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+          gap: 0 56px;
+          align-items: start;
+        }
+        .overview {
+          position: sticky;
+          top: 24px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .status .dot,
+        .item .mark {
+          animation: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page" id="page">
+      <p class="banner" id="viewing" hidden>
+        <span id="viewingText">Looking at an earlier run</span>
+        <button type="button" data-action="back">Back to current</button>
+      </p>
+      <header>
+        <div class="who">
+          <h1 id="workflow">Connecting…</h1>
+          <p class="status" id="status" data-tone="idle">
+            <span class="dot" aria-hidden="true"></span>
+            <span id="statusText">Connecting</span>
+            <span class="time" id="elapsed"></span>
+          </p>
+          <p class="line" id="summary"></p>
+          <p class="error" id="runError" hidden></p>
+          <p class="line quiet" id="connection" hidden></p>
+        </div>
+        <div class="actions" id="actions" hidden>
+          <button id="primary" type="button" data-action="pause">Pause</button>
+          <button id="secondary" type="button" class="secondary" data-action="restart" hidden>
+            Restart
+          </button>
+          <p id="actionHint" hidden></p>
+        </div>
+      </header>
+      <div class="layout">
+        <div class="overview">
+          <section id="nowSection" hidden>
+            <h2>Now</h2>
+            <ul id="now"></ul>
+          </section>
+          <section id="waitingSection" hidden>
+            <h2>Waiting <span class="aside" id="waitingAside"></span></h2>
+            <ul id="waiting"></ul>
+          </section>
+          <section id="failedSection" hidden>
+            <h2>Failed</h2>
+            <ul id="failed"></ul>
+          </section>
+        </div>
+        <div class="plan">
+          <section>
+            <h2>Steps</h2>
+            <div id="plan"></div>
+          </section>
+          <details class="runs" id="runsBox">
+            <summary>Recent runs <span class="aside" id="runsAside"></span></summary>
+            <ul id="runs"></ul>
+          </details>
+          <details id="details">
+            <summary>Details</summary>
+            <dl id="facts"></dl>
+            <ul class="activity" id="activity"></ul>
+          </details>
+        </div>
+      </div>
+    </div>
+    <script>
+      // Command states as an operator reads them: [mark, words, tone].
+      const STATE = {
+        planned: ["○", "Not started", "planned"],
+        scheduled: ["○", "Waiting", "waiting"],
+        queued: ["○", "Waiting", "waiting"],
+        running: ["●", "Running", "running"],
+        succeeded: ["✓", "Done", "done"],
+        failed: ["✕", "Failed", "failed"],
+        cancelled: ["–", "Stopped", "stopped"],
+        unknown: ["?", "Result unknown", "unsure"],
+        unfinished: ["–", "Didn't finish", "stopped"],
+      };
+      const RUN = {
+        running: ["Running", "running"],
+        paused: ["Paused", "paused"],
+        completed: ["Done", "done"],
+        failed: ["Failed", "failed"],
+        cancelled: ["Stopped", "stopped"],
+      };
+      const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+      const LIST_LIMIT = 6;
+      const $ = (id) => document.getElementById(id);
+      // `live` follows the newest run over the stream; `viewing` is an earlier
+      // run's final snapshot when the operator opened one. `snapshot` is
+      // whichever of the two is on screen.
+      let live = null;
+      let viewing = null;
+      let snapshot = null;
+      let runs = [];
+      let activity = [];
+      let busy = false;
+      let pending = "";
+      let controlError = "";
+
+      function connect() {
+        const source = new EventSource("/api/events");
+        source.addEventListener("snapshot", (message) => {
+          const next = JSON.parse(message.data);
+          if (!live || live.runId !== next.runId) activity = [];
+          live = next;
+          if (viewing && viewing.runId === live.runId) viewing = null;
+          setConnection("");
+          render();
+          refreshRuns();
+        });
+        source.addEventListener("event", (message) => {
+          apply(JSON.parse(message.data));
+          setConnection("");
+          render();
+        });
+        source.addEventListener("run", (message) => {
+          const notice = JSON.parse(message.data);
+          if (notice.runs) runs = notice.runs;
+          if (notice.type === "run.created") {
+            // A new run takes over the page; its snapshot arrives right after.
+            viewing = null;
+            controlError = "";
+          }
+          render();
+        });
+        source.onerror = () => setConnection("Reconnecting…");
+      }
+
+      async function refreshRuns() {
+        try {
+          const response = await fetch("/api/runs");
+          if (!response.ok) return;
+          runs = (await response.json()).runs;
+          render();
+        } catch {
+          // The stream will bring the list along with the next run notice.
+        }
+      }
+
+      function apply(envelope) {
+        if (!live || envelope.runId !== live.runId || envelope.seq <= live.seq) return;
+        live.seq = envelope.seq;
+        live.status = envelope.status;
+        live.scheduler = envelope.scheduler;
+        if (envelope.command) {
+          const index = live.commands.findIndex((c) => c.id === envelope.command.id);
+          if (index === -1) live.commands.push(envelope.command);
+          else live.commands[index] = envelope.command;
+        }
+        const event = envelope.event;
+        if (event.type === "run.finished") {
+          live.finishedAt = envelope.ts;
+          live.replayed = event.replayed;
+        } else if (event.type === "run.failed" || event.type === "run.cancelled") {
+          live.finishedAt = envelope.ts;
+          live.error = event.message;
+        }
+        const text = describe(envelope);
+        if (text) {
+          activity.push([envelope.ts, text]);
+          if (activity.length > 100) activity.shift();
+        }
+      }
+
+      function setConnection(text) {
+        $("connection").hidden = !text;
+        $("connection").textContent = text;
+      }
+
+      async function post(path) {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+        });
+        if (response.ok) return "";
+        const body = await response.json().catch(() => ({}));
+        return body.error || `error ${response.status}`;
+      }
+
+      const ACTIONS = {
+        pause: () => post("/api/pause"),
+        resume: () => post("/api/resume"),
+        restart: () => {
+          if (live && !TERMINAL.has(live.status)) {
+            if (!confirm("Stop what's running and start the workflow over?")) return "";
+          }
+          return post("/api/restart");
+        },
+        again: () => post("/api/runs"),
+        back: () => {
+          viewing = null;
+          return "";
+        },
+      };
+      const FAILED = {
+        pause: "Couldn't pause",
+        resume: "Couldn't resume",
+        restart: "Couldn't restart",
+        again: "Couldn't start",
+      };
+
+      async function act(action) {
+        if (busy || !ACTIONS[action]) return;
+        busy = true;
+        pending = action;
+        controlError = "";
+        render();
+        try {
+          const problem = await ACTIONS[action]();
+          controlError = problem ? `${FAILED[action]}: ${problem}` : "";
+        } catch (error) {
+          controlError = `${FAILED[action] || "Couldn't do that"}: ${error.message}`;
+        } finally {
+          busy = false;
+          pending = "";
+          render();
+        }
+      }
+
+      async function view(runId) {
+        if (!live || runId === live.runId) {
+          viewing = null;
+          render();
+          return;
+        }
+        try {
+          const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
+          if (!response.ok) {
+            controlError = "That run isn't kept any more";
+            refreshRuns();
+          } else {
+            viewing = await response.json();
+            controlError = "";
+          }
+        } catch (error) {
+          controlError = `Couldn't open that run: ${error.message}`;
+        }
+        render();
+      }
+
+      document.addEventListener("click", (event) => {
+        const button = event.target.closest("button");
+        if (!button) return;
+        if (button.dataset.action) act(button.dataset.action);
+        else if (button.dataset.run) view(button.dataset.run);
+      });
+      $("details").addEventListener("toggle", () => render());
+      $("runsBox").addEventListener("toggle", () => render());
+
+      function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      }
+
+      function durationMs(ms) {
+        const s = Math.floor(Math.max(0, ms) / 1000);
+        if (s < 60) return `${s}s`;
+        const m = Math.floor(s / 60);
+        return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+      }
+
+      function duration(from, to) {
+        return durationMs(new Date(to || Date.now()) - new Date(from));
+      }
+
+      function plural(n, word) {
+        return `${n} ${word}${n === 1 ? "" : "s"}`;
+      }
+
+      function numberOf(runId) {
+        const entry = runs.find((r) => r.runId === runId);
+        return entry ? entry.number : null;
+      }
+
+      /** The operator-facing state of a command, folding history answers into their outcome. */
+      function stateOf(command) {
+        if (!command) return { key: "planned", words: STATE.planned[1] };
+        if (command.state === "replayed") {
+          const [, words] = STATE[command.status] || STATE.succeeded;
+          return { key: command.status || "succeeded", words: `${words} earlier` };
+        }
+        // Once the run is over, nothing is still waiting or running.
+        const open = ["scheduled", "queued", "running"].includes(command.state);
+        const key = open && TERMINAL.has(snapshot.status) ? "unfinished" : command.state;
+        const [, words] = STATE[key] || STATE.scheduled;
+        return { key, words };
+      }
+
+      function item(id, command, options = {}) {
+        const { key, words } = stateOf(command);
+        const [mark, , tone] = STATE[key] || STATE.scheduled;
+        const row = el("li", "item");
+        row.dataset.state = tone;
+        const glyph = el("span", "mark", mark);
+        glyph.setAttribute("aria-hidden", "true");
+        row.append(glyph, el("span", "name", id));
+        if (key === "running" && command.startedAt && options.timer) {
+          const time = el("span", "state", duration(command.startedAt));
+          time.dataset.since = command.startedAt;
+          row.append(time);
+        } else if (key !== "planned" && !options.bare) {
+          row.append(el("span", "state", words));
+        }
+        if (command && command.error) {
+          const why = command.phase ? `During ${command.phase}: ${command.error}` : command.error;
+          row.append(el("p", "why", why));
+        }
+        return row;
+      }
+
+      function list(target, commands, options) {
+        const rows = commands.slice(0, LIST_LIMIT).map((c) => item(c.id, c, options));
+        if (commands.length > LIST_LIMIT) {
+          rows.push(el("li", "more", `and ${commands.length - LIST_LIMIT} more`));
+        }
+        $(target).replaceChildren(...rows);
+      }
+
+      function countSteps(node) {
+        if (node.type === "operation") return 1;
+        if (node.type === "dynamic") return 0;
+        const children = node.type === "sequence" ? node.stages : node.members;
+        return children.reduce((sum, child) => sum + countSteps(child), 0);
+      }
+
+      function flowStep(id, command, className = "flow-step") {
+        const { key, words } = stateOf(command);
+        const [mark, , tone] = STATE[key] || STATE.scheduled;
+        const box = el("div", className);
+        box.dataset.state = tone;
+        const head = el("div", "flow-step-head");
+        const glyph = el("span", "flow-mark", mark);
+        glyph.setAttribute("aria-hidden", "true");
+        head.append(glyph, el("span", "name", id), el("span", "state", words));
+        box.append(head);
+        if (command && command.error) {
+          const why = command.phase ? `During ${command.phase}: ${command.error}` : command.error;
+          box.append(el("p", "flow-error", why));
+        }
+        return box;
+      }
+
+      function renderNode(node, path, context) {
+        if (node.type === "operation") {
+          const command = context.byId.get(node.id);
+          return flowStep(node.id, command && command.scheduledAt ? command : null);
+        }
+        if (node.type === "dynamic") {
+          const commands = context.dynamic.get(`dynamic:${path}`) || [];
+          const box = el("div", `flow-dynamic${commands.length ? " has-commands" : ""}`);
+          const title = el("div", "flow-dynamic-title");
+          title.append(
+            el("span", "", "Dynamic"),
+            el("span", "", commands.length ? `${commands.length} command${commands.length === 1 ? "" : "s"}` : "Runtime"),
+          );
+          box.append(title);
+          if (commands.length) {
+            const activity = el("div", "flow-dynamic-commands");
+            activity.append(...commands.map((command) => flowStep(command.id, command, "flow-command")));
+            box.append(activity);
+          } else {
+            box.append(el("p", "flow-dynamic-empty", "Commands will appear here"));
+          }
+          return box;
+        }
+        const members = node.type === "sequence" ? node.stages : node.members;
+        const box = el("div", `flow-group flow-${node.type}-group`);
+        box.append(el("div", "flow-group-label", node.type === "sequence" ? "Sequence" : "Parallel"));
+        if (node.type === "sequence") {
+          const stages = el("div", "flow-sequence");
+          stages.append(
+            ...members.map((child, index) => {
+              const stage = el("div", "flow-sequence-stage");
+              stage.append(renderNode(child, `${path}.${index}`, context));
+              return stage;
+            }),
+          );
+          box.append(stages);
+        } else {
+          box.classList.add("flow-parallel");
+          const branches = el("div", "flow-parallel-branches");
+          branches.append(
+            ...members.map((child, index) => {
+              const branch = el("div", "flow-branch");
+              branch.append(renderNode(child, `${path}.${index}`, context));
+              return branch;
+            }),
+          );
+          box.append(branches);
+        }
+        return box;
+      }
+
+      function renderPlan() {
+        const dynamic = new Map();
+        for (const command of snapshot.commands) {
+          if (!command.dynamicId) continue;
+          const commands = dynamic.get(command.dynamicId) || [];
+          commands.push(command);
+          dynamic.set(command.dynamicId, commands);
+        }
+        const context = {
+          byId: new Map(snapshot.commands.map((c) => [c.id, c])),
+          added: snapshot.commands.filter((c) => !c.static),
+          dynamic,
+        };
+        const chart = el("div", "flow-chart");
+        chart.append(renderNode(snapshot.topology, "0", context));
+        $("plan").replaceChildren(chart);
+        return context;
+      }
+
+      function describe(envelope) {
+        const event = envelope.event;
+        const id = event.commandId;
+        switch (event.type) {
+          case "command.scheduled":
+            return envelope.command && !envelope.command.static ? `${id} added` : "";
+          case "scheduler.queued":
+            return `${id} waiting`;
+          case "scheduler.admitted":
+            return `${id} started`;
+          case "command.completed":
+            return `${id} ${STATE[event.status][1].toLowerCase()}${event.error ? `: ${event.error}` : ""}`;
+          case "command.replayed":
+            return `${id} ${STATE[event.status][1].toLowerCase()} earlier`;
+          case "scheduler.paused":
+            return "Paused";
+          case "scheduler.resumed":
+            return "Resumed";
+          case "run.finished":
+            return "Workflow done";
+          case "run.failed":
+            return `Workflow failed: ${event.message}`;
+          case "run.cancelled":
+            return `Workflow stopped: ${event.message}`;
+          default:
+            return "";
+        }
+      }
+
+      function renderRuns() {
+        $("runsAside").textContent = runs.length > 1 ? `· ${runs.length}` : "";
+        if (!$("runsBox").open) return;
+        if (!runs.length) {
+          $("runs").replaceChildren(el("li", "quiet", "Just this run so far"));
+          return;
+        }
+        $("runs").replaceChildren(
+          ...runs.map((entry) => {
+            const row = el("li");
+            const button = el("button");
+            button.type = "button";
+            button.dataset.run = entry.runId;
+            if (snapshot && entry.runId === snapshot.runId) button.setAttribute("aria-current", "true");
+            const current = live && entry.runId === live.runId;
+            const [words] = RUN[entry.status] || RUN.running;
+            const outcome = TERMINAL.has(entry.status)
+              ? `${words} in ${durationMs(entry.durationMs)}`
+              : words;
+            const when = new Date(entry.startedAt).toLocaleTimeString([], { hour12: false });
+            button.append(
+              el("span", "run-name", `Run ${entry.number}${current ? " · current" : ""}`),
+              el("span", "run-meta", `${outcome} · ${when}`),
+            );
+            row.append(button);
+            return row;
+          }),
+        );
+      }
+
+      function renderDetails() {
+        const s = snapshot.scheduler;
+        const number = numberOf(snapshot.runId);
+        const facts = [
+          ["Run", number ? `${number} (${snapshot.runId})` : snapshot.runId],
+          ["Started", new Date(snapshot.startedAt).toLocaleString()],
+        ];
+        if (s.capacity) facts.push(["Limit", `${plural(s.capacity, "slot")}, ${s.used} in use`]);
+        $("facts").replaceChildren(
+          ...facts.flatMap(([label, value]) => [el("dt", "", label), el("dd", "", value)]),
+        );
+        if (viewing) {
+          $("activity").replaceChildren(el("li", "quiet", "Activity is kept for the current run only"));
+          return;
+        }
+        $("activity").replaceChildren(
+          ...activity
+            .slice(-50)
+            .reverse()
+            .map(([ts, text]) => {
+              const row = el("li");
+              row.append(
+                el("time", "", new Date(ts).toLocaleTimeString([], { hour12: false })),
+                el("span", "", text),
+              );
+              return row;
+            }),
+        );
+      }
+
+      function render() {
+        snapshot = viewing || live;
+        if (!snapshot) return;
+        const archived = viewing !== null;
+        const terminal = TERMINAL.has(snapshot.status);
+        const [statusWords, tone] = RUN[snapshot.status] || RUN.running;
+        const commands = snapshot.commands;
+        const running = commands.filter((c) => c.state === "running");
+        const waiting = commands.filter((c) => c.state === "queued" || c.state === "scheduled");
+        const failed = commands.filter((c) => c.state === "failed" || c.state === "unknown");
+
+        document.title = `${statusWords} · ${snapshot.workflow}`;
+        $("workflow").textContent = snapshot.workflow;
+        $("status").dataset.tone = tone;
+        $("statusText").textContent = statusWords;
+        renderElapsed();
+
+        $("viewing").hidden = !archived;
+        if (archived) {
+          const number = numberOf(snapshot.runId);
+          $("viewingText").textContent = number
+            ? `Looking at run ${number}, from earlier`
+            : "Looking at an earlier run";
+        }
+
+        const context = renderPlan();
+        const known = context.dynamicCount === 0;
+        const total = countSteps(snapshot.topology) + context.added.length;
+        const done = commands.filter(
+          (c) => c.state === "succeeded" || (c.state === "replayed" && c.status === "succeeded"),
+        ).length;
+        let summary;
+        if (snapshot.status === "completed" && snapshot.replayed) {
+          summary = "Everything was already done earlier.";
+        } else if (snapshot.status === "completed") {
+          summary = `${plural(done, "step")} done`;
+        } else {
+          summary = known ? `${done} of ${plural(total, "step")} done` : `${plural(done, "step")} done`;
+        }
+        $("summary").textContent = summary;
+        $("runError").hidden = !(terminal && snapshot.error);
+        $("runError").textContent = snapshot.error || "";
+        $("runError").classList.toggle("quiet", snapshot.status === "cancelled");
+
+        $("nowSection").hidden = terminal || (snapshot.status === "paused" && !running.length);
+        if (running.length) list("now", running, { timer: true });
+        else $("now").replaceChildren(el("li", "item quiet", "Nothing running right now"));
+        $("waitingSection").hidden = terminal || !waiting.length;
+        $("waitingAside").textContent = snapshot.status === "paused" ? "· starts when you resume" : "";
+        list("waiting", waiting, { bare: true });
+        $("failedSection").hidden = terminal || !failed.length;
+        list("failed", failed, { bare: true });
+
+        $("actions").hidden = false;
+        const primary = $("primary");
+        const secondary = $("secondary");
+        const paused = snapshot.status === "paused";
+        if (archived) {
+          primary.dataset.action = "back";
+          primary.textContent = "Back to current run";
+          secondary.hidden = true;
+        } else if (terminal) {
+          primary.dataset.action = "again";
+          primary.textContent = "Run again";
+          secondary.hidden = true;
+        } else {
+          primary.dataset.action = paused ? "resume" : "pause";
+          primary.textContent = paused ? "Resume" : "Pause";
+          secondary.hidden = false;
+        }
+        primary.disabled = busy;
+        secondary.disabled = busy;
+        const hint = $("actionHint");
+        let hintText = "";
+        if (controlError) hintText = controlError;
+        else if (pending === "restart") hintText = "Stopping, then starting over…";
+        else if (pending === "again") hintText = "Starting…";
+        else if (archived) hintText = "This run is over; it can only be looked at";
+        else if (running.length && paused) hintText = `Letting ${plural(running.length, "running step")} finish`;
+        else if (running.length) hintText = "Steps already running will finish";
+        hint.hidden = !hintText;
+        hint.textContent = hintText;
+        hint.classList.toggle("error", Boolean(controlError));
+
+        renderRuns();
+        if ($("details").open) renderDetails();
+      }
+
+      function renderElapsed() {
+        if (!snapshot) return;
+        const took = duration(snapshot.startedAt, snapshot.finishedAt);
+        $("elapsed").textContent = TERMINAL.has(snapshot.status) ? `in ${took}` : took;
+        for (const node of document.querySelectorAll("[data-since]")) {
+          node.textContent = duration(node.dataset.since);
+        }
+      }
+
+      setInterval(() => {
+        if (snapshot && !TERMINAL.has(snapshot.status)) renderElapsed();
+      }, 1000);
+      connect();
+    </script>
+  </body>
+</html>

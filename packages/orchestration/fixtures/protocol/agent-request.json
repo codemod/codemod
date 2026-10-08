@@ -1,0 +1,21 @@
+{
+  "protocolVersion": 8,
+  "commandId": "fix-tests",
+  "operation": {
+    "kind": "agent",
+    "prompt": "Fix the failing tests in the listed packages. Report the fixed files.",
+    "input": { "packages": ["web", "api"] },
+    "backend": {
+      "kind": "builtin",
+      "tools": [
+        "str_replace_based_edit_tool",
+        "json_edit_tool",
+        "glob",
+        "sequentialthinking",
+        "task_done"
+      ],
+      "maxSteps": 40
+    },
+    "responseFormat": "json"
+  }
+}

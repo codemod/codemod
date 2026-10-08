@@ -1,0 +1,9 @@
+{
+  "protocolVersion": 8,
+  "commandId": "summarize-readme",
+  "operation": {
+    "kind": "agent",
+    "prompt": "Summarize README.md in one sentence.",
+    "backend": { "kind": "claude-code", "tools": ["Read", "Glob", "Grep"] }
+  }
+}
