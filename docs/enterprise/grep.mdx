@@ -75,6 +75,14 @@ Successful searches return:
 - Provider links to the indexed commit on GitHub or GitLab
 - Partial failures for repositories that are not indexed, lack the selected language, or fail during execution
 
+### Check coverage before concluding that code is absent
+
+Returned snippets remain useful even when some repositories fail. A zero-match page does not prove that code is absent when coverage is incomplete.
+
+If your search reports repository failures, inspect those failures and narrow the language, path, or expression within the scope you intended to search. Avoid repeatedly submitting the same failing query.
+
+When more pages are available, continue the same search. Changing the query, mode, repositories, language, or path starts a new search; do not reuse a continuation cursor from the old search. Reuse snippets and focused source ranges for files you already found.
+
 ## Grep MCP
 
 MCP clients can search the same repository scope through the Grep MCP endpoint:
@@ -102,6 +110,22 @@ Authenticate with a Codemod API key that has **Use Grep** enabled:
 The server is read-only. It can list repositories, search indexed code, and read focused source ranges around matches. It does not start indexing or modify code. Index repositories in the Grep UI before searching from an MCP client.
 
 Store the key in a secret or environment variable. Do not commit it into MCP configuration files.
+
+### Select supported languages
+
+For `grep_search`, use the scalar `"all"` or a non-empty array of parser names advertised in the tool's input schema, such as `["go", "typescript"]`. `["all"]` is not a valid selection. Neither `markdown` nor `makefile` is a supported parser value.
+
+If a language selection is rejected, choose supported parsers that match your intended scope. Use `"all"` only when you intend to search all indexed languages; unsupported selections are not silently broadened.
+
+### Interpret search results
+
+Check `failures`, `countComplete`, and `nextCursor` before making an absence or exhaustive-coverage claim:
+
+- Non-empty `failures` means some repository searches failed. Returned files are still usable evidence for their indexed commits.
+- `countComplete: false` means coverage is incomplete, even if `nextCursor` is null or no matches were returned. If there is no cursor, narrow your search before drawing an exhaustive conclusion.
+- A non-null `nextCursor` lets you continue with the identical search parameters. Start without the old cursor if you change the search.
+
+The MCP response keeps its structured search payload and can include additional recovery guidance for incomplete results. A successful tool response does not mean that every repository search succeeded.
 
 ## Create Insights dashboards from Grep
 
@@ -149,7 +173,9 @@ After creation, the dashboard is a normal Insights dashboard: you can edit widge
 | ------- | ----------- |
 | No repositories appear | Connect GitHub or GitLab, confirm app install permissions, and switch to the correct organization if you work in one. |
 | Search returns not indexed | Index the repository from Grep, wait until it is searchable, then retry. |
-| Unsupported language failures | Narrow the language filter to languages present in the indexed snapshot, or search with `all`. |
+| Invalid MCP language selection | Use scalar `"all"`, not `["all"]`, or a non-empty array of supported parser names from the input schema. Do not mix unsupported parser names into the array. |
+| Unsupported language failures | Narrow the language filter to supported languages present in the indexed snapshot. Select `all` only if you intend to broaden the search. |
+| Partial failures or incomplete counts | Keep usable snippets, inspect the failures, and narrow the search. Do not treat zero results or a null cursor as proof of absence. |
 | Pattern finds nothing that Regex finds | Confirm the Pattern query is complete, valid syntax for the language, and not a bare text fragment. |
 | MCP searches fail with auth errors | Use an API key with **Use Grep** enabled. Organization keys require the creator to still be a member. |
 
