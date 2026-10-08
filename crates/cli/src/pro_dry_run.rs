@@ -54,7 +54,7 @@ pub(crate) fn apply_pro_dry_run_execution_settings(cfg: &mut WorkflowRunConfig) 
 /// or when raw mode can't be enabled. Callers must ensure any prompt they want
 /// the user to read has already been printed to a stream the user can see.
 fn wait_for_any_key() {
-    use crossterm::event::{read, Event, KeyEventKind};
+    use crossterm::event::{Event, KeyEventKind, read};
     use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {

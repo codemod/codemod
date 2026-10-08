@@ -1,5 +1,5 @@
 use crate::auth::TokenStorage;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -512,9 +512,11 @@ mod tests {
 
         let adapt_decision = evaluate_threshold_route(&[adapt]);
         assert_eq!(adapt_decision.band, SuitabilityRouteBand::Adapt);
-        assert!(adapt_decision
-            .score
-            .is_some_and(|score| (80..95).contains(&score)));
+        assert!(
+            adapt_decision
+                .score
+                .is_some_and(|score| (80..95).contains(&score))
+        );
 
         let build_decision = evaluate_threshold_route(&[build]);
         assert_eq!(build_decision.band, SuitabilityRouteBand::Build);

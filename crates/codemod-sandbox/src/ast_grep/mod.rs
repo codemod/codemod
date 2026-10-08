@@ -27,17 +27,17 @@ use ast_grep_core::language::Language;
 use crate::{
     sandbox::engine::codemod_lang::CodemodLang,
     sandbox::engine::{
-        execution_engine::{
-            validate_path_within_target, DryRunExecutionFlag, FileChange, JssgExecutionContext,
-            JssgFileChanges,
-        },
-        transform_helpers::{build_transform_options, process_transform_result, ModificationCheck},
         ExecutionModeFlag,
+        execution_engine::{
+            DryRunExecutionFlag, FileChange, JssgExecutionContext, JssgFileChanges,
+            validate_path_within_target,
+        },
+        transform_helpers::{ModificationCheck, build_transform_options, process_transform_result},
     },
     utils::quickjs_utils::maybe_promise,
 };
 use rquickjs::module::{Declarations, Exports, ModuleDef};
-use rquickjs::{prelude::Func, Class, Ctx, Exception, Function, Object, Result, Value};
+use rquickjs::{Class, Ctx, Exception, Function, Object, Result, Value, prelude::Func};
 #[cfg(feature = "native")]
 use std::{str::FromStr, sync::Arc};
 
@@ -98,7 +98,10 @@ fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<
     #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
     {
         if !wasm_lang::WasmLang::is_parser_initialized() {
-            return Err(Exception::throw_message(&ctx, "Tree-sitter parser not initialized. Ensure setupParser() has completed before calling parseAsync."));
+            return Err(Exception::throw_message(
+                &ctx,
+                "Tree-sitter parser not initialized. Ensure setupParser() has completed before calling parseAsync.",
+            ));
         }
     }
 

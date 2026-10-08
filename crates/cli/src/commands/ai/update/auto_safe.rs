@@ -1,9 +1,9 @@
 use super::policy::maybe_attach_registry_auth;
 use super::types::{
     AutoSafeApplyExecution, AutoSafeApplyResult, AutoSafeComponentResult, AutoSafeComponentStatus,
-    ComponentBackup, ComponentReconcileDecision, ManagedUpdateManifestComponent,
-    ReconcileDecisionStatus, StagedComponentUpdate, StagedFileWrite, UpdatePolicyContext,
-    UpdatePolicyMode, MANAGED_UPDATE_MANIFEST_REQUEST_TIMEOUT_SECS,
+    ComponentBackup, ComponentReconcileDecision, MANAGED_UPDATE_MANIFEST_REQUEST_TIMEOUT_SECS,
+    ManagedUpdateManifestComponent, ReconcileDecisionStatus, StagedComponentUpdate,
+    StagedFileWrite, UpdatePolicyContext, UpdatePolicyMode,
 };
 use crate::commands::harness_adapter::{ManagedComponentKind, ManagedComponentSnapshot};
 use butterflow_core::utils::get_cache_dir;

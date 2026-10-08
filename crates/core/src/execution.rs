@@ -1,16 +1,16 @@
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
 use ignore::{
-    overrides::{Override, OverrideBuilder},
     WalkBuilder, WalkState,
+    overrides::{Override, OverrideBuilder},
 };
 use std::{
     collections::HashSet,
     error::Error,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -129,7 +129,7 @@ impl CodemodExecutionConfig {
             self.count_files(&search_base, &globs)?
         };
 
-        if let Some(ref progress_cb) = self.progress_callback.as_ref() {
+        if let Some(progress_cb) = self.progress_callback.as_ref() {
             (progress_cb.callback)(task_id, "start", "counting", Some(&total_files), &0);
         }
 
@@ -144,7 +144,7 @@ impl CodemodExecutionConfig {
 
         if let Some(files) = explicit_files {
             for file_path in files {
-                if let Some(ref progress_cb) = shared_context.progress_callback.as_ref() {
+                if let Some(progress_cb) = shared_context.progress_callback.as_ref() {
                     let file_path_str = file_path.to_string_lossy();
                     (progress_cb.callback)(
                         &shared_context.task_id,
@@ -161,7 +161,7 @@ impl CodemodExecutionConfig {
                     .processed_count
                     .fetch_add(1, Ordering::Relaxed);
 
-                if let Some(ref progress_cb) = shared_context.progress_callback.as_ref() {
+                if let Some(progress_cb) = shared_context.progress_callback.as_ref() {
                     (progress_cb.callback)(
                         &shared_context.task_id,
                         "",
@@ -191,7 +191,7 @@ impl CodemodExecutionConfig {
                         let file_path = dir_entry.path();
 
                         if dir_entry.file_type().is_some_and(|ft| ft.is_file()) {
-                            if let Some(ref progress_cb) = ctx.progress_callback.as_ref() {
+                            if let Some(progress_cb) = ctx.progress_callback.as_ref() {
                                 let file_path_str = file_path.to_string_lossy();
                                 (progress_cb.callback)(
                                     &ctx.task_id,
@@ -206,7 +206,7 @@ impl CodemodExecutionConfig {
 
                             let current_count = ctx.processed_count.fetch_add(1, Ordering::Relaxed);
 
-                            if let Some(ref progress_cb) = ctx.progress_callback.as_ref() {
+                            if let Some(progress_cb) = ctx.progress_callback.as_ref() {
                                 (progress_cb.callback)(
                                     &ctx.task_id,
                                     "",
@@ -228,7 +228,7 @@ impl CodemodExecutionConfig {
 
         before_finish();
 
-        if let Some(ref progress_cb) = self.progress_callback.as_ref() {
+        if let Some(progress_cb) = self.progress_callback.as_ref() {
             let final_count = shared_context.processed_count.load(Ordering::Relaxed);
             (progress_cb.callback)(task_id, "", "finish", Some(&total_files), &final_count);
         }

@@ -409,14 +409,16 @@ async fn run_cli() -> Result<()> {
         || implicit_cli_params
             .map(|params| params.disable_analytics)
             .unwrap_or(false)
+        || matches!(
+            std::env::var("DISABLE_ANALYTICS").as_deref(),
+            Ok("true") | Ok("1")
+        )
     {
-        std::env::set_var("DISABLE_ANALYTICS", "true");
+        feedback::set_analytics_disabled(true);
     }
 
     let telemetry_sender: Arc<Box<dyn TelemetrySender + Send + Sync>> =
-        if std::env::var("DISABLE_ANALYTICS") == Ok("true".to_string())
-            || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
-        {
+        if feedback::feedback_disabled() {
             Arc::new(Box::new(NullSender {}))
         } else {
             let storage = TokenStorage::new()?;
@@ -564,7 +566,7 @@ async fn run_cli() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::{error::ErrorKind, CommandFactory};
+    use clap::{CommandFactory, error::ErrorKind};
 
     #[test]
     fn top_level_help_lists_ai_and_mcp() {

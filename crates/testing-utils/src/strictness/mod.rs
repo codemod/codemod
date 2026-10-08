@@ -62,18 +62,18 @@ mod typescript;
 mod utils;
 
 pub use compare::{
-    ast_compare, ast_compare_with_parser_registry, ast_compare_with_registry, cst_compare,
-    cst_compare_with_parser_registry, cst_compare_with_registry, loose_compare,
+    CompareError, ast_compare, ast_compare_with_parser_registry, ast_compare_with_registry,
+    cst_compare, cst_compare_with_parser_registry, cst_compare_with_registry, loose_compare,
     loose_compare_with_registries, loose_compare_with_registry, try_ast_compare,
     try_ast_compare_with_parser_registry, try_ast_compare_with_registry, try_cst_compare,
     try_cst_compare_with_parser_registry, try_cst_compare_with_registry, try_loose_compare,
-    try_loose_compare_with_registry, CompareError,
+    try_loose_compare_with_registry,
 };
 pub use detect::{
     detect_language, detect_language_from_path, loose_compare_with_path,
     loose_compare_with_path_and_registry,
 };
-pub use diff::{semantic_diff, semantic_diff_with_registry, DiffEntry, DiffKind, SemanticDiff};
+pub use diff::{DiffEntry, DiffKind, SemanticDiff, semantic_diff, semantic_diff_with_registry};
 pub use registry::{NormalizerRegistry, ParserRegistry};
 pub use traits::{NormalizedNode, ParserProvider, SemanticNormalizer};
 

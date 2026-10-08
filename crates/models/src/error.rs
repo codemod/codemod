@@ -18,18 +18,8 @@ pub enum Error {
     #[error("Workflow validation error: {0}")]
     WorkflowValidation(String),
 
-    #[error(
-        "Failed to parse workflow file: {path}. YAML error: {yaml_error}, JSON error: {json_error}"
-    )]
-    WorkflowParse {
-        path: PathBuf,
-        yaml_error: Box<str>,
-        yaml_line: Option<usize>,
-        yaml_column: Option<usize>,
-        json_error: Box<str>,
-        json_line: Option<usize>,
-        json_column: Option<usize>,
-    },
+    #[error("{0}")]
+    WorkflowParse(Box<WorkflowParseError>),
 
     #[error("Node not found: {0}")]
     NodeNotFound(String),
@@ -94,4 +84,19 @@ pub enum Error {
 
     #[error("Unsupported runtime: {0}")]
     UnsupportedRuntime(RuntimeType),
+}
+
+/// Detail payload for [`Error::WorkflowParse`]; boxed so `Error` stays small.
+#[derive(Debug, Error)]
+#[error(
+    "Failed to parse workflow file: {path}. YAML error: {yaml_error}, JSON error: {json_error}"
+)]
+pub struct WorkflowParseError {
+    pub path: PathBuf,
+    pub yaml_error: Box<str>,
+    pub yaml_line: Option<usize>,
+    pub yaml_column: Option<usize>,
+    pub json_error: Box<str>,
+    pub json_line: Option<usize>,
+    pub json_column: Option<usize>,
 }

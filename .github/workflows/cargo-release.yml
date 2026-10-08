@@ -54,7 +54,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.97.1
+          toolchain: 1.98.0
           components: rustfmt, clippy
           targets: ${{ matrix.target }}
 
@@ -318,7 +318,7 @@ jobs:
         run: |
           # Create directories if they don't exist
           mkdir -p crates/cli/npm/platforms/darwin-arm64
-          mkdir -p crates/cli/npm/platforms/darwin-x64  
+          mkdir -p crates/cli/npm/platforms/darwin-x64
           mkdir -p crates/cli/npm/platforms/linux-x64-gnu
           mkdir -p crates/cli/npm/platforms/linux-x64-musl
           mkdir -p crates/cli/npm/platforms/linux-arm64-gnu

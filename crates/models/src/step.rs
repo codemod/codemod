@@ -26,7 +26,7 @@ pub struct Step {
     /// Accepts a string expression or a literal boolean (`if: true` / `if: false`).
     #[serde(rename = "if")]
     #[serde(default, deserialize_with = "deserialize_condition")]
-    #[ts(optional, as = "Option<String>")]
+    #[ts(optional, type = "string")]
     pub condition: Option<String>,
 
     /// Optional commit checkpoint — if present (and in cloud mode), a git commit
