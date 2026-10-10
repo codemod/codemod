@@ -548,8 +548,12 @@ steps:
 </ParamField>
 
 <ParamField path="run" type="string" required>
-  Inline shell command to execute.
+  Inline shell command to execute. It runs with `sh -c` on macOS and Linux, and as a batch file with `cmd.exe` on Windows.
 </ParamField>
+
+<Note>
+  On Windows, every line runs in order and the step's exit code is the last command's, as with `sh`. Batch-file rules apply: write a literal `%` as `%%` (for example in a URL, `%%20`) and `for` loop variables as `%%i`. A command that is itself a batch file, such as `npm`, `npx` or `pnpm`, is run with `call` automatically at the start of a line or after `&`, `&&` or `||`, so the lines after it still run. Inside `if` or `for`, write `call npm ...` yourself.
+</Note>
 
 <ParamField path="env" type="object">
   Step-level environment variables applied to the process environment.

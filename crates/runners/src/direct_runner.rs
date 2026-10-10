@@ -25,6 +25,49 @@ impl DirectRunner {
         Self { quiet }
     }
 
+    /// Run a step on Windows. `cmd /C` runs only the first line of its
+    /// argument, and Rust's backslash escaping of that argument is not
+    /// understood by cmd, so the step is written to a batch file instead
+    /// (see `cmd_script`).
+    #[cfg(windows)]
+    async fn run_cmd_script(
+        &self,
+        command: &str,
+        env: &HashMap<String, String>,
+        output_callback: Option<OutputCallback>,
+    ) -> Result<String> {
+        use std::os::windows::process::CommandExt;
+
+        let script =
+            crate::cmd_script::TempScript::create(&crate::cmd_script::script_for(command, env))
+                .map_err(|e| {
+                    Error::Runtime(format!("Failed to write script to temporary file: {e}"))
+                })?;
+        let _code_page = crate::cmd_script::CodePageGuard::acquire();
+
+        // With /S, cmd drops only the outer quotes and keeps the quoted path
+        // whole, so a temporary directory containing `&` or `^` still works.
+        let mut cmd = Command::new("cmd");
+        cmd.raw_arg(format!("/S /C \"\"{}\"\"", script.path().display()));
+
+        cmd.env_clear();
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+
+        self.execute_with_streaming(cmd, output_callback).await
+    }
+
+    #[cfg(not(windows))]
+    async fn run_cmd_script(
+        &self,
+        _command: &str,
+        _env: &HashMap<String, String>,
+        _output_callback: Option<OutputCallback>,
+    ) -> Result<String> {
+        unreachable!("cmd scripts only run on Windows")
+    }
+
     /// Execute a command with streaming output
     async fn execute_with_streaming(
         &self,
@@ -268,23 +311,12 @@ impl Runner for DirectRunner {
 
             // Return the result
             result
+        } else if cfg!(windows) {
+            self.run_cmd_script(command, env, output_callback).await
         } else {
-            // Determine the shell to use
-            let shell = if cfg!(target_os = "windows") {
-                "cmd"
-            } else {
-                "sh"
-            };
-
-            let shell_arg = if cfg!(target_os = "windows") {
-                "/C"
-            } else {
-                "-c"
-            };
-
             // Create the command
-            let mut cmd = Command::new(shell);
-            cmd.arg(shell_arg).arg(command);
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c").arg(command);
 
             // Add environment variables
             cmd.env_clear();
