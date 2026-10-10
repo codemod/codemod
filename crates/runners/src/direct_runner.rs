@@ -25,6 +25,49 @@ impl DirectRunner {
         Self { quiet }
     }
 
+    /// Run a step on Windows. `cmd /C` runs only the first line of its
+    /// argument, and Rust's backslash escaping of that argument is not
+    /// understood by cmd, so the step is written to a batch file instead
+    /// (see `cmd_script`).
+    #[cfg(windows)]
+    async fn run_cmd_script(
+        &self,
+        command: &str,
+        env: &HashMap<String, String>,
+        output_callback: Option<OutputCallback>,
+    ) -> Result<String> {
+        use std::os::windows::process::CommandExt;
+
+        let script =
+            crate::cmd_script::TempScript::create(&crate::cmd_script::script_for(command, env))
+                .map_err(|e| {
+                    Error::Runtime(format!("Failed to write script to temporary file: {e}"))
+                })?;
+        let _code_page = crate::cmd_script::CodePageGuard::acquire();
+
+        // With /S, cmd drops only the outer quotes and keeps the quoted path
+        // whole, so a temporary directory containing `&` or `^` still works.
+        let mut cmd = Command::new("cmd");
+        cmd.raw_arg(format!("/S /C \"\"{}\"\"", script.path().display()));
+
+        cmd.env_clear();
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+
+        self.execute_with_streaming(cmd, output_callback).await
+    }
+
+    #[cfg(not(windows))]
+    async fn run_cmd_script(
+        &self,
+        _command: &str,
+        _env: &HashMap<String, String>,
+        _output_callback: Option<OutputCallback>,
+    ) -> Result<String> {
+        unreachable!("cmd scripts only run on Windows")
+    }
+
     /// Execute a command with streaming output
     async fn execute_with_streaming(
         &self,
@@ -268,36 +311,8 @@ impl Runner for DirectRunner {
 
             // Return the result
             result
-        } else if cfg!(target_os = "windows") {
-            // `cmd /C` runs only the first line of its argument, and the
-            // backslash escaping Rust applies to it is not understood by cmd,
-            // so quoted strings arrived as \"...\". Run the step as a batch
-            // file instead, the way `sh -c` runs every line on Unix.
-            let temp_dir = std::env::temp_dir();
-            let file_name = format!("butterflow-script-{}.cmd", uuid::Uuid::new_v4());
-            let script_path = temp_dir.join(file_name);
-
-            let script = format!(
-                "@echo off\r\n{}\r\n",
-                command.replace("\r\n", "\n").replace('\n', "\r\n")
-            );
-            std::fs::write(&script_path, script).map_err(|e| {
-                Error::Runtime(format!("Failed to write script to temporary file: {e}"))
-            })?;
-
-            let mut cmd = Command::new("cmd");
-            cmd.arg("/C").arg(&script_path);
-
-            cmd.env_clear();
-            for (key, value) in env {
-                cmd.env(key, value);
-            }
-
-            let result = self.execute_with_streaming(cmd, output_callback).await;
-
-            std::fs::remove_file(&script_path).ok();
-
-            result
+        } else if cfg!(windows) {
+            self.run_cmd_script(command, env, output_callback).await
         } else {
             // Create the command
             let mut cmd = Command::new("sh");
