@@ -268,23 +268,40 @@ impl Runner for DirectRunner {
 
             // Return the result
             result
+        } else if cfg!(target_os = "windows") {
+            // `cmd /C` runs only the first line of its argument, and the
+            // backslash escaping Rust applies to it is not understood by cmd,
+            // so quoted strings arrived as \"...\". Run the step as a batch
+            // file instead, the way `sh -c` runs every line on Unix.
+            let temp_dir = std::env::temp_dir();
+            let file_name = format!("butterflow-script-{}.cmd", uuid::Uuid::new_v4());
+            let script_path = temp_dir.join(file_name);
+
+            let script = format!(
+                "@echo off\r\n{}\r\n",
+                command.replace("\r\n", "\n").replace('\n', "\r\n")
+            );
+            std::fs::write(&script_path, script).map_err(|e| {
+                Error::Runtime(format!("Failed to write script to temporary file: {e}"))
+            })?;
+
+            let mut cmd = Command::new("cmd");
+            cmd.arg("/C").arg(&script_path);
+
+            cmd.env_clear();
+            for (key, value) in env {
+                cmd.env(key, value);
+            }
+
+            let result = self.execute_with_streaming(cmd, output_callback).await;
+
+            std::fs::remove_file(&script_path).ok();
+
+            result
         } else {
-            // Determine the shell to use
-            let shell = if cfg!(target_os = "windows") {
-                "cmd"
-            } else {
-                "sh"
-            };
-
-            let shell_arg = if cfg!(target_os = "windows") {
-                "/C"
-            } else {
-                "-c"
-            };
-
             // Create the command
-            let mut cmd = Command::new(shell);
-            cmd.arg(shell_arg).arg(command);
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c").arg(command);
 
             // Add environment variables
             cmd.env_clear();
