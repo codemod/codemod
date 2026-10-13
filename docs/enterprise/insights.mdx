@@ -30,6 +30,14 @@ To create a new dashboard, go to `Insights → Create Dashboard`.
   After a completed [Grep](/enterprise/grep) search, you can create an Insights dashboard from the same query and repository selection. For an AI-native experience while viewing a dashboard, try [Codemod Wish](/enterprise/codemod-wish).
 </Tip>
 
+### Access
+
+You can open a dashboard only if you can access every repository it references, either through your personal git account or through an organization you belong to. If you lose access to any of those repositories, the dashboard becomes unavailable to you, even if you created it. Dashboards with no repositories are visible only to their creator.
+
+### Share links
+
+You can share a snapshot of a dashboard with a link. Each link freezes the dashboard as it is when you create it. Choose who can open it (**Org only** or **Anyone with link**) and when it expires: `24 hours`, `7 days`, `30 days`, or `Never`. Links set to `Never` stay active until you revoke them from the share dialog.
+
 ## Widgets
 
 Widgets are the building blocks of a dashboard. Insights supports four widget types:
@@ -45,7 +53,7 @@ Timeseries chart, single number, and table view widgets are query-backed. They r
     ![Creating a new widget](/images/insights/create-widget.png)
 </Frame>
 
-Each query-backed widget can contain up to 10 queries. Use the query source selector to choose the data source for each query:
+In the dashboard editor, each query-backed widget can contain up to 10 queries. Use the query source selector to choose the data source for each query:
 
 - **[JSSG Codemod](/enterprise/insights/jssg-queries)** - runs inline JSSG source, a JSSG codemod package, or a JSSG source template variable.
 - **[ast-grep (YAML)](/enterprise/insights/ast-grep-queries)** - runs an ast-grep YAML rule against selected repositories.
@@ -60,7 +68,7 @@ You can select the query source from the dropdown at the start of each query.
 
 ### Formulas
 
-You can combine multiple query results with a formula. Queries are assigned alphabetical variable names (`a`, `b`, `c`, ...) that you can reference in the formula expression.
+You can combine multiple query results with a formula. Queries are assigned alphabetical variable names in order (`a`, `b`, `c`, and so on) that you can reference in the formula expression. Formulas support variables `a` through `z`. The dashboard editor lets you add up to 10 queries (`a`–`j`), while widgets created through the API or [Codemod MCP](/enterprise/codemod-mcp) can reference up to 26 queries (`a`–`z`) in a formula.
 
 You can also give the formula result a name using the formula alias field (e.g. `Formula Result`).
 
