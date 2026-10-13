@@ -1084,6 +1084,7 @@ dependencies = [
  "hyper-rustls 0.24.2",
  "indicatif",
  "inquire",
+ "jsonc-parser",
  "language-core",
  "libc",
  "libtest-mimic",

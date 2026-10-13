@@ -5,7 +5,8 @@ use crate::commands::harness_adapter::{
     upsert_mcs_command_entrypoints_with_runtime, upsert_periodic_update_trigger,
     upsert_skill_discovery_guides_with_command_status, Harness, HarnessAdapterError,
     InstallRequest, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
-    OutputFormat, PeriodicUpdatePolicy, ResolvedAdapter, VerificationStatus,
+    OutputFormat, PeriodicUpdatePolicy, PeriodicUpdateTriggerUpsertResult, ResolvedAdapter,
+    VerificationStatus,
 };
 use crate::commands::output::{
     exit_adapter_error, format_output_path, prompt_for_overwrite_confirmation,
@@ -800,24 +801,15 @@ fn run_install_flow(
         }
     };
 
-    let periodic_trigger = match upsert_periodic_update_trigger(
-        resolved_adapter.harness,
-        install_inputs.scope,
-        periodic_policy_from_update_mode(install_inputs.update_policy),
-    ) {
-        Ok(result) => Some(result),
-        Err(error) => {
-            warnings.push(format!(
-                "Installed skills, but failed to upsert periodic update triggers: {error}"
-            ));
-            None
-        }
-    };
-
-    let periodic_trigger_paths = periodic_trigger
-        .as_ref()
-        .map(|result| result.tracked_paths.clone())
-        .unwrap_or_default();
+    let periodic_trigger_paths = record_periodic_trigger_result(
+        upsert_periodic_update_trigger(
+            resolved_adapter.harness,
+            install_inputs.scope,
+            periodic_policy_from_update_mode(install_inputs.update_policy),
+        ),
+        messages,
+        warnings,
+    );
     let managed_components = managed_components_from_install(
         &installed,
         &command_paths,
@@ -825,6 +817,27 @@ fn run_install_flow(
         &periodic_trigger_paths,
     );
     (installed, managed_components)
+}
+
+/// Surfaces the trigger's notes (for example a skipped Codex notification)
+/// in the install output and returns the paths to track as managed.
+fn record_periodic_trigger_result(
+    result: Result<PeriodicUpdateTriggerUpsertResult, impl fmt::Display>,
+    messages: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) -> Vec<PathBuf> {
+    match result {
+        Ok(result) => {
+            messages.extend(result.notes);
+            result.tracked_paths
+        }
+        Err(error) => {
+            warnings.push(format!(
+                "Installed skills, but failed to upsert periodic update triggers: {error}"
+            ));
+            Vec::new()
+        }
+    }
 }
 
 fn managed_component_kind_from_install_entry(entry: &InstalledSkill) -> ManagedComponentKind {

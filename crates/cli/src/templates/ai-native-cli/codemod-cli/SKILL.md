@@ -88,7 +88,7 @@ Keep feedback short and thematic. Do not include source code, secrets, auth toke
 1. Discover candidates with `codemod search`.
 2. Read the selected package's README/docs and perform any documented prerequisites or setup steps.
 3. Run workflow-capable packages with `codemod run --dry-run` before apply.
-4. Run `codemod <package-id>` and accept the install prompt when a package exposes installable skill behavior.
+4. Run `codemod run <package-id> --no-interactive --install-skill` when a package exposes installable skill behavior (install-skill steps are skipped in non-interactive runs without `--install-skill`).
 5. Enforce verification with tests and dry-run summaries before apply.
 
 ## Mandatory first action for migration/update/upgrade requests

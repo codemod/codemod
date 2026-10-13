@@ -1,6 +1,7 @@
-use crate::utils::env_paths::home_dir_from_env;
+use crate::utils::env_paths::{codex_home_from_env, home_dir_from_env};
 use crate::utils::skill_layout::SKILL_FILE_NAME;
 use clap::ValueEnum;
+use jsonc_parser::cst::{CstInputValue, CstRootNode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -414,6 +415,8 @@ pub struct ResolvedAdapter {
 pub(crate) struct RuntimePaths {
     cwd: PathBuf,
     home_dir: Option<PathBuf>,
+    /// Where Codex reads its user config: `$CODEX_HOME`, else `~/.codex`.
+    codex_home: Option<PathBuf>,
     current_executable: Option<PathBuf>,
 }
 
@@ -438,6 +441,7 @@ impl RuntimePaths {
         Ok(Self {
             cwd,
             home_dir: home_dir_from_env(environment),
+            codex_home: codex_home_from_env(environment),
             current_executable: std::env::current_exe().ok(),
         })
     }
@@ -621,15 +625,21 @@ pub(crate) fn resolve_adapter_with_runtime(
 }
 
 fn detect_auto_harness(cwd: &Path) -> (Harness, Vec<String>) {
-    for (harness, root_dir) in [
-        (Harness::Claude, ".claude"),
-        (Harness::Goose, ".goose"),
-        (Harness::Opencode, ".opencode"),
-        (Harness::Cursor, ".cursor"),
-        (Harness::Codex, ".codex"),
-        (Harness::Antigravity, ".agents"),
+    // OpenCode projects are frequently configured with only a root-level
+    // `opencode.json`/`opencode.jsonc` (no `.opencode` directory), so treat
+    // those files as OpenCode markers too.
+    for (harness, markers) in [
+        (Harness::Claude, &[".claude"][..]),
+        (Harness::Goose, &[".goose"][..]),
+        (
+            Harness::Opencode,
+            &[".opencode", "opencode.json", "opencode.jsonc"][..],
+        ),
+        (Harness::Cursor, &[".cursor"][..]),
+        (Harness::Codex, &[".codex"][..]),
+        (Harness::Antigravity, &[".agents"][..]),
     ] {
-        if cwd.join(root_dir).exists() {
+        if markers.iter().any(|marker| cwd.join(marker).exists()) {
             return (harness, Vec::new());
         }
     }
@@ -637,7 +647,7 @@ fn detect_auto_harness(cwd: &Path) -> (Harness, Vec<String>) {
     (
         Harness::Claude,
         vec![
-            "No .claude, .goose, .opencode, .cursor, .codex, or .agents directory found; defaulting to Claude harness.".to_string(),
+            "No .claude, .goose, .opencode (or opencode.json), .cursor, .codex, or .agents found; defaulting to Claude harness. Pass --harness to choose a different harness.".to_string(),
         ],
     )
 }
@@ -743,7 +753,27 @@ fn upsert_periodic_update_trigger_with_runtime(
         updated_paths.push(runner_path.clone());
     }
 
-    if (trigger_strategy.upsert)(&trigger_strategy.integration_path, &runner_path)? {
+    if let Some(user_config_path) =
+        codex_user_notify_shadowed_by_project_install(harness, scope, runtime_paths)
+    {
+        // Earlier installs wrote the Codemod runner into the project config even
+        // when the user config had its own `notify`. Drop that stale entry (only
+        // when it is exactly the Codemod-managed runner) so the user's
+        // integration applies again.
+        if remove_codex_managed_notify(&trigger_strategy.integration_path, &runner_path)? {
+            updated_paths.push(trigger_strategy.integration_path.clone());
+            notes.push(format!(
+                "Removed Codemod-managed `notify` from {} so the user-level `notify` in {} applies again.",
+                trigger_strategy.integration_path.display(),
+                user_config_path.display()
+            ));
+        }
+        notes.push(format!(
+            "Skipped Codex periodic update notify: {} already defines `notify`, and a project-level `notify` in {} would override it. Run `codemod ai update` manually to check for updates.",
+            user_config_path.display(),
+            trigger_strategy.integration_path.display()
+        ));
+    } else if (trigger_strategy.upsert)(&trigger_strategy.integration_path, &runner_path)? {
         updated_paths.push(trigger_strategy.integration_path.clone());
     }
 
@@ -1339,6 +1369,68 @@ fn upsert_codex_periodic_update_notify(
     document["notify"] = value(notify);
 
     write_file_if_changed(config_path, format!("{}\n", document).as_bytes())
+}
+
+/// Removes the project-level Codex `notify` entry when it exactly matches the
+/// Codemod-managed periodic update runner. Any other `notify` value is left
+/// untouched. Returns whether the config file changed.
+fn remove_codex_managed_notify(config_path: &Path, runner_path: &Path) -> AdapterResult<bool> {
+    if !config_path.is_file() {
+        return Ok(false);
+    }
+    let existing = fs::read_to_string(config_path).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to read Codex config {}: {error}",
+            config_path.display()
+        ))
+    })?;
+    let mut document = existing.parse::<DocumentMut>().map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Codex config {} is not valid TOML: {error}",
+            config_path.display()
+        ))
+    })?;
+
+    let expected = vec!["sh".to_string(), runner_path.to_string_lossy().to_string()];
+    if read_notify_command(&document)?.as_ref() != Some(&expected) {
+        return Ok(false);
+    }
+
+    document.remove("notify");
+    write_file_if_changed(config_path, document.to_string().as_bytes())
+}
+
+/// Codex layers a project `.codex/config.toml` on top of the user config, so a
+/// project-level `notify` replaces the user's own `notify` integration. Returns
+/// the user config path when a project install would shadow a user-managed
+/// (non-Codemod) `notify` entry.
+fn codex_user_notify_shadowed_by_project_install(
+    harness: Harness,
+    scope: InstallScope,
+    runtime_paths: &RuntimePaths,
+) -> Option<PathBuf> {
+    if harness != Harness::Codex || !matches!(scope, InstallScope::Project) {
+        return None;
+    }
+    let user_config_path = runtime_paths
+        .codex_home
+        .as_ref()?
+        .join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME);
+    let document = fs::read_to_string(&user_config_path)
+        .ok()?
+        .parse::<DocumentMut>()
+        .ok()?;
+    document.get("notify")?;
+    match read_notify_command(&document) {
+        Ok(Some(notify)) if is_codemod_periodic_notify_command(&notify) => None,
+        _ => Some(user_config_path),
+    }
+}
+
+fn is_codemod_periodic_notify_command(notify: &[String]) -> bool {
+    let runner_suffix = Path::new(CODEMOD_PERIODIC_UPDATE_RELATIVE_DIR)
+        .join(CODEMOD_PERIODIC_UPDATE_RUNNER_FILE_NAME);
+    matches!(notify, [shell, runner] if shell == "sh" && Path::new(runner).ends_with(&runner_suffix))
 }
 
 fn read_notify_command(document: &DocumentMut) -> AdapterResult<Option<Vec<String>>> {
@@ -2521,11 +2613,13 @@ fn mcp_config_path_for_harness(
                     "Could not determine home directory for --user install".to_string(),
                 )
             }),
-        (Harness::Opencode, InstallScope::Project) => Ok(runtime_paths.cwd.join("opencode.json")),
+        (Harness::Opencode, InstallScope::Project) => {
+            Ok(opencode_config_path_in_dir(&runtime_paths.cwd))
+        }
         (Harness::Opencode, InstallScope::User) => runtime_paths
             .home_dir
             .as_ref()
-            .map(|home_dir| home_dir.join(".config/opencode/opencode.json"))
+            .map(|home_dir| opencode_config_path_in_dir(&home_dir.join(".config/opencode")))
             .ok_or_else(|| {
                 HarnessAdapterError::InstallFailed(
                     "Could not determine home directory for --user install".to_string(),
@@ -2585,6 +2679,7 @@ fn expected_codemod_mcp_server_entry_opencode(runtime_paths: &RuntimePaths) -> V
 }
 
 const OPENCODE_CONFIG_SCHEMA_URL: &str = "https://opencode.ai/config.json";
+const OPENCODE_CONFIG_FILE_NAMES: [&str; 2] = ["opencode.json", "opencode.jsonc"];
 
 fn upsert_codemod_mcp_server(
     harness: Harness,
@@ -2690,111 +2785,210 @@ fn upsert_codemod_mcp_server_json(
     Ok(())
 }
 
+/// OpenCode loads both `opencode.json` and `opencode.jsonc` from a config
+/// directory. Prefer the file that already defines the Codemod MCP server, then
+/// whichever config file exists (`opencode.json` first), and only fall back to
+/// creating `opencode.json` when neither exists.
+fn opencode_config_path_in_dir(config_dir: &Path) -> PathBuf {
+    let candidates = OPENCODE_CONFIG_FILE_NAMES.map(|file_name| config_dir.join(file_name));
+    candidates
+        .iter()
+        .find(|path| opencode_config_defines_codemod_mcp(path))
+        .or_else(|| candidates.iter().find(|path| path.is_file()))
+        .unwrap_or(&candidates[0])
+        .clone()
+}
+
+fn opencode_config_defines_codemod_mcp(config_path: &Path) -> bool {
+    fs::read_to_string(config_path)
+        .ok()
+        .and_then(|content| parse_jsonc_value(&content).ok().flatten())
+        .is_some_and(|config| {
+            config
+                .get("mcp")
+                .and_then(|mcp| mcp.get(MCP_SERVER_NAME))
+                .is_some()
+        })
+}
+
+/// OpenCode config files are JSONC: comments and trailing commas are allowed.
+fn parse_jsonc_value(content: &str) -> Result<Option<Value>, jsonc_parser::errors::ParseError> {
+    jsonc_parser::parse_to_serde_value(content, &jsonc_parser::ParseOptions::default())
+}
+
+fn json_value_to_cst_input(value: &Value) -> CstInputValue {
+    match value {
+        Value::Null => CstInputValue::Null,
+        Value::Bool(value) => CstInputValue::Bool(*value),
+        Value::Number(value) => CstInputValue::Number(value.to_string()),
+        Value::String(value) => CstInputValue::String(value.clone()),
+        Value::Array(items) => {
+            CstInputValue::Array(items.iter().map(json_value_to_cst_input).collect())
+        }
+        Value::Object(entries) => CstInputValue::Object(
+            entries
+                .iter()
+                .map(|(key, value)| (key.clone(), json_value_to_cst_input(value)))
+                .collect(),
+        ),
+    }
+}
+
 fn upsert_codemod_mcp_server_opencode_json(
     config_path: &Path,
     force: bool,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<()> {
-    if let Some(parent_dir) = config_path.parent() {
-        fs::create_dir_all(parent_dir).map_err(|error| {
+    let expected_entry = expected_codemod_mcp_server_entry_opencode(runtime_paths);
+
+    // OpenCode merges `opencode.json` and `opencode.jsonc`, so a Codemod entry in
+    // the sibling file must be kept consistent as well (or reported as a conflict).
+    let mut config_paths = vec![config_path.to_path_buf()];
+    let is_opencode_config_file = config_path
+        .file_name()
+        .and_then(|file_name| file_name.to_str())
+        .is_some_and(|file_name| OPENCODE_CONFIG_FILE_NAMES.contains(&file_name));
+    if let (true, Some(config_dir)) = (is_opencode_config_file, config_path.parent()) {
+        for file_name in OPENCODE_CONFIG_FILE_NAMES {
+            let sibling_path = config_dir.join(file_name);
+            if sibling_path != config_path && opencode_config_defines_codemod_mcp(&sibling_path) {
+                config_paths.push(sibling_path);
+            }
+        }
+    }
+
+    // Validate every file before writing any of them.
+    let updates = config_paths
+        .iter()
+        .map(|path| {
+            render_opencode_config_update(path, &expected_entry, force)
+                .map(|content| (path, content))
+        })
+        .collect::<AdapterResult<Vec<_>>>()?;
+
+    for (path, content) in updates {
+        let Some(content) = content else {
+            continue;
+        };
+        if let Some(parent_dir) = path.parent() {
+            fs::create_dir_all(parent_dir).map_err(|error| {
+                HarnessAdapterError::InstallFailed(format!(
+                    "Failed to create directory {}: {error}",
+                    parent_dir.display()
+                ))
+            })?;
+        }
+        fs::write(path, content).map_err(|error| {
             HarnessAdapterError::InstallFailed(format!(
-                "Failed to create directory {}: {error}",
-                parent_dir.display()
+                "Failed to write MCP config {}: {error}",
+                path.display()
             ))
         })?;
     }
 
-    let expected_entry = expected_codemod_mcp_server_entry_opencode(runtime_paths);
-    let mut config_root = if config_path.exists() {
-        let existing_content = fs::read_to_string(config_path).map_err(|error| {
+    Ok(())
+}
+
+/// Returns the updated OpenCode config content, or `None` when the file is
+/// already up to date. Existing files are edited through a JSONC concrete
+/// syntax tree so comments, formatting, and unrelated settings are preserved.
+fn render_opencode_config_update(
+    config_path: &Path,
+    expected_entry: &Value,
+    force: bool,
+) -> AdapterResult<Option<String>> {
+    if !config_path.exists() {
+        let mut mcp = serde_json::Map::new();
+        mcp.insert(MCP_SERVER_NAME.to_string(), expected_entry.clone());
+        let mut config = serde_json::Map::new();
+        config.insert("$schema".to_string(), json!(OPENCODE_CONFIG_SCHEMA_URL));
+        config.insert("mcp".to_string(), Value::Object(mcp));
+        let serialized = serde_json::to_string_pretty(&Value::Object(config)).map_err(|error| {
             HarnessAdapterError::InstallFailed(format!(
-                "Failed to read MCP config {}: {error}",
+                "Failed to serialize MCP config {}: {error}",
                 config_path.display()
             ))
         })?;
+        return Ok(Some(format!("{serialized}\n")));
+    }
 
-        serde_json::from_str::<Value>(&existing_content).map_err(|error| {
-            HarnessAdapterError::InstallFailed(format!(
-                "MCP config {} is not valid JSON: {error}",
-                config_path.display()
-            ))
-        })?
-    } else {
-        json!({})
+    let existing_content = fs::read_to_string(config_path).map_err(|error| {
+        HarnessAdapterError::InstallFailed(format!(
+            "Failed to read MCP config {}: {error}",
+            config_path.display()
+        ))
+    })?;
+    let invalid_config_error = |error: jsonc_parser::errors::ParseError| {
+        HarnessAdapterError::InstallFailed(format!(
+            "MCP config {} is not valid JSON/JSONC: {error}",
+            config_path.display()
+        ))
     };
+    let config = parse_jsonc_value(&existing_content).map_err(invalid_config_error)?;
+    let root = CstRootNode::parse(&existing_content, &jsonc_parser::ParseOptions::default())
+        .map_err(invalid_config_error)?;
 
-    let Some(root_object) = config_root.as_object_mut() else {
-        return Err(HarnessAdapterError::InstallFailed(format!(
+    let top_level_object_error = || {
+        HarnessAdapterError::InstallFailed(format!(
             "MCP config {} must contain a top-level JSON object",
             config_path.display()
-        )));
+        ))
+    };
+    let config_object = match &config {
+        // Empty (or comment-only) file: start from an empty object.
+        None => None,
+        Some(Value::Object(config_object)) => Some(config_object),
+        Some(_) => return Err(top_level_object_error()),
+    };
+    let root_object = match config_object {
+        None => root.object_value_or_set(),
+        Some(_) => root.object_value().ok_or_else(top_level_object_error)?,
     };
 
-    let mut config_changed = false;
-    if !root_object.contains_key("$schema") {
-        root_object.insert("$schema".to_string(), json!(OPENCODE_CONFIG_SCHEMA_URL));
-        config_changed = true;
-    }
-
-    let mcp_value = root_object
-        .entry("mcp".to_string())
-        .or_insert_with(|| json!({}));
-
-    let Some(mcp_object) = mcp_value.as_object_mut() else {
+    let has_schema = config_object.is_some_and(|config| config.contains_key("$schema"));
+    let mcp_value = config_object.and_then(|config| config.get("mcp"));
+    if mcp_value.is_some_and(|mcp| !mcp.is_object()) {
         return Err(HarnessAdapterError::InstallFailed(format!(
             "MCP config {} has non-object `mcp`; update manually or re-run with --force after fixing JSON",
             config_path.display()
         )));
-    };
+    }
 
-    if let Some(existing_entry) = mcp_object.get(MCP_SERVER_NAME) {
-        if existing_entry == &expected_entry {
-            if !config_changed {
-                return Ok(());
+    let existing_entry = mcp_value.and_then(|mcp| mcp.get(MCP_SERVER_NAME));
+    let entry_matches = existing_entry == Some(expected_entry);
+    if existing_entry.is_some() && !entry_matches && !force {
+        return Err(HarnessAdapterError::InstallFailed(format!(
+            "MCP server `{MCP_SERVER_NAME}` already exists in {} with different settings. Re-run with --force to overwrite.",
+            config_path.display()
+        )));
+    }
+    if entry_matches && has_schema {
+        return Ok(None);
+    }
+
+    if !has_schema {
+        root_object.insert(
+            0,
+            "$schema",
+            CstInputValue::String(OPENCODE_CONFIG_SCHEMA_URL.to_string()),
+        );
+    }
+    if !entry_matches {
+        let mcp_object = root_object.object_value_or_set("mcp");
+        let entry_value = json_value_to_cst_input(expected_entry);
+        match mcp_object.get(MCP_SERVER_NAME) {
+            Some(entry_prop) => entry_prop.set_value(entry_value),
+            None => {
+                mcp_object.append(MCP_SERVER_NAME, entry_value);
             }
-
-            let serialized = serde_json::to_string_pretty(&config_root).map_err(|error| {
-                HarnessAdapterError::InstallFailed(format!(
-                    "Failed to serialize MCP config {}: {error}",
-                    config_path.display()
-                ))
-            })?;
-
-            fs::write(config_path, format!("{serialized}\n")).map_err(|error| {
-                HarnessAdapterError::InstallFailed(format!(
-                    "Failed to write MCP config {}: {error}",
-                    config_path.display()
-                ))
-            })?;
-
-            return Ok(());
-        }
-
-        if !force {
-            return Err(HarnessAdapterError::InstallFailed(format!(
-                "MCP server `{MCP_SERVER_NAME}` already exists in {} with different settings. Re-run with --force to overwrite.",
-                config_path.display()
-            )));
         }
     }
 
-    mcp_object.insert(MCP_SERVER_NAME.to_string(), expected_entry);
-
-    let serialized = serde_json::to_string_pretty(&config_root).map_err(|error| {
-        HarnessAdapterError::InstallFailed(format!(
-            "Failed to serialize MCP config {}: {error}",
-            config_path.display()
-        ))
-    })?;
-
-    fs::write(config_path, format!("{serialized}\n")).map_err(|error| {
-        HarnessAdapterError::InstallFailed(format!(
-            "Failed to write MCP config {}: {error}",
-            config_path.display()
-        ))
-    })?;
-
-    Ok(())
+    let mut updated_content = root.to_string();
+    if !updated_content.ends_with('\n') {
+        updated_content.push('\n');
+    }
+    Ok(Some(updated_content))
 }
 
 fn upsert_codemod_mcp_server_toml(
@@ -3217,19 +3411,34 @@ fn skill_roots_for_listing(
     harness: Harness,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Vec<(InstallScope, PathBuf)>> {
-    let mut roots = vec![(
-        InstallScope::Project,
-        skills_root_for_harness(harness, InstallScope::Project, runtime_paths)?,
-    )];
+    let project_root = skills_root_for_harness(harness, InstallScope::Project, runtime_paths)?;
 
-    if runtime_paths.home_dir.is_some() {
-        roots.push((
-            InstallScope::User,
-            skills_root_for_harness(harness, InstallScope::User, runtime_paths)?,
-        ));
+    if runtime_paths.home_dir.is_none() {
+        return Ok(vec![(InstallScope::Project, project_root)]);
     }
 
-    Ok(roots)
+    let user_root = skills_root_for_harness(harness, InstallScope::User, runtime_paths)?;
+    // When run from the home directory (or a symlink to it), the project and
+    // user skill roots are the same directory; list it once as user scope so
+    // installed skills are not reported twice.
+    if same_existing_path(&project_root, &user_root) {
+        return Ok(vec![(InstallScope::User, user_root)]);
+    }
+
+    Ok(vec![
+        (InstallScope::Project, project_root),
+        (InstallScope::User, user_root),
+    ])
+}
+
+fn same_existing_path(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 fn validate_embedded_mcs_bundle() -> AdapterResult<()> {
@@ -4001,6 +4210,7 @@ mod tests {
         let runtime_paths = RuntimePaths {
             cwd: temp_dir.path().join("workspace"),
             home_dir: Some(temp_dir.path().join("home")),
+            codex_home: Some(temp_dir.path().join("home").join(CODEX_CONFIG_DIR_NAME)),
             current_executable: Some(codemod_executable),
         };
         std::fs::create_dir_all(&runtime_paths.cwd).unwrap();
@@ -4758,6 +4968,216 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
+    fn upsert_periodic_update_trigger_preserves_existing_codex_notify() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path =
+            expected_harness_root(&runtime_paths, Harness::Codex, InstallScope::Project)
+                .join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME);
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        let original = "model = \"o3\"\nnotify = [\"notify-send\", \"codex\"]\n";
+        fs::write(&config_path, original).unwrap();
+
+        let result = upsert_periodic_update_trigger_with_runtime(
+            Harness::Codex,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert!(!result.updated_paths.contains(&config_path));
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
+    }
+
+    #[test]
+    fn upsert_periodic_update_trigger_does_not_shadow_user_codex_notify() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let user_config_path = runtime_paths
+            .home_dir
+            .as_ref()
+            .unwrap()
+            .join(CODEX_CONFIG_DIR_NAME)
+            .join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME);
+        fs::create_dir_all(user_config_path.parent().unwrap()).unwrap();
+        let user_config = "notify = [\"python3\", \"/home/me/notify.py\"]\n";
+        fs::write(&user_config_path, user_config).unwrap();
+
+        let result = upsert_periodic_update_trigger_with_runtime(
+            Harness::Codex,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        let project_config_path =
+            expected_harness_root(&runtime_paths, Harness::Codex, InstallScope::Project)
+                .join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME);
+        assert!(!result.updated_paths.contains(&project_config_path));
+        if project_config_path.exists() {
+            let document = fs::read_to_string(&project_config_path)
+                .unwrap()
+                .parse::<DocumentMut>()
+                .unwrap();
+            assert!(read_notify_command(&document).unwrap().is_none());
+        }
+        assert!(result
+            .notes
+            .iter()
+            .any(|note| note.contains("Skipped Codex periodic update notify")));
+        assert_eq!(fs::read_to_string(&user_config_path).unwrap(), user_config);
+    }
+
+    #[test]
+    fn upsert_periodic_update_trigger_does_not_shadow_user_codex_notify_in_codex_home() {
+        let (mut runtime_paths, temp_dir) = runtime_paths_with_temp_roots();
+        let codex_home = temp_dir.path().join("custom-codex-home");
+        runtime_paths.codex_home = Some(codex_home.clone());
+        fs::create_dir_all(&codex_home).unwrap();
+        fs::write(
+            codex_home.join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME),
+            "notify = [\"python3\", \"/home/me/notify.py\"]\n",
+        )
+        .unwrap();
+
+        let result = upsert_periodic_update_trigger_with_runtime(
+            Harness::Codex,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert!(result
+            .notes
+            .iter()
+            .any(|note| note.contains("Skipped Codex periodic update notify")));
+    }
+
+    #[test]
+    fn upsert_periodic_update_trigger_removes_stale_codemod_project_notify_on_upgrade() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let project_config_path =
+            expected_harness_root(&runtime_paths, Harness::Codex, InstallScope::Project)
+                .join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME);
+
+        // Previous installer behavior: project notify written without a user notify.
+        upsert_periodic_update_trigger_with_runtime(
+            Harness::Codex,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+        let installed = fs::read_to_string(&project_config_path).unwrap();
+        fs::write(
+            &project_config_path,
+            format!("# project settings\nmodel = \"o3\"\n{installed}"),
+        )
+        .unwrap();
+        let document = fs::read_to_string(&project_config_path)
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        assert!(read_notify_command(&document)
+            .unwrap()
+            .is_some_and(|notify| is_codemod_periodic_notify_command(&notify)));
+
+        let user_config_path = runtime_paths
+            .home_dir
+            .as_ref()
+            .unwrap()
+            .join(CODEX_CONFIG_DIR_NAME)
+            .join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME);
+        fs::create_dir_all(user_config_path.parent().unwrap()).unwrap();
+        let user_config = "notify = [\"python3\", \"/home/me/notify.py\"]\n";
+        fs::write(&user_config_path, user_config).unwrap();
+
+        let result = upsert_periodic_update_trigger_with_runtime(
+            Harness::Codex,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&project_config_path).unwrap();
+        let document = content.parse::<DocumentMut>().unwrap();
+        assert!(read_notify_command(&document).unwrap().is_none());
+        assert!(content.contains("# project settings"));
+        assert_eq!(document["model"].as_str(), Some("o3"));
+        assert!(result.updated_paths.contains(&project_config_path));
+        assert!(result
+            .notes
+            .iter()
+            .any(|note| note.contains("Removed Codemod-managed `notify`")));
+        assert_eq!(fs::read_to_string(&user_config_path).unwrap(), user_config);
+    }
+
+    #[test]
+    fn upsert_periodic_update_trigger_keeps_custom_project_notify_when_user_notify_exists() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let user_config_path = runtime_paths
+            .home_dir
+            .as_ref()
+            .unwrap()
+            .join(CODEX_CONFIG_DIR_NAME)
+            .join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME);
+        fs::create_dir_all(user_config_path.parent().unwrap()).unwrap();
+        fs::write(
+            &user_config_path,
+            "notify = [\"python3\", \"/home/me/notify.py\"]\n",
+        )
+        .unwrap();
+
+        let project_config_path =
+            expected_harness_root(&runtime_paths, Harness::Codex, InstallScope::Project)
+                .join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME);
+        fs::create_dir_all(project_config_path.parent().unwrap()).unwrap();
+        let project_config = "notify = [\"notify-send\", \"codex\"]\n";
+        fs::write(&project_config_path, project_config).unwrap();
+
+        let result = upsert_periodic_update_trigger_with_runtime(
+            Harness::Codex,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        assert!(!result.updated_paths.contains(&project_config_path));
+        assert_eq!(
+            fs::read_to_string(&project_config_path).unwrap(),
+            project_config
+        );
+    }
+
+    #[test]
+    fn upsert_periodic_update_trigger_ignores_codemod_user_codex_notify() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        upsert_periodic_update_trigger_with_runtime(
+            Harness::Codex,
+            InstallScope::User,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        let result = upsert_periodic_update_trigger_with_runtime(
+            Harness::Codex,
+            InstallScope::Project,
+            PeriodicUpdatePolicy::AutoSafe,
+            &runtime_paths,
+        )
+        .unwrap();
+
+        let project_config_path =
+            expected_harness_root(&runtime_paths, Harness::Codex, InstallScope::Project)
+                .join(CODEMOD_PERIODIC_TRIGGER_CODEX_CONFIG_FILE_NAME);
+        assert!(result.updated_paths.contains(&project_config_path));
+    }
+
+    #[test]
     fn resolve_install_scope_rejects_conflicting_flags() {
         assert!(resolve_install_scope(true, true).is_err());
     }
@@ -4799,6 +5219,18 @@ codemod-skill-version: 0.1.0
         let (harness, warnings) = detect_auto_harness(temp_dir.path());
         assert_eq!(harness, Harness::Opencode);
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn auto_detect_uses_opencode_when_only_opencode_config_file_exists() {
+        for config_file in ["opencode.json", "opencode.jsonc"] {
+            let temp_dir = tempdir().unwrap();
+            fs::write(temp_dir.path().join(config_file), "{}").unwrap();
+
+            let (harness, warnings) = detect_auto_harness(temp_dir.path());
+            assert_eq!(harness, Harness::Opencode, "marker: {config_file}");
+            assert!(warnings.is_empty());
+        }
     }
 
     #[test]
@@ -5697,6 +6129,61 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
+    fn list_skills_does_not_duplicate_entries_when_cwd_is_home() {
+        let (mut runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        runtime_paths.cwd = runtime_paths.home_dir.clone().unwrap();
+        let user_request = InstallRequest {
+            scope: InstallScope::User,
+            force: false,
+        };
+
+        for harness in ALL_HARNESSES {
+            install_mcs_skill_bundle_with_runtime(harness, &user_request, &runtime_paths).unwrap();
+            let skills = list_skills_with_runtime(harness, &runtime_paths).unwrap();
+            let roots = skill_roots_for_listing(harness, &runtime_paths).unwrap();
+            let shares_root = roots.len() == 1;
+            if shares_root {
+                assert_eq!(skills.len(), 1, "harness: {}", harness.as_str());
+                assert_eq!(skills[0].scope, Some(InstallScope::User));
+            }
+            let mut paths = skills.iter().map(|skill| &skill.path).collect::<Vec<_>>();
+            paths.dedup();
+            assert_eq!(paths.len(), skills.len(), "harness: {}", harness.as_str());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_skills_does_not_duplicate_entries_when_cwd_is_symlink_to_home() {
+        let (mut runtime_paths, temp_dir) = runtime_paths_with_temp_roots();
+        let home_link = temp_dir.path().join("home-link");
+        std::os::unix::fs::symlink(runtime_paths.home_dir.as_ref().unwrap(), &home_link).unwrap();
+        runtime_paths.cwd = home_link;
+        let user_request = InstallRequest {
+            scope: InstallScope::User,
+            force: false,
+        };
+
+        install_mcs_skill_bundle_with_runtime(Harness::Claude, &user_request, &runtime_paths)
+            .unwrap();
+
+        let project_root =
+            skills_root_for_harness(Harness::Claude, InstallScope::Project, &runtime_paths)
+                .unwrap();
+        let user_root =
+            skills_root_for_harness(Harness::Claude, InstallScope::User, &runtime_paths).unwrap();
+        // The roots differ textually; only symlink resolution shows they match.
+        assert_ne!(project_root, user_root);
+
+        let roots = skill_roots_for_listing(Harness::Claude, &runtime_paths).unwrap();
+        assert_eq!(roots, vec![(InstallScope::User, user_root)]);
+
+        let skills = list_skills_with_runtime(Harness::Claude, &runtime_paths).unwrap();
+        assert_eq!(skills.len(), 1, "skills: {skills:?}");
+        assert_eq!(skills[0].scope, Some(InstallScope::User));
+    }
+
+    #[test]
     fn verify_skills_passes_for_installed_mcs_bundle() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
         let install_request = InstallRequest {
@@ -6139,6 +6626,146 @@ codemod-skill-version: 0.1.0
         assert_eq!(config_path, runtime_paths.cwd.join("opencode.json"));
         assert!(config_path.exists());
         assert!(legacy_path.exists());
+    }
+
+    #[test]
+    fn install_detects_and_updates_commented_opencode_json() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path = runtime_paths.cwd.join("opencode.json");
+        let original = r#"{
+  // project settings
+  "theme": "dark", /* keep me */
+  "mcp": {
+    "other": { "type": "remote", "url": "https://example.com/mcp", },
+  },
+}
+"#;
+        fs::write(&config_path, original).unwrap();
+
+        let (harness, _warnings) = detect_auto_harness(&runtime_paths.cwd);
+        assert_eq!(harness, Harness::Opencode);
+
+        let request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+        install_mcs_skill_bundle_with_runtime(harness, &request, &runtime_paths).unwrap();
+
+        let content = fs::read_to_string(&config_path).unwrap();
+        assert!(content.contains("// project settings"), "{content}");
+        assert!(content.contains("/* keep me */"), "{content}");
+        let parsed = parse_jsonc_value(&content).unwrap().unwrap();
+        assert_eq!(parsed["theme"], json!("dark"));
+        assert_eq!(parsed["$schema"], json!(OPENCODE_CONFIG_SCHEMA_URL));
+        assert_eq!(
+            parsed["mcp"]["other"],
+            json!({ "type": "remote", "url": "https://example.com/mcp" })
+        );
+        assert_eq!(
+            parsed["mcp"][MCP_SERVER_NAME],
+            expected_codemod_mcp_server_entry_opencode(&runtime_paths)
+        );
+        assert!(!runtime_paths.cwd.join("opencode.jsonc").exists());
+
+        // Reinstalling is a no-op.
+        install_mcs_skill_bundle_with_runtime(harness, &request, &runtime_paths).unwrap();
+        assert_eq!(fs::read_to_string(&config_path).unwrap(), content);
+    }
+
+    #[test]
+    fn install_mcp_server_config_updates_existing_opencode_jsonc_in_place() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let jsonc_path = runtime_paths.cwd.join("opencode.jsonc");
+        fs::write(
+            &jsonc_path,
+            "{\n  // keep this comment\n  \"model\": \"anthropic/claude\",\n}\n",
+        )
+        .unwrap();
+
+        let request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+        let config_path =
+            install_mcp_server_config(Harness::Opencode, &request, &runtime_paths).unwrap();
+
+        assert_eq!(config_path, jsonc_path);
+        assert!(!runtime_paths.cwd.join("opencode.json").exists());
+        let content = fs::read_to_string(&jsonc_path).unwrap();
+        assert!(content.contains("// keep this comment"), "{content}");
+        let parsed = parse_jsonc_value(&content).unwrap().unwrap();
+        assert_eq!(parsed["model"], json!("anthropic/claude"));
+        assert_eq!(
+            parsed["mcp"][MCP_SERVER_NAME],
+            expected_codemod_mcp_server_entry_opencode(&runtime_paths)
+        );
+    }
+
+    #[test]
+    fn install_mcp_server_config_checks_opencode_jsonc_for_existing_codemod_entry() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let json_path = runtime_paths.cwd.join("opencode.json");
+        let jsonc_path = runtime_paths.cwd.join("opencode.jsonc");
+        let json_content = "{ \"theme\": \"dark\" }\n";
+        fs::write(&json_path, json_content).unwrap();
+        fs::write(
+            &jsonc_path,
+            "{\n  // custom codemod server\n  \"mcp\": { \"codemod\": { \"type\": \"local\", \"command\": [\"custom\"] } },\n}\n",
+        )
+        .unwrap();
+
+        let request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+        let error = install_mcp_server_config(Harness::Opencode, &request, &runtime_paths)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("opencode.jsonc"), "{error}");
+        assert!(error.contains("--force"), "{error}");
+        assert_eq!(fs::read_to_string(&json_path).unwrap(), json_content);
+
+        let forced = InstallRequest {
+            scope: InstallScope::Project,
+            force: true,
+        };
+        let config_path =
+            install_mcp_server_config(Harness::Opencode, &forced, &runtime_paths).unwrap();
+        assert_eq!(config_path, jsonc_path);
+        assert_eq!(fs::read_to_string(&json_path).unwrap(), json_content);
+        let content = fs::read_to_string(&jsonc_path).unwrap();
+        assert!(content.contains("// custom codemod server"), "{content}");
+        let parsed = parse_jsonc_value(&content).unwrap().unwrap();
+        assert_eq!(
+            parsed["mcp"][MCP_SERVER_NAME],
+            expected_codemod_mcp_server_entry_opencode(&runtime_paths)
+        );
+    }
+
+    #[test]
+    fn upsert_mcp_server_keeps_codemod_entries_in_both_opencode_files_consistent() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let json_path = runtime_paths.cwd.join("opencode.json");
+        let jsonc_path = runtime_paths.cwd.join("opencode.jsonc");
+        upsert_codemod_mcp_server(Harness::Opencode, &json_path, false, &runtime_paths).unwrap();
+        let stale_jsonc =
+            "{\n  \"mcp\": {\n    // stale\n    \"codemod\": { \"type\": \"local\", \"command\": [\"old\"] },\n  },\n}\n";
+        fs::write(&jsonc_path, stale_jsonc).unwrap();
+
+        assert!(
+            upsert_codemod_mcp_server(Harness::Opencode, &json_path, false, &runtime_paths)
+                .is_err()
+        );
+        assert_eq!(fs::read_to_string(&jsonc_path).unwrap(), stale_jsonc);
+
+        upsert_codemod_mcp_server(Harness::Opencode, &json_path, true, &runtime_paths).unwrap();
+        let content = fs::read_to_string(&jsonc_path).unwrap();
+        assert!(content.contains("// stale"), "{content}");
+        let parsed = parse_jsonc_value(&content).unwrap().unwrap();
+        assert_eq!(
+            parsed["mcp"][MCP_SERVER_NAME],
+            expected_codemod_mcp_server_entry_opencode(&runtime_paths)
+        );
     }
 
     #[test]

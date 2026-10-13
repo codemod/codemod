@@ -25,6 +25,19 @@ pub(crate) fn home_dir_from_env(env: Option<&HashMap<String, String>>) -> Option
         .or_else(dirs::home_dir)
 }
 
+/// Codex's config directory: `$CODEX_HOME` when set, otherwise `~/.codex`.
+pub(crate) fn codex_home_from_env(env: Option<&HashMap<String, String>>) -> Option<PathBuf> {
+    let from_env = match env {
+        Some(_) => env_path(env, "CODEX_HOME"),
+        None => std::env::var("CODEX_HOME")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
+    };
+    from_env.or_else(|| home_dir_from_env(env).map(|home| home.join(".codex")))
+}
+
 pub(crate) fn data_dir_from_env(env: Option<&HashMap<String, String>>) -> Option<PathBuf> {
     env_path(env, "XDG_DATA_HOME")
         .or_else(|| env_path(env, "LOCALAPPDATA"))

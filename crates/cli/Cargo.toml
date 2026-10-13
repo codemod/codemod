@@ -78,6 +78,7 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
 toml_edit = "0.22"
+jsonc-parser = { version = "0.26", features = ["cst", "serde"] }
 arboard = "3.4"
 
 [target.'cfg(unix)'.dependencies]
