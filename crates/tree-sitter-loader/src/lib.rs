@@ -76,6 +76,16 @@ macro_rules! parser_urls {
 fn get_definitions() -> &'static [DynamicLanguageDefinition] {
     &[
         DynamicLanguageDefinition {
+            name: "sql",
+            symbol: "tree_sitter_sql",
+            extensions: &["sql"],
+            expando_char: '_',
+            urls: parser_urls!(
+                "tree-sitter-sql",
+                "39fdb006403747241244326e8af3b3e96b85381c"
+            ),
+        },
+        DynamicLanguageDefinition {
             name: "less",
             symbol: "tree_sitter_less",
             extensions: &["less"],
