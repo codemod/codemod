@@ -26,6 +26,7 @@ async fn measure_completion_latency_once() -> Duration {
                 Ok(CodemodOutput {
                     primary: ExecutionResult::Unmodified,
                     secondary: vec![],
+                    output: None,
                 })
             });
 

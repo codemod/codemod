@@ -212,6 +212,46 @@ impl<'js> SgRootRjs<'js> {
             }
 
             let path = std::path::Path::new(file_path);
+            let stage_writes = ctx
+                .userdata::<crate::sandbox::engine::execution_engine::StageFileWrites>()
+                .map(|flag| flag.0)
+                .unwrap_or(false);
+            if stage_writes {
+                // A staging host owns the filesystem: hand the edit back as a
+                // secondary change (like `jssgTransform`) instead of writing.
+                use crate::sandbox::engine::execution_engine::{
+                    validate_path_within_target, ExecutionResult, FileChange, JssgFileChanges,
+                    ModifiedResult,
+                };
+                validate_path_within_target(&ctx, path, "write()")?;
+                let changes = ctx
+                    .userdata::<JssgFileChanges>()
+                    .map(|guard| guard.clone())
+                    .ok_or_else(|| {
+                        Exception::throw_message(&ctx, "JssgFileChanges not found in userdata")
+                    })?;
+                changes
+                    .changes
+                    .lock()
+                    .map_err(|e| {
+                        Exception::throw_message(
+                            &ctx,
+                            &format!("Failed to lock file_changes mutex: {e}"),
+                        )
+                    })?
+                    .push(FileChange {
+                        path: path.to_path_buf(),
+                        result: ExecutionResult::Modified(ModifiedResult {
+                            content: content.clone(),
+                            rename_to: None,
+                        }),
+                    });
+                if let Some(ref provider) = self.inner.semantic_provider {
+                    let _ = provider.notify_file_processed(path, &content);
+                }
+                return Ok(());
+            }
+
             std::fs::write(path, &content).map_err(|e| {
                 Exception::throw_message(
                     &ctx,

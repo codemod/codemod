@@ -243,6 +243,7 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         cancellation_flag: None,
         test_mode: false,
         dry_run: false,
+        stage_writes: false,
         target_directory: target_path.parent().unwrap_or(target_path.as_path()),
     };
 

@@ -9,6 +9,8 @@ use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver
 use crate::sandbox::runtime_module::{RuntimeHooksContext, RuntimeModule};
 use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::{RuleConfig, SerializableRuleConfig};
+use ast_grep_core::matcher::MatcherExt;
+use ast_grep_core::AstGrep;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use rquickjs::loader::Loader;
@@ -23,6 +25,51 @@ use std::time::{Duration, Instant};
 
 use crate::ast_grep::serde::JsValue;
 use crate::workflow_global::WorkflowGlobalModule;
+
+/// Build a selector from static rule data: the object a `getSelector` returns
+/// (`rule`, optional `constraints` and `utils`), with `id` and `language`
+/// supplied here. Hosts that declare the selector as data instead of a
+/// function (the TypeScript orchestration bridge) skip QuickJS entirely.
+pub fn selector_from_value(
+    language: CodemodLang,
+    value: serde_json::Value,
+) -> Result<RuleConfig<CodemodLang>, ExecutionError> {
+    let mut config = serde_json::Map::new();
+    config.insert("id".to_string(), "selector".into());
+    config.insert("language".to_string(), language.to_string().into());
+    if let serde_json::Value::Object(fields) = value {
+        config.extend(fields);
+    }
+    let serializable: SerializableRuleConfig<CodemodLang> =
+        serde_json::from_value(serde_json::Value::Object(config)).map_err(|e| {
+            ExecutionError::Runtime {
+                source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+                    message: format!("Failed to deserialize rule config: {e}"),
+                },
+            }
+        })?;
+    RuleConfig::try_from(serializable, &Default::default()).map_err(|e| ExecutionError::Runtime {
+        source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
+            message: format!("Failed to create RuleConfig: {e}"),
+        },
+    })
+}
+
+/// True when `content`, parsed as `language`, holds at least one node the
+/// selector matches: the same eligibility test the engine applies before it
+/// calls a transform, without starting a JavaScript runtime.
+pub fn selector_matches(
+    selector: &RuleConfig<CodemodLang>,
+    language: CodemodLang,
+    content: &str,
+) -> bool {
+    let ast = AstGrep::new(content, language);
+    let matched = ast
+        .root()
+        .dfs()
+        .any(|node| selector.matcher.match_node(node).is_some());
+    matched
+}
 
 pub struct SelectorEngineOptions<'a, R> {
     pub script_path: &'a Path,
@@ -394,7 +441,9 @@ where
             }
 
             if result_obj.is_object() {
-                // Convert the JavaScript object to a RuleConfig
+                // Convert the JavaScript object to a RuleConfig. The script
+                // already merged `id` and `language` in; `selector_from_value`
+                // sets the same values again.
                 let js_value = JsValue::from_js(&ctx, result_obj)
                     .map_err(|e| ExecutionError::Runtime {
                         source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
@@ -402,22 +451,7 @@ where
                         },
                     })?;
 
-                let serializable_config: SerializableRuleConfig<CodemodLang> =
-                    serde_json::from_value(js_value.0)
-                        .map_err(|e| ExecutionError::Runtime {
-                            source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                                message: format!("Failed to deserialize rule config: {e}"),
-                            },
-                        })?;
-
-                let rule_config = RuleConfig::try_from(serializable_config, &Default::default())
-                    .map_err(|e| ExecutionError::Runtime {
-                        source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                            message: format!("Failed to create RuleConfig: {e}"),
-                        },
-                    })?;
-
-                Ok(Some(Box::new(rule_config)))
+                Ok(Some(Box::new(selector_from_value(options.language, js_value.0)?)))
             } else {
                 Err(ExecutionError::Runtime {
                     source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
@@ -637,6 +671,32 @@ mod tests {
             result.is_some(),
             "const arrow getSelector exports should be supported"
         );
+    }
+
+    #[test]
+    fn static_selectors_decide_eligibility_without_a_runtime() {
+        let language: CodemodLang = "typescript".parse().unwrap();
+        let selector = selector_from_value(
+            language,
+            serde_json::json!({
+                "rule": { "pattern": "oldApi($A)" },
+                "constraints": { "A": { "kind": "string" } }
+            }),
+        )
+        .expect("valid selector");
+        assert!(selector_matches(&selector, language, "oldApi('a');"));
+        assert!(!selector_matches(&selector, language, "oldApi(a);"));
+        assert!(!selector_matches(&selector, language, "newApi('a');"));
+
+        for invalid in [
+            serde_json::json!({ "rule": { "nope": 1 } }),
+            serde_json::json!("pattern"),
+        ] {
+            let error = selector_from_value(language, invalid)
+                .map(|_| ())
+                .expect_err("invalid selector");
+            assert!(error.to_string().contains("rule config"), "{error}");
+        }
     }
 
     #[tokio::test]

@@ -4,6 +4,7 @@ members = [
     "crates/core",
     "crates/cli",
     "crates/runners",
+    "crates/execution-bridge",
     "crates/state",
     "crates/codemod-sandbox",
     "crates/codemod-sandbox/build",

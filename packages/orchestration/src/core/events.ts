@@ -1,0 +1,53 @@
+import type { ScheduledCommand } from "./history.ts";
+import type { Json } from "./json.ts";
+import type { OperationCompletion } from "./protocol.ts";
+
+export type RunEvent =
+  | { type: "command.scheduled"; command: ScheduledCommand; dynamicId?: string }
+  | {
+      type: "command.replayed";
+      commandId: string;
+      completion: OperationCompletion;
+      dynamicId?: string;
+    }
+  | { type: "command.completed"; commandId: string; completion: OperationCompletion }
+  | { type: "run.finished"; output: Json; replayed: boolean }
+  /** One bridge process was spawned for a command. */
+  | { type: "bridge.spawned"; commandId: string; pid: number | undefined }
+  /** A command had to wait for execution capacity; nothing is spawned yet. */
+  | { type: "scheduler.queued"; commandId: string; weight: number }
+  /** A command took a permit. `active`/`used` are the totals including it. */
+  | {
+      type: "scheduler.admitted";
+      commandId: string;
+      weight: number;
+      active: number;
+      used: number;
+      capacity: number;
+    }
+  /** A command returned its permit. `active`/`used` are the totals without it. */
+  | {
+      type: "scheduler.released";
+      commandId: string;
+      weight: number;
+      active: number;
+      used: number;
+    }
+  /** Admission paused: queued commands stay queued, admitted ones run to completion. */
+  | { type: "scheduler.paused"; queued: number; active: number }
+  /** Admission resumed: the queue is pumped again in FIFO order. */
+  | { type: "scheduler.resumed"; queued: number; active: number };
+
+/** Migration seam: where engine events go (CLI, TUI, JSONL, ...). */
+export interface EventSink {
+  emit(event: RunEvent): void;
+}
+
+export const nullSink: EventSink = { emit() {} };
+
+export class CollectingSink implements EventSink {
+  readonly events: RunEvent[] = [];
+  emit(event: RunEvent): void {
+    this.events.push(event);
+  }
+}

@@ -560,6 +560,42 @@ declare module "codemod:ast-grep" {
     options: TransformOptions<T>,
   ) => Promise<string | null>;
 
+  /**
+   * Result of a `StructuredCodemod`: the file edit plus JSON data for the
+   * caller. The engine applies `content` exactly like a `Codemod` return value
+   * and collects `output`; the TypeScript orchestration prototype returns all
+   * outputs as an array in sorted file order.
+   */
+  export type CodemodResult<O = unknown> = {
+    /** Transformed source. Omit or return null when the file is unchanged. */
+    content?: string | null;
+    /** JSON data for the caller. Required: an object result without it is an error. */
+    output: O;
+  };
+
+  /**
+   * Options for a `StructuredCodemod`. Same as `TransformOptions`, but
+   * `params.input` carries the orchestration invocation input, which is
+   * arbitrary JSON rather than a string.
+   */
+  export type StructuredTransformOptions<T extends TypesMap, I = unknown> = Omit<
+    TransformOptions<T>,
+    "params"
+  > & {
+    params: Record<string, unknown> & { input?: I };
+  };
+
+  /**
+   * Top-level transform that returns `{ content, output }`. Only the default
+   * export of a codemod may be structured: `jssgTransform` accepts a plain
+   * `Codemod` and rejects structured results at runtime, because a secondary
+   * transform has nowhere to deliver `output`.
+   */
+  export type StructuredCodemod<T extends TypesMap, O = unknown, I = unknown> = (
+    root: SgRoot<T>,
+    options: StructuredTransformOptions<T, I>,
+  ) => Promise<CodemodResult<O>>;
+
   export type GetSelectorOptions<_T extends TypesMap> = {
     params: Record<string, string>;
   };
