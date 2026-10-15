@@ -28,14 +28,12 @@ fn write_package(path: &Path, workflow: &Workflow) {
     .unwrap();
 }
 
-fn child_step(path: &Path) -> String {
-    let source = format!(
-        "./{}",
-        path.strip_prefix(std::env::current_dir().unwrap())
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/")
-    );
+/// A step that runs the package at `path`, declared by a workflow whose
+/// bundle is `declaring_bundle`. Local sources are relative to that bundle,
+/// and the test packages all sit side by side in one directory.
+fn child_step(declaring_bundle: &Path, path: &Path) -> String {
+    assert_eq!(declaring_bundle.parent(), path.parent());
+    let source = format!("../{}", path.file_name().unwrap().to_string_lossy());
     format!(
         "      - name: Run child\n        codemod:\n          source: {}\n",
         serde_json::to_string(&source).unwrap()
@@ -132,7 +130,7 @@ export default function transform() {
         )
         .unwrap();
         let run = if nested {
-            workflow(&child_step(&bundle))
+            workflow(&child_step(&bundle, &bundle))
         } else {
             child
         };
@@ -154,7 +152,7 @@ async fn nested_workflow_state_conditions_observe_shell_updates() {
     let parent = workflow(&format!(
         "{}{}",
         shell_step("Seed false", "ready=false"),
-        child_step(&bundle)
+        child_step(&bundle, &bundle)
     ));
     let state = run_workflow(root.path(), &bundle, parent).await;
     assert_eq!(state.get("ready"), Some(&json!(true)));
@@ -205,7 +203,7 @@ export default function transform() {
         "{}{}{}",
         shell_step("Seed value", "value=old"),
         shell_step("Seed removal", "removed=old"),
-        child_step(&bundle)
+        child_step(&bundle, &bundle)
     ));
     let state = run_workflow(root.path(), &bundle, parent).await;
     assert_eq!(state.get("observed"), Some(&json!("new")));
@@ -228,7 +226,7 @@ async fn nested_workflow_state_is_refreshed_across_nodes_and_grandchildren() {
     let mut child = workflow(&shell_step("Initialize value", "value=child"));
     let mut next_node = workflow(&format!(
         "{}{}",
-        child_step(&grandchild_dir),
+        child_step(&child_dir, &grandchild_dir),
         shell_step("Read grandchild value", "observed=${{ state.value }}")
     ))
     .nodes
@@ -237,7 +235,7 @@ async fn nested_workflow_state_is_refreshed_across_nodes_and_grandchildren() {
     next_node.depends_on = vec!["apply".to_string()];
     child.nodes.push(next_node);
     write_package(&child_dir, &child);
-    let parent = workflow(&child_step(&child_dir));
+    let parent = workflow(&child_step(&child_dir, &child_dir));
     let state = run_workflow(root.path(), &child_dir, parent).await;
     assert_eq!(state.get("grandchildRead"), Some(&json!("child")));
     assert_eq!(state.get("observed"), Some(&json!("grandchild")));

@@ -506,7 +506,7 @@ steps:
 </ParamField>
 
 <ParamField path="codemod.source" type="string" required>
-  Codemod source (registry package or local path). Supports version pinning: `@scope/pkg@1.2.3`.
+  Codemod source (registry package or local path). Supports version pinning: `@scope/pkg@1.2.3`. A local path that starts with `./` or `../` is relative to the directory that contains the workflow file with the step, not to the directory you run the CLI from.
 </ParamField>
 
 <ParamField path="codemod.args" type="string[]">

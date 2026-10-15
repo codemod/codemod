@@ -115,12 +115,16 @@ pub fn parse_workflow_file<P: AsRef<Path>>(path: P) -> Result<Workflow> {
     }
 }
 
+/// Finds a nested codemod of `workflow` that may only run as a dry run.
+/// `bundle_path` is the workflow's package directory, which local `./` and
+/// `../` sources are relative to.
 pub async fn find_dry_run_only_codemod_dependency(
     workflow: &Workflow,
+    bundle_path: Option<&Path>,
     registry_client: &RegistryClient,
 ) -> Result<Option<String>> {
     NestedCodemodService::new(registry_client)
-        .find_dry_run_only_dependency(workflow, &[] as &[CodemodDependency])
+        .find_dry_run_only_dependency(workflow, bundle_path, &[] as &[CodemodDependency])
         .await
 }
 

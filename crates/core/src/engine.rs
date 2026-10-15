@@ -617,8 +617,12 @@ pub struct Engine {
 /// Represents a codemod dependency chain for cycle detection
 #[derive(Debug, Clone)]
 pub struct CodemodDependency {
-    /// Source identifier (registry package or local path)
+    /// Source identifier (registry package or local path), as written
     pub(crate) source: String,
+    /// What the source refers to: the canonical directory of a local source,
+    /// otherwise the source itself. Cycles are detected on this, because the
+    /// same local path names a different package at each nesting level.
+    pub(crate) identity: String,
 }
 
 impl Default for Engine {
@@ -1659,7 +1663,8 @@ impl Engine {
         capabilities: Option<&HashSet<LlrtSupportedModules>>,
     ) -> Result<Uuid> {
         validate_workflow(&workflow, bundle_path.as_deref().unwrap_or(Path::new("")))?;
-        self.validate_codemod_dependencies(&workflow, &[]).await?;
+        self.validate_codemod_dependencies(&workflow, bundle_path.as_deref(), &[])
+            .await?;
 
         let workflow_run = WorkflowRun {
             id: workflow_run_id,
@@ -1973,10 +1978,11 @@ impl Engine {
     async fn validate_codemod_dependencies(
         &self,
         workflow: &Workflow,
+        bundle_path: Option<&Path>,
         dependency_chain: &[CodemodDependency],
     ) -> Result<()> {
         NestedCodemodService::new(&self.workflow_run_config.execution.registry_client)
-            .validate_workflow_dependencies(workflow, dependency_chain)
+            .validate_workflow_dependencies(workflow, bundle_path, dependency_chain)
             .await
     }
 
@@ -3456,7 +3462,7 @@ impl Engine {
 
         let resolved =
             NestedCodemodService::new(&self.workflow_run_config.execution.registry_client)
-                .resolve(&codemod.source, dependency_chain)
+                .resolve(&codemod.source, bundle_path.as_deref(), dependency_chain)
                 .await?;
         let dependency_display_path = codemod_dependency_display_path(&resolved.dependency_chain);
         notify_nested_codemod_progress(
@@ -4391,18 +4397,23 @@ mod tests {
         let dependency_chain = vec![
             CodemodDependency {
                 source: "@codemod/child-a".to_string(),
+                identity: "@codemod/child-a".to_string(),
             },
             CodemodDependency {
                 source: "/Users/example/private/absolute-child".to_string(),
+                identity: "/Users/example/private/absolute-child".to_string(),
             },
             CodemodDependency {
                 source: "./private/relative-child".to_string(),
+                identity: "./private/relative-child".to_string(),
             },
             CodemodDependency {
                 source: "../private/sibling-child".to_string(),
+                identity: "../private/sibling-child".to_string(),
             },
             CodemodDependency {
                 source: "@alias/child-b".to_string(),
+                identity: "@alias/child-b".to_string(),
             },
         ];
         let registry_package = resolved_package(Some(RegistryPackageMetadata {

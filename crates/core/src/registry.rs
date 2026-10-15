@@ -311,17 +311,22 @@ impl RegistryClient {
     }
 
     fn resolve_local_package(&self, source: &str) -> Result<ResolvedPackage> {
-        let path = PathBuf::from(source);
+        self.resolve_local_package_at(Path::new(source))
+    }
+
+    /// Resolves a package from a local directory.
+    pub(crate) fn resolve_local_package_at(&self, path: &Path) -> Result<ResolvedPackage> {
+        let path = path.to_path_buf();
 
         if !path.exists() {
             return Err(RegistryError::LocalPackageNotFound {
-                path: source.to_string(),
+                path: path.display().to_string(),
             });
         }
 
         if !path.is_dir() {
             return Err(RegistryError::LocalPackageNotDirectory {
-                path: source.to_string(),
+                path: path.display().to_string(),
             });
         }
 

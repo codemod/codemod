@@ -295,6 +295,9 @@ pub async fn handler(
     } else {
         butterflow_core::utils::find_dry_run_only_codemod_dependency(
             &workflow_definition,
+            // `create_engine` runs the workflow with its file's directory as
+            // the bundle path, so local sources resolve from there.
+            workflow_path.parent(),
             &registry_client,
         )
         .await
