@@ -238,6 +238,21 @@ function findRawImportMatches<T extends Language>(
                     kind: "formal_parameters",
                   },
                 },
+                // - TypeScript wraps each parameter in `required_parameter`
+                //   (identifier > required_parameter > formal_parameters). That kind does
+                //   not exist in the JavaScript grammar, so match by shape (grandparent)
+                //   instead of naming the kind, which would make the whole rule invalid for JS.
+                {
+                  kind: "identifier",
+                  pattern: "$NAMESPACE_ALIAS",
+                  inside: {
+                    kind: "required_parameter",
+                    field: "pattern",
+                    inside: {
+                      kind: "formal_parameters",
+                    },
+                  },
+                },
                 // - dynamic with callback: import("mod").then(mod => ...)
                 {
                   kind: "identifier",
