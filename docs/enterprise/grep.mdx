@@ -85,20 +85,20 @@ When more pages are available, continue the same search. Changing the query, mod
 
 ## Grep MCP
 
-MCP clients can search the same repository scope through the Grep MCP endpoint:
+MCP clients can search the same repository scope through [Codemod MCP](/enterprise/codemod-mcp):
 
 ```text
-https://app.codemod.com/api/v1/grep/mcp
+https://app.codemod.com/api/v1/mcp
 ```
 
-Authenticate with a Codemod API key that has **Use Grep** enabled:
+Authenticate with a Codemod API key that has **Use Grep** enabled, or with OAuth for the full tool set:
 
 ```json
 {
   "mcpServers": {
     "codemod-grep": {
       "type": "http",
-      "url": "https://app.codemod.com/api/v1/grep/mcp",
+      "url": "https://app.codemod.com/api/v1/mcp",
       "headers": {
         "Authorization": "Bearer ${CODEMOD_API_KEY}"
       }
@@ -107,9 +107,20 @@ Authenticate with a Codemod API key that has **Use Grep** enabled:
 }
 ```
 
-The server is read-only. It can list repositories, search indexed code, and read focused source ranges around matches. It does not start indexing or modify code. Index repositories in the Grep UI before searching from an MCP client.
+API keys expose Grep read tools only (`grep_list_repositories`, `grep_search`, `grep_read_ranges`, and related Grep reads). OAuth can also index and create Insights dashboards when scopes allow. Index repositories in the Grep UI (or with `grep_index_*` under OAuth) before searching from an MCP client.
 
 Store the key in a secret or environment variable. Do not commit it into MCP configuration files.
+
+### Agent workflow
+
+1. Narrow path, language, and repositories when you can.
+2. Call `grep_search` — MCP returns a small text page (~12 KiB) with a coverage header such as `[matches 1–N of ≥M in F files]`, numbered snippets, and per-file `readHints` for follow-up reads.
+3. Share the leading `Grep <absolute URL>` short link unchanged so a person can open the same search.
+4. Pull more source with `grep_read_ranges` using those `readHints` (or known ranges). Do not paste large dumps into chat.
+5. Continue with one cursor and identical inputs when the page says `more:` — either the search `cursor` or an `outputCursor` for buffered text. Cursors expire after about 30 minutes.
+6. For naming variants (snake / Pascal / camel), prefer `grep_multi_search` with labelled queries instead of many separate searches.
+
+Default MCP `fileLimit` is 20 matching files per page (max 1,000). Optional `definitionsOnly` with `mode=regex` prefers declaration-like matches on page 1.
 
 ### Select supported languages
 
@@ -119,13 +130,11 @@ If a language selection is rejected, choose supported parsers that match your in
 
 ### Interpret search results
 
-Check `failures`, `countComplete`, and `nextCursor` before making an absence or exhaustive-coverage claim:
+MCP search and range tools return **text only** (no `structuredContent` on those calls). Trust the coverage header and `more:` footer in the text. Before claiming absence or exhaustive coverage:
 
-- Non-empty `failures` means some repository searches failed. Returned files are still usable evidence for their indexed commits.
-- `countComplete: false` means coverage is incomplete, even if `nextCursor` is null or no matches were returned. If there is no cursor, narrow your search before drawing an exhaustive conclusion.
-- A non-null `nextCursor` lets you continue with the identical search parameters. Start without the old cursor if you change the search.
-
-The MCP response keeps its structured search payload and can include additional recovery guidance for incomplete results. A successful tool response does not mean that every repository search succeeded.
+- Partial repository failures do **not** mark the tool result as a hard error when matching files are still present — keep usable evidence and inspect failures separately.
+- Incomplete coverage (`countComplete: false` or a continuation footer) is not proof of absence, even with zero matches on the page.
+- Continue with identical inputs when a cursor is present. Changing query, mode, repositories, language, or path starts a new search; do not reuse an old cursor.
 
 ## Create Insights dashboards from Grep
 
@@ -177,7 +186,9 @@ After creation, the dashboard is a normal Insights dashboard: you can edit widge
 | Unsupported language failures | Narrow the language filter to supported languages present in the indexed snapshot. Select `all` only if you intend to broaden the search. |
 | Partial failures or incomplete counts | Keep usable snippets, inspect the failures, and narrow the search. Do not treat zero results or a null cursor as proof of absence. |
 | Pattern finds nothing that Regex finds | Confirm the Pattern query is complete, valid syntax for the language, and not a bare text fragment. |
-| MCP searches fail with auth errors | Use an API key with **Use Grep** enabled. Organization keys require the creator to still be a member. |
+| MCP searches fail with auth errors | Use an API key with **Use Grep** enabled, or OAuth with `grep:read`. Organization keys require the creator to still be a member. Endpoint is `/api/v1/mcp` (not a Grep-only path). |
+| MCP page looks truncated | Expected — pages are ~12 KiB. Use `readHints` with `grep_read_ranges`, or continue with the same cursor and identical inputs. |
+| Cursor rejected after a pause | Cursors expire after about 30 minutes. Re-run the search with identical inputs. |
 
 ## Related docs
 
@@ -190,6 +201,9 @@ After creation, the dashboard is a normal Insights dashboard: you can edit widge
   </Card>
   <Card title="Investigation" icon="microscope" href="/enterprise/wish-investigation">
     Turn Grep searches into a source-backed answer about code behavior.
+  </Card>
+  <Card title="Codemod MCP" icon="screwdriver-wrench" href="/enterprise/codemod-mcp">
+    Connect assistants to Grep, Insights, and other Codemod tools.
   </Card>
   <Card title="GitHub integration" icon="github" href="/enterprise/integrations/github">
     Grant repository access so Grep can index and search your code.

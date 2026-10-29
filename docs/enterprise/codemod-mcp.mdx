@@ -135,12 +135,14 @@ Tool names follow the pattern `<area>_<action>`. Tools with a `:read` scope don'
 
 ### Grep
 
-These tools use the same indexed repositories as [Grep](/enterprise/grep).
+These tools use the same indexed repositories as [Grep](/enterprise/grep). Prefer small pages, `readHints`, and `grep_read_ranges` over dumping large result sets. See [Grep MCP](/enterprise/grep#grep-mcp) for the agent workflow.
 
 | Tool | Scope | Description |
 | --- | --- | --- |
-| `grep_list_repositories` | `grep:read` | List Grep repositories. Optional `query` filters by repository full name (case-insensitive) and `limit` caps the results |
-| `grep_search` | `grep:read` | Run a Grep search |
+| `grep_list_repositories` | `grep:read` | List Grep repositories. Optional `query` filters by name; MCP defaults `limit` to 100 |
+| `grep_search` | `grep:read` | Run a Grep search. MCP returns ~12 KiB text pages with a coverage header and `readHints` |
+| `grep_multi_search` | `grep:read` | Run up to eight labelled queries in one call (for example naming variants) |
+| `grep_read_ranges` | `grep:read` | Read focused source ranges at pinned commits; prefer `readHints` from `grep_search` |
 | `grep_insights_dashboard_options` | `grep:read` | Resolve options for turning a Grep search into an Insights dashboard |
 | `grep_index_repository` | `grep:write` | Index a repository for Grep. **Requires approval** |
 | `grep_create_insights_dashboard` | `grep:write` | Create an Insights dashboard from a Grep search. **Asks first when supported** |
