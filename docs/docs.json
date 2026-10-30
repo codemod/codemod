@@ -503,6 +503,10 @@
       "destination": "/enterprise/codemod-agent"
     },
     {
+      "source": "/enterprise/wish-investigation.md",
+      "destination": "/enterprise/codemod-agent.md"
+    },
+    {
       "source": "/campaigns",
       "destination": "/enterprise/campaigns"
     },
