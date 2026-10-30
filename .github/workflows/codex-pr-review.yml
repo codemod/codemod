@@ -69,7 +69,7 @@ jobs:
           pr_number: ${{ needs.resolve-pr.outputs.pr_number }}
           codex_model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
           azure_openai_api_key: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          azure_openai_responses_endpoint: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
+          azure_openai_endpoint: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
           node_version: "24"
           pnpm_version: "10.19.0"
           install_command: pnpm install --frozen-lockfile
