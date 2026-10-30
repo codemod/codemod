@@ -2,9 +2,10 @@
 title: 'Codemod Agent'
 sidebarTitle: 'Agent'
 icon: 'wand-magic-sparkles'
+description: 'Use Codemod Agent, the in-app AI assistant formerly called Codemod Wish, to search code with Grep, build Insights dashboards, and create codemods.'
 ---
 
-Codemod Agent is the in-app Codemod AI assistant. It understands the page you are on and can help with Codemod workflows without requiring you to leave the app.
+Codemod Agent (formerly Codemod Wish) is the in-app Codemod AI assistant. It understands the page you are on and can help with Codemod workflows without requiring you to leave the app.
 
 Use the Agent to inspect current platform state, ask follow-up questions, and start repeatable codebase work from the context you already have open.
 
@@ -47,6 +48,8 @@ Ask for an Insights dashboard when you want results that stay up to date: trends
 > Build an Insights dashboard that tracks `fetchUser` call sites by repository.
 
 Questions about which repositories depend on a package use the Insights dependency inventory, because it covers dependencies across all indexed repositories.
+
+Investigation mode (`@investigate`) has been retired. Ask your question about code behavior directly, and the Agent answers with Grep searches.
 
 <Tip>
   If your request is too broad to act on, such as "improve my codebase," the Agent asks for a concrete target first, like a pattern to find or a before-and-after change. It can suggest Grep searches to help you choose one.
