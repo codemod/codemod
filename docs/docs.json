@@ -85,12 +85,7 @@
             "group": "Enterprise",
             "pages": [
               "enterprise/quickstart",
-              {
-                "icon": "wand-magic-sparkles",
-                "group": "Wish",
-                "root": "enterprise/codemod-wish",
-                "pages": ["enterprise/wish-investigation"]
-              },
+              "enterprise/codemod-wish",
               "enterprise/grep",
               "enterprise/codemod-mcp",
               {
@@ -493,6 +488,10 @@
     },
     {
       "source": "/wish",
+      "destination": "/enterprise/codemod-wish"
+    },
+    {
+      "source": "/enterprise/wish-investigation",
       "destination": "/enterprise/codemod-wish"
     },
     {
