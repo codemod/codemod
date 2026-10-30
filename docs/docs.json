@@ -85,12 +85,7 @@
             "group": "Enterprise",
             "pages": [
               "enterprise/quickstart",
-              {
-                "icon": "wand-magic-sparkles",
-                "group": "Wish",
-                "root": "enterprise/codemod-wish",
-                "pages": ["enterprise/wish-investigation"]
-              },
+              "enterprise/codemod-agent",
               "enterprise/grep",
               "enterprise/codemod-mcp",
               {
@@ -389,11 +384,19 @@
     },
     {
       "source": "/platform/codemod-wish",
-      "destination": "/enterprise/codemod-wish"
+      "destination": "/enterprise/codemod-agent"
     },
     {
       "source": "/platform/codemod-wish.md",
-      "destination": "/enterprise/codemod-wish.md"
+      "destination": "/enterprise/codemod-agent.md"
+    },
+    {
+      "source": "/enterprise/codemod-wish",
+      "destination": "/enterprise/codemod-agent"
+    },
+    {
+      "source": "/enterprise/codemod-wish.md",
+      "destination": "/enterprise/codemod-agent.md"
     },
     {
       "source": "/platform/insights",
@@ -489,11 +492,19 @@
     },
     {
       "source": "/codemod-wish",
-      "destination": "/enterprise/codemod-wish"
+      "destination": "/enterprise/codemod-agent"
     },
     {
       "source": "/wish",
-      "destination": "/enterprise/codemod-wish"
+      "destination": "/enterprise/codemod-agent"
+    },
+    {
+      "source": "/enterprise/wish-investigation",
+      "destination": "/enterprise/codemod-agent"
+    },
+    {
+      "source": "/enterprise/wish-investigation.md",
+      "destination": "/enterprise/codemod-agent.md"
     },
     {
       "source": "/campaigns",

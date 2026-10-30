@@ -1,0 +1,89 @@
+---
+title: 'Codemod Agent'
+sidebarTitle: 'Agent'
+icon: 'wand-magic-sparkles'
+description: 'Use Codemod Agent, the in-app AI assistant formerly called Codemod Wish, to search code with Grep, build Insights dashboards, and create codemods.'
+---
+
+Codemod Agent (formerly Codemod Wish) is the in-app Codemod AI assistant. It understands the page you are on and can help with Codemod workflows without requiring you to leave the app.
+
+Use the Agent to inspect current platform state, ask follow-up questions, and start repeatable codebase work from the context you already have open.
+
+## What the Agent can help with
+
+The Agent can help with work across the Codemod platform:
+
+- **Campaigns**: review campaign progress, inspect failed or stuck tasks, and open the campaign creation form for a registry package.
+- **Automations**: explain triggers and actions, identify missing guardrails, and help configure automation steps.
+- **Insights**: inspect dashboards, create widgets, and reason about migration readiness or adoption trends.
+- **Grep**: search indexed repositories with Pattern, Regex, or YAML queries, and create Insights dashboards from a completed search.
+- **Registry packages**: search for relevant codemods and inspect package details before applying them.
+- **Repositories**: use indexed repository context to search files, dependencies, and code patterns when repository access is available.
+- **Codemod creation**: turn repeatable transformations or analysis ideas into generated codemod packages.
+
+<Info>
+  The Agent uses the current page as context. If you ask about a Campaign, Automation, or Insights dashboard while viewing it, the Agent can use that page state to give more specific help.
+</Info>
+
+## Start a conversation
+
+<Steps>
+  <Step title="Open the Agent">
+    Select **Agent** in the sidebar for a full-page conversation, or press `Cmd+J` on macOS or `Ctrl+J` on Windows and Linux to open it in a side panel from any page.
+  </Step>
+  <Step title="Ask from the current page">
+    Ask about the Campaign, Automation, Insights dashboard, Registry package, or repository context you are viewing.
+  </Step>
+  <Step title="Review suggested actions">
+    When the Agent needs to navigate, create follow-up work, or choose between next steps, review the suggested action before continuing.
+  </Step>
+</Steps>
+
+## Grep answers and Insights dashboards
+
+When you ask a question about your code, such as where an API is called or how often a pattern appears, the Agent answers in the conversation with a [Grep](/enterprise/grep) search. Grep results reflect the current index and return quickly.
+
+Ask for an Insights dashboard when you want results that stay up to date: trends over time, migration or ownership tracking, or a view to share with your team. Building a dashboard takes longer, but its widgets keep refreshing as your code changes. For example:
+
+> Build an Insights dashboard that tracks `fetchUser` call sites by repository.
+
+Questions about which repositories depend on a package use the Insights dependency inventory, because it covers dependencies across all indexed repositories.
+
+Investigation mode (`@investigate`) has been retired. Ask your question about code behavior directly, and the Agent answers with Grep searches.
+
+<Tip>
+  If your request is too broad to act on, such as "improve my codebase," the Agent asks for a concrete target first, like a pattern to find or a before-and-after change. It can suggest Grep searches to help you choose one.
+</Tip>
+
+## Build codemod packages
+
+For repeatable code transformations or reusable analysis, the Agent can generate a codemod package and publish it to the registry.
+
+Generated packages are private by default unless you explicitly choose public visibility. When you are working in an organization, generated packages use that organization's registry scope.
+
+After a package is ready, the Agent can continue with follow-up work such as creating a Campaign or building an Insights dashboard that uses the generated package.
+
+The same prompting guidance for [building better codemods in Studio](/enterprise/codemod-studio#tips-for-building-better-codemods) applies to the Agent: keep the transformation focused, describe the intended behavior clearly, and include examples when they help.
+
+## Related docs
+
+<CardGroup cols={2}>
+  <Card title="Campaigns" icon="arrow-up-right-dots" href="/enterprise/campaigns">
+    Run codemods with automated PRs and centralized tracking.
+  </Card>
+  <Card title="Automations" icon="bolt" href="/enterprise/automations">
+    Create rules that react to events across your projects.
+  </Card>
+  <Card title="Insights" icon="chart-simple" href="/enterprise/insights">
+    Create dashboards for migration and codebase visibility.
+  </Card>
+  <Card title="Grep" icon="magnifying-glass" href="/enterprise/grep">
+    Search indexed private repositories with patterns, regex, or YAML rules.
+  </Card>
+  <Card title="Registry" icon="globe" href="/enterprise/registry">
+    Find and apply public, private, or pro codemod packages.
+  </Card>
+  <Card title="MCP" icon="server" href="/enterprise/codemod-mcp">
+    Let Claude, Cursor, and other AI assistants search your code and manage migrations.
+  </Card>
+</CardGroup>
