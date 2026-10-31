@@ -2062,7 +2062,7 @@ function sliceUtf8(source: string, startByte: number, endByte: number): string {
   let startIndex = startByte === 0 ? 0 : source.length;
   let endIndex = source.length;
   let foundStart = startByte === 0;
-  for (let index = 0; index < source.length;) {
+  for (let index = 0; index < source.length; ) {
     if (!foundStart && bytes >= startByte) {
       startIndex = index;
       foundStart = true;
