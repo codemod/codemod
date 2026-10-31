@@ -230,16 +230,18 @@ function testNamespaceFallback_WhenNoTypedMatchFound_NamedQuery() {
   assert(res[0]!.alias === "ns", "Alias should be the namespace binding name");
 }
 
-function testNamespaceNotReturnedWhenTypedResultsExist() {
+function testNamespaceReturnedAlongsideDefaultImport() {
   const program = parseProgram(
     "javascript",
     ["import foo from 'mod';", "import * as ns from 'mod';", "console.log(foo, ns);"].join("\n"),
   );
 
   const res = getAllImports(program, { type: "default", from: "mod" });
-  assert(res.length === 1, "Should return only the default import, not the namespace too");
-  assert(res[0]!.alias === "foo", "Should return the default import");
-  assert(res[0]!.isNamespace === false, "Should not be the namespace result");
+  assert(res.length === 2, "A default import must not hide the namespace import");
+  const typed = res.find((item) => !item.isNamespace);
+  const namespace = res.find((item) => item.isNamespace);
+  assert(typed?.alias === "foo" && typed.isTypeOnly === false, "Should return the default import");
+  assert(namespace?.alias === "ns", "Should also return the namespace import");
 }
 
 function testSingleNamespaceImport_getAllImports_StillWorks() {
@@ -294,22 +296,30 @@ function testMultipleNamespaceImports_NamedQuery_getAllImports_AllReturned() {
   );
 }
 
-function testNamespaceNotReturnedAlongsideTypedResults_getAllImports() {
-  // getAllImports also suppresses namespace when typed results exist
+function testNamespaceReturnedAlongsideTypedResults_getAllImports() {
   const program = parseProgram(
     "javascript",
     [
-      "import foo from 'mod';",
+      "import foo, * as ns from 'mod';",
       "import * as nsA from 'mod';",
       "import * as nsB from 'mod';",
-      "console.log(foo, nsA, nsB);",
+      "console.log(foo, ns, nsA, nsB);",
     ].join("\n"),
   );
 
   const res = getAllImports(program, { type: "default", from: "mod" });
-  assert(res.length === 1, "Should return only the default import, not the namespace imports");
-  assert(res[0]!.alias === "foo", "Should be the default import");
-  assert(res[0]!.isNamespace === false, "Should not be a namespace result");
+  const namespaces = res
+    .filter((item) => item.isNamespace)
+    .map((item) => item.alias)
+    .sort();
+  assert(
+    res.some((item) => item.alias === "foo" && !item.isNamespace),
+    "Should return the default import",
+  );
+  assert(
+    namespaces.join(",") === "ns,nsA,nsB",
+    `Should return every namespace import, got ${namespaces.join(",")}`,
+  );
 }
 
 // ============================================================================
@@ -1888,6 +1898,168 @@ function testListImportsOmitsMultiDeclaratorRequire() {
   assert(listed[0]!.defaultName === "kept", "The ESM import from the same module remains");
 }
 
+function testGetAllImportsMarksTypeOnlyBindings() {
+  const program = parseProgram(
+    "typescript",
+    "import type Foo from 'mod';\nimport { type Bar, baz } from 'mod';\n",
+  );
+
+  const defaults = getAllImports(program, { type: "default", from: "mod" });
+  assert(defaults.length === 1 && defaults[0]!.alias === "Foo", "Should find the type default");
+  assert(defaults[0]!.isTypeOnly === true, "import type Foo is not a value binding");
+
+  const bar = getAllImports(program, { type: "named", name: "Bar", from: "mod" });
+  assert(bar.length === 1 && bar[0]!.isTypeOnly === true, "Inline type Bar is type-only");
+
+  const value = getAllImports(program, { type: "named", name: "baz", from: "mod" });
+  assert(value.length === 1 && value[0]!.isTypeOnly === false, "baz is a value binding");
+}
+
+function testAddNamedImportDistinguishesAliasAndNamespace() {
+  const aliased = parseProgram("javascript", "import { foo as bar } from 'mod';\n");
+  const sameAlias = addImport(aliased, {
+    type: "named",
+    specifiers: [{ name: "foo", alias: "bar" }],
+    from: "mod",
+  });
+  assert(sameAlias === null, "foo as bar already binds that local name");
+
+  const bare = addImport(aliased, {
+    type: "named",
+    specifiers: [{ name: "foo" }],
+    from: "mod",
+  });
+  assert(bare !== null, "foo as bar does not satisfy a binding named foo");
+  const bareResult = aliased.commitEdits([bare!]);
+  assert(
+    bareResult.includes("foo as bar") && bareResult.includes("foo"),
+    `Should add the local name foo, got ${JSON.stringify(bareResult)}`,
+  );
+
+  const namespace = parseProgram("javascript", "import * as ns from 'mod';\n");
+  const named = addImport(namespace, {
+    type: "named",
+    specifiers: [{ name: "useState" }],
+    from: "mod",
+  });
+  assert(named !== null, "A namespace import is not the named binding");
+  const namedResult = namespace.commitEdits([named!]);
+  assert(
+    namedResult.includes("import * as ns from 'mod';") &&
+      namedResult.includes("import { useState } from 'mod';"),
+    `Should add a separate named import, got ${JSON.stringify(namedResult)}`,
+  );
+}
+
+function testAddImportIgnoresRequireInsideFunction() {
+  const source = ["function load() {", "  const hidden = require('inner');", "}", ""].join("\n");
+  const program = parseProgram("javascript", source);
+  const edit = addImport(program, { type: "default", name: "foo", from: "mod" });
+  assert(edit !== null, "Should add an import");
+  const result = program.commitEdits([edit!]);
+  assert(
+    result.startsWith("import foo from 'mod';\nfunction load()"),
+    `New import should stay at module scope, got ${JSON.stringify(result)}`,
+  );
+  assert(result.includes("const hidden = require('inner');"), "Nested require stays put");
+}
+
+function testAddValueDefaultBesideImportType() {
+  const program = parseProgram("typescript", "import type Foo from 'mod';\n");
+  const edit = addImport(program, { type: "default", name: "FooValue", from: "mod" });
+  assert(edit !== null, "import type Foo does not satisfy a value default");
+  const result = program.commitEdits([edit!]);
+  assert(result.includes("import type Foo from 'mod';"), "The type import stays");
+  assert(
+    result.includes("import FooValue from 'mod';"),
+    `The value default is a new statement, got ${JSON.stringify(result)}`,
+  );
+}
+
+function testRemoveNamedImportTargetsLaterAlias() {
+  const program = parseProgram(
+    "javascript",
+    "import { foo as a } from 'mod';\nimport { foo as b } from 'mod';\nconsole.log(a, b);\n",
+  );
+  const edit = removeImport(program, {
+    type: "named",
+    specifiers: [{ name: "foo", alias: "b" }],
+    from: "mod",
+  });
+  assert(edit !== null, "Should remove the requested alias");
+  const result = program.commitEdits([edit!]);
+  assert(result.includes("import { foo as a } from 'mod';"), "The earlier alias stays");
+  assert(!result.includes("foo as b"), `The later alias is removed, got ${JSON.stringify(result)}`);
+
+  const every = parseProgram(
+    "javascript",
+    "import { foo as a } from 'mod';\nimport { foo as b } from 'mod';\nconsole.log(a, b);\n",
+  );
+  const everyEdit = removeImport(every, {
+    type: "named",
+    specifiers: ["foo"],
+    from: "mod",
+  });
+  assert(everyEdit !== null, "Should remove every foo binding");
+  const everyResult = every.commitEdits([everyEdit!]);
+  assert(
+    !everyResult.includes("from 'mod'"),
+    `Both statements go, got ${JSON.stringify(everyResult)}`,
+  );
+  assert(everyResult.includes("console.log"), "Other code stays");
+}
+
+function testUpdateImportKeepsDistinctAliasAndLaterClause() {
+  const sameClause = parseProgram("javascript", "import { foo, foo as bar, baz } from 'mod';\n");
+  const sibling = updateImport(sameClause, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "baz", to: "qux" }],
+  });
+  assert(sibling !== null, "Should rename baz");
+  const siblingResult = sameClause.commitEdits([sibling!]);
+  assert(
+    siblingResult.includes("foo") &&
+      siblingResult.includes("foo as bar") &&
+      siblingResult.includes("qux"),
+    `Renaming baz must keep both foo bindings, got ${JSON.stringify(siblingResult)}`,
+  );
+
+  const later = parseProgram(
+    "javascript",
+    "import { foo as a } from 'mod';\nimport { foo as b } from 'mod';\n",
+  );
+  const edit = updateImport(later, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar", local: "b" }],
+  });
+  assert(edit !== null, "Should rename the later alias");
+  const result = later.commitEdits([edit!]);
+  assert(result.includes("import { foo as a } from 'mod';"), "The first clause stays");
+  assert(
+    result.includes("import { bar as b } from 'mod';"),
+    `The later clause is renamed, got ${JSON.stringify(result)}`,
+  );
+
+  const both = parseProgram(
+    "javascript",
+    "import { foo } from 'mod';\nimport { foo as f } from 'mod';\n",
+  );
+  const bothEdit = updateImport(both, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar" }],
+  });
+  assert(bothEdit !== null, "Should rename every clause");
+  const bothResult = both.commitEdits([bothEdit!]);
+  assert(
+    bothResult.includes("import { bar } from 'mod';") &&
+      bothResult.includes("import { bar as f } from 'mod';"),
+    `Both clauses are renamed, got ${JSON.stringify(bothResult)}`,
+  );
+}
+
 function run() {
   testReturnsEmptyArrayWhenNoImports();
   testReturnsEmptyArrayWhenModuleNotImported();
@@ -1903,11 +2075,11 @@ function run() {
   testMultipleDefaultImports_OnlyReturnsMatchingModule();
   testNamespaceFallback_WhenNoTypedMatchFound_DefaultQuery();
   testNamespaceFallback_WhenNoTypedMatchFound_NamedQuery();
-  testNamespaceNotReturnedWhenTypedResultsExist();
+  testNamespaceReturnedAlongsideDefaultImport();
   testSingleNamespaceImport_getAllImports_StillWorks();
   testMultipleNamespaceImports_getAllImports_AllReturned();
   testMultipleNamespaceImports_NamedQuery_getAllImports_AllReturned();
-  testNamespaceNotReturnedAlongsideTypedResults_getAllImports();
+  testNamespaceReturnedAlongsideTypedResults_getAllImports();
   testSingleNamedDynamicImport();
   testSingleNamedDynamicImportWithAlias();
 
@@ -2018,6 +2190,12 @@ function run() {
   testListImportsFiltersExactSources();
   testListImportsIgnoresNonThenCallbacks();
   testListImportsOmitsMultiDeclaratorRequire();
+  testGetAllImportsMarksTypeOnlyBindings();
+  testAddNamedImportDistinguishesAliasAndNamespace();
+  testAddImportIgnoresRequireInsideFunction();
+  testAddValueDefaultBesideImportType();
+  testRemoveNamedImportTargetsLaterAlias();
+  testUpdateImportKeepsDistinctAliasAndLaterClause();
 
   console.log("imports.test.ts: all assertions passed");
 }
