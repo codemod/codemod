@@ -74,18 +74,25 @@ npx codemod ai [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|
 
 Interactive prompts are enabled by default in TTY sessions. Use `--no-interactive` to skip prompts and use flags/defaults directly.
 
-Along with skill files, install writes or updates a Codemod MCP server entry:
+Along with skill files, install writes or updates a Codemod MCP server entry. Project installs (`--project`) write a portable launcher pinned to the CLI version that ran the install, so the config can be committed and used on other machines and checkouts:
 
 ```json
 {
   "mcpServers": {
     "codemod": {
       "command": "npx",
-      "args": ["codemod@latest", "mcp"]
+      "args": ["-y", "codemod@<installing CLI version>", "mcp"]
     }
   }
 }
 ```
+
+User installs (`--user`) stay on the current machine, so they launch the installed `codemod` executable directly. If the CLI itself was run through `npx`, its cached executable is temporary, so user installs fall back to `codemod` on `PATH` (outside the npx cache) or the same pinned `npx` launcher. Re-running `ai --project` repairs one known broken entry without `--force`: a project entry whose command is an absolute path to an executable inside npm's npx cache (`_npx`), which earlier releases wrote. Every other existing `codemod` entry is kept and reported as a conflict, including absolute paths outside the npx cache, older pinned `codemod@<version>` launchers, and all user-scope entries. Re-run with `--force` to replace it.
+
+Prerequisites for project installs:
+- The project MCP launcher needs Node.js and npm (`npx`) on every machine that uses the committed config. The first launch of a pinned version downloads it from the npm registry unless it is already in the npm cache.
+- If npm is not available, use `--user` with an installed `codemod` executable instead.
+- The Claude periodic update hook runs a POSIX shell script. Claude Code runs hook commands with `sh` on macOS and Linux and with Git Bash on Windows, so Windows machines need Git for Windows; the hook does not run under PowerShell.
 
 For Opencode, install writes `opencode.json` using the Opencode-specific `mcp` schema instead of `mcpServers`.
 
@@ -127,7 +134,8 @@ The installed skill also points users to CLI fallbacks when MCP is unavailable o
 - `npx codemod ai feedback --category <category> --message <message>`: submit short anonymous platform feedback after consent is recorded
 
 `ai` also wires a periodic, cooldown-protected update check trigger:
-- `claude`: `hooks.SessionStart` command in `./.claude/settings.json` (project) or `~/.claude/settings.json` (user)
+- `claude`: `hooks.SessionStart` command in `./.claude/settings.json` (project) or `~/.claude/settings.json` (user). The project hook runs `"$CLAUDE_PROJECT_DIR"/.claude/codemod/periodic-update/check-updates.sh`, so it keeps working after the project is cloned or moved. Re-running `ai` replaces a project hook that an earlier install wrote with an absolute runner path, including one written from a different checkout.
+  Only unmodified generated hooks with an unambiguous absolute runner command are migrated automatically. Commands containing whitespace (including old unquoted paths with spaces), quoting, arguments or shell syntax are preserved, as are hooks with custom matchers, timeouts or other fields. Review and remove obsolete preserved hooks manually when moving a checkout; install adds the portable hook without deleting those commands.
 - `cursor`: `hooks.afterAgentResponse` command in `./.cursor/hooks.json` (project) or `~/.cursor/hooks.json` (user)
 - `opencode`: plugin `codemod-periodic-update.js` in `./.opencode/plugins/` (project) or `~/.config/opencode/plugins/` (user), listening to `session.idle`
 - `goose`: managed `codemod-periodic-update` block in `./.goosehints` (project) or `~/.config/goose/.goosehints` (user) as fallback guidance
@@ -137,7 +145,7 @@ Managed update policy is install-flag driven and shared by install-time reconcil
 - `--update-source <local|registry|URL>` (default: `registry`)
 - `--require-signed-manifest` or `--allow-unsigned-manifest` (optional override)
   `--update-source` only accepts `local`, `registry`, or an absolute `http(s)` URL (legacy `registry:`/`url:` aliases are rejected).
-Periodic runs enforce signed manifest verification via `--require-signed-manifest` in the generated runner command.
+Project periodic runners use the same pinned `npx -y codemod@<installing CLI version>` launcher as project MCP, even when another global CLI version is installed. User runners retain their local executable/PATH fallback. Periodic runs enforce signed manifest verification via `--require-signed-manifest` in the generated runner command.
 After install, restart or reload your harness session so newly installed skills and command entrypoints are picked up.
 
 **`ai feedback`**

@@ -198,15 +198,17 @@ fn installed_component_version_for_output(skill: &InstalledSkill) -> Option<Stri
 fn codemod_mcp_configured_package_version(config_path: &Path) -> Option<String> {
     let content = fs::read_to_string(config_path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let package_arg = root
+    let version = root
         .get("mcpServers")
         .and_then(|servers| servers.get("codemod"))
         .and_then(|entry| entry.get("args"))
         .and_then(|args| args.as_array())
-        .and_then(|args| args.first())
-        .and_then(|value| value.as_str())?;
-
-    let version = package_arg.strip_prefix("codemod@")?.trim();
+        .and_then(|args| {
+            args.iter()
+                .filter_map(|value| value.as_str())
+                .find_map(|arg| arg.strip_prefix("codemod@"))
+        })?
+        .trim();
     if version.is_empty() {
         return None;
     }

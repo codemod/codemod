@@ -544,14 +544,10 @@ mod tests {
         let initial_value = "initial_value";
         let default_value = "default_value";
 
-        // Temporarily set the step ID for the test
-        unsafe {
-            std::env::set_var("CODEMOD_STEP_ID", step_id);
-        }
-        set_step_output(output_name, initial_value).unwrap();
-        unsafe {
-            std::env::remove_var("CODEMOD_STEP_ID");
-        }
+        // Prime with an explicit step ID instead of the process-wide
+        // CODEMOD_STEP_ID, which other tests change concurrently.
+        let primed = get_or_set_step_output(step_id, output_name, initial_value).unwrap();
+        assert_eq!(primed, initial_value);
 
         // Try to get or set with different default
         let result = get_or_set_step_output(step_id, output_name, default_value).unwrap();
