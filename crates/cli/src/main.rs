@@ -34,6 +34,9 @@ use codemod_telemetry::{
 
 pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[cfg(test)]
+static ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[derive(Parser)]
 #[command(name = "codemod")]
 #[command(

@@ -9,6 +9,8 @@ use std::path::PathBuf;
 
 use crate::auth::types::{AuthTokens, UserInfo};
 
+const DEFAULT_REGISTRY_URL: &str = "https://app.codemod.com";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub default_registry: String,
@@ -19,7 +21,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self::with_default_registry(RegistryConfig::default().default_registry.to_string())
+        Self::with_default_registry(RegistryConfig::default().default_registry)
     }
 }
 
@@ -99,25 +101,27 @@ impl TokenStorage {
     }
 
     pub fn load_config_with_env(&self, env: Option<&HashMap<String, String>>) -> Result<Config> {
-        let config_path = self.config_dir.join("config.json");
-
-        if !config_path.exists() {
+        Ok(self.load_persisted_config()?.unwrap_or_else(|| {
             let default_registry = env
                 .and_then(|vars| vars.get("CODEMOD_REGISTRY_URL"))
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty())
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| RegistryConfig::default().default_registry);
-            return Ok(Config::with_default_registry(default_registry));
+            Config::with_default_registry(default_registry)
+        }))
+    }
+
+    fn load_persisted_config(&self) -> Result<Option<Config>> {
+        let config_path = self.config_dir.join("config.json");
+        if !config_path.exists() {
+            return Ok(None);
         }
 
         let content = fs::read_to_string(&config_path)
             .with_context(|| format!("Failed to read config file: {config_path:?}"))?;
-
-        let config: Config =
-            serde_json::from_str(&content).context("Failed to parse config file")?;
-
-        Ok(config)
+        let config = serde_json::from_str(&content).context("Failed to parse config file")?;
+        Ok(Some(config))
     }
 
     pub fn save_config(&self, config: &Config) -> Result<()> {
@@ -132,8 +136,9 @@ impl TokenStorage {
     }
 
     pub fn enable_anonymous_feedback(&self) -> Result<Config> {
-        let env: HashMap<String, String> = std::env::vars().collect();
-        let mut config = self.load_config_with_env(Some(&env))?;
+        let mut config = self
+            .load_persisted_config()?
+            .unwrap_or_else(|| Config::with_default_registry(DEFAULT_REGISTRY_URL.to_string()));
         let consented_at = config
             .anonymous_feedback
             .consented_at
@@ -312,6 +317,29 @@ mod tests {
     use std::fs;
     use std::sync::{Arc, Barrier};
 
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(original) = &self.original {
+                std::env::set_var(self.key, original);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     #[test]
     fn missing_feedback_config_defaults_to_disabled() {
         let temp_dir = tempfile::tempdir().expect("expected temp dir");
@@ -350,6 +378,69 @@ mod tests {
             reloaded.anonymous_feedback.consented_at,
             config.anonymous_feedback.consented_at
         );
+    }
+
+    #[test]
+    fn enable_anonymous_feedback_does_not_persist_registry_env_override() {
+        let _env_lock = crate::ENV_GUARD.lock().expect("registry env lock");
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        let _registry_url_guard = EnvVarGuard::set("CODEMOD_REGISTRY_URL", "http://localhost:3000");
+
+        assert_eq!(
+            storage
+                .load_config()
+                .expect("fresh config")
+                .default_registry,
+            "http://localhost:3000"
+        );
+        assert_eq!(Config::default().default_registry, "http://localhost:3000");
+        let env = std::collections::HashMap::from([(
+            "CODEMOD_REGISTRY_URL".to_string(),
+            " https://explicit.example.test ".to_string(),
+        )]);
+        assert_eq!(
+            storage
+                .load_config_with_env(Some(&env))
+                .expect("explicit env config")
+                .default_registry,
+            "https://explicit.example.test"
+        );
+
+        let config = storage
+            .enable_anonymous_feedback()
+            .expect("expected feedback consent write");
+
+        assert_eq!(config.default_registry, "https://app.codemod.com");
+        assert_eq!(
+            storage
+                .load_config()
+                .expect("expected config reload")
+                .default_registry,
+            "https://app.codemod.com"
+        );
+    }
+
+    #[test]
+    fn enable_anonymous_feedback_preserves_saved_registry() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        let saved = Config::with_default_registry("https://registry.example.test".to_string());
+        storage.save_config(&saved).expect("saved config");
+
+        storage
+            .enable_anonymous_feedback()
+            .expect("feedback consent");
+        let reloaded = storage.load_config().expect("config");
+
+        assert_eq!(reloaded.default_registry, saved.default_registry);
+        assert_eq!(
+            reloaded.registries[&saved.default_registry].auth_url,
+            saved.registries[&saved.default_registry].auth_url
+        );
+        assert!(reloaded.anonymous_feedback.enabled);
     }
 
     #[test]

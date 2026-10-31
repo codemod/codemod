@@ -25,6 +25,7 @@ use crate::commands::harness_adapter::{
     Harness, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
     ManagedStateWriteResult, PeriodicUpdateTriggerUpsertResult,
 };
+use crate::ENV_GUARD;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 use hyper::header::HeaderName;
@@ -35,11 +36,9 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
-
-static ENV_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 #[derive(Clone)]
 struct TestHttpFixture {

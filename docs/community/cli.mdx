@@ -144,6 +144,8 @@ After install, restart or reload your harness session so newly installed skills 
 
 Submit short anonymous platform feedback for Codemod AI, MCP, JSSG, workflows, docs, CLI, registry, or related surfaces. The command records anonymous feedback consent in the user-wide Codemod config, including the timestamp at which this OS user allowed feedback submission.
 
+`CODEMOD_REGISTRY_URL` overrides the feedback endpoint for the current process. Saving consent does not persist this override as your default registry. Your existing saved registry is preserved.
+
 ```bash
 npx codemod ai feedback --category <category> --message <message>
 ```
