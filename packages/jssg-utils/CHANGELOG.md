@@ -4,7 +4,7 @@
 
 ### Patch Changes
 
-- 484da52: Fix JavaScript import helpers so namespace imports stay visible, aliases can be targeted, nested `require()` calls are not insertion points, and type-only bindings are distinct from values.
+- 484da52: Fix JavaScript import helpers so namespace imports stay visible, aliases can be targeted, nested `require()` calls are not insertion points, and type-only bindings are distinct from values. `removeImport` / `updateImport` always return a flat `Edit[]`. Type-only namespace defaults promote like type-only defaults. Destructured dynamic `{ default: alias }` can be removed by alias.
 
 ## 0.0.10
 

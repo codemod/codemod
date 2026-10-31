@@ -203,7 +203,7 @@ Add an import to the program. Smart behavior:
 - **Creates** a new import statement otherwise
 - Inserts after the last existing import (or at file start if no imports exist)
 - A **new** statement copies the quote and semicolon of the first module specifier already in the file. When the file has none, it copies the first string literal and the first semicolon-style statement, and keeps `'` and `;` only when those are absent. A merge does not rewrite the existing clause.
-- A named specifier with `isTypeOnly: true` is written as inline `type` (`import { type Foo }`), not `import type`. A value specifier is not merged into an existing `import type` statement. When a value import from the same module already exists, the specifier merges into that statement even if an `import type` line comes first. Otherwise it becomes a second statement. Type-only specifiers merged into `import type` do not repeat the `type` keyword. `import type Foo` with the same local name drops `type` instead of adding a second default. A different local name is a new statement.
+- A named specifier with `isTypeOnly: true` is written as inline `type` (`import { type Foo }`), not `import type`. A value specifier is not merged into an existing `import type` statement. When a value import from the same module already exists, the specifier merges into that statement even if an `import type` line comes first. Otherwise it becomes a second statement. Type-only specifiers merged into `import type` do not repeat the `type` keyword. `import type Foo` or `import type * as ns` with the same local name drops `type` instead of adding a second statement. A different local name is a new statement.
 - A type-only binding does not count as the value. `import { type Foo }` drops the `type` modifier, and `import type { Foo, Bar }` becomes `import { Foo, type Bar }`, when the local name matches. A different local name (`import type { Foo as F }` plus a value `Foo`) stays a separate statement.
 - A named specifier already exists only when that export is bound to the same local name. `import { foo as bar }` does not satisfy `foo`, and `import * as ns` does not satisfy a named specifier. A new statement is inserted after the last module-level import. A `require()` or `import()` inside a function is not an insertion point.
 
@@ -291,7 +291,7 @@ Remove an import from the program. Smart behavior:
 
 **Returns**
 
-`Edit | Edit[] | null` — An edit to apply via `rootNode.commitEdits()`, or `null` if the import was not found. When the matches are separated by other statements, the result is an array of edits. Spread that array into `commitEdits` so the text between them can still change.
+`Edit[] | null` — A flat array of edits to pass to `rootNode.commitEdits()`, or `null` if the import was not found. Separated matches stay as separate array elements so text between them can still change. Spread into an `Edit[]` (do not wrap the array again).
 
 **Example**
 
@@ -310,7 +310,7 @@ const codemod: Codemod<TSX> = async (root) => {
     specifiers: ["PropTypes"],
     from: "react",
   });
-  if (removeEdit) edits.push(removeEdit);
+  if (removeEdit) edits.push(...removeEdit);
 
   return edits.length > 0 ? rootNode.commitEdits(edits) : null;
 };
@@ -345,7 +345,7 @@ Replace named specifiers of an existing import or `require` in place. The whole 
 
 **Returns**
 
-`Edit | Edit[] | null` — An edit to apply via `rootNode.commitEdits()`, or `null` if none of the named specifiers is found or `specifiers` is empty. Separated clauses are an array. Spread it into `commitEdits`.
+`Edit[] | null` — A flat array of edits to pass to `rootNode.commitEdits()`, or `null` if none of the named specifiers is found or `specifiers` is empty. Separated clauses are separate elements. Pass the array directly (do not wrap it in another array).
 
 **Example**
 
@@ -363,7 +363,7 @@ const codemod: Codemod<TSX> = async (root) => {
     specifiers: [{ name: "foo", to: "bar" }],
   });
 
-  return edit ? rootNode.commitEdits([edit]) : null;
+  return edit ? rootNode.commitEdits(edit) : null;
 };
 
 export default codemod;
@@ -525,7 +525,7 @@ const removeEdit = removeImport(rootNode, {
   specifiers: ["oldUtil"],
   from: "old-pkg",
 });
-if (removeEdit) edits.push(removeEdit);
+if (removeEdit) edits.push(...removeEdit);
 
 const addEdit = addImport(rootNode, {
   type: "named",

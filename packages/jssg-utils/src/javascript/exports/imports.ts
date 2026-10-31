@@ -1810,7 +1810,8 @@ function mergeNamedIntoExisting<T extends Language>(
  * - `isTypeOnly` on a named specifier emits inline `type`, not `import type`
  * - A type-only binding does not count as the value. The same local name is
  *   promoted (`import { type Foo }` drops `type`; `import type { Foo, Bar }`
- *   becomes `import { Foo, type Bar }`). A different local name is a new statement.
+ *   becomes `import { Foo, type Bar }`; `import type Foo` / `import type * as ns`
+ *   drop `type`). A different local name is a new statement.
  * - A named specifier already exists only when the same export and the same
  *   local name are bound. `foo as bar` does not satisfy `foo`, and
  *   `import * as ns` does not satisfy a named specifier.
@@ -1827,12 +1828,13 @@ export function addImport<T extends Language>(
 
   // Check if import already exists
   if (options.type === "default") {
+    const localName = options.name;
     const existing = getAllImports(program, { type: "default", from: options.from });
     if (existing.some((item) => !item.isNamespace && !item.isTypeOnly)) {
       return null; // Already has a value default import
     }
     const typeDefault = existing.find(
-      (item) => !item.isNamespace && item.isTypeOnly && item.alias === options.name,
+      (item) => !item.isNamespace && item.isTypeOnly && item.alias === localName,
     );
     if (typeDefault) {
       const statement = (typeDefault.node as unknown as SgNode<TS>)
@@ -1847,9 +1849,22 @@ export function addImport<T extends Language>(
       }
     }
   } else if (options.type === "namespace") {
+    const localName = options.name;
     const existing = getAllImports(program, { type: "default", from: options.from });
-    if (existing.some((item) => item.isNamespace)) {
-      return null; // Already has a namespace import
+    if (existing.some((item) => item.isNamespace && !item.isTypeOnly)) {
+      return null; // Already has a value namespace import
+    }
+    const typeNamespace = existing.find(
+      (item) => item.isNamespace && item.isTypeOnly && item.alias === localName,
+    );
+    if (typeNamespace) {
+      const statement = (typeNamespace.node as unknown as SgNode<TS>)
+        .ancestors()
+        .find((ancestor) => ancestor.kind() === "import_statement") as SgNode<TS> | undefined;
+      if (statement) {
+        const promoted = dropStatementTypeKeyword(statement);
+        if (promoted) return promoted;
+      }
     }
   } else if (options.type === "named") {
     // A value binding satisfies a value or type request. `import type` and
@@ -2130,8 +2145,10 @@ function spliceByteEdits(edits: Edit[], source: string): Edit | null {
  * Edits separated by other source stay separate so a later `commitEdits` can
  * still change the text between them. Contiguous edits collapse into one.
  * A deletion that contains another edit wins, and the inner edit is dropped.
+ * Always returns a flat `Edit[]` so callers can pass the result to
+ * `commitEdits` without wrapping it in another array.
  */
-function separateEdits(edits: Edit[], source: string): Edit | Edit[] | null {
+function separateEdits(edits: Edit[], source: string): Edit[] | null {
   const sorted = dropContainedEdits(edits).sort((left, right) => left.startPos - right.startPos);
   const first = sorted[0];
   if (!first) return null;
@@ -2147,8 +2164,12 @@ function separateEdits(edits: Edit[], source: string): Edit | Edit[] | null {
   const coalesced = groups.map((group) =>
     group.length === 1 ? group[0]! : spliceByteEdits(group, source)!,
   );
-  if (coalesced.length === 1) return coalesced[0]!;
   return coalesced;
+}
+
+/** Wrap a single edit so remove/update always return a flat `Edit[]`. */
+function oneEdit(edit: Edit | null | undefined): Edit[] | null {
+  return edit ? [edit] : null;
 }
 
 function editDeletingRanges(
@@ -2279,30 +2300,37 @@ function removeDefaultBindingEdit<T extends Language>(
  * - Default + `removeSideEffectForms`: also removes bare `require('m')` and `import 'm'` when there is no binding import
  * - The same export in a later statement is removed too. Pass `alias` (or
  *   `{ name, alias }` for a named specifier) to remove one local binding.
- * - Edits separated by other statements are returned as an array so they do
- *   not swallow the text between them.
+ * - Edits are always a flat array so they do not swallow text between
+ *   statements and so `commitEdits(edits)` / `edits.push(...result)` work
+ *   without nesting.
  *
  * Note: removeImport returns null for multi-declarator CJS declarations
  * (e.g. `const foo = require('mod'), x = 1`). These are not tracked by
  * findAllImportStatements to prevent accidental deletion of unrelated bindings.
  *
- * @returns Edit, an array of non-overlapping edits, or null if import not found
+ * @returns A flat array of non-overlapping edits, or null if import not found
  */
 export function removeImport<T extends Language>(
   program: SgNode<T, "program">,
   options: RemoveImportOptions,
-): Edit | Edit[] | null {
+): Edit[] | null {
   const programText = program.text();
   const allStatements = findAllImportStatements(program);
 
   if (options.type === "default") {
     const stripSideEffects = options.removeSideEffectForms === true;
     if (options.alias) {
+      // `defaultName` covers `import Foo` / `const Foo = require(...)`.
+      // Destructured `{ default: loaded }` lives in `specifiers` instead.
       const listed = listImports(program, { from: options.from }).find(
-        (item) => item.defaultName === options.alias,
+        (item) =>
+          item.defaultName === options.alias ||
+          item.specifiers.some(
+            (spec) => spec.importedName === "default" && spec.localName === options.alias,
+          ),
       );
       if (!listed) return null;
-      return removeDefaultBindingEdit(listed.node as unknown as SgNode<T>, programText);
+      return oneEdit(removeDefaultBindingEdit(listed.node as unknown as SgNode<T>, programText));
     }
 
     const existing = getImport(program, { type: "default", from: options.from });
@@ -2337,14 +2365,14 @@ export function removeImport<T extends Language>(
         }) ?? null;
 
       if (!statement) return null;
-      return removeDefaultBindingEdit(statement, programText);
+      return oneEdit(removeDefaultBindingEdit(statement, programText));
     }
 
     if (stripSideEffects) {
       const tsProgram = program as unknown as SgNode<TS, "program">;
-      return (
+      return oneEdit(
         removeBareRequireImportSideEffectEdit(tsProgram, options.from) ??
-        removeSideEffectImportStatementEdit(tsProgram, options.from)
+          removeSideEffectImportStatementEdit(tsProgram, options.from),
       );
     }
 
@@ -2391,18 +2419,18 @@ export function removeImport<T extends Language>(
       const parts = analyzeImportClause(statement);
       if (parts.defaultIdent && parts.namespaceImport) {
         // Mixed: strip ', * as ns' keeping the default binding.
-        return {
+        return oneEdit({
           startPos: parts.defaultIdent.range().end.index,
           endPos: parts.namespaceImport.range().end.index,
           insertedText: "",
-        };
+        });
       }
 
       const { start, end } = getStatementRangeWithNewline(
         statement as unknown as SgNode<Language>,
         programText,
       );
-      return { startPos: start, endPos: end, insertedText: "" };
+      return oneEdit({ startPos: start, endPos: end, insertedText: "" });
     }
 
     const dynamicNamespaces = listImports(program, { from: options.from }).filter(
@@ -2419,7 +2447,7 @@ export function removeImport<T extends Language>(
       chosen.node as unknown as SgNode<Language>,
       programText,
     );
-    return { startPos: start, endPos: end, insertedText: "" };
+    return oneEdit({ startPos: start, endPos: end, insertedText: "" });
   }
 
   if (options.type === "named") {
@@ -2499,14 +2527,15 @@ function resultingLocalName(exportedName: string, alias: string | undefined): st
  * - `local` selects one binding when the same export is imported more than once.
  * - Distinct aliases of one export stay (`foo` and `foo as bar`).
  * - If the resulting local name is already used in the same clause, the rename is dropped and the existing binding stays.
- * - Clauses separated by other statements come back as an array of edits.
+ * - Clauses separated by other statements come back as separate edits in one
+ *   flat array so `commitEdits(edits)` works without wrapping.
  *
- * @returns Edit, an array of non-overlapping edits, or null if none of the specifiers is found
+ * @returns A flat array of non-overlapping edits, or null if none of the specifiers is found
  */
 export function updateImport<T extends Language>(
   program: SgNode<T, "program">,
   options: UpdateImportOptions,
-): Edit | Edit[] | null {
+): Edit[] | null {
   if (options.type !== "named" || options.specifiers.length === 0) {
     return null;
   }
