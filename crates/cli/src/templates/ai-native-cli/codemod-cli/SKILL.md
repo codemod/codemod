@@ -60,7 +60,7 @@ Keep feedback short and thematic. Do not include source code, secrets, auth toke
 
 - Treat the Codemod docs served through `codemod ai docs` or MCP resources as the source of truth for CLI, workflow, and JSSG semantics.
 - Keep source transforms AST-first. Do not use regex or raw source-text rewriting as the primary implementation strategy.
-- Before using line-based parsing, regular-expression replacement, or whole-file source rewriting, check whether the target file type has a JSSG language parser. Parser-backed formats include JavaScript, TypeScript, TSX, Python, Rust, Go, Java, HTML, XML, CSS, Kotlin, Angular templates, C#, C, C++, PHP, Ruby, Elixir, JSON, YAML, and TOML.
+- Before using line-based parsing, regular-expression replacement, or whole-file source rewriting, check whether the target file type has a JSSG language parser. Parser-backed formats include JavaScript, TypeScript, TSX, Python, Rust, Go, Java, HTML, XML, CSS, Kotlin, Angular templates, C#, C, C++, PHP, Ruby, Elixir, SQL, JSON, YAML, and TOML.
 - For parser-backed files, use a `js-ast-grep` workflow with the matching language import, AST queries (`find`, `findAll`, `getMatch`, fields), `node.replace(...)`, and `root.root().commitEdits(...)`. String construction is acceptable for the replacement text, but AST-selected nodes must define the edit boundaries.
 - Use raw text manipulation only for unsupported plain-text formats or when a structured parser is unavailable. When you do, document the fallback in code or README and cover comments, multiline values, quoting, false positives, and no-op cases in fixtures.
 - Use `npx codemod ai dump-ast` or MCP `dump_ast` before broadening heuristics.

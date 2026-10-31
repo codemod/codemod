@@ -70,6 +70,10 @@ declare module "codemod:ast-grep/langs/scala" {
   export { default } from "@codemod.com/jssg-types/langs/scala";
 }
 
+declare module "codemod:ast-grep/langs/sql" {
+  export { default } from "@codemod.com/jssg-types/langs/sql";
+}
+
 declare module "codemod:ast-grep/langs/tsx" {
   export { default } from "@codemod.com/jssg-types/langs/tsx";
 }

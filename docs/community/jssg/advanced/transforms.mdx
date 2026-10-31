@@ -146,6 +146,20 @@ export default codemod;
 
 Avoid using JSSG as a file walker while doing the actual transform with `fs`, `root.source().replace(...)`, or full-source `.split(...)`/`.join(...)` logic. Raw text rewriting is a fallback for unsupported plain-text formats or rare cases where no parser or structured library exists.
 
+### SQL transforms
+
+Use `sql` to parse `.sql` files with the [tree-sitter SQL grammar](https://github.com/DerekStride/tree-sitter-sql). The CLI downloads and caches the parser on first use, so that first run needs network access. SQL dialect coverage follows the grammar; check your fixtures for dialect-specific syntax.
+
+```bash
+npx codemod init sql-rename --language sql
+npx codemod jssg run -l sql ./scripts/codemod.ts ./queries
+npx codemod jssg test -l sql ./scripts/codemod.ts
+```
+
+The starter transform renames `legacy_users` table references in `FROM` and `JOIN` clauses to `users`. It preserves schema names, column names, aliases, comments, and string literals. Import SQL node types with `import type Sql from "codemod:ast-grep/langs/sql"`.
+
+SQL supports `$NAME` pattern metavariables. For example, `SELECT $COLUMN FROM $TABLE` captures the selected column and table. You can also parse SQL inside another transform with `await parseAsync("sql", sqlText)`.
+
 
 ## Selectors (getSelector)
 
