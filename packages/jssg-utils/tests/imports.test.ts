@@ -2001,7 +2001,7 @@ function testRemoveNamedImportTargetsLaterAlias() {
     from: "mod",
   });
   assert(everyEdit !== null, "Should remove every foo binding");
-  const everyResult = every.commitEdits([everyEdit!]);
+  const everyResult = applyEdits(every, everyEdit);
   assert(
     !everyResult.includes("from 'mod'"),
     `Both statements go, got ${JSON.stringify(everyResult)}`,
@@ -2052,11 +2052,183 @@ function testUpdateImportKeepsDistinctAliasAndLaterClause() {
     specifiers: [{ name: "foo", to: "bar" }],
   });
   assert(bothEdit !== null, "Should rename every clause");
-  const bothResult = both.commitEdits([bothEdit!]);
+  const bothResult = applyEdits(both, bothEdit);
   assert(
     bothResult.includes("import { bar } from 'mod';") &&
       bothResult.includes("import { bar as f } from 'mod';"),
     `Both clauses are renamed, got ${JSON.stringify(bothResult)}`,
+  );
+}
+
+function applyEdits(
+  program: ReturnType<typeof parseProgram>,
+  edit: { startPos: number } | Array<{ startPos: number }> | null,
+) {
+  assert(edit !== null, "Expected an edit");
+  const edits = Array.isArray(edit) ? edit : [edit];
+  return program.commitEdits(edits);
+}
+
+function testUnicodeBetweenImportsStaysIntact() {
+  const program = parseProgram(
+    "javascript",
+    "import { foo } from 'mod';\n// 日本語\nimport { bar } from 'mod';\n",
+  );
+  const edit = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [
+      { name: "foo", to: "foo2" },
+      { name: "bar", to: "bar2" },
+    ],
+  });
+  const result = applyEdits(program, edit);
+  assert(result.includes("// 日本語"), `The comment should survive, got ${JSON.stringify(result)}`);
+  assert(
+    result.includes("foo2") && result.includes("bar2"),
+    `Both imports rename, got ${JSON.stringify(result)}`,
+  );
+}
+
+function testRemoveNamedKeepsDefaultedBinding() {
+  const program = parseProgram(
+    "javascript",
+    "const { kept = 1, foo } = require('mod');\nconsole.log(kept, foo);\n",
+  );
+  const edit = removeImport(program, { type: "named", specifiers: ["foo"], from: "mod" });
+  const result = applyEdits(program, edit);
+  assert(result.includes("kept = 1"), `The defaulted binding stays, got ${JSON.stringify(result)}`);
+  assert(result.includes("require('mod')"), "The require stays");
+  assert(
+    !result.includes("{ foo") && !result.includes(", foo }"),
+    `foo is removed from the pattern, got ${JSON.stringify(result)}`,
+  );
+}
+
+function testMultiDeclaratorStaysVisibleToAddAndUpdate() {
+  const source = "const { foo } = require('mod'), kept = 1;\n";
+  const addProgram = parseProgram("javascript", source);
+  const added = addImport(addProgram, {
+    type: "named",
+    specifiers: [{ name: "foo" }],
+    from: "mod",
+    moduleType: "cjs",
+  });
+  assert(added === null, "foo is already bound in the multi-declarator require");
+
+  const updateProgram = parseProgram("javascript", source);
+  const edit = updateImport(updateProgram, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar" }],
+  });
+  const result = applyEdits(updateProgram, edit);
+  assert(
+    result.includes("const { bar } = require('mod'), kept = 1;"),
+    `The pattern renames and kept stays, got ${JSON.stringify(result)}`,
+  );
+}
+
+function testAddValueDefaultPromotesMatchingTypeImport() {
+  const program = parseProgram("typescript", "import type Foo from 'mod';\n");
+  const edit = addImport(program, { type: "default", name: "Foo", from: "mod" });
+  const result = applyEdits(program, edit);
+  assert(
+    result.includes("import Foo from 'mod';"),
+    `Foo becomes a value, got ${JSON.stringify(result)}`,
+  );
+  assert(!result.includes("import type"), "The type keyword is removed");
+  assert(!result.includes("import Foo from 'mod';\nimport"), "Foo is not imported twice");
+}
+
+function testDefaultedCallbackPatternIsABinding() {
+  const source = "import('mod').then(({foo} = {}) => foo());\n";
+  const addProgram = parseProgram("javascript", source);
+  const added = addImport(addProgram, {
+    type: "named",
+    specifiers: [{ name: "foo" }],
+    from: "mod",
+  });
+  assert(added === null, "The defaulted callback already binds foo");
+
+  const removeProgram = parseProgram("javascript", source);
+  const edit = removeImport(removeProgram, { type: "named", specifiers: ["foo"], from: "mod" });
+  const result = applyEdits(removeProgram, edit);
+  assert(!result.includes("foo"), `The callback binding is removed, got ${JSON.stringify(result)}`);
+}
+
+function testNestedSameModuleRemovalDropsTheOuterStatement() {
+  const program = parseProgram(
+    "javascript",
+    "import('mod').then(({foo}) => { const {foo: inner} = require('mod'); });\n",
+  );
+  const edit = removeImport(program, { type: "named", specifiers: ["foo"], from: "mod" });
+  const result = applyEdits(program, edit);
+  assert(result.trim() === "", `The whole statement goes, got ${JSON.stringify(result)}`);
+}
+
+function testRemoveLaterDynamicNamespaceAlias() {
+  const program = parseProgram(
+    "javascript",
+    "import('mod').then(first => first());\nimport('mod').then(second => second());\n",
+  );
+  const edit = removeImport(program, { type: "namespace", from: "mod", alias: "second" });
+  const result = applyEdits(program, edit);
+  assert(
+    result.includes("first => first()"),
+    `The first callback stays, got ${JSON.stringify(result)}`,
+  );
+  assert(
+    !result.includes("second"),
+    `The second callback is removed, got ${JSON.stringify(result)}`,
+  );
+}
+
+function testRenameLosesToExistingLocalName() {
+  for (const source of [
+    "import { foo, baz as bar } from 'mod';\n",
+    "import { baz as bar, foo } from 'mod';\n",
+  ]) {
+    const program = parseProgram("javascript", source);
+    const edit = updateImport(program, {
+      type: "named",
+      from: "mod",
+      specifiers: [{ name: "foo", to: "bar" }],
+    });
+    const result = applyEdits(program, edit);
+    assert(
+      result.includes("baz as bar") && !/import \{ bar \}/.test(result),
+      `The existing bar binding wins for ${source}, got ${JSON.stringify(result)}`,
+    );
+  }
+}
+
+function testUpdateAndRemoveStayIndependentAroundEachOther() {
+  const program = parseProgram(
+    "javascript",
+    "import { foo } from 'mod';\nimport { x } from 'other';\nimport { foo as f } from 'mod';\n",
+  );
+  const update = updateImport(program, {
+    type: "named",
+    from: "mod",
+    specifiers: [{ name: "foo", to: "bar" }],
+  });
+  const remove = removeImport(program, { type: "named", from: "other", specifiers: ["x"] });
+  const edits = [update, remove].flatMap((edit) =>
+    edit === null ? [] : Array.isArray(edit) ? edit : [edit],
+  );
+  const result = program.commitEdits(edits);
+  assert(
+    result.includes("import { bar } from 'mod';"),
+    `foo is renamed, got ${JSON.stringify(result)}`,
+  );
+  assert(
+    result.includes("import { bar as f } from 'mod';"),
+    `The later alias is renamed, got ${JSON.stringify(result)}`,
+  );
+  assert(
+    !result.includes("other"),
+    `The intervening import is removed, got ${JSON.stringify(result)}`,
   );
 }
 
@@ -2196,6 +2368,15 @@ function run() {
   testAddValueDefaultBesideImportType();
   testRemoveNamedImportTargetsLaterAlias();
   testUpdateImportKeepsDistinctAliasAndLaterClause();
+  testUnicodeBetweenImportsStaysIntact();
+  testRemoveNamedKeepsDefaultedBinding();
+  testMultiDeclaratorStaysVisibleToAddAndUpdate();
+  testAddValueDefaultPromotesMatchingTypeImport();
+  testDefaultedCallbackPatternIsABinding();
+  testNestedSameModuleRemovalDropsTheOuterStatement();
+  testRemoveLaterDynamicNamespaceAlias();
+  testRenameLosesToExistingLocalName();
+  testUpdateAndRemoveStayIndependentAroundEachOther();
 
   console.log("imports.test.ts: all assertions passed");
 }

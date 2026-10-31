@@ -1343,31 +1343,51 @@ function describeDeclaration(statement: SgNode<TS>): ListedImport<TS> | null {
   };
 }
 
+/** `({ foo } = {})` and `required_parameter` wrappers expose the pattern on the left. */
+function unwrapBindingPattern(node: SgNode<TS> | null): SgNode<TS> | null {
+  if (!node) return null;
+  let current = node;
+  if (current.kind() === "required_parameter") {
+    const named = current.children().find((inner) => inner.isNamed());
+    current = (named as SgNode<TS> | undefined) ?? current;
+  }
+  if (current.kind() === "assignment_pattern") {
+    const left = current.field("left") ?? current.child(0);
+    if (left) current = left as SgNode<TS>;
+  }
+  return current;
+}
+
+function describeOneBinding(node: SgNode<TS> | null): {
+  namespaceName: string | null;
+  specifiers: Array<ListedSpecifier<TS>>;
+} {
+  const binding = unwrapBindingPattern(node);
+  if (!binding) return { namespaceName: null, specifiers: [] };
+  if (binding.kind() === "identifier") {
+    return { namespaceName: binding.text(), specifiers: [] };
+  }
+  if (binding.kind() === "object_pattern") {
+    return { namespaceName: null, specifiers: specifiersFromObjectPattern(binding) };
+  }
+  return { namespaceName: null, specifiers: [] };
+}
+
 function describeCallbackBindings(fn: SgNode<TS>): {
   namespaceName: string | null;
   specifiers: Array<ListedSpecifier<TS>>;
 } {
   const direct = fn.field("parameter");
-  if (direct?.kind() === "identifier") {
-    return { namespaceName: direct.text(), specifiers: [] };
-  }
-
   const params = fn.field("parameters");
+  if (direct && !params) return describeOneBinding(direct as SgNode<TS>);
   if (!params) return { namespaceName: null, specifiers: [] };
 
   let namespaceName: string | null = null;
   const specifiers: Array<ListedSpecifier<TS>> = [];
   for (const child of params.children()) {
-    const binding =
-      child.kind() === "required_parameter"
-        ? (child.children().find((inner) => inner.isNamed()) ?? null)
-        : child;
-    if (!binding) continue;
-    if (binding.kind() === "identifier") {
-      namespaceName = binding.text();
-    } else if (binding.kind() === "object_pattern") {
-      specifiers.push(...specifiersFromObjectPattern(binding));
-    }
+    const described = describeOneBinding(child as SgNode<TS>);
+    if (described.namespaceName) namespaceName = described.namespaceName;
+    specifiers.push(...described.specifiers);
   }
   return { namespaceName, specifiers };
 }
@@ -1508,14 +1528,13 @@ function namedSpecifierExists<T extends Language>(
   spec: ImportSpecifier,
 ): boolean {
   const local = requestedLocalName(spec);
-  for (const item of listImports(program, { from })) {
-    for (const existing of item.specifiers) {
-      if (existing.importedName !== spec.name || existing.localName !== local) continue;
-      if (!spec.isTypeOnly && existing.isTypeOnly) continue;
-      return true;
-    }
-  }
-  return false;
+  // getAllImports sees multi-declarator requires and defaulted callback
+  // patterns that listImports omits so removal cannot drop a sibling binding.
+  return getAllImports(program, { type: "named", name: spec.name, from }).some((existing) => {
+    if (existing.isNamespace || existing.alias !== local) return false;
+    if (!spec.isTypeOnly && existing.isTypeOnly) return false;
+    return true;
+  });
 }
 
 function isModuleLevelStatement(statement: SgNode<TS>): boolean {
@@ -1812,6 +1831,21 @@ export function addImport<T extends Language>(
     if (existing.some((item) => !item.isNamespace && !item.isTypeOnly)) {
       return null; // Already has a value default import
     }
+    const typeDefault = existing.find(
+      (item) => !item.isNamespace && item.isTypeOnly && item.alias === options.name,
+    );
+    if (typeDefault) {
+      const statement = (typeDefault.node as unknown as SgNode<TS>)
+        .ancestors()
+        .find((ancestor) => ancestor.kind() === "import_statement") as SgNode<TS> | undefined;
+      const parts = statement
+        ? analyzeImportClause(statement as unknown as SgNode<Language>)
+        : null;
+      if (statement && parts?.defaultIdent && !parts.namedImports && !parts.namespaceImport) {
+        const promoted = dropStatementTypeKeyword(statement);
+        if (promoted) return promoted;
+      }
+    }
   } else if (options.type === "namespace") {
     const existing = getAllImports(program, { type: "default", from: options.from });
     if (existing.some((item) => item.isNamespace)) {
@@ -2014,24 +2048,107 @@ function mergeRanges(
   return merged;
 }
 
-/** One edit covering every range, keeping the source text between them. */
-function combineEdits(edits: Edit[], source: string): Edit | null {
-  const sorted = [...edits].sort((left, right) => left.startPos - right.startPos);
+function utf8ByteLength(codePoint: number): number {
+  if (codePoint <= 0x7f) return 1;
+  if (codePoint <= 0x7ff) return 2;
+  if (codePoint <= 0xffff) return 3;
+  return 4;
+}
+
+/** AST ranges are UTF-8 byte offsets. `String#slice` counts UTF-16 code units. */
+function sliceUtf8(source: string, startByte: number, endByte: number): string {
+  if (endByte <= startByte) return "";
+  let bytes = 0;
+  let startIndex = startByte === 0 ? 0 : source.length;
+  let endIndex = source.length;
+  let foundStart = startByte === 0;
+  for (let index = 0; index < source.length;) {
+    if (!foundStart && bytes >= startByte) {
+      startIndex = index;
+      foundStart = true;
+    }
+    if (foundStart && bytes >= endByte) {
+      endIndex = index;
+      break;
+    }
+    const code = source.charCodeAt(index);
+    let point = code;
+    let units = 1;
+    if (code >= 0xd800 && code <= 0xdbff && index + 1 < source.length) {
+      const next = source.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        point = (code - 0xd800) * 0x400 + (next - 0xdc00) + 0x10000;
+        units = 2;
+      }
+    }
+    bytes += utf8ByteLength(point);
+    index += units;
+  }
+  if (!foundStart) startIndex = source.length;
+  return source.slice(startIndex, endIndex);
+}
+
+function dropContainedEdits(edits: Edit[]): Edit[] {
+  const sorted = [...edits].sort(
+    (left, right) => left.startPos - right.startPos || right.endPos - left.endPos,
+  );
+  const kept: Edit[] = [];
+  for (const edit of sorted) {
+    const contained = kept.some(
+      (outer) => outer.startPos <= edit.startPos && outer.endPos >= edit.endPos,
+    );
+    if (!contained) kept.push(edit);
+  }
+  return kept;
+}
+
+/**
+ * One edit from the first start through the last end. Gaps are copied with
+ * byte offsets. Callers use this inside a single clause, where the gap is
+ * text that belongs to that edit.
+ */
+function spliceByteEdits(edits: Edit[], source: string): Edit | null {
+  const sorted = dropContainedEdits(edits).sort((left, right) => left.startPos - right.startPos);
   const first = sorted[0];
   if (!first) return null;
   if (sorted.length === 1) return first;
 
   const start = first.startPos;
-  const end = sorted[sorted.length - 1]!.endPos;
+  const end = sorted.reduce((max, edit) => Math.max(max, edit.endPos), first.endPos);
   let cursor = start;
   let text = "";
   for (const edit of sorted) {
-    text += source.slice(cursor, edit.startPos);
+    if (edit.startPos > cursor) text += sliceUtf8(source, cursor, edit.startPos);
     text += edit.insertedText;
-    cursor = edit.endPos;
+    cursor = Math.max(cursor, edit.endPos);
   }
-  text += source.slice(cursor, end);
+  if (cursor < end) text += sliceUtf8(source, cursor, end);
   return { startPos: start, endPos: end, insertedText: text };
+}
+
+/**
+ * Edits separated by other source stay separate so a later `commitEdits` can
+ * still change the text between them. Contiguous edits collapse into one.
+ * A deletion that contains another edit wins, and the inner edit is dropped.
+ */
+function separateEdits(edits: Edit[], source: string): Edit | Edit[] | null {
+  const sorted = dropContainedEdits(edits).sort((left, right) => left.startPos - right.startPos);
+  const first = sorted[0];
+  if (!first) return null;
+
+  const groups: Edit[][] = [[first]];
+  for (const edit of sorted.slice(1)) {
+    const group = groups[groups.length - 1]!;
+    const last = group[group.length - 1]!;
+    if (edit.startPos <= last.endPos) group.push(edit);
+    else groups.push([edit]);
+  }
+
+  const coalesced = groups.map((group) =>
+    group.length === 1 ? group[0]! : spliceByteEdits(group, source)!,
+  );
+  if (coalesced.length === 1) return coalesced[0]!;
+  return coalesced;
 }
 
 function editDeletingRanges(
@@ -2041,12 +2158,96 @@ function editDeletingRanges(
   const merged = mergeRanges(ranges);
   const first = merged[0];
   if (!first) return null;
-  return (
-    combineEdits(
-      merged.map((range) => ({ startPos: range.start, endPos: range.end, insertedText: "" })),
-      programText,
-    ) ?? null
+  return spliceByteEdits(
+    merged.map((range) => ({ startPos: range.start, endPos: range.end, insertedText: "" })),
+    programText,
   );
+}
+
+const OBJECT_BINDING_KINDS = new Set([
+  "shorthand_property_identifier_pattern",
+  "pair_pattern",
+  "object_assignment_pattern",
+  "assignment_pattern",
+  "rest_pattern",
+]);
+
+/** Includes defaulted properties such as `{ kept = 1 }`, which are not listed specifiers. */
+function objectPatternBindingCount(pattern: SgNode<TS>): number {
+  return pattern.children().filter((child) => OBJECT_BINDING_KINDS.has(child.kind())).length;
+}
+
+function statementBindingCount<T extends Language>(statement: SgNode<T>, listed: number): number {
+  const pattern = (statement as unknown as SgNode<TS>).find({ rule: { kind: "object_pattern" } });
+  if (!pattern) return listed;
+  return Math.max(listed, objectPatternBindingCount(pattern));
+}
+
+function requireObjectPatterns<T extends Language>(
+  program: SgNode<T, "program">,
+  from: string,
+): Array<SgNode<T>> {
+  const tsProgram = program as unknown as SgNode<TS, "program">;
+  const source = stringToExactRegexString(from);
+  const value = {
+    field: "value",
+    any: [
+      {
+        all: [
+          { kind: "call_expression" },
+          { has: { field: "function", regex: "^(require|import)$" } },
+          {
+            has: {
+              field: "arguments",
+              has: {
+                kind: "string",
+                any: [{ regex: source }, { has: { kind: "string_fragment", regex: source } }],
+              },
+            },
+          },
+        ],
+      },
+      {
+        kind: "await_expression",
+        has: {
+          all: [
+            { kind: "call_expression" },
+            { has: { field: "function", regex: "^import$" } },
+            {
+              has: {
+                field: "arguments",
+                has: {
+                  kind: "string",
+                  any: [{ regex: source }, { has: { kind: "string_fragment", regex: source } }],
+                },
+              },
+            },
+          ],
+        },
+      },
+    ],
+  } satisfies Rule<Language>;
+  const patterns = new Map<number, SgNode<T>>();
+  const specifiers = tsProgram.findAll({
+    rule: {
+      any: [{ kind: "shorthand_property_identifier_pattern" }, { kind: "pair_pattern" }],
+      inside: {
+        stopBy: "end",
+        kind: "object_pattern",
+        inside: {
+          stopBy: "end",
+          kind: "variable_declarator",
+          has: value,
+        },
+      },
+    },
+  });
+  for (const specifier of specifiers) {
+    const pattern = specifier.ancestors().find((ancestor) => ancestor.kind() === "object_pattern");
+    if (!pattern) continue;
+    patterns.set(pattern.range().start.index, pattern as unknown as SgNode<T>);
+  }
+  return [...patterns.values()];
 }
 
 function removeDefaultBindingEdit<T extends Language>(
@@ -2078,17 +2279,19 @@ function removeDefaultBindingEdit<T extends Language>(
  * - Default + `removeSideEffectForms`: also removes bare `require('m')` and `import 'm'` when there is no binding import
  * - The same export in a later statement is removed too. Pass `alias` (or
  *   `{ name, alias }` for a named specifier) to remove one local binding.
+ * - Edits separated by other statements are returned as an array so they do
+ *   not swallow the text between them.
  *
  * Note: removeImport returns null for multi-declarator CJS declarations
  * (e.g. `const foo = require('mod'), x = 1`). These are not tracked by
  * findAllImportStatements to prevent accidental deletion of unrelated bindings.
  *
- * @returns Edit to apply, or null if import not found
+ * @returns Edit, an array of non-overlapping edits, or null if import not found
  */
 export function removeImport<T extends Language>(
   program: SgNode<T, "program">,
   options: RemoveImportOptions,
-): Edit | null {
+): Edit | Edit[] | null {
   const programText = program.text();
   const allStatements = findAllImportStatements(program);
 
@@ -2202,62 +2405,18 @@ export function removeImport<T extends Language>(
       return { startPos: start, endPos: end, insertedText: "" };
     }
 
-    const namespaceDynamicImport = tsProgram.find({
-      rule: {
-        kind: "identifier",
-        inside: {
-          stopBy: "end",
-          kind: "call_expression",
-          has: {
-            field: "function",
-            kind: "member_expression",
-            all: [
-              {
-                has: {
-                  field: "object",
-                  kind: "call_expression",
-                  has: {
-                    field: "arguments",
-                    kind: "arguments",
-                    has: {
-                      kind: "string",
-                      has: {
-                        kind: "string_fragment",
-                        pattern: "$SOURCE",
-                        regex: stringToExactRegexString(options.from),
-                      },
-                    },
-                  },
-                },
-              },
-              {
-                has: {
-                  field: "property",
-                  kind: "property_identifier",
-                  regex: "^then$",
-                },
-              },
-            ],
-          },
-        },
-      },
-    });
-
-    if (!namespaceDynamicImport) return null;
-    if (options.alias && namespaceDynamicImport.text() !== options.alias) return null;
-    const expressStmtDynamicImport = namespaceDynamicImport.find({
-      rule: {
-        inside: {
-          stopBy: "end",
-          kind: "expression_statement",
-        },
-      },
-    });
-
-    if (!expressStmtDynamicImport) return null;
+    const dynamicNamespaces = listImports(program, { from: options.from }).filter(
+      (item) =>
+        item.namespaceName !== null &&
+        (item.node as unknown as SgNode<TS>).kind() === "expression_statement",
+    );
+    const chosen = options.alias
+      ? dynamicNamespaces.find((item) => item.namespaceName === options.alias)
+      : dynamicNamespaces[0];
+    if (!chosen) return null;
 
     const { start, end } = getStatementRangeWithNewline(
-      expressStmtDynamicImport as unknown as SgNode<Language>,
+      chosen.node as unknown as SgNode<Language>,
       programText,
     );
     return { startPos: start, endPos: end, insertedText: "" };
@@ -2277,8 +2436,10 @@ export function removeImport<T extends Language>(
       );
       if (matching.length === 0) continue;
 
-      const removesEverySpecifier = matching.length >= item.specifiers.length;
       const statement = item.node as unknown as SgNode<T>;
+      const removesEverySpecifier =
+        matching.length >= item.specifiers.length &&
+        matching.length >= statementBindingCount(statement, item.specifiers.length);
       if (removesEverySpecifier && !item.defaultName && !item.namespaceName) {
         const { start, end } = getStatementRangeWithNewline(statement, programText);
         edits.push({ startPos: start, endPos: end, insertedText: "" });
@@ -2311,7 +2472,7 @@ export function removeImport<T extends Language>(
       if (edit) edits.push(edit);
     }
 
-    return combineEdits(edits, programText);
+    return separateEdits(edits, programText);
   }
 
   return null;
@@ -2337,19 +2498,25 @@ function resultingLocalName(exportedName: string, alias: string | undefined): st
  * - Every clause that imports `name` is updated, not only the first statement.
  * - `local` selects one binding when the same export is imported more than once.
  * - Distinct aliases of one export stay (`foo` and `foo as bar`).
- * - If the resulting local name is already imported in the same clause, the old specifier is dropped.
+ * - If the resulting local name is already used in the same clause, the rename is dropped and the existing binding stays.
+ * - Clauses separated by other statements come back as an array of edits.
  *
- * @returns Edit to apply, or null if none of the specifiers is found
+ * @returns Edit, an array of non-overlapping edits, or null if none of the specifiers is found
  */
 export function updateImport<T extends Language>(
   program: SgNode<T, "program">,
   options: UpdateImportOptions,
-): Edit | null {
+): Edit | Edit[] | null {
   if (options.type !== "named" || options.specifiers.length === 0) {
     return null;
   }
 
   const clauses = new Map<number, SgNode<T>>();
+  const rememberClause = (clause: SgNode<T> | null | undefined) => {
+    if (!clause) return;
+    clauses.set(clause.range().start.index, clause);
+  };
+
   for (const item of listImports(program, { from: options.from })) {
     for (const spec of item.specifiers) {
       const read = readSpecifier(spec.node as unknown as SgNode<T>);
@@ -2357,18 +2524,36 @@ export function updateImport<T extends Language>(
       const clause = (spec.node as unknown as SgNode<TS>)
         .ancestors()
         .find((ancestor) => ancestor.is("named_imports") || ancestor.is("object_pattern"));
-      if (!clause) continue;
-      clauses.set(clause.range().start.index, clause as unknown as SgNode<T>);
+      rememberClause(clause as unknown as SgNode<T> | undefined);
     }
+  }
+
+  // Multi-declarator requires are omitted from listImports so a later deletion
+  // cannot drop the sibling. Renames still apply to that object pattern.
+  for (const pattern of requireObjectPatterns(program, options.from)) {
+    const hasRename = readClauseItems(pattern).some((item) => {
+      if (item.kind !== "specifier") return false;
+      const read = readSpecifier(item.node);
+      return read !== null && options.specifiers.some((rename) => renameApplies(read, rename));
+    });
+    if (hasRename) rememberClause(pattern);
   }
 
   const edits: Edit[] = [];
   for (const clause of clauses.values()) {
     const existingItems = readClauseItems(clause);
-    const emittedLocals = new Set<string>();
+    const kind = clause.kind() === "object_pattern" ? "object_pattern" : "named_imports";
+    const retainedLocals = new Set<string>();
+    for (const item of existingItems) {
+      if (item.kind !== "specifier") continue;
+      const read = readSpecifier(item.node);
+      if (!read || options.specifiers.some((rename) => renameApplies(read, rename))) continue;
+      retainedLocals.add(read.alias ?? read.name);
+    }
+
+    const emittedLocals = new Set<string>(retainedLocals);
     let changed = false;
     const items: ClauseItem[] = [];
-    const kind = clause.kind() === "object_pattern" ? "object_pattern" : "named_imports";
 
     for (const item of existingItems) {
       if (item.kind === "comment") {
@@ -2382,16 +2567,10 @@ export function updateImport<T extends Language>(
         continue;
       }
 
-      const currentLocal = specifierNode.alias ?? specifierNode.name;
       const rename = options.specifiers.find((candidate) =>
         renameApplies(specifierNode, candidate),
       );
       if (!rename) {
-        if (emittedLocals.has(currentLocal)) {
-          changed = true;
-          continue;
-        }
-        emittedLocals.add(currentLocal);
         items.push(item);
         continue;
       }
@@ -2416,5 +2595,5 @@ export function updateImport<T extends Language>(
     if (changed) edits.push(serializeSpecifierClause(clause, items));
   }
 
-  return combineEdits(edits, program.text());
+  return separateEdits(edits, program.text());
 }

@@ -203,7 +203,7 @@ Add an import to the program. Smart behavior:
 - **Creates** a new import statement otherwise
 - Inserts after the last existing import (or at file start if no imports exist)
 - A **new** statement copies the quote and semicolon of the first module specifier already in the file. When the file has none, it copies the first string literal and the first semicolon-style statement, and keeps `'` and `;` only when those are absent. A merge does not rewrite the existing clause.
-- A named specifier with `isTypeOnly: true` is written as inline `type` (`import { type Foo }`), not `import type`. A value specifier is not merged into an existing `import type` statement. When a value import from the same module already exists, the specifier merges into that statement even if an `import type` line comes first. Otherwise it becomes a second statement. Type-only specifiers merged into `import type` do not repeat the `type` keyword. `import type Foo` does not block a value default import.
+- A named specifier with `isTypeOnly: true` is written as inline `type` (`import { type Foo }`), not `import type`. A value specifier is not merged into an existing `import type` statement. When a value import from the same module already exists, the specifier merges into that statement even if an `import type` line comes first. Otherwise it becomes a second statement. Type-only specifiers merged into `import type` do not repeat the `type` keyword. `import type Foo` with the same local name drops `type` instead of adding a second default. A different local name is a new statement.
 - A type-only binding does not count as the value. `import { type Foo }` drops the `type` modifier, and `import type { Foo, Bar }` becomes `import { Foo, type Bar }`, when the local name matches. A different local name (`import type { Foo as F }` plus a value `Foo`) stays a separate statement.
 - A named specifier already exists only when that export is bound to the same local name. `import { foo as bar }` does not satisfy `foo`, and `import * as ns` does not satisfy a named specifier. A new statement is inserted after the last module-level import. A `require()` or `import()` inside a function is not an insertion point.
 
@@ -291,7 +291,7 @@ Remove an import from the program. Smart behavior:
 
 **Returns**
 
-`Edit | null` — An edit to apply via `rootNode.commitEdits()`, or `null` if the import was not found.
+`Edit | Edit[] | null` — An edit to apply via `rootNode.commitEdits()`, or `null` if the import was not found. When the matches are separated by other statements, the result is an array of edits. Spread that array into `commitEdits` so the text between them can still change.
 
 **Example**
 
@@ -326,10 +326,10 @@ Replace named specifiers of an existing import or `require` in place. The whole 
 
 - `import { foo } from "mod"` with `{ name: "foo", to: "bar" }` becomes `import { bar } from "mod"`.
 - An existing local alias is kept: `import { foo as f }` becomes `import { bar as f }`. Pass `alias` to override that local name.
-- Every matching clause is updated. Pass `local` to rename one current binding when the same export is imported more than once (`foo` and `foo as bar`, or two statements).
+- Every matching clause is updated. Pass `local` to rename one current binding when the same export is imported more than once (`foo` and `foo as bar`, or two statements). Clauses separated by other statements come back as an array of edits.
 - `foo` and `foo as bar` stay distinct. Renaming a sibling does not drop the alias.
 - Works for ESM named imports, destructured `require()`, and destructured dynamic `import()`.
-- If the resulting local name is already imported in the same clause, the old specifier is dropped instead of duplicated.
+- If the resulting local name is already used in the same clause, the existing binding stays and the rename is dropped. `import { foo, baz as bar }` renamed from `foo` to `bar` stays `import { baz as bar }`.
 
 **Parameters**
 
@@ -345,7 +345,7 @@ Replace named specifiers of an existing import or `require` in place. The whole 
 
 **Returns**
 
-`Edit | null` — An edit to apply via `rootNode.commitEdits()`, or `null` if none of the named specifiers is found or `specifiers` is empty.
+`Edit | Edit[] | null` — An edit to apply via `rootNode.commitEdits()`, or `null` if none of the named specifiers is found or `specifiers` is empty. Separated clauses are an array. Spread it into `commitEdits`.
 
 **Example**
 
