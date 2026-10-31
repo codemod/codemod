@@ -1,5 +1,11 @@
 # @jssg/utils
 
+## 0.0.11
+
+### Patch Changes
+
+- 484da52: Fix JavaScript import helpers so namespace imports stay visible, aliases can be targeted, nested `require()` calls are not insertion points, and type-only bindings are distinct from values.
+
 ## 0.0.10
 
 ### Patch Changes
