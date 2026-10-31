@@ -98,7 +98,7 @@ jobs:
       issues: write # Let the composite action upsert its summary comment.
     steps:
       # The sync workflow replaces @main; pin it manually when copying this template elsewhere.
-      - uses: codemod/codex-review-action@f3459c4e44946f7a33a5a11f85dcc51ce5351cb0 # zizmor: ignore[unpinned-uses] -- sync-action-pins replaces this template ref with a full SHA.
+      - uses: codemod/codex-review-action@d49c8fe12fbe11de606f337a662b2d36086c2fa7 # zizmor: ignore[unpinned-uses] -- sync-action-pins replaces this template ref with a full SHA.
         with:
           github_token: ${{ github.token }}
           pr_number: ${{ github.event.issue.number }}
@@ -129,7 +129,7 @@ jobs:
       pull-requests: write # Let only the called workflow's posting job write reviews.
       issues: write # Let only the called workflow's posting job upsert its summary.
     # The sync workflow replaces @main; pin it manually when copying this template elsewhere.
-    uses: codemod/codex-review-action/.github/workflows/fork-review.yml@f3459c4e44946f7a33a5a11f85dcc51ce5351cb0 # zizmor: ignore[unpinned-uses] -- sync-action-pins replaces this template ref with a full SHA.
+    uses: codemod/codex-review-action/.github/workflows/fork-review.yml@d49c8fe12fbe11de606f337a662b2d36086c2fa7 # zizmor: ignore[unpinned-uses] -- sync-action-pins replaces this template ref with a full SHA.
     with:
       pr_number: ${{ github.event.issue.number }}
       codex_model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
