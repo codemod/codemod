@@ -257,6 +257,47 @@ impl TokenStorage {
         }
     }
 
+    /// Email last delivered to PostHog as a person `$set` for `distinct_id`.
+    /// Stored in plain text next to the auth file (which already holds the
+    /// email). Missing or unreadable cache files are treated as "not sent yet".
+    pub fn load_last_sent_person_email(&self, distinct_id: &str) -> Result<Option<String>> {
+        let path = self.person_traits_path(distinct_id);
+        match fs::read_to_string(&path) {
+            Ok(contents) => {
+                let email = contents.trim();
+                if email.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(email.to_string()))
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => {
+                log::debug!("Ignoring unreadable person traits file {path:?}: {error}");
+                Ok(None)
+            }
+        }
+    }
+
+    pub fn save_last_sent_person_email(&self, distinct_id: &str, email: &str) -> Result<()> {
+        let dir = self.person_traits_dir();
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("Failed to create person traits directory: {dir:?}"))?;
+        let path = self.person_traits_path(distinct_id);
+        fs::write(&path, email)
+            .with_context(|| format!("Failed to write person traits file: {path:?}"))?;
+        Ok(())
+    }
+
+    fn person_traits_dir(&self) -> PathBuf {
+        self.config_dir.join("person_traits")
+    }
+
+    fn person_traits_path(&self, distinct_id: &str) -> PathBuf {
+        self.person_traits_dir()
+            .join(Self::sanitize_registry_name(distinct_id))
+    }
+
     fn get_auth_path(&self, registry: &str) -> PathBuf {
         let auth_dir = self.config_dir.join("auth");
         let filename = format!("{}.json", Self::sanitize_registry_name(registry));
@@ -426,6 +467,52 @@ mod tests {
             .collect::<HashSet<_>>();
 
         assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn last_sent_person_email_round_trips_per_user() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+
+        assert_eq!(
+            storage
+                .load_last_sent_person_email("user-a")
+                .expect("missing file is not an error"),
+            None
+        );
+
+        storage
+            .save_last_sent_person_email("user-a", "a@example.com")
+            .expect("save user a");
+        storage
+            .save_last_sent_person_email("user-b", "b@example.com")
+            .expect("save user b");
+        storage
+            .save_last_sent_person_email("user-a", "a2@example.com")
+            .expect("overwrite user a");
+
+        let reloaded =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        assert_eq!(
+            reloaded.load_last_sent_person_email("user-a").unwrap(),
+            Some("a2@example.com".to_string())
+        );
+        assert_eq!(
+            reloaded.load_last_sent_person_email("user-b").unwrap(),
+            Some("b@example.com".to_string())
+        );
+
+        let path = temp_dir.path().join("person_traits").join("user-a");
+        fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+        assert_eq!(storage.load_last_sent_person_email("user-a").unwrap(), None);
+        storage
+            .save_last_sent_person_email("user-a", "healed@example.com")
+            .expect("overwrite corrupt file");
+        assert_eq!(
+            storage.load_last_sent_person_email("user-a").unwrap(),
+            Some("healed@example.com".to_string())
+        );
     }
 
     fn stored_auth(registry: &str) -> StoredAuth {
