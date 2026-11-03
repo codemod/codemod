@@ -35,7 +35,6 @@
     "@types/node": "20.10.3",
     "@types/pako": "catalog:",
     "@types/semver": "^7.5.8",
-    "@types/tar": "catalog:",
     "@types/tar-stream": "catalog:",
     "@types/unzipper": "catalog:",
     "@vitest/coverage-v8": "catalog:",
@@ -54,7 +53,7 @@
     "pako": "catalog:",
     "prettier": "^3.2.5",
     "semver": "^7.6.2",
-    "tar": "^6.1.15",
+    "tar": "^7.5.11",
     "tar-stream": "catalog:",
     "unzipper": "catalog:",
     "valibot": "catalog:"

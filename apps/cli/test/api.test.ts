@@ -10,6 +10,7 @@ import type {
 } from "@codemod-com/api-types";
 import { Octokit } from "@octokit/rest";
 import axios from "axios";
+import type { Mocked, MockedClass } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   confirmUserLoggedIn,
@@ -34,11 +35,11 @@ import {
 
 // Mock axios
 vi.mock("axios");
-const mockedAxios = axios as jest.Mocked<typeof axios>;
+const mockedAxios = axios as Mocked<typeof axios>;
 
 // Mock octokit
 vi.mock("@octokit/rest");
-const mockedOctokit = Octokit as jest.MockedClass<typeof Octokit>;
+const mockedOctokit = Octokit as MockedClass<typeof Octokit>;
 
 describe("API Client Tests", () => {
   const mockAccessToken = "test-access-token";
