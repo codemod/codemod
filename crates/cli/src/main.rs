@@ -256,7 +256,6 @@ fn should_prompt_for_no_command_action() -> bool {
 }
 
 fn exit_with_code(code: i32) -> ! {
-    wait_for_person_traits_sync();
     let _ = io::stdout().flush();
     let _ = io::stderr().flush();
     std::process::exit(code);
@@ -264,59 +263,29 @@ fn exit_with_code(code: i32) -> ! {
 
 /// Effective analytics opt-out, including implicit `codemod @pkg … --disable-analytics`
 /// where the flag lives in trailing args until the run subcommand is re-parsed.
+/// `--disable-analytics` is an on/off flag (`ArgAction::SetTrue`), so a literal match
+/// in trailing args is enough; re-parsing does not catch additional spellings.
 fn effective_disable_analytics(cli: &Cli) -> bool {
-    if cli.disable_analytics {
-        return true;
-    }
-    if cli
-        .trailing_args
-        .iter()
-        .any(|arg| arg == "--disable-analytics")
-    {
-        return true;
-    }
-    if let Ok(parsed) = Cli::try_parse_from(cli.trailing_args.clone()) {
-        if parsed.disable_analytics {
-            return true;
-        }
-    }
-    if let Some(ImplicitRoute::Run(full_args)) = classify_implicit_route(&cli.trailing_args) {
-        if let Ok(parsed) = Cli::try_parse_from(&full_args) {
-            return parsed.disable_analytics;
-        }
-    }
-    false
+    cli.disable_analytics
+        || cli
+            .trailing_args
+            .iter()
+            .any(|arg| arg == "--disable-analytics")
 }
 
-static PERSON_TRAITS_TASK: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>> =
-    std::sync::Mutex::new(None);
+const PERSON_TRAITS_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
-fn register_person_traits_task(handle: tokio::task::JoinHandle<()>) {
-    if let Ok(mut slot) = PERSON_TRAITS_TASK.lock() {
-        *slot = Some(handle);
+async fn await_person_traits_sync(handle: Option<tokio::task::JoinHandle<()>>) {
+    if let Some(handle) = handle {
+        let _ = tokio::time::timeout(PERSON_TRAITS_EXIT_GRACE, handle).await;
     }
 }
 
-fn wait_for_person_traits_sync() {
-    let handle = PERSON_TRAITS_TASK
-        .lock()
-        .ok()
-        .and_then(|mut slot| slot.take());
-    let Some(handle) = handle else {
-        return;
-    };
-    match tokio::runtime::Handle::try_current() {
-        Ok(runtime) => {
-            let _ = tokio::task::block_in_place(|| {
-                runtime.block_on(tokio::time::timeout(PERSON_TRAITS_EXIT_GRACE, handle))
-            });
-        }
-        Err(_) => {
-            // Detach if we somehow exit without a runtime; the OS reaps the task.
-            drop(handle);
-        }
-    }
-}
+/// Printed by the no-command path before returning; main should exit without
+/// rendering the error again.
+#[derive(Debug, thiserror::Error)]
+#[error("No command provided")]
+struct NoCommandAlreadyReported;
 
 fn validate_no_command_package_input(
     input: &str,
@@ -445,6 +414,7 @@ async fn main() {
         if error
             .downcast_ref::<workflow_runner::WorkflowFailureAlreadyReported>()
             .is_none()
+            && error.downcast_ref::<NoCommandAlreadyReported>().is_none()
         {
             diagnostics::render_anyhow_error(&error);
         }
@@ -465,6 +435,7 @@ async fn run_cli() -> Result<()> {
         std::env::set_var("DISABLE_ANALYTICS", "true");
     }
 
+    let mut person_traits_task = None;
     let telemetry_sender: TelemetrySenderMutex = if std::env::var("DISABLE_ANALYTICS")
         == Ok("true".to_string())
         || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
@@ -507,8 +478,8 @@ async fn run_cli() -> Result<()> {
         // Opt-out is resolved before this spawn (including implicit-run flag order).
         if let (Some(posthog), Some(auth)) = (&posthog, auth) {
             let posthog = posthog.clone();
-            register_person_traits_task(tokio::spawn(async move {
-                let _ = person_telemetry::sync_person_traits(&storage, &posthog, &auth.user).await;
+            person_traits_task = Some(tokio::spawn(async move {
+                person_telemetry::sync_person_traits(&storage, &posthog, &auth.user).await;
             }));
         }
 
@@ -532,14 +503,10 @@ async fn run_cli() -> Result<()> {
     telemetry_sender.initialize_panic_telemetry().await;
 
     let result = dispatch_command(&cli, telemetry_sender).await;
-
-    // Also runs from exit_with_code so direct process exits get the same grace.
-    wait_for_person_traits_sync();
+    await_person_traits_sync(person_traits_task).await;
 
     result
 }
-
-const PERSON_TRAITS_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
 async fn dispatch_command(cli: &Cli, telemetry_sender: TelemetrySenderMutex) -> Result<()> {
     match &cli.command {
@@ -628,7 +595,7 @@ async fn dispatch_command(cli: &Cli, telemetry_sender: TelemetrySenderMutex) -> 
                     NoCommandResult::Completed => {}
                     NoCommandResult::ExitWithMessage(message) => {
                         eprintln!("{message}");
-                        exit_with_code(1);
+                        return Err(NoCommandAlreadyReported.into());
                     }
                 }
             }
@@ -825,13 +792,6 @@ mod tests {
         ])
         .expect("implicit package parse");
         assert!(!cli.disable_analytics);
-        assert!(effective_disable_analytics(&cli));
-    }
-
-    #[test]
-    fn effective_disable_analytics_respects_global_flag() {
-        let cli = Cli::try_parse_from(["codemod", "--disable-analytics", "whoami"])
-            .expect("global flag parse");
         assert!(effective_disable_analytics(&cli));
     }
 

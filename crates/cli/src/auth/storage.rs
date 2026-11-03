@@ -257,54 +257,35 @@ impl TokenStorage {
         }
     }
 
-    /// Fingerprint of the person traits last delivered to PostHog for
-    /// `distinct_id`, if any. Each distinct id has its own file so concurrent
-    /// CLI processes for different users cannot clobber each other. Corrupt
-    /// or invalid UTF-8 content is treated as "nothing delivered yet" so the
-    /// next successful send heals the cache.
-    pub fn load_person_traits_fingerprint(&self, distinct_id: &str) -> Result<Option<String>> {
+    /// Email last delivered to PostHog as a person `$set` for `distinct_id`.
+    /// Stored in plain text next to the auth file (which already holds the
+    /// email). Missing or unreadable cache files are treated as "not sent yet".
+    pub fn load_last_sent_person_email(&self, distinct_id: &str) -> Result<Option<String>> {
         let path = self.person_traits_path(distinct_id);
-        let bytes = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("Failed to read person traits file: {path:?}"))
+        match fs::read_to_string(&path) {
+            Ok(contents) => {
+                let email = contents.trim();
+                if email.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(email.to_string()))
+                }
             }
-        };
-        match serde_json::from_slice::<String>(&bytes) {
-            Ok(fingerprint) if !fingerprint.is_empty() => Ok(Some(fingerprint)),
-            Ok(_) => Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => {
-                log::debug!("Ignoring unparsable person traits file {path:?}: {error}");
+                log::debug!("Ignoring unreadable person traits file {path:?}: {error}");
                 Ok(None)
             }
         }
     }
 
-    pub fn save_person_traits_fingerprint(
-        &self,
-        distinct_id: &str,
-        fingerprint: &str,
-    ) -> Result<()> {
+    pub fn save_last_sent_person_email(&self, distinct_id: &str, email: &str) -> Result<()> {
         let dir = self.person_traits_dir();
         fs::create_dir_all(&dir)
             .with_context(|| format!("Failed to create person traits directory: {dir:?}"))?;
-
         let path = self.person_traits_path(distinct_id);
-        let content = serde_json::to_vec(fingerprint)
-            .context("Failed to serialize person traits fingerprint")?;
-
-        // Write-then-rename so a concurrent CLI process never reads a partial file.
-        let mut temporary = tempfile::NamedTempFile::new_in(&dir)
-            .context("Failed to create temporary person traits file")?;
-        temporary
-            .write_all(&content)
-            .context("Failed to write temporary person traits file")?;
-        temporary
-            .persist(&path)
-            .map_err(|error| error.error)
-            .with_context(|| format!("Failed to persist person traits file: {path:?}"))?;
+        fs::write(&path, email)
+            .with_context(|| format!("Failed to write person traits file: {path:?}"))?;
         Ok(())
     }
 
@@ -313,10 +294,8 @@ impl TokenStorage {
     }
 
     fn person_traits_path(&self, distinct_id: &str) -> PathBuf {
-        self.person_traits_dir().join(format!(
-            "{}.json",
-            Self::sanitize_registry_name(distinct_id)
-        ))
+        self.person_traits_dir()
+            .join(Self::sanitize_registry_name(distinct_id))
     }
 
     fn get_auth_path(&self, registry: &str) -> PathBuf {
@@ -491,113 +470,48 @@ mod tests {
     }
 
     #[test]
-    fn person_traits_fingerprint_is_persisted_per_user() {
+    fn last_sent_person_email_round_trips_per_user() {
         let temp_dir = tempfile::tempdir().expect("expected temp dir");
         let storage =
             TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
 
         assert_eq!(
             storage
-                .load_person_traits_fingerprint("user-a")
+                .load_last_sent_person_email("user-a")
                 .expect("missing file is not an error"),
             None
         );
 
         storage
-            .save_person_traits_fingerprint("user-a", "hash-a")
+            .save_last_sent_person_email("user-a", "a@example.com")
             .expect("save user a");
         storage
-            .save_person_traits_fingerprint("user-b", "hash-b")
+            .save_last_sent_person_email("user-b", "b@example.com")
             .expect("save user b");
         storage
-            .save_person_traits_fingerprint("user-a", "hash-a2")
+            .save_last_sent_person_email("user-a", "a2@example.com")
             .expect("overwrite user a");
 
         let reloaded =
             TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
         assert_eq!(
-            reloaded.load_person_traits_fingerprint("user-a").unwrap(),
-            Some("hash-a2".to_string())
+            reloaded.load_last_sent_person_email("user-a").unwrap(),
+            Some("a2@example.com".to_string())
         );
         assert_eq!(
-            reloaded.load_person_traits_fingerprint("user-b").unwrap(),
-            Some("hash-b".to_string())
-        );
-    }
-
-    #[test]
-    fn unparsable_person_traits_file_is_treated_as_empty_and_overwritten() {
-        let temp_dir = tempfile::tempdir().expect("expected temp dir");
-        let storage =
-            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
-        let path = temp_dir.path().join("person_traits").join("user-a.json");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "not json").unwrap();
-
-        assert_eq!(
-            storage.load_person_traits_fingerprint("user-a").unwrap(),
-            None
+            reloaded.load_last_sent_person_email("user-b").unwrap(),
+            Some("b@example.com".to_string())
         );
 
-        storage
-            .save_person_traits_fingerprint("user-a", "hash-a")
-            .expect("save should replace the corrupt file");
-        assert_eq!(
-            storage.load_person_traits_fingerprint("user-a").unwrap(),
-            Some("hash-a".to_string())
-        );
-    }
-
-    #[test]
-    fn invalid_utf8_person_traits_file_is_treated_as_empty() {
-        let temp_dir = tempfile::tempdir().expect("expected temp dir");
-        let storage =
-            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
-        let path = temp_dir.path().join("person_traits").join("user-a.json");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let path = temp_dir.path().join("person_traits").join("user-a");
         fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
-
-        assert_eq!(
-            storage.load_person_traits_fingerprint("user-a").unwrap(),
-            None
-        );
+        assert_eq!(storage.load_last_sent_person_email("user-a").unwrap(), None);
         storage
-            .save_person_traits_fingerprint("user-a", "hash-a")
-            .expect("save should replace the corrupt file");
+            .save_last_sent_person_email("user-a", "healed@example.com")
+            .expect("overwrite corrupt file");
         assert_eq!(
-            storage.load_person_traits_fingerprint("user-a").unwrap(),
-            Some("hash-a".to_string())
-        );
-    }
-
-    #[test]
-    fn concurrent_person_traits_saves_for_different_users_do_not_clobber() {
-        let temp_dir = tempfile::tempdir().expect("expected temp dir");
-        let dir = temp_dir.path().to_path_buf();
-        let handles = (0..8)
-            .map(|index| {
-                let dir = dir.clone();
-                std::thread::spawn(move || {
-                    let storage = TokenStorage::with_config_dir(dir).expect("storage");
-                    let user = if index % 2 == 0 { "user-a" } else { "user-b" };
-                    let hash = if index % 2 == 0 { "hash-a" } else { "hash-b" };
-                    storage
-                        .save_person_traits_fingerprint(user, hash)
-                        .expect("save");
-                })
-            })
-            .collect::<Vec<_>>();
-        for handle in handles {
-            handle.join().expect("thread");
-        }
-        let storage = TokenStorage::with_config_dir(dir).expect("storage");
-        assert_eq!(
-            storage.load_person_traits_fingerprint("user-a").unwrap(),
-            Some("hash-a".to_string())
-        );
-        assert_eq!(
-            storage.load_person_traits_fingerprint("user-b").unwrap(),
-            Some("hash-b".to_string())
+            storage.load_last_sent_person_email("user-a").unwrap(),
+            Some("healed@example.com".to_string())
         );
     }
 
@@ -614,7 +528,6 @@ mod tests {
                 id: "user-id".to_string(),
                 username: "user".to_string(),
                 email: "user@example.com".to_string(),
-                name: None,
                 organizations: None,
             },
             registry: registry.to_string(),

@@ -46,8 +46,6 @@ pub enum TelemetryError {
     Scarf(String),
     #[error("Scarf responded with status {0}")]
     ScarfStatus(u16),
-    #[error("No allowlisted person traits to send")]
-    NoPersonTraits,
 }
 
 #[async_trait]

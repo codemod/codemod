@@ -59,8 +59,8 @@ gateway for install/usage signals). Logged-in users are keyed by their Codemod a
 Anonymous installs use a local telemetry id and are never aliased to an account.
 
 For logged-in sessions only, the CLI may also send a separate PostHog `$set` with the account
-**email** and optional **display name** so dashboards can show people instead of raw UUIDs. That
-update is PostHog-only (not Scarf), deduped locally, and skipped when you opt out.
+**email** so dashboards can show people instead of raw UUIDs. That update is PostHog-only (not
+Scarf), deduped locally, and skipped when you opt out.
 
 Disable all of this for a single invocation with `--disable-analytics`, or by setting
 `DISABLE_ANALYTICS=true` / `DISABLE_ANALYTICS=1` in the environment. The flag works on explicit

@@ -15,10 +15,6 @@ pub(crate) struct UserInfo {
     pub(crate) id: String,
     pub(crate) username: String,
     pub(crate) email: String,
-    /// Display name. The registry's userinfo endpoint does not return it today;
-    /// optional so existing stored auth files and older servers keep parsing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) name: Option<String>,
     pub(crate) organizations: Option<Vec<OrganizationMembership>>,
 }
 
