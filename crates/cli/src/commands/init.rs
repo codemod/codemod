@@ -220,6 +220,8 @@ const JS_APPLY_SCRIPT_FOR_YAML: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.yaml.ts");
 const JS_APPLY_SCRIPT_FOR_TOML: &str =
     include_str!("../templates/js-astgrep/scripts/codemod.toml.ts");
+const JS_APPLY_SCRIPT_FOR_SQL: &str =
+    include_str!("../templates/js-astgrep/scripts/codemod.sql.ts");
 const JS_TSCONFIG_TEMPLATE: &str = include_str!("../templates/js-astgrep/tsconfig.json");
 
 // fixtures
@@ -272,6 +274,8 @@ const YAML_TEST_EXPECTED: &str =
 const TOML_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.toml");
 const TOML_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.toml");
+const SQL_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.sql");
+const SQL_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixtures/expected.sql");
 
 // ast-grep YAML project templates
 const ASTGREP_PATTERNS_FOR_JAVASCRIPT: &str =
@@ -308,6 +312,8 @@ const ASTGREP_PATTERNS_FOR_JSON: &str =
     include_str!("../templates/astgrep-yaml/rules/config.json.yml");
 const ASTGREP_PATTERNS_FOR_YAML: &str =
     include_str!("../templates/astgrep-yaml/rules/config.yaml.yml");
+const ASTGREP_PATTERNS_FOR_SQL: &str =
+    include_str!("../templates/astgrep-yaml/rules/config.sql.yml");
 
 static ROCKET: Emoji<'_, '_> = Emoji("🚀 ", "");
 static CHECKMARK: Emoji<'_, '_> = Emoji("✓ ", "");
@@ -798,6 +804,7 @@ fn select_language() -> Result<String> {
         "Json",
         "Yaml",
         "Toml",
+        "SQL",
         "Other",
     ];
 
@@ -823,6 +830,7 @@ fn select_language() -> Result<String> {
         "Json" => "json",
         "Yaml" => "yaml",
         "Toml" => "toml",
+        "SQL" => "sql",
         "Other" => {
             let custom = Text::new("Enter language name:").prompt()?;
             return Ok(custom);
@@ -962,6 +970,7 @@ fn default_include_patterns(language: &str) -> String {
         "json" => &["**/*.json"],
         "yaml" => &["**/*.{yaml,yml}"],
         "toml" => &["**/*.toml"],
+        "sql" => &["**/*.sql"],
         _ => &["**/*"],
     };
 
@@ -997,7 +1006,8 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
         .replace("{package_manager}", selected_package_manager_spec(config))
-        .replace("{codemod_command}", codemod_command);
+        .replace("{codemod_command}", codemod_command)
+        .replace("{language}", &config.language);
 
     fs::write(project_path.join("package.json"), package_json)?;
 
@@ -1025,6 +1035,7 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
         "json" => JS_APPLY_SCRIPT_FOR_JSON.to_string(),
         "yaml" => JS_APPLY_SCRIPT_FOR_YAML.to_string(),
         "toml" => JS_APPLY_SCRIPT_FOR_TOML.to_string(),
+        "sql" => JS_APPLY_SCRIPT_FOR_SQL.to_string(),
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT.to_string(),
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script.as_str())?;
@@ -1061,6 +1072,7 @@ fn create_astgrep_yaml_project(project_path: &Path, config: &ProjectConfig) -> R
         "elixir" => ASTGREP_PATTERNS_FOR_ELIXIR,
         "json" => ASTGREP_PATTERNS_FOR_JSON,
         "yaml" => ASTGREP_PATTERNS_FOR_YAML,
+        "sql" => ASTGREP_PATTERNS_FOR_SQL,
         _ => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
     };
     fs::write(rules_dir.join("config.yml"), config_file)?;
@@ -1104,6 +1116,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
         "json" => JS_APPLY_SCRIPT_FOR_JSON,
         "yaml" => JS_APPLY_SCRIPT_FOR_YAML,
         "toml" => JS_APPLY_SCRIPT_FOR_TOML,
+        "sql" => JS_APPLY_SCRIPT_FOR_SQL,
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT,
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script)?;
@@ -1131,6 +1144,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
             "elixir" => ASTGREP_PATTERNS_FOR_ELIXIR,
             "json" => ASTGREP_PATTERNS_FOR_JSON,
             "yaml" => ASTGREP_PATTERNS_FOR_YAML,
+            "sql" => ASTGREP_PATTERNS_FOR_SQL,
             _ => ASTGREP_PATTERNS_FOR_JAVASCRIPT,
         };
         fs::write(rules_dir.join("config.yml"), config_file)?;
@@ -1349,6 +1363,12 @@ fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         fs::write(
             tests_dir.join("fixtures").join("expected.yaml"),
             YAML_TEST_EXPECTED,
+        )?;
+    } else if config.language == "sql" {
+        fs::write(tests_dir.join("fixtures").join("input.sql"), SQL_TEST_INPUT)?;
+        fs::write(
+            tests_dir.join("fixtures").join("expected.sql"),
+            SQL_TEST_EXPECTED,
         )?;
     } else if config.language == "toml" {
         fs::write(
@@ -1998,6 +2018,58 @@ mod tests {
         assert!(manifest.contains("default: true"));
         assert!(manifest.contains("capabilities: []"));
         assert!(manifest.contains("Keep this aligned with the files matched in workflow.yaml."));
+    }
+
+    #[test]
+    fn sql_projects_generate_sql_transforms_rules_and_fixtures() {
+        for project_type in [
+            ProjectType::AstGrepJs,
+            ProjectType::AstGrepYaml,
+            ProjectType::Hybrid,
+        ] {
+            let temp_dir = tempdir().unwrap();
+            let project_path = temp_dir.path().join("sql-project");
+            let config = ProjectConfig {
+                name: "sql-project".to_string(),
+                description: "Rename a SQL table".to_string(),
+                author: "Codemod Team <team@codemod.com>".to_string(),
+                license: "MIT".to_string(),
+                project_type: project_type.clone(),
+                package_behavior: PackageBehavior::WorkflowOnly,
+                language: "sql".to_string(),
+                private: false,
+                package_manager: Some("pnpm".to_string()),
+                git_repository_url: None,
+                github_action: false,
+                workspace: false,
+            };
+
+            create_project(&project_path, &config).unwrap();
+            let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+
+            if matches!(project_type, ProjectType::AstGrepJs | ProjectType::Hybrid) {
+                assert!(workflow.contains("language: \"sql\""));
+                let script = fs::read_to_string(project_path.join("scripts/codemod.ts")).unwrap();
+                assert!(script.contains("langs/sql"));
+                assert_eq!(
+                    fs::read_to_string(project_path.join("tests/fixtures/input.sql")).unwrap(),
+                    SQL_TEST_INPUT
+                );
+                assert_eq!(
+                    fs::read_to_string(project_path.join("tests/fixtures/expected.sql")).unwrap(),
+                    SQL_TEST_EXPECTED
+                );
+            }
+            if matches!(project_type, ProjectType::AstGrepYaml | ProjectType::Hybrid) {
+                let rule = fs::read_to_string(project_path.join("rules/config.yml")).unwrap();
+                assert!(rule.contains("language: sql"));
+            }
+            if project_type == ProjectType::AstGrepJs {
+                assert!(workflow.contains("**/*.sql"));
+                let package_json = fs::read_to_string(project_path.join("package.json")).unwrap();
+                assert!(package_json.contains("jssg test -l sql ./scripts/codemod.ts"));
+            }
+        }
     }
 
     #[test]

@@ -5,7 +5,7 @@
   "packageManager": "{package_manager}",
   "type": "module",
   "scripts": {
-    "test": "{codemod_command} jssg test -l typescript ./scripts/codemod.ts",
+    "test": "{codemod_command} jssg test -l {language} ./scripts/codemod.ts",
     "check-types": "tsc --noEmit"
   },
   "devDependencies": {

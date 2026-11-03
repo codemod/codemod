@@ -1,0 +1,11 @@
+id: rename-legacy-users-table
+language: sql
+rule:
+  kind: identifier
+  regex: ^legacy_users$
+  inside:
+    kind: object_reference
+    field: name
+    inside:
+      kind: relation
+fix: users
