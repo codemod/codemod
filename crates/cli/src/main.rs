@@ -16,6 +16,7 @@ mod diagnostics;
 mod dirty_git_check;
 mod engine;
 mod feedback;
+mod person_telemetry;
 mod pro_dry_run;
 mod progress_bar;
 mod report_server;
@@ -413,25 +414,28 @@ async fn run_cli() -> Result<()> {
         std::env::set_var("DISABLE_ANALYTICS", "true");
     }
 
-    let telemetry_sender: Arc<Box<dyn TelemetrySender + Send + Sync>> =
+    let (telemetry_sender, person_traits_sync): (TelemetrySenderMutex, Option<_>) =
         if std::env::var("DISABLE_ANALYTICS") == Ok("true".to_string())
             || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
         {
-            Arc::new(Box::new(NullSender {}))
+            (Arc::new(Box::new(NullSender {})), None)
         } else {
             let storage = TokenStorage::new()?;
             let config = storage.load_config()?;
 
             let auth = storage.get_auth_for_registry(&config.default_registry)?;
 
-            let distinct_id = auth.map(|auth| auth.user.id).unwrap_or_else(|| {
-                storage
-                    .get_or_create_anonymous_telemetry_id()
-                    .unwrap_or_else(|error| {
-                        log::debug!("Failed to persist anonymous telemetry id: {error}");
-                        uuid::Uuid::new_v4().to_string()
-                    })
-            });
+            let distinct_id = auth
+                .as_ref()
+                .map(|auth| auth.user.id.clone())
+                .unwrap_or_else(|| {
+                    storage
+                        .get_or_create_anonymous_telemetry_id()
+                        .unwrap_or_else(|error| {
+                            log::debug!("Failed to persist anonymous telemetry id: {error}");
+                            uuid::Uuid::new_v4().to_string()
+                        })
+                });
 
             let options = TelemetrySenderOptions {
                 distinct_id,
@@ -446,10 +450,23 @@ async fn run_cli() -> Result<()> {
                 .inspect_err(|error| log::debug!("Failed to initialize Scarf telemetry: {error}"))
                 .ok();
 
+            // Person traits go to PostHog directly, never through the composite:
+            // Scarf would put the email in a URL query string. Anonymous
+            // installs have no traits and are never aliased to a user.
+            let person_traits_sync = match (&posthog, auth) {
+                (Some(posthog), Some(auth)) => {
+                    let posthog = posthog.clone();
+                    Some(tokio::spawn(async move {
+                        person_telemetry::sync_person_traits(&storage, &posthog, &auth.user).await
+                    }))
+                }
+                _ => None,
+            };
+
             // PostHog is the primary backend; Scarf is best-effort alongside it.
             // If PostHog fails to initialize, Scarf can still carry telemetry
             // on its own rather than disabling telemetry entirely.
-            match (posthog, scarf) {
+            let sender: TelemetrySenderMutex = match (posthog, scarf) {
                 (Some(posthog), scarf) => {
                     let mut sender = CompositeSender::new(Arc::new(posthog));
                     if let Some(scarf) = scarf {
@@ -460,11 +477,27 @@ async fn run_cli() -> Result<()> {
                 }
                 (None, Some(scarf)) => Arc::new(Box::new(scarf)),
                 (None, None) => Arc::new(Box::new(NullSender {})),
-            }
+            };
+            (sender, person_traits_sync)
         };
 
     telemetry_sender.initialize_panic_telemetry().await;
 
+    let result = dispatch_command(&cli, telemetry_sender).await;
+
+    // The person-set runs concurrently with the command; give it a short grace
+    // period on exit so short-lived invocations still deliver it, without
+    // letting an unreachable PostHog hold the process open.
+    if let Some(task) = person_traits_sync {
+        let _ = tokio::time::timeout(PERSON_TRAITS_EXIT_GRACE, task).await;
+    }
+
+    result
+}
+
+const PERSON_TRAITS_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+
+async fn dispatch_command(cli: &Cli, telemetry_sender: TelemetrySenderMutex) -> Result<()> {
     match &cli.command {
         Some(Commands::Workflow(args)) => match &args.command {
             WorkflowCommands::Run(args) => {

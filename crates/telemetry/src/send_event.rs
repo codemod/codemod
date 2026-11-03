@@ -46,6 +46,8 @@ pub enum TelemetryError {
     Scarf(String),
     #[error("Scarf responded with status {0}")]
     ScarfStatus(u16),
+    #[error("No allowlisted person traits to send")]
+    NoPersonTraits,
 }
 
 #[async_trait]
@@ -68,8 +70,8 @@ pub trait TelemetrySender: Send + Sync + 'static {
 
 #[derive(Clone)]
 pub struct PostHogSender {
-    client: Arc<posthog_rs::Client>,
-    options: TelemetrySenderOptions,
+    pub(crate) client: Arc<posthog_rs::Client>,
+    pub(crate) options: TelemetrySenderOptions,
 }
 
 pub const POSTHOG_API_KEY: &str = env!("POSTHOG_API_KEY");
@@ -101,7 +103,7 @@ impl PostHogSender {
         Ok(Self::with_client(options, client))
     }
 
-    fn with_client(options: TelemetrySenderOptions, client: posthog_rs::Client) -> Self {
+    pub(crate) fn with_client(options: TelemetrySenderOptions, client: posthog_rs::Client) -> Self {
         Self {
             client: Arc::new(client),
             options,
@@ -227,8 +229,47 @@ where
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    use super::{PostHogSender, TelemetrySenderOptions};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
+
+    /// A `PostHogSender` pointed at a fresh [`TestServer`] answering `statuses`.
+    pub(crate) async fn posthog_test_sender(
+        statuses: Vec<&'static str>,
+        distinct_id: &str,
+    ) -> (PostHogSender, TestServer) {
+        let server = TestServer::start(statuses).await;
+
+        let client_options = posthog_rs::ClientOptionsBuilder::default()
+            .api_key("test-key".to_string())
+            .host(server.base_url())
+            .request_timeout_seconds(1)
+            .max_capture_attempts(3)
+            .retry_initial_backoff_ms(1)
+            .retry_max_backoff_ms(2)
+            .build()
+            .expect("build test PostHog client options");
+        let client = posthog_rs::client(client_options).await;
+        (
+            PostHogSender::with_client(
+                TelemetrySenderOptions {
+                    distinct_id: distinct_id.to_string(),
+                    cloud_role: "CLI".to_string(),
+                },
+                client,
+            ),
+            server,
+        )
+    }
+
+    /// Parses the JSON body of a raw HTTP request recorded by [`TestServer`].
+    pub(crate) fn request_json(request: &str) -> serde_json::Value {
+        let body = request
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body)
+            .expect("request should contain a body");
+        serde_json::from_str(body).expect("request body should be JSON")
+    }
 
     /// A single-threaded HTTP server that answers `statuses` in order and
     /// records every raw request it received.
@@ -307,32 +348,11 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::TestServer;
+    use super::test_support::{posthog_test_sender, request_json, TestServer};
     use super::*;
 
     async fn test_sender(statuses: Vec<&'static str>) -> (PostHogSender, TestServer) {
-        let server = TestServer::start(statuses).await;
-
-        let client_options = posthog_rs::ClientOptionsBuilder::default()
-            .api_key("test-key".to_string())
-            .host(server.base_url())
-            .request_timeout_seconds(1)
-            .max_capture_attempts(3)
-            .retry_initial_backoff_ms(1)
-            .retry_max_backoff_ms(2)
-            .build()
-            .expect("build test PostHog client options");
-        let client = posthog_rs::client(client_options).await;
-        (
-            PostHogSender::with_client(
-                TelemetrySenderOptions {
-                    distinct_id: "installation-123".to_string(),
-                    cloud_role: "CLI".to_string(),
-                },
-                client,
-            ),
-            server,
-        )
+        posthog_test_sender(statuses, "installation-123").await
     }
 
     #[tokio::test]
@@ -354,13 +374,7 @@ mod tests {
             .expect("event should be accepted");
 
         let requests = server.finish().await;
-        let request = &requests[0];
-        let body = request
-            .split_once("\r\n\r\n")
-            .map(|(_, body)| body)
-            .expect("request should contain a body");
-        let payload: serde_json::Value =
-            serde_json::from_str(body).expect("request body should be JSON");
+        let payload = request_json(&requests[0]);
         let event = &payload["batch"][0];
 
         assert_eq!(event["distinct_id"], "installation-123");

@@ -257,6 +257,58 @@ impl TokenStorage {
         }
     }
 
+    /// Fingerprint of the person traits last delivered to PostHog for
+    /// `distinct_id`, if any. An unreadable file is treated as "nothing
+    /// delivered yet" so a corrupt entry heals on the next successful send.
+    pub fn load_person_traits_fingerprint(&self, distinct_id: &str) -> Result<Option<String>> {
+        Ok(self.load_person_traits_fingerprints()?.remove(distinct_id))
+    }
+
+    pub fn save_person_traits_fingerprint(
+        &self,
+        distinct_id: &str,
+        fingerprint: &str,
+    ) -> Result<()> {
+        let mut fingerprints = self.load_person_traits_fingerprints()?;
+        fingerprints.insert(distinct_id.to_string(), fingerprint.to_string());
+
+        let path = self.person_traits_path();
+        let content = serde_json::to_string_pretty(&fingerprints)
+            .context("Failed to serialize person traits fingerprints")?;
+
+        // Write-then-rename so a concurrent CLI process never reads a partial file.
+        let mut temporary = tempfile::NamedTempFile::new_in(&self.config_dir)
+            .context("Failed to create temporary person traits file")?;
+        temporary
+            .write_all(content.as_bytes())
+            .context("Failed to write temporary person traits file")?;
+        temporary
+            .persist(&path)
+            .map_err(|error| error.error)
+            .with_context(|| format!("Failed to persist person traits file: {path:?}"))?;
+        Ok(())
+    }
+
+    fn load_person_traits_fingerprints(&self) -> Result<HashMap<String, String>> {
+        let path = self.person_traits_path();
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to read person traits file: {path:?}"))
+            }
+        };
+        Ok(serde_json::from_str(&content).unwrap_or_else(|error| {
+            log::debug!("Ignoring unparsable person traits file {path:?}: {error}");
+            HashMap::new()
+        }))
+    }
+
+    fn person_traits_path(&self) -> PathBuf {
+        self.config_dir.join("person_traits.json")
+    }
+
     fn get_auth_path(&self, registry: &str) -> PathBuf {
         let auth_dir = self.config_dir.join("auth");
         let filename = format!("{}.json", Self::sanitize_registry_name(registry));
@@ -428,6 +480,62 @@ mod tests {
         assert_eq!(ids.len(), 1);
     }
 
+    #[test]
+    fn person_traits_fingerprint_is_persisted_per_user() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+
+        assert_eq!(
+            storage
+                .load_person_traits_fingerprint("user-a")
+                .expect("missing file is not an error"),
+            None
+        );
+
+        storage
+            .save_person_traits_fingerprint("user-a", "hash-a")
+            .expect("save user a");
+        storage
+            .save_person_traits_fingerprint("user-b", "hash-b")
+            .expect("save user b");
+        storage
+            .save_person_traits_fingerprint("user-a", "hash-a2")
+            .expect("overwrite user a");
+
+        let reloaded =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        assert_eq!(
+            reloaded.load_person_traits_fingerprint("user-a").unwrap(),
+            Some("hash-a2".to_string())
+        );
+        assert_eq!(
+            reloaded.load_person_traits_fingerprint("user-b").unwrap(),
+            Some("hash-b".to_string())
+        );
+    }
+
+    #[test]
+    fn unparsable_person_traits_file_is_treated_as_empty_and_overwritten() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        fs::write(temp_dir.path().join("person_traits.json"), "not json").unwrap();
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+
+        assert_eq!(
+            storage.load_person_traits_fingerprint("user-a").unwrap(),
+            None
+        );
+
+        storage
+            .save_person_traits_fingerprint("user-a", "hash-a")
+            .expect("save should replace the corrupt file");
+        assert_eq!(
+            storage.load_person_traits_fingerprint("user-a").unwrap(),
+            Some("hash-a".to_string())
+        );
+    }
+
     fn stored_auth(registry: &str) -> StoredAuth {
         StoredAuth {
             tokens: AuthTokens {
@@ -441,6 +549,7 @@ mod tests {
                 id: "user-id".to_string(),
                 username: "user".to_string(),
                 email: "user@example.com".to_string(),
+                name: None,
                 organizations: None,
             },
             registry: registry.to_string(),
