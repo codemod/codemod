@@ -256,9 +256,66 @@ fn should_prompt_for_no_command_action() -> bool {
 }
 
 fn exit_with_code(code: i32) -> ! {
+    wait_for_person_traits_sync();
     let _ = io::stdout().flush();
     let _ = io::stderr().flush();
     std::process::exit(code);
+}
+
+/// Effective analytics opt-out, including implicit `codemod @pkg … --disable-analytics`
+/// where the flag lives in trailing args until the run subcommand is re-parsed.
+fn effective_disable_analytics(cli: &Cli) -> bool {
+    if cli.disable_analytics {
+        return true;
+    }
+    if cli
+        .trailing_args
+        .iter()
+        .any(|arg| arg == "--disable-analytics")
+    {
+        return true;
+    }
+    if let Ok(parsed) = Cli::try_parse_from(cli.trailing_args.clone()) {
+        if parsed.disable_analytics {
+            return true;
+        }
+    }
+    if let Some(ImplicitRoute::Run(full_args)) = classify_implicit_route(&cli.trailing_args) {
+        if let Ok(parsed) = Cli::try_parse_from(&full_args) {
+            return parsed.disable_analytics;
+        }
+    }
+    false
+}
+
+static PERSON_TRAITS_TASK: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>> =
+    std::sync::Mutex::new(None);
+
+fn register_person_traits_task(handle: tokio::task::JoinHandle<()>) {
+    if let Ok(mut slot) = PERSON_TRAITS_TASK.lock() {
+        *slot = Some(handle);
+    }
+}
+
+fn wait_for_person_traits_sync() {
+    let handle = PERSON_TRAITS_TASK
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    let Some(handle) = handle else {
+        return;
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => {
+            let _ = tokio::task::block_in_place(|| {
+                runtime.block_on(tokio::time::timeout(PERSON_TRAITS_EXIT_GRACE, handle))
+            });
+        }
+        Err(_) => {
+            // Detach if we somehow exit without a runtime; the OS reaps the task.
+            drop(handle);
+        }
+    }
 }
 
 fn validate_no_command_package_input(
@@ -404,93 +461,80 @@ async fn run_cli() -> Result<()> {
     let default_log_filter = if cli.verbose { "debug" } else { "error" };
     env_logger::init_from_env(env_logger::Env::default().default_filter_or(default_log_filter));
 
-    let implicit_cli_params = Cli::try_parse_from(cli.trailing_args.clone());
-
-    if cli.disable_analytics
-        || implicit_cli_params
-            .map(|params| params.disable_analytics)
-            .unwrap_or(false)
-    {
+    if effective_disable_analytics(&cli) {
         std::env::set_var("DISABLE_ANALYTICS", "true");
     }
 
-    let (telemetry_sender, person_traits_sync): (TelemetrySenderMutex, Option<_>) =
-        if std::env::var("DISABLE_ANALYTICS") == Ok("true".to_string())
-            || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
-        {
-            (Arc::new(Box::new(NullSender {})), None)
-        } else {
-            let storage = TokenStorage::new()?;
-            let config = storage.load_config()?;
+    let telemetry_sender: TelemetrySenderMutex = if std::env::var("DISABLE_ANALYTICS")
+        == Ok("true".to_string())
+        || std::env::var("DISABLE_ANALYTICS") == Ok("1".to_string())
+    {
+        Arc::new(Box::new(NullSender {}))
+    } else {
+        let storage = TokenStorage::new()?;
+        let config = storage.load_config()?;
 
-            let auth = storage.get_auth_for_registry(&config.default_registry)?;
+        let auth = storage.get_auth_for_registry(&config.default_registry)?;
 
-            let distinct_id = auth
-                .as_ref()
-                .map(|auth| auth.user.id.clone())
-                .unwrap_or_else(|| {
-                    storage
-                        .get_or_create_anonymous_telemetry_id()
-                        .unwrap_or_else(|error| {
-                            log::debug!("Failed to persist anonymous telemetry id: {error}");
-                            uuid::Uuid::new_v4().to_string()
-                        })
-                });
+        let distinct_id = auth
+            .as_ref()
+            .map(|auth| auth.user.id.clone())
+            .unwrap_or_else(|| {
+                storage
+                    .get_or_create_anonymous_telemetry_id()
+                    .unwrap_or_else(|error| {
+                        log::debug!("Failed to persist anonymous telemetry id: {error}");
+                        uuid::Uuid::new_v4().to_string()
+                    })
+            });
 
-            let options = TelemetrySenderOptions {
-                distinct_id,
-                cloud_role: "CLI".to_string(),
-            };
-
-            let posthog = PostHogSender::new(options.clone())
-                .await
-                .inspect_err(|error| log::debug!("Failed to initialize PostHog telemetry: {error}"))
-                .ok();
-            let scarf = ScarfSender::new(options)
-                .inspect_err(|error| log::debug!("Failed to initialize Scarf telemetry: {error}"))
-                .ok();
-
-            // Person traits go to PostHog directly, never through the composite:
-            // Scarf would put the email in a URL query string. Anonymous
-            // installs have no traits and are never aliased to a user.
-            let person_traits_sync = match (&posthog, auth) {
-                (Some(posthog), Some(auth)) => {
-                    let posthog = posthog.clone();
-                    Some(tokio::spawn(async move {
-                        person_telemetry::sync_person_traits(&storage, &posthog, &auth.user).await
-                    }))
-                }
-                _ => None,
-            };
-
-            // PostHog is the primary backend; Scarf is best-effort alongside it.
-            // If PostHog fails to initialize, Scarf can still carry telemetry
-            // on its own rather than disabling telemetry entirely.
-            let sender: TelemetrySenderMutex = match (posthog, scarf) {
-                (Some(posthog), scarf) => {
-                    let mut sender = CompositeSender::new(Arc::new(posthog));
-                    if let Some(scarf) = scarf {
-                        sender = sender.with_secondary(Arc::new(scarf));
-                    }
-                    let sender: Box<dyn TelemetrySender + Send + Sync> = Box::new(sender);
-                    Arc::new(sender)
-                }
-                (None, Some(scarf)) => Arc::new(Box::new(scarf)),
-                (None, None) => Arc::new(Box::new(NullSender {})),
-            };
-            (sender, person_traits_sync)
+        let options = TelemetrySenderOptions {
+            distinct_id,
+            cloud_role: "CLI".to_string(),
         };
+
+        let posthog = PostHogSender::new(options.clone())
+            .await
+            .inspect_err(|error| log::debug!("Failed to initialize PostHog telemetry: {error}"))
+            .ok();
+        let scarf = ScarfSender::new(options)
+            .inspect_err(|error| log::debug!("Failed to initialize Scarf telemetry: {error}"))
+            .ok();
+
+        // Person traits go to PostHog directly, never through the composite:
+        // Scarf would put the email in a URL query string. Anonymous
+        // installs have no traits and are never aliased to a user.
+        // Opt-out is resolved before this spawn (including implicit-run flag order).
+        if let (Some(posthog), Some(auth)) = (&posthog, auth) {
+            let posthog = posthog.clone();
+            register_person_traits_task(tokio::spawn(async move {
+                let _ = person_telemetry::sync_person_traits(&storage, &posthog, &auth.user).await;
+            }));
+        }
+
+        // PostHog is the primary backend; Scarf is best-effort alongside it.
+        // If PostHog fails to initialize, Scarf can still carry telemetry
+        // on its own rather than disabling telemetry entirely.
+        match (posthog, scarf) {
+            (Some(posthog), scarf) => {
+                let mut sender = CompositeSender::new(Arc::new(posthog));
+                if let Some(scarf) = scarf {
+                    sender = sender.with_secondary(Arc::new(scarf));
+                }
+                let sender: Box<dyn TelemetrySender + Send + Sync> = Box::new(sender);
+                Arc::new(sender)
+            }
+            (None, Some(scarf)) => Arc::new(Box::new(scarf)),
+            (None, None) => Arc::new(Box::new(NullSender {})),
+        }
+    };
 
     telemetry_sender.initialize_panic_telemetry().await;
 
     let result = dispatch_command(&cli, telemetry_sender).await;
 
-    // The person-set runs concurrently with the command; give it a short grace
-    // period on exit so short-lived invocations still deliver it, without
-    // letting an unreachable PostHog hold the process open.
-    if let Some(task) = person_traits_sync {
-        let _ = tokio::time::timeout(PERSON_TRAITS_EXIT_GRACE, task).await;
-    }
+    // Also runs from exit_with_code so direct process exits get the same grace.
+    wait_for_person_traits_sync();
 
     result
 }
@@ -768,6 +812,27 @@ mod tests {
         let trailing_args = vec!["jest-to-vitest".to_string(), "--dry-run".to_string()];
         let route = classify_implicit_route(&trailing_args);
         assert!(matches!(route, Some(ImplicitRoute::Run(_))));
+    }
+
+    #[test]
+    fn effective_disable_analytics_sees_flag_after_implicit_package_args() {
+        // `codemod @pkg --dry-run --disable-analytics` parks the opt-out in trailing_args.
+        let cli = Cli::try_parse_from([
+            "codemod",
+            "@codemod/sample",
+            "--dry-run",
+            "--disable-analytics",
+        ])
+        .expect("implicit package parse");
+        assert!(!cli.disable_analytics);
+        assert!(effective_disable_analytics(&cli));
+    }
+
+    #[test]
+    fn effective_disable_analytics_respects_global_flag() {
+        let cli = Cli::try_parse_from(["codemod", "--disable-analytics", "whoami"])
+            .expect("global flag parse");
+        assert!(effective_disable_analytics(&cli));
     }
 
     #[test]

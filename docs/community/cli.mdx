@@ -52,6 +52,24 @@ npx codemod publish
 
 ---
 
+## Telemetry
+
+When analytics are enabled, the CLI sends product telemetry to PostHog (and a separate Scarf
+gateway for install/usage signals). Logged-in users are keyed by their Codemod account id.
+Anonymous installs use a local telemetry id and are never aliased to an account.
+
+For logged-in sessions only, the CLI may also send a separate PostHog `$set` with the account
+**email** and optional **display name** so dashboards can show people instead of raw UUIDs. That
+update is PostHog-only (not Scarf), deduped locally, and skipped when you opt out.
+
+Disable all of this for a single invocation with `--disable-analytics`, or by setting
+`DISABLE_ANALYTICS=true` / `DISABLE_ANALYTICS=1` in the environment. The flag works on explicit
+commands and on implicit package runs such as `npx codemod @org/package --disable-analytics`.
+
+More detail: [Telemetry compliance](https://codemod.com/telemetry-compliance).
+
+---
+
 # CLI Command Reference
 
 Codemod CLI is accessible using the `npx codemod` command. The following commands and options are available:
