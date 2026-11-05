@@ -9,5 +9,5 @@ Non-negotiable:
 - Search the registry before proposing a custom codemod plan, unless the user asked to create a codemod.
 - If no package fits, run `npx codemod init <path> --no-interactive` right away, passing only flags the user or task gave you; do not invent author, license, description, or repository metadata.
 - Stay AST-first with `js-ast-grep` for parser-backed formats; use `npx codemod ai dump-ast` and `npx codemod ai node-types` when shape is unclear.
-- Before stopping, run `npx codemod ai call validate_codemod_package --input '{"package_path":"."}'` and the package's default tests, and make the transform, fixtures, README, `codemod.yaml`, and `workflow.yaml` describe the same migration.
+- When authoring, do not stop until `npx codemod workflow validate -w <package-dir>`, `npx codemod ai call validate_codemod_package --input '{"package_path":"."}'`, and the package's default tests all pass, and make the transform, fixtures, README, `codemod.yaml`, and `workflow.yaml` describe the same migration.
 - Do not commit or push unless the user asked for git operations.
