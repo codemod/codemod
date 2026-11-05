@@ -914,7 +914,10 @@ mod tests {
     use flate2::{write::GzEncoder, Compression};
     use std::io::{Cursor, Write};
     use std::sync::Mutex;
-    use tokio::net::TcpListener;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
 
     #[tokio::test]
     async fn package_locks_are_shared_while_live_and_pruned_after_use() {
@@ -1309,7 +1312,7 @@ mod tests {
 
         let handle = tokio::spawn(async move {
             loop {
-                let Ok((stream, _)) = listener.accept().await else {
+                let Ok((mut stream, _)) = listener.accept().await else {
                     break;
                 };
 
@@ -1320,15 +1323,9 @@ mod tests {
                 let requests = Arc::clone(&requests);
 
                 tokio::spawn(async move {
-                    let mut buffer = [0; 4096];
-                    let Ok(size) = stream
-                        .readable()
-                        .await
-                        .and_then(|_| stream.try_read(&mut buffer))
-                    else {
+                    let Some(request) = read_request_head(&mut stream).await else {
                         return;
                     };
-                    let request = String::from_utf8_lossy(&buffer[..size]);
                     let Some(request_line) = request.lines().next() else {
                         return;
                     };
@@ -1351,22 +1348,38 @@ mod tests {
                         ("404 Not Found", "text/plain", b"not found".to_vec())
                     };
 
-                    let response = format!(
+                    let mut response = format!(
                         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         body.len()
-                    );
-
-                    let _ = stream.writable().await;
-                    let _ = stream.try_write(response.as_bytes());
-                    if method != "HEAD" && !body.is_empty() {
-                        let _ = stream.writable().await;
-                        let _ = stream.try_write(&body);
+                    )
+                    .into_bytes();
+                    if method != "HEAD" {
+                        response.extend_from_slice(&body);
                     }
+
+                    let _ = stream.write_all(&response).await;
+                    let _ = stream.shutdown().await;
                 });
             }
         });
 
         (format!("http://{addr}"), handle)
+    }
+
+    /// Reads until the end of the HTTP request head. A single non-blocking
+    /// read can observe a spurious readiness or a partial request, which drops
+    /// the connection and makes registry lookups fail nondeterministically.
+    async fn read_request_head(stream: &mut tokio::net::TcpStream) -> Option<String> {
+        let mut request = Vec::new();
+        let mut buffer = [0; 4096];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let size = stream.read(&mut buffer).await.ok()?;
+            if size == 0 {
+                return None;
+            }
+            request.extend_from_slice(&buffer[..size]);
+        }
+        Some(String::from_utf8_lossy(&request).into_owned())
     }
 
     fn package_info_response(name: &str, scope: Option<&str>) -> String {

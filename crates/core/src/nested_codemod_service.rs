@@ -300,7 +300,10 @@ mod tests {
         },
         time::Duration,
     };
-    use tokio::net::TcpListener;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
 
     #[test]
     fn format_cycle_error_does_not_expose_dependency_chain() {
@@ -406,6 +409,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn registry_server_answers_requests_split_across_tcp_writes() {
+        let workflow = workflow_yaml_without_children();
+        let packages = HashMap::from([(
+            "child-pro".to_string(),
+            MockPackage {
+                workflow: workflow.clone(),
+                dry_run_only: false,
+            },
+        )]);
+        let (registry_url, server) = spawn_registry_server(packages).await;
+        let address = registry_url
+            .strip_prefix("http://")
+            .expect("registry address");
+        let mut client = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connect to test registry");
+
+        // Split inside the path: a server that answers from its first read
+        // sees `/cdn/child` and responds 404 instead of serving the archive.
+        client
+            .write_all(b"GET /cdn/child")
+            .await
+            .expect("write first request fragment");
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+        client
+            .write_all(b"-pro.tgz HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .expect("write second request fragment");
+
+        let mut response = Vec::new();
+        client
+            .read_to_end(&mut response)
+            .await
+            .expect("read registry response");
+        let body = package_archive(&workflow);
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        assert_eq!(response, [head.as_bytes(), &body].concat());
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn validates_direct_bundle_dependencies_concurrently() {
         let packages = HashMap::from([
             (
@@ -486,7 +535,7 @@ mod tests {
 
         let handle = tokio::spawn(async move {
             loop {
-                let Ok((stream, _)) = listener.accept().await else {
+                let Ok((mut stream, _)) = listener.accept().await else {
                     break;
                 };
 
@@ -494,15 +543,9 @@ mod tests {
                 let server_url = server_url.clone();
                 let metrics = Arc::clone(&server_metrics);
                 tokio::spawn(async move {
-                    let mut buffer = [0; 4096];
-                    let Ok(size) = stream
-                        .readable()
-                        .await
-                        .and_then(|_| stream.try_read(&mut buffer))
-                    else {
+                    let Some(request) = read_request_head(&mut stream).await else {
                         return;
                     };
-                    let request = String::from_utf8_lossy(&buffer[..size]);
                     let Some(request_line) = request.lines().next() else {
                         return;
                     };
@@ -527,22 +570,38 @@ mod tests {
                             || ("404 Not Found", "text/plain", b"not found".to_vec()),
                         );
 
-                    let response = format!(
+                    let mut response = format!(
                         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         body.len()
-                    );
-
-                    let _ = stream.writable().await;
-                    let _ = stream.try_write(response.as_bytes());
-                    if method != "HEAD" && !body.is_empty() {
-                        let _ = stream.writable().await;
-                        let _ = stream.try_write(&body);
+                    )
+                    .into_bytes();
+                    if method != "HEAD" {
+                        response.extend_from_slice(&body);
                     }
+
+                    let _ = stream.write_all(&response).await;
+                    let _ = stream.shutdown().await;
                 });
             }
         });
 
         (registry_url, handle, metrics)
+    }
+
+    /// Reads until the end of the HTTP request head. A single non-blocking
+    /// read can observe a spurious readiness or a partial request, which drops
+    /// the connection and makes registry lookups fail nondeterministically.
+    async fn read_request_head(stream: &mut tokio::net::TcpStream) -> Option<String> {
+        let mut request = Vec::new();
+        let mut buffer = [0; 4096];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let size = stream.read(&mut buffer).await.ok()?;
+            if size == 0 {
+                return None;
+            }
+            request.extend_from_slice(&buffer[..size]);
+        }
+        Some(String::from_utf8_lossy(&request).into_owned())
     }
 
     fn registry_response(
