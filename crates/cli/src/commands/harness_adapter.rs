@@ -5601,65 +5601,39 @@ codemod-skill-version: 0.1.0
         let _ = release_managed_state_lock(&lock_path);
     }
 
-    fn bundled_command_args(prefix: &str) -> Vec<String> {
-        [MCS_SKILL_MD, MCS_COMMAND_MD]
+    fn assert_bundled_args_are_known(prefix: &str, known: Vec<&str>) {
+        let unknown: Vec<&str> = [MCS_SKILL_MD, MCS_COMMAND_MD]
             .iter()
             .flat_map(|doc| doc.split(prefix).skip(1))
             .filter_map(|rest| rest.split_whitespace().next())
-            .map(|arg| arg.trim_matches(|c: char| "`'\",.".contains(c)).to_string())
-            .filter(|arg| !arg.is_empty() && !arg.starts_with('<') && !arg.starts_with('-'))
-            .collect()
+            .map(|arg| arg.trim_matches(|c: char| "`'\",.".contains(c)))
+            .filter(|arg| !arg.starts_with('<') && !known.contains(arg))
+            .collect();
+        assert!(unknown.is_empty(), "unknown after `{prefix}`: {unknown:?}");
     }
 
     #[test]
     fn every_doc_the_skill_names_is_readable_with_codemod_ai_docs() {
-        let resources = codemod_mcp::CodemodMcpServer::default().cli_resources();
-        let table_names = MCS_SKILL_MD
-            .lines()
-            .filter(|line| line.starts_with("| ") && line.contains('`'))
-            .flat_map(|line| {
-                line.rsplit('|')
-                    .nth(1)
-                    .unwrap_or_default()
-                    .split('`')
-                    .skip(1)
-                    .step_by(2)
-            })
-            .map(str::to_string);
-        let unknown: Vec<String> = bundled_command_args("npx codemod ai docs ")
-            .into_iter()
-            .chain(table_names)
-            .filter(|name| {
-                !resources.iter().any(|resource| {
-                    resource.name == name
-                        || resource.name.strip_suffix("-instructions") == Some(name)
-                })
-            })
-            .collect();
-        assert!(unknown.is_empty(), "unknown docs: {unknown:?}");
+        let docs = codemod_mcp::CodemodMcpServer::default().cli_resources();
+        let names = docs
+            .iter()
+            .map(|d| d.name.trim_end_matches("-instructions"));
+        assert_bundled_args_are_known("npx codemod ai docs ", names.collect());
     }
 
     #[test]
     fn every_tool_the_skill_calls_is_exposed_by_codemod_ai_call() {
         let tools = codemod_mcp::CodemodMcpServer::default().cli_tools();
-        let unknown: Vec<String> = bundled_command_args("npx codemod ai call ")
-            .into_iter()
-            .filter(|name| !tools.iter().any(|tool| tool.name == name))
-            .collect();
-        assert!(unknown.is_empty(), "unknown tools: {unknown:?}");
+        let names = tools.iter().map(|tool| tool.name);
+        assert_bundled_args_are_known("npx codemod ai call ", names.collect());
     }
 
     #[test]
     fn repository_skill_matches_the_skill_codemod_ai_installs() {
-        let repo_skill = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills/codemod");
-        assert_eq!(
-            fs::read_to_string(repo_skill.join("SKILL.md")).unwrap(),
-            MCS_SKILL_MD
-        );
-        assert_eq!(
-            fs::read_to_string(repo_skill.join("commands/codemod.md")).unwrap(),
-            MCS_COMMAND_MD
-        );
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../skills/codemod/");
+        let read = |file| fs::read_to_string(format!("{dir}{file}")).unwrap();
+        let repo_copy = [read("SKILL.md"), read("commands/codemod.md")];
+        assert_eq!(repo_copy, [MCS_SKILL_MD, MCS_COMMAND_MD]);
     }
 
     #[test]

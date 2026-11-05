@@ -30,19 +30,17 @@ Everything below runs through the Codemod CLI. For work on the user's Codemod pl
 
 ## Which doc to read
 
-Read each doc with `npx codemod ai docs <name>`.
-
-| When you | Doc name |
+| When you | Run |
 | --- | --- |
-| Create a codemod or do a large refactor (read first) | `codemod-creation-workflow` |
-| Write transform or mining code (read before coding) | `jssg-gotchas`, then `ast-grep-gotchas` |
-| Implement the transform once a package exists | `jssg` |
-| Need Node/LLRT APIs, capability-gated modules, or multi-file JSSG work | `jssg-runtime-capabilities` |
-| Need reusable JSSG helpers | `jssg-utils` |
-| Run or discover codemods, or need exact command syntax | `codemod-cli` |
-| Maintain a codemod monorepo or a multi-hop version series | `codemod-maintainer-monorepo` |
-| Split a large migration into multiple PRs | `sharding` |
-| Hit errors or unexpected behavior | `codemod-troubleshooting` |
+| Create a codemod or do a large refactor (read first) | `npx codemod ai docs codemod-creation-workflow` |
+| Write transform or mining code (read before coding) | `npx codemod ai docs jssg-gotchas`, then `npx codemod ai docs ast-grep-gotchas` |
+| Implement the transform once a package exists | `npx codemod ai docs jssg` |
+| Need Node/LLRT APIs, capability-gated modules, or multi-file JSSG work | `npx codemod ai docs jssg-runtime-capabilities` |
+| Need reusable JSSG helpers | `npx codemod ai docs jssg-utils` |
+| Run or discover codemods, or need exact command syntax | `npx codemod ai docs codemod-cli` |
+| Maintain a codemod monorepo or a multi-hop version series | `npx codemod ai docs codemod-maintainer-monorepo` |
+| Split a large migration into multiple PRs | `npx codemod ai docs sharding` |
+| Hit errors or unexpected behavior | `npx codemod ai docs codemod-troubleshooting` |
 
 The Performant codemods section of `jssg-gotchas` is required reading for any JSSG package: discriminating selectors or token gates, no per-file full-repo walks, and a timed no-op vs real run on the same entry path (`workflow run` when the package uses selectors/globs; otherwise `jssg run --language`) before you claim it is done.
 
