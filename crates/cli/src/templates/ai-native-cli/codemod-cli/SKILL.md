@@ -1,6 +1,6 @@
 ---
 name: codemod
-description: Use Codemod CLI whenever the user wants to migrate, upgrade, update, or refactor a codebase in a repeatable way. This includes framework migrations, library upgrades, version bump migrations, API surface changes, deprecations, large-scale mechanical edits, codemod package authoring, AST inspection, tree-sitter node type lookup, and Codemod documentation lookup through `codemod ai` commands. First search the Codemod Registry for an existing package, prefer deterministic codemods before open-ended AI rewrites, run dry-runs before apply, and create a codemod package only when no suitable package exists.
+description: Use Codemod CLI whenever the user wants to migrate, upgrade, update, or refactor a codebase in a repeatable way. This includes framework migrations, library upgrades, version bump migrations, API surface changes, deprecations, large-scale mechanical edits, codemod package authoring, AST inspection, tree-sitter node type lookup, and Codemod documentation lookup through `npx codemod ai` commands. First search the Codemod Registry for an existing package, prefer deterministic codemods before open-ended AI rewrites, run dry-runs before apply, and create a codemod package only when no suitable package exists.
 allowed-tools:
   - Bash(codemod *)
   - Bash(npx codemod *)
@@ -10,107 +10,66 @@ argument-hint: "<migration-intent>"
 # Codemod Migration Assistant
 
 codemod-compatibility: mcs-v1
-codemod-skill-version: 1.1.3
+codemod-skill-version: 1.2.0
 
-Use this skill to orchestrate migration execution, codemod package authoring, and Codemod CLI AI inspection.
+Use this skill for migrations, upgrades, deprecation rollouts, large mechanical refactors, codemod package authoring (including read-only mining / Insights metrics packages), and AST inspection. Use Codemod before falling back to an open-ended AI rewrite.
 
-Trigger this skill when the user asks to:
-- migrate from one framework/library/tooling stack to another
-- upgrade or update a framework, SDK, package, plugin, compiler, or toolchain
-- apply a breaking-change migration, deprecation migration, or version bump rollout
-- perform a large mechanical refactor that may already exist as a Codemod Registry package
-- inspect AST shape, tree-sitter node types, Codemod documentation, or Codemod MCP-equivalent tools/resources from the CLI
-- build a read-only mining / Insights metrics package (detect patterns, emit metrics, leave source unchanged)
+Everything below runs through the Codemod CLI. For work on the user's Codemod platform account (Grep across their repositories, Insights dashboards, campaigns, organizations), use the Codemod MCP at `https://app.codemod.com/api/v1/mcp`. If its tools are not available, ask the user to connect it (setup: https://docs.codemod.com/enterprise/codemod-mcp); do not substitute these CLI commands for platform data.
 
-When the intent is migration/update/upgrade oriented, use Codemod first before defaulting to a fully open-ended AI rewrite.
+## CLI commands
 
-## CLI AI tools
+- Search the registry: `npx codemod search <terms>`
+- Dry-run a package: `npx codemod run <package-id> --dry-run`
+- Scaffold a package: `npx codemod init <path> --no-interactive`
+- List docs: `npx codemod ai docs`
+- Read a doc: `npx codemod ai docs <name>`, for example `npx codemod ai docs codemod-creation-workflow`
+- Dump AST: `npx codemod ai dump-ast src/App.tsx` or `echo 'const x = 1;' | npx codemod ai dump-ast --`
+- Node kinds and fields: `npx codemod ai node-types tsx`
+- Validate a package: `npx codemod ai call validate_codemod_package --input '{"package_path":"."}'`
+- Report a platform gap, only after the user consents: `npx codemod ai feedback --category <category> --message "<short message>"`
 
-Codemod AI tools must be usable without MCP. Prefer the CLI commands below when MCP tools/resources are missing, stale, blocked by the harness, or when you need a user-reproducible command:
+## Which doc to read
 
-- Dump AST shape: `echo 'const x = 23;' | npx codemod ai dump-ast --`
-- Dump AST for a file: `npx codemod ai dump-ast src/App.tsx`
-- Inspect node types for a language: `npx codemod ai node-types tsx`
-- List docs resources: `npx codemod ai docs`
-- Read/search docs: `npx codemod ai docs codemod-creation-workflow`
-- Submit anonymous platform feedback after user consent: `npx codemod ai feedback --category jssg --message "Short feedback"`
+Read each doc with `npx codemod ai docs <name>`.
 
-If MCP is available, direct MCP calls are acceptable. If MCP is unavailable, do not stop authoring only because MCP is missing; use the `codemod ai` CLI equivalents.
+| When you | Doc name |
+| --- | --- |
+| Create a codemod or do a large refactor (read first) | `codemod-creation-workflow` |
+| Write transform or mining code (read before coding) | `jssg-gotchas`, then `ast-grep-gotchas` |
+| Implement the transform once a package exists | `jssg` |
+| Need Node/LLRT APIs, capability-gated modules, or multi-file JSSG work | `jssg-runtime-capabilities` |
+| Need reusable JSSG helpers | `jssg-utils` |
+| Run or discover codemods, or need exact command syntax | `codemod-cli` |
+| Maintain a codemod monorepo or a multi-hop version series | `codemod-maintainer-monorepo` |
+| Split a large migration into multiple PRs | `sharding` |
+| Hit errors or unexpected behavior | `codemod-troubleshooting` |
 
-When the user:
-- **Creates a codemod or does a large refactor** — Read `codemod-creation-workflow-instructions` first via MCP or `npx codemod ai docs codemod-creation-workflow`. Before writing source-transform code, read `jssg-gotchas` and `ast-grep-gotchas` via MCP or `npx codemod ai docs jssg-gotchas` / `npx codemod ai docs ast-grep-gotchas`. Treat the Performant codemods section in `jssg-gotchas` (from `docs/community/jssg/advanced/performance.mdx`) as required: discriminating selectors or token gates, no per-file full-repo walks, timed no-op vs real run on the same entry path (`workflow run` when the package uses selectors/globs; otherwise `jssg run --language`) before you claim it is done. Read `codemod-cli-instructions` only when you need exact command syntax. Read `jssg-instructions` once a package exists and you are implementing the transform.
-- **Creates a mining / Insights metrics package** — Same as authoring via MCP or `npx codemod ai docs jssg-gotchas`. Insights binds one workflow step and loads that step’s `js-ast-grep` script from the published package: put `useMetricAtom` + `increment` in that script (`return null` for mining), not only in a package-entry file or helper import.
-- **Needs to know whether a codemod package is still a starter scaffold or incomplete** — Call MCP `validate_codemod_package` or run `npx codemod ai call validate_codemod_package --input '{"package_path":"."}'` before stopping.
-- **Needs Node/LLRT APIs, capability-gated modules, or non-trivial multi-file JSSG work** — Read `jssg-runtime-capabilities-instructions` via MCP or `npx codemod ai docs jssg-runtime-capabilities`.
-- **Maintains a codemod monorepo** — Read `codemod-maintainer-monorepo-instructions` via MCP or `npx codemod ai docs codemod-maintainer-monorepo`.
-- **Runs or discovers codemods** — Read `codemod-cli-instructions` via MCP or `npx codemod ai docs codemod-cli`.
-- **Hits errors or unexpected behavior** — Read `codemod-troubleshooting-instructions` via MCP or `npx codemod ai docs codemod-troubleshooting`.
-- **Needs reusable JSSG helpers** — Read `jssg-utils-instructions` via MCP or `npx codemod ai docs jssg-utils`.
-- **Needs to split a large migration into multiple PRs** — Read `sharding-instructions` via MCP or `npx codemod ai docs sharding`.
+The Performant codemods section of `jssg-gotchas` is required reading for any JSSG package: discriminating selectors or token gates, no per-file full-repo walks, and a timed no-op vs real run on the same entry path (`workflow run` when the package uses selectors/globs; otherwise `jssg run --language`) before you claim it is done.
 
-## Anonymous feedback
+For mining / Insights metrics packages, Insights loads the `js-ast-grep` script of the one bound workflow step: call `useMetricAtom` and `increment` in that script and `return null`, not only in a package-entry file or helper import.
 
-If you discover a Codemod platform gap, ask the user for explicit consent before enabling or submitting anonymous feedback. With consent, run `npx codemod ai feedback --category <category> --message <message>`. The command records the consent timestamp in user-wide Codemod config and submits the short feedback anonymously.
+## Migrations: search the registry first
 
-Use these categories when possible: `jssg` for JSSG feature requests or runtime gaps, `workflow` for workflow authoring feedback, `ai-docs` for docs/resource enhancements, `mcp` for MCP tool or resource feedback, `cli`, `registry`, `package-validation`, or `other`.
+1. Before planning a manual migration, derive a few high-signal terms from the request and run `npx codemod search`. Skip this only when the user says not to use Codemod or not to search.
+2. If a package fits, read its README for prerequisites, config, and limits, then run it with `--dry-run` before applying. Use `--no-interactive --install-skill` when the package ships an installable skill.
+3. Verify with tests and the dry-run summary before applying.
+4. If no package fits, run `npx codemod init` right away instead of continuing broad research.
 
-Keep feedback short and thematic. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.
+## Authoring rules
 
-## Authoring defaults
+- Keep transforms AST-first. Parser-backed formats (JavaScript, TypeScript, TSX, Python, Rust, Go, Java, HTML, XML, CSS, Kotlin, Angular templates, C#, C, C++, PHP, Ruby, Elixir, JSON, YAML, TOML) use a `js-ast-grep` step: AST queries select the nodes, `node.replace(...)` edits them, `root.root().commitEdits(...)` applies the edits.
+- Do not use regex, line splitting, whole-file `.replace(...)`, or Python, shell, or Node `fs` rewrites for those formats, and do not use JSSG only as a file walker around such rewrites. Do not add a shell step to reach a related file when JSSG can make that hop. Use raw text only for unsupported plain-text formats, document the fallback, and cover it with fixtures.
+- Run `npx codemod ai dump-ast` before broadening heuristics and `npx codemod ai node-types` when node kinds or fields are unclear. Use semantic, binding-aware checks when symbol origin matters.
+- Keep one granular transform or one exact `from -> to` migration per package unless the request is clearly open-ended or multi-hop.
+- Inspect only 1-3 representative repo files before you settle the transform shape.
+- In non-interactive `codemod init`, pass only flags the user or task gave you. Do not invent `--author`, `--license`, `--description`, or `--git-repository-url`; leave missing metadata to CLI defaults and the publish-time auth fallback.
+- Define positive, negative, edge, and no-op fixtures before deep implementation, then replace the starter transform, README, and fixtures.
+- Before stopping, make the transform, fixtures, README, `codemod.yaml`, `workflow.yaml`, and `package.json` scripts describe the same migration and target files. Keep workflow `base_path`/`include`/`exclude` globs explicit and aligned with `codemod.yaml` `targets.languages`. Do not churn version numbers, but do not leave stale metadata after a rename.
+- Keep the scaffold's package manager in scripts and README commands, and the repository's dependency and lockfile conventions.
+- Do not stop while `validate_codemod_package` reports starter scaffold markers, missing package surface updates, missing real test cases, or failing default tests.
+- Do not default reusable codemods to private registry access unless the user asked for it.
+- Do not commit or push unless the user asked for git operations.
 
-- Treat the Codemod docs served through `codemod ai docs` or MCP resources as the source of truth for CLI, workflow, and JSSG semantics.
-- Keep source transforms AST-first. Do not use regex or raw source-text rewriting as the primary implementation strategy.
-- Before using line-based parsing, regular-expression replacement, or whole-file source rewriting, check whether the target file type has a JSSG language parser. Parser-backed formats include JavaScript, TypeScript, TSX, Python, Rust, Go, Java, HTML, XML, CSS, Kotlin, Angular templates, C#, C, C++, PHP, Ruby, Elixir, JSON, YAML, and TOML.
-- For parser-backed files, use a `js-ast-grep` workflow with the matching language import, AST queries (`find`, `findAll`, `getMatch`, fields), `node.replace(...)`, and `root.root().commitEdits(...)`. String construction is acceptable for the replacement text, but AST-selected nodes must define the edit boundaries.
-- Use raw text manipulation only for unsupported plain-text formats or when a structured parser is unavailable. When you do, document the fallback in code or README and cover comments, multiline values, quoting, false positives, and no-op cases in fixtures.
-- Use `npx codemod ai dump-ast` or MCP `dump_ast` before broadening heuristics.
-- Use `npx codemod ai node-types <language>` or MCP `get_node_types` when node kinds or fields are unclear.
-- If symbol origin matters, use semantic analysis and binding-aware checks.
-- Keep one granular transform or one exact `from -> to` migration as a single package unless the request is clearly open-ended or multi-hop.
-- Inspect 1-3 representative repo files after or alongside registry discovery before you finalize the transform shape.
-- If registry search yields no exact package, run `codemod init` immediately instead of continuing broad research without a package. In headless/non-interactive flows, use the simplified `codemod init <path> --no-interactive` interface and pass only user- or task-provided flags; do not invent `--author`, `--license`, `--description`, or `--git-repository-url`.
-- After the package exists, replace the starter transform, README, and starter fixtures before doing optional work.
-- Define positive, negative, and edge fixtures before deep implementation work.
-- Before stopping, inspect the whole package surface and update every affected file together: `README.md`, `codemod.yaml`, `workflow.yaml`, `package.json` scripts, tests/fixtures, and any renamed paths, ids, or references. Do not churn version numbers by default, but do not leave stale package metadata behind after a rename or material package-surface change.
-- Keep the requested migration aligned across every artifact: transform logic, fixtures, `workflow.yaml`, `codemod.yaml`, README, and package metadata must all describe the same codemod.
-- Replace scaffold boilerplate before finishing. Do not leave generic README text, placeholder fixture intent, or mismatched usage descriptions in place.
-- Use explicit workflow `base_path`, `include`, and `exclude` globs that match the actual target file types and keep `codemod.yaml` `targets.languages` aligned with that scope.
-- Preserve the scaffold-selected package manager in `package.json` scripts and package-local README/development commands. Infer it from the scaffold choice, lockfile, or existing package metadata; do not rewrite `yarn`/`pnpm`/`bun` packages to `npx`/`npm` unless the user explicitly asked.
-- Preserve repository-local package and lockfile conventions. In existing monorepos, do not introduce ad hoc dependency ranges or unrelated lockfile churn.
-- Treat fixture quality as a release gate. Cover realistic positive cases, edge cases, preserve/no-op cases, and negative cases where similar code must stay unchanged.
-- Do not stop while `validate_codemod_package` still reports starter scaffold markers, missing package surface updates, missing real test cases, or failing default tests.
-- For reusable authored codemods, do not default registry access/visibility to private unless the user explicitly asked for a private package.
-- Leave missing package author metadata to the CLI defaults/publish-time auth fallback unless the user supplied an explicit author.
-- Do not create commits or push branches for codemod authoring/evaluation unless the user explicitly asked for git operations.
+## Feedback
 
-## Runtime flow
-
-1. Discover candidates with `codemod search`.
-2. Read the selected package's README/docs and perform any documented prerequisites or setup steps.
-3. Run workflow-capable packages with `codemod run --dry-run` before apply.
-4. Run `codemod run <package-id> --no-interactive --install-skill` when a package exposes installable skill behavior (install-skill steps are skipped in non-interactive runs without `--install-skill`).
-5. Enforce verification with tests and dry-run summaries before apply.
-
-## Mandatory first action for migration/update/upgrade requests
-
-- Run `codemod search` before proposing a manual migration plan.
-- Do not jump straight to a handcrafted migration approach until registry discovery has been attempted and summarized.
-- If a suitable existing codemod is found, prefer evaluating it with `--dry-run` before proposing bespoke manual or AI-only migration work.
-- Only skip registry discovery when the user explicitly says not to use Codemod or not to search for existing codemods.
-
-## First-turn behavior
-
-- Before broad repo inspection or planning, derive a small set of high-signal search terms from the user request and run `codemod search`.
-- For codemod authoring, inspect only a small representative slice of the repo after or alongside registry discovery, then scaffold and iterate.
-- If the search returns a plausible existing package, the next step is to inspect that package's README/limits and run a dry-run, not to draft a manual migration plan.
-
-## Anti-patterns to avoid
-
-- Do not start by planning a manual migration when the request is an upgrade, update, or migration and the registry has not been searched yet.
-- Do not create a new codemod package before checking whether an existing registry package already covers the migration.
-- Do not keep reading broad guidance after a registry miss without scaffolding a package.
-- Do not run a discovered package blindly without first reading its README/docs for prerequisites, config, and known limits.
-- Do not introduce a shell step just to reach or mutate another related file path when JSSG can handle the hop.
-- Do not use JSSG as a file-walking wrapper around parser-backed files while doing the actual transformation with `fs`, `root.source().replace(...)`, or full-source `.split(...)`/`.join(...)` rewrites.
-- Do not choose Python, shell, or Node file I/O for JSON, YAML, XML, TOML, or source-code transforms when a matching `js-ast-grep` language exists.
-- Do not stop codemod authoring only because Codemod MCP is unavailable; use `codemod ai` CLI equivalents.
+When you find a Codemod platform gap, ask the user for consent before running `npx codemod ai feedback`. Use a category such as `jssg`, `workflow`, `ai-docs`, `mcp`, `cli`, `registry`, `package-validation`, or `other`. Keep the message short and thematic, with no source code, secrets, tokens, private repository paths, user identity, or transcripts.
