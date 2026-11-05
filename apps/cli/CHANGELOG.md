@@ -1,5 +1,12 @@
 # codemod
 
+## 0.18.14
+
+### Patch Changes
+
+- e5af7b0: Update the legacy CLI's bundled tar dependency to fix CVE-2026-24842,
+  CVE-2026-29786, and CVE-2026-31802 when extracting registry archives.
+
 ## 0.18.13
 
 ### Patch Changes
