@@ -1,7 +1,5 @@
 pub mod app;
 pub mod event;
-#[cfg(test)]
-mod render_latency_bench;
 mod screens;
 
 use std::io;
@@ -44,102 +42,6 @@ impl Drop for TerminalGuard {
         let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
     }
-}
-
-#[derive(Default)]
-struct TuiPerfCounters {
-    enabled: bool,
-    draws: u64,
-    workflow_events: u64,
-    workflow_lag_reconciles: u64,
-    ui_events: u64,
-    terminal_events: u64,
-    terminal_key_events: u64,
-    terminal_resize_events: u64,
-    deadline_wakeups: u64,
-}
-
-impl TuiPerfCounters {
-    fn from_env() -> Self {
-        Self {
-            enabled: std::env::var_os("CODEMOD_TUI_PERF_METRICS").is_some(),
-            ..Self::default()
-        }
-    }
-
-    fn inc_draws(&mut self) {
-        if self.enabled {
-            self.draws += 1;
-        }
-    }
-
-    fn inc_workflow_events(&mut self) {
-        if self.enabled {
-            self.workflow_events += 1;
-        }
-    }
-
-    fn inc_workflow_lag_reconciles(&mut self) {
-        if self.enabled {
-            self.workflow_lag_reconciles += 1;
-        }
-    }
-
-    fn inc_ui_events(&mut self) {
-        if self.enabled {
-            self.ui_events += 1;
-        }
-    }
-
-    fn inc_terminal_key_event(&mut self) {
-        if self.enabled {
-            self.terminal_events += 1;
-            self.terminal_key_events += 1;
-        }
-    }
-
-    fn inc_terminal_resize_event(&mut self) {
-        if self.enabled {
-            self.terminal_events += 1;
-            self.terminal_resize_events += 1;
-        }
-    }
-
-    fn inc_terminal_other_event(&mut self) {
-        if self.enabled {
-            self.terminal_events += 1;
-        }
-    }
-
-    fn inc_deadline_wakeups(&mut self) {
-        if self.enabled {
-            self.deadline_wakeups += 1;
-        }
-    }
-
-    fn summary(&self) -> Option<String> {
-        self.enabled.then(|| {
-            format!(
-                "TUI perf counters: draws={} workflow_events={} workflow_lag_reconciles={} ui_events={} terminal_events={} terminal_key_events={} terminal_resize_events={} deadline_wakeups={}",
-                self.draws,
-                self.workflow_events,
-                self.workflow_lag_reconciles,
-                self.ui_events,
-                self.terminal_events,
-                self.terminal_key_events,
-                self.terminal_resize_events,
-                self.deadline_wakeups,
-            )
-        })
-    }
-}
-
-fn tui_perf_auto_exit_deadline() -> Option<std::time::Instant> {
-    let seconds = std::env::var("CODEMOD_TUI_PERF_AUTO_EXIT_SECS")
-        .ok()?
-        .parse::<u64>()
-        .ok()?;
-    Some(std::time::Instant::now() + std::time::Duration::from_secs(seconds))
 }
 
 fn log_modal_viewport_height(terminal_height: u16) -> u16 {
@@ -245,7 +147,6 @@ pub async fn run_workflow_tui(
 
     let (_ui_event_tx, ui_event_rx) = mpsc::unbounded_channel::<AppEvent>();
     let mut runtime = TuiRuntime::new(ui_event_rx);
-    let mut perf_counters = TuiPerfCounters::from_env();
 
     if let Some(run_id) = run_id {
         attach_run(
@@ -265,14 +166,10 @@ pub async fn run_workflow_tui(
         &mut state,
         limit,
         &mut runtime,
-        &mut perf_counters,
     )
     .await;
     drop(terminal);
     drop(guard);
-    if let Some(summary) = perf_counters.summary() {
-        eprintln!("{summary}");
-    }
     result
 }
 
@@ -295,7 +192,6 @@ pub async fn run_workflow_tui_with_session(
 
     let (_ui_event_tx, ui_event_rx) = mpsc::unbounded_channel::<AppEvent>();
     let mut runtime = TuiRuntime::new(ui_event_rx);
-    let mut perf_counters = TuiPerfCounters::from_env();
     let run_id = session.handle().workflow_run_id();
     engine.set_progress_callback(std::sync::Arc::new(Some(create_tui_progress_callback(
         run_id,
@@ -310,14 +206,10 @@ pub async fn run_workflow_tui_with_session(
         &mut state,
         limit,
         &mut runtime,
-        &mut perf_counters,
     )
     .await;
     drop(terminal);
     drop(guard);
-    if let Some(summary) = perf_counters.summary() {
-        eprintln!("{summary}");
-    }
     result
 }
 
@@ -433,17 +325,11 @@ async fn run_tui_loop(
     state: &mut TuiState,
     limit: usize,
     runtime: &mut TuiRuntime,
-    perf_counters: &mut TuiPerfCounters,
 ) -> Result<()> {
     let mut needs_redraw = true;
     let mut terminal_events = EventStream::new();
-    let auto_exit_deadline = tui_perf_auto_exit_deadline();
 
     loop {
-        if auto_exit_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
-            break;
-        }
-
         let mut state_changed = false;
 
         let workflow_drain = if let Some(rx) = runtime.receiver.as_mut() {
@@ -456,15 +342,11 @@ async fn run_tui_loop(
             }
         };
         state_changed |= workflow_drain.applied_events > 0;
-        for _ in 0..workflow_drain.applied_events {
-            perf_counters.inc_workflow_events();
-        }
 
         if workflow_drain.needs_snapshot_reconcile {
             if let Some(session) = runtime.session.as_ref() {
                 state.reduce(AppEvent::Snapshot(session.handle().load_snapshot().await?));
                 state_changed = true;
-                perf_counters.inc_workflow_lag_reconciles();
             }
         }
         if workflow_drain.receiver_closed {
@@ -475,7 +357,6 @@ async fn run_tui_loop(
         while let Ok(event) = runtime.ui_event_rx.try_recv() {
             state.reduce(event);
             state_changed = true;
-            perf_counters.inc_ui_events();
         }
 
         state_changed |= state.clear_expired_log_modal_notice();
@@ -491,17 +372,9 @@ async fn run_tui_loop(
         if should_redraw(needs_redraw, state_changed, redraw_deadline, now) {
             terminal.draw(|frame| screens::render(frame, state))?;
             needs_redraw = false;
-            perf_counters.inc_draws();
         }
 
-        let wait_deadline = match (redraw_deadline, auto_exit_deadline) {
-            (Some(redraw_deadline), Some(auto_exit_deadline)) => {
-                Some(redraw_deadline.min(auto_exit_deadline))
-            }
-            (Some(redraw_deadline), None) => Some(redraw_deadline),
-            (None, Some(auto_exit_deadline)) => Some(auto_exit_deadline),
-            (None, None) => None,
-        };
+        let wait_deadline = redraw_deadline;
 
         let wake = if let Some(deadline) = wait_deadline {
             match tokio::time::timeout_at(
@@ -513,7 +386,6 @@ async fn run_tui_loop(
                 Ok(wake) => wake?,
                 Err(_) => {
                     needs_redraw = true;
-                    perf_counters.inc_deadline_wakeups();
                     continue;
                 }
             }
@@ -529,14 +401,12 @@ async fn run_tui_loop(
             TuiLoopWake::WorkflowEvent(event) => {
                 state.reduce(AppEvent::Workflow(event));
                 needs_redraw = true;
-                perf_counters.inc_workflow_events();
                 continue;
             }
             TuiLoopWake::WorkflowLagged => {
                 if let Some(session) = runtime.session.as_ref() {
                     state.reduce(AppEvent::Snapshot(session.handle().load_snapshot().await?));
                     needs_redraw = true;
-                    perf_counters.inc_workflow_lag_reconciles();
                 }
                 continue;
             }
@@ -548,16 +418,13 @@ async fn run_tui_loop(
             TuiLoopWake::UiEvent(event) => {
                 state.reduce(event);
                 needs_redraw = true;
-                perf_counters.inc_ui_events();
                 continue;
             }
             TuiLoopWake::TerminalEvent(Event::Resize(_, _)) => {
-                perf_counters.inc_terminal_resize_event();
                 needs_redraw = true;
                 continue;
             }
             TuiLoopWake::TerminalEvent(Event::Key(key)) => {
-                perf_counters.inc_terminal_key_event();
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
@@ -751,7 +618,6 @@ async fn run_tui_loop(
                 continue;
             }
             TuiLoopWake::TerminalEvent(_) => {
-                perf_counters.inc_terminal_other_event();
                 continue;
             }
         }
@@ -842,7 +708,7 @@ async fn bind_session(
 mod tests {
     use super::{
         reduce_workflow_receiver, should_exit_on_interrupt, should_redraw,
-        task_list_viewport_height, TuiPerfCounters,
+        task_list_viewport_height,
     };
     use crate::tui::app::{Screen, TuiState};
     use butterflow_core::workflow_runtime::WorkflowEvent;
@@ -1105,33 +971,6 @@ mod tests {
     fn task_list_viewport_height_matches_run_detail_layout() {
         assert_eq!(task_list_viewport_height(24), 17);
         assert_eq!(task_list_viewport_height(10), 3);
-    }
-
-    #[test]
-    fn perf_counter_summary_is_disabled_by_default() {
-        assert!(TuiPerfCounters::default().summary().is_none());
-    }
-
-    #[test]
-    fn perf_counter_summary_renders_enabled_counts() {
-        let mut counters = TuiPerfCounters {
-            enabled: true,
-            ..TuiPerfCounters::default()
-        };
-        counters.inc_draws();
-        counters.inc_workflow_events();
-        counters.inc_workflow_lag_reconciles();
-        counters.inc_ui_events();
-        counters.inc_terminal_key_event();
-        counters.inc_deadline_wakeups();
-
-        let summary = counters.summary().expect("enabled counters should render");
-        assert!(summary.contains("draws=1"));
-        assert!(summary.contains("workflow_events=1"));
-        assert!(summary.contains("workflow_lag_reconciles=1"));
-        assert!(summary.contains("ui_events=1"));
-        assert!(summary.contains("terminal_key_events=1"));
-        assert!(summary.contains("deadline_wakeups=1"));
     }
 
     #[test]
