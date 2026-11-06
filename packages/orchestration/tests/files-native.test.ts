@@ -427,6 +427,32 @@ run("native selection matches the TypeScript walker", () => {
     }
   });
 
+  it.skipIf(process.getuid?.() === 0)(
+    "reports the first of several failures in the sequential walk's order",
+    () => {
+      // Failures in sibling subtrees (walked on parallel threads natively):
+      // an unreadable directory, a refused path, another unreadable one.
+      const dir = join(base, "many-failures");
+      const tree: Record<string, string> = { ".gitignore": "" };
+      for (const name of ["a", "b", "c", "d", "e", "f", "g", "h"]) {
+        tree[`${name}/x/ok.ts`] = "";
+        tree[`${name}/y/ok.ts`] = "";
+      }
+      // `...` is refused where it is tested relative to its own directory.
+      tree["d/y/..."] = "";
+      tree["d/y/.gitignore"] = "";
+      write(dir, tree);
+      const locked = [join(dir, "c/x"), join(dir, "f/y")];
+      for (const path of locked) chmodSync(path, 0o000);
+      try {
+        const result = compare(sel({ cwd: dir, targetRoot: dir }));
+        expect("error" in result).toBe(true);
+      } finally {
+        for (const path of locked) chmodSync(path, 0o755);
+      }
+    },
+  );
+
   it("reports an unreadable selected file exactly", () => {
     const dir = join(base, "unreadable");
     write(dir, { "a.ts": "a\n", "b.ts": "b\n" });

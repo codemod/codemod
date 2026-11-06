@@ -33,6 +33,8 @@ pub mod node_ignore;
 use std::cmp::Ordering;
 use std::fs;
 use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering as Atomic};
+use std::sync::{Arc, Mutex};
 
 use node_ignore::{Ignore, Match, PathError, PatternError, RuleCache};
 
@@ -93,12 +95,28 @@ struct Level {
     kinds: [Matcher; 3],
 }
 
+/// The `levels` array of `files.ts` as a shared chain, nearest first.
+struct Levels {
+    level: Level,
+    parent: Option<Arc<Levels>>,
+}
+
+impl Levels {
+    fn iter(&self) -> impl Iterator<Item = &Level> {
+        std::iter::successors(Some(self), |node| node.parent.as_deref()).map(|node| &node.level)
+    }
+}
+
+/// One selection. Subdirectories are walked on scoped threads while spare
+/// ones remain (`spare`); every directory's result is combined in listing
+/// order, so the file set and the error reported (the first one the
+/// sequential TypeScript walk would hit) are the same as walking serially.
 struct Walk<'a> {
     root: &'a str,
     overrides: Vec<(&'a str, Ignore, bool)>,
     global: Matcher,
-    cache: RuleCache,
-    files: Vec<String>,
+    cache: Mutex<RuleCache>,
+    spare: AtomicUsize,
 }
 
 /// POSIX `dirname` of an absolute, normalized path.
@@ -158,24 +176,38 @@ fn read_lossy(path: &str) -> io::Result<String> {
 
 impl Walk<'_> {
     /// `readIgnoreFile`: unreadable or not compilable means no matcher.
-    fn read_ignore_file(&mut self, path: &str) -> Matcher {
+    fn read_ignore_file(&self, path: &str) -> Matcher {
         let text = read_lossy(path).ok()?;
-        Ignore::from_text(&text, &mut self.cache).ok()
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        Ignore::from_text(&text, &mut cache).ok()
     }
 
-    fn read_level(&mut self, dir: &str) -> Level {
+    /// `readLevel`. `present` says which of `.ignore`, `.gitignore`, `.git`
+    /// may exist in `dir` (from its listing); a read of one that cannot
+    /// exist would fail with `ENOENT`, so it is skipped.
+    fn read_level(&self, dir: &str, present: [bool; 3]) -> Level {
+        let read = |present: bool, name: &str| {
+            if present {
+                self.read_ignore_file(&join(dir, name))
+            } else {
+                None
+            }
+        };
         Level {
             dir: dir.to_string(),
             kinds: [
-                self.read_ignore_file(&join(dir, ".ignore")),
-                self.read_ignore_file(&join(dir, ".gitignore")),
-                self.read_ignore_file(&join(dir, ".git/info/exclude")),
+                read(present[0], ".ignore"),
+                read(present[1], ".gitignore"),
+                read(present[2], ".git/info/exclude"),
             ],
         }
     }
 
-    /// `matched` of `files.ts`. `levels` is nearest-last.
-    fn matched(&self, absolute: &str, is_dir: bool, levels: &[Level]) -> Result<Match, Error> {
+    /// `matched` of `files.ts`.
+    fn matched(&self, absolute: &str, is_dir: bool, levels: &Levels) -> Result<Match, Error> {
         let mut result = Match::None;
         for (root, matcher, whitelists) in &self.overrides {
             let mut found = test(matcher, candidate(root, absolute)?, is_dir)?;
@@ -193,7 +225,7 @@ impl Walk<'_> {
             return Ok(result);
         }
         for kind in 0..3 {
-            for level in levels.iter().rev() {
+            for level in levels.iter() {
                 if let Some(matcher) = &level.kinds[kind] {
                     let found = test(matcher, candidate(&level.dir, absolute)?, is_dir)?;
                     if found != Match::None {
@@ -208,43 +240,138 @@ impl Walk<'_> {
         }
     }
 
-    fn visit(&mut self, dir: &str, levels: &mut Vec<Level>) -> Result<(), Error> {
+    /// `visit(dir, [readLevel(dir), ...levels])` of `files.ts`: `dir`'s own
+    /// level is read here, after listing it. Reading ignore files never
+    /// fails, so the order is unobservable, and the listing tells which
+    /// ignore files can exist: names are matched ASCII-case-insensitively
+    /// (and any non-ASCII name counts) so a case-insensitive file system,
+    /// where `.GITIGNORE` opens as `.gitignore`, still reads it.
+    ///
+    /// Returns the selected files beneath `dir`, or the first error in the
+    /// sequential walk's order: entries are matched in listing order up to
+    /// the first matching error; the subdirectories accepted before it are
+    /// walked (possibly in parallel) and their results taken in order, then
+    /// that matching error.
+    fn visit(&self, dir: &str, parent: Option<Arc<Levels>>) -> Result<Vec<String>, Error> {
         let scandir = |error| Error::Io {
             op: "scandir",
             path: dir.to_string(),
             error,
         };
-        // Listed completely first, as the host's `readdir` does.
-        let mut entries = Vec::new();
+        // Listed completely first, as the host's `readdir` does, in its
+        // order: byte order of the raw names (Node's libuv `scandir` sorts
+        // with `strcmp`; the QuickJS host sorts the same way).
+        let mut raw = Vec::new();
         for entry in fs::read_dir(dir).map_err(scandir)? {
             let entry = entry.map_err(scandir)?;
             let kind = entry.file_type().map_err(scandir)?;
-            entries.push((
-                entry.file_name().to_string_lossy().into_owned(),
-                kind.is_dir(),
-                kind.is_file(),
-            ));
+            raw.push((entry.file_name(), kind.is_dir(), kind.is_file()));
         }
+        raw.sort_by(|a, b| a.0.as_encoded_bytes().cmp(b.0.as_encoded_bytes()));
+        let mut present = [false; 3];
+        let mut entries = Vec::with_capacity(raw.len());
+        for (name, is_dir, is_file) in raw {
+            let name = name.to_string_lossy().into_owned();
+            for (index, special) in [".ignore", ".gitignore", ".git"].iter().enumerate() {
+                present[index] |= !name.is_ascii() || name.eq_ignore_ascii_case(special);
+            }
+            entries.push((name, is_dir, is_file));
+        }
+        let levels = Arc::new(Levels {
+            level: self.read_level(dir, present),
+            parent,
+        });
+
+        let mut files = Vec::new();
+        let mut dirs = Vec::new();
+        let mut stopped = None;
         for (name, is_dir, is_file) in entries {
             if !is_dir && !is_file {
                 continue; // symlinks and special files
             }
             let absolute = join(dir, &name);
-            if self.matched(&absolute, is_dir, levels)? == Match::Ignore {
-                continue;
-            }
-            if is_dir {
-                let level = self.read_level(&absolute);
-                levels.push(level);
-                let visited = self.visit(&absolute, levels);
-                levels.pop();
-                visited?;
-            } else {
-                let relative = candidate(self.root, &absolute)?.to_string();
-                self.files.push(relative);
+            let accepted = self
+                .matched(&absolute, is_dir, &levels)
+                .and_then(|found| match found {
+                    Match::Ignore => Ok(None),
+                    _ if is_dir => Ok(Some(true)),
+                    _ => candidate(self.root, &absolute).map(|relative| {
+                        files.push(relative.to_string());
+                        Some(false)
+                    }),
+                });
+            match accepted {
+                Ok(Some(true)) => dirs.push(absolute),
+                Ok(_) => {}
+                Err(error) => {
+                    stopped = Some(error);
+                    break;
+                }
             }
         }
-        Ok(())
+        for result in self.visit_all(dirs, &levels) {
+            files.extend(result?);
+        }
+        match stopped {
+            Some(error) => Err(error),
+            None => Ok(files),
+        }
+    }
+
+    /// `visit` of each directory, results in order. Directories run on
+    /// scoped threads while spare ones remain; the rest on this thread.
+    fn visit_all(
+        &self,
+        dirs: Vec<String>,
+        levels: &Arc<Levels>,
+    ) -> Vec<Result<Vec<String>, Error>> {
+        let take = || {
+            self.spare
+                .fetch_update(Atomic::AcqRel, Atomic::Acquire, |spare| {
+                    spare.checked_sub(1)
+                })
+                .is_ok()
+        };
+        if dirs.len() < 2 || self.spare.load(Atomic::Acquire) == 0 {
+            return dirs
+                .iter()
+                .map(|dir| self.visit(dir, Some(levels.clone())))
+                .collect();
+        }
+        std::thread::scope(|scope| {
+            let started: Vec<_> = dirs
+                .iter()
+                .map(|dir| {
+                    take().then(|| {
+                        let levels = levels.clone();
+                        scope.spawn(move || {
+                            let result = self.visit(dir, Some(levels));
+                            self.spare.fetch_add(1, Atomic::AcqRel);
+                            result
+                        })
+                    })
+                })
+                .collect();
+            // This thread's share first, while the others run.
+            let here: Vec<_> = dirs
+                .iter()
+                .zip(&started)
+                .map(|(dir, handle)| {
+                    handle
+                        .is_none()
+                        .then(|| self.visit(dir, Some(levels.clone())))
+                })
+                .collect();
+            started
+                .into_iter()
+                .zip(here)
+                .map(|(handle, result)| match (handle, result) {
+                    (Some(handle), _) => handle.join().expect("walker thread"),
+                    (None, Some(result)) => result,
+                    (None, None) => unreachable!("every directory is visited once"),
+                })
+                .collect()
+        })
     }
 }
 
@@ -281,33 +408,35 @@ pub fn select(request: &Request) -> Result<Vec<String>, Error> {
             .map_err(Error::Pattern)?;
         overrides.push((set.root.as_str(), matcher, set.whitelists));
     }
+    let threads = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(8);
     let mut walk = Walk {
         root: &request.root,
         overrides,
         global: None,
-        cache,
-        files: Vec::new(),
+        cache: Mutex::new(cache),
+        spare: AtomicUsize::new(threads - 1),
     };
     walk.global = match &request.global_excludes {
         Some(path) => walk.read_ignore_file(path),
         None => None,
     };
-    // Ancestors farthest-first, then the root: nearest-last.
+    // Ancestors, farthest last in the chain.
     let mut ancestors = Vec::new();
     let mut dir = dirname(&request.root);
     loop {
-        ancestors.push(walk.read_level(dir));
+        ancestors.push(walk.read_level(dir, [true; 3]));
         if dirname(dir) == dir {
             break;
         }
         dir = dirname(dir);
     }
-    ancestors.reverse();
-    let mut levels = ancestors;
-    let root_level = walk.read_level(&request.root);
-    levels.push(root_level);
-    walk.visit(&request.root, &mut levels)?;
-    let mut files = walk.files;
+    let levels = ancestors.into_iter().rev().fold(None, |parent, level| {
+        Some(Arc::new(Levels { level, parent }))
+    });
+    let mut files = walk.visit(&request.root, levels)?;
     files.sort_by(|a, b| compare_paths(a, b));
     Ok(files)
 }

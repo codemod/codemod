@@ -63,7 +63,10 @@ export interface JssgCommandOptions {
   host?: Host;
   /** Test hook: global git excludes file (`null` disables). */
   globalExcludes?: string | null;
-  /** Optional timers in milliseconds: `select` (walk + reads), `stage`, `commit`. */
+  /**
+   * Optional timers in milliseconds: `select` (target root + walk), `read`
+   * (selected sources), `stage`, `commit`.
+   */
   profile?: (phase: string, ms: number) => void;
 }
 
@@ -120,11 +123,12 @@ export async function executeJssgCommand(
       globalExcludes: options.globalExcludes,
       host,
     });
+    lap("select");
     files = readSelectedSources(host, targetRoot, paths);
   } catch (error) {
     return fail("failed", (error as Error).message, { phase: "select" });
   }
-  lap("select");
+  lap("read");
 
   let completion: OperationCompletion;
   try {

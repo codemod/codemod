@@ -59,7 +59,11 @@ export interface HostFs {
   lstat(path: string): HostFileStat;
   /** Canonical absolute path with every symlink resolved (`realpath(3)`). */
   realpath(path: string): string;
-  /** Entries in unspecified order, without `.` and `..`. */
+  /**
+   * Entries without `.` and `..`. Both hosts list them in byte order of the
+   * raw names (Node's libuv sorts `scandir` with `strcmp`), which fixes the
+   * order a walk visits directories and so which failure it reports first.
+   */
   readdir(path: string): HostDirEntry[];
   /**
    * Optional batch form of `readText(join(root, path), { fatal: true })` for

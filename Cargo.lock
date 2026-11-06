@@ -4857,6 +4857,7 @@ dependencies = [
 name = "orchestration-walker"
 version = "1.13.18"
 dependencies = [
+ "regex",
  "regress",
  "tempfile",
 ]

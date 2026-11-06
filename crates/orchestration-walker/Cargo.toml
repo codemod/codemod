@@ -13,6 +13,9 @@ publish = false
 # ECMAScript regular expressions (non-unicode mode, UTF-16 code units), so
 # node-ignore's generated `RegExp` sources match exactly as they do in JS.
 regress = { version = "0.10", features = ["utf16"] }
+# Fast path for rules whose JS semantics the `regex` crate provably shares
+# on ASCII paths (`node_ignore::fast_source`).
+regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

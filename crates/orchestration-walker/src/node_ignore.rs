@@ -14,10 +14,8 @@
 //! ignored when any parent directory is). Regex construction errors make the
 //! whole `add()` fail, as `new RegExp` throwing does.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use regress::{Flags, Match as RegexMatch, Regex};
 
@@ -266,25 +264,79 @@ fn check_pattern(pattern: &str) -> bool {
 
 struct Rule {
     negative: bool,
-    regex: Rc<Regex>,
+    regex: Arc<Compiled>,
+}
+
+/// One rule's `RegExp`: always on `regress`, and on the `regex` crate too
+/// when [`fast_source`] proves both engines agree on ASCII paths.
+struct Compiled {
+    js: Regex,
+    fast: Option<regex::Regex>,
+}
+
+impl Compiled {
+    fn is_match(&self, path: &str, units: Option<&[u16]>) -> bool {
+        match (units, &self.fast) {
+            (None, Some(fast)) => fast.is_match(path),
+            // ASCII text is the same sequence as code points and UTF-16 units.
+            (None, None) => self.js.find(path).is_some(),
+            (Some(units), _) => self.js.find_from_ucs2(units, 0).next().is_some(),
+        }
+    }
+}
+
+/// The rule's source for the `regex` crate, when the rule's text is plain
+/// enough that the generated source uses only constructs both engines read
+/// alike on ASCII input: rule text that is ASCII without `\`, `[`, `]`,
+/// `{`, `}` (so every escape in the source is a generated punctuation escape
+/// and there is no user character class), `.` rewritten to JS's "anything
+/// but a line terminator", and the trailing `(?=$|\/$)` lookahead (the only
+/// one `makeRegex` emits, always last) as a group, equivalent for a yes/no
+/// search. Case-insensitivity on ASCII text is ASCII folding in both. `None`
+/// keeps the rule on `regress` alone.
+fn fast_source(body: &str, source: &str) -> Option<String> {
+    if !body.is_ascii() || body.contains(['\\', '[', ']', '{', '}']) {
+        return None;
+    }
+    let source = match source.strip_suffix(r"(?=$|\/$)") {
+        Some(rest) => format!(r"{rest}(?:$|\/$)"),
+        None => source.to_string(),
+    };
+    if source.contains("(?=") || source.contains("(?!") || source.contains("(?<") {
+        return None;
+    }
+    let mut out = String::from("(?i)");
+    let mut chars = source.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                out.push('\\');
+                out.push(chars.next()?);
+            }
+            '.' => out.push_str(r"[^\n\r\x{2028}\x{2029}]"),
+            other => out.push(other),
+        }
+    }
+    Some(out)
 }
 
 /// Compiled rules by source, shared by every matcher one selection builds.
 #[derive(Default)]
 pub struct RuleCache {
-    compiled: HashMap<String, Result<Rc<Regex>, String>>,
+    compiled: HashMap<String, Result<Arc<Compiled>, String>>,
 }
 
 impl RuleCache {
-    fn compile(&mut self, source: String) -> Result<Rc<Regex>, (String, String)> {
+    fn compile(&mut self, body: &str, source: String) -> Result<Arc<Compiled>, (String, String)> {
         let entry = self.compiled.entry(source.clone()).or_insert_with(|| {
             let flags = Flags {
                 icase: true,
                 ..Flags::default()
             };
-            Regex::from_unicode(source.encode_utf16().map(u32::from), flags)
-                .map(Rc::new)
-                .map_err(|error| error.to_string())
+            let js = Regex::from_unicode(source.encode_utf16().map(u32::from), flags)
+                .map_err(|error| error.to_string())?;
+            let fast = fast_source(body, &source).and_then(|fast| regex::Regex::new(&fast).ok());
+            Ok(Arc::new(Compiled { js, fast }))
         });
         entry.clone().map_err(|message| (source, message))
     }
@@ -305,7 +357,7 @@ fn create_rule(pattern: &str, cache: &mut RuleCache) -> Result<Rule, PatternErro
     });
     let source = make_source(&body);
     let regex = cache
-        .compile(source)
+        .compile(&body, source)
         .map_err(|(source, message)| PatternError {
             pattern: pattern.to_string(),
             source,
@@ -314,10 +366,11 @@ fn create_rule(pattern: &str, cache: &mut RuleCache) -> Result<Rule, PatternErro
     Ok(Rule { negative, regex })
 }
 
-/// One `ignore()` instance: its rules and its `_testCache`.
+/// One `ignore()` instance: its rules and its `_testCache` (shared by the
+/// walker's threads; results are pure, so races only repeat work).
 pub struct Ignore {
     rules: Vec<Rule>,
-    cache: RefCell<HashMap<String, Match>>,
+    cache: Mutex<HashMap<String, Match>>,
 }
 
 impl Ignore {
@@ -334,7 +387,7 @@ impl Ignore {
         }
         Ok(Self {
             rules,
-            cache: RefCell::new(HashMap::new()),
+            cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -375,11 +428,16 @@ impl Ignore {
     /// `_testOne` of a directory prefix, memoized like `_testCache`. Only
     /// reached when no shorter prefix is ignored, so this is also its `_t`.
     fn cached(&self, dir: &str) -> Match {
-        if let Some(result) = self.cache.borrow().get(dir) {
+        fn lock(cache: &Mutex<HashMap<String, Match>>) -> MutexGuard<'_, HashMap<String, Match>> {
+            cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+        if let Some(result) = lock(&self.cache).get(dir) {
             return *result;
         }
         let result = self.test_one(dir);
-        self.cache.borrow_mut().insert(dir.to_string(), result);
+        lock(&self.cache).insert(dir.to_string(), result);
         result
     }
 
@@ -388,14 +446,9 @@ impl Ignore {
         if self.rules.is_empty() {
             return Match::None;
         }
-        // ASCII text is the same sequence as code points and UTF-16 units.
         let units: Option<Vec<u16>> = (!path.is_ascii()).then(|| path.encode_utf16().collect());
         for rule in self.rules.iter().rev() {
-            let matched = match &units {
-                None => rule.regex.find(path).is_some(),
-                Some(units) => rule.regex.find_from_ucs2(units, 0).next().is_some(),
-            };
-            if matched {
+            if rule.regex.is_match(path, units.as_deref()) {
                 return if rule.negative {
                     Match::Whitelist
                 } else {
@@ -458,6 +511,102 @@ mod tests {
         for (pattern, expected) in cases {
             assert_eq!(source(pattern), expected, "{pattern}");
         }
+    }
+
+    #[test]
+    fn the_fast_path_agrees_with_regress_on_ascii_paths() {
+        let patterns = [
+            "node_modules",
+            "*.ts",
+            "*.TS",
+            "/top.ts",
+            "build/",
+            "a/**/b",
+            "**/foo",
+            "foo/**",
+            "foo/*",
+            "a?c",
+            "abc*",
+            "*",
+            "**",
+            "a/**/",
+            "*.{ts,js}",
+            "x.y+z",
+            "a|b",
+            "(a)",
+            "^a$",
+            "dir/*.log",
+            "**/deep/**/x.ts",
+            "abc.*/",
+            "spaced.ts   ",
+            ".hidden",
+            ".*",
+            "*/",
+            "?",
+            "??",
+            "a**b",
+            "**/*.ts/",
+            "*.min.*",
+        ];
+        let paths = [
+            "a",
+            "A",
+            "a.ts",
+            "A.TS",
+            "src/a.ts",
+            "src/",
+            "node_modules/",
+            "x/node_modules/y",
+            "top.ts",
+            "x/top.ts",
+            "build",
+            "build/",
+            "x/build/",
+            "a/b",
+            "a/x/y/b",
+            "foo/",
+            "foo/x",
+            "foo/x/",
+            "foo/x/y",
+            "abc",
+            "abcd/",
+            "a.b/c",
+            "x.y+z",
+            "a|b",
+            "(a)",
+            "^a$",
+            "dir/x.log",
+            "deep/1/x.ts",
+            "q/deep/x.ts",
+            "abc.d/",
+            "spaced.ts",
+            ".hidden/",
+            ".env",
+            "new\nline/foo",
+            "cr\rdir/x.ts",
+            "a\r",
+            "abc.min.js",
+            "x/y.ts/",
+        ];
+        let mut cache = RuleCache::default();
+        let mut fast_rules = 0;
+        for pattern in patterns {
+            let source = make_source(pattern);
+            let compiled = cache.compile(pattern, source.clone()).expect("compiles");
+            let Some(fast) = &compiled.fast else { continue };
+            fast_rules += 1;
+            for path in paths {
+                assert_eq!(
+                    fast.is_match(path),
+                    compiled.js.find(path).is_some(),
+                    "pattern {pattern:?} (/{source}/i) on {path:?}"
+                );
+            }
+        }
+        assert!(
+            fast_rules >= patterns.len() - 2,
+            "most rules take the fast path"
+        );
     }
 
     #[test]

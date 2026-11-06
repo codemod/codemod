@@ -279,16 +279,21 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: Rc<HostState>) -> rquickjs::Result<()
     native.set(
         "readdir",
         Function::new(ctx.clone(), |ctx: Ctx<'js>, path: String| {
-            let entries =
-                fs::read_dir(&path).map_err(|error| fs_error(&ctx, "scandir", &path, error))?;
+            let scandir = |error| fs_error(&ctx, "scandir", &path, error);
+            // Byte order of the raw names, as Node's `readdirSync` returns
+            // them (libuv sorts `scandir` with `strcmp`), so a walk visits
+            // directories, and reports failures, in the same order on both hosts.
+            let mut entries = Vec::new();
+            for entry in fs::read_dir(&path).map_err(scandir)? {
+                let entry = entry.map_err(scandir)?;
+                let kind = entry.file_type().map_err(scandir)?;
+                entries.push((entry.file_name(), kind));
+            }
+            entries.sort_by(|a, b| a.0.as_encoded_bytes().cmp(b.0.as_encoded_bytes()));
             let list = rquickjs::Array::new(ctx.clone())?;
-            for (index, entry) in entries.enumerate() {
-                let entry = entry.map_err(|error| fs_error(&ctx, "scandir", &path, error))?;
-                let kind = entry
-                    .file_type()
-                    .map_err(|error| fs_error(&ctx, "scandir", &path, error))?;
+            for (index, (name, kind)) in entries.into_iter().enumerate() {
                 let item = Object::new(ctx.clone())?;
-                item.set("name", entry.file_name().to_string_lossy().as_ref())?;
+                item.set("name", name.to_string_lossy().as_ref())?;
                 item.set("isFile", kind.is_file())?;
                 item.set("isDirectory", kind.is_dir())?;
                 list.set(index, item)?;
