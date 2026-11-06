@@ -1,5 +1,7 @@
 #[cfg(feature = "native")]
 pub mod curated_fs;
+#[cfg(feature = "native")]
+pub mod embedded;
 pub mod execution_engine;
 #[cfg(feature = "native")]
 pub mod fetching_vfs;

@@ -260,6 +260,15 @@ describe("codemod-workflow argument parsing", () => {
     expect(() => parseArgs(["wf.ts", "--input"])).toThrow(/missing value for --input/u);
   });
 
+  it("accepts flags before the workflow (`run --runtime=quickjs <workflow.ts>`)", () => {
+    expect(parseArgs(["run", "--runtime=quickjs", "wf.ts", "--target", "repo"])).toMatchObject({
+      workflow: resolve("wf.ts"),
+      target: resolve("repo"),
+      runtime: "quickjs",
+    });
+    expect(() => parseArgs(["wf.ts", "other.ts"])).toThrow(/unexpected argument: other\.ts/u);
+  });
+
   it("rejects missing workflow, unknown or removed options, and dangling values", () => {
     expect(() => parseArgs([])).toThrow(USAGE);
     expect(() => parseArgs(["--target", "x"])).toThrow(USAGE);

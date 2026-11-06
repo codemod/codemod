@@ -80,7 +80,51 @@ export interface CliHooks {
  */
 export const ABORT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
-export const USAGE = `usage: codemod-workflow [run] <workflow.ts> [--runtime <${defaultRuntimes.names().join("|")}>] [--target <directory>] [--bridge <binary>] [--input <json>] [--dashboard]`;
+export const USAGE = `usage: codemod-workflow [run] <workflow.ts> [--runtime <${defaultRuntimes.names().join("|")}>] [--target <directory>] [--bridge <binary>] [--input <json>] [--dashboard]
+       codemod-workflow build <workflow.ts> --runtime quickjs -o <bundle.mjs>`;
+
+/**
+ * `codemod-workflow build <workflow.ts> --runtime=quickjs -o <bundle.mjs>`:
+ * write the self-contained QuickJS bundle (`quickjs-bundle.ts`) and return a
+ * summary (`{ bundle, hash, artifacts }`). Run it with
+ * `orchestration-quickjs-host run <bundle.mjs> --target <directory>`.
+ */
+export async function buildBundleCli(argv: string[]): Promise<unknown> {
+  const args = argv.flatMap((arg) => {
+    const match = /^(--[^=]+)=(.*)$/su.exec(arg);
+    return match ? [match[1]!, match[2]!] : [arg];
+  });
+  const workflow = args.shift();
+  if (workflow === undefined || workflow.startsWith("-")) throw new Error(USAGE);
+  let runtime: string | undefined;
+  let out: string | undefined;
+  while (args.length > 0) {
+    const flag = args.shift();
+    const value = args.shift();
+    if (value === undefined) throw new Error(`missing value for ${flag}\n${USAGE}`);
+    if (flag === "--runtime") runtime = value;
+    else if (flag === "-o" || flag === "--out") out = value;
+    else throw new Error(`unknown option: ${flag}\n${USAGE}`);
+  }
+  if (runtime !== "quickjs") {
+    throw new Error(
+      `build produces bundles for --runtime quickjs only${runtime === undefined ? "" : ` (got '${runtime}')`}\n${USAGE}`,
+    );
+  }
+  if (out === undefined) throw new Error(`missing -o <bundle.mjs>\n${USAGE}`);
+  const { buildQuickjsBundle } = await import("./quickjs-bundle.ts");
+  const bundle = await buildQuickjsBundle(resolve(workflow));
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  const { dirname } = await import("node:path");
+  const target = resolve(out);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, bundle.code);
+  return {
+    bundle: target,
+    hash: bundle.hash,
+    artifacts: bundle.artifacts.map(({ name, hash }) => ({ name, hash })),
+  };
+}
 
 /**
  * `notify` receives out-of-band lines such as the dashboard URL; the default
@@ -94,6 +138,7 @@ export async function runWorkflowCli(
   notify: (line: string) => void = (line) => process.stderr.write(`${line}\n`),
   hooks: CliHooks = {},
 ): Promise<unknown> {
+  if (argv[0] === "build") return buildBundleCli(argv.slice(1));
   const options = parseArgs(argv);
   const hasInput = "input" in options;
   const launch = {
@@ -177,17 +222,23 @@ export function parseArgs(argv: string[]): CliOptions {
   });
   // `run` is the (optional) subcommand: `codemod-workflow run <workflow.ts>`.
   if (args[0] === "run") args.shift();
-  const workflow = args.shift();
-  if (workflow === undefined || workflow.startsWith("-")) throw new Error(USAGE);
+  // The workflow is the one positional argument; flags may come before it
+  // (`run --runtime=quickjs <workflow.ts>`) or after it.
+  let workflow: string | undefined;
   let target = process.cwd();
   let bridge = defaultBridgePath();
   let input: { value: Json } | undefined;
   let runtime: string | undefined;
   let dashboard = false;
   while (args.length > 0) {
-    const flag = args.shift();
+    const flag = args.shift()!;
     if (flag === "--dashboard") {
       dashboard = true;
+      continue;
+    }
+    if (!flag.startsWith("-")) {
+      if (workflow !== undefined) throw new Error(`unexpected argument: ${flag}\n${USAGE}`);
+      workflow = flag;
       continue;
     }
     const value = args.shift();
@@ -198,6 +249,7 @@ export function parseArgs(argv: string[]): CliOptions {
     else if (flag === "--runtime") runtime = value;
     else throw new Error(`unknown option: ${flag}\n${USAGE}`);
   }
+  if (workflow === undefined) throw new Error(USAGE);
   return {
     workflow: resolve(workflow),
     target: resolve(target),
