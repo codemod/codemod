@@ -1,0 +1,6 @@
+# Large or per-run artifacts; results/benchmark.md and results/environment.md are committed.
+results/*.json
+results/arms.env
+results/verify/
+# Link to packages/orchestration created by lib.sh (ensure_ts_link).
+ts/node_modules/
