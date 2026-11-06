@@ -26,8 +26,11 @@ migration path are summarized in `DESIGN.md`.
 packages/orchestration/
   DESIGN.md              problem statement, proposal, scope, and migration path
   RUST_BRIDGE.md         the Rust boundary: protocol, batch, security model, transactions
-  src/index.ts           public API: re-exports from the folders below
+  RUNTIMES.md            --runtime bridge|node|quickjs, the Host seam, async context, registry
+  src/index.ts           Node API: portable.ts + Node host + build, bridge, agents, registry
+  src/portable.ts        Node-free API (`./portable` export) for non-Node hosts such as QuickJS
   src/core/              plain data contracts shared by every layer
+    host.ts              Host seam (fs, path, os, env, spawn, async context, clock) + install
     protocol.ts          versioned JSON OperationRequest / OperationCompletion (v8)
     assessment.ts        assessment questions, answers, and their validation
     json.ts              Json type and canonical JSON (command identity)
@@ -35,10 +38,12 @@ packages/orchestration/
     history.ts           HistoryStore seam + MemoryHistoryStore
     events.ts            EventSink seam (+ bridge.spawned, scheduler.*)
     errors.ts            error classes thrown across layers
+    posix.ts             dependency-free node:path.posix port
+    async-context.ts     stopgap AsyncContextVariable for hosts without promise hooks
   src/authoring/         what workflow code writes; builds commands, executes nothing
     runnable.ts          callable shell / jssg / agent / assessment descriptors (typed via Standard Schema)
     command.ts           Command: one invocation as data, awaitable inside a workflow
-    context.ts           the active workflow runtime (AsyncLocalStorage in the Node prototype)
+    context.ts           the active workflow runtime (Host async-context variable)
     composition.ts       sequence(...) and parallel(...) static graph nodes + IR
     dynamic.ts           explicit arbitrary-TypeScript dynamic nodes
     target.ts            validation and normalization of a JSSG invocation Target
@@ -47,19 +52,24 @@ packages/orchestration/
   src/bundle/            splits inline JSSG transforms out of workflow modules
     build.ts             build step: extract inline transforms, bundle, rewrite, loadWorkflow
   src/execution/         how one OperationRequest becomes an OperationCompletion
-    executor.ts          OperationExecutor seam + BridgeExecutor (shell, jssg, agent, assessment)
+    operation-executor.ts OperationExecutor seam
+    executor.ts          BridgeExecutor (shell, jssg, agent, assessment)
+    shell.ts             executeShell: in-process shell over Host.spawn (DirectRunner semantics)
     assessment.ts        executeAssessment: one TypeSafe SDK systemOne() call per command
     scheduler.ts         AdmissionScheduler: weighted, bounded admission at the executor
-    bridge.ts            spawnBridge: one bridge process per request over exchange files
+    bridge.ts            spawnBridge: one bridge process per request; executeJssg over it
     exchange.ts          host-owned exchange directory, exclusive request, no-follow response read
     process-tree.ts      best-effort process-tree kill on abort, timeout, and host exit
-    jssg.ts              executeJssg: artifact, select, batch, validate, stage, commit, classify
+    jssg.ts              executeJssgCommand: artifact, select, dispatch batch, validate, stage, commit
     files.ts             file selection with the engine's walker semantics (npm `ignore`)
     languages.json       language -> extensions, pinned to the engine table by a cargo test
   src/runtime/           runs a workflow: issue commands, replay or execute, record history
     run.ts               run lifecycle, history, and command execution
     gate.ts              CommandGate seam + ReplayGate (replay matching, errors)
-  src/host/              entry points that assemble a run
+    capabilities.ts      runtime descriptors and capability checks (agent/assessment refusal)
+  src/host/              entry points that assemble a run (Node only)
+    node-host.ts         the Node Host; importing it installs it
+    runtimes/            one RuntimeProvider per runtime + registry/runWorkflow
     cli.ts               experimental local runner behind bin/codemod-workflow.mjs
     harness.ts           test harness with scripted completions (`./harness` export)
     dashboard/           local run dashboard behind `--dashboard` (`./dashboard` export)
