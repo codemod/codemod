@@ -1088,6 +1088,13 @@ mod tests {
     }
 
     #[test]
+    fn root_handles_are_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<CoreRoot>();
+        assert_send_sync::<CoreMatcher>();
+    }
+
+    #[test]
     fn find_replace_commit_roundtrip() {
         let root = parse("console.log(a);\nconsole.log(b);\n");
         let matcher = root

@@ -25,7 +25,11 @@ function describe(value) {
     }
     return out;
   }
-  if (typeof value === "object" && typeof value.kind === "function" && typeof value.text === "function") {
+  if (
+    typeof value === "object" &&
+    typeof value.kind === "function" &&
+    typeof value.text === "function"
+  ) {
     return node(value);
   }
   if (typeof value === "object" && typeof value.root === "function") {
@@ -154,7 +158,9 @@ export default function transform(root, options) {
     matchesBad: errorOf(() => call.matches(null)),
   };
 
-  const edits = top.findAll("console.log($A)").map((n) => n.replace(`logger.info(${n.getMatch("A").text()})`));
+  const edits = top
+    .findAll("console.log($A)")
+    .map((n) => n.replace(`logger.info(${n.getMatch("A").text()})`));
   report.edits = {
     edits,
     committed: top.commitEdits(edits),
@@ -184,7 +190,7 @@ export default function transform(root, options) {
     writeNoPath: errorOf(() => parsed.write("y")),
     renameNoPath: errorOf(() => parsed.rename("other.ts")),
     renameNoPathTwice: errorOf(() => parsed.rename("again.ts")),
-    construct: errorOf(() => new (parsed.constructor)()),
+    construct: errorOf(() => new parsed.constructor()),
   };
 
   report.rootErrors = {
