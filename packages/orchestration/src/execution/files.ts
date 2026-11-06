@@ -16,7 +16,8 @@
  * (`core/host.ts`).
  */
 import ignoreModule, { type Ignore } from "ignore";
-import { getHost, type Host } from "../core/host.ts";
+import { errorCode, getHost, type Host } from "../core/host.ts";
+import type { BatchFile } from "../core/protocol.ts";
 import LANGUAGES from "./languages.json" with { type: "json" };
 
 // `ignore` is CommonJS; its default export is the factory under both Node's
@@ -37,6 +38,8 @@ type Match = "ignore" | "whitelist" | "none";
 interface Override {
   /** Absolute directory the patterns are relative to. */
   root: string;
+  /** The `ignore` lines `matcher` is built from (what `Host.selectFiles` receives). */
+  patterns: string[];
   matcher: Ignore;
   /** With at least one include pattern, an unmatched file is ignored. */
   whitelists: boolean;
@@ -82,7 +85,7 @@ function override(
     }
   }
   for (const glob of (exclude ?? []).flatMap(expandBraces)) lines.push(glob.replace(/^!/u, ""));
-  return { root, matcher: ignore().add(lines), whitelists };
+  return { root, patterns: lines, matcher: ignore().add(lines), whitelists };
 }
 
 function test(matcher: Ignore, candidate: string, isDir: boolean): Match {
@@ -144,6 +147,24 @@ export function discoverGlobalExcludesPath(
   );
 }
 
+/**
+ * `Host.selectFiles` takes POSIX paths that are absolute, normalized, and
+ * nested (every override root is the walk root or an ancestor of it), the
+ * shape `executeJssgCommand` always produces. Anything else (a hand-written
+ * `selectFiles` call) walks in TypeScript.
+ */
+function nativeEligible(host: Host, root: string, overrides: Override[]): boolean {
+  const { isAbsolute, normalize, sep } = host.path;
+  if (sep !== "/") return false;
+  const canonical = (path: string) => isAbsolute(path) && normalize(path) === path;
+  if (!canonical(root)) return false;
+  return overrides.every(
+    (set) =>
+      canonical(set.root) &&
+      (set.root === root || root.startsWith(set.root.endsWith("/") ? set.root : `${set.root}/`)),
+  );
+}
+
 function walk(
   host: Host,
   root: string,
@@ -154,6 +175,17 @@ function walk(
   const toPosix = (path: string): string => (sep === "/" ? path : path.split(sep).join("/"));
   const globalPath =
     globalExcludes === undefined ? discoverGlobalExcludesPath(host.env(), host) : globalExcludes;
+  if (host.selectFiles !== undefined && nativeEligible(host, root, overrides)) {
+    return host.selectFiles({
+      root,
+      overrides: overrides.map((set) => ({
+        root: set.root,
+        patterns: set.patterns,
+        whitelists: set.whitelists,
+      })),
+      globalExcludes: globalPath ? globalPath : null,
+    });
+  }
   const global = globalPath ? readIgnoreFile(host, globalPath) : undefined;
   const ancestors: Level[] = [];
   for (let dir = dirname(root); ; dir = dirname(dir)) {
@@ -254,4 +286,49 @@ export function selectFiles(selection: Selection): string[] {
     overrides,
     selection.globalExcludes,
   );
+}
+
+/**
+ * Read a selected file. `undefined` means it vanished since selection or is
+ * not valid UTF-8; both are skipped, as the workflow engine does.
+ */
+function readSource(host: Host, absolute: string): string | undefined {
+  try {
+    return host.fs.readText(absolute, { fatal: true });
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === "ENOENT" || code === "EILSEQ") return undefined;
+    throw error;
+  }
+}
+
+/**
+ * The content of every selected file (`root`-relative paths, in order),
+ * skipping files that vanished or are not UTF-8. Uses the host's batch
+ * `fs.readSources` when it has one.
+ */
+export function readSelectedSources(
+  host: Host,
+  root: string,
+  paths: readonly string[],
+): BatchFile[] {
+  const { isAbsolute, join, normalize, sep } = host.path;
+  if (
+    host.fs.readSources !== undefined &&
+    sep === "/" &&
+    isAbsolute(root) &&
+    normalize(root) === root
+  ) {
+    const contents = host.fs.readSources(root, paths);
+    const files: BatchFile[] = [];
+    for (let index = 0; index < paths.length; index++) {
+      const content = contents[index];
+      if (content !== undefined) files.push({ path: paths[index]!, content });
+    }
+    return files;
+  }
+  return paths.flatMap((path) => {
+    const content = readSource(host, join(root, path));
+    return content === undefined ? [] : [{ path, content }];
+  });
 }

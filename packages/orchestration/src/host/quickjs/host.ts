@@ -2,7 +2,7 @@
  * The QuickJS `Host` (`core/host.ts`) over the Rust host's primitives
  * (`native.ts`). Runs inside QuickJS: Node-free (`tests/portable.test.ts`).
  */
-import type { Host, HostChild, HostSpawnOptions } from "../../core/host.ts";
+import type { Host, HostChild, HostSelectRequest, HostSpawnOptions } from "../../core/host.ts";
 import { createPosixPath } from "../../core/posix.ts";
 import { createPropagatingAsyncContext } from "./async-context.ts";
 import type { QuickjsNative } from "./native.ts";
@@ -45,8 +45,15 @@ function spawn(native: QuickjsNative, options: HostSpawnOptions): HostChild {
   };
 }
 
+/**
+ * The QuickJS `Host`. File selection and source reads run natively in Rust
+ * (`Host.selectFiles`, `Host.fs.readSources`) unless the environment sets
+ * `CODEMOD_QUICKJS_NATIVE_SELECT=0`, which walks in the interpreter instead
+ * (the same result; for comparisons and benchmarks).
+ */
 export function createQuickjsHost(native: QuickjsNative): Host {
   const timers = globalThis as unknown as Timers;
+  const nativeSelect = native.env().CODEMOD_QUICKJS_NATIVE_SELECT !== "0";
   return {
     name: "quickjs",
     fs: {
@@ -57,7 +64,16 @@ export function createQuickjsHost(native: QuickjsNative): Host {
       lstat: (path) => native.lstat(path),
       realpath: (path) => native.realpath(path),
       readdir: (path) => native.readdir(path),
+      ...(nativeSelect
+        ? {
+            readSources: (root: string, paths: readonly string[]) =>
+              native.readSources(root, [...paths]),
+          }
+        : {}),
     },
+    ...(nativeSelect
+      ? { selectFiles: (request: HostSelectRequest) => native.selectFiles(JSON.stringify(request)) }
+      : {}),
     path: createPosixPath(() => native.cwd()),
     os: {
       platform: native.platform,

@@ -19,6 +19,10 @@ export interface QuickjsNative {
   lstat(path: string): HostFileStat;
   realpath(path: string): string;
   readdir(path: string): HostDirEntry[];
+  /** `Host.selectFiles` (`crates/orchestration-walker`); the request as JSON. */
+  selectFiles(request: string): string[];
+  /** `Host.fs.readSources`; files are read on worker threads. */
+  readSources(root: string, paths: string[]): (string | undefined)[];
 
   readonly platform: string;
   availableParallelism(): number;

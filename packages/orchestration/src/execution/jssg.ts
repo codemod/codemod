@@ -22,8 +22,8 @@
  * `Host` (`core/host.ts`), so this module runs unchanged outside Node.
  */
 import type { ArtifactStore } from "../bundle/build.ts";
-import { comparePaths, selectFiles } from "./files.ts";
-import { errorCode, getHost, type Host } from "../core/host.ts";
+import { comparePaths, readSelectedSources, selectFiles } from "./files.ts";
+import { getHost, type Host } from "../core/host.ts";
 import type { Json } from "../core/json.ts";
 import { lexists, resolveInsideRoot } from "../core/paths.ts";
 import {
@@ -65,20 +65,6 @@ export interface JssgCommandOptions {
   globalExcludes?: string | null;
   /** Optional timers in milliseconds: `select` (walk + reads), `stage`, `commit`. */
   profile?: (phase: string, ms: number) => void;
-}
-
-/**
- * Read a selected file. `undefined` means it vanished since selection or is
- * not valid UTF-8; both are skipped, as the workflow engine does.
- */
-function readSource(host: Host, absolute: string): string | undefined {
-  try {
-    return host.fs.readText(absolute, { fatal: true });
-  } catch (error) {
-    const code = errorCode(error);
-    if (code === "ENOENT" || code === "EILSEQ") return undefined;
-    throw error;
-  }
 }
 
 export async function executeJssgCommand(
@@ -125,7 +111,7 @@ export async function executeJssgCommand(
         ? cwd
         : resolveInsideRoot(cwd, operation.target.root, "target root", host),
     );
-    files = selectFiles({
+    const paths = selectFiles({
       cwd,
       targetRoot,
       language: operation.language,
@@ -133,10 +119,8 @@ export async function executeJssgCommand(
       invocation: { include: operation.target?.include, exclude: operation.target?.exclude },
       globalExcludes: options.globalExcludes,
       host,
-    }).flatMap((path) => {
-      const content = readSource(host, join(targetRoot, path));
-      return content === undefined ? [] : [{ path, content }];
     });
+    files = readSelectedSources(host, targetRoot, paths);
   } catch (error) {
     return fail("failed", (error as Error).message, { phase: "select" });
   }

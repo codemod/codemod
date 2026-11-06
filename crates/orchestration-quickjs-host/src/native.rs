@@ -25,6 +25,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 use crate::jssg;
 use crate::modules::ModuleRegistry;
+use crate::select::{self, SelectRequest};
 use crate::utf8::StreamDecoder;
 
 /// The global the bundle reads its primitives from.
@@ -104,6 +105,12 @@ pub fn io_code(error: &io::Error) -> &'static str {
 fn fs_error(ctx: &Ctx<'_>, op: &str, path: &str, error: io::Error) -> rquickjs::Error {
     let code = io_code(&error);
     throw(ctx, Some(code), &format!("{code}: {error}, {op} '{path}'"))
+}
+
+/// Walker failures as the TypeScript walker over this host's `fs` reports them.
+fn walker_error(ctx: &Ctx<'_>, error: orchestration_walker::Error) -> rquickjs::Error {
+    let (code, message) = select::describe(&error);
+    throw(ctx, code, &message)
 }
 
 /// Node's `os.platform()` names.
@@ -288,6 +295,27 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: Rc<HostState>) -> rquickjs::Result<()
             }
             Ok::<_, rquickjs::Error>(list)
         })?,
+    )?;
+
+    // --- file selection (`Host.selectFiles`, `Host.fs.readSources`) ---------
+    native.set(
+        "selectFiles",
+        Function::new(ctx.clone(), |ctx: Ctx<'js>, request: String| {
+            let request: SelectRequest = serde_json::from_str(&request).map_err(|error| {
+                throw(&ctx, None, &format!("invalid selectFiles request: {error}"))
+            })?;
+            orchestration_walker::select(&request.into()).map_err(|error| walker_error(&ctx, error))
+        })?,
+    )?;
+    native.set(
+        "readSources",
+        Function::new(
+            ctx.clone(),
+            |ctx: Ctx<'js>, root: String, paths: Vec<String>| {
+                orchestration_walker::read_sources(&root, &paths)
+                    .map_err(|error| walker_error(&ctx, error))
+            },
+        )?,
     )?;
 
     // --- process facts ------------------------------------------------------

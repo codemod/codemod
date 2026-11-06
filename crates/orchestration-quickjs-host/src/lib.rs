@@ -35,6 +35,7 @@ use rquickjs::{
 pub mod jssg;
 pub mod modules;
 pub mod native;
+pub mod select;
 mod utf8;
 
 /// Module name of the workflow bundle inside the runtime.

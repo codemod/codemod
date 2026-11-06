@@ -1,0 +1,18 @@
+[package]
+name = "orchestration-walker"
+version.workspace = true
+edition = "2021"
+authors.workspace = true
+description = "Native file selection for the TypeScript orchestration runtimes: packages/orchestration/src/execution/files.ts (and the `ignore` npm package it uses) reproduced exactly in Rust"
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# ECMAScript regular expressions (non-unicode mode, UTF-16 code units), so
+# node-ignore's generated `RegExp` sources match exactly as they do in JS.
+regress = { version = "0.10", features = ["utf16"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

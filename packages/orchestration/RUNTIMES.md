@@ -83,6 +83,47 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
   is killed). A spinning transform cannot be interrupted (one JS thread).
 - **Console:** workflow and transform `console.*` go to the host's stderr; stdout is the result.
 - **Timings:** `--timings` or `CODEMOD_QUICKJS_TIMINGS=1` prints a `timings: {...}` line.
+- **File selection is native.** The host implements the optional `Host.selectFiles` and
+  `Host.fs.readSources` (see "Native file selection"), so the walk and the reads of a JSSG
+  command run in Rust instead of the interpreter. `CODEMOD_QUICKJS_NATIVE_SELECT=0` turns
+  both off (the portable walker then runs in QuickJS; same result, slower).
+
+## Native file selection
+
+`execution/files.ts` is the reference walker. A host may also offer two optional
+capabilities, and `files.ts` uses them when present:
+
+- `Host.selectFiles(request)`: `walk()` with exactly its semantics. TypeScript still derives
+  the inputs (language extensions, brace expansion, include/exclude lines, global excludes
+  discovery, building the override matchers, so pattern errors are thrown by the same code)
+  and passes `{ root, overrides: [{ root, patterns, whitelists }], globalExcludes }`. It is
+  used only for POSIX paths that are absolute, normalized, and nested (each override root is
+  the walk root or an ancestor), which `executeJssgCommand` always produces. Anything else
+  walks in TypeScript.
+- `Host.fs.readSources(root, paths)`: `readText(join(root, path), { fatal: true })` for every
+  selected path in one call (`undefined` for `ENOENT`/`EILSEQ`, the first other error thrown).
+
+The QuickJS host implements both in `crates/orchestration-walker` (reads on worker threads).
+It is not the engine's walker (`codemod_walk_builder`, the `ignore` crate) because the
+TypeScript walker's semantics differ from it in ways only a port reproduces: matching is the
+`ignore` npm package, ported rule by rule (`node_ignore.rs`: the same `RegExp` sources,
+evaluated by `regress`, an ECMAScript engine, in non-unicode mode over UTF-16 code units, so
+case-insensitive, `?` is one UTF-16 unit, `.` stops at line terminators, a rule set JS cannot
+compile is dropped whole); a path is ignored when any parent directory is, even if a nearer
+`.ignore` whitelisted that directory; two override sets; and `.ignore` / `.gitignore` /
+`.git/info/exclude` are read in every ancestor of the target. Paths are the lossy strings the
+TypeScript walker sees. Errors carry the host's own `fs` messages (`EACCES: ..., scandir
+'<dir>'`) and the `ignore` package's (`path should be a \`path.relative()\`d string, ...`).
+
+`tests/files-native.test.ts` checks it differentially: an awkward fixture tree (nested and
+ancestor ignore files, negations, precedence, CRLF, BOM, an uncompilable rule, case and
+UTF-16 matching, symlinks, newlines in names, non-UTF-8 content, both override sets, a
+nested target root) plus a seeded random sweep of ignore files, each selection and read run
+through `selectFiles()` / `readSelectedSources()` over the Node host with and without the
+native capabilities (`orchestration-quickjs-host select` runs the same Rust code the context
+calls). Known host difference, unrelated to the walker: the Node host's `readText(fatal)`
+strips a leading BOM (`TextDecoder`), the QuickJS host's keeps it, so a JSSG transform sees
+a BOM under `quickjs` but not under `bridge`/`node`.
 
 ## Inventory: what used Node, and where it went
 

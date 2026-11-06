@@ -4844,12 +4844,21 @@ dependencies = [
  "butterflow-execution-bridge",
  "codemod-sandbox",
  "libc",
+ "orchestration-walker",
  "rquickjs",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "orchestration-walker"
+version = "1.13.18"
+dependencies = [
+ "regress",
+ "tempfile",
 ]
 
 [[package]]
