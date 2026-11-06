@@ -1,0 +1,398 @@
+{
+  "root": {
+    "filename": true,
+    "relativeFilename": "input.ts",
+    "sourceMatches": true,
+    "kind": "program",
+    "isLeaf": false,
+    "isNamed": true,
+    "isNamedLeaf": false,
+    "parent": null,
+    "childKinds": [
+      "import_statement",
+      "lexical_declaration",
+      "expression_statement",
+      "expression_statement",
+      "expression_statement"
+    ],
+    "child0": {
+      "kind": "import_statement",
+      "text": "import { a } from \"./a\";",
+      "range": {
+        "start": {
+          "line": 0,
+          "column": 0,
+          "index": 0
+        },
+        "end": {
+          "line": 0,
+          "column": 24,
+          "index": 24
+        }
+      }
+    },
+    "child999": null,
+    "idIsNumber": true,
+    "idStable": true,
+    "getRootFilenameMatches": true,
+    "debug": "import_statement:\n  [\"import\"]\n  import_clause:\n    named_imports:\n      [\"{\"]\n      import_specifier:\n        identifier: \"a\"\n      [\"}\"]\n  [\"from\"]\n  string:\n    [\"\\\"\"]\n    string_fragment: \"./a\"\n    [\"\\\"\"]\n  [\";\"]\n"
+  },
+  "matches": [
+    {
+      "kind": "call_expression",
+      "text": "console.log(a)",
+      "range": {
+        "start": {
+          "line": 2,
+          "column": 0,
+          "index": 52
+        },
+        "end": {
+          "line": 2,
+          "column": 14,
+          "index": 66
+        }
+      }
+    },
+    {
+      "kind": "call_expression",
+      "text": "console.log(bar)",
+      "range": {
+        "start": {
+          "line": 4,
+          "column": 0,
+          "index": 90
+        },
+        "end": {
+          "line": 4,
+          "column": 16,
+          "index": 106
+        }
+      }
+    }
+  ],
+  "language": "TypeScript",
+  "find": {
+    "call": {
+      "kind": "call_expression",
+      "text": "console.log(a)",
+      "range": {
+        "start": {
+          "line": 2,
+          "column": 0,
+          "index": 52
+        },
+        "end": {
+          "line": 2,
+          "column": 14,
+          "index": 66
+        }
+      }
+    },
+    "metaA": {
+      "kind": "identifier",
+      "text": "a",
+      "range": {
+        "start": {
+          "line": 2,
+          "column": 12,
+          "index": 64
+        },
+        "end": {
+          "line": 2,
+          "column": 13,
+          "index": 65
+        }
+      }
+    },
+    "metaMissing": null,
+    "isCall": true,
+    "isOther": false,
+    "field": {
+      "kind": "member_expression",
+      "text": "console.log",
+      "range": {
+        "start": {
+          "line": 2,
+          "column": 0,
+          "index": 52
+        },
+        "end": {
+          "line": 2,
+          "column": 11,
+          "index": 63
+        }
+      }
+    },
+    "fieldMissing": null,
+    "fieldChildren": [
+      "arguments"
+    ],
+    "ancestors": [
+      "expression_statement",
+      "program"
+    ],
+    "next": {
+      "kind": ";",
+      "text": ";",
+      "range": {
+        "start": {
+          "line": 2,
+          "column": 14,
+          "index": 66
+        },
+        "end": {
+          "line": 2,
+          "column": 15,
+          "index": 67
+        }
+      }
+    },
+    "prev": null,
+    "nextAll": [
+      ";"
+    ],
+    "prevAll": []
+  },
+  "siblings": {
+    "next": {
+      "kind": "expression_statement",
+      "text": "foo(1, \"two\", three);",
+      "range": {
+        "start": {
+          "line": 3,
+          "column": 0,
+          "index": 68
+        },
+        "end": {
+          "line": 3,
+          "column": 21,
+          "index": 89
+        }
+      }
+    },
+    "prev": {
+      "kind": "lexical_declaration",
+      "text": "const greeting = 'héllo';",
+      "range": {
+        "start": {
+          "line": 1,
+          "column": 0,
+          "index": 25
+        },
+        "end": {
+          "line": 1,
+          "column": 25,
+          "index": 51
+        }
+      }
+    },
+    "nextAll": [
+      "expression_statement",
+      "expression_statement"
+    ],
+    "prevAll": [
+      "lexical_declaration",
+      "import_statement"
+    ]
+  },
+  "findAll": {
+    "pattern": [
+      {
+        "kind": "call_expression",
+        "text": "console.log(a)",
+        "range": {
+          "start": {
+            "line": 2,
+            "column": 0,
+            "index": 52
+          },
+          "end": {
+            "line": 2,
+            "column": 14,
+            "index": 66
+          }
+        }
+      },
+      {
+        "kind": "call_expression",
+        "text": "console.log(bar)",
+        "range": {
+          "start": {
+            "line": 4,
+            "column": 0,
+            "index": 90
+          },
+          "end": {
+            "line": 4,
+            "column": 16,
+            "index": 106
+          }
+        }
+      }
+    ],
+    "kindNumber": [
+      "\"./a\"",
+      "'héllo'",
+      "\"two\""
+    ],
+    "rule": [
+      {
+        "text": "foo(1, \"two\", three)",
+        "args": [
+          "1",
+          ",",
+          "\"two\"",
+          ",",
+          "three"
+        ],
+        "none": 0
+      }
+    ],
+    "constraints": [
+      "console.log(bar)"
+    ],
+    "utils": [
+      "console.log(a)",
+      "console.log(bar)"
+    ],
+    "relational": [
+      "a",
+      "three",
+      "bar"
+    ]
+  },
+  "transformed": {
+    "value": [],
+    "type": "object",
+    "isArray": true,
+    "missing": null
+  },
+  "relations": {
+    "matches": true,
+    "matchesNot": false,
+    "inside": true,
+    "has": true,
+    "precedes": false,
+    "follows": true
+  },
+  "matcherErrors": {
+    "boolean": {
+      "error": "TypeError",
+      "message": "Matcher must be an object with a 'pattern' or 'kind' property"
+    },
+    "undefinedArg": {
+      "error": "TypeError",
+      "message": "Matcher must be an object with a 'pattern' or 'kind' property"
+    },
+    "badRule": {
+      "error": "TypeError",
+      "message": "invalid type: integer `5`, expected struct SerializableRule"
+    },
+    "unknownField": {
+      "ok": []
+    },
+    "emptyRule": {
+      "error": "TypeError",
+      "message": "`rule` is not configured correctly."
+    },
+    "array": {
+      "error": "TypeError",
+      "message": "invalid type: integer `1`, expected struct SerializableRule"
+    },
+    "badKind": {
+      "error": "TypeError",
+      "message": "`rule` is not configured correctly."
+    },
+    "matchesBad": {
+      "error": "TypeError",
+      "message": "Matcher must be an object with a 'pattern' or 'kind' property"
+    }
+  },
+  "edits": {
+    "edits": [
+      {
+        "startPos": 52,
+        "endPos": 66,
+        "insertedText": "logger.info(a)"
+      },
+      {
+        "startPos": 90,
+        "endPos": 106,
+        "insertedText": "logger.info(bar)"
+      }
+    ],
+    "committed": "import { a } from \"./a\";\nconst greeting = 'héllo';\nlogger.info(a);\nfoo(1, \"two\", three);\nlogger.info(bar);\n",
+    "overlapping": "X { a } from \"./a\";\nconst greeting = 'héllo';\nconsole.log(a);\nfoo(1, \"two\", three);\nconsole.log(bar);\n",
+    "subnode": "console.log('z');",
+    "empty": "import { a } from \"./a\";\nconst greeting = 'héllo';\nconsole.log(a);\nfoo(1, \"two\", three);\nconsole.log(bar);\n"
+  },
+  "unicode": {
+    "kind": "string",
+    "text": "'héllo'",
+    "range": {
+      "start": {
+        "line": 1,
+        "column": 17,
+        "index": 42
+      },
+      "end": {
+        "line": 1,
+        "column": 24,
+        "index": 50
+      }
+    }
+  },
+  "semantic": {
+    "definition": null,
+    "definitionWithOptions": null,
+    "references": []
+  },
+  "parse": {
+    "filename": "",
+    "relativeFilename": "",
+    "source": "let x = 1;",
+    "rootKind": "program",
+    "badLang": {
+      "error": "Error",
+      "message": "Failed to parse: Unsupported language: not-a-language. Error: Unsupported language: not-a-language"
+    },
+    "writeNoPath": {
+      "error": "Error",
+      "message": "Cannot write: file has no path"
+    },
+    "renameNoPath": {
+      "error": "Error",
+      "message": "rename() path 'other.ts' is outside the target directory '<WORK>'"
+    },
+    "renameNoPathTwice": {
+      "error": "Error",
+      "message": "rename() path 'again.ts' is outside the target directory '<WORK>'"
+    },
+    "construct": {
+      "error": "TypeError",
+      "message": "'SgRoot' is not constructible. Use 'parse(lang, src)'."
+    }
+  },
+  "rootErrors": {
+    "writeCurrent": {
+      "error": "Error",
+      "message": "Cannot call write() on the current file. Return the modified content from transform() instead."
+    },
+    "renameEmpty": {
+      "error": "Error",
+      "message": "rename() requires a non-empty path"
+    },
+    "renameOutside": {
+      "error": "Error",
+      "message": "rename() path '<WORK>/../../outside.ts' is outside the target directory '<WORK>'"
+    },
+    "rename": {
+      "ok": "undefined"
+    },
+    "renameTwice": {
+      "error": "Error",
+      "message": "rename() has already been called for this file. It can only be called once."
+    }
+  }
+}

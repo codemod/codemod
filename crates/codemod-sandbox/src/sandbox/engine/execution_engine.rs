@@ -7,6 +7,7 @@ use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use super::transform_helpers::{
     build_transform_options, extract_transform_output, process_transform_result, ModificationCheck,
 };
+use crate::ast_grep::sg_core::{CoreRoot, RootOptions, SemanticSeam};
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::ast_grep::AstGrepModule;
 use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
@@ -19,7 +20,6 @@ use crate::sandbox::runtime_module::{
 use crate::utils::quickjs_utils::maybe_promise;
 use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
 use ast_grep_config::RuleConfig;
-use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
@@ -30,7 +30,6 @@ use rquickjs::{async_with, AsyncContext, AsyncRuntime, Ctx, Object, Type, Value}
 use rquickjs::{CatchResultExt, Function, Module};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -666,32 +665,21 @@ where
                 .to_string_lossy()
                 .to_string();
             let target_directory = canonical_target_directory.clone();
-            let parsed_content =
-                SgRootRjs::try_new_with_semantic(
-                    ast_grep,
-                    Some(file_path_str.clone()),
-                    options.semantic_provider.clone(),
-                    Some(file_path_str), // Pass current file path for write() validation
-                    Some(target_directory.as_path()),
-                ).map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
-                })?;
-
-            // Keep a reference to read rename_to after JS execution
-            let sg_root_inner = Arc::clone(&parsed_content.inner);
+            // Keep a handle to read rename_to after JS execution
+            let sg_root = CoreRoot::from_ast_grep(
+                ast_grep,
+                RootOptions {
+                    filename: Some(file_path_str.clone()),
+                    target_directory: Some(target_directory.as_path()),
+                    semantic: SemanticSeam::from_provider(options.semantic_provider.clone()),
+                    // Pass current file path for write() validation
+                    current_file_path: Some(file_path_str),
+                },
+            );
 
             // Calculate matches inside the JS context
             let matches: Option<Vec<SgNodeRjs<'_>>> = if let Some(selector_config) = &options.selector_config {
-                let root_node = parsed_content.root(ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                    source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                        message: e.to_string(),
-                    },
-                })?;
-                let ast_matches: Vec<_> = root_node.inner_node.dfs()
-                    .filter_map(|node| selector_config.matcher.match_node(node))
-                    .collect();
+                let ast_matches = sg_root.select(&selector_config.matcher);
 
                 if ast_matches.is_empty() {
                     return Ok(CodemodOutput {
@@ -701,14 +689,11 @@ where
                     });
                 }
 
-                Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
-                    root: Arc::clone(&parsed_content.inner),
-                    inner_node: node_match,
-                    _phantom: PhantomData,
-                }).collect())
+                Some(ast_matches.into_iter().map(SgNodeRjs::from_core).collect())
             } else {
                 None
             };
+            let parsed_content = SgRootRjs::from_core(sg_root.clone());
 
             let language_str = options.language.to_string();
             let target_dir_str = target_directory.to_string_lossy().into_owned();
@@ -745,7 +730,7 @@ where
 
             let primary = process_transform_result(
                 &content_result,
-                &sg_root_inner,
+                &sg_root,
                 ModificationCheck::StringEquality { original_content: options.content },
             )?;
 
