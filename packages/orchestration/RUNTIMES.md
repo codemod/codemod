@@ -238,6 +238,10 @@ spawns the binary. No CLI change either way.
 
 ## What a QuickJS host must provide
 
+(The original requirements list; `crates/orchestration-quickjs-host` plus
+`src/host/quickjs/*` now implement it. Differences: the `Host` is built by the bundle entry
+from Rust primitives, and the async context uses then-propagation, not promise hooks.)
+
 1. A `Host` object (above), installed via `HOST_GLOBAL` before the bundle evaluates or by the
    bundle entry calling `setHost`:
    - `fs`: synchronous UTF-8 read (lossy and fatal/`EILSEQ`), write with mode, mkdir -p, rm

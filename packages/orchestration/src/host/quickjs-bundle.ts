@@ -26,8 +26,10 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
-import { build, type Plugin } from "esbuild";
-import { buildModule, type JssgArtifact } from "../bundle/build.ts";
+// esbuild and the build step (TypeScript) load only when a bundle is built,
+// so a cache hit (`cachedQuickjsBundle`) costs file hashing only.
+import type { Plugin } from "esbuild";
+import type { BuiltModule, JssgArtifact } from "../bundle/build.ts";
 
 export interface QuickjsBundle {
   /** The ES module text. */
@@ -55,7 +57,11 @@ const loaderFor = (file: string): Loader => {
   return "ts";
 };
 
-function plugin(artifacts: Map<string, JssgArtifact>, transformInputs: Set<string>): Plugin {
+function plugin(
+  artifacts: Map<string, JssgArtifact>,
+  transformInputs: Set<string>,
+  buildModule: (source: string, file: string) => BuiltModule,
+): Plugin {
   return {
     name: "codemod-quickjs",
     setup(build) {
@@ -111,6 +117,10 @@ function plugin(artifacts: Map<string, JssgArtifact>, transformInputs: Set<strin
 /** Build the bundle for `workflow` (absolute or relative to the process cwd). */
 export async function buildQuickjsBundle(workflow: string): Promise<QuickjsBundle> {
   const file = resolve(workflow);
+  const [{ build }, { buildModule }] = await Promise.all([
+    import("esbuild"),
+    import("../bundle/build.ts"),
+  ]);
   const artifacts = new Map<string, JssgArtifact>();
   const transformInputs = new Set<string>();
   // The QuickJS entry first, so the host and the async context are installed
@@ -135,7 +145,7 @@ export async function buildQuickjsBundle(workflow: string): Promise<QuickjsBundl
     legalComments: "none",
     logLevel: "silent",
     charset: "utf8",
-    plugins: [plugin(artifacts, transformInputs)],
+    plugins: [plugin(artifacts, transformInputs, buildModule)],
   }).catch((error: unknown) => {
     const messages = (
       error as { errors?: { text: string; location?: { file: string; line: number } | null }[] }
