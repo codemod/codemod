@@ -1,41 +1,49 @@
-//! In-context JSSG batches. The bundle's dispatcher
-//! (`packages/orchestration/src/host/quickjs/dispatch.ts`) drives one batch
-//! per `jssg` command, one file at a time on the JS thread:
+//! In-context JSSG batches. The portable batch loop
+//! (`packages/orchestration/src/execution/jssg-batch.ts`, shared with the
+//! `node` runtime) drives one batch per `jssg` command through the bundle's
+//! engine (`packages/orchestration/src/host/quickjs/dispatch.ts`), one
+//! transform call at a time on the JS thread. Every batch rule is the
+//! shared [`jssg_batch::BatchPlan`]:
 //!
-//! - `jssgBegin(config, paths)`: the execution bridge's own
-//!   [`BatchPlan`]: hash-verified artifact, canonical target root, compiled
-//!   selector, params, every path resolved inside the root; semantic
-//!   analysis is refused (`unsupported in runtime 'quickjs'`);
-//! - `jssgPrepare(batch, index, content)`: `null` when the static selector
-//!   skips the file, else `[root, options]` for the transform
-//!   (`embedded::begin_file`);
-//! - the dispatcher calls the transform (evaluated once per run) itself;
-//! - `jssgFinish(batch, index, result)`: the awaited result as the
-//!   `FileOutcome` JSON the bridge would have returned (`embedded::finish_file`
-//!   then [`BatchPlan::convert`]);
+//! - `jssgBegin(config, paths)`: [`BatchPlan`]: hash-verified artifact,
+//!   canonical target root, compiled selector, params, every path resolved
+//!   inside the root; semantic analysis is refused (`unsupported in runtime
+//!   'quickjs'`);
+//! - `jssgParse(batch, start, contents)`: [`BatchPlan::parse`] for each
+//!   file, an `SgRoot` or `null` where the static selector skips it;
+//! - `jssgCall(batch)`: the transform `options`, staging cleared
+//!   (`embedded::begin_call`); the loop then calls the transform (evaluated
+//!   once per run) itself;
+//! - `jssgCallEnd(batch, index)`: the changes the call staged, kept for
+//!   `jssgFinish` (`embedded::end_call`);
+//! - `jssgFinish(batch, index, root, result)`: the awaited result as the
+//!   `FileOutcome` JSON the bridge would have returned
+//!   (`embedded::transform_output` then [`BatchPlan::finish`]);
 //! - `jssgEnd(batch)`.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use butterflow_execution_bridge::jssg::{Batch, BatchPlan, SemanticSupport};
-use butterflow_execution_bridge::{ArtifactRef, Selector, SemanticAnalysis};
-use codemod_sandbox::sandbox::engine::embedded::{begin_file, finish_file, EmbeddedFile};
-use rquickjs::{Array, Ctx, Function, Object, Value};
-use serde::Deserialize;
+use codemod_sandbox::sandbox::engine::embedded::{
+    begin_call, core_root, end_call, root_value, transform_output,
+};
+use codemod_sandbox::sandbox::engine::FileChange;
+use jssg_batch::{BatchConfig, BatchPlan, SemanticSupport};
+use rquickjs::{Ctx, Function, Object, Value};
 
 use crate::native::{throw, HostState};
 
 pub struct OpenBatch {
     plan: BatchPlan,
-    paths: Vec<String>,
-    current: Option<(u32, EmbeddedFile)>,
+    /// What each finished transform call staged, until `jssgFinish`.
+    staged: HashMap<u32, Vec<FileChange>>,
 }
 
 /// Time spent in Rust around transforms, for the timer breakdown.
 #[derive(Default)]
 pub struct Stats {
-    /// `jssgPrepare`: selector check, parse, options.
+    /// `jssgParse`: selector check and parse.
     pub prepare: Duration,
     /// `jssgFinish`: result conversion and path validation.
     pub finish: Duration,
@@ -43,19 +51,17 @@ pub struct Stats {
     pub skipped: u64,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BatchConfig {
-    transform: ArtifactRef,
-    source: Option<String>,
-    language: String,
-    #[serde(default)]
-    selector: Option<Selector>,
-    #[serde(default)]
-    semantic_analysis: Option<SemanticAnalysis>,
-    #[serde(default)]
-    input: Option<serde_json::Value>,
-    target_root: Option<String>,
+fn with_batch<'js, T>(
+    ctx: &Ctx<'js>,
+    state: &HostState,
+    id: u32,
+    f: impl FnOnce(&mut OpenBatch) -> rquickjs::Result<T>,
+) -> rquickjs::Result<T> {
+    let mut batches = state.batches.borrow_mut();
+    let batch = batches
+        .get_mut(&id)
+        .ok_or_else(|| throw(ctx, None, &format!("unknown JSSG batch {id}")))?;
+    f(batch)
 }
 
 pub fn install<'js>(
@@ -73,18 +79,8 @@ pub fn install<'js>(
                     let config: BatchConfig = serde_json::from_str(&config).map_err(|error| {
                         throw(&ctx, None, &format!("invalid JSSG batch: {error}"))
                     })?;
-                    let batch = Batch {
-                        artifact: &config.transform,
-                        source: config.source.as_deref(),
-                        language: &config.language,
-                        selector: config.selector.as_ref(),
-                        target_root: config.target_root.as_deref(),
-                        semantic_analysis: config.semantic_analysis.as_ref(),
-                        input: config.input.as_ref(),
-                        files: &[],
-                    };
                     let plan = BatchPlan::for_paths(
-                        &batch,
+                        &config.batch(),
                         paths.iter().map(String::as_str),
                         SemanticSupport::Unsupported("quickjs"),
                     )
@@ -95,8 +91,7 @@ pub fn install<'js>(
                         id,
                         OpenBatch {
                             plan,
-                            paths,
-                            current: None,
+                            staged: HashMap::new(),
                         },
                     );
                     let handle = Object::new(ctx.clone())?;
@@ -110,56 +105,70 @@ pub fn install<'js>(
     {
         let state = Rc::clone(&state);
         native.set(
-            "jssgPrepare",
+            "jssgParse",
             Function::new(
                 ctx.clone(),
                 move |ctx: Ctx<'js>,
                       id: u32,
-                      index: u32,
-                      content: String|
-                      -> rquickjs::Result<Value<'js>> {
+                      start: u32,
+                      contents: Vec<String>|
+                      -> rquickjs::Result<Vec<Value<'js>>> {
                     let started = Instant::now();
-                    let mut batches = state.batches.borrow_mut();
-                    let batch = batches
-                        .get_mut(&id)
-                        .ok_or_else(|| throw(&ctx, None, &format!("unknown JSSG batch {id}")))?;
-                    let source = batch
-                        .plan
-                        .sources
-                        .get(index as usize)
-                        .ok_or_else(|| {
-                            throw(&ctx, None, &format!("no file {index} in batch {id}"))
-                        })?
-                        .clone();
-                    let mut stats = state.stats.borrow_mut();
-                    if batch.plan.skips(&content) {
-                        stats.skipped += 1;
-                        stats.prepare += started.elapsed();
-                        return Ok(Value::new_null(ctx.clone()));
-                    }
-                    let (file, root, options) = begin_file(
-                        &ctx,
-                        batch.plan.language,
-                        &source,
-                        &content,
-                        batch.plan.params.clone().unwrap_or_default(),
-                    )
-                    .map_err(|error| {
-                        throw(
-                            &ctx,
-                            None,
-                            &format!("JSSG failed for '{}': {error}", batch.paths[index as usize]),
-                        )
+                    let roots = with_batch(&ctx, &state, id, |batch| {
+                        let mut stats = state.stats.borrow_mut();
+                        let mut roots = Vec::with_capacity(contents.len());
+                        for (offset, content) in contents.iter().enumerate() {
+                            let root = batch
+                                .plan
+                                .parse(start as usize + offset, content)
+                                .map_err(|error| throw(&ctx, None, &error))?;
+                            roots.push(match root {
+                                None => {
+                                    stats.skipped += 1;
+                                    Value::new_null(ctx.clone())
+                                }
+                                Some(root) => {
+                                    stats.files += 1;
+                                    root_value(&ctx, root)
+                                        .map_err(|error| throw(&ctx, None, &error.to_string()))?
+                                }
+                            });
+                        }
+                        Ok(roots)
                     })?;
-                    batch.current = Some((index, file));
-                    stats.files += 1;
-                    stats.prepare += started.elapsed();
-                    let pair = Array::new(ctx.clone())?;
-                    pair.set(0, root)?;
-                    pair.set(1, options)?;
-                    Ok(pair.into_value())
+                    state.stats.borrow_mut().prepare += started.elapsed();
+                    Ok(roots)
                 },
             )?,
+        )?;
+    }
+    {
+        let state = Rc::clone(&state);
+        native.set(
+            "jssgCall",
+            Function::new(ctx.clone(), move |ctx: Ctx<'js>, id: u32| {
+                let (language, params) = with_batch(&ctx, &state, id, |batch| {
+                    Ok((
+                        batch.plan.language,
+                        batch.plan.params.clone().unwrap_or_default(),
+                    ))
+                })?;
+                begin_call(&ctx, language, params)
+                    .map_err(|error| throw(&ctx, None, &error.to_string()))
+            })?,
+        )?;
+    }
+    {
+        let state = Rc::clone(&state);
+        native.set(
+            "jssgCallEnd",
+            Function::new(ctx.clone(), move |ctx: Ctx<'js>, id: u32, index: u32| {
+                let staged = end_call(&ctx);
+                with_batch(&ctx, &state, id, |batch| {
+                    batch.staged.insert(index, staged);
+                    Ok(())
+                })
+            })?,
         )?;
     }
     {
@@ -168,33 +177,22 @@ pub fn install<'js>(
             "jssgFinish",
             Function::new(
                 ctx.clone(),
-                move |ctx: Ctx<'js>, id: u32, index: u32, result: Value<'js>| {
+                move |ctx: Ctx<'js>, id: u32, index: u32, root: Value<'js>, result: Value<'js>| {
                     let started = Instant::now();
-                    let mut batches = state.batches.borrow_mut();
-                    let batch = batches
-                        .get_mut(&id)
-                        .ok_or_else(|| throw(&ctx, None, &format!("unknown JSSG batch {id}")))?;
-                    let path = batch.paths.get(index as usize).cloned().ok_or_else(|| {
-                        throw(&ctx, None, &format!("no file {index} in batch {id}"))
-                    })?;
-                    let file = match batch.current.take() {
-                        Some((current, file)) if current == index => file,
-                        _ => {
-                            return Err(throw(
-                                &ctx,
-                                None,
-                                &format!("file {index} of batch {id} was not prepared"),
-                            ))
-                        }
-                    };
-                    let outcome = finish_file(&ctx, file, result)
-                        .map_err(|error| error.to_string())
-                        .and_then(|output| batch.plan.convert(&path, output))
-                        .map_err(|error| {
-                            throw(&ctx, None, &format!("JSSG failed for '{path}': {error}"))
+                    let text = with_batch(&ctx, &state, id, |batch| {
+                        let core = core_root(&root).ok_or_else(|| {
+                            throw(&ctx, None, &format!("file {index} has no SgRoot"))
                         })?;
-                    let text = serde_json::to_string(&outcome)
-                        .map_err(|error| throw(&ctx, None, &error.to_string()))?;
+                        let staged = batch.staged.remove(&index).unwrap_or_default();
+                        let output = transform_output(&ctx, &core, result, staged)
+                            .map_err(|error| error.to_string());
+                        let outcome = batch
+                            .plan
+                            .finish(index as usize, output)
+                            .map_err(|error| throw(&ctx, None, &error))?;
+                        serde_json::to_string(&outcome)
+                            .map_err(|error| throw(&ctx, None, &error.to_string()))
+                    })?;
                     state.stats.borrow_mut().finish += started.elapsed();
                     Ok::<_, rquickjs::Error>(text)
                 },

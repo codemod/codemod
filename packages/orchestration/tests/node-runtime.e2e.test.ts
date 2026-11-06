@@ -30,7 +30,7 @@ import {
   NODE_RUNTIME,
   NodeExecutor,
   buildFile,
-  createInProcessJssgDispatch,
+  createJssgBatchDispatch,
   createNapiJssgEngine,
   dynamic,
   executeJssgCommand,
@@ -151,7 +151,7 @@ async function both(
     const inner: JssgDispatch =
       runtime === "bridge"
         ? (request, signal) => spawnBridge({ bin, cwd: repo }, request, signal)
-        : createInProcessJssgDispatch({ engine: createNapiJssgEngine() });
+        : createJssgBatchDispatch({ engine: createNapiJssgEngine() });
     let batch: OperationCompletion | undefined;
     const completion = await executeJssgCommand({
       cwd: repo,

@@ -1,33 +1,56 @@
-/** A change a transform staged through `write()` or `jssgTransform()`. */
-export interface StagedChange {
-  path: string;
-  content: string | null;
-  renameTo: string | null;
+/** The changes one transform call staged through `write()` or `jssgTransform()` (opaque). */
+export interface StagedChanges {
+  readonly __staged: unique symbol;
 }
 
 /** Opaque native `SgRoot` (see `codemod:ast-grep` in `@codemod.com/jssg-types` for its API). */
 export type NativeRoot = object;
 
-export interface NativeSelector {
-  test(root: NativeRoot): boolean;
+/** One file's batch result (`FileOutcome` in `@codemod.com/orchestration`). */
+export interface FileOutcome {
+  path: string;
+  edits: { path: string; content: string; renameTo?: string }[];
+  output?: unknown;
+}
+
+/**
+ * One planned JSSG batch: the bridge's batch rules (`crates/jssg-batch`).
+ * The constructor throws the planning error.
+ */
+export interface JssgBatch {
+  readonly module: string;
+  readonly targetRoot: string;
+  readonly params: Record<string, unknown>;
+  /** Roots of files `start ..< start + contents.length`, parsed off-thread; `null` where the selector skips. */
+  parse(start: number, contents: string[]): Promise<(NativeRoot | null)[]>;
+  /** A fresh transform `options` object. */
+  options(): {
+    params: Record<string, unknown>;
+    language: string;
+    matches: undefined;
+    matrixValues: undefined;
+    dryRun: false;
+    targetDir: string;
+  };
+  /** File `index`'s `FileOutcome`; throws `JSSG failed for '<path>': ...`. */
+  finish(index: number, root: NativeRoot, result: unknown, staged: StagedChanges): FileOutcome;
 }
 
 /** The addon's exports used by the engine. */
 export interface Binding {
   SgRoot: abstract new () => NativeRoot;
   SgNode: abstract new () => object;
-  Selector: new (language: string, rule: unknown) => NativeSelector;
+  /** `config`: JSON of `jssg_batch::BatchConfig`; `paths`: root-relative file paths. */
+  JssgBatch: new (config: string, paths: string[]) => JssgBatch;
   parse(language: string, source: string): NativeRoot;
   parseAsync(language: string, source: string): NativeRoot;
   parseFile(language: string, path: string): NativeRoot;
   kind(language: string, kind: string): number;
   engineBegin(targetDir: string): void;
-  engineEnd(): StagedChange[];
-  engineStage(path: string, content: string | null, renameTo: string | null): void;
+  engineEnd(): StagedChanges;
+  engineStageResult(path: string, root: NativeRoot, result: unknown): string | null;
   engineCheckWithinTarget(path: string, caller: string): void;
   engineTargetDir(): string | null;
-  engineRenameTo(root: NativeRoot): string | null;
-  engineSource(root: NativeRoot): string;
   engineLanguageName(language: string): string;
   engineParseWithPath(
     language: string,
@@ -35,13 +58,6 @@ export interface Binding {
     filename: string,
     targetDir?: string | null,
   ): NativeRoot;
-  engineParseBatch(
-    language: string,
-    targetDir: string,
-    paths: string[],
-    contents: string[],
-    selector?: NativeSelector | null,
-  ): Promise<(NativeRoot | null)[]>;
 }
 
 export function bindingPath(env?: Record<string, string | undefined>): string;
@@ -52,4 +68,4 @@ export function runTransform(
   targetDir: string,
   params: unknown,
   call: () => unknown,
-): Promise<{ result: unknown; staged: StagedChange[] }>;
+): Promise<{ result: unknown; staged: StagedChanges }>;

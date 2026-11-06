@@ -1,0 +1,737 @@
+//! The JSSG batch rules every TypeScript orchestration runtime shares, in one
+//! place:
+//!
+//! - the batch's protocol data ([`ArtifactRef`], [`Selector`],
+//!   [`SemanticAnalysis`], [`BatchFile`]) and its results ([`Edit`],
+//!   [`FileOutcome`]);
+//! - [`BatchPlan`]: everything a batch needs before its first transform runs
+//!   (hash-verified artifact, canonical target root, language, compiled
+//!   selector, params, semantic scope, every requested path contained in the
+//!   root), the static selector skip, parsing a file into a [`CoreRoot`], and
+//!   turning a transform's [`CodemodOutput`] into a validated
+//!   [`FileOutcome`] (`/`-separated, contained secondary paths and rename
+//!   targets).
+//!
+//! Users: the execution bridge (`crates/execution-bridge`, a fresh QuickJS
+//! runtime per file), the orchestration QuickJS host
+//! (`crates/orchestration-quickjs-host`, one context for the whole run), and
+//! the napi addon of the `node` runtime (`crates/jssg-napi`). Each binds the
+//! transform call itself; none re-implements these rules.
+//!
+//! Binding-agnostic: no JavaScript engine types here. Turning a transform's
+//! JavaScript return value into a [`CodemodOutput`] is the binding's job, via
+//! the shared [`classify_transform_result`] of `codemod-sandbox`.
+
+use std::{
+    collections::HashMap,
+    path::{Component, Path, PathBuf},
+};
+
+use ast_grep_config::RuleConfig;
+use ast_grep_core::{matcher::MatcherExt, AstGrep};
+use codemod_sandbox::sandbox::engine::{
+    codemod_lang::CodemodLang, selector_from_value, selector_matches, CodemodOutput,
+    ExecutionResult,
+};
+use codemod_sandbox::sg_core::{CoreRoot, RootOptions};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+pub use codemod_sandbox::sandbox::engine::{
+    classify_transform_result, ModificationCheck, ReturnedContent, MISSING_OUTPUT_MESSAGE,
+};
+
+// ---------------------------------------------------------------------------
+// Protocol data (mirrors `packages/orchestration/src/core/protocol.ts`)
+// ---------------------------------------------------------------------------
+
+/// Build-time identity of one transform artifact: the definition's `name`
+/// and the lowercase hex SHA-256 of the bundled source. No path, so the
+/// recorded command is the same on every checkout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactRef {
+    pub name: String,
+    pub hash: String,
+}
+
+/// The ast-grep rule data a definition declares as its selector. Only the
+/// matching fields are accepted; `id` and `language` are set by the bridge.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Selector {
+    pub rule: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utils: Option<Value>,
+}
+
+/// `"file"`, `"workspace"`, or `{ mode, root? }` where `root` is a safe
+/// relative path beneath the target root and requires workspace mode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SemanticAnalysis {
+    Mode(SemanticMode),
+    Detailed(SemanticAnalysisDetails),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticAnalysisDetails {
+    pub mode: SemanticMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SemanticMode {
+    File,
+    Workspace,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BatchFile {
+    /// Safe relative path beneath the target root.
+    pub path: String,
+    pub content: String,
+}
+
+/// One write the sandbox asked for. `path` is the file whose content this is;
+/// with `rename_to` the content belongs at that path and `path` goes away.
+/// Both are target-root-relative `/`-separated paths.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Edit {
+    pub path: String,
+    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rename_to: Option<String>,
+}
+
+/// What one supplied file's transform produced: its own edit (if modified),
+/// `jssgTransform` and staged `write()` edits, and the structured output. A
+/// file the selector skipped has no edits and no output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileOutcome {
+    pub path: String,
+    pub edits: Vec<Edit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<Value>,
+}
+
+impl FileOutcome {
+    /// A file the selector skipped: no edits, no output.
+    pub fn skipped(path: &str) -> Self {
+        FileOutcome {
+            path: path.to_string(),
+            edits: vec![],
+            output: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Batch planning
+// ---------------------------------------------------------------------------
+
+/// One `jssg` operation's batch as the request carries it.
+pub struct Batch<'a> {
+    pub artifact: &'a ArtifactRef,
+    /// The bundled transform source from the request context.
+    pub source: Option<&'a str>,
+    pub language: &'a str,
+    pub selector: Option<&'a Selector>,
+    pub target_root: Option<&'a str>,
+    pub semantic_analysis: Option<&'a SemanticAnalysis>,
+    /// Exposed to the transform as `options.params.input`.
+    pub input: Option<&'a Value>,
+    pub files: &'a [BatchFile],
+}
+
+/// The JSON form of a [`Batch`] without its files, for runners whose file
+/// contents stay on the JavaScript side (`jssgBegin` of the QuickJS host,
+/// `JssgBatch` of the napi addon); the paths travel separately.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BatchConfig {
+    pub transform: ArtifactRef,
+    #[serde(default)]
+    pub source: Option<String>,
+    pub language: String,
+    #[serde(default)]
+    pub selector: Option<Selector>,
+    #[serde(default)]
+    pub semantic_analysis: Option<SemanticAnalysis>,
+    #[serde(default)]
+    pub input: Option<Value>,
+    #[serde(default)]
+    pub target_root: Option<String>,
+}
+
+impl BatchConfig {
+    pub fn batch(&self) -> Batch<'_> {
+        Batch {
+            artifact: &self.transform,
+            source: self.source.as_deref(),
+            language: &self.language,
+            selector: self.selector.as_ref(),
+            target_root: self.target_root.as_deref(),
+            semantic_analysis: self.semantic_analysis.as_ref(),
+            input: self.input.as_ref(),
+            files: &[],
+        }
+    }
+}
+
+/// Whether the runner executing a batch can provide semantic analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticSupport {
+    Enabled,
+    /// Refuse `semanticAnalysis` with `JSSG semantic analysis is unsupported
+    /// in runtime '<name>'` (the runtime capability contract's wording).
+    Unsupported(&'static str),
+}
+
+/// The semantic analysis a batch asked for, validated against the root. The
+/// runner that supports it builds the provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SemanticScope {
+    File,
+    /// The contained, existing workspace directory to index.
+    Workspace(PathBuf),
+}
+
+/// Everything a batch needs before its first transform runs, shared by every
+/// batch runner: the canonical target root, the hash-verified artifact, the
+/// language, the compiled selector, the transform params, the semantic
+/// scope, and every file path resolved inside the root. Building it fails
+/// before anything runs.
+pub struct BatchPlan {
+    pub root: PathBuf,
+    /// Virtual module name derived from the transform name (`<name>.jssg.js`).
+    pub module: String,
+    pub language: CodemodLang,
+    selector: Option<RuleConfig<CodemodLang>>,
+    /// `{ input }` when the operation has an input.
+    pub params: Option<HashMap<String, Value>>,
+    pub semantic: Option<SemanticScope>,
+    /// The requested (root-relative) path of every file, in request order.
+    pub paths: Vec<String>,
+    /// Absolute, contained path of every requested file, in request order.
+    pub sources: Vec<PathBuf>,
+}
+
+impl BatchPlan {
+    /// Plan `batch` for its own `files`.
+    pub fn new(batch: &Batch<'_>, semantic: SemanticSupport) -> Result<Self, String> {
+        Self::for_paths(
+            batch,
+            batch.files.iter().map(|file| file.path.as_str()),
+            semantic,
+        )
+    }
+
+    /// Plan `batch` for `paths` (a runner that keeps file contents on its
+    /// own side passes `files: &[]` and the paths here).
+    pub fn for_paths<'p>(
+        batch: &Batch<'_>,
+        paths: impl IntoIterator<Item = &'p str>,
+        semantic: SemanticSupport,
+    ) -> Result<Self, String> {
+        let root = canonical_dir(batch.target_root, "targetRoot")?;
+        let module = verified_module(batch.artifact, batch.source)?;
+        let language: CodemodLang = batch
+            .language
+            .parse()
+            .map_err(|error| format!("invalid JSSG language '{}': {error}", batch.language))?;
+        let selector = batch
+            .selector
+            .map(|selector| {
+                serde_json::to_value(selector)
+                    .map_err(|error| error.to_string())
+                    .and_then(|value| {
+                        selector_from_value(language, value).map_err(|error| error.to_string())
+                    })
+            })
+            .transpose()
+            .map_err(|error| format!("invalid JSSG selector: {error}"))?;
+        let semantic = match (semantic, batch.semantic_analysis) {
+            (SemanticSupport::Unsupported(runtime), Some(_)) => {
+                return Err(format!(
+                    "JSSG semantic analysis is unsupported in runtime '{runtime}'"
+                ))
+            }
+            _ => semantic_scope(batch.semantic_analysis, &root)?,
+        };
+        let params = batch
+            .input
+            .map(|value| HashMap::from([("input".to_string(), value.clone())]));
+        // Every requested path is checked before anything runs.
+        let paths: Vec<String> = paths.into_iter().map(str::to_string).collect();
+        let sources = paths
+            .iter()
+            .map(|path| resolve_source(&root, path, "file path"))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            root,
+            module,
+            language,
+            selector,
+            params,
+            semantic,
+            paths,
+            sources,
+        })
+    }
+
+    /// The display name of the language (`options.language`).
+    pub fn language_name(&self) -> String {
+        self.language.to_string()
+    }
+
+    /// The requested path of file `index`.
+    pub fn path(&self, index: usize) -> Result<&str, String> {
+        self.paths
+            .get(index)
+            .map(String::as_str)
+            .ok_or_else(|| format!("no file {index} in the batch"))
+    }
+
+    /// Whether the static selector rules `content` out (the transform is not
+    /// called and the file's outcome is [`FileOutcome::skipped`]).
+    pub fn skips(&self, content: &str) -> bool {
+        self.selector
+            .as_ref()
+            .is_some_and(|selector| !selector_matches(selector, self.language, content))
+    }
+
+    /// File `index` parsed from `content` (the snapshot the host read), with
+    /// its canonical path as `filename()` and the root as the target
+    /// directory, or `None` when the static selector matches nothing in it.
+    /// Parses once; safe to call from any thread. No semantic provider.
+    pub fn parse(&self, index: usize, content: &str) -> Result<Option<CoreRoot>, String> {
+        let source = self
+            .sources
+            .get(index)
+            .ok_or_else(|| format!("no file {index} in the batch"))?;
+        let filename = source.to_string_lossy().into_owned();
+        let root = CoreRoot::from_ast_grep(
+            AstGrep::new(content, self.language),
+            RootOptions {
+                filename: Some(filename.clone()),
+                target_directory: Some(&self.root),
+                current_file_path: Some(filename),
+                ..Default::default()
+            },
+        );
+        let skipped = self.selector.as_ref().is_some_and(|selector| {
+            !root
+                .ast_grep()
+                .root()
+                .dfs()
+                .any(|node| selector.matcher.match_node(node).is_some())
+        });
+        Ok((!skipped).then_some(root))
+    }
+
+    /// File `index`'s transform output as a validated [`FileOutcome`]; an
+    /// error (the binding's, or a path that fails validation) names the file:
+    /// `JSSG failed for '<path>': <error>`.
+    pub fn finish(
+        &self,
+        index: usize,
+        output: Result<CodemodOutput, String>,
+    ) -> Result<FileOutcome, String> {
+        let path = self.path(index)?;
+        output
+            .and_then(|output| convert(&self.root, path, output))
+            .map_err(|error| format!("JSSG failed for '{path}': {error}"))
+    }
+}
+
+/// The artifact's virtual module name, once the source is present and its
+/// SHA-256 matches the hash the operation recorded. The name is derived from
+/// the definition name so errors point at the transform.
+fn verified_module(artifact: &ArtifactRef, source: Option<&str>) -> Result<String, String> {
+    if artifact.name.trim().is_empty() {
+        return Err("JSSG transform name must not be empty".to_string());
+    }
+    let hash = &artifact.hash;
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(format!(
+            "JSSG transform '{}' hash must be lowercase hex SHA-256",
+            artifact.name
+        ));
+    }
+    let source = source.ok_or_else(|| {
+        format!(
+            "JSSG transform '{}' has no artifact source in the request context",
+            artifact.name
+        )
+    })?;
+    let actual = format!("{:x}", Sha256::digest(source.as_bytes()));
+    if actual != *hash {
+        return Err(format!(
+            "JSSG transform '{}' source hashes to {actual}, not the recorded {hash}",
+            artifact.name
+        ));
+    }
+    let stem: String = artifact
+        .name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Ok(format!("{stem}.jssg.js"))
+}
+
+fn convert(root: &Path, path: &str, output: CodemodOutput) -> Result<FileOutcome, String> {
+    let mut edits = Vec::new();
+    push_edit(&mut edits, root, path.to_string(), output.primary)?;
+    for change in output.secondary {
+        let path = normalize_output(root, &change.path, "secondary path")?;
+        push_edit(&mut edits, root, path, change.result)?;
+    }
+    Ok(FileOutcome {
+        path: path.to_string(),
+        edits,
+        output: output.output,
+    })
+}
+
+fn push_edit(
+    edits: &mut Vec<Edit>,
+    root: &Path,
+    path: String,
+    result: ExecutionResult,
+) -> Result<(), String> {
+    if let ExecutionResult::Modified(modified) = result {
+        let rename_to = modified
+            .rename_to
+            .as_deref()
+            .map(|target| normalize_output(root, target, "rename target"))
+            .transpose()?;
+        edits.push(Edit {
+            path,
+            content: modified.content,
+            rename_to,
+        });
+    }
+    Ok(())
+}
+
+fn semantic_scope(
+    config: Option<&SemanticAnalysis>,
+    root: &Path,
+) -> Result<Option<SemanticScope>, String> {
+    let (mode, sub_root) = match config {
+        None => return Ok(None),
+        Some(SemanticAnalysis::Mode(mode)) => (*mode, None),
+        Some(SemanticAnalysis::Detailed(details)) => (details.mode, details.root.as_deref()),
+    };
+    Ok(Some(match (mode, sub_root) {
+        (SemanticMode::File, None) => SemanticScope::File,
+        (SemanticMode::File, Some(_)) => {
+            return Err("semanticAnalysis.root requires workspace mode".to_string())
+        }
+        (SemanticMode::Workspace, sub_root) => {
+            let workspace = match sub_root {
+                Some(sub_root) => resolve_source(root, sub_root, "semanticAnalysis.root")?,
+                None => root.to_path_buf(),
+            };
+            if !workspace.is_dir() {
+                return Err(format!(
+                    "failed to resolve semanticAnalysis.root '{}': not a directory",
+                    workspace.display()
+                ));
+            }
+            SemanticScope::Workspace(workspace)
+        }
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Path containment
+// ---------------------------------------------------------------------------
+//
+// Paths the host sends must be safe relative paths whose nearest existing
+// ancestor resolves inside the canonical root, so a symlinked file or
+// directory cannot point outside it. Paths the sandbox produces may be
+// absolute or relative and are normalized to root-relative `/`-separated
+// form after the same check. TypeScript repeats its own checks before
+// writing; neither side trusts the other's validation.
+
+fn canonical_dir(value: Option<&str>, name: &str) -> Result<PathBuf, String> {
+    let path = match value.map(Path::new) {
+        Some(path) if path.is_absolute() => path,
+        _ => return Err(format!("{name} must be an absolute path")),
+    };
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve {name} '{}': {error}", path.display()))?;
+    if !canonical.is_dir() {
+        return Err(format!("{name} '{}' is not a directory", path.display()));
+    }
+    Ok(canonical)
+}
+
+/// Same rules as `isSafeRelativePath` in `packages/orchestration/src/core/paths.ts`:
+/// non-empty, not absolute on any platform (`/x`, `\x`, `C:\x`), and no `..`
+/// segment. A `..` inside a name such as `foo..bar` is allowed.
+pub fn validate_relative_path(value: &str, name: &str) -> Result<(), String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{name} must not be empty"));
+    }
+    let bytes = trimmed.as_bytes();
+    let absolute = Path::new(trimmed).has_root()
+        || trimmed.starts_with(['/', '\\'])
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':');
+    if absolute || trimmed.split(['/', '\\']).any(|segment| segment == "..") {
+        return Err(format!("{name} must be a safe relative path"));
+    }
+    Ok(())
+}
+
+fn resolve_source(root: &Path, relative: &str, name: &str) -> Result<PathBuf, String> {
+    validate_relative_path(relative, name)?;
+    contain(root, &root.join(relative), name)
+}
+
+fn normalize_output(root: &Path, requested: &Path, name: &str) -> Result<String, String> {
+    if requested.as_os_str().is_empty() {
+        return Err(format!("{name} must not be empty"));
+    }
+    let real = contain(root, &root.join(requested), name)?;
+    let mut parts = Vec::new();
+    for component in real.strip_prefix(root).unwrap_or(&real).components() {
+        match component {
+            Component::Normal(part) => match part.to_str() {
+                Some(text) if !text.contains('\\') => parts.push(text.to_string()),
+                _ => {
+                    return Err(format!(
+                        "{name} '{}' is not a plain path",
+                        requested.display()
+                    ))
+                }
+            },
+            Component::CurDir => {}
+            _ => {
+                return Err(format!(
+                    "{name} '{}' is not a plain path",
+                    requested.display()
+                ))
+            }
+        }
+    }
+    if parts.is_empty() {
+        return Err(format!("{name} resolves to the target root itself"));
+    }
+    Ok(parts.join("/"))
+}
+
+/// The real path of `candidate` once symlinks in its nearest existing
+/// ancestor are resolved, provided it stays inside `root`.
+fn contain(root: &Path, candidate: &Path, name: &str) -> Result<PathBuf, String> {
+    let escape = || format!("{name} '{}' escapes the target root", candidate.display());
+    if candidate
+        .components()
+        .any(|part| matches!(part, Component::ParentDir))
+    {
+        return Err(escape());
+    }
+    let existing = candidate
+        .ancestors()
+        .find(|ancestor| ancestor.exists())
+        .ok_or_else(escape)?;
+    let canonical = existing
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve {name} '{}': {error}", existing.display()))?;
+    let rest = candidate.strip_prefix(existing).map_err(|_| escape())?;
+    // `join("")` would append a trailing separator to an existing path.
+    let real = if rest.as_os_str().is_empty() {
+        canonical
+    } else {
+        canonical.join(rest)
+    };
+    if real.starts_with(root) {
+        Ok(real)
+    } else {
+        Err(escape())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codemod_sandbox::sandbox::engine::{FileChange, ModifiedResult};
+
+    fn plan(dir: &Path, paths: &[&str], selector: Option<Selector>) -> BatchPlan {
+        let source = "export default () => null;";
+        let artifact = ArtifactRef {
+            name: "t x".to_string(),
+            hash: format!("{:x}", Sha256::digest(source.as_bytes())),
+        };
+        let root = dir.to_string_lossy().into_owned();
+        let batch = Batch {
+            artifact: &artifact,
+            source: Some(source),
+            language: "typescript",
+            selector: selector.as_ref(),
+            target_root: Some(&root),
+            semantic_analysis: None,
+            input: None,
+            files: &[],
+        };
+        BatchPlan::for_paths(&batch, paths.iter().copied(), SemanticSupport::Enabled).expect("plan")
+    }
+
+    fn modified(content: &str, rename_to: Option<&str>) -> ExecutionResult {
+        ExecutionResult::Modified(ModifiedResult {
+            content: content.to_string(),
+            rename_to: rename_to.map(PathBuf::from),
+        })
+    }
+
+    #[test]
+    fn plans_parses_and_skips_with_the_selector() {
+        let dir = tempfile::tempdir().unwrap();
+        let selector = Selector {
+            rule: serde_json::json!({ "pattern": "oldApi($A)" }),
+            constraints: None,
+            utils: None,
+        };
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/b.ts"), "oldApi(1);").unwrap();
+        let plan = plan(dir.path(), &["a.ts", "sub/b.ts"], Some(selector));
+        assert_eq!(plan.module, "t_x.jssg.js");
+        assert_eq!(plan.language_name(), "TypeScript");
+        let root = plan.parse(1, "oldApi(1);").unwrap().expect("matches");
+        // Existing and missing files alike: the canonical path, no trailing separator.
+        let canonical = dir.path().canonicalize().unwrap();
+        assert_eq!(
+            root.filename(),
+            Some(canonical.join("sub/b.ts").to_string_lossy().as_ref())
+        );
+        assert_eq!(root.relative_filename(), Some("sub/b.ts"));
+        assert_eq!(plan.sources[0], canonical.join("a.ts"));
+        assert!(root.rename_to().is_none());
+        assert_eq!(root.source(), "oldApi(1);");
+        assert!(plan.parse(0, "plain();").unwrap().is_none());
+        assert!(plan.skips("plain();"));
+        assert!(!plan.skips("oldApi(2);"));
+        assert!(plan.parse(2, "").is_err());
+    }
+
+    #[test]
+    fn refuses_paths_outside_the_root_before_anything_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = "x";
+        let artifact = ArtifactRef {
+            name: "t".to_string(),
+            hash: format!("{:x}", Sha256::digest(source.as_bytes())),
+        };
+        let root = dir.path().to_string_lossy().into_owned();
+        let batch = Batch {
+            artifact: &artifact,
+            source: Some(source),
+            language: "typescript",
+            selector: None,
+            target_root: Some(&root),
+            semantic_analysis: Some(&SemanticAnalysis::Mode(SemanticMode::File)),
+            input: None,
+            files: &[],
+        };
+        for path in ["../x.ts", "/etc/passwd", "a/../../b.ts", ""] {
+            let error = BatchPlan::for_paths(&batch, [path], SemanticSupport::Enabled)
+                .err()
+                .expect(path);
+            assert!(error.contains("file path"), "{path}: {error}");
+        }
+        let error = BatchPlan::for_paths(&batch, ["a.ts"], SemanticSupport::Unsupported("node"))
+            .err()
+            .unwrap();
+        assert_eq!(
+            error,
+            "JSSG semantic analysis is unsupported in runtime 'node'"
+        );
+    }
+
+    #[test]
+    fn converts_outputs_and_rejects_escaping_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = plan(dir.path(), &["a.ts"], None);
+        let root = plan.root.clone();
+        let outcome = plan
+            .finish(
+                0,
+                Ok(CodemodOutput {
+                    primary: modified("new", Some(&root.join("b.ts").to_string_lossy())),
+                    secondary: vec![
+                        FileChange {
+                            path: root.join("sub/c.ts"),
+                            result: modified("c", None),
+                        },
+                        FileChange {
+                            path: root.join("same.ts"),
+                            result: ExecutionResult::Unmodified,
+                        },
+                    ],
+                    output: Some(serde_json::json!({ "n": 1 })),
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&outcome).unwrap(),
+            serde_json::json!({
+                "path": "a.ts",
+                "edits": [
+                    { "path": "a.ts", "content": "new", "renameTo": "b.ts" },
+                    { "path": "sub/c.ts", "content": "c" },
+                ],
+                "output": { "n": 1 },
+            })
+        );
+        let escaping = |result: ExecutionResult, secondary: Vec<FileChange>| {
+            plan.finish(
+                0,
+                Ok(CodemodOutput {
+                    primary: result,
+                    secondary,
+                    output: None,
+                }),
+            )
+            .unwrap_err()
+        };
+        let error = escaping(modified("x", Some("/elsewhere/x.ts")), vec![]);
+        assert!(
+            error.starts_with("JSSG failed for 'a.ts': rename target")
+                && error.ends_with("escapes the target root"),
+            "{error}"
+        );
+        let error = escaping(
+            ExecutionResult::Unmodified,
+            vec![FileChange {
+                path: root.join("../outside.ts"),
+                result: ExecutionResult::Unmodified,
+            }],
+        );
+        assert!(error.contains("secondary path"), "{error}");
+        let error = plan.finish(0, Err("boom".to_string())).unwrap_err();
+        assert_eq!(error, "JSSG failed for 'a.ts': boom");
+    }
+}

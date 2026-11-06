@@ -16,8 +16,8 @@ name = "orchestration-quickjs-host"
 path = "src/main.rs"
 
 [dependencies]
-# Shared JSSG batch planning and FileOutcome conversion (`jssg::BatchPlan`).
-butterflow-execution-bridge = { path = "../execution-bridge" }
+# Shared JSSG batch planning and FileOutcome conversion (`BatchPlan`).
+jssg-batch = { workspace = true }
 codemod-sandbox = { workspace = true, features = ["native"] }
 libc = "0.2"
 rquickjs = { version = "0.11", features = ["full-async"] }

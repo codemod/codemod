@@ -206,13 +206,15 @@ export {
 export type { Selection } from "./execution/files.ts";
 export { executeJssgCommand } from "./execution/jssg.ts";
 export type { JssgCommandOptions, JssgDispatch } from "./execution/jssg.ts";
-export { createInProcessJssgDispatch, normalizeOutput } from "./execution/jssg-inprocess.ts";
+export { createJssgBatchDispatch, describeError } from "./execution/jssg-batch.ts";
 export type {
-  InProcessJssgOptions,
-  JssgEngine,
-  StagedChange,
+  JssgBatch,
+  JssgBatchConfig,
+  JssgBatchDispatchOptions,
+  JssgBatchEngine,
   TransformArtifact,
-} from "./execution/jssg-inprocess.ts";
+  TransformFunction,
+} from "./execution/jssg-batch.ts";
 export { executeShell, normalizeShellOutput } from "./execution/shell.ts";
 export type { ShellExecutionOptions } from "./execution/shell.ts";
 export type { OperationExecutor } from "./execution/operation-executor.ts";

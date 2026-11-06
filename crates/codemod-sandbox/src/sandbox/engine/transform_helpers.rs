@@ -16,6 +16,57 @@ pub enum ModificationCheck<'a> {
     Sha256(Option<[u8; 32]>),
 }
 
+/// The error for an object result without an `output` field.
+pub const MISSING_OUTPUT_MESSAGE: &str = "Object codemod results must contain an 'output' field";
+
+/// The error for a `jssgTransform()` inner transform returning an object.
+pub const SECONDARY_STRUCTURED_RESULT: &str = "jssgTransform() transforms must return a string or null; structured { content, output } results are only supported from the top-level transform";
+
+fn execution_failed(message: String) -> ExecutionError {
+    ExecutionError::Runtime {
+        source: crate::sandbox::errors::RuntimeError::ExecutionFailed { message },
+    }
+}
+
+/// An object result without an `output` field.
+pub fn missing_output_error() -> ExecutionError {
+    execution_failed(MISSING_OUTPUT_MESSAGE.to_string())
+}
+
+/// An `output` field that could not be read as JSON.
+pub fn output_json_error(error: impl std::fmt::Display) -> ExecutionError {
+    execution_failed(format!("Codemod output must be JSON: {error}"))
+}
+
+/// A transform's (awaited) content as plain data, read from the JavaScript
+/// value by a binding (this rquickjs facade, or the napi facade of
+/// `crates/jssg-napi`), so the result rules in
+/// [`classify_transform_result`] are binding-agnostic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReturnedContent {
+    Text(String),
+    /// `null` or `undefined`.
+    Nullish,
+    /// Anything else, by its QuickJS type name (`int`, `float`, `bool`,
+    /// `object`, ...), which the error message shows.
+    Other(String),
+}
+
+impl ReturnedContent {
+    pub(crate) fn from_value(value: &Value<'_>) -> Self {
+        if value.is_string() {
+            match value.get::<String>() {
+                Ok(text) => ReturnedContent::Text(text),
+                Err(_) => ReturnedContent::Other(value.type_name().to_string()),
+            }
+        } else if value.is_null() || value.is_undefined() {
+            ReturnedContent::Nullish
+        } else {
+            ReturnedContent::Other(value.type_name().to_string())
+        }
+    }
+}
+
 /// Split the extended `{ content, output }` result without changing legacy
 /// string/null result handling.
 pub fn extract_transform_output<'js>(
@@ -27,32 +78,14 @@ pub fn extract_transform_output<'js>(
     };
     let output: Value<'_> = object
         .get("output")
-        .map_err(|error| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                message: error.to_string(),
-            },
-        })?;
+        .map_err(|error| execution_failed(error.to_string()))?;
     if output.is_undefined() {
-        return Err(ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                message: "Object codemod results must contain an 'output' field".to_string(),
-            },
-        });
+        return Err(missing_output_error());
     }
     let content: Value<'_> = object
         .get("content")
-        .map_err(|error| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                message: error.to_string(),
-            },
-        })?;
-    let output = JsValue::from_js(ctx, output)
-        .map_err(|error| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                message: format!("Codemod output must be JSON: {error}"),
-            },
-        })?
-        .0;
+        .map_err(|error| execution_failed(error.to_string()))?;
+    let output = JsValue::from_js(ctx, output).map_err(output_json_error)?.0;
     Ok((content, Some(output)))
 }
 
@@ -68,39 +101,20 @@ pub fn build_transform_options<'js>(
     dry_run: bool,
     target_dir: &str,
 ) -> Result<Value<'js>, ExecutionError> {
-    let run_options = Object::new(ctx.clone()).map_err(|e| ExecutionError::Runtime {
+    let init_failed = |e: rquickjs::Error| ExecutionError::Runtime {
         source: crate::sandbox::errors::RuntimeError::InitializationFailed {
             message: e.to_string(),
         },
-    })?;
+    };
+    let run_options = Object::new(ctx.clone()).map_err(init_failed)?;
 
     let params_js = params
         .into_iter()
         .map(|(k, v)| (k, JsValue(v)))
         .collect::<HashMap<String, JsValue>>();
-    run_options
-        .set("params", params_js)
-        .map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
-            },
-        })?;
-
-    run_options
-        .set("language", language)
-        .map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
-            },
-        })?;
-
-    run_options
-        .set("matches", matches)
-        .map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
-            },
-        })?;
+    run_options.set("params", params_js).map_err(init_failed)?;
+    run_options.set("language", language).map_err(init_failed)?;
+    run_options.set("matches", matches).map_err(init_failed)?;
 
     let matrix_values_js = matrix_values.map(|input| {
         input
@@ -108,38 +122,15 @@ pub fn build_transform_options<'js>(
             .map(|(k, v)| (k, JsValue(v)))
             .collect::<HashMap<String, JsValue>>()
     });
-
     run_options
         .set("matrixValues", matrix_values_js)
-        .map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
-            },
-        })?;
-
-    run_options
-        .set("dryRun", dry_run)
-        .map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
-            },
-        })?;
-
+        .map_err(init_failed)?;
+    run_options.set("dryRun", dry_run).map_err(init_failed)?;
     run_options
         .set("targetDir", target_dir)
-        .map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
-            },
-        })?;
+        .map_err(init_failed)?;
 
-    run_options
-        .into_js(ctx)
-        .map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: e.to_string(),
-            },
-        })
+    run_options.into_js(ctx).map_err(init_failed)
 }
 
 /// Process the result value returned by a transform function.
@@ -151,52 +142,64 @@ pub fn process_transform_result(
     sg_root: &CoreRoot,
     modification_check: ModificationCheck<'_>,
 ) -> Result<ExecutionResult, ExecutionError> {
+    classify_transform_result(
+        ReturnedContent::from_value(result_obj),
+        sg_root,
+        modification_check,
+    )
+}
+
+/// The result rules every JSSG runner shares, binding-agnostic: a string is
+/// the new content (modified when it differs or the file was renamed),
+/// `null`/`undefined` keeps the file (modified only by a `rename()`, with
+/// the original content), and anything else is an error.
+pub fn classify_transform_result(
+    content: ReturnedContent,
+    sg_root: &CoreRoot,
+    modification_check: ModificationCheck<'_>,
+) -> Result<ExecutionResult, ExecutionError> {
     let rename_to = sg_root.rename_to().map(PathBuf::from);
 
-    if result_obj.is_string() {
-        let new_content = result_obj
-            .get::<String>()
-            .expect("result_obj should be a String after is_string() check");
-        let is_modified = match modification_check {
-            ModificationCheck::StringEquality { original_content } => {
-                new_content != original_content
-            }
-            #[cfg(feature = "native")]
-            ModificationCheck::Sha256(original_sha256) => match original_sha256 {
-                Some(original_hash) => {
-                    use sha2::{Digest, Sha256};
-                    let mut hasher = Sha256::new();
-                    hasher.update(new_content.as_bytes());
-                    let new_hash: [u8; 32] = hasher.finalize().into();
-                    new_hash != original_hash
+    match content {
+        ReturnedContent::Text(new_content) => {
+            let is_modified = match modification_check {
+                ModificationCheck::StringEquality { original_content } => {
+                    new_content != original_content
                 }
-                None => true,
-            },
-        };
-        if is_modified || rename_to.is_some() {
-            Ok(ExecutionResult::Modified(ModifiedResult {
-                content: new_content,
-                rename_to,
-            }))
-        } else {
-            Ok(ExecutionResult::Unmodified)
+                #[cfg(feature = "native")]
+                ModificationCheck::Sha256(original_sha256) => match original_sha256 {
+                    Some(original_hash) => {
+                        use sha2::{Digest, Sha256};
+                        let mut hasher = Sha256::new();
+                        hasher.update(new_content.as_bytes());
+                        let new_hash: [u8; 32] = hasher.finalize().into();
+                        new_hash != original_hash
+                    }
+                    None => true,
+                },
+            };
+            if is_modified || rename_to.is_some() {
+                Ok(ExecutionResult::Modified(ModifiedResult {
+                    content: new_content,
+                    rename_to,
+                }))
+            } else {
+                Ok(ExecutionResult::Unmodified)
+            }
         }
-    } else if result_obj.is_null() || result_obj.is_undefined() {
-        if rename_to.is_some() {
-            let original_content = sg_root.source();
-            Ok(ExecutionResult::Modified(ModifiedResult {
-                content: original_content,
-                rename_to,
-            }))
-        } else {
-            Ok(ExecutionResult::Unmodified)
+        ReturnedContent::Nullish => {
+            if rename_to.is_some() {
+                let original_content = sg_root.source();
+                Ok(ExecutionResult::Modified(ModifiedResult {
+                    content: original_content,
+                    rename_to,
+                }))
+            } else {
+                Ok(ExecutionResult::Unmodified)
+            }
         }
-    } else {
-        let type_name = result_obj.type_name();
-        Err(ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                message: format!("Codemod transform functions must return either a string or null/undefined. Received {type_name}"),
-            },
-        })
+        ReturnedContent::Other(type_name) => Err(execution_failed(format!(
+            "Codemod transform functions must return either a string or null/undefined. Received {type_name}"
+        ))),
     }
 }
