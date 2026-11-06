@@ -35,9 +35,9 @@ export function createNapiSelectHost(base: Host): Host {
     ...base,
     fs: {
       ...base.fs,
-      // The Node host's `readText(fatal)` decodes with `TextDecoder`, which drops a BOM.
+      // Verbatim, a leading BOM included, as `readText(fatal)` (`Host.fs.readText`).
       readSources: (root, paths) =>
-        native.readSources(root, [...paths], true).map((content) => content ?? undefined),
+        native.readSources(root, [...paths]).map((content) => content ?? undefined),
     },
     selectFiles: (request) => native.selectFiles(JSON.stringify(request)),
   };

@@ -111,8 +111,8 @@ capabilities, and `files.ts` uses them when present:
 Both in-process runtimes implement them with `crates/orchestration-walker` (subdirectories
 walked and files read on worker threads, results combined in listing order): the QuickJS
 host as context primitives, the `node` runtime through the napi addon
-(`createNapiSelectHost` in `host/runtimes/node-jssg.ts`: Node's libuv error wording, BOM
-dropped like the Node host's `TextDecoder`). `CODEMOD_NATIVE_SELECT=0` turns them off in
+(`createNapiSelectHost` in `host/runtimes/node-jssg.ts`: Node's libuv error wording).
+Reads are verbatim everywhere (see "Source encoding"). `CODEMOD_NATIVE_SELECT=0` turns them off in
 both. `bridge` keeps the TypeScript walker. Both hosts list directories in byte order of the
 raw names (Node's libuv sorts `scandir`; the QuickJS host and the walker sort the same
 way), so a walk reports the same first failure everywhere.
@@ -134,9 +134,32 @@ UTF-16 matching, symlinks, newlines in names, non-UTF-8 content, both override s
 nested target root) plus a seeded random sweep of ignore files, each selection and read run
 through `selectFiles()` / `readSelectedSources()` over the Node host with and without the
 native capabilities (`orchestration-quickjs-host select` runs the same Rust code the context
-calls). Known host difference, unrelated to the walker: the Node host's `readText(fatal)`
-strips a leading BOM (`TextDecoder`), the QuickJS host's keeps it, so a JSSG transform sees
-a BOM under `quickjs` but not under `bridge`/`node`.
+calls). Every backend's reads must equal the Node host's, byte for byte (a BOM included).
+
+## Source encoding
+
+JSSG sources reach transforms verbatim in every runtime, exactly as the workflow engine
+(`crates/core/src/jssg_execution_service.rs`, `std::fs::read_to_string`) hands them over:
+a leading UTF-8 byte order mark stays in the text as U+FEFF, CRLF stays CRLF, a missing final
+newline stays missing, and non-UTF-8 files are skipped. That is the `Host.fs.readText`
+contract (the Node host decodes with `TextDecoder(..., { ignoreBOM: true })`; the QuickJS host
+and `crates/orchestration-walker` use `String::from_utf8`), so the shared result rules
+(`classify_transform_result`) see the same original everywhere. What a transform observes
+of a BOM file, identical in `yaml`, `bridge`, `node`, and `quickjs`:
+
+- tree-sitter starts the root after a leading BOM: `root().text()` has no BOM, but node
+  ranges count it (`root().range().start` is `{ line: 0, column: 1, index: 3 }`);
+- an edited file is written as the transform returned it, so `commitEdits` output drops the
+  BOM; `null` leaves the file (and its BOM) alone; `rename()` with `null` moves the original
+  bytes, BOM included; returning `root().text()` unchanged is a modification (it differs from
+  the file by the BOM) and rewrites the file without it.
+
+Before this was pinned, the Node host stripped the BOM (`TextDecoder`'s default), so `bridge`
+and `node` differed from the engine and from `quickjs` in those last three cases.
+`tests/jssg-parity.e2e.test.ts` ("BOM, CRLF, and no trailing newline") runs BOM, CRLF, and
+no-final-newline files through all three runtimes and, when a `codemod` binary is found
+(`CODEMOD_BIN`, `target/{release,debug}/codemod`), through the workflow engine, and requires
+identical transform input and identical written bytes.
 
 ## Inventory: what used Node, and where it went
 

@@ -49,6 +49,13 @@ export interface HostFs {
    * The file's content decoded as UTF-8 (follows symlinks). Without `fatal`,
    * invalid sequences become U+FFFD; with it, invalid UTF-8 throws an error
    * with `code: "EILSEQ"`. A missing file throws `code: "ENOENT"`.
+   *
+   * Verbatim: a leading byte order mark stays in the text as U+FEFF (no
+   * `TextDecoder` BOM stripping) and line endings are untouched. The
+   * workflow engine reads JSSG sources the same way (`read_to_string`), so
+   * every runtime hands transforms, and the shared result rules, the same
+   * source: node offsets count the BOM, a `rename()` keeps it, and a string
+   * result counts as unchanged only if it still carries it.
    */
   readText(path: string, options?: { fatal?: boolean }): string;
   /** Create or truncate, UTF-8 encoded. `mode` applies when the file is created. */

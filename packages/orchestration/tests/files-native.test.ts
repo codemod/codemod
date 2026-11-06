@@ -29,7 +29,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -98,36 +97,11 @@ const QUICKJS_NATIVE: Host = {
   selectFiles: (request) => unwrap<string[]>(runNative({ request }), "files"),
 };
 
-/**
- * The reference for the QuickJS host's reads: the Node host with the QuickJS
- * host's `readText(fatal)`, which keeps a leading BOM (`readSources` is that
- * call in a batch). The Node host's `TextDecoder` strips it: a difference
- * between the two hosts that predates native reads.
- */
-const keepBom = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-const QUICKJS_READ_REFERENCE: Host = {
-  ...NODE_HOST,
-  fs: {
-    ...NODE_HOST.fs,
-    readText(file, options) {
-      if (!options?.fatal) return NODE_HOST.fs.readText(file, options);
-      const bytes = readFileSync(file);
-      try {
-        return keepBom.decode(bytes);
-      } catch {
-        throw Object.assign(new Error(`'${file}' is not valid UTF-8`), { code: "EILSEQ" });
-      }
-    },
-  },
-};
-
 interface Backend {
   name: string;
   available: boolean;
   /** The Node host plus the backend's native capabilities. */
   host: () => Host;
-  /** What the backend's reads must equal (its host's `readText(fatal)`). */
-  readReference: Host;
   /**
    * Whether error messages must match the Node host's word for word. The
    * QuickJS host words file-system errors like its own `fs` (`EACCES:
@@ -142,14 +116,12 @@ const BACKENDS: Backend[] = [
     name: "quickjs host",
     available,
     host: () => counted(QUICKJS_NATIVE),
-    readReference: QUICKJS_READ_REFERENCE,
     exactErrors: false,
   },
   {
     name: "napi addon (node runtime)",
     available: isNapiAvailable(),
     host: () => counted(createNapiSelectHost(NODE_HOST)),
-    readReference: NODE_HOST,
     exactErrors: true,
   },
 ];
@@ -184,7 +156,7 @@ function compare(selection: Omit<Selection, "host">) {
   if ("value" in typescript) {
     const paths = typescript.value;
     expect(outcome(() => readSelectedSources(current.native, selection.targetRoot, paths))).toEqual(
-      outcome(() => readSelectedSources(current.readReference, selection.targetRoot, paths)),
+      outcome(() => readSelectedSources(NODE_HOST, selection.targetRoot, paths)),
     );
   }
   return typescript;
@@ -522,6 +494,19 @@ function defineTests() {
     },
   );
 
+  it("reads verbatim: a leading BOM is kept, non-UTF-8 is skipped", () => {
+    const bin = join(repo, "bin");
+    const paths = ["bom.ts", "latin1.ts", "ok.ts"];
+    const expected = {
+      value: [
+        { path: "bom.ts", content: "﻿x\n" },
+        { path: "ok.ts", content: "ok\n" },
+      ],
+    };
+    expect(outcome(() => readSelectedSources(NODE_HOST, bin, paths))).toEqual(expected);
+    expect(outcome(() => readSelectedSources(current.native, bin, paths))).toEqual(expected);
+  });
+
   it("reports an unreadable selected file exactly", () => {
     const dir = join(base, "unreadable");
     write(dir, { "a.ts": "a\n", "b.ts": "b\n" });
@@ -529,8 +514,8 @@ function defineTests() {
     try {
       if (process.getuid?.() === 0) return;
       const read = (host: Host) => outcome(() => readSelectedSources(host, dir, ["a.ts", "b.ts"]));
-      expect(read(current.native)).toEqual(read(current.readReference));
-      expect(read(current.readReference)).toEqual({
+      expect(read(current.native)).toEqual(read(NODE_HOST));
+      expect(read(NODE_HOST)).toEqual({
         error: ioError("EACCES", "permission denied", "open", join(dir, "b.ts")),
       });
     } finally {

@@ -1,9 +1,17 @@
 // Cross-runtime JSSG parity (`tests/jssg-parity.e2e.test.ts`): one JSSG
 // command per run, picked by the workflow input `{ step, input?, include? }`.
 import { dynamic, type Json } from "../../../src/index.ts";
-import { multi, renameInto, returns, secondaryAt, selected, throwing } from "./transforms.ts";
+import {
+  encoding,
+  multi,
+  renameInto,
+  returns,
+  secondaryAt,
+  selected,
+  throwing,
+} from "./transforms.ts";
 
-const steps = { multi, renameInto, returns, secondaryAt, selected, throwing };
+const steps = { encoding, multi, renameInto, returns, secondaryAt, selected, throwing };
 
 interface Case {
   step: keyof typeof steps;

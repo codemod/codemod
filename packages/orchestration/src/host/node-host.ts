@@ -28,7 +28,9 @@ import {
 import type { SchedulerHost } from "../execution/scheduler.ts";
 import { killProcessTree, spawnOptions, trackProcessTree } from "../execution/process-tree.ts";
 
-const strict = new TextDecoder("utf-8", { fatal: true });
+// `ignoreBOM`: keep a leading U+FEFF, as `readFileSync(file, "utf8")`, the
+// QuickJS host, and the workflow engine's `read_to_string` do (`Host.fs.readText`).
+const strict = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** `node:os` capacity facts, injectable into `AdmissionScheduler` / `defaultCapacity`. */
 export const nodeHost: SchedulerHost = { availableParallelism, totalmem };

@@ -15,6 +15,7 @@
  */
 import { spawnSync } from "node:child_process";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -301,4 +302,123 @@ describe.skipIf(!enabled)("JSSG parity: bridge, node, quickjs", () => {
       { error: "outside the target directory", thrown: true },
     );
   });
+
+  it("BOM, CRLF, and no trailing newline: the same input and bytes as the workflow engine", () => {
+    const outcomes = parity({ files: ENCODING_FILES }, { step: "encoding" }, { ok: true });
+    // `parity` already required node and quickjs to equal bridge: the same
+    // trees (read back losslessly, a BOM included) and the same outputs.
+    const { tree } = outcomes.bridge;
+    const seen = (path: string) =>
+      JSON.parse(/\/\* seen (.*) \*\/$/su.exec(tree[path]!)![1]!) as {
+        head: number[];
+        length: number;
+        crlf: boolean;
+        root: { start: { index: number; column: number } };
+      };
+    // The transform sees the file verbatim: tree-sitter starts the root
+    // after a leading BOM, so `root().text()` lacks it but offsets count it.
+    expect(seen("bom-edit.ts")).toMatchObject({ head: [111, 108], length: 11, crlf: false });
+    expect(seen("bom-edit.ts").root.start).toMatchObject({ index: 3, column: 1 });
+    expect(seen("edit.ts").root.start).toMatchObject({ index: 0, column: 0 });
+    expect(seen("bom-crlf-edit.ts")).toMatchObject({ crlf: true, root: { start: { index: 3 } } });
+    expect(seen("double-bom-edit.ts").root.start).toMatchObject({ index: 6 });
+    // Written bytes: line endings and a missing final newline are kept; an
+    // edited BOM file is the transform's text (no BOM, as the engine writes
+    // it); `null` leaves a file alone; `rename()` keeps the BOM; returning
+    // `root().text()` of a BOM file is a change (it differs from the file).
+    expect(tree["crlf-edit.ts"]).toMatch(/^newApi\(1\);\r\nnewApi\(2\);\r\n\/\* seen /u);
+    expect(tree["notrail-edit.ts"]).toMatch(/^newApi\(1\);\/\* seen /u);
+    expect(tree["bom-edit.ts"]).toMatch(/^newApi\(1\);\n\/\* seen /u);
+    expect(tree["bom-null.ts"]).toBe(`${BOM}keep();\n`);
+    expect(tree["bom-renamed.ts"]).toBe(`${BOM}keep();\n`);
+    expect(tree["crlf-renamed.ts"]).toBe("keep();\r\n");
+    expect(tree["bom-rename.ts"]).toBeUndefined();
+    expect(tree["bom-same.ts"]).toBe("keep();\n");
+    expect(tree["crlf-same.ts"]).toBe("keep();\r\n");
+
+    // The workflow engine (`codemod workflow run`, a `js-ast-grep` step over
+    // the same transform file), when a `codemod` binary is available.
+    if (codemodCli === undefined) {
+      if (process.env.CODEMOD_REQUIRE_RUNTIMES === "1") {
+        throw new Error("codemod CLI not found; build it or set CODEMOD_BIN");
+      }
+      return;
+    }
+    expect(runEngine(ENCODING_FILES)).toEqual(tree);
+  });
 });
+
+const BOM = "﻿";
+
+/** Files for the `encoding` step, named for what `fixtures/parity/encoding.ts` does with them. */
+const ENCODING_FILES: Record<string, string> = {
+  "edit.ts": "oldApi(1);\n",
+  "bom-edit.ts": `${BOM}oldApi(1);\n`,
+  "bom-crlf-edit.ts": `${BOM}oldApi(1);\r\noldApi(2);\r\n`,
+  "crlf-edit.ts": "oldApi(1);\r\noldApi(2);\r\n",
+  "notrail-edit.ts": "oldApi(1);",
+  "bom-notrail-edit.ts": `${BOM}oldApi(1);`,
+  "double-bom-edit.ts": `${BOM}${BOM}oldApi(1);\n`,
+  "mid-bom-edit.ts": `oldApi(1);\n${BOM}x;\n`,
+  "bom-same.ts": `${BOM}keep();\n`,
+  "crlf-same.ts": "keep();\r\n",
+  "bom-rename.ts": `${BOM}keep();\n`,
+  "crlf-rename.ts": "keep();\r\n",
+  "bom-null.ts": `${BOM}keep();\n`,
+};
+
+const codemodCli = [
+  process.env.CODEMOD_BIN,
+  join(repoRoot, "target/release/codemod"),
+  join(repoRoot, "target/debug/codemod"),
+].find((path) => path !== undefined && existsSync(path));
+
+/** Runs `fixtures/parity/encoding.ts` as a workflow engine step; returns the tree. */
+function runEngine(files: Record<string, string>): Record<string, string> {
+  const dir = join(scratch, `engine-${++repos}`);
+  const repo = join(dir, "repo");
+  const definition = join(dir, "workflow");
+  mkdirSync(definition, { recursive: true });
+  copyFileSync(
+    resolve(import.meta.dirname, "fixtures/parity/encoding.ts"),
+    join(definition, "encoding.ts"),
+  );
+  writeFileSync(
+    join(definition, "workflow.yaml"),
+    [
+      'version: "1"',
+      "nodes:",
+      "  - id: encoding",
+      "    name: encoding",
+      "    type: automatic",
+      "    steps:",
+      "      - name: encoding",
+      "        js-ast-grep:",
+      "          js_file: encoding.ts",
+      "          language: typescript",
+      '          include: ["**/*.ts"]',
+      "",
+    ].join("\n"),
+  );
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(repo, path)), { recursive: true });
+    writeFileSync(join(repo, path), content);
+  }
+  const result = spawnSync(
+    codemodCli!,
+    [
+      "workflow",
+      "run",
+      "-w",
+      join(definition, "workflow.yaml"),
+      "--target",
+      repo,
+      "--no-interactive",
+      "--disable-analytics",
+      "--allow-dirty",
+    ],
+    { encoding: "utf8", env: { ...process.env, DISABLE_ANALYTICS: "true" } },
+  );
+  expect(result.status, `workflow engine failed\n${result.stdout}\n${result.stderr}`).toBe(0);
+  return tree(repo);
+}

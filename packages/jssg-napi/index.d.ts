@@ -69,8 +69,11 @@ export interface Binding {
   ): NativeRoot;
   /** Orchestration `Host.selectFiles` (`crates/orchestration-walker`); the request as JSON. */
   selectFiles(request: string): string[];
-  /** Orchestration `Host.fs.readSources`; `null` for a missing or non-UTF-8 file. */
-  readSources(root: string, paths: string[], stripBom: boolean): (string | null)[];
+  /**
+   * Orchestration `Host.fs.readSources`: verbatim (a leading BOM included);
+   * `null` for a missing or non-UTF-8 file.
+   */
+  readSources(root: string, paths: string[]): (string | null)[];
 }
 
 export function bindingPath(env?: Record<string, string | undefined>): string;

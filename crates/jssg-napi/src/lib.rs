@@ -736,23 +736,9 @@ pub fn select_files(env: Env, request: String) -> Result<Vec<String>> {
 
 /// `Host.fs.readSources` for the Node host: `readText(join(root, path),
 /// { fatal: true })` per path on worker threads, `null` for a missing or
-/// non-UTF-8 file. `stripBom` drops a leading U+FEFF, as the Node host's
-/// `TextDecoder` does.
+/// non-UTF-8 file. Verbatim: a leading U+FEFF stays, as in every host and
+/// the workflow engine (`Host.fs.readText`).
 #[napi(js_name = "readSources")]
-pub fn read_sources(
-    env: Env,
-    root: String,
-    paths: Vec<String>,
-    strip_bom: bool,
-) -> Result<Vec<Option<String>>> {
-    let mut sources = orchestration_walker::read_sources(&root, &paths)
-        .map_err(|error| walker_error(&env, error))?;
-    if strip_bom {
-        for text in sources.iter_mut().flatten() {
-            if text.starts_with('\u{FEFF}') {
-                text.drain(..'\u{FEFF}'.len_utf8());
-            }
-        }
-    }
-    Ok(sources)
+pub fn read_sources(env: Env, root: String, paths: Vec<String>) -> Result<Vec<Option<String>>> {
+    orchestration_walker::read_sources(&root, &paths).map_err(|error| walker_error(&env, error))
 }

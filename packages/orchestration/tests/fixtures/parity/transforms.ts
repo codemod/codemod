@@ -7,6 +7,14 @@
  */
 import { jssg } from "../../../src/index.ts";
 import { migrateText, posixPath } from "../jssg/helpers.ts";
+import encodingTransform from "./encoding.ts";
+
+/** BOM, CRLF, and no trailing newline (`encoding.ts`, shared with the workflow engine). */
+export const encoding = jssg({
+  name: "encoding",
+  language: "typescript",
+  transform: encodingTransform,
+});
 
 type AstGrep = typeof import("codemod:ast-grep") & {
   parseFile(language: string, path: string): { write(content: string): void };
