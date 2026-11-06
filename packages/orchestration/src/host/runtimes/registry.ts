@@ -13,7 +13,6 @@ import {
 import type { ArtifactStore } from "../../bundle/build.ts";
 import type { Json } from "../../core/json.ts";
 import { DEFAULT_RUNTIME } from "../../runtime/capabilities.ts";
-import { run } from "../../runtime/run.ts";
 import "../node-host.ts";
 import { bridgeRuntime, defaultBridgePath } from "./bridge.ts";
 import { nodeRuntime } from "./node.ts";
@@ -173,6 +172,7 @@ export async function runWorkflow(
 ): Promise<unknown> {
   const { provider, workflow, target, settings } = prepareLaunch(workflowPath, options);
   const hasInput = "input" in options;
+  await provider.load?.();
   if (provider.createExecutor === undefined) {
     if (provider.launch === undefined) {
       throw new RuntimeUnavailableError(
@@ -190,6 +190,8 @@ export async function runWorkflow(
     });
   }
   const { executable, artifacts } = await loadExecutable(workflow, hasInput);
+  // In-process runs only: an out-of-process runtime runs its own control plane.
+  const { run } = await import("../../runtime/run.ts");
   const result = await run(executable, {
     executor: provider.createExecutor({ cwd: target, artifacts, settings }),
     runtime: provider,

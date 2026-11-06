@@ -4,9 +4,9 @@
 // Mutates the repository like the arm itself; reset it afterwards.
 //
 // The orchestration sources need full TypeScript transforms (parameter
-// properties), as `bin/codemod-workflow.mjs` sets up:
+// properties), which `bin/register-ts.mjs` installs (as `bin/codemod-workflow.mjs` does):
 //
-//   node --experimental-transform-types --import ./packages/orchestration/bin/register-ts.mjs \
+//   node --import ./packages/orchestration/bin/register-ts.mjs \
 //     benchmarks/runtimes/profile-node.mjs [repo]   # default $BENCH_REPO or ~/.cache/codemod-bench/vite
 import { homedir } from "node:os";
 import { resolve } from "node:path";

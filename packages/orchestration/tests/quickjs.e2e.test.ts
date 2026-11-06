@@ -110,14 +110,7 @@ function runOn(runtime: "bridge" | "quickjs", fixture: string, input?: unknown):
 function nodeReference(fixture: string): { output: unknown; history: History } {
   const result = spawnSync(
     process.execPath,
-    [
-      "--disable-warning=ExperimentalWarning",
-      "--experimental-transform-types",
-      "--import",
-      register,
-      join(fixtures, "node-reference.ts"),
-      join(fixtures, fixture),
-    ],
+    ["--import", register, join(fixtures, "node-reference.ts"), join(fixtures, fixture)],
     { encoding: "utf8" },
   );
   if (result.status !== 0) throw new Error(`node reference failed: ${result.stderr}`);

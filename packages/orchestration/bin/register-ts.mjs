@@ -5,26 +5,25 @@
 // installs them; `bin/codemod-workflow.mjs` does so before loading the CLI,
 // and `node --import ./bin/register-ts.mjs file.ts` works too.
 //
-// - Outside `node_modules`, Node's default loader picks the format (package
-//   `type`, extension, syntax detection) and these hooks strip the types.
-// - Under `node_modules`, where Node's own type stripping refuses to run
-//   (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING) and where this package
-//   lives once installed, the extension picks the format (`.cts` CommonJS,
-//   anything else ESM).
+// The format follows Node's rules (`formatOf`), and `node_modules` is
+// covered too: Node's own type stripping refuses it
+// (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING), and that is exactly where
+// this package lives once installed.
 //
 // Stripped output is cached on disk by content hash (`ts/` under the build
 // cache: `$CODEMOD_WORKFLOW_CACHE` or `<tmpdir>/codemod-workflow-cache-<uid>`,
 // the same root and privacy rule as `src/bundle/cache.ts`), so a warm start
 // never loads Node's TypeScript transformer (~30 ms).
 //
-// Needs Node >= 22.15 (`registerHooks`, `stripTypeScriptTypes`); the
-// repository requires Node 24.
+// Needs Node >= 22.15 (`registerHooks`, `stripTypeScriptTypes`,
+// `findPackageJSON`); the repository requires Node 24.
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { registerHooks, stripTypeScriptTypes } from "node:module";
+import { findPackageJSON, registerHooks, stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { compileFunction } from "node:vm";
 
 const TS = /\.[cm]?ts$/u;
 const NODE_MODULES = /\/node_modules\//u;
@@ -39,14 +38,17 @@ export function cacheRoot(env = process.env) {
 /** `src/bundle/cache.ts` `privateDirectory`. */
 export function privateDirectory(name, root = cacheRoot()) {
   const directory = join(root, name);
+  const isPrivate = (path) => {
+    const stat = lstatSync(path);
+    if (!stat.isDirectory() || (stat.mode & 0o022) !== 0) return false;
+    return process.getuid === undefined || stat.uid === process.getuid();
+  };
   try {
+    // The root is checked before anything is created inside it.
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    if (!isPrivate(root)) return undefined;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    for (const path of [root, directory]) {
-      const stat = lstatSync(path);
-      if (!stat.isDirectory() || (stat.mode & 0o022) !== 0) return undefined;
-      if (process.getuid !== undefined && stat.uid !== process.getuid()) return undefined;
-    }
-    return directory;
+    return isPrivate(directory) ? directory : undefined;
   } catch {
     return undefined;
   }
@@ -93,29 +95,66 @@ function strip(source, url) {
   return stripped;
 }
 
+// The syntax errors Node's CommonJS-or-ESM detection takes as ESM syntax.
+const ESM_SYNTAX = [
+  "Cannot use import statement outside a module",
+  "Unexpected token 'export'",
+  "Cannot use 'import.meta' outside a module",
+  "await is only valid in async functions and the top level bodies of modules",
+];
+
+/** Node's syntax detection for a file in no `type`d package, on stripped JavaScript. */
+function detectFormat(source) {
+  try {
+    compileFunction(source, ["exports", "require", "module", "__filename", "__dirname"]);
+    return "commonjs";
+  } catch (error) {
+    return error instanceof SyntaxError && ESM_SYNTAX.some((m) => error.message.includes(m))
+      ? "module"
+      : "commonjs";
+  }
+}
+
+const packageTypes = new Map();
+/** `type` of the nearest `package.json` (`module`, `commonjs`, or undefined). */
+function packageType(url) {
+  const manifest = findPackageJSON(url);
+  if (manifest === undefined) return undefined;
+  if (!packageTypes.has(manifest)) {
+    let type;
+    try {
+      type = JSON.parse(readFileSync(manifest, "utf8")).type;
+    } catch {
+      type = undefined;
+    }
+    packageTypes.set(manifest, type === "module" || type === "commonjs" ? type : undefined);
+  }
+  return packageTypes.get(manifest);
+}
+
+/**
+ * Node's rules for TypeScript files: `.mts` ESM, `.cts` CommonJS, `.ts` by
+ * the nearest `package.json` `type`, else by syntax. Under `node_modules`,
+ * Node gives typeless `.ts` no detection; ESM, as before.
+ */
+function formatOf(url, source) {
+  if (url.endsWith(".mts")) return "module";
+  if (url.endsWith(".cts")) return "commonjs";
+  const type = packageType(url);
+  if (type !== undefined) return type;
+  return NODE_MODULES.test(url) ? "module" : detectFormat(source);
+}
+
+// The format is decided here rather than by Node's default loader, because
+// for a `.ts` file outside a `type`d package Node detects it by stripping
+// the file in strip-only mode, which loads the stripper (defeating the cache)
+// and rejects enums and parameter properties.
 registerHooks({
   load(url, context, nextLoad) {
     if (!url.startsWith("file:") || !TS.test(new URL(url).pathname)) {
       return nextLoad(url, context);
     }
-    if (NODE_MODULES.test(url)) {
-      const source = readFileSync(fileURLToPath(url), "utf8");
-      return {
-        format: url.endsWith(".cts") ? "commonjs" : "module",
-        source: strip(source, url),
-        shortCircuit: true,
-      };
-    }
-    const loaded = nextLoad(url, context);
-    if (loaded.format !== "module-typescript" && loaded.format !== "commonjs-typescript") {
-      return loaded;
-    }
-    const raw = loaded.source ?? readFileSync(fileURLToPath(url));
-    const source = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8");
-    return {
-      ...loaded,
-      format: loaded.format === "module-typescript" ? "module" : "commonjs",
-      source: strip(source, url),
-    };
+    const source = strip(readFileSync(fileURLToPath(url), "utf8"), url);
+    return { format: formatOf(url, source), source, shortCircuit: true };
   },
 });

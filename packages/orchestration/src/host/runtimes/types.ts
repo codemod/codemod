@@ -68,7 +68,14 @@ export interface RuntimeProvider extends RuntimeDescriptor {
    * workflow is loaded; `reason` is the whole user-facing error.
    */
   availability(settings: RuntimeSettings): RuntimeAvailability;
-  /** In-process runtimes: the executor for one run (called once per run). */
+  /**
+   * Import the implementation. `runWorkflow` and the CLI await it once the
+   * runtime is available, before `createExecutor` or `launch`, so resolving
+   * and checking a runtime (and running a different one) loads none of its
+   * code. Idempotent.
+   */
+  load?(): Promise<void>;
+  /** In-process runtimes: the executor for one run (called once per run, after `load`). */
   createExecutor?(context: ExecutorContext): OperationExecutor;
   /** Out-of-process runtimes: run the workflow file end to end; resolves with its output. */
   launch?(request: LaunchRequest): Promise<unknown>;
@@ -77,4 +84,9 @@ export interface RuntimeProvider extends RuntimeDescriptor {
 /** `runtime '<name>' not available yet`: what placeholder providers report. */
 export function notAvailableYet(name: string): RuntimeAvailability {
   return { available: false, reason: `runtime '${name}' not available yet` };
+}
+
+/** What a provider's `createExecutor` throws when called before its `load()` resolved. */
+export function notLoaded(name: string): Error {
+  return new Error(`runtime '${name}' is not loaded; await its load() before createExecutor()`);
 }

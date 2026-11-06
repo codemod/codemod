@@ -30,8 +30,9 @@ import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Json } from "../core/json.ts";
 import "./node-host.ts";
-import { startDashboard, type Dashboard } from "./dashboard/server.ts";
-import { DashboardSession, type RunSummary } from "./dashboard/session.ts";
+// The dashboard (server, session, monitor, the run loop) loads only for --dashboard.
+import type { Dashboard } from "./dashboard/server.ts";
+import type { DashboardSession, RunSummary } from "./dashboard/session.ts";
 import { defaultBridgePath } from "./runtimes/bridge.ts";
 import {
   defaultRuntimes,
@@ -161,7 +162,12 @@ export async function runWorkflowCli(
   if (createExecutor === undefined) {
     throw new Error(`--dashboard is not supported by runtime '${provider.name}'`);
   }
+  await provider.load?.();
   const { executable, artifacts } = await loadExecutable(options.workflow, hasInput);
+  const [{ startDashboard }, { DashboardSession }] = await Promise.all([
+    import("./dashboard/server.ts"),
+    import("./dashboard/session.ts"),
+  ]);
   // The session owns every run of this configuration; each run gets a fresh
   // executor, monitor, scheduler, and abort controller from it.
   const session = new DashboardSession({

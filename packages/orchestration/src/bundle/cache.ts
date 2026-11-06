@@ -33,14 +33,17 @@ export function cacheRoot(env: Record<string, string | undefined> = process.env)
  */
 export function privateDirectory(name: string, root: string = cacheRoot()): string | undefined {
   const directory = join(root, name);
+  const isPrivate = (path: string): boolean => {
+    const stat = lstatSync(path);
+    if (!stat.isDirectory() || (stat.mode & 0o022) !== 0) return false;
+    return process.getuid === undefined || stat.uid === process.getuid();
+  };
   try {
+    // The root is checked before anything is created inside it.
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    if (!isPrivate(root)) return undefined;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
-    for (const path of [root, directory]) {
-      const stat = lstatSync(path);
-      if (!stat.isDirectory() || (stat.mode & 0o022) !== 0) return undefined;
-      if (process.getuid !== undefined && stat.uid !== process.getuid()) return undefined;
-    }
-    return directory;
+    return isPrivate(directory) ? directory : undefined;
   } catch {
     return undefined;
   }

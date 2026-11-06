@@ -745,16 +745,28 @@ stderr with exit code 1; it is the only place that writes to the terminal.
 `SIGINT`/`SIGTERM`/`SIGHUP` abort the run: the bridge process tree is killed and the
 command in flight is recorded as `cancelled` with nothing written (an `agent`
 already running is recorded as `unknown`, since it may have edited files). (In dashboard mode
-the same holds for the newest run when the host exits; see Dashboard.) The bin re-spawns
-Node with `--experimental-transform-types` and a `node:module` hook that strips
-types from `.ts` files under `node_modules`, then loads the workflow through
-`loadWorkflow`, so it works both from this checkout and from a workspace or
-package installation of `@codemod.com/orchestration` (the e2e suite installs
-a copy under a consumer's `node_modules`, with `esbuild` and `typescript`
-beside it, to prove it). The workflow module and the sources it imports are
-expected to be ESM. No build output is written to disk. This is a
-trusted-local runner: it does not sandbox the workflow body and makes no claim
-about untrusted registry packages.
+the same holds for the newest run when the host exits; see Dashboard.) The bin runs in
+one Node process (Node >= 22.15; the repository requires 24): `bin/register-ts.mjs`
+installs synchronous `node:module` hooks that strip types in transform mode (what
+`--experimental-transform-types` does) from every `.ts` file, `node_modules` included,
+then the CLI loads the workflow through `loadWorkflow`, so it works both from this
+checkout and from a workspace or package installation of `@codemod.com/orchestration`
+(the e2e suite installs a copy under a consumer's `node_modules`, with `esbuild` and
+`typescript` beside it, to prove it). The workflow module and the sources it imports
+are expected to be ESM. This is a trusted-local runner: it does not sandbox the
+workflow body and makes no claim about untrusted registry packages.
+
+Startup is cached on disk under `$CODEMOD_WORKFLOW_CACHE` (default
+`<tmpdir>/codemod-workflow-cache-<uid>`; a directory that is not private to the user
+is not used): `ts/` type-stripped sources and `v8/` Node's compile cache (bin),
+`modules/` workflow modules rewritten by the build step with their artifacts
+(`loadWorkflow`, so a warm run loads neither TypeScript nor esbuild), and `quickjs/`
+bundles (`--runtime=quickjs`). Entries are keyed by content and checked against every
+file that went into them, so editing the workflow, a module it imports, or a helper a
+transform bundles rebuilds; a resolution change that edits none of those files (a new
+file shadowing an import, an edited `package.json` `exports` or `tsconfig.json`) is
+not detected, so delete the directory. `NODE_DISABLE_COMPILE_CACHE=1` turns off the
+compile cache.
 
 Remaining work before Solid Migration Assistant can move onto this package:
 
