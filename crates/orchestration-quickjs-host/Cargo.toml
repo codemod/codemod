@@ -20,6 +20,8 @@ path = "src/main.rs"
 jssg-batch = { workspace = true }
 codemod-sandbox = { workspace = true, features = ["native"] }
 libc = "0.2"
+# Native `Host.selectFiles` / `Host.fs.readSources` (files.ts semantics).
+orchestration-walker = { path = "../orchestration-walker" }
 rquickjs = { version = "0.11", features = ["full-async"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

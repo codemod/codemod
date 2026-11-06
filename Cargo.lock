@@ -3494,6 +3494,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "orchestration-walker",
  "serde_json",
  "sha2",
  "tempfile",
@@ -4859,12 +4860,23 @@ dependencies = [
  "codemod-sandbox",
  "jssg-batch",
  "libc",
+ "orchestration-walker",
  "rquickjs",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "orchestration-walker"
+version = "1.13.18"
+dependencies = [
+ "libc",
+ "regex",
+ "regress",
+ "tempfile",
 ]
 
 [[package]]

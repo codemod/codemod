@@ -17,6 +17,8 @@ jssg-batch = { workspace = true }
 napi = { version = "3", default-features = false, features = ["napi6", "serde-json", "dyn-symbols"] }
 napi-derive = "3"
 serde_json = { workspace = true }
+# Native file selection for the orchestration `node` runtime.
+orchestration-walker = { path = "../orchestration-walker" }
 
 [dev-dependencies]
 sha2 = "0.10"

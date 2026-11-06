@@ -52,9 +52,9 @@ const FILES: Record<string, string> = {
   "sub/d.old.ts": "export const d = 3;\n",
 };
 
-function makeRepo(): string {
+function makeRepo(extra: Record<string, string> = {}): string {
   const dir = join(scratch, `repo-${++counter}`);
-  for (const [path, content] of Object.entries(FILES)) {
+  for (const [path, content] of Object.entries({ ...FILES, ...extra })) {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     writeFileSync(join(dir, path), content);
   }
@@ -94,12 +94,20 @@ const register = resolve(import.meta.dirname, "../bin/register-ts.mjs");
  * `codemod-workflow run --runtime=<runtime>` in a subprocess: the real CLI
  * path (vitest's module loader would bypass `loadWorkflow`'s Node hooks).
  */
-function runOn(runtime: "bridge" | "quickjs", fixture: string, input?: unknown): Outcome {
-  const target = makeRepo();
+function runOn(
+  runtime: "bridge" | "quickjs",
+  fixture: string,
+  input?: unknown,
+  options: { files?: Record<string, string>; env?: Record<string, string> } = {},
+): Outcome {
+  const target = makeRepo(options.files);
   const args = [cli, "run", `--runtime=${runtime}`, join(fixtures, fixture), "--target", target];
   args.push("--bridge", bridge);
   if (input !== undefined) args.push("--input", JSON.stringify(input));
-  const result = spawnSync(process.execPath, args, { encoding: "utf8", env: process.env });
+  const result = spawnSync(process.execPath, args, {
+    encoding: "utf8",
+    env: { ...process.env, ...options.env },
+  });
   if (result.status === 0) {
     return { ok: true, output: JSON.parse(result.stdout) as unknown, files: snapshot(target) };
   }
@@ -180,6 +188,37 @@ describe.runIf(enabled)("quickjs runtime vs bridge runtime: JSSG parity", () => 
       expect(outcome.files).toEqual(FILES);
     }
   });
+});
+
+describe.runIf(enabled)("quickjs runtime: native file selection", () => {
+  // Ignore files at several levels, a negation, a parent rule a negation
+  // cannot undo, and a nested `.ignore`, around the parity fixtures' files.
+  const files = {
+    ".gitignore": "*.gen.ts\nvendor/\n!keep.gen.ts\n",
+    "keep.gen.ts": "oldApi(5);\n",
+    "x.gen.ts": "oldApi(6);\n",
+    "vendor/v.ts": "oldApi(7);\n",
+    "sub/.ignore": "!*.gen.ts\n",
+    "sub/y.gen.ts": "oldApi(8);\n",
+    "sub/deeper/.gitignore": "z.ts\n",
+    "sub/deeper/z.ts": "oldApi(9);\n",
+    "sub/deeper/w.ts": "oldApi(10);\n",
+  };
+
+  it.each(["jssg-sequence.ts", "jssg-dynamic.ts"])(
+    "%s: the same run with the walker interpreted, and the same as the bridge",
+    async (fixture) => {
+      const native = runOn("quickjs", fixture, undefined, { files });
+      const interpreted = runOn("quickjs", fixture, undefined, {
+        files,
+        env: { CODEMOD_NATIVE_SELECT: "0" },
+      });
+      const bridged = runOn("bridge", fixture, undefined, { files });
+      expect(native.ok).toBe(true);
+      expect(interpreted).toEqual(native);
+      expect(bridged).toEqual(native);
+    },
+  );
 });
 
 describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {

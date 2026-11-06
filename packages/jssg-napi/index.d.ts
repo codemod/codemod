@@ -67,6 +67,10 @@ export interface Binding {
     filename: string,
     targetDir?: string | null,
   ): NativeRoot;
+  /** Orchestration `Host.selectFiles` (`crates/orchestration-walker`); the request as JSON. */
+  selectFiles(request: string): string[];
+  /** Orchestration `Host.fs.readSources`; `null` for a missing or non-UTF-8 file. */
+  readSources(root: string, paths: string[], stripBom: boolean): (string | null)[];
 }
 
 export function bindingPath(env?: Record<string, string | undefined>): string;

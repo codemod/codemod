@@ -59,8 +59,37 @@ export interface HostFs {
   lstat(path: string): HostFileStat;
   /** Canonical absolute path with every symlink resolved (`realpath(3)`). */
   realpath(path: string): string;
-  /** Entries in unspecified order, without `.` and `..`. */
+  /**
+   * Entries without `.` and `..`. Both hosts list them in byte order of the
+   * raw names (Node's libuv sorts `scandir` with `strcmp`), which fixes the
+   * order a walk visits directories and so which failure it reports first.
+   */
   readdir(path: string): HostDirEntry[];
+  /**
+   * Optional batch form of `readText(join(root, path), { fatal: true })` for
+   * every path: the content, or `undefined` where that read throws `ENOENT`
+   * or `EILSEQ`. Any other failure throws `readText`'s error for the first
+   * such path. `execution/jssg.ts` uses it, when present, to read a selection.
+   */
+  readSources?(root: string, paths: readonly string[]): (string | undefined)[];
+}
+
+/**
+ * The inputs of one `walk()` of `execution/files.ts` after the TypeScript
+ * side has derived them (see `Host.selectFiles`).
+ */
+export interface HostSelectRequest {
+  /** Directory to walk: absolute and normalized. */
+  root: string;
+  /**
+   * Include/exclude sets in precedence order. `patterns` are lines for the
+   * `ignore` package (excludes as written, includes as `!glob`, braces
+   * expanded); `root` is absolute, normalized, and `root` of the request or
+   * one of its ancestors; `whitelists` is true when the set has an include.
+   */
+  overrides: { root: string; patterns: string[]; whitelists: boolean }[];
+  /** The global git excludes file, already discovered; `null` for none. */
+  globalExcludes: string | null;
 }
 
 /**
@@ -174,6 +203,16 @@ export interface Host {
   clearTimeout(timer: HostTimer): void;
   /** RFC 4122 v4 UUID; used for unique temporary names. */
   randomUUID(): string;
+  /**
+   * Optional native file selection: `walk()` of `execution/files.ts` with
+   * exactly its semantics and errors (the `ignore` package's matching, every
+   * ancestor's ignore files, the override sets, lossy entry names, symlinks
+   * skipped), returning target-relative `/` paths sorted by `comparePaths`.
+   * `files.ts` uses it when present and falls back to walking through `fs`.
+   * The QuickJS host implements it in Rust (`crates/orchestration-walker`);
+   * `tests/files-native.test.ts` checks it against the TypeScript walker.
+   */
+  readonly selectFiles?: (request: HostSelectRequest) => string[];
 }
 
 /**

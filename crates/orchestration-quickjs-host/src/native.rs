@@ -25,6 +25,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 use crate::jssg;
 use crate::modules::ModuleRegistry;
+use crate::select::{self, SelectRequest};
 use crate::utf8::StreamDecoder;
 
 /// The global the bundle reads its primitives from.
@@ -104,6 +105,12 @@ pub fn io_code(error: &io::Error) -> &'static str {
 fn fs_error(ctx: &Ctx<'_>, op: &str, path: &str, error: io::Error) -> rquickjs::Error {
     let code = io_code(&error);
     throw(ctx, Some(code), &format!("{code}: {error}, {op} '{path}'"))
+}
+
+/// Walker failures as the TypeScript walker over this host's `fs` reports them.
+fn walker_error(ctx: &Ctx<'_>, error: orchestration_walker::Error) -> rquickjs::Error {
+    let (code, message) = select::describe(&error);
+    throw(ctx, code, &message)
 }
 
 /// Node's `os.platform()` names.
@@ -272,22 +279,48 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: Rc<HostState>) -> rquickjs::Result<()
     native.set(
         "readdir",
         Function::new(ctx.clone(), |ctx: Ctx<'js>, path: String| {
-            let entries =
-                fs::read_dir(&path).map_err(|error| fs_error(&ctx, "scandir", &path, error))?;
+            let scandir = |error| fs_error(&ctx, "scandir", &path, error);
+            // Byte order of the raw names, as Node's `readdirSync` returns
+            // them (libuv sorts `scandir` with `strcmp`), so a walk visits
+            // directories, and reports failures, in the same order on both hosts.
+            let mut entries = Vec::new();
+            for entry in fs::read_dir(&path).map_err(scandir)? {
+                let entry = entry.map_err(scandir)?;
+                let kind = entry.file_type().map_err(scandir)?;
+                entries.push((entry.file_name(), kind));
+            }
+            entries.sort_by(|a, b| a.0.as_encoded_bytes().cmp(b.0.as_encoded_bytes()));
             let list = rquickjs::Array::new(ctx.clone())?;
-            for (index, entry) in entries.enumerate() {
-                let entry = entry.map_err(|error| fs_error(&ctx, "scandir", &path, error))?;
-                let kind = entry
-                    .file_type()
-                    .map_err(|error| fs_error(&ctx, "scandir", &path, error))?;
+            for (index, (name, kind)) in entries.into_iter().enumerate() {
                 let item = Object::new(ctx.clone())?;
-                item.set("name", entry.file_name().to_string_lossy().as_ref())?;
+                item.set("name", name.to_string_lossy().as_ref())?;
                 item.set("isFile", kind.is_file())?;
                 item.set("isDirectory", kind.is_dir())?;
                 list.set(index, item)?;
             }
             Ok::<_, rquickjs::Error>(list)
         })?,
+    )?;
+
+    // --- file selection (`Host.selectFiles`, `Host.fs.readSources`) ---------
+    native.set(
+        "selectFiles",
+        Function::new(ctx.clone(), |ctx: Ctx<'js>, request: String| {
+            let request: SelectRequest = serde_json::from_str(&request).map_err(|error| {
+                throw(&ctx, None, &format!("invalid selectFiles request: {error}"))
+            })?;
+            orchestration_walker::select(&request.into()).map_err(|error| walker_error(&ctx, error))
+        })?,
+    )?;
+    native.set(
+        "readSources",
+        Function::new(
+            ctx.clone(),
+            |ctx: Ctx<'js>, root: String, paths: Vec<String>| {
+                orchestration_walker::read_sources(&root, &paths)
+                    .map_err(|error| walker_error(&ctx, error))
+            },
+        )?,
     )?;
 
     // --- process facts ------------------------------------------------------

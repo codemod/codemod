@@ -21,6 +21,28 @@ import { importArtifact } from "@codemod.com/jssg-napi/loader";
 import type { FileOutcome } from "../../core/protocol.ts";
 import { describeError, type JssgBatchEngine } from "../../execution/jssg-batch.ts";
 
+import type { Host } from "../../core/host.ts";
+
+/**
+ * `base` (the Node host) plus the addon's native file selection
+ * (`Host.selectFiles`, `Host.fs.readSources`, `crates/orchestration-walker`):
+ * the same files, contents, and error messages as the TypeScript walker
+ * over `base` (`tests/files-native.test.ts`), without interpreting the walk.
+ */
+export function createNapiSelectHost(base: Host): Host {
+  const native = loadBinding();
+  return {
+    ...base,
+    fs: {
+      ...base.fs,
+      // The Node host's `readText(fatal)` decodes with `TextDecoder`, which drops a BOM.
+      readSources: (root, paths) =>
+        native.readSources(root, [...paths], true).map((content) => content ?? undefined),
+    },
+    selectFiles: (request) => native.selectFiles(JSON.stringify(request)),
+  };
+}
+
 let engines = 0;
 
 /** One engine per run: each artifact is evaluated once per engine. */

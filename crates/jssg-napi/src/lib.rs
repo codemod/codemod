@@ -665,3 +665,94 @@ impl SgNode {
         request.type_info().map_err(|e| core_error(&env, e))
     }
 }
+
+// ---------------------------------------------------------------------------
+// File selection (orchestration `Host.selectFiles` / `Host.fs.readSources`)
+// ---------------------------------------------------------------------------
+
+/// Throw the error Node's `fs` (or the `ignore` package) would have thrown
+/// for this walker failure, with its `code`.
+fn walker_error(env: &Env, error: orchestration_walker::Error) -> Error {
+    let (code, message) = orchestration_walker::errors::node_message(&error);
+    let _ = env.throw_error(&message, code);
+    Error::new(Status::PendingException, message)
+}
+
+/// `HostSelectRequest` (`packages/orchestration/src/core/host.ts`) from JSON.
+fn select_request(json: &str) -> std::result::Result<orchestration_walker::Request, String> {
+    let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let text = |value: &serde_json::Value, key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| format!("'{key}' must be a string"))
+    };
+    let overrides = value
+        .get("overrides")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("'overrides' must be an array")?
+        .iter()
+        .map(|set| {
+            Ok(orchestration_walker::OverrideSet {
+                root: text(set, "root")?,
+                patterns: set
+                    .get("patterns")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or("'patterns' must be an array")?
+                    .iter()
+                    .map(|pattern| {
+                        pattern
+                            .as_str()
+                            .map(str::to_string)
+                            .ok_or("patterns must be strings".to_string())
+                    })
+                    .collect::<std::result::Result<_, String>>()?,
+                whitelists: set
+                    .get("whitelists")
+                    .and_then(serde_json::Value::as_bool)
+                    .ok_or("'whitelists' must be a boolean")?,
+            })
+        })
+        .collect::<std::result::Result<_, String>>()?;
+    Ok(orchestration_walker::Request {
+        root: text(&value, "root")?,
+        overrides,
+        global_excludes: match value.get("globalExcludes") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(path) => Some(path.as_str().ok_or("'globalExcludes'")?.to_string()),
+        },
+    })
+}
+
+/// `Host.selectFiles` for the Node host: `walk()` of `execution/files.ts`
+/// in Rust (`crates/orchestration-walker`); the request as JSON.
+#[napi(js_name = "selectFiles")]
+pub fn select_files(env: Env, request: String) -> Result<Vec<String>> {
+    let request = select_request(&request)
+        .map_err(|reason| Error::from_reason(format!("invalid selectFiles request: {reason}")))?;
+    orchestration_walker::select(&request).map_err(|error| walker_error(&env, error))
+}
+
+/// `Host.fs.readSources` for the Node host: `readText(join(root, path),
+/// { fatal: true })` per path on worker threads, `null` for a missing or
+/// non-UTF-8 file. `stripBom` drops a leading U+FEFF, as the Node host's
+/// `TextDecoder` does.
+#[napi(js_name = "readSources")]
+pub fn read_sources(
+    env: Env,
+    root: String,
+    paths: Vec<String>,
+    strip_bom: bool,
+) -> Result<Vec<Option<String>>> {
+    let mut sources = orchestration_walker::read_sources(&root, &paths)
+        .map_err(|error| walker_error(&env, error))?;
+    if strip_bom {
+        for text in sources.iter_mut().flatten() {
+            if text.starts_with('\u{FEFF}') {
+                text.drain(..'\u{FEFF}'.len_utf8());
+            }
+        }
+    }
+    Ok(sources)
+}

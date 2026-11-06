@@ -40,9 +40,9 @@ row("import orchestration", importMs);
 row("load workflow + build artifacts", buildMs);
 row("run (both jssg commands)", runMs);
 for (const [phase, ms] of [...phases].sort(([a], [b]) => a.localeCompare(b))) row(`  ${phase}`, ms);
-const accounted = ["jssg.select", "jssg.dispatch", "jssg.stage", "jssg.commit"].reduce(
+const accounted = ["jssg.select", "jssg.read", "jssg.dispatch", "jssg.stage", "jssg.commit"].reduce(
   (sum, phase) => sum + (phases.get(phase) ?? 0),
   0,
 );
-row("  (run - select/dispatch/stage/commit)", runMs - accounted);
+row("  (run - select/read/dispatch/stage/commit)", runMs - accounted);
 row("total in process", startup + importMs + buildMs + runMs);

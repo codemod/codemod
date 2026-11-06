@@ -61,6 +61,10 @@ export interface QuickjsRequest {
 interface ExecutorTimings {
   /** Target-root resolution, file selection, and reads (before dispatch). */
   selectMs: number;
+  /** Of `selectMs`: target root and the walk (`profile` phase `select`, whole ms). */
+  walkMs: number;
+  /** Of `selectMs`: reading the selected sources (`profile` phase `read`, whole ms). */
+  readMs: number;
   /** Validation, conflict checks, and writes (after dispatch). */
   commitMs: number;
   /** The batch runner (parse, transform, convert). */
@@ -79,7 +83,14 @@ globals.console = createQuickjsConsole(native);
 
 /** `jssg` in context, `shell` through the Rust spawn; everything else refused. */
 class QuickjsExecutor implements OperationExecutor {
-  readonly timings: ExecutorTimings = { selectMs: 0, commitMs: 0, dispatchMs: 0, shellMs: 0 };
+  readonly timings: ExecutorTimings = {
+    selectMs: 0,
+    walkMs: 0,
+    readMs: 0,
+    commitMs: 0,
+    dispatchMs: 0,
+    shellMs: 0,
+  };
 
   constructor(
     private readonly cwd: string,
@@ -109,6 +120,10 @@ class QuickjsExecutor implements OperationExecutor {
             operation,
             signal,
             host,
+            profile: (phase, ms) => {
+              if (phase === "select") this.timings.walkMs += ms;
+              else if (phase === "read") this.timings.readMs += ms;
+            },
             dispatch: async (batch, batchSignal) => {
               dispatchStart = native.hrtime();
               try {
@@ -213,6 +228,8 @@ export async function runBundled(
       ),
       runMs: round(end - mainStarted),
       selectAndReadMs: round(executor.timings.selectMs),
+      walkMs: round(executor.timings.walkMs),
+      readMs: round(executor.timings.readMs),
       dispatchMs: round(executor.timings.dispatchMs),
       parseMs: round(stats.prepareMs),
       moduleLoadMs: round(jssg.timings.loadMs),
