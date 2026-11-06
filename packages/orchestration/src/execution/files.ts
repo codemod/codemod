@@ -7,24 +7,21 @@
  * directories applied, and include/exclude globs that take precedence over
  * every ignore file. Deterministic component-wise order.
  *
- * Matching is the `ignore` npm package: gitignore semantics, which is also
- * what the engine's override globs use, plus brace alternation (globset has
- * it, gitignore does not) expanded up front. `fixtures/walker/cases.json`
- * pins parity with the engine; `tests/files.test.ts` and
- * `crates/execution-bridge/tests/contracts.rs` run the two sides.
+ * Matching is the `ignore` npm package (pure JavaScript): gitignore semantics,
+ * which is also what the engine's override globs use, plus brace alternation
+ * (globset has it, gitignore does not) expanded up front.
+ * `fixtures/walker/cases.json` pins parity with the engine;
+ * `tests/files.test.ts` and `crates/execution-bridge/tests/contracts.rs` run
+ * the two sides. Every filesystem and path operation goes through the `Host`
+ * (`core/host.ts`).
  */
-import { readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, relative, sep } from "node:path";
 import ignoreModule, { type Ignore } from "ignore";
+import { getHost, type Host } from "../core/host.ts";
+import LANGUAGES from "./languages.json" with { type: "json" };
 
 // `ignore` is CommonJS; its default export is the factory under both Node's
 // interop and its own type declarations only through `.default`.
 const ignore = ignoreModule.default;
-
-const LANGUAGES = JSON.parse(
-  readFileSync(new URL("./languages.json", import.meta.url), "utf8"),
-) as Record<string, string[]>;
 
 /**
  * The engine's file extensions for a language (`languages.json`, pinned to
@@ -32,7 +29,7 @@ const LANGUAGES = JSON.parse(
  * table does not list, which then need an explicit `include`.
  */
 export function languageExtensions(language: string): string[] {
-  return LANGUAGES[language.toLowerCase()] ?? [];
+  return (LANGUAGES as Record<string, string[]>)[language.toLowerCase()] ?? [];
 }
 
 type Match = "ignore" | "whitelist" | "none";
@@ -93,25 +90,22 @@ function test(matcher: Ignore, candidate: string, isDir: boolean): Match {
   return ignored ? "ignore" : unignored ? "whitelist" : "none";
 }
 
-function readIgnoreFile(path: string): Ignore | undefined {
+function readIgnoreFile(host: Host, path: string): Ignore | undefined {
   try {
-    return ignore().add(readFileSync(path, "utf8"));
+    return ignore().add(host.fs.readText(path));
   } catch {
     return undefined;
   }
 }
 
-function readLevel(dir: string): Level {
+function readLevel(host: Host, dir: string): Level {
+  const { join } = host.path;
   return {
     dir,
     kinds: [".ignore", ".gitignore", join(".git", "info", "exclude")].map((name) =>
-      readIgnoreFile(join(dir, name)),
+      readIgnoreFile(host, join(dir, name)),
     ),
   };
-}
-
-function toPosix(path: string): string {
-  return sep === "/" ? path : path.split(sep).join("/");
 }
 
 /** Component-wise byte order, the order `Vec<PathBuf>::sort` produces. */
@@ -126,15 +120,17 @@ export function comparePaths(a: string, b: string): number {
 
 /** `gitconfig_excludes_path` from the `ignore` crate. */
 export function discoverGlobalExcludesPath(
-  env: NodeJS.ProcessEnv = process.env,
+  env: Readonly<Record<string, string | undefined>> = getHost().env(),
+  host: Host = getHost(),
 ): string | undefined {
-  const home = env.HOME ?? env.USERPROFILE ?? homedir();
+  const { join } = host.path;
+  const home = env.HOME ?? env.USERPROFILE ?? host.os.homedir();
   const xdg = env.XDG_CONFIG_HOME ? env.XDG_CONFIG_HOME : home ? join(home, ".config") : undefined;
   const fromConfig = (path: string | undefined): string | undefined => {
     if (!path) return undefined;
     let text: string;
     try {
-      text = readFileSync(path, "utf8");
+      text = host.fs.readText(path);
     } catch {
       return undefined;
     }
@@ -148,12 +144,20 @@ export function discoverGlobalExcludesPath(
   );
 }
 
-function walk(root: string, overrides: Override[], globalExcludes: string | null | undefined) {
-  const globalPath = globalExcludes === undefined ? discoverGlobalExcludesPath() : globalExcludes;
-  const global = globalPath ? readIgnoreFile(globalPath) : undefined;
+function walk(
+  host: Host,
+  root: string,
+  overrides: Override[],
+  globalExcludes: string | null | undefined,
+) {
+  const { dirname, join, relative, sep } = host.path;
+  const toPosix = (path: string): string => (sep === "/" ? path : path.split(sep).join("/"));
+  const globalPath =
+    globalExcludes === undefined ? discoverGlobalExcludesPath(host.env(), host) : globalExcludes;
+  const global = globalPath ? readIgnoreFile(host, globalPath) : undefined;
   const ancestors: Level[] = [];
   for (let dir = dirname(root); ; dir = dirname(dir)) {
-    ancestors.push(readLevel(dir));
+    ancestors.push(readLevel(host, dir));
     if (dirname(dir) === dir) break;
   }
   const candidate = (base: string, absolute: string) => toPosix(relative(base, absolute));
@@ -182,16 +186,16 @@ function walk(root: string, overrides: Override[], globalExcludes: string | null
 
   const files: string[] = [];
   const visit = (dir: string, levels: Level[]) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const isDir = entry.isDirectory();
-      if (!isDir && !entry.isFile()) continue; // symlinks and special files
+    for (const entry of host.fs.readdir(dir)) {
+      const isDir = entry.isDirectory;
+      if (!isDir && !entry.isFile) continue; // symlinks and special files
       const absolute = join(dir, entry.name);
       if (matched(absolute, isDir, levels) === "ignore") continue;
-      if (isDir) visit(absolute, [readLevel(absolute), ...levels]);
+      if (isDir) visit(absolute, [readLevel(host, absolute), ...levels]);
       else files.push(candidate(root, absolute));
     }
   };
-  visit(root, [readLevel(root), ...ancestors]);
+  visit(root, [readLevel(host, root), ...ancestors]);
   return files.sort(comparePaths);
 }
 
@@ -209,6 +213,8 @@ export interface Selection {
    * disables it.
    */
   globalExcludes?: string | null;
+  /** Filesystem and paths. Defaults to the installed host. */
+  host?: Host;
 }
 
 /**
@@ -232,5 +238,10 @@ export function selectFiles(selection: Selection): string[] {
   if (invocation.include !== undefined || invocation.exclude !== undefined) {
     overrides.push(override(selection.targetRoot, invocation.include, invocation.exclude));
   }
-  return walk(selection.targetRoot, overrides, selection.globalExcludes);
+  return walk(
+    selection.host ?? getHost(),
+    selection.targetRoot,
+    overrides,
+    selection.globalExcludes,
+  );
 }

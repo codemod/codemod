@@ -1,11 +1,15 @@
 /**
- * Experimental local workflow runner: `codemod-workflow <workflow.ts>`.
+ * Experimental local workflow runner:
+ * `codemod-workflow [run] <workflow.ts> [--runtime <name>]`.
  *
  * Loads a TypeScript workflow module through the build step (`bundle/build.ts`:
  * inline JSSG transforms are bundled into artifacts and the module is
- * rewritten to reference them), runs its default export through the Rust
- * execution bridge (one process per `shell` or JSSG command), and prints the
- * final value as JSON. Trusted local use only: the workflow runs in plain
+ * rewritten to reference them), runs its default export on the selected
+ * runtime (`runtimes/`; default `bridge`: the Rust execution bridge, one
+ * process per `shell` or JSSG command), and prints the final value as JSON.
+ * A runtime that cannot run here fails before anything is loaded with its
+ * own reason (e.g. `runtime 'node' not available yet`), and the command
+ * exits nonzero. Trusted local use only: the workflow runs in plain
  * Node, not a restricted sandbox, and nothing here validates registry
  * packages. SIGINT/SIGTERM/SIGHUP abort the run: the operation in flight is
  * cancelled (bridge process tree killed, nothing written; an agent that had
@@ -22,16 +26,20 @@
  * the newest run, and the command fails with that run's error when it did
  * not complete, exactly as a plain run would.
  */
-import { existsSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadWorkflow } from "../bundle/build.ts";
-import { executableRequiresInput, isExecutable } from "../authoring/composition.ts";
-import { BridgeExecutor } from "../execution/executor.ts";
 import type { Json } from "../core/json.ts";
-import { run } from "../runtime/run.ts";
+import "./node-host.ts";
 import { startDashboard, type Dashboard } from "./dashboard/server.ts";
 import { DashboardSession, type RunSummary } from "./dashboard/session.ts";
+import { defaultBridgePath } from "./runtimes/bridge.ts";
+import {
+  defaultRuntimes,
+  loadExecutable,
+  prepareLaunch,
+  runWorkflow,
+  type RuntimeRegistry,
+} from "./runtimes/registry.ts";
 
 export interface CliOptions {
   /** Workflow module path. */
@@ -40,6 +48,11 @@ export interface CliOptions {
   target: string;
   /** Path to the `butterflow-execution-bridge` binary. */
   bridge: string;
+  /**
+   * `--runtime <name>` (`bridge`, `node`, `quickjs`, or any registered
+   * runtime). Present only when the flag was given; the default is `bridge`.
+   */
+  runtime?: string;
   /**
    * The root input, parsed from `--input <json>`. The key is present only
    * when the flag was given: `--input null` is the value `null`, no flag is
@@ -56,6 +69,8 @@ export interface CliHooks {
   serve?: (session: DashboardSession) => Promise<Dashboard>;
   /** Receives the session as soon as it exists, before the first run starts. */
   onSession?: (session: DashboardSession) => void;
+  /** Runtimes `--runtime` resolves against. Default `defaultRuntimes`. */
+  registry?: RuntimeRegistry;
 }
 
 /**
@@ -65,8 +80,7 @@ export interface CliHooks {
  */
 export const ABORT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
-export const USAGE =
-  "usage: codemod-workflow <workflow.ts> [--target <directory>] [--bridge <binary>] [--input <json>] [--dashboard]";
+export const USAGE = `usage: codemod-workflow [run] <workflow.ts> [--runtime <${defaultRuntimes.names().join("|")}>] [--target <directory>] [--bridge <binary>] [--input <json>] [--dashboard]`;
 
 /**
  * `notify` receives out-of-band lines such as the dashboard URL; the default
@@ -81,42 +95,35 @@ export async function runWorkflowCli(
   hooks: CliHooks = {},
 ): Promise<unknown> {
   const options = parseArgs(argv);
-  if (!existsSync(options.workflow)) {
-    throw new Error(`workflow does not exist: ${options.workflow}`);
-  }
-  if (!existsSync(options.target)) throw new Error(`target does not exist: ${options.target}`);
-  if (!existsSync(options.bridge)) {
-    throw new Error(
-      `bridge binary not found at ${options.bridge}; build it with 'cargo build -p butterflow-execution-bridge' or pass --bridge / CODEMOD_BRIDGE_BIN`,
-    );
-  }
-  const { exports, artifacts } = await loadWorkflow(options.workflow);
-  const executable = exports.default;
-  if (!isExecutable(executable)) {
-    throw new Error(
-      "workflow module must default-export a shell or jssg step, a step invocation, dynamic(...), sequence(...), or parallel(...)",
-    );
-  }
   const hasInput = "input" in options;
-  if (!hasInput && executableRequiresInput(executable)) {
-    throw new Error("workflow requires an input value; pass --input <json>");
-  }
+  const launch = {
+    target: options.target,
+    bridge: options.bridge,
+    ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
+    ...(hooks.registry === undefined ? {} : { registry: hooks.registry }),
+  };
   if (!options.dashboard) {
-    const result = await run(executable, {
-      executor: new BridgeExecutor({ bin: options.bridge, cwd: options.target, artifacts }),
-      signal,
+    return runWorkflow(options.workflow, {
+      ...launch,
+      notify,
+      ...(signal === undefined ? {} : { signal }),
       ...(hasInput ? { input: options.input } : {}),
     });
-    return result.output;
   }
 
+  const { provider, target, settings } = prepareLaunch(options.workflow, launch);
+  const createExecutor = provider.createExecutor?.bind(provider);
+  if (createExecutor === undefined) {
+    throw new Error(`--dashboard is not supported by runtime '${provider.name}'`);
+  }
+  const { executable, artifacts } = await loadExecutable(options.workflow, hasInput);
   // The session owns every run of this configuration; each run gets a fresh
   // executor, monitor, scheduler, and abort controller from it.
   const session = new DashboardSession({
     executable,
     workflow: basename(options.workflow),
-    executor: (events) =>
-      new BridgeExecutor({ bin: options.bridge, cwd: options.target, artifacts, events }),
+    executor: (events) => createExecutor({ cwd: target, artifacts, events, settings }),
+    runtime: provider,
     ...(hasInput ? { input: options.input } : {}),
   });
   hooks.onSession?.(session);
@@ -163,14 +170,19 @@ function describeOutcome(run: RunSummary): string {
  * build when the package runs from the source checkout.
  */
 export function parseArgs(argv: string[]): CliOptions {
-  const args = [...argv];
+  // `--flag=value` is the same as `--flag value`.
+  const args = argv.flatMap((arg) => {
+    const match = /^(--[^=]+)=(.*)$/su.exec(arg);
+    return match ? [match[1]!, match[2]!] : [arg];
+  });
+  // `run` is the (optional) subcommand: `codemod-workflow run <workflow.ts>`.
+  if (args[0] === "run") args.shift();
   const workflow = args.shift();
   if (workflow === undefined || workflow.startsWith("-")) throw new Error(USAGE);
   let target = process.cwd();
-  let bridge =
-    process.env.CODEMOD_BRIDGE_BIN ??
-    resolve(import.meta.dirname, "../../../../target/debug/butterflow-execution-bridge");
+  let bridge = defaultBridgePath();
   let input: { value: Json } | undefined;
+  let runtime: string | undefined;
   let dashboard = false;
   while (args.length > 0) {
     const flag = args.shift();
@@ -183,12 +195,14 @@ export function parseArgs(argv: string[]): CliOptions {
     if (flag === "--target") target = value;
     else if (flag === "--bridge") bridge = value;
     else if (flag === "--input") input = { value: parseInput(value) };
+    else if (flag === "--runtime") runtime = value;
     else throw new Error(`unknown option: ${flag}\n${USAGE}`);
   }
   return {
     workflow: resolve(workflow),
     target: resolve(target),
     bridge: resolve(bridge),
+    ...(runtime === undefined ? {} : { runtime }),
     ...(input === undefined ? {} : { input: input.value }),
     dashboard,
   };

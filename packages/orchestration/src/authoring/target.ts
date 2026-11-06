@@ -3,9 +3,9 @@
  * `core/protocol.ts`; this module decides what an author may write and normalizes
  * it so equivalent spellings produce identical command content for replay.
  */
-import { posix } from "node:path";
 import { TargetValidationError } from "../core/errors.ts";
 import { escapesRoot, isAbsolutePath } from "../core/paths.ts";
+import * as posix from "../core/posix.ts";
 import type { Target } from "../core/protocol.ts";
 
 const FIELDS: readonly string[] = ["root", "include", "exclude"];

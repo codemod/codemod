@@ -21,7 +21,8 @@ it("src folders import only in the documented direction", () => {
     .map((name) => join(src, name));
   const violations: string[] = [];
   for (const file of files) {
-    if (file === join(src, "index.ts")) continue;
+    // Entry points re-export across layers by design.
+    if (file === join(src, "index.ts") || file === join(src, "portable.ts")) continue;
     const from = layerOf(file);
     expect(Object.keys(ALLOWED), relative(src, file)).toContain(from);
     const text = readFileSync(file, "utf8");

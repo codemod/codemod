@@ -5,8 +5,7 @@
  * checks in `crates/execution-bridge/src/jssg.rs`), so a value accepted here
  * is accepted there and every path is checked independently on both sides.
  */
-import { lstatSync, realpathSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { getHost, type Host, type HostFs } from "./host.ts";
 
 /** Absolute on any platform: `/x`, `\x`, `C:\x`, `c:/x`. */
 export function isAbsolutePath(path: string): boolean {
@@ -36,9 +35,9 @@ export class PathEscapeError extends Error {
 }
 
 /** True when `path` exists as anything, including a dangling symlink. */
-export function lexists(path: string): boolean {
+export function lexists(path: string, fs: HostFs = getHost().fs): boolean {
   try {
-    lstatSync(path);
+    fs.lstat(path);
     return true;
   } catch {
     return false;
@@ -53,20 +52,27 @@ export function lexists(path: string): boolean {
  * and directories that point outside, and dangling symlinks. Returns the
  * absolute path with the existing prefix resolved.
  */
-export function resolveInsideRoot(root: string, relative: string, what: string): string {
+export function resolveInsideRoot(
+  root: string,
+  relative: string,
+  what: string,
+  host: Host = getHost(),
+): string {
   if (!isSafeRelativePath(relative)) {
     throw new PathEscapeError(what, relative, "must be a safe relative path");
   }
-  const absolute = resolve(root, relative);
+  const { fs, path } = host;
+  const { sep } = path;
+  const absolute = path.resolve(root, relative);
   let existing = absolute;
-  while (!lexists(existing)) {
-    const parent = dirname(existing);
+  while (!lexists(existing, fs)) {
+    const parent = path.dirname(existing);
     if (parent === existing) throw new PathEscapeError(what, relative, "has no existing ancestor");
     existing = parent;
   }
   let real: string;
   try {
-    real = realpathSync.native(existing);
+    real = fs.realpath(existing);
   } catch {
     throw new PathEscapeError(what, relative, "resolves through a broken symlink");
   }

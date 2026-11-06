@@ -5,7 +5,7 @@
  */
 import { NondeterminismError, DuplicateCommandIdError } from "../core/errors.ts";
 import { nullSink, type EventSink } from "../core/events.ts";
-import type { OperationExecutor } from "../execution/executor.ts";
+import type { OperationExecutor } from "../execution/operation-executor.ts";
 import {
   completions,
   finalOutput,

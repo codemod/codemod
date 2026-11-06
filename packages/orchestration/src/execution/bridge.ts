@@ -21,6 +21,7 @@ import { spawn } from "node:child_process";
 import { nullSink, type EventSink } from "../core/events.ts";
 import type { Json } from "../core/json.ts";
 import { createExchange, readResponse, resolveExchangeRoot } from "./exchange.ts";
+import { executeJssgCommand, type JssgCommandOptions } from "./jssg.ts";
 import { killProcessTree, spawnOptions, trackProcessTree } from "./process-tree.ts";
 import {
   PROTOCOL_VERSION,
@@ -28,6 +29,29 @@ import {
   type OperationCompletion,
   type OperationRequest,
 } from "../core/protocol.ts";
+
+export interface JssgExecutionOptions extends Omit<JssgCommandOptions, "dispatch"> {
+  /** Path to the bridge binary that runs the transform batch. */
+  bin: string;
+  /** Receives `bridge.spawned`. */
+  events?: EventSink;
+  /** Added to the bridge process's inherited environment. */
+  env?: Record<string, string>;
+}
+
+/**
+ * One JSSG command whose transform batch runs in one bridge process: the
+ * portable orchestrator (`jssg.ts::executeJssgCommand`) with `spawnBridge` as
+ * its dispatcher.
+ */
+export function executeJssg(options: JssgExecutionOptions): Promise<OperationCompletion> {
+  const { bin, events, env, ...rest } = options;
+  return executeJssgCommand({
+    ...rest,
+    dispatch: (request, signal) =>
+      spawnBridge({ bin, cwd: options.cwd, env, events }, request, signal),
+  });
+}
 
 export interface BridgeProcessOptions {
   /** Absolute path to the bridge binary. */

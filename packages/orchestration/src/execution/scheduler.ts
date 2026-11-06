@@ -24,9 +24,9 @@
  * and `resume()` pumps the queue again. Nothing in flight is interrupted, so a
  * pause never produces a `cancelled` or `unknown` completion by itself.
  */
-import { availableParallelism, totalmem } from "node:os";
 import { nullSink, type EventSink } from "../core/events.ts";
-import type { OperationExecutor } from "./executor.ts";
+import { getHost } from "../core/host.ts";
+import type { OperationExecutor } from "./operation-executor.ts";
 import {
   PROTOCOL_VERSION,
   type Operation,
@@ -65,7 +65,11 @@ export interface SchedulerHost {
   totalmem(): number;
 }
 
-export const nodeHost: SchedulerHost = { availableParallelism, totalmem };
+/** The installed host's facts (`Host.os`), read when a capacity is derived. */
+export const installedHostFacts: SchedulerHost = {
+  availableParallelism: () => getHost().os.availableParallelism(),
+  totalmem: () => getHost().os.totalmem(),
+};
 
 /**
  * Operator/CI override for the total capacity, in the same units as the
@@ -88,9 +92,10 @@ export interface SchedulerOptions {
   /** Total capacity in weight units. Defaults to `defaultCapacity()`. */
   capacity?: number;
   weights?: Partial<OperationWeights>;
-  /** Defaults to `nodeHost`. */
+  /** Defaults to the installed host's facts (`installedHostFacts`). */
   host?: SchedulerHost;
-  env?: Record<string, string | undefined>;
+  /** Defaults to the installed host's environment. */
+  env?: Readonly<Record<string, string | undefined>>;
   /**
    * Receives `scheduler.paused` / `scheduler.resumed`. Per-command scheduling
    * events go to the sink of the run that asked for the permit instead.
@@ -146,8 +151,8 @@ export function weightOf(
  */
 export function defaultCapacity(
   weights: OperationWeights = DEFAULT_WEIGHTS,
-  host: SchedulerHost = nodeHost,
-  env: Record<string, string | undefined> = process.env,
+  host: SchedulerHost = installedHostFacts,
+  env: Readonly<Record<string, string | undefined>> = getHost().env(),
 ): number {
   const heaviest = Math.max(...Object.values(weights));
   const override = env[CAPACITY_ENV];
@@ -189,8 +194,7 @@ export class AdmissionScheduler {
 
   constructor(options: SchedulerOptions = {}) {
     this.weights = { ...DEFAULT_WEIGHTS, ...options.weights };
-    this.capacity =
-      options.capacity ?? defaultCapacity(this.weights, options.host, options.env ?? process.env);
+    this.capacity = options.capacity ?? defaultCapacity(this.weights, options.host, options.env);
     if (!Number.isInteger(this.capacity) || this.capacity < 1) {
       throw new Error(`scheduler capacity must be a positive integer, got ${this.capacity}`);
     }

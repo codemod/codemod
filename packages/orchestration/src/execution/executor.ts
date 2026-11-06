@@ -11,10 +11,9 @@ import {
   executeFileAssessment,
   type AssessmentExecutorOptions,
 } from "./assessment.ts";
-import { spawnBridge } from "./bridge.ts";
+import { executeJssg, spawnBridge } from "./bridge.ts";
 import type { ArtifactStore } from "../bundle/build.ts";
 import type { EventSink } from "../core/events.ts";
-import { executeJssg } from "./jssg.ts";
 import {
   PROTOCOL_VERSION,
   type OperationCompletion,
@@ -27,10 +26,9 @@ export const DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS = 30 * 60 * 1000;
 /** Largest delay a Node timer honors. */
 const MAX_TIMER_MS = 2_147_483_647;
 
-export interface OperationExecutor {
-  /** `signal` aborts the operation; the completion is then `cancelled` or `unknown`. */
-  execute(request: OperationRequest, signal?: AbortSignal): Promise<OperationCompletion>;
-}
+import type { OperationExecutor } from "./operation-executor.ts";
+
+export type { OperationExecutor };
 
 export interface BridgeOptions {
   /** Path to the `butterflow-execution-bridge` binary (cargo build -p butterflow-execution-bridge). */

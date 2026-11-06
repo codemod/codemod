@@ -3,7 +3,7 @@
  * Exercises only the public runtime API.
  */
 import { CollectingSink } from "../core/events.ts";
-import type { OperationExecutor } from "../execution/executor.ts";
+import type { OperationExecutor } from "../execution/operation-executor.ts";
 import {
   MemoryHistoryStore,
   completions,
@@ -21,7 +21,13 @@ import {
 } from "../core/protocol.ts";
 import type { AdmissionScheduler } from "../execution/scheduler.ts";
 import type { Executable, ExecutableOutput, StageInput } from "../authoring/composition.ts";
+import {
+  BUILTIN_RUNTIMES,
+  type BuiltinRuntimeName,
+  type RuntimeDescriptor,
+} from "../runtime/capabilities.ts";
 import { run, type RunOptions, type RunResult } from "../runtime/run.ts";
+import "./node-host.ts";
 
 export class Outcome {
   constructor(
@@ -57,6 +63,12 @@ export interface HarnessOptions {
   /** Bounded admission for the run; defaults to the host-derived scheduler. */
   scheduler?: AdmissionScheduler;
   signal?: AbortSignal;
+  /**
+   * Apply a runtime's capability contract (`RunSettings.runtime`) around the
+   * scripted executor: `"node"` makes `agent`/`assessment` fail fast exactly
+   * as the real runtime would. Default: none (every kind is scripted).
+   */
+  runtime?: BuiltinRuntimeName | RuntimeDescriptor;
 }
 
 export interface HarnessRun<R> extends RunResult<R> {
@@ -94,6 +106,11 @@ export function createHarness(options: HarnessOptions = {}): Harness {
       : new MemoryHistoryStore(options.history);
   const executed: OperationRequest[] = [];
   const events = new CollectingSink();
+  const runtime =
+    typeof options.runtime === "string" ? BUILTIN_RUNTIMES[options.runtime] : options.runtime;
+  if (typeof options.runtime === "string" && runtime === undefined) {
+    throw new Error(`harness: unknown runtime '${options.runtime}'`);
+  }
   const executor: OperationExecutor = {
     async execute(request) {
       executed.push(request);
@@ -113,6 +130,7 @@ export function createHarness(options: HarnessOptions = {}): Harness {
         events,
         ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
         ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(runtime === undefined ? {} : { runtime }),
         ...(runOptions === undefined || !("input" in runOptions)
           ? {}
           : { input: runOptions.input }),

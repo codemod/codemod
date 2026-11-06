@@ -17,6 +17,10 @@
     "./harness": {
       "types": "./src/host/harness.ts",
       "default": "./src/host/harness.ts"
+    },
+    "./portable": {
+      "types": "./src/portable.ts",
+      "default": "./src/portable.ts"
     }
   },
   "bin": {

@@ -28,7 +28,9 @@ import type { EventSink } from "../../core/events.ts";
 import type { Json } from "../../core/json.ts";
 import type { OperationExecutor } from "../../execution/executor.ts";
 import { AdmissionScheduler, defaultCapacity } from "../../execution/scheduler.ts";
+import type { RuntimeDescriptor } from "../../runtime/capabilities.ts";
 import { run } from "../../runtime/run.ts";
+import "../node-host.ts";
 import {
   RunMonitor,
   type DashboardSnapshot,
@@ -48,6 +50,8 @@ export interface SessionOptions {
    * event sink, so `bridge.spawned` reaches the right monitor.
    */
   executor: (events: EventSink) => OperationExecutor;
+  /** The runtime executing every run; see `RunSettings.runtime`. */
+  runtime?: RuntimeDescriptor;
   /** The root input. The key's presence matters: `{ input: null }` is the value `null`. */
   input?: Json;
   /** Admission capacity shared by every run's scheduler. Defaults to `defaultCapacity()`. */
@@ -374,6 +378,7 @@ export class DashboardSession {
         events: monitor,
         scheduler,
         signal: controller.signal,
+        ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
         ...("input" in options ? { input: options.input } : {}),
       });
       record.outcome = { output: result.output };
