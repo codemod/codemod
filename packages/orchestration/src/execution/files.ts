@@ -160,7 +160,17 @@ function walk(
     ancestors.push(readLevel(host, dir));
     if (dirname(dir) === dir) break;
   }
-  const candidate = (base: string, absolute: string) => toPosix(relative(base, absolute));
+  // Hot path: every entry is tested against every level. Walked paths are
+  // normalized joins beneath `base`, so stripping the prefix is exactly
+  // `relative()` (which is slow in an interpreter); anything else takes it.
+  const candidate = (base: string, absolute: string) => {
+    if (absolute.startsWith(base)) {
+      if (absolute.length === base.length) return "";
+      if (base.endsWith(sep)) return toPosix(absolute.slice(base.length));
+      if (absolute[base.length] === sep) return toPosix(absolute.slice(base.length + 1));
+    }
+    return toPosix(relative(base, absolute));
+  };
 
   // `Ignore::matched`: an override match, whitelist or ignore, is final.
   // Otherwise the nearest `.ignore` beats the nearest `.gitignore` beats the

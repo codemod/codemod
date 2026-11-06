@@ -40,6 +40,8 @@ export interface BuiltModule {
   /** The module with every inline transform replaced by its `ArtifactRef`. */
   source: string;
   artifacts: JssgArtifact[];
+  /** Absolute paths of every file bundled into the artifacts (for build caches). */
+  inputs?: string[];
 }
 
 /** Artifact lookup by hash; a `Map<string, JssgArtifact>` qualifies. */
@@ -103,6 +105,7 @@ export function buildModule(source: string, file: string): BuiltModule {
   const module = moduleScope(sf);
   const edits: { start: number; end: number; text: string }[] = [];
   const artifacts: JssgArtifact[] = [];
+  const inputs = new Set<string>();
 
   for (const call of findJssgCalls(sf)) {
     const argument = call.arguments[0];
@@ -118,7 +121,8 @@ export function buildModule(source: string, file: string): BuiltModule {
       fail(argument, `jssg '${name}' has no transform`);
     }
     const entry = transformEntry(property, sf, module, fail, name);
-    const bundled = bundle(entry, file, loader);
+    const { text: bundled, inputs: used } = bundle(entry, file, loader);
+    for (const input of used) inputs.add(input);
     const hash = createHash("sha256").update(bundled).digest("hex");
     artifacts.push({ name, hash, source: bundled, origin: file });
     edits.push({
@@ -132,7 +136,7 @@ export function buildModule(source: string, file: string): BuiltModule {
   for (const edit of edits.sort((a, b) => b.start - a.start)) {
     rewritten = rewritten.slice(0, edit.start) + edit.text + rewritten.slice(edit.end);
   }
-  return { source: rewritten, artifacts };
+  return { source: rewritten, artifacts, inputs: [...inputs].sort() };
 }
 
 /** Read and split a module on disk. */
@@ -476,7 +480,7 @@ function isValueReference(identifier: ts.Identifier): boolean {
  * hash is stable across checkouts. Node built-ins and `codemod:*` stay
  * external; everything else is inlined.
  */
-function bundle(entry: string, file: string, loader: Loader): string {
+function bundle(entry: string, file: string, loader: Loader): { text: string; inputs: string[] } {
   const directory = realDirectory(dirname(file));
   try {
     const result = buildSync({
@@ -484,6 +488,8 @@ function bundle(entry: string, file: string, loader: Loader): string {
       absWorkingDir: directory,
       bundle: true,
       write: false,
+      // Only for `BuiltModule.inputs`; does not change the output.
+      metafile: true,
       format: "esm",
       platform: "node",
       target: "es2022",
@@ -492,7 +498,11 @@ function bundle(entry: string, file: string, loader: Loader): string {
       logLevel: "silent",
       charset: "utf8",
     });
-    return result.outputFiles[0]!.text;
+    const inputs = Object.keys(result.metafile.inputs)
+      .filter((input) => input !== basename(file) && !input.startsWith("<stdin>"))
+      .map((input) => resolve(directory, input));
+    // The module itself is an input too (its transform text is in the artifact).
+    return { text: result.outputFiles[0]!.text, inputs: [file, ...inputs] };
   } catch (error) {
     const messages = (error as { errors?: { text: string; location?: { line: number } }[] }).errors;
     const detail = messages?.map((m) => m.text).join("; ") ?? (error as Error).message;

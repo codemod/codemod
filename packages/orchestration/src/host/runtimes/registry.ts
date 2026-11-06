@@ -5,7 +5,6 @@
  */
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { loadWorkflow } from "../../bundle/build.ts";
 import {
   executableRequiresInput,
   isExecutable,
@@ -116,6 +115,8 @@ export async function loadExecutable(
   workflow: string,
   hasInput: boolean,
 ): Promise<LoadedExecutable> {
+  // Loaded on demand (TypeScript and esbuild): out-of-process runtimes never need it.
+  const { loadWorkflow } = await import("../../bundle/build.ts");
   const { exports, artifacts } = await loadWorkflow(workflow);
   const executable = exports.default;
   if (!isExecutable(executable)) {

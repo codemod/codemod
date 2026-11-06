@@ -1,11 +1,14 @@
 # Runtimes and the host seam
 
-> Status: prototype. `bridge` is the default; `node` is implemented (needs the napi addon,
-> `pnpm --filter @codemod.com/jssg-napi build`); `quickjs` is a registered placeholder that
-> fails with `runtime 'quickjs' not available yet`.
-
+> Status: prototype. `bridge` is the default. `node` is implemented (needs the napi addon,
+> `pnpm --filter @codemod.com/jssg-napi build`; see "The `node` runtime"). `quickjs` is
+> implemented (needs the host binary, `cargo build -p orchestration-quickjs-host`; see "The
+> quickjs runtime"). A runtime whose addon or binary is missing fails before anything loads,
+> and the error says how to build it.
 ```text
 codemod-workflow [run] <workflow.ts> [--runtime <bridge|node|quickjs>] ...
+codemod-workflow build <workflow.ts> --runtime quickjs -o <bundle.mjs>
+orchestration-quickjs-host run <bundle.mjs> --target <dir> [--input <json>] [--history <file>] [--timings]
 runWorkflow(path, { runtime })                      // programmatic, Node
 run(executable, { executor, runtime: NODE_RUNTIME }) // any host, incl. QuickJS
 createHarness({ runtime: "node" })                   // tests
@@ -37,7 +40,49 @@ createHarness({ runtime: "node" })                   // tests
 | `src/host/runtimes/{bridge,node,quickjs}.ts` | one provider per runtime |
 | `src/host/runtimes/registry.ts` | `RuntimeRegistry`, `defaultRuntimes`, `runWorkflow`, `prepareLaunch` |
 | `src/portable.ts` | `@codemod.com/orchestration/portable`: the Node-free API |
-| `tests/portable.test.ts` | static import scan of everything reachable from `portable.ts` |
+| `tests/portable.test.ts` | static import scan of everything reachable from `portable.ts` and `host/quickjs/entry.ts` |
+| `src/host/quickjs-bundle.ts` | Node: `buildQuickjsBundle`, `cachedQuickjsBundle` (esbuild) |
+| `src/host/quickjs/{entry,host,dispatch,async-context,native}.ts` | runs inside QuickJS: bundle entry, `Host`, in-context JSSG dispatch, async context, the Rust primitives' types |
+| `crates/orchestration-quickjs-host` | the Rust binary: one runtime + one context, Rust primitives, JSSG per-file calls |
+| `crates/codemod-sandbox/src/sandbox/engine/embedded.rs` | JSSG in an embedder-owned context: built-in modules, userdata, `begin_file`/`finish_file` |
+| `crates/execution-bridge/src/jssg.rs` | `BatchPlan` (shared batch setup + `FileOutcome` conversion) |
+
+## The quickjs runtime
+
+```text
+codemod-workflow run --runtime=quickjs wf.ts --target R
+  Node: cachedQuickjsBundle(wf.ts)   (esbuild; reused while every input file is unchanged)
+  spawn orchestration-quickjs-host run <bundle> --target R --json
+    Rust: AsyncRuntime + ONE AsyncContext; transform built-ins (codemod:ast-grep over sg_core, ...)
+          + LLRT globals; globalThis.__codemodQuickjsNative (fs, env, clock, spawn, jssg*)
+    JS:   bundle entry installs Host + async context; run(workflow, { executor, runtime: QUICKJS_RUNTIME })
+          jssg  -> executeJssgCommand({ dispatch }) -> per file: jssgPrepare (Rust parse) ->
+                   transform(root, options) (artifact module, evaluated once per run) ->
+                   jssgFinish (Rust, the bridge's convert) -> select/stage/commit unchanged
+          shell -> executeShell over Host.spawn (Rust: own process group, merged pipe, SIGKILL on abort)
+```
+
+- **Bundle** (`codemod-workflow build wf.ts --runtime=quickjs -o b.mjs`): the entry, the
+  portable closure, the workflow graph rewritten by the build step (same `ArtifactRef`s and
+  hashes as `loadWorkflow`, so history matches the other runtimes), and every artifact's
+  source verbatim, keyed by hash. `@codemod.com/orchestration` (and the package's
+  `src/index.ts`) resolve to `src/portable.ts`; `node:*` fails the build; `codemod:*` stays
+  external. Async is lowered (see "Async context").
+- **Transforms** are evaluated once per run per artifact hash (`import()` of a registered
+  virtual module), so module-level state is shared across files and commands of a run:
+  unsupported, as in the other in-process runtime. Each file gets the same `SgRoot`,
+  `options` (`params.input`, `language`, `targetDir`, `dryRun: false`), string/null/
+  `{ content, output }` handling, `rename()`, staged `jssgTransform`, and path validation as
+  the bridge (shared Rust code). Batches run one at a time; files serially.
+- **Unsupported:** `agent`/`assessment` (`UnsupportedInRuntimeError`, statically or as a
+  `config` failure), JSSG semantic analysis (`JSSG semantic analysis is unsupported in
+  runtime 'quickjs'`, also refused by `BatchPlan` in Rust).
+- **History/resume:** `orchestration-quickjs-host run b.mjs --history h.json` resumes from
+  `h.json` and writes the run's history back, success or not.
+- **Cancellation:** SIGINT/SIGTERM/SIGHUP to the host abort the run (the shell's process group
+  is killed). A spinning transform cannot be interrupted (one JS thread).
+- **Console:** workflow and transform `console.*` go to the host's stderr; stdout is the result.
+- **Timings:** `--timings` or `CODEMOD_QUICKJS_TIMINGS=1` prints a `timings: {...}` line.
 
 ## Inventory: what used Node, and where it went
 
@@ -125,22 +170,26 @@ and composition nodes awaited by author code in `dynamic()` bodies (and the root
 variable.
 
 - **Node:** `AsyncLocalStorage`.
-- **QuickJS (recommended):** the vendored engine is quickjs-ng (`rquickjs-sys` 0.11 exposes
-  `JS_SetPromiseHook` with `INIT`/`BEFORE`/`AFTER`/`RESOLVE`, the same primitive V8 uses to back
-  `AsyncLocalStorage`). The Rust host keeps one "current context" slot per variable: on `INIT`
-  store the current slot on the new promise (`parent_promise`'s for derived promises); on
-  `BEFORE` save the current slot and switch to the promise's; on `AFTER` restore. `run(value,
-  fn)` sets the slot for the synchronous extent of `fn` and restores it afterwards. This keeps
-  `concurrent` flags and `dynamicId`s identical to Node, so history is byte-identical across
-  runtimes.
-- **QuickJS (stopgap):** `createFallbackAsyncContext()` in `core/async-context.ts`. Correct for
+- **QuickJS (implemented):** `host/quickjs/async-context.ts`. Promise hooks do not work on
+  the vendored quickjs-ng (`rquickjs-sys` 0.11): `JS_SetPromiseHook` fires `BEFORE`/`AFTER`
+  only around thenable-resolution jobs, not around ordinary reaction jobs
+  (`promise_reaction_job` calls no hook), and `await` registers its continuation without a
+  derived promise. Instead the quickjs bundle is built with async functions, async generators,
+  and `for await` lowered to generators (esbuild `supported`), so every continuation in the
+  bundle goes through `Promise.prototype.then`, which the entry patches once to capture the
+  current frame at registration and restore it around the callback: V8's
+  `AsyncLocalStorage` rule. `tests/quickjs-async-context.test.ts` checks it against
+  `AsyncLocalStorage` (nesting, `Promise.all`, `finally`, a promise resolved outside the
+  run, async generators); `tests/quickjs.e2e.test.ts` checks that `dynamic()` inside
+  `parallel()` records the same history (`concurrent` flags) as Node. Transform artifacts
+  are not lowered; they never read the run context.
+- **QuickJS (stopgap, unused):** `createFallbackAsyncContext()` in `core/async-context.ts`. Correct for
   sequential workflows and all static composition; after an `await`, a nested `dynamic()` body
   falls back to the root runtime, so a `dynamic()` inside `parallel()` loses `concurrent: true`
   (history differs from Node; replay may report `reordered`) and nested dynamic commands lose
   `dynamicId` in events. Covered by `tests/portable.test.ts`.
-- Rejected: explicit context passing to authors (breaks the authoring API) and patching
-  `Promise.prototype.then` (native `await` bypasses it unless async functions are lowered to
-  generators at build time; possible later, but promise hooks are simpler and exact).
+- Rejected: explicit context passing to authors (breaks the authoring API) and QuickJS promise
+  hooks (incomplete on the vendored engine, see above).
 
 ## Runtime registry contract
 
@@ -184,8 +233,9 @@ exits 1), then either `launch` the file or load it (`loadWorkflow`) and
 `run(executable, { executor: createExecutor(...), runtime: provider })`. `--dashboard` needs
 `createExecutor`.
 
-To add `quickjs`: replace `src/host/runtimes/quickjs.ts` with a `launch` that builds the bundle
-and spawns the binary. No CLI change.
+`bridge` and `node` are in-process providers (`createExecutor`); `quickjs` is out-of-process
+(`launch`: build or reuse the cached bundle, spawn the host binary, parse its `--json`
+result). Adding a runtime needs no CLI change.
 
 ## The `node` runtime
 
@@ -228,6 +278,10 @@ and requires identical batch results, completions, and file trees;
 byte-for-byte from the napi facade.
 
 ## What a QuickJS host must provide
+
+(The original requirements list; `crates/orchestration-quickjs-host` plus
+`src/host/quickjs/*` now implement it. Differences: the `Host` is built by the bundle entry
+from Rust primitives, and the async context uses then-propagation, not promise hooks.)
 
 1. A `Host` object (above), installed via `HOST_GLOBAL` before the bundle evaluates or by the
    bundle entry calling `setHost`:

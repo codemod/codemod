@@ -1,17 +1,18 @@
 /**
  * Runtime selection: `--runtime` parsing, the registry contract (in-process
- * `createExecutor` vs out-of-process `launch`), the `node` runtime's
- * availability, the placeholder `quickjs` runtime the benchmark harness
- * probes for, and the capability contract (`agent`/`assessment`/semantic
- * analysis fail fast outside `bridge`).
+ * `createExecutor` vs out-of-process `launch`), the `node` and `quickjs`
+ * availability checks the benchmark harness probes for, and the capability
+ * contract (`agent`/`assessment`/semantic analysis fail fast outside
+ * `bridge`).
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync } from "node:fs";
+import { chmodSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { isAvailable as isNapiAvailable } from "@codemod.com/jssg-napi";
 import { parseArgs, runWorkflowCli, USAGE } from "../src/host/cli.ts";
 import { createHarness } from "../src/host/harness.ts";
+import { defaultQuickjsHostPath } from "../src/host/runtimes/quickjs.ts";
 import {
   BRIDGE_RUNTIME,
   NODE_RUNTIME,
@@ -70,17 +71,39 @@ describe("the runtime registry", () => {
     );
   });
 
-  it.each(["quickjs"])(
-    "refuses runtime '%s' before loading anything: not available yet",
-    async (name) => {
+  it("reports node and quickjs available exactly when their addon / host binary is built", () => {
+    const settings = { bridge: "/b" };
+    const node = defaultRuntimes.resolve("node").availability(settings);
+    const quickjs = defaultRuntimes.resolve("quickjs").availability(settings);
+    expect(node.available).toBe(isNapiAvailable());
+    expect(quickjs.available).toBe(existsSync(defaultQuickjsHostPath()));
+    // Neither is a placeholder any more.
+    for (const availability of [node, quickjs]) {
+      if (!availability.available) expect(availability.reason).not.toContain("not available yet");
+    }
+    // The full verification builds both; CODEMOD_REQUIRE_RUNTIMES=1 makes that a hard check.
+    if (process.env.CODEMOD_REQUIRE_RUNTIMES === "1") {
+      expect(node).toEqual({ available: true });
+      expect(quickjs).toEqual({ available: true });
+    }
+  });
+
+  it("refuses runtime 'quickjs' before loading anything when its host binary is missing", async () => {
+    const previous = process.env.CODEMOD_QUICKJS_HOST_BIN;
+    process.env.CODEMOD_QUICKJS_HOST_BIN = "/nonexistent/orchestration-quickjs-host";
+    try {
+      const reason = "quickjs host binary not found at /nonexistent/orchestration-quickjs-host";
       await expect(
-        runWorkflowCli(["run", shellWorkflow, "--runtime", name, "--target", fixtures]),
-      ).rejects.toThrow(`runtime '${name}' not available yet`);
-      await expect(runWorkflow(shellWorkflow, { runtime: name, target: fixtures })).rejects.toThrow(
-        `runtime '${name}' not available yet`,
-      );
-    },
-  );
+        runWorkflowCli(["run", shellWorkflow, "--runtime", "quickjs", "--target", fixtures]),
+      ).rejects.toThrow(reason);
+      await expect(
+        runWorkflow(shellWorkflow, { runtime: "quickjs", target: fixtures }),
+      ).rejects.toThrow(reason);
+    } finally {
+      if (previous === undefined) delete process.env.CODEMOD_QUICKJS_HOST_BIN;
+      else process.env.CODEMOD_QUICKJS_HOST_BIN = previous;
+    }
+  });
 
   it("keeps the bridge runtime's missing-binary error", async () => {
     await expect(
@@ -174,7 +197,11 @@ describe("the runtime registry", () => {
     "codemod-workflow exits nonzero with the reason for an unavailable runtime",
     () => {
       for (const [name, reason, env] of [
-        ["quickjs", "runtime 'quickjs' not available yet", {}],
+        [
+          "quickjs",
+          "quickjs host binary not found at /nonexistent/orchestration-quickjs-host",
+          { CODEMOD_QUICKJS_HOST_BIN: "/nonexistent/orchestration-quickjs-host" },
+        ],
         [
           "node",
           "runtime 'node' needs the jssg napi addon, not found at /nonexistent/addon.node",

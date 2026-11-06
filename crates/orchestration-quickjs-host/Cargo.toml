@@ -1,0 +1,30 @@
+[package]
+name = "orchestration-quickjs-host"
+version.workspace = true
+edition = "2021"
+authors.workspace = true
+description = "Runs a prebuilt TypeScript orchestration workflow bundle (control plane, workflow, and every JSSG transform) in one QuickJS context"
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+# `std::io::pipe` (stdout and stderr of a shell child share one pipe).
+rust-version = "1.87"
+publish = false
+
+[[bin]]
+name = "orchestration-quickjs-host"
+path = "src/main.rs"
+
+[dependencies]
+# Shared JSSG batch planning and FileOutcome conversion (`jssg::BatchPlan`).
+butterflow-execution-bridge = { path = "../execution-bridge" }
+codemod-sandbox = { workspace = true, features = ["native"] }
+libc = "0.2"
+rquickjs = { version = "0.11", features = ["full-async"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

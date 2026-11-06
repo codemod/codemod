@@ -1,6 +1,6 @@
 import { configDefaults, defineConfig } from "vitest/config";
 
-const e2e = process.env.CODEMOD_BRIDGE_E2E === "1";
+const e2e = process.env.CODEMOD_BRIDGE_E2E === "1" || process.env.CODEMOD_QUICKJS_E2E === "1";
 
 export default defineConfig({
   test: {

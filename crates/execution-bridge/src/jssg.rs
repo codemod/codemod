@@ -16,6 +16,7 @@ use std::{
     sync::Arc,
 };
 
+use ast_grep_config::RuleConfig;
 use codemod_sandbox::sandbox::{
     engine::{
         codemod_lang::CodemodLang, execute_codemod_with_loader, selector_from_value,
@@ -68,45 +69,136 @@ pub struct FileOutcome {
     pub output: Option<Value>,
 }
 
-pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, String> {
-    let root = canonical_dir(batch.target_root, "targetRoot")?;
-    let (module, source) = verified_module(batch.artifact, batch.source)?;
-    let language: CodemodLang = batch
-        .language
-        .parse()
-        .map_err(|error| format!("invalid JSSG language '{}': {error}", batch.language))?;
-    let selector = batch
-        .selector
-        .map(|selector| {
-            serde_json::to_value(selector)
-                .map_err(|error| error.to_string())
-                .and_then(|value| {
-                    selector_from_value(language, value).map_err(|error| error.to_string())
-                })
+/// Whether the runner executing a batch can provide semantic analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticSupport {
+    Enabled,
+    /// Refuse `semanticAnalysis` with `JSSG semantic analysis is unsupported
+    /// in runtime '<name>'` (the runtime capability contract's wording).
+    Unsupported(&'static str),
+}
+
+/// Everything a batch needs before its first transform runs, shared by every
+/// batch runner (this bridge's per-file sandbox, and in-context runners such
+/// as the orchestration QuickJS host): the canonical target root, the
+/// hash-verified artifact, the language, the compiled selector, the
+/// transform params, the semantic provider, and every file path resolved
+/// inside the root. Building it fails before anything runs.
+pub struct BatchPlan {
+    pub root: PathBuf,
+    /// Virtual module name derived from the transform name (`<name>.jssg.js`).
+    pub module: String,
+    pub language: CodemodLang,
+    selector: Option<RuleConfig<CodemodLang>>,
+    /// `{ input }` when the operation has an input.
+    pub params: Option<HashMap<String, Value>>,
+    pub provider: Option<Arc<dyn SemanticProvider>>,
+    /// Absolute, contained path of every requested file, in request order.
+    pub sources: Vec<PathBuf>,
+}
+
+impl BatchPlan {
+    /// Plan `batch` for its own `files`.
+    pub fn new(batch: &Batch<'_>, semantic: SemanticSupport) -> Result<Self, String> {
+        Self::for_paths(
+            batch,
+            batch.files.iter().map(|file| file.path.as_str()),
+            semantic,
+        )
+    }
+
+    /// Plan `batch` for `paths` (a runner that keeps file contents on its
+    /// own side passes `files: &[]` and the paths here).
+    pub fn for_paths<'p>(
+        batch: &Batch<'_>,
+        paths: impl IntoIterator<Item = &'p str>,
+        semantic: SemanticSupport,
+    ) -> Result<Self, String> {
+        let root = canonical_dir(batch.target_root, "targetRoot")?;
+        let (module, _) = verified_module(batch.artifact, batch.source)?;
+        let language: CodemodLang = batch
+            .language
+            .parse()
+            .map_err(|error| format!("invalid JSSG language '{}': {error}", batch.language))?;
+        let selector = batch
+            .selector
+            .map(|selector| {
+                serde_json::to_value(selector)
+                    .map_err(|error| error.to_string())
+                    .and_then(|value| {
+                        selector_from_value(language, value).map_err(|error| error.to_string())
+                    })
+            })
+            .transpose()
+            .map_err(|error| format!("invalid JSSG selector: {error}"))?;
+        let provider = match (semantic, batch.semantic_analysis) {
+            (SemanticSupport::Unsupported(runtime), Some(_)) => {
+                return Err(format!(
+                    "JSSG semantic analysis is unsupported in runtime '{runtime}'"
+                ))
+            }
+            _ => semantic_provider(batch.semantic_analysis, &root)?,
+        };
+        let params = batch
+            .input
+            .map(|value| HashMap::from([("input".to_string(), value.clone())]));
+        // Every requested path is checked before anything runs.
+        let sources = paths
+            .into_iter()
+            .map(|path| resolve_source(&root, path, "file path"))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            root,
+            module,
+            language,
+            selector,
+            params,
+            provider,
+            sources,
         })
-        .transpose()
-        .map_err(|error| format!("invalid JSSG selector: {error}"))?;
-    let provider = semantic_provider(batch.semantic_analysis, &root)?;
-    let params = batch
-        .input
-        .map(|value| HashMap::from([("input".to_string(), value.clone())]));
+    }
+
+    /// Whether the static selector rules `content` out (the transform is not
+    /// called and the file's outcome is [`FileOutcome::skipped`]).
+    pub fn skips(&self, content: &str) -> bool {
+        self.selector
+            .as_ref()
+            .is_some_and(|selector| !selector_matches(selector, self.language, content))
+    }
+
+    /// One file's transform output as a validated [`FileOutcome`].
+    pub fn convert(&self, path: &str, output: CodemodOutput) -> Result<FileOutcome, String> {
+        convert(&self.root, path, output)
+    }
+}
+
+impl FileOutcome {
+    /// A file the selector skipped: no edits, no output.
+    pub fn skipped(path: &str) -> Self {
+        FileOutcome {
+            path: path.to_string(),
+            edits: vec![],
+            output: None,
+        }
+    }
+}
+
+pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, String> {
+    let plan = BatchPlan::new(&batch, SemanticSupport::Enabled)?;
+    let source = batch.source.unwrap_or_default();
+    let module = plan.module.clone();
     let mut resolver = InMemoryResolver::new();
     resolver.add_module_with_source(format!("./{module}"), module.clone(), source.to_string());
     let resolver = Arc::new(resolver);
 
-    // Every requested path is checked before anything runs.
-    let sources = batch
-        .files
-        .iter()
-        .map(|file| resolve_source(&root, &file.path, "file path"))
-        .collect::<Result<Vec<_>, _>>()?;
     // The whole selected set is indexed, including files the selector will
     // skip, so a matching transform can resolve definitions in them.
-    if let Some(provider) = provider
+    if let Some(provider) = plan
+        .provider
         .as_ref()
         .filter(|provider| provider.mode() == ProviderMode::WorkspaceScope)
     {
-        for (file, source) in batch.files.iter().zip(&sources) {
+        for (file, source) in batch.files.iter().zip(&plan.sources) {
             provider
                 .notify_file_processed(source, &file.content)
                 .map_err(|error| format!("failed to index '{}': {error}", file.path))?;
@@ -114,30 +206,23 @@ pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, Strin
     }
 
     let mut outcomes = Vec::with_capacity(batch.files.len());
-    for (file, source) in batch.files.iter().zip(&sources) {
-        if selector
-            .as_ref()
-            .is_some_and(|selector| !selector_matches(selector, language, &file.content))
-        {
-            outcomes.push(FileOutcome {
-                path: file.path.clone(),
-                edits: vec![],
-                output: None,
-            });
+    for (file, source) in batch.files.iter().zip(&plan.sources) {
+        if plan.skips(&file.content) {
+            outcomes.push(FileOutcome::skipped(&file.path));
             continue;
         }
         let output = execute_codemod_with_loader(
             JssgExecutionOptions {
                 script_path: Path::new(&module),
                 resolver: Arc::clone(&resolver),
-                language,
+                language: plan.language,
                 file_path: source,
                 content: &file.content,
                 selector_config: None,
-                params: params.clone(),
+                params: plan.params.clone(),
                 matrix_values: None,
                 capabilities: None,
-                semantic_provider: provider.clone(),
+                semantic_provider: plan.provider.clone(),
                 metrics_context: None,
                 llm_request_handler: None,
                 shared_state_context: None,
@@ -146,13 +231,13 @@ pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, Strin
                 test_mode: false,
                 dry_run: false,
                 stage_writes: true,
-                target_directory: &root,
+                target_directory: &plan.root,
             },
             InMemoryLoader::new(Arc::clone(&resolver)),
         )
         .await
         .map_err(|error| format!("JSSG failed for '{}': {error}", file.path))?;
-        outcomes.push(convert(&root, &file.path, output)?);
+        outcomes.push(plan.convert(&file.path, output)?);
     }
     Ok(outcomes)
 }

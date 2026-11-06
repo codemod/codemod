@@ -164,6 +164,42 @@ describe("the portable closure", () => {
   });
 });
 
+describe("the QuickJS bundle entry (host/quickjs/entry.ts) closure", () => {
+  // Everything the quickjs bundle evaluates inside QuickJS: the entry plus
+  // the portable control plane it imports. It lives under host/ (a Node-only
+  // folder) but must obey the portable rules.
+  const closure = portableClosure(join(src, "host", "quickjs", "entry.ts"));
+  const inHost = (file: string) => rel(file).startsWith("host/");
+
+  it("reaches only host/quickjs/* and portable modules", () => {
+    const files = [...closure.keys()];
+    expect(
+      files
+        .filter(inHost)
+        .map(rel)
+        .filter((f) => !f.startsWith("host/quickjs/")),
+    ).toEqual([]);
+    expect(files.filter((f) => !inHost(f) && isNodeOnly(f)).map(rel)).toEqual([]);
+    expect(files.map(rel)).toContain("execution/jssg.ts");
+  });
+
+  it("imports no node:* module or Node-only package and uses no Node global", () => {
+    const violations: string[] = [];
+    for (const [file, specifiers] of closure) {
+      for (const specifier of specifiers) {
+        if (!specifier.startsWith(".") && !PORTABLE_PACKAGES.has(specifier)) {
+          violations.push(`${rel(file)} -> ${specifier}`);
+        }
+      }
+      const code = stripComments(readFileSync(file, "utf8"));
+      for (const [pattern, name] of NODE_GLOBALS) {
+        if (pattern.test(code)) violations.push(`${rel(file)} uses ${name}`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+});
+
 describe("core/posix.ts", () => {
   const cwd = "/work/dir";
   const ours = createPosixPath(() => cwd);

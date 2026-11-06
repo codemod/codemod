@@ -749,6 +749,7 @@ dependencies = [
 name = "butterflow-execution-bridge"
 version = "1.13.18"
 dependencies = [
+ "ast-grep-config",
  "butterflow-models",
  "butterflow-runners",
  "codemod-ai",
@@ -4835,6 +4836,21 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
+name = "orchestration-quickjs-host"
+version = "1.13.18"
+dependencies = [
+ "butterflow-execution-bridge",
+ "codemod-sandbox",
+ "libc",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "ordered-float"

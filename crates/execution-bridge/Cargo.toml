@@ -10,6 +10,8 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# The compiled JSSG selector type held by `jssg::BatchPlan`.
+ast-grep-config = { workspace = true }
 butterflow-models = { workspace = true }
 codemod-ai = { path = "../ai" }
 butterflow-runners = { workspace = true }
