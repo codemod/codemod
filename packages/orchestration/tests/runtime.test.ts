@@ -1,7 +1,7 @@
 /**
  * Runtime selection: `--runtime` parsing, the registry contract (in-process
- * `createExecutor` vs out-of-process `launch`), the placeholder `node` and
- * `quickjs` runtimes the benchmark harness probes for, and the capability
+ * `createExecutor` vs out-of-process `launch`), the placeholder `node` runtime
+ * and the `quickjs` availability check the benchmark harness probes for, and the capability
  * contract (`agent`/`assessment`/semantic analysis fail fast outside `bridge`).
  */
 import { spawnSync } from "node:child_process";
@@ -61,7 +61,24 @@ describe("the runtime registry", () => {
     );
   });
 
-  it.each(["node", "quickjs"])(
+  it("refuses runtime 'quickjs' before loading anything when its host binary is missing", async () => {
+    const previous = process.env.CODEMOD_QUICKJS_HOST_BIN;
+    process.env.CODEMOD_QUICKJS_HOST_BIN = "/nonexistent/orchestration-quickjs-host";
+    try {
+      const reason = "quickjs host binary not found at /nonexistent/orchestration-quickjs-host";
+      await expect(
+        runWorkflowCli(["run", shellWorkflow, "--runtime", "quickjs", "--target", fixtures]),
+      ).rejects.toThrow(reason);
+      await expect(
+        runWorkflow(shellWorkflow, { runtime: "quickjs", target: fixtures }),
+      ).rejects.toThrow(reason);
+    } finally {
+      if (previous === undefined) delete process.env.CODEMOD_QUICKJS_HOST_BIN;
+      else process.env.CODEMOD_QUICKJS_HOST_BIN = previous;
+    }
+  });
+
+  it.each(["node"])(
     "refuses runtime '%s' before loading anything: not available yet",
     async (name) => {
       await expect(
@@ -164,14 +181,23 @@ describe("the runtime registry", () => {
   it.skipIf(process.platform === "win32")(
     "codemod-workflow exits nonzero with the reason for an unavailable runtime",
     () => {
-      for (const name of ["node", "quickjs"]) {
+      for (const [name, reason] of [
+        ["node", "runtime 'node' not available yet"],
+        ["quickjs", "quickjs host binary not found at /nonexistent/orchestration-quickjs-host"],
+      ] as const) {
         const result = spawnSync(
           process.execPath,
           [bin, "run", shellWorkflow, `--runtime=${name}`, "--target", fixtures],
-          { encoding: "utf8" },
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              CODEMOD_QUICKJS_HOST_BIN: "/nonexistent/orchestration-quickjs-host",
+            },
+          },
         );
         expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain(`runtime '${name}' not available yet`);
+        expect(result.stderr).toContain(reason);
         expect(result.stdout).toBe("");
       }
     },
