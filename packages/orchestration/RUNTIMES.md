@@ -1,8 +1,8 @@
 # Runtimes and the host seam
 
-> Status: prototype. `bridge` is the default and only implemented runtime;
-> `node` and `quickjs` are registered placeholders that fail with
-> `runtime '<name>' not available yet`.
+> Status: prototype. `bridge` is the default; `node` is implemented (needs the napi addon,
+> `pnpm --filter @codemod.com/jssg-napi build`); `quickjs` is a registered placeholder that
+> fails with `runtime 'quickjs' not available yet`.
 
 ```text
 codemod-workflow [run] <workflow.ts> [--runtime <bridge|node|quickjs>] ...
@@ -29,6 +29,9 @@ createHarness({ runtime: "node" })                   // tests
 | `src/execution/jssg.ts` | portable `executeJssgCommand({ ..., dispatch, host })` |
 | `src/execution/bridge.ts` | `executeJssg` = `executeJssgCommand` with `spawnBridge` as `dispatch` |
 | `src/execution/shell.ts` | portable `executeShell` with DirectRunner semantics |
+| `src/execution/jssg-inprocess.ts` | portable in-process `JssgDispatch` over a `JssgEngine` (see "The `node` runtime") |
+| `src/host/runtimes/node-jssg.ts` | the napi-backed `JssgEngine` (`@codemod.com/jssg-napi`) |
+| `packages/jssg-napi`, `crates/jssg-napi` | the napi-rs addon: `SgRoot`/`SgNode` over `sg_core`, batch parse, staging |
 | `src/runtime/capabilities.ts` | runtime descriptors, `CapabilityExecutor`, `assertRuntimeSupports` |
 | `src/host/runtimes/types.ts` | `RuntimeProvider` contract |
 | `src/host/runtimes/{bridge,node,quickjs}.ts` | one provider per runtime |
@@ -181,11 +184,48 @@ exits 1), then either `launch` the file or load it (`loadWorkflow`) and
 `run(executable, { executor: createExecutor(...), runtime: provider })`. `--dashboard` needs
 `createExecutor`.
 
-To add `node`: replace `src/host/runtimes/node.ts` with a provider whose `availability` checks
-for the addon and whose `createExecutor` returns an executor that routes `jssg` to
-`executeJssgCommand({ ..., dispatch: inProcessBatch })` and `shell` to `executeShell`. To add
-`quickjs`: replace `src/host/runtimes/quickjs.ts` with a `launch` that builds the bundle and
-spawns the binary. No CLI change either way.
+To add `quickjs`: replace `src/host/runtimes/quickjs.ts` with a `launch` that builds the bundle
+and spawns the binary. No CLI change.
+
+## The `node` runtime
+
+`src/host/runtimes/node.ts`: `availability` checks for the addon
+(`CODEMOD_JSSG_NAPI` or `packages/jssg-napi/jssg-napi.<platform>-<arch>.node`); `NodeExecutor`
+routes `shell` to `executeShell` and `jssg` to `executeJssgCommand({ dispatch })` with the
+dispatch from `createInProcessJssgDispatch({ engine: createNapiJssgEngine() })`, one per run.
+Selection, reads, staging, conflict checks, and the commit are the unchanged portable code.
+
+The batch runner (`src/execution/jssg-inprocess.ts`, portable, reusable by any host that
+implements `JssgEngine`) is `crates/execution-bridge/src/jssg.rs::transform_batch` in
+TypeScript:
+
+- the artifact module is evaluated once per run, cached by hash, lazily (only when a file
+  reaches a transform). Node: `@codemod.com/jssg-napi/loader` verifies the SHA-256, serves
+  the source from memory through `node:module` `registerHooks` under
+  `codemod-artifact:<run>/<name>-<hash>.mjs`, resolves `codemod:ast-grep` to the addon-backed
+  module, and refuses every other `codemod:*` module (`module 'codemod:x' is unsupported in
+  runtime 'node'`). Node built-ins a bundle left external resolve to Node's (the bridge
+  serves its own `fs`/`path`; transforms should not rely on either);
+- files are parsed in Rust on worker threads in chunks of 64, one chunk ahead of the
+  transforms; the static selector is tested there too, so a skipped file never reaches JS;
+- transforms run serially on the JS thread, one at a time across concurrent commands
+  (`runTransform` is a process-wide queue), with the sandbox's options
+  (`{ params, language, matches: undefined, matrixValues: undefined, dryRun: false, targetDir }`);
+- `write()` and `jssgTransform()` are staged (never written) and contained to the target
+  root, as `stage_writes: true` does in the bridge; `rename()` is contained the same way;
+- results map to `FileOutcome`s with the bridge's rules (string/null/`{ content, output }`,
+  rename keeps content, `normalize_output` containment and `/` paths for secondary edits
+  and renames).
+
+Differences from `bridge`, by design: module-level state in a transform persists across the
+files and commands of one run (it is unsupported either way; the bridge starts a fresh
+runtime per file); a transform that never returns cannot be interrupted (the signal is
+checked between files); error messages name the same file but carry Node's `Error` text
+rather than QuickJS's; semantic analysis and `codemod:{llm,metrics,runtime,workflow}` are
+unsupported. `tests/node-runtime.e2e.test.ts` runs the JSSG fixtures through both runtimes
+and requires identical batch results, completions, and file trees;
+`packages/jssg-napi/tests/api-report.test.mjs` requires the QuickJS `sg_api` snapshot
+byte-for-byte from the napi facade.
 
 ## What a QuickJS host must provide
 

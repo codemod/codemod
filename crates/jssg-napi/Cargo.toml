@@ -1,0 +1,20 @@
+[package]
+name = "jssg-napi"
+version.workspace = true
+edition = "2021"
+publish = false
+description = "napi-rs facade over the binding-agnostic JSSG AST core (SgRoot/SgNode) for the Node runtime of the TypeScript orchestration prototype"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+codemod-sandbox = { workspace = true }
+ast-grep-core = { workspace = true }
+ast-grep-config = { workspace = true }
+napi = { version = "3", default-features = false, features = ["napi6", "serde-json", "dyn-symbols"] }
+napi-derive = "3"
+serde_json = { workspace = true }
+
+[build-dependencies]
+napi-build = "2"

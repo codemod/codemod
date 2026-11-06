@@ -549,6 +549,37 @@ impl CoreRoot {
     }
 }
 
+/// Host-side containment rule shared by every facade (`rename()`, staged
+/// `write()`, `jssgTransform()`): `path` (canonicalized, or its parent when
+/// it does not exist yet) must lie under the canonical `target_dir`. `caller`
+/// names the API in the error (e.g. `"rename()"`).
+pub fn check_within_target(target_dir: &Path, path: &Path, caller: &str) -> CoreResult<()> {
+    let canonical_target = target_dir
+        .canonicalize()
+        .unwrap_or_else(|_| target_dir.to_path_buf());
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| {
+        // File may not exist yet (e.g. rename target); canonicalize the parent instead
+        if let Some(parent) = path.parent() {
+            let canonical_parent = parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf());
+            canonical_parent.join(path.file_name().unwrap_or_default())
+        } else {
+            path.to_path_buf()
+        }
+    });
+    if canonical_path.starts_with(&canonical_target) {
+        Ok(())
+    } else {
+        Err(CoreError::error(format!(
+            "{} path '{}' is outside the target directory '{}'",
+            caller,
+            path.display(),
+            target_dir.display()
+        )))
+    }
+}
+
 fn compute_relative_filename(
     filename: Option<&str>,
     target_directory: Option<&Path>,

@@ -56,6 +56,9 @@ export type {
   RunWorkflowOptions,
 } from "./host/runtimes/registry.ts";
 export { bridgeRuntime, defaultBridgePath } from "./host/runtimes/bridge.ts";
+export { NodeExecutor, nodeRuntime } from "./host/runtimes/node.ts";
+export type { NodeExecutorOptions } from "./host/runtimes/node.ts";
+export { createNapiJssgEngine } from "./host/runtimes/node-jssg.ts";
 export { notAvailableYet } from "./host/runtimes/types.ts";
 export type {
   ExecutorContext,

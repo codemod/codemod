@@ -206,32 +206,8 @@ pub fn validate_path_within_target<'js>(
     caller: &str,
 ) -> rquickjs::Result<()> {
     if let Some(target_dir) = ctx.userdata::<TargetDirectory>() {
-        let canonical_target = target_dir
-            .0
-            .canonicalize()
-            .unwrap_or_else(|_| target_dir.0.clone());
-        let canonical_path = path.canonicalize().unwrap_or_else(|_| {
-            // File may not exist yet (e.g. rename target); canonicalize the parent instead
-            if let Some(parent) = path.parent() {
-                let canonical_parent = parent
-                    .canonicalize()
-                    .unwrap_or_else(|_| parent.to_path_buf());
-                canonical_parent.join(path.file_name().unwrap_or_default())
-            } else {
-                path.to_path_buf()
-            }
-        });
-        if !canonical_path.starts_with(&canonical_target) {
-            return Err(rquickjs::Exception::throw_message(
-                ctx,
-                &format!(
-                    "{} path '{}' is outside the target directory '{}'",
-                    caller,
-                    path.display(),
-                    target_dir.0.display()
-                ),
-            ));
-        }
+        crate::ast_grep::sg_core::check_within_target(&target_dir.0, path, caller)
+            .map_err(|e| rquickjs::Exception::throw_message(ctx, &e.message))?;
     }
     Ok(())
 }

@@ -1,13 +1,15 @@
 /**
  * Runtime selection: `--runtime` parsing, the registry contract (in-process
- * `createExecutor` vs out-of-process `launch`), the placeholder `node` and
- * `quickjs` runtimes the benchmark harness probes for, and the capability
- * contract (`agent`/`assessment`/semantic analysis fail fast outside `bridge`).
+ * `createExecutor` vs out-of-process `launch`), the `node` runtime's
+ * availability, the placeholder `quickjs` runtime the benchmark harness
+ * probes for, and the capability contract (`agent`/`assessment`/semantic
+ * analysis fail fast outside `bridge`).
  */
 import { spawnSync } from "node:child_process";
 import { chmodSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { isAvailable as isNapiAvailable } from "@codemod.com/jssg-napi";
 import { parseArgs, runWorkflowCli, USAGE } from "../src/host/cli.ts";
 import { createHarness } from "../src/host/harness.ts";
 import {
@@ -61,7 +63,7 @@ describe("the runtime registry", () => {
     );
   });
 
-  it.each(["node", "quickjs"])(
+  it.each(["quickjs"])(
     "refuses runtime '%s' before loading anything: not available yet",
     async (name) => {
       await expect(
@@ -164,16 +166,46 @@ describe("the runtime registry", () => {
   it.skipIf(process.platform === "win32")(
     "codemod-workflow exits nonzero with the reason for an unavailable runtime",
     () => {
-      for (const name of ["node", "quickjs"]) {
+      for (const [name, reason, env] of [
+        ["quickjs", "runtime 'quickjs' not available yet", {}],
+        [
+          "node",
+          "runtime 'node' needs the jssg napi addon, not found at /nonexistent/addon.node",
+          { CODEMOD_JSSG_NAPI: "/nonexistent/addon.node" },
+        ],
+      ] as const) {
         const result = spawnSync(
           process.execPath,
           [bin, "run", shellWorkflow, `--runtime=${name}`, "--target", fixtures],
-          { encoding: "utf8" },
+          { encoding: "utf8", env: { ...process.env, ...env } },
         );
         expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain(`runtime '${name}' not available yet`);
+        expect(result.stderr).toContain(reason);
         expect(result.stdout).toBe("");
       }
+    },
+  );
+
+  it("refuses runtime 'node' before loading anything when the addon is missing", async () => {
+    const saved = process.env.CODEMOD_JSSG_NAPI;
+    process.env.CODEMOD_JSSG_NAPI = "/nonexistent/addon.node";
+    try {
+      await expect(
+        runWorkflow(shellWorkflow, { runtime: "node", target: fixtures }),
+      ).rejects.toThrow(
+        "runtime 'node' needs the jssg napi addon, not found at /nonexistent/addon.node; build it with 'pnpm --filter @codemod.com/jssg-napi build' or set CODEMOD_JSSG_NAPI",
+      );
+    } finally {
+      if (saved === undefined) delete process.env.CODEMOD_JSSG_NAPI;
+      else process.env.CODEMOD_JSSG_NAPI = saved;
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || !isNapiAvailable())(
+    "runs a shell workflow in-process on runtime 'node'",
+    async () => {
+      const output = await runWorkflow(shellWorkflow, { runtime: "node", target: fixtures });
+      expect(output).toEqual({ stdout: "" });
     },
   );
 });

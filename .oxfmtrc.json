@@ -6,6 +6,7 @@
     "*.md",
     "crates/cli/src/templates/**",
     "packages/jssg-types/src/llrt/**",
-    "schemas/*.json"
+    "schemas/*.json",
+    "crates/codemod-sandbox/tests/integration/sg_api/*.json"
   ]
 }

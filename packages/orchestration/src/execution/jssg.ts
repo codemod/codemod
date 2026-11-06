@@ -63,6 +63,8 @@ export interface JssgCommandOptions {
   host?: Host;
   /** Test hook: global git excludes file (`null` disables). */
   globalExcludes?: string | null;
+  /** Optional timers in milliseconds: `select` (walk + reads), `stage`, `commit`. */
+  profile?: (phase: string, ms: number) => void;
 }
 
 /**
@@ -105,6 +107,15 @@ export async function executeJssgCommand(
     );
   }
 
+  const { profile } = options;
+  let mark = profile === undefined ? 0 : host.now();
+  const lap = (phase: string) => {
+    if (profile === undefined) return;
+    const now = host.now();
+    profile(phase, now - mark);
+    mark = now;
+  };
+
   let targetRoot: string;
   let files: BatchFile[];
   try {
@@ -129,6 +140,7 @@ export async function executeJssgCommand(
   } catch (error) {
     return fail("failed", (error as Error).message, { phase: "select" });
   }
+  lap("select");
 
   let completion: OperationCompletion;
   try {
@@ -166,12 +178,14 @@ export async function executeJssgCommand(
     return fail("failed", "bridge returned an invalid batch result", { phase: "transform" });
   }
 
+  mark = profile === undefined ? 0 : host.now();
   let staged: Staged;
   try {
     staged = stage(host, targetRoot, outcomes);
   } catch (error) {
     return fail("failed", (error as Error).message, { phase: "stage" });
   }
+  lap("stage");
   if (signal?.aborted) return fail("cancelled", "cancelled before commit", { phase: "commit" });
   const applied: string[] = [];
   const steps = [
@@ -201,6 +215,7 @@ export async function executeJssgCommand(
     }
     applied.push(step.path);
   }
+  lap("commit");
   return {
     protocolVersion: PROTOCOL_VERSION,
     commandId,
