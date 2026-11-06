@@ -11,6 +11,9 @@
 #   BENCH_REQUIRE_ARMS   space-separated arms that must be available (default: "yaml ts-bridge")
 #   BENCH_CMD_<ARM>      replace an arm's command line, e.g. BENCH_CMD_TS_QUICKJS='...'.
 #                        Evaluated by bash with $REPO and the variables below in scope.
+#   BENCH_TIMEOUT        if set, seconds after which any single arm run is killed (SIGALRM,
+#                        via `perl -e 'alarm ...; exec ...'`), so a hung run fails the
+#                        gate or the benchmark instead of stalling it
 
 set -euo pipefail
 
@@ -109,7 +112,15 @@ arm_var() { printf 'BENCH_CMD_%s' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"; }
 # `ts-bridge` uses the `run --runtime=bridge` form once the CLI has it and the
 # legacy `codemod-workflow <workflow.ts>` form until then (see probe_arm).
 q() { printf '%q' "$1"; }
+# With BENCH_TIMEOUT, the command is exec'd by perl after `alarm`, so the arm
+# itself is the process hyperfine waits on and SIGALRM ends it (exit 142).
 arm_command() {
+  if [ -n "${BENCH_TIMEOUT:-}" ]; then
+    printf "perl -e 'alarm shift; exec @ARGV or die' %s " "$(q "$BENCH_TIMEOUT")"
+  fi
+  arm_command_unbounded "$@"
+}
+arm_command_unbounded() {
   local arm="$1" repo="${2:-$REPO}" override
   override="$(arm_var "$arm")"
   if [ -n "${!override:-}" ]; then
@@ -152,10 +163,10 @@ arm_concurrency() {
       printf 'sequence(): one command at a time; each jssg command is one bridge process transforming its batch serially on 1 thread, one QuickJS runtime per file (file selection/reads/writes in Node)'
       ;;
     ts-node)
-      printf 'one Node process; workflow and every transform on the single JS thread, serially per file (the napi addon parses and selector-matches 64-file chunks on worker threads, one chunk ahead)'
+      printf 'one Node process; workflow and every transform on the single JS thread, serially per file (the napi addon walks/reads the selection natively and parses and selector-matches 64-file chunks on worker threads, one chunk ahead)'
       ;;
     ts-quickjs)
-      printf 'one QuickJS context in one Rust process (launched by Node, which reuses the cached bundle); workflow and every transform on the single JS thread, serially per file (Rust parses each file on that same thread)'
+      printf 'one QuickJS context in one Rust process (launched by Node, which reuses the cached bundle); workflow and every transform on the single JS thread, serially per file (native walk/reads on worker threads; Rust parses each file on the JS thread)'
       ;;
   esac
 }
