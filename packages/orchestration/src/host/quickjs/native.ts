@@ -61,10 +61,14 @@ export interface QuickjsNative {
    * canonical root, selector, every path contained). Throws on a bad batch.
    */
   jssgBegin(config: string, paths: string[]): { id: number; module: string };
-  /** `null`: the static selector skips the file. Otherwise the transform's `(root, options)`. */
-  jssgPrepare(batch: number, index: number, content: string): [unknown, unknown] | null;
-  /** The awaited transform result as `FileOutcome` JSON. Throws `JSSG failed for '<path>': ...`. */
-  jssgFinish(batch: number, index: number, result: unknown): string;
+  /** Roots of files `start ..< start + contents.length`; `null` where the static selector skips. */
+  jssgParse(batch: number, start: number, contents: string[]): unknown[];
+  /** Start one transform call (staging cleared, params set); the transform's `options`. */
+  jssgCall(batch: number): unknown;
+  /** End the call; keeps what it staged for `jssgFinish(batch, index, ...)`. */
+  jssgCallEnd(batch: number, index: number): void;
+  /** The awaited transform result as `FileOutcome` JSON (`undefined`: no edits, no output). Throws `JSSG failed for '<path>': ...`. */
+  jssgFinish(batch: number, index: number, root: unknown, result: unknown): string | undefined;
   jssgEnd(batch: number): void;
   jssgStats(): { prepareMs: number; finishMs: number; files: number; skipped: number };
 }

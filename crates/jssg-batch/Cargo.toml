@@ -1,0 +1,25 @@
+[package]
+name = "jssg-batch"
+version.workspace = true
+edition = "2021"
+authors.workspace = true
+description = "Binding-agnostic JSSG batch rules shared by every TypeScript orchestration runtime (bridge, node, quickjs): batch planning, path containment, selector skip, and transform result conversion"
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+# The compiled JSSG selector type held by `BatchPlan`.
+ast-grep-config = { workspace = true }
+ast-grep-core = { workspace = true }
+codemod-sandbox = { workspace = true, features = ["native"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+# Verifies that the artifact source in the request context is the one the
+# recorded command names.
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = { workspace = true }

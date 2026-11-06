@@ -14,35 +14,38 @@
 //! 2. [`install_context`] stores the per-run userdata those modules read
 //!    (target directory, staged writes, no dry run, no test mode) and
 //!    attaches the globals;
-//! 3. around every transform call, [`begin_file`] parses the file into an
-//!    `SgRoot` and builds the transform `options` exactly as the per-file
-//!    engine does, and [`finish_file`] turns the transform's return value
-//!    into the same [`CodemodOutput`] (string/null/`{ content, output }`
-//!    handling, `rename()`, staged `jssgTransform` changes).
+//! 3. [`root_value`] hands a parsed [`CoreRoot`] (the embedder parses, e.g.
+//!    with `jssg_batch::BatchPlan::parse`) to JavaScript as an `SgRoot`;
+//! 4. around every transform call, [`begin_call`] clears the staged-changes
+//!    accumulator, sets the params `jssgTransform` forwards, and builds the
+//!    transform `options` exactly as the per-file engine does;
+//!    [`end_call`] takes what the call staged; [`transform_output`] turns
+//!    the transform's return value into the same [`CodemodOutput`]
+//!    (string/null/`{ content, output }` handling, `rename()`, staged
+//!    `write()`/`jssgTransform` changes).
 //!
 //! Calls must be serialized: the staged-changes accumulator and the
-//! `jssgTransform` params are per context, so one file is in flight at a
-//! time (the embedder awaits each transform before beginning the next file).
-//! Semantic analysis is not wired here; roots get no semantic provider.
+//! `jssgTransform` params are per context, so one transform call is in
+//! flight at a time (between [`begin_call`] and [`end_call`]). Semantic
+//! analysis is not wired here; roots get no semantic provider.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use ast_grep_core::AstGrep;
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use rquickjs::loader::{Loader, Resolver};
-use rquickjs::{AsyncRuntime, Ctx, IntoJs, Value};
+use rquickjs::{AsyncRuntime, Class, Ctx, IntoJs, Value};
 
 use super::codemod_lang::CodemodLang;
 use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::execution_engine::{
-    CodemodOutput, DryRunExecutionFlag, ExecutionModeFlag, JssgExecutionContext, JssgFileChanges,
-    StageFileWrites, TargetDirectory,
+    CodemodOutput, DryRunExecutionFlag, ExecutionModeFlag, FileChange, JssgExecutionContext,
+    JssgFileChanges, StageFileWrites, TargetDirectory,
 };
 use super::transform_helpers::{
     build_transform_options, extract_transform_output, process_transform_result, ModificationCheck,
 };
-use crate::ast_grep::sg_core::{CoreRoot, RootOptions, SemanticSeam};
+use crate::ast_grep::sg_core::CoreRoot;
 use crate::ast_grep::sg_node::SgRootRjs;
 use crate::ast_grep::AstGrepModule;
 use crate::llm::LlmRuntimeContext;
@@ -140,60 +143,40 @@ pub fn install_context(
     Ok(())
 }
 
-/// One file between [`begin_file`] and [`finish_file`].
-pub struct EmbeddedFile {
-    root: CoreRoot,
-    content: String,
-    changes: JssgFileChanges,
+/// `root` as the transform's `SgRoot` argument.
+pub fn root_value<'js>(ctx: &Ctx<'js>, root: CoreRoot) -> Result<Value<'js>, ExecutionError> {
+    SgRootRjs::from_core(root)
+        .into_js(ctx)
+        .map_err(|e| init_error("SgRoot", e))
 }
 
-/// Parse `content` and build the transform's `(root, options)` arguments as
-/// the per-file engine does: `filename()` is the canonical `file_path`,
-/// `options` is `{ params, language, matches: undefined, matrixValues,
-/// dryRun: false, targetDir }`. Clears the staged-changes accumulator and
-/// sets the params `jssgTransform` forwards.
-pub fn begin_file<'js>(
+/// The core root behind an `SgRoot` value (as made by [`root_value`]).
+pub fn core_root(value: &Value<'_>) -> Option<CoreRoot> {
+    Class::<SgRootRjs>::from_value(value)
+        .ok()
+        .map(|root| root.borrow().core.clone())
+}
+
+/// Start one transform call: clear the staged-changes accumulator, set the
+/// params `jssgTransform` forwards, and build the transform `options` as the
+/// per-file engine does: `{ params, language, matches: undefined,
+/// matrixValues: undefined, dryRun: false, targetDir }`.
+pub fn begin_call<'js>(
     ctx: &Ctx<'js>,
     language: CodemodLang,
-    file_path: &Path,
-    content: &str,
     params: HashMap<String, serde_json::Value>,
-) -> Result<(EmbeddedFile, Value<'js>, Value<'js>), ExecutionError> {
+) -> Result<Value<'js>, ExecutionError> {
     let target = ctx
         .userdata::<TargetDirectory>()
         .map(|target| target.0.clone())
         .ok_or_else(|| init_error("install_context was not called", ()))?;
-    let changes = ctx
-        .userdata::<JssgFileChanges>()
-        .map(|changes| changes.clone())
-        .ok_or_else(|| init_error("install_context was not called", ()))?;
-    if let Ok(mut staged) = changes.changes.lock() {
-        staged.clear();
-    }
+    end_call(ctx);
     ctx.store_userdata(JssgExecutionContext {
         params: params.clone(),
         matrix_values: None,
     })
     .map_err(|e| init_error("JssgExecutionContext", e))?;
-
-    let file_name = file_path
-        .canonicalize()
-        .unwrap_or_else(|_| file_path.to_path_buf())
-        .to_string_lossy()
-        .into_owned();
-    let root = CoreRoot::from_ast_grep(
-        AstGrep::new(content, language),
-        RootOptions {
-            filename: Some(file_name.clone()),
-            target_directory: Some(target.as_path()),
-            semantic: SemanticSeam::from_provider(None),
-            current_file_path: Some(file_name),
-        },
-    );
-    let root_js = SgRootRjs::from_core(root.clone())
-        .into_js(ctx)
-        .map_err(|e| init_error("SgRoot", e))?;
-    let options = build_transform_options(
+    build_transform_options(
         ctx,
         params,
         &language.to_string(),
@@ -201,39 +184,41 @@ pub fn begin_file<'js>(
         None,
         false,
         &target.to_string_lossy(),
-    )?;
-    Ok((
-        EmbeddedFile {
-            root,
-            content: content.to_string(),
-            changes,
-        },
-        root_js,
-        options,
-    ))
+    )
 }
 
-/// The transform's (awaited) return value as a [`CodemodOutput`], exactly as
-/// the per-file engine converts it.
-pub fn finish_file<'js>(
+/// End the transform call: the `write()` / `jssgTransform()` changes it
+/// staged, in order.
+pub fn end_call(ctx: &Ctx<'_>) -> Vec<FileChange> {
+    ctx.userdata::<JssgFileChanges>()
+        .and_then(|changes| {
+            changes
+                .changes
+                .lock()
+                .map(|mut staged| std::mem::take(&mut *staged))
+                .ok()
+        })
+        .unwrap_or_default()
+}
+
+/// The transform's (awaited) return value on `root`, with the changes the
+/// call staged, as a [`CodemodOutput`], exactly as the per-file engine
+/// converts it.
+pub fn transform_output<'js>(
     ctx: &Ctx<'js>,
-    file: EmbeddedFile,
+    root: &CoreRoot,
     result: Value<'js>,
+    secondary: Vec<FileChange>,
 ) -> Result<CodemodOutput, ExecutionError> {
     let (content, output) = extract_transform_output(ctx, result)?;
+    let original = root.source();
     let primary = process_transform_result(
         &content,
-        &file.root,
+        root,
         ModificationCheck::StringEquality {
-            original_content: &file.content,
+            original_content: &original,
         },
     )?;
-    let secondary = file
-        .changes
-        .changes
-        .lock()
-        .map(|mut staged| std::mem::take(&mut *staged))
-        .unwrap_or_default();
     Ok(CodemodOutput {
         primary,
         secondary,

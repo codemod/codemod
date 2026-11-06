@@ -9,17 +9,17 @@
 //!   (`crates/codemod-sandbox/src/ast_grep/sg_node.rs`). `jssgTransform` is
 //!   implemented in JavaScript by `packages/jssg-napi` on top of the engine
 //!   helpers below.
-//! * Engine helpers (`engine*` exports, the `Selector` class) used by the
-//!   in-process JSSG batch runner of the orchestration `node` runtime: batch
-//!   parsing off the JS thread (in parallel), the static selector test, the
-//!   per-file execution context that stages `write()` / `jssgTransform()`
-//!   edits instead of touching the disk, and reading a root's `rename()`
-//!   target.
+//! * Engine helpers used by the orchestration `node` runtime's in-process
+//!   JSSG batches: the `JssgBatch` class (see [`batch`]: the bridge's own
+//!   batch rules from `crates/jssg-batch`, parsing off the JS thread, result
+//!   conversion), and the per-call execution context that stages
+//!   `write()` / `jssgTransform()` edits instead of touching the disk
+//!   (`engine*` exports).
 //!
 //! Every method is a thin adapter: convert arguments, call the core, convert
 //! the result, map [`CoreError`] to a JS `Error` / `TypeError`. Nodes are not
 //! `Send` and are only created and used on the JS thread; roots are
-//! `Send + Sync` and are parsed on worker threads by [`engine_parse_batch`].
+//! `Send + Sync` and are parsed on worker threads by [`JssgBatch::parse`].
 //!
 //! Semantic analysis (`definition()` / `references()` / `typeInfo()`) goes
 //! through the core's semantic seam. Roots made here have no provider, so
@@ -32,14 +32,11 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
 
-use ast_grep_config::RuleConfig;
-use ast_grep_core::matcher::MatcherExt;
-use codemod_sandbox::sandbox::engine::selector_from_value;
+use codemod_sandbox::sandbox::engine::{ExecutionResult, FileChange, ModifiedResult};
 use codemod_sandbox::sg_core::{
     check_within_target, compile_matcher, CoreError, CoreErrorKind, CoreLang, CoreMatcher,
-    CoreNode, CoreRoot, DefinitionOptions, Edit, MatcherInput, RootOptions,
+    CoreNode, CoreRoot, DefinitionOptions, Edit, MatcherInput,
 };
 use codemod_sandbox::CodemodLang;
 use napi::bindgen_prelude::*;
@@ -67,20 +64,13 @@ fn core_error(env: &Env, error: CoreError) -> Error {
 // Per-file execution context (engine)
 // ---------------------------------------------------------------------------
 
-/// A change `write()` or `jssgTransform()` asked for while a transform ran.
-/// `content: null` is a file `jssgTransform()` left unmodified (its path is
-/// still validated by the batch runner, as the bridge does).
-#[napi(object)]
-pub struct StagedChange {
-    pub path: String,
-    pub content: Option<String>,
-    #[napi(js_name = "renameTo")]
-    pub rename_to: Option<String>,
-}
+mod batch;
+
+pub use batch::{JssgBatch, StagedChanges};
 
 struct ExecutionContext {
     target_dir: PathBuf,
-    changes: Vec<StagedChange>,
+    changes: Vec<FileChange>,
 }
 
 thread_local! {
@@ -105,33 +95,36 @@ pub fn engine_begin(target_dir: String) {
     });
 }
 
-/// End the current transform call and return its staged changes in order.
+/// End the current transform call and return what it staged, in order
+/// (opaque; `JssgBatch.finish` consumes it), or `null` when it staged
+/// nothing (no object per call in the common case).
 #[napi(js_name = "engineEnd")]
-pub fn engine_end() -> Vec<StagedChange> {
-    CONTEXT.with(|context| {
+pub fn engine_end() -> Option<StagedChanges> {
+    let changes = CONTEXT.with(|context| {
         context
             .borrow_mut()
             .take()
             .map(|c| c.changes)
             .unwrap_or_default()
-    })
+    });
+    (!changes.is_empty()).then_some(StagedChanges { changes })
 }
 
-/// Stage a change produced outside Rust (`jssgTransform()`).
-#[napi(js_name = "engineStage")]
-pub fn engine_stage(
+/// `jssgTransform()`: stage the inner transform's awaited `result` for the
+/// file at `path` parsed as `root`, with the sandbox's result rules.
+/// Returns the new content, or `null` when the file is unmodified.
+#[napi(js_name = "engineStageResult")]
+pub fn engine_stage_result(
     path: String,
-    content: Option<String>,
-    rename_to: Option<String>,
-) -> Result<()> {
+    root: &SgRoot,
+    result: Unknown<'_>,
+) -> Result<Option<String>> {
+    let (modified, change) =
+        batch::stage_secondary(path, &root.core, result).map_err(Error::from_reason)?;
     CONTEXT.with(|context| match context.borrow_mut().as_mut() {
         Some(context) => {
-            context.changes.push(StagedChange {
-                path,
-                content,
-                rename_to,
-            });
-            Ok(())
+            context.changes.push(change);
+            Ok(modified)
         }
         None => Err(Error::from_reason(
             "jssgTransform() can only be called while a transform runs",
@@ -153,18 +146,6 @@ pub fn engine_check_within_target(path: String, caller: String) -> Result<()> {
 #[napi(js_name = "engineTargetDir")]
 pub fn engine_target_dir() -> Option<String> {
     with_target(|target| target.map(|t| t.to_string_lossy().into_owned()))
-}
-
-/// Absolute `rename()` target recorded on `root`, if any.
-#[napi(js_name = "engineRenameTo")]
-pub fn engine_rename_to(root: &SgRoot) -> Option<String> {
-    root.core.rename_to()
-}
-
-/// The full source `root` was parsed from.
-#[napi(js_name = "engineSource")]
-pub fn engine_source(root: &SgRoot) -> String {
-    root.core.source()
 }
 
 fn parse_lang(lang: &str) -> std::result::Result<CoreLang, String> {
@@ -196,162 +177,6 @@ pub fn engine_parse_with_path(
     )
     .map(SgRoot::from_core)
     .map_err(|e| Error::from_reason(format!("Failed to parse: {e}")))
-}
-
-/// A compiled static JSSG selector (`operation.selector`).
-#[napi]
-pub struct Selector {
-    rule: Arc<RuleConfig<CoreLang>>,
-}
-
-#[napi]
-impl Selector {
-    #[napi(constructor)]
-    pub fn new(lang: String, rule: serde_json::Value) -> Result<Self> {
-        let language = parse_lang(&lang).map_err(Error::from_reason)?;
-        selector_from_value(language, rule)
-            .map(|rule| Selector {
-                rule: Arc::new(rule),
-            })
-            .map_err(|e| Error::from_reason(format!("invalid JSSG selector: {e}")))
-    }
-
-    /// True when some node of `root` matches (the bridge's prefilter).
-    #[napi]
-    pub fn test(&self, root: &SgRoot) -> bool {
-        selector_hits(&self.rule, &root.core)
-    }
-}
-
-fn selector_hits(rule: &RuleConfig<CoreLang>, root: &CoreRoot) -> bool {
-    root.ast_grep()
-        .root()
-        .dfs()
-        .any(|node| rule.matcher.match_node(node).is_some())
-}
-
-/// One parsed batch: a root per file, or `null` where the selector skipped it.
-pub struct ParseBatch {
-    lang: CoreLang,
-    target_dir: PathBuf,
-    paths: Vec<String>,
-    contents: Vec<String>,
-    selector: Option<Arc<RuleConfig<CoreLang>>>,
-}
-
-impl ParseBatch {
-    fn parse_one(&self, index: usize) -> std::result::Result<Option<CoreRoot>, String> {
-        let relative = &self.paths[index];
-        let path = Path::new(relative);
-        if relative.trim().is_empty()
-            || path.has_root()
-            || relative.starts_with(['/', '\\'])
-            || path
-                .components()
-                .any(|c| !matches!(c, std::path::Component::Normal(_)))
-        {
-            return Err(format!(
-                "file path '{relative}' must be a safe relative path"
-            ));
-        }
-        let joined = self.target_dir.join(relative);
-        let filename = joined.canonicalize().unwrap_or(joined);
-        if !filename.starts_with(&self.target_dir) {
-            return Err(format!("file path '{relative}' escapes the target root"));
-        }
-        let filename = filename.to_string_lossy().into_owned();
-        let grep = ast_grep_core::AstGrep::new(self.contents[index].as_str(), self.lang);
-        let root = CoreRoot::from_ast_grep(
-            grep,
-            RootOptions {
-                filename: Some(filename.clone()),
-                target_directory: Some(&self.target_dir),
-                current_file_path: Some(filename),
-                ..Default::default()
-            },
-        );
-        Ok(match &self.selector {
-            Some(rule) if !selector_hits(rule, &root) => None,
-            _ => Some(root),
-        })
-    }
-}
-
-impl Task for ParseBatch {
-    type Output = Vec<Option<CoreRoot>>;
-    type JsValue = Vec<Option<SgRoot>>;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        let len = self.paths.len();
-        let threads = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1)
-            .min(len.div_ceil(4))
-            .max(1);
-        let this = &*self;
-        let chunk = len.div_ceil(threads).max(1);
-        let results: Vec<std::result::Result<Vec<Option<CoreRoot>>, String>> =
-            std::thread::scope(|scope| {
-                let handles: Vec<_> = (0..len)
-                    .step_by(chunk)
-                    .map(|start| {
-                        scope.spawn(move || {
-                            (start..(start + chunk).min(len))
-                                .map(|index| this.parse_one(index))
-                                .collect::<std::result::Result<Vec<_>, _>>()
-                        })
-                    })
-                    .collect();
-                handles
-                    .into_iter()
-                    .map(|handle| {
-                        handle
-                            .join()
-                            .unwrap_or_else(|_| Err("parser thread panicked".to_string()))
-                    })
-                    .collect()
-            });
-        let mut roots = Vec::with_capacity(len);
-        for part in results {
-            roots.extend(part.map_err(Error::from_reason)?);
-        }
-        Ok(roots)
-    }
-
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
-        Ok(output
-            .into_iter()
-            .map(|root| root.map(SgRoot::from_core))
-            .collect())
-    }
-}
-
-/// Parse a batch of target-root-relative files off the JS thread (in
-/// parallel). Each root's filename is the file's real path and it records
-/// `targetDir` for `relativeFilename()`; with a selector, files it does not
-/// match come back as `null` without ever reaching JavaScript.
-#[napi(
-    js_name = "engineParseBatch",
-    ts_return_type = "Promise<Array<SgRoot | null>>"
-)]
-pub fn engine_parse_batch(
-    lang: String,
-    target_dir: String,
-    paths: Vec<String>,
-    contents: Vec<String>,
-    selector: Option<&Selector>,
-) -> Result<AsyncTask<ParseBatch>> {
-    if paths.len() != contents.len() {
-        return Err(Error::from_reason("paths and contents differ in length"));
-    }
-    let lang = parse_lang(&lang).map_err(Error::from_reason)?;
-    Ok(AsyncTask::new(ParseBatch {
-        lang,
-        target_dir: PathBuf::from(target_dir),
-        paths,
-        contents,
-        selector: selector.map(|s| Arc::clone(&s.rule)),
-    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -526,10 +351,12 @@ impl SgRoot {
             };
             check_within_target(&context.target_dir, path, "write()")
                 .map_err(|e| core_error(&env, e))?;
-            context.changes.push(StagedChange {
-                path: file_path.clone(),
-                content: Some(content.clone()),
-                rename_to: None,
+            context.changes.push(FileChange {
+                path: PathBuf::from(&file_path),
+                result: ExecutionResult::Modified(ModifiedResult {
+                    content: content.clone(),
+                    rename_to: None,
+                }),
             });
             Ok(true)
         })?;
@@ -836,99 +663,5 @@ impl SgNode {
             return Ok(None);
         };
         request.type_info().map_err(|e| core_error(&env, e))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn batch(root: &Path, files: &[(&str, &str)], selector: Option<&str>) -> ParseBatch {
-        let lang = parse_lang("typescript").unwrap();
-        ParseBatch {
-            lang,
-            target_dir: root.to_path_buf(),
-            paths: files.iter().map(|(p, _)| p.to_string()).collect(),
-            contents: files.iter().map(|(_, c)| c.to_string()).collect(),
-            selector: selector.map(|pattern| {
-                Arc::new(
-                    selector_from_value(
-                        lang,
-                        serde_json::json!({ "rule": { "pattern": pattern } }),
-                    )
-                    .unwrap(),
-                )
-            }),
-        }
-    }
-
-    #[test]
-    fn parses_in_parallel_in_order_and_applies_the_selector() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
-        let files: Vec<(String, String)> = (0..37)
-            .map(|i| {
-                let content = if i % 3 == 0 {
-                    format!("oldApi({i});\n")
-                } else {
-                    format!("other({i});\n")
-                };
-                (format!("dir/f{i}.ts"), content)
-            })
-            .collect();
-        std::fs::create_dir_all(root.join("dir")).unwrap();
-        for (path, content) in &files {
-            std::fs::write(root.join(path), content).unwrap();
-        }
-        let refs: Vec<(&str, &str)> = files
-            .iter()
-            .map(|(p, c)| (p.as_str(), c.as_str()))
-            .collect();
-        let roots = batch(&root, &refs, Some("oldApi($A)")).compute().unwrap();
-        assert_eq!(roots.len(), files.len());
-        for (i, root_handle) in roots.iter().enumerate() {
-            assert_eq!(root_handle.is_some(), i % 3 == 0, "file {i}");
-            if let Some(parsed) = root_handle {
-                assert_eq!(
-                    parsed.relative_filename(),
-                    Some(format!("dir/f{i}.ts").as_str())
-                );
-                assert_eq!(parsed.source(), files[i].1);
-            }
-        }
-        let all = batch(&root, &refs, None).compute().unwrap();
-        assert!(all.iter().all(Option::is_some));
-    }
-
-    #[test]
-    fn refuses_paths_outside_the_root() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
-        for path in ["../x.ts", "/etc/passwd", "a/../../x.ts", ""] {
-            let error = batch(&root, &[(path, "x")], None)
-                .compute()
-                .err()
-                .unwrap_or_else(|| panic!("{path:?} was accepted"));
-            assert!(
-                error.reason.contains("safe relative path"),
-                "{}",
-                error.reason
-            );
-        }
-        #[cfg(unix)]
-        {
-            let outside = tempfile::tempdir().unwrap();
-            std::fs::write(outside.path().join("x.ts"), "x").unwrap();
-            std::os::unix::fs::symlink(outside.path(), root.join("link")).unwrap();
-            let error = batch(&root, &[("link/x.ts", "x")], None)
-                .compute()
-                .err()
-                .unwrap();
-            assert!(
-                error.reason.contains("escapes the target root"),
-                "{}",
-                error.reason
-            );
-        }
     }
 }

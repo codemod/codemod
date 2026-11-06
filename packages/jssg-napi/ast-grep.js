@@ -11,19 +11,6 @@ const native = loadBinding();
 
 export const { SgRoot, SgNode, parse, parseAsync, parseFile, kind } = native;
 
-function quickJsTypeName(value) {
-  switch (typeof value) {
-    case "number":
-      return Number.isInteger(value) ? "int" : "float";
-    case "boolean":
-      return "bool";
-    case "bigint":
-      return "big_int";
-    default:
-      return typeof value;
-  }
-}
-
 /**
  * `jssgTransform(transformFn, pathToFile, language)`: parse another file in
  * the target directory, run `transformFn` on it, and stage the result as a
@@ -63,24 +50,8 @@ export function jssgTransform(transformFn, pathToFile, language) {
     } catch (error) {
       throw new Error(`Transform failed: ${error instanceof Error ? error.message : error}`);
     }
-    if (typeof result === "object" && result !== null) {
-      throw new Error(
-        "jssgTransform() transforms must return a string or null; structured { content, output } results are only supported from the top-level transform",
-      );
-    }
-    const renameTo = native.engineRenameTo(root) ?? null;
-    let modified;
-    if (typeof result === "string") {
-      modified = result !== content || renameTo !== null ? result : null;
-    } else if (result === null || result === undefined) {
-      modified = renameTo !== null ? content : null;
-    } else {
-      throw new Error(
-        `Transform result error: Codemod transform functions must return either a string or null/undefined. Received ${quickJsTypeName(result)}`,
-      );
-    }
-    native.engineStage(pathToFile, modified, modified === null ? null : renameTo);
-    return modified;
+    // The sandbox's result rules, in Rust: staged as a secondary change.
+    return native.engineStageResult(pathToFile, root, result);
   })();
 }
 

@@ -3,7 +3,8 @@
  * in-process (each artifact module evaluated once per run, cached by hash)
  * over the napi-rs ast-grep addon (`@codemod.com/jssg-napi`), through the
  * portable orchestrator (`execution/jssg.ts::executeJssgCommand` with the
- * in-process dispatch of `execution/jssg-inprocess.ts`); `shell` runs
+ * portable batch loop of `execution/jssg-batch.ts`, whose batch rules are
+ * the bridge's own Rust through the addon's `JssgBatch`); `shell` runs
  * through the host (`execution/shell.ts::executeShell`). `agent`,
  * `assessment`, and JSSG semantic analysis are refused by the capability
  * contract (`NODE_RUNTIME`) before anything executes.
@@ -17,7 +18,7 @@
 import { bindingPath, isAvailable } from "@codemod.com/jssg-napi";
 import type { ArtifactStore } from "../../bundle/build.ts";
 import { executeJssgCommand, type JssgDispatch } from "../../execution/jssg.ts";
-import { createInProcessJssgDispatch } from "../../execution/jssg-inprocess.ts";
+import { createJssgBatchDispatch } from "../../execution/jssg-batch.ts";
 import type { OperationExecutor } from "../../execution/operation-executor.ts";
 import { executeShell } from "../../execution/shell.ts";
 import {
@@ -51,7 +52,7 @@ export class NodeExecutor implements OperationExecutor {
 
   constructor(private readonly options: NodeExecutorOptions) {
     const { profile } = options;
-    const dispatch = createInProcessJssgDispatch({
+    const dispatch = createJssgBatchDispatch({
       engine: createNapiJssgEngine(),
       ...(profile === undefined
         ? {}

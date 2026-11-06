@@ -10,24 +10,23 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-# The compiled JSSG selector type held by `jssg::BatchPlan`.
-ast-grep-config = { workspace = true }
 butterflow-models = { workspace = true }
 codemod-ai = { path = "../ai" }
 butterflow-runners = { workspace = true }
+# The JSSG batch rules shared with the in-process runtimes.
+jssg-batch = { workspace = true }
 codemod-sandbox = { workspace = true, features = ["native"] }
 language-core = { workspace = true }
 semantic-factory = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# Verifies that the artifact source in the request context is the one the
-# recorded command names.
-sha2 = "0.10"
 # A private directory for the Codex last-message file.
 tempfile = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+# Hashes fixture transform sources.
+sha2 = "0.10"
 # Only the walker parity contract uses the walker; the bridge itself never
 # enumerates a repository.
 ignore = { workspace = true }

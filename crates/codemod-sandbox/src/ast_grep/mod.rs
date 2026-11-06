@@ -32,7 +32,10 @@ use crate::{
             validate_path_within_target, DryRunExecutionFlag, FileChange, JssgExecutionContext,
             JssgFileChanges,
         },
-        transform_helpers::{build_transform_options, process_transform_result, ModificationCheck},
+        transform_helpers::{
+            build_transform_options, process_transform_result, ModificationCheck,
+            SECONDARY_STRUCTURED_RESULT,
+        },
         ExecutionModeFlag,
     },
     utils::quickjs_utils::maybe_promise,
@@ -265,10 +268,7 @@ fn jssg_transform_rjs<'js>(
         // transform has nowhere to deliver structured data, so it is rejected
         // rather than silently discarded.
         if result.is_object() {
-            return Err(Exception::throw_message(
-                &ctx2,
-                "jssgTransform() transforms must return a string or null; structured { content, output } results are only supported from the top-level transform",
-            ));
+            return Err(Exception::throw_message(&ctx2, SECONDARY_STRUCTURED_RESULT));
         }
 
         let exec_result = process_transform_result(

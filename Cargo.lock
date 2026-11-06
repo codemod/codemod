@@ -749,12 +749,12 @@ dependencies = [
 name = "butterflow-execution-bridge"
 version = "1.13.18"
 dependencies = [
- "ast-grep-config",
  "butterflow-models",
  "butterflow-runners",
  "codemod-ai",
  "codemod-sandbox",
  "ignore",
+ "jssg-batch",
  "language-core",
  "semantic-factory",
  "serde",
@@ -3471,16 +3471,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "jssg-batch"
+version = "1.13.18"
+dependencies = [
+ "ast-grep-config",
+ "ast-grep-core",
+ "codemod-sandbox",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "jssg-napi"
 version = "1.13.18"
 dependencies = [
  "ast-grep-config",
  "ast-grep-core",
  "codemod-sandbox",
+ "jssg-batch",
  "napi",
  "napi-build",
  "napi-derive",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 
@@ -4841,8 +4856,8 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 name = "orchestration-quickjs-host"
 version = "1.13.18"
 dependencies = [
- "butterflow-execution-bridge",
  "codemod-sandbox",
+ "jssg-batch",
  "libc",
  "rquickjs",
  "serde",

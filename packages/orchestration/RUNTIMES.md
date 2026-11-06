@@ -32,9 +32,10 @@ createHarness({ runtime: "node" })                   // tests
 | `src/execution/jssg.ts` | portable `executeJssgCommand({ ..., dispatch, host })` |
 | `src/execution/bridge.ts` | `executeJssg` = `executeJssgCommand` with `spawnBridge` as `dispatch` |
 | `src/execution/shell.ts` | portable `executeShell` with DirectRunner semantics |
-| `src/execution/jssg-inprocess.ts` | portable in-process `JssgDispatch` over a `JssgEngine` (see "The `node` runtime") |
-| `src/host/runtimes/node-jssg.ts` | the napi-backed `JssgEngine` (`@codemod.com/jssg-napi`) |
-| `packages/jssg-napi`, `crates/jssg-napi` | the napi-rs addon: `SgRoot`/`SgNode` over `sg_core`, batch parse, staging |
+| `src/execution/jssg-batch.ts` | the portable JSSG batch loop of both in-process runtimes, over a `JssgBatchEngine` (see "JSSG batches in-process") |
+| `src/host/runtimes/node-jssg.ts` | the napi-backed `JssgBatchEngine` (`@codemod.com/jssg-napi`) |
+| `packages/jssg-napi`, `crates/jssg-napi` | the napi-rs addon: `SgRoot`/`SgNode` over `sg_core`, `JssgBatch` over `jssg-batch`, staging |
+| `crates/jssg-batch` | the JSSG batch rules every runtime shares: `BatchPlan` (planning, containment, selector skip, parse, result conversion) |
 | `src/runtime/capabilities.ts` | runtime descriptors, `CapabilityExecutor`, `assertRuntimeSupports` |
 | `src/host/runtimes/types.ts` | `RuntimeProvider` contract |
 | `src/host/runtimes/{bridge,node,quickjs}.ts` | one provider per runtime |
@@ -42,10 +43,10 @@ createHarness({ runtime: "node" })                   // tests
 | `src/portable.ts` | `@codemod.com/orchestration/portable`: the Node-free API |
 | `tests/portable.test.ts` | static import scan of everything reachable from `portable.ts` and `host/quickjs/entry.ts` |
 | `src/host/quickjs-bundle.ts` | Node: `buildQuickjsBundle`, `cachedQuickjsBundle` (esbuild) |
-| `src/host/quickjs/{entry,host,dispatch,async-context,native}.ts` | runs inside QuickJS: bundle entry, `Host`, in-context JSSG dispatch, async context, the Rust primitives' types |
+| `src/host/quickjs/{entry,host,dispatch,async-context,native}.ts` | runs inside QuickJS: bundle entry, `Host`, the in-context `JssgBatchEngine`, async context, the Rust primitives' types |
 | `crates/orchestration-quickjs-host` | the Rust binary: one runtime + one context, Rust primitives, JSSG per-file calls |
-| `crates/codemod-sandbox/src/sandbox/engine/embedded.rs` | JSSG in an embedder-owned context: built-in modules, userdata, `begin_file`/`finish_file` |
-| `crates/execution-bridge/src/jssg.rs` | `BatchPlan` (shared batch setup + `FileOutcome` conversion) |
+| `crates/codemod-sandbox/src/sandbox/engine/embedded.rs` | JSSG in an embedder-owned context: built-in modules, userdata, `begin_call`/`end_call`/`transform_output` |
+| `crates/execution-bridge/src/jssg.rs` | the bridge's batch: `BatchPlan` + a fresh sandbox runtime per file + semantic analysis |
 
 ## The quickjs runtime
 
@@ -56,9 +57,11 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
     Rust: AsyncRuntime + ONE AsyncContext; transform built-ins (codemod:ast-grep over sg_core, ...)
           + LLRT globals; globalThis.__codemodQuickjsNative (fs, env, clock, spawn, jssg*)
     JS:   bundle entry installs Host + async context; run(workflow, { executor, runtime: QUICKJS_RUNTIME })
-          jssg  -> executeJssgCommand({ dispatch }) -> per file: jssgPrepare (Rust parse) ->
-                   transform(root, options) (artifact module, evaluated once per run) ->
-                   jssgFinish (Rust, the bridge's convert) -> select/stage/commit unchanged
+          jssg  -> executeJssgCommand({ dispatch }) -> the shared batch loop (jssg-batch.ts):
+                   jssgBegin (Rust BatchPlan) -> per chunk jssgParse (Rust parse + selector) ->
+                   per file jssgCall / transform(root, options) (artifact module, evaluated
+                   once per run) / jssgCallEnd -> jssgFinish (Rust, the bridge's convert)
+                   -> select/stage/commit unchanged
           shell -> executeShell over Host.spawn (Rust: own process group, merged pipe, SIGKILL on abort)
 ```
 
@@ -73,7 +76,8 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
   unsupported, as in the other in-process runtime. Each file gets the same `SgRoot`,
   `options` (`params.input`, `language`, `targetDir`, `dryRun: false`), string/null/
   `{ content, output }` handling, `rename()`, staged `jssgTransform`, and path validation as
-  the bridge (shared Rust code). Batches run one at a time; files serially.
+  the bridge (shared Rust code, `crates/jssg-batch`). Transform calls run one at a time
+  across the run; files serially.
 - **Unsupported:** `agent`/`assessment` (`UnsupportedInRuntimeError`, statically or as a
   `config` failure), JSSG semantic analysis (`JSSG semantic analysis is unsupported in
   runtime 'quickjs'`, also refused by `BatchPlan` in Rust).
@@ -242,30 +246,52 @@ result). Adding a runtime needs no CLI change.
 `src/host/runtimes/node.ts`: `availability` checks for the addon
 (`CODEMOD_JSSG_NAPI` or `packages/jssg-napi/jssg-napi.<platform>-<arch>.node`); `NodeExecutor`
 routes `shell` to `executeShell` and `jssg` to `executeJssgCommand({ dispatch })` with the
-dispatch from `createInProcessJssgDispatch({ engine: createNapiJssgEngine() })`, one per run.
+dispatch from `createJssgBatchDispatch({ engine: createNapiJssgEngine() })`, one per run.
 Selection, reads, staging, conflict checks, and the commit are the unchanged portable code.
 
-The batch runner (`src/execution/jssg-inprocess.ts`, portable, reusable by any host that
-implements `JssgEngine`) is `crates/execution-bridge/src/jssg.rs::transform_batch` in
-TypeScript:
+## JSSG batches in-process
 
-- the artifact module is evaluated once per run, cached by hash, lazily (only when a file
-  reaches a transform). Node: `@codemod.com/jssg-napi/loader` verifies the SHA-256, serves
-  the source from memory through `node:module` `registerHooks` under
-  `codemod-artifact:<run>/<name>-<hash>.mjs`, resolves `codemod:ast-grep` to the addon-backed
-  module, and refuses every other `codemod:*` module (`module 'codemod:x' is unsupported in
-  runtime 'node'`). Node built-ins a bundle left external resolve to Node's (the bridge
-  serves its own `fs`/`path`; transforms should not rely on either);
-- files are parsed in Rust on worker threads in chunks of 64, one chunk ahead of the
-  transforms; the static selector is tested there too, so a skipped file never reaches JS;
+Both in-process runtimes run JSSG batches through one portable loop,
+`src/execution/jssg-batch.ts` (`createJssgBatchDispatch({ engine })`), and every rule of a
+batch is the bridge's own Rust, in one place: `crates/jssg-batch` (`BatchPlan`), used by
+the bridge (`crates/execution-bridge`), the QuickJS host (`crates/orchestration-quickjs-host`),
+and the napi addon (`crates/jssg-napi`). No runtime re-implements them in TypeScript.
+
+| Step | Rust (`jssg-batch`) | `node` (napi `JssgBatch`) | `quickjs` (host primitives) |
+| --- | --- | --- | --- |
+| plan: hash check, canonical root, every path a safe relative path, language, selector, params; semantic analysis refused | `BatchPlan::for_paths(.., Containment::PerFile)` | `new JssgBatch(config, paths)` | `jssgBegin` |
+| contain each path in the root (`stat` + `realpath`), then parse a chunk (64 files); `null` where the selector matches nothing | `BatchPlan::parse` | `parse(start, contents)`: worker threads, one chunk ahead | `jssgParse`: on the JS thread |
+| call the transform, staging `write()`/`jssgTransform()` | (sandbox result rules) | `runTransform` + options (built once per batch, copied per file) | `jssgCall` / `jssgCallEnd` |
+| result -> `FileOutcome` (string/null/`{ content, output }`, rename, `/` paths after containment) | `classify_transform_result` + `BatchPlan::finish` | `finish(index, root, result, staged)` (`null`: no edits, no output) | `jssgFinish` |
+
+Containment timing is the only difference from the bridge, which resolves every path while
+planning (`Containment::Upfront`; its semantic index needs them). In-process, a path is
+contained right before its file is parsed, so the filesystem calls overlap the transforms of
+the previous chunk; a path that escapes still fails the command before that file reaches a
+transform, and nothing is written unless every file passed.
+
+The loop owns only chunking, cancellation between files, evaluating each artifact once per
+run (cached by hash, lazily: only when a file reaches a transform), and turning failures into
+a `failed` completion. The bindings only read the transform's JavaScript return value into
+plain data (`ReturnedContent` + output JSON, the rquickjs and napi readers mirror each other).
+`tests/jssg-parity.e2e.test.ts` runs edge cases (results of every type, structured outputs,
+throws, the selector skip, multiple and staged edits, renames and writes escaping the root,
+also through a symlink) through all three runtimes and requires identical outputs, trees, and
+errors.
+
+The `node` engine:
+
+- the artifact module is evaluated once per run. Node: `@codemod.com/jssg-napi/loader`
+  verifies the SHA-256, serves the source from memory through `node:module` `registerHooks`
+  under `codemod-artifact:<run>/<name>-<hash>.mjs`, resolves `codemod:ast-grep` to the
+  addon-backed module, and refuses every other `codemod:*` module (`module 'codemod:x' is
+  unsupported in runtime 'node'`). Node built-ins a bundle left external resolve to Node's
+  (the bridge serves its own `fs`/`path`; transforms should not rely on either);
 - transforms run serially on the JS thread, one at a time across concurrent commands
   (`runTransform` is a process-wide queue), with the sandbox's options
   (`{ params, language, matches: undefined, matrixValues: undefined, dryRun: false, targetDir }`);
 - `write()` and `jssgTransform()` are staged (never written) and contained to the target
-  root, as `stage_writes: true` does in the bridge; `rename()` is contained the same way;
-- results map to `FileOutcome`s with the bridge's rules (string/null/`{ content, output }`,
-  rename keeps content, `normalize_output` containment and `/` paths for secondary edits
-  and renames).
+  root, as `stage_writes: true` does in the bridge; `rename()` is contained the same way.
 
 Differences from `bridge`, by design: module-level state in a transform persists across the
 files and commands of one run (it is unsupported either way; the bridge starts a fresh

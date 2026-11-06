@@ -108,51 +108,11 @@ pub enum AssessmentQuestion {
     },
 }
 
-/// Build-time identity of one transform artifact: the definition's `name`
-/// and the lowercase hex SHA-256 of the bundled source. No path, so the
-/// recorded command is the same on every checkout.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ArtifactRef {
-    pub name: String,
-    pub hash: String,
-}
-
-/// The ast-grep rule data a definition declares as its selector. Only the
-/// matching fields are accepted; `id` and `language` are set by the bridge.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Selector {
-    pub rule: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub constraints: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub utils: Option<Value>,
-}
-
-/// `"file"`, `"workspace"`, or `{ mode, root? }` where `root` is a safe
-/// relative path beneath the target root and requires workspace mode.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum SemanticAnalysis {
-    Mode(SemanticMode),
-    Detailed(SemanticAnalysisDetails),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SemanticAnalysisDetails {
-    pub mode: SemanticMode,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SemanticMode {
-    File,
-    Workspace,
-}
+// The JSSG batch's protocol data is shared with every in-process runtime
+// (`crates/jssg-batch`); re-exported so the bridge's wire types stay here.
+pub use jssg_batch::{
+    ArtifactRef, BatchFile, Selector, SemanticAnalysis, SemanticAnalysisDetails, SemanticMode,
+};
 
 /// Mirrors `Target` in `protocol.ts`. Interpreted only by TypeScript.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -189,14 +149,6 @@ pub struct RequestContext {
 #[serde(deny_unknown_fields)]
 pub struct ArtifactSource {
     pub source: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BatchFile {
-    /// Safe relative path beneath the target root.
-    pub path: String,
-    pub content: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
