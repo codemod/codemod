@@ -206,11 +206,26 @@ pub enum SemanticScope {
     Workspace(PathBuf),
 }
 
+/// When a batch's file paths are resolved inside the root (a `stat` and a
+/// `realpath` each). Every path is checked syntactically (a safe relative
+/// path) while planning either way, and nothing is ever written unless every
+/// file of the batch passed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Containment {
+    /// All of them while planning, before anything runs (the bridge, whose
+    /// semantic index needs every source path up front).
+    Upfront,
+    /// Each in [`BatchPlan::parse`], before that file can reach a transform:
+    /// the in-process runtimes parse on worker threads a chunk ahead, so the
+    /// filesystem calls overlap the transforms instead of preceding them.
+    PerFile,
+}
+
 /// Everything a batch needs before its first transform runs, shared by every
 /// batch runner: the canonical target root, the hash-verified artifact, the
 /// language, the compiled selector, the transform params, the semantic
-/// scope, and every file path resolved inside the root. Building it fails
-/// before anything runs.
+/// scope, and every file path checked (resolved inside the root up front or
+/// per file, see [`Containment`]). Building it fails before anything runs.
 pub struct BatchPlan {
     pub root: PathBuf,
     /// Virtual module name derived from the transform name (`<name>.jssg.js`).
@@ -222,17 +237,20 @@ pub struct BatchPlan {
     pub semantic: Option<SemanticScope>,
     /// The requested (root-relative) path of every file, in request order.
     pub paths: Vec<String>,
-    /// Absolute, contained path of every requested file, in request order.
+    /// Absolute, contained path of every requested file, in request order
+    /// ([`Containment::Upfront`]; empty with [`Containment::PerFile`], see
+    /// [`BatchPlan::source`]).
     pub sources: Vec<PathBuf>,
 }
 
 impl BatchPlan {
-    /// Plan `batch` for its own `files`.
+    /// Plan `batch` for its own `files`, every path resolved up front.
     pub fn new(batch: &Batch<'_>, semantic: SemanticSupport) -> Result<Self, String> {
         Self::for_paths(
             batch,
             batch.files.iter().map(|file| file.path.as_str()),
             semantic,
+            Containment::Upfront,
         )
     }
 
@@ -242,6 +260,7 @@ impl BatchPlan {
         batch: &Batch<'_>,
         paths: impl IntoIterator<Item = &'p str>,
         semantic: SemanticSupport,
+        containment: Containment,
     ) -> Result<Self, String> {
         let root = canonical_dir(batch.target_root, "targetRoot")?;
         let module = verified_module(batch.artifact, batch.source)?;
@@ -273,10 +292,18 @@ impl BatchPlan {
             .map(|value| HashMap::from([("input".to_string(), value.clone())]));
         // Every requested path is checked before anything runs.
         let paths: Vec<String> = paths.into_iter().map(str::to_string).collect();
-        let sources = paths
-            .iter()
-            .map(|path| resolve_source(&root, path, "file path"))
-            .collect::<Result<Vec<_>, _>>()?;
+        let sources = match containment {
+            Containment::Upfront => paths
+                .iter()
+                .map(|path| resolve_source(&root, path, "file path"))
+                .collect::<Result<Vec<_>, _>>()?,
+            Containment::PerFile => {
+                for path in &paths {
+                    validate_relative_path(path, "file path")?;
+                }
+                Vec::new()
+            }
+        };
         Ok(Self {
             root,
             module,
@@ -302,6 +329,18 @@ impl BatchPlan {
             .ok_or_else(|| format!("no file {index} in the batch"))
     }
 
+    /// The absolute, contained path of file `index` (resolved now with
+    /// [`Containment::PerFile`]).
+    pub fn source(&self, index: usize) -> Result<PathBuf, String> {
+        match self.sources.get(index) {
+            Some(source) => Ok(source.clone()),
+            None if self.sources.is_empty() => {
+                resolve_source(&self.root, self.path(index)?, "file path")
+            }
+            None => Err(format!("no file {index} in the batch")),
+        }
+    }
+
     /// Whether the static selector rules `content` out (the transform is not
     /// called and the file's outcome is [`FileOutcome::skipped`]).
     pub fn skips(&self, content: &str) -> bool {
@@ -313,12 +352,10 @@ impl BatchPlan {
     /// File `index` parsed from `content` (the snapshot the host read), with
     /// its canonical path as `filename()` and the root as the target
     /// directory, or `None` when the static selector matches nothing in it.
-    /// Parses once; safe to call from any thread. No semantic provider.
+    /// Contains the path first ([`BatchPlan::source`]). Parses once; safe to
+    /// call from any thread. No semantic provider.
     pub fn parse(&self, index: usize, content: &str) -> Result<Option<CoreRoot>, String> {
-        let source = self
-            .sources
-            .get(index)
-            .ok_or_else(|| format!("no file {index} in the batch"))?;
+        let source = self.source(index)?;
         let filename = source.to_string_lossy().into_owned();
         let root = CoreRoot::from_ast_grep(
             AstGrep::new(content, self.language),
@@ -554,13 +591,22 @@ fn contain(root: &Path, candidate: &Path, name: &str) -> Result<PathBuf, String>
     {
         return Err(escape());
     }
-    let existing = candidate
-        .ancestors()
-        .find(|ancestor| ancestor.exists())
-        .ok_or_else(escape)?;
-    let canonical = existing
-        .canonicalize()
-        .map_err(|error| format!("failed to resolve {name} '{}': {error}", existing.display()))?;
+    // The common case, an existing path, costs one `realpath`; otherwise the
+    // nearest ancestor that exists (`Path::exists`: any error walks on).
+    let (existing, canonical) = match candidate.canonicalize() {
+        Ok(canonical) => (candidate, canonical),
+        Err(_) => {
+            let existing = candidate
+                .ancestors()
+                .skip(1)
+                .find(|ancestor| ancestor.exists())
+                .ok_or_else(escape)?;
+            let canonical = existing.canonicalize().map_err(|error| {
+                format!("failed to resolve {name} '{}': {error}", existing.display())
+            })?;
+            (existing, canonical)
+        }
+    };
     let rest = candidate.strip_prefix(existing).map_err(|_| escape())?;
     // `join("")` would append a trailing separator to an existing path.
     let real = if rest.as_os_str().is_empty() {
@@ -597,7 +643,13 @@ mod tests {
             input: None,
             files: &[],
         };
-        BatchPlan::for_paths(&batch, paths.iter().copied(), SemanticSupport::Enabled).expect("plan")
+        BatchPlan::for_paths(
+            &batch,
+            paths.iter().copied(),
+            SemanticSupport::Enabled,
+            Containment::Upfront,
+        )
+        .expect("plan")
     }
 
     fn modified(content: &str, rename_to: Option<&str>) -> ExecutionResult {
@@ -657,18 +709,123 @@ mod tests {
             files: &[],
         };
         for path in ["../x.ts", "/etc/passwd", "a/../../b.ts", ""] {
-            let error = BatchPlan::for_paths(&batch, [path], SemanticSupport::Enabled)
-                .err()
-                .expect(path);
+            let error = BatchPlan::for_paths(
+                &batch,
+                [path],
+                SemanticSupport::Enabled,
+                Containment::Upfront,
+            )
+            .err()
+            .expect(path);
             assert!(error.contains("file path"), "{path}: {error}");
         }
-        let error = BatchPlan::for_paths(&batch, ["a.ts"], SemanticSupport::Unsupported("node"))
-            .err()
-            .unwrap();
+        let error = BatchPlan::for_paths(
+            &batch,
+            ["a.ts"],
+            SemanticSupport::Unsupported("node"),
+            Containment::PerFile,
+        )
+        .err()
+        .unwrap();
         assert_eq!(
             error,
             "JSSG semantic analysis is unsupported in runtime 'node'"
         );
+    }
+
+    #[test]
+    fn contains_per_file_when_asked_after_the_syntactic_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let canonical = dir.path().canonicalize().unwrap();
+        let source = "x";
+        let artifact = ArtifactRef {
+            name: "t".to_string(),
+            hash: format!("{:x}", Sha256::digest(source.as_bytes())),
+        };
+        let root = dir.path().to_string_lossy().into_owned();
+        let batch = Batch {
+            artifact: &artifact,
+            source: Some(source),
+            language: "typescript",
+            selector: None,
+            target_root: Some(&root),
+            semantic_analysis: None,
+            input: None,
+            files: &[],
+        };
+        let plan_for = |paths: &[&str]| {
+            BatchPlan::for_paths(
+                &batch,
+                paths.iter().copied(),
+                SemanticSupport::Enabled,
+                Containment::PerFile,
+            )
+        };
+        // Syntax is still checked while planning.
+        let error = plan_for(&["a.ts", "../x.ts"]).err().unwrap();
+        assert_eq!(error, "file path must be a safe relative path");
+        let plan = plan_for(&["a.ts", "link/x.ts"]).unwrap();
+        assert!(plan.sources.is_empty());
+        assert_eq!(plan.source(0).unwrap(), canonical.join("a.ts"));
+        assert!(plan.parse(0, "a;").unwrap().is_some());
+        assert!(plan.source(2).is_err());
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
+            let error = plan.parse(1, "x;").err().unwrap();
+            assert!(error.contains("escapes the target root"), "{error}");
+        }
+    }
+
+    #[test]
+    fn resolves_large_batches_in_order_with_the_earliest_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let canonical = dir.path().canonicalize().unwrap();
+        let mut paths: Vec<String> = (0..1000).map(|i| format!("d{}/f{i}.ts", i % 7)).collect();
+        let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+        let plan = plan(dir.path(), &refs, None);
+        assert_eq!(plan.sources.len(), 1000);
+        for (i, source) in plan.sources.iter().enumerate() {
+            assert_eq!(*source, canonical.join(&paths[i]));
+        }
+        paths[900] = String::new();
+        paths[400] = "/early.ts".to_string();
+        let source = "x";
+        let artifact = ArtifactRef {
+            name: "t".to_string(),
+            hash: format!("{:x}", Sha256::digest(source.as_bytes())),
+        };
+        let root = dir.path().to_string_lossy().into_owned();
+        let batch = Batch {
+            artifact: &artifact,
+            source: Some(source),
+            language: "typescript",
+            selector: None,
+            target_root: Some(&root),
+            semantic_analysis: None,
+            input: None,
+            files: &[],
+        };
+        let error = BatchPlan::for_paths(
+            &batch,
+            paths.iter().map(String::as_str),
+            SemanticSupport::Enabled,
+            Containment::Upfront,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error, "file path must be a safe relative path");
+        paths[400] = "d0/ok.ts".to_string();
+        let error = BatchPlan::for_paths(
+            &batch,
+            paths.iter().map(String::as_str),
+            SemanticSupport::Enabled,
+            Containment::Upfront,
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error, "file path must not be empty");
     }
 
     #[test]

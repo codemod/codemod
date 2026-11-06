@@ -67,8 +67,8 @@ export interface QuickjsNative {
   jssgCall(batch: number): unknown;
   /** End the call; keeps what it staged for `jssgFinish(batch, index, ...)`. */
   jssgCallEnd(batch: number, index: number): void;
-  /** The awaited transform result as `FileOutcome` JSON. Throws `JSSG failed for '<path>': ...`. */
-  jssgFinish(batch: number, index: number, root: unknown, result: unknown): string;
+  /** The awaited transform result as `FileOutcome` JSON (`undefined`: no edits, no output). Throws `JSSG failed for '<path>': ...`. */
+  jssgFinish(batch: number, index: number, root: unknown, result: unknown): string | undefined;
   jssgEnd(batch: number): void;
   jssgStats(): { prepareMs: number; finishMs: number; files: number; skipped: number };
 }

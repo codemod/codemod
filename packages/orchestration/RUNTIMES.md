@@ -259,10 +259,16 @@ and the napi addon (`crates/jssg-napi`). No runtime re-implements them in TypeSc
 
 | Step | Rust (`jssg-batch`) | `node` (napi `JssgBatch`) | `quickjs` (host primitives) |
 | --- | --- | --- | --- |
-| plan: hash check, canonical root, every path contained, language, selector, params; semantic analysis refused | `BatchPlan::for_paths` | `new JssgBatch(config, paths)` | `jssgBegin` |
-| parse a chunk (64 files); `null` where the selector matches nothing | `BatchPlan::parse` | `parse(start, contents)`: worker threads, one chunk ahead | `jssgParse`: on the JS thread |
-| call the transform, staging `write()`/`jssgTransform()` | (sandbox result rules) | `runTransform` + `options()` | `jssgCall` / `jssgCallEnd` |
-| result -> `FileOutcome` (string/null/`{ content, output }`, rename, `/` paths after containment) | `classify_transform_result` + `BatchPlan::finish` | `finish(index, root, result, staged)` | `jssgFinish` |
+| plan: hash check, canonical root, every path a safe relative path, language, selector, params; semantic analysis refused | `BatchPlan::for_paths(.., Containment::PerFile)` | `new JssgBatch(config, paths)` | `jssgBegin` |
+| contain each path in the root (`stat` + `realpath`), then parse a chunk (64 files); `null` where the selector matches nothing | `BatchPlan::parse` | `parse(start, contents)`: worker threads, one chunk ahead | `jssgParse`: on the JS thread |
+| call the transform, staging `write()`/`jssgTransform()` | (sandbox result rules) | `runTransform` + options (built once per batch, copied per file) | `jssgCall` / `jssgCallEnd` |
+| result -> `FileOutcome` (string/null/`{ content, output }`, rename, `/` paths after containment) | `classify_transform_result` + `BatchPlan::finish` | `finish(index, root, result, staged)` (`null`: no edits, no output) | `jssgFinish` |
+
+Containment timing is the only difference from the bridge, which resolves every path while
+planning (`Containment::Upfront`; its semantic index needs them). In-process, a path is
+contained right before its file is parsed, so the filesystem calls overlap the transforms of
+the previous chunk; a path that escapes still fails the command before that file reaches a
+transform, and nothing is written unless every file passed.
 
 The loop owns only chunking, cancellation between files, evaluating each artifact once per
 run (cached by hash, lazily: only when a file reaches a transform), and turning failures into

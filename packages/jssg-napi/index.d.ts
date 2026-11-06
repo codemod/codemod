@@ -32,8 +32,16 @@ export interface JssgBatch {
     dryRun: false;
     targetDir: string;
   };
-  /** File `index`'s `FileOutcome`; throws `JSSG failed for '<path>': ...`. */
-  finish(index: number, root: NativeRoot, result: unknown, staged: StagedChanges): FileOutcome;
+  /**
+   * File `index`'s `FileOutcome`, or `null` when it has no edits and no
+   * output (`{ path, edits: [] }`); throws `JSSG failed for '<path>': ...`.
+   */
+  finish(
+    index: number,
+    root: NativeRoot,
+    result: unknown,
+    staged: StagedChanges | null,
+  ): FileOutcome | null;
 }
 
 /** The addon's exports used by the engine. */
@@ -47,7 +55,8 @@ export interface Binding {
   parseFile(language: string, path: string): NativeRoot;
   kind(language: string, kind: string): number;
   engineBegin(targetDir: string): void;
-  engineEnd(): StagedChanges;
+  /** `null` when the call staged nothing. */
+  engineEnd(): StagedChanges | null;
   engineStageResult(path: string, root: NativeRoot, result: unknown): string | null;
   engineCheckWithinTarget(path: string, caller: string): void;
   engineTargetDir(): string | null;
@@ -68,4 +77,4 @@ export function runTransform(
   targetDir: string,
   params: unknown,
   call: () => unknown,
-): Promise<{ result: unknown; staged: StagedChanges }>;
+): Promise<{ result: unknown; staged: StagedChanges | null }>;

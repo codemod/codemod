@@ -17,7 +17,8 @@
 //! - `jssgCallEnd(batch, index)`: the changes the call staged, kept for
 //!   `jssgFinish` (`embedded::end_call`);
 //! - `jssgFinish(batch, index, root, result)`: the awaited result as the
-//!   `FileOutcome` JSON the bridge would have returned
+//!   `FileOutcome` JSON the bridge would have returned (`undefined` when it
+//!   has no edits and no output)
 //!   (`embedded::transform_output` then [`BatchPlan::finish`]);
 //! - `jssgEnd(batch)`.
 
@@ -29,7 +30,7 @@ use codemod_sandbox::sandbox::engine::embedded::{
     begin_call, core_root, end_call, root_value, transform_output,
 };
 use codemod_sandbox::sandbox::engine::FileChange;
-use jssg_batch::{BatchConfig, BatchPlan, SemanticSupport};
+use jssg_batch::{BatchConfig, BatchPlan, Containment, SemanticSupport};
 use rquickjs::{Ctx, Function, Object, Value};
 
 use crate::native::{throw, HostState};
@@ -83,6 +84,7 @@ pub fn install<'js>(
                         &config.batch(),
                         paths.iter().map(String::as_str),
                         SemanticSupport::Unsupported("quickjs"),
+                        Containment::PerFile,
                     )
                     .map_err(|error| throw(&ctx, None, &error))?;
                     let id = state.next_id();
@@ -190,7 +192,12 @@ pub fn install<'js>(
                             .plan
                             .finish(index as usize, output)
                             .map_err(|error| throw(&ctx, None, &error))?;
+                        // No edits, no output: `undefined` (the loop builds `{ path, edits: [] }`).
+                        if outcome.edits.is_empty() && outcome.output.is_none() {
+                            return Ok(None);
+                        }
                         serde_json::to_string(&outcome)
+                            .map(Some)
                             .map_err(|error| throw(&ctx, None, &error.to_string()))
                     })?;
                     state.stats.borrow_mut().finish += started.elapsed();

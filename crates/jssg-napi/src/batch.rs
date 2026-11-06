@@ -23,7 +23,7 @@ use codemod_sandbox::sandbox::engine::{
     ExecutionResult, FileChange, ModificationCheck, ReturnedContent,
 };
 use codemod_sandbox::sg_core::CoreRoot;
-use jssg_batch::{BatchConfig, BatchPlan, SemanticSupport};
+use jssg_batch::{BatchConfig, BatchPlan, Containment, SemanticSupport};
 use napi::bindgen_prelude::*;
 use napi::{JsValue, ValueType};
 use napi_derive::napi;
@@ -55,6 +55,7 @@ impl JssgBatch {
             &config.batch(),
             paths.iter().map(String::as_str),
             SemanticSupport::Unsupported("node"),
+            Containment::PerFile,
         )
         .map_err(Error::from_reason)?;
         Ok(Self {
@@ -109,23 +110,59 @@ impl JssgBatch {
     }
 
     /// File `index`'s awaited transform `result` and `staged` changes as its
-    /// `FileOutcome`; throws `JSSG failed for '<path>': ...`.
-    #[napi(ts_return_type = "FileOutcome")]
+    /// `FileOutcome`, or `null` when it has no edits and no output (the
+    /// common case, `{ path, edits: [] }`, built without crossing back);
+    /// throws `JSSG failed for '<path>': ...`.
+    #[napi(ts_return_type = "FileOutcome | null")]
     pub fn finish(
         &self,
         index: u32,
         root: &SgRoot,
         result: Unknown<'_>,
-        staged: &mut StagedChanges,
-    ) -> Result<serde_json::Value> {
-        let secondary = std::mem::take(&mut staged.changes);
+        staged: Option<&mut StagedChanges>,
+    ) -> Result<Option<FileOutcomeJs>> {
+        let secondary = staged
+            .map(|staged| std::mem::take(&mut staged.changes))
+            .unwrap_or_default();
         let output = transform_output(&root.core, result, secondary);
         let outcome = self
             .plan
             .finish(index as usize, output)
             .map_err(Error::from_reason)?;
-        serde_json::to_value(outcome).map_err(|error| Error::from_reason(error.to_string()))
+        if outcome.edits.is_empty() && outcome.output.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(FileOutcomeJs {
+            path: outcome.path,
+            edits: outcome
+                .edits
+                .into_iter()
+                .map(|edit| EditJs {
+                    path: edit.path,
+                    content: edit.content,
+                    rename_to: edit.rename_to,
+                })
+                .collect(),
+            output: outcome.output,
+        }))
     }
+}
+
+/// `jssg_batch::FileOutcome` as a JS object (strings moved, not re-serialized).
+#[napi(object)]
+pub struct FileOutcomeJs {
+    pub path: String,
+    pub edits: Vec<EditJs>,
+    pub output: Option<serde_json::Value>,
+}
+
+/// `jssg_batch::Edit` as a JS object.
+#[napi(object)]
+pub struct EditJs {
+    pub path: String,
+    pub content: String,
+    #[napi(js_name = "renameTo")]
+    pub rename_to: Option<String>,
 }
 
 fn params(plan: &BatchPlan) -> serde_json::Value {
@@ -202,7 +239,11 @@ fn transform_output(
     secondary: Vec<FileChange>,
 ) -> std::result::Result<CodemodOutput, String> {
     let (content, output) = read_return(result).map_err(|error| error.to_string())?;
-    let original = root.source();
+    // Only a string result is compared with the original.
+    let original = match &content {
+        ReturnedContent::Text(_) => root.source(),
+        _ => String::new(),
+    };
     let primary = classify_transform_result(
         content,
         root,
@@ -424,6 +465,7 @@ mod tests {
             &config.batch(),
             paths.iter().copied(),
             SemanticSupport::Unsupported("node"),
+            Containment::PerFile,
         )
     }
 
@@ -495,7 +537,14 @@ mod tests {
             let outside = tempfile::tempdir().unwrap();
             std::fs::write(outside.path().join("x.ts"), "x").unwrap();
             std::os::unix::fs::symlink(outside.path(), root.join("link")).unwrap();
-            let error = plan(&root, &["link/x.ts"], None).err().unwrap();
+            // Contained per file, on the parse worker, before any transform.
+            let plan = Arc::new(plan(&root, &["link/x.ts"], None).unwrap());
+            let mut chunk = ParseChunk {
+                plan,
+                start: 0,
+                contents: vec!["x".to_string()],
+            };
+            let error = chunk.compute().err().unwrap().reason;
             assert!(error.contains("escapes the target root"), "{error}");
         }
     }

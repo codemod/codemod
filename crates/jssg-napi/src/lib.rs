@@ -96,18 +96,18 @@ pub fn engine_begin(target_dir: String) {
 }
 
 /// End the current transform call and return what it staged, in order
-/// (opaque; `JssgBatch.finish` consumes it).
+/// (opaque; `JssgBatch.finish` consumes it), or `null` when it staged
+/// nothing (no object per call in the common case).
 #[napi(js_name = "engineEnd")]
-pub fn engine_end() -> StagedChanges {
-    StagedChanges {
-        changes: CONTEXT.with(|context| {
-            context
-                .borrow_mut()
-                .take()
-                .map(|c| c.changes)
-                .unwrap_or_default()
-        }),
-    }
+pub fn engine_end() -> Option<StagedChanges> {
+    let changes = CONTEXT.with(|context| {
+        context
+            .borrow_mut()
+            .take()
+            .map(|c| c.changes)
+            .unwrap_or_default()
+    });
+    (!changes.is_empty()).then_some(StagedChanges { changes })
 }
 
 /// `jssgTransform()`: stage the inner transform's awaited `result` for the

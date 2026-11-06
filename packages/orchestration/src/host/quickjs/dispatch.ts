@@ -56,35 +56,66 @@ const describe = (error: unknown) => {
 
 export function createQuickjsDispatch(native: QuickjsNative): QuickjsDispatch {
   const timings: DispatchTimings = { loadMs: 0, transformMs: 0, batches: 0 };
-  let queue: Promise<unknown> = Promise.resolve();
-  /** Run `task` once every earlier transform call has settled. */
-  const serialized = <T>(task: () => Promise<T>): Promise<T> => {
-    const next = queue.then(task);
-    queue = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+  // One transform call in flight across the run (the staging is per
+  // context). Without contention a call starts at once, and a synchronous
+  // transform settles without extra promise hops: in the bundle every
+  // `then` also carries the async-context frame, so hops are not free.
+  let busy = false;
+  const waiting: (() => void)[] = [];
+  const release = () => {
+    const next = waiting.shift();
+    if (next === undefined) busy = false;
+    else next();
+  };
+  const exclusive = <T>(start: () => Promise<T>): Promise<T> => {
+    if (!busy) {
+      busy = true;
+      return start();
+    }
+    return new Promise<void>((resolve) => waiting.push(resolve)).then(start);
   };
 
   const engine: JssgBatchEngine<unknown, unknown> = {
     open(config, paths) {
       timings.batches += 1;
       const { id, module } = native.jssgBegin(JSON.stringify(config), paths);
+      const end = (index: number) => {
+        native.jssgCallEnd(id, index);
+        release();
+      };
       return {
         module,
         parse: (start, contents) => Promise.resolve(native.jssgParse(id, start, contents)),
         call: (index, root, transform: TransformFunction) =>
-          serialized(async () => {
-            const options = native.jssgCall(id);
+          exclusive(() => {
+            let value: unknown;
             try {
-              return await transform(root, options);
-            } finally {
-              native.jssgCallEnd(id, index);
+              value = transform(root, native.jssgCall(id));
+            } catch (error) {
+              end(index);
+              return Promise.reject(error);
             }
+            if (typeof (value as PromiseLike<unknown> | null)?.then !== "function") {
+              end(index);
+              return Promise.resolve(value);
+            }
+            return Promise.resolve(value).then(
+              (result) => {
+                end(index);
+                return result;
+              },
+              (error: unknown) => {
+                end(index);
+                throw error;
+              },
+            );
           }),
-        finish: (index, root, result) =>
-          JSON.parse(native.jssgFinish(id, index, root, result)) as FileOutcome,
+        finish: (index, root, result) => {
+          const outcome = native.jssgFinish(id, index, root, result);
+          return outcome === undefined
+            ? { path: paths[index]!, edits: [] }
+            : (JSON.parse(outcome) as FileOutcome);
+        },
         close: () => native.jssgEnd(id),
       };
     },

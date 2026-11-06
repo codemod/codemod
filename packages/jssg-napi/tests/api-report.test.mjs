@@ -140,8 +140,9 @@ test("results convert with the sandbox's rules", async () => {
       path: "a.ts",
       edits: [{ path: "a.ts", content: "b;" }],
     });
+    // No edits and no output: `null` (the engine builds `{ path, edits: [] }`).
     for (const unchanged of ["a;", null, undefined]) {
-      assert.deepEqual(await finish(unchanged), { path: "a.ts", edits: [] });
+      assert.equal(await finish(unchanged), null, String(unchanged));
     }
     assert.deepEqual(
       await finish({ content: null, output: { a: undefined, b: [1, 1.5, () => 1], c: 2 ** 40 } }),

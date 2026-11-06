@@ -96,9 +96,9 @@ export interface JssgBatchDispatchOptions {
   /** Files parsed per `parse` call; the next chunk is requested before this one transforms. Default 64. */
   chunkSize?: number;
   /**
-   * Optional timers, phase name and milliseconds: `parse` (each chunk, which
-   * may overlap transforms), `parse.wait` (time blocked on it), `load`,
-   * `transform`, `convert`.
+   * Optional timers, phase name and milliseconds: `open` (planning the
+   * batch), `parse` (each chunk, which may overlap transforms), `parse.wait`
+   * (time blocked on it), `load`, `transform`, `convert`.
    */
   profile?: (phase: string, ms: number) => void;
 }
@@ -137,6 +137,7 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
     const files = request.context?.files ?? [];
     const source = request.context?.artifact?.source;
     let batch: JssgBatch;
+    const opened = now();
     try {
       batch = engine.open(
         {
@@ -153,6 +154,7 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
     } catch (error) {
       return failed((error as Error).message ?? String(error));
     }
+    timed("open", opened);
     const artifact: TransformArtifact = { ...operation.transform, source: source ?? "" };
     let pending: Promise<unknown[]> | undefined;
     try {

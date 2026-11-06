@@ -26,7 +26,7 @@ let engines = 0;
 /** One engine per run: each artifact is evaluated once per engine. */
 export function createNapiJssgEngine(): JssgBatchEngine<
   NativeRoot,
-  { result: unknown; staged: StagedChanges }
+  { result: unknown; staged: StagedChanges | null }
 > {
   const native = loadBinding();
   const runId = `r${++engines}`;
@@ -34,13 +34,20 @@ export function createNapiJssgEngine(): JssgBatchEngine<
     open(config, paths) {
       const batch = new native.JssgBatch(JSON.stringify(config), paths);
       const { targetRoot, params } = batch;
+      // The options Rust builds, once per batch; every file gets its own copy.
+      const options = batch.options();
       return {
         module: batch.module,
         parse: (start, contents) => batch.parse(start, contents),
         call: (_index, root, transform) =>
-          runTransform(targetRoot, params, () => transform(root, batch.options())),
+          runTransform(targetRoot, params, () =>
+            transform(root, { ...options, params: { ...options.params } }),
+          ),
         finish: (index, root, ran) =>
-          batch.finish(index, root, ran.result, ran.staged) as FileOutcome,
+          (batch.finish(index, root, ran.result, ran.staged) as FileOutcome | null) ?? {
+            path: paths[index]!,
+            edits: [],
+          },
         close: () => {},
       };
     },
