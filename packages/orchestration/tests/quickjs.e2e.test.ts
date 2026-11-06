@@ -211,7 +211,7 @@ describe.runIf(enabled)("quickjs runtime: native file selection", () => {
       const native = runOn("quickjs", fixture, undefined, { files });
       const interpreted = runOn("quickjs", fixture, undefined, {
         files,
-        env: { CODEMOD_QUICKJS_NATIVE_SELECT: "0" },
+        env: { CODEMOD_NATIVE_SELECT: "0" },
       });
       const bridged = runOn("bridge", fixture, undefined, { files });
       expect(native.ok).toBe(true);

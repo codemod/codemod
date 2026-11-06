@@ -85,8 +85,8 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
 - **Timings:** `--timings` or `CODEMOD_QUICKJS_TIMINGS=1` prints a `timings: {...}` line.
 - **File selection is native.** The host implements the optional `Host.selectFiles` and
   `Host.fs.readSources` (see "Native file selection"), so the walk and the reads of a JSSG
-  command run in Rust instead of the interpreter. `CODEMOD_QUICKJS_NATIVE_SELECT=0` turns
-  both off (the portable walker then runs in QuickJS; same result, slower).
+  command run in Rust instead of the interpreter. `CODEMOD_NATIVE_SELECT=0` turns both off
+  (the portable walker then runs in QuickJS; same result, slower).
 
 ## Native file selection
 
@@ -103,8 +103,16 @@ capabilities, and `files.ts` uses them when present:
 - `Host.fs.readSources(root, paths)`: `readText(join(root, path), { fatal: true })` for every
   selected path in one call (`undefined` for `ENOENT`/`EILSEQ`, the first other error thrown).
 
-The QuickJS host implements both in `crates/orchestration-walker` (reads on worker threads).
-It is not the engine's walker (`codemod_walk_builder`, the `ignore` crate) because the
+Both in-process runtimes implement them with `crates/orchestration-walker` (subdirectories
+walked and files read on worker threads, results combined in listing order): the QuickJS
+host as context primitives, the `node` runtime through the napi addon
+(`createNapiSelectHost` in `host/runtimes/node-jssg.ts`: Node's libuv error wording, BOM
+dropped like the Node host's `TextDecoder`). `CODEMOD_NATIVE_SELECT=0` turns them off in
+both. `bridge` keeps the TypeScript walker. Both hosts list directories in byte order of the
+raw names (Node's libuv sorts `scandir`; the QuickJS host and the walker sort the same
+way), so a walk reports the same first failure everywhere.
+
+The walker is not the engine's walker (`codemod_walk_builder`, the `ignore` crate) because the
 TypeScript walker's semantics differ from it in ways only a port reproduces: matching is the
 `ignore` npm package, ported rule by rule (`node_ignore.rs`: the same `RegExp` sources,
 evaluated by `regress`, an ECMAScript engine, in non-unicode mode over UTF-16 code units, so

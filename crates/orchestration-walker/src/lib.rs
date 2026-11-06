@@ -28,6 +28,7 @@
 //! or an ancestor of the walk root), the override patterns (braces expanded,
 //! includes negated), and the global excludes file already discovered.
 
+pub mod errors;
 pub mod node_ignore;
 
 use std::cmp::Ordering;

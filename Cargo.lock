@@ -3480,6 +3480,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "orchestration-walker",
  "serde_json",
  "tempfile",
 ]
@@ -4857,6 +4858,7 @@ dependencies = [
 name = "orchestration-walker"
 version = "1.13.18"
 dependencies = [
+ "libc",
  "regex",
  "regress",
  "tempfile",

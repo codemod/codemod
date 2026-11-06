@@ -6,9 +6,11 @@
  *
  * Both run through the same `selectFiles()` / `readSelectedSources()` calls:
  * once over the Node host (TypeScript walk, `node:fs` reads) and once over
- * the Node host plus the two native capabilities, which run
- * `orchestration-quickjs-host select` (the exact Rust code the QuickJS
- * context calls). The fixture tree is built to be awkward: nested and
+ * the Node host plus the two native capabilities, for each backend: the
+ * QuickJS host's (`orchestration-quickjs-host select`, the exact Rust code
+ * the QuickJS context calls) and the napi addon's (`createNapiSelectHost`,
+ * what the `node` runtime uses; its error messages must equal the Node
+ * host's word for word). The fixture tree is built to be awkward: nested and
  * ancestor ignore files, negations, a parent-directory exclusion that a
  * negation cannot undo, every `.ignore` / `.gitignore` / `.git/info/exclude`
  * precedence, global excludes, CRLF and BOM, a rule set JS cannot compile,
@@ -17,8 +19,9 @@
  * include/exclude globs on both override sets. A seeded random sweep then
  * draws ignore files from a pool of tricky patterns.
  *
- * Needs the host binary (`cargo build -p orchestration-quickjs-host`); it is
- * skipped without one unless CODEMOD_REQUIRE_RUNTIMES=1.
+ * Needs the host binary (`cargo build -p orchestration-quickjs-host`) and the
+ * addon (`pnpm --filter @codemod.com/jssg-napi build`); a backend without
+ * its binary is skipped unless CODEMOD_REQUIRE_RUNTIMES=1.
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -37,7 +40,9 @@ import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Host, HostSelectRequest } from "../src/core/host.ts";
 import { readSelectedSources, selectFiles, type Selection } from "../src/execution/files.ts";
+import { isAvailable as isNapiAvailable } from "@codemod.com/jssg-napi";
 import { NODE_HOST } from "../src/host/node-host.ts";
+import { createNapiSelectHost } from "../src/host/runtimes/node-jssg.ts";
 import { defaultQuickjsHostPath } from "../src/host/runtimes/quickjs.ts";
 
 const binary = defaultQuickjsHostPath();
@@ -65,50 +70,42 @@ function unwrap<T>(result: NativeResult, key: "files" | "sources"): T {
 }
 
 let nativeCalls = 0;
-const NATIVE_HOST: Host = {
-  ...NODE_HOST,
+const counted = (host: Host): Host => ({
+  ...host,
   fs: {
-    ...NODE_HOST.fs,
+    ...host.fs,
     readSources(root, paths) {
       nativeCalls++;
-      return unwrap<(string | null)[]>(runNative({ root, paths }), "sources").map(
-        (content) => content ?? undefined,
-      );
+      return host.fs.readSources!(root, paths);
     },
   },
   selectFiles(request: HostSelectRequest) {
     nativeCalls++;
-    return unwrap<string[]>(runNative({ request }), "files");
+    return host.selectFiles!(request);
   },
+});
+
+/** The QuickJS host's primitives, through `orchestration-quickjs-host select`. */
+const QUICKJS_NATIVE: Host = {
+  ...NODE_HOST,
+  fs: {
+    ...NODE_HOST.fs,
+    readSources: (root, paths) =>
+      unwrap<(string | null)[]>(runNative({ root, paths }), "sources").map(
+        (content) => content ?? undefined,
+      ),
+  },
+  selectFiles: (request) => unwrap<string[]>(runNative({ request }), "files"),
 };
 
 /**
- * File-system errors carry each host's own wording (`EACCES: permission
- * denied, scandir '/x'` from Node, `EACCES: Permission denied (os error
- * 13), scandir '/x'` from Rust); compare code, syscall, and path.
- */
-function describeError(error: unknown): string {
-  const message = (error as Error).message;
-  const io = /^([A-Z]+): .*, (\w+) '(.*)'$/su.exec(message);
-  return io ? `${io[1]} ${io[2]} '${io[3]}'` : message;
-}
-
-function outcome<T>(run: () => T): { value: T } | { error: string } {
-  try {
-    return { value: run() };
-  } catch (error) {
-    return { error: describeError(error) };
-  }
-}
-
-/**
- * The reference for reads: the Node host with the QuickJS host's
- * `readText(fatal)`, which keeps a leading BOM (`readSources` is that call
- * in a batch). The Node host's `TextDecoder` strips it: a difference between
- * the two hosts that predates native reads.
+ * The reference for the QuickJS host's reads: the Node host with the QuickJS
+ * host's `readText(fatal)`, which keeps a leading BOM (`readSources` is that
+ * call in a batch). The Node host's `TextDecoder` strips it: a difference
+ * between the two hosts that predates native reads.
  */
 const keepBom = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-const READ_REFERENCE: Host = {
+const QUICKJS_READ_REFERENCE: Host = {
   ...NODE_HOST,
   fs: {
     ...NODE_HOST.fs,
@@ -124,17 +121,70 @@ const READ_REFERENCE: Host = {
   },
 };
 
+interface Backend {
+  name: string;
+  available: boolean;
+  /** The Node host plus the backend's native capabilities. */
+  host: () => Host;
+  /** What the backend's reads must equal (its host's `readText(fatal)`). */
+  readReference: Host;
+  /**
+   * Whether error messages must match the Node host's word for word. The
+   * QuickJS host words file-system errors like its own `fs` (`EACCES:
+   * Permission denied (os error 13), scandir '/x'`), so only code, syscall,
+   * and path are compared for it.
+   */
+  exactErrors: boolean;
+}
+
+const BACKENDS: Backend[] = [
+  {
+    name: "quickjs host",
+    available,
+    host: () => counted(QUICKJS_NATIVE),
+    readReference: QUICKJS_READ_REFERENCE,
+    exactErrors: false,
+  },
+  {
+    name: "napi addon (node runtime)",
+    available: isNapiAvailable(),
+    host: () => counted(createNapiSelectHost(NODE_HOST)),
+    readReference: NODE_HOST,
+    exactErrors: true,
+  },
+];
+if (!isNapiAvailable() && process.env.CODEMOD_REQUIRE_RUNTIMES === "1") {
+  throw new Error("the jssg-napi addon is not built");
+}
+
+let current: Backend & { native: Host } = { ...BACKENDS[0]!, native: NODE_HOST };
+
+function describeError(error: unknown): string {
+  const message = (error as Error).message;
+  if (current.exactErrors) return message;
+  const io = /^([A-Z]+): .*, (\w+) '(.*)'$/su.exec(message);
+  return io ? `${io[1]} ${io[2]} '${io[3]}'` : message;
+}
+
+function outcome<T>(run: () => T): { value: T } | { error: string } {
+  try {
+    return { value: run() };
+  } catch (error) {
+    return { error: describeError(error) };
+  }
+}
+
 /** Selection and reads, TypeScript vs native; returns the TypeScript side. */
 function compare(selection: Omit<Selection, "host">) {
   const before = nativeCalls;
   const typescript = outcome(() => selectFiles({ ...selection, host: NODE_HOST }));
-  const native = outcome(() => selectFiles({ ...selection, host: NATIVE_HOST }));
+  const native = outcome(() => selectFiles({ ...selection, host: current.native }));
   expect(nativeCalls, "the native path was taken").toBeGreaterThan(before);
   expect(native).toEqual(typescript);
   if ("value" in typescript) {
     const paths = typescript.value;
-    expect(outcome(() => readSelectedSources(NATIVE_HOST, selection.targetRoot, paths))).toEqual(
-      outcome(() => readSelectedSources(READ_REFERENCE, selection.targetRoot, paths)),
+    expect(outcome(() => readSelectedSources(current.native, selection.targetRoot, paths))).toEqual(
+      outcome(() => readSelectedSources(current.readReference, selection.targetRoot, paths)),
     );
   }
   return typescript;
@@ -314,9 +364,26 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(base, { recursive: true, force: true }));
 
-const run = available ? describe : describe.skip;
+/** A file-system error as `outcome` reports it for the current backend. */
+function ioError(code: string, text: string, op: string, path: string): string {
+  return current.exactErrors ? `${code}: ${text}, ${op} '${path}'` : `${code} ${op} '${path}'`;
+}
 
-run("native selection matches the TypeScript walker", () => {
+for (const backend of BACKENDS) suite(backend);
+
+function suite(backend: Backend) {
+  (backend.available ? describe : describe.skip)(
+    `native selection (${backend.name}) matches the TypeScript walker`,
+    () => {
+      beforeAll(() => {
+        current = { ...backend, native: backend.host() };
+      });
+      defineTests();
+    },
+  );
+}
+
+function defineTests() {
   const cases: [string, () => Omit<Selection, "host">][] = [
     ["ignore files only", () => sel({ language: "none" })],
     ["language defaults (typescript)", () => sel({ language: "typescript" })],
@@ -421,7 +488,9 @@ run("native selection matches the TypeScript walker", () => {
     chmodSync(join(dir, "closed"), 0o000);
     try {
       const result = compare(sel({ cwd: dir, targetRoot: dir }));
-      expect(result).toEqual({ error: `EACCES scandir '${join(dir, "closed")}'` });
+      expect(result).toEqual({
+        error: ioError("EACCES", "permission denied", "scandir", join(dir, "closed")),
+      });
     } finally {
       chmodSync(join(dir, "closed"), 0o755);
     }
@@ -460,8 +529,10 @@ run("native selection matches the TypeScript walker", () => {
     try {
       if (process.getuid?.() === 0) return;
       const read = (host: Host) => outcome(() => readSelectedSources(host, dir, ["a.ts", "b.ts"]));
-      expect(read(NATIVE_HOST)).toEqual(read(READ_REFERENCE));
-      expect(read(READ_REFERENCE)).toEqual({ error: `EACCES open '${join(dir, "b.ts")}'` });
+      expect(read(current.native)).toEqual(read(current.readReference));
+      expect(read(current.readReference)).toEqual({
+        error: ioError("EACCES", "permission denied", "open", join(dir, "b.ts")),
+      });
     } finally {
       chmodSync(join(dir, "b.ts"), 0o644);
     }
@@ -550,4 +621,4 @@ run("native selection matches the TypeScript walker", () => {
       compare(sel({ cwd: sweep, targetRoot: sweep, definition: include ? { include } : {} }));
     }
   });
-});
+}

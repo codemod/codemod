@@ -26,7 +26,9 @@ import {
   type OperationRequest,
 } from "../../core/protocol.ts";
 import { NODE_RUNTIME, UnsupportedInRuntimeError } from "../../runtime/capabilities.ts";
-import { createNapiJssgEngine } from "./node-jssg.ts";
+import { getHost, type Host } from "../../core/host.ts";
+import { NODE_HOST } from "../node-host.ts";
+import { createNapiJssgEngine, createNapiSelectHost } from "./node-jssg.ts";
 import type { RuntimeProvider } from "./types.ts";
 
 export interface NodeExecutorOptions {
@@ -48,9 +50,20 @@ export interface NodeExecutorOptions {
 /** Executes `jssg` and `shell` in this process; refuses everything else. */
 export class NodeExecutor implements OperationExecutor {
   readonly #dispatch: JssgDispatch;
+  /**
+   * The installed host; the Node host gains the addon's native file
+   * selection unless `CODEMOD_NATIVE_SELECT=0`. Another installed host (a
+   * test double) is used as is.
+   */
+  readonly #host: Host;
 
   constructor(private readonly options: NodeExecutorOptions) {
     const { profile } = options;
+    const host = getHost();
+    this.#host =
+      process.env.CODEMOD_NATIVE_SELECT === "0" || host !== NODE_HOST
+        ? host
+        : createNapiSelectHost(host);
     const dispatch = createInProcessJssgDispatch({
       engine: createNapiJssgEngine(),
       ...(profile === undefined
@@ -89,6 +102,7 @@ export class NodeExecutor implements OperationExecutor {
             commandId: request.commandId,
             operation,
             signal,
+            host: this.#host,
             dispatch: this.#dispatch,
             ...(profile === undefined
               ? {}

@@ -7,7 +7,28 @@
  */
 import { loadBinding, runTransform, type NativeSelector } from "@codemod.com/jssg-napi";
 import { importArtifact } from "@codemod.com/jssg-napi/loader";
+import type { Host } from "../../core/host.ts";
 import type { JssgEngine } from "../../execution/jssg-inprocess.ts";
+
+/**
+ * `base` (the Node host) plus the addon's native file selection
+ * (`Host.selectFiles`, `Host.fs.readSources`, `crates/orchestration-walker`):
+ * the same files, contents, and error messages as the TypeScript walker
+ * over `base` (`tests/files-native.test.ts`), without interpreting the walk.
+ */
+export function createNapiSelectHost(base: Host): Host {
+  const native = loadBinding();
+  return {
+    ...base,
+    fs: {
+      ...base.fs,
+      // The Node host's `readText(fatal)` decodes with `TextDecoder`, which drops a BOM.
+      readSources: (root, paths) =>
+        native.readSources(root, [...paths], true).map((content) => content ?? undefined),
+    },
+    selectFiles: (request) => native.selectFiles(JSON.stringify(request)),
+  };
+}
 
 export function createNapiJssgEngine(): JssgEngine<object> {
   const native = loadBinding();

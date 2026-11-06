@@ -225,7 +225,7 @@ pub fn make_source(pattern: &str) -> String {
         if lead_escape == Some("\\") {
             format!("\\[{range}{}{close}", clean_range_back_slash(end_escape))
         } else if close == "]" {
-            if end_escape.len() % 2 == 0 {
+            if end_escape.len().is_multiple_of(2) {
                 format!("[{}{end_escape}]", sanitize_range(range))
             } else {
                 "[]".to_string()
