@@ -56,6 +56,13 @@ export interface QuickjsNative {
   ): { id: number; pid?: number; result: Promise<HostSpawnResult> };
   /** SIGKILL the child's process group (no-op once it exited). */
   kill(id: number): void;
+  /**
+   * Settles after the host's event loop has run once (signals, child output,
+   * timers). Promise jobs alone never let it run: a long stretch of
+   * synchronous work plus resolved promises (a JSSG batch) must await this
+   * now and then, or a SIGINT is only seen once the run is over.
+   */
+  yieldNow(): Promise<void>;
 
   /** Make `source` importable as `import(specifier)` (evaluated once by the engine). */
   registerModule(specifier: string, source: string): void;

@@ -303,4 +303,40 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
     expect(JSON.parse(stdout)).toMatchObject({ ok: false });
     expect(() => process.kill(pid, 0)).toThrow();
   });
+
+  it("SIGINT cancels a running JSSG batch promptly and writes nothing", async () => {
+    const bundle = await bundleFor("jssg-long.ts");
+    // 300 files x ~10 ms: about 3 s of transforms if the signal were ignored.
+    const many = Object.fromEntries(
+      Array.from({ length: 300 }, (_, i) => [`many/f${i}.ts`, `oldApi(${i});\n`]),
+    );
+    const target = makeRepo(many);
+    const before = snapshot(target);
+    const child = spawn(host, ["run", bundle, "--target", target, "--json"], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    const marker = join(target, "started.marker");
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(marker)) {
+      if (Date.now() > deadline) throw new Error("the workflow never started");
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    // Well inside the batch (the shell step is done once the marker exists).
+    await new Promise((r) => setTimeout(r, 300));
+    const signalled = Date.now();
+    child.kill("SIGINT");
+    const code = await new Promise<number | null>((r) => child.once("close", r));
+    // At most one 64-file chunk (~0.65 s) plus the file in flight.
+    expect(Date.now() - signalled).toBeLessThan(1_500);
+    expect(code).toBe(1);
+    expect(JSON.parse(stdout)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/command 'slow' cancelled/u) as unknown,
+    });
+    const after = snapshot(target);
+    delete after["started.marker"];
+    expect(after).toEqual(before);
+  });
 });

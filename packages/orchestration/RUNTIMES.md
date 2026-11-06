@@ -14,11 +14,18 @@ run(executable, { executor, runtime: NODE_RUNTIME }) // any host, incl. QuickJS
 createHarness({ runtime: "node" })                   // tests
 ```
 
-| Runtime | Control plane | `jssg` | `shell` | `agent` / `assessment` | Semantic analysis |
-| --- | --- | --- | --- | --- | --- |
-| `bridge` (default) | Node | one bridge process per command | one bridge process | bridge / Node host | yes |
-| `node` | Node | in-process over a napi addon | `child_process` via `Host.spawn` | unsupported | unsupported |
-| `quickjs` | QuickJS (Rust binary) | in-process in the same context | Rust host spawn | unsupported | unsupported |
+| Runtime | Control plane | File selection + reads | `jssg` | `shell` | `agent` / `assessment` | Semantic analysis |
+| --- | --- | --- | --- | --- | --- | --- |
+| `bridge` (default) | Node | TypeScript walker, `node:fs` | one bridge process per command | one bridge process | bridge / Node host | yes |
+| `node` | Node | native (napi addon, `orchestration-walker`) | in-process over the napi addon | `child_process` via `Host.spawn` | unsupported | unsupported |
+| `quickjs` | QuickJS (Rust binary) | native (host primitives, `orchestration-walker`) | in-process in the same context | Rust host spawn | unsupported | unsupported |
+
+Every runtime applies the same JSSG batch rules (`crates/jssg-batch`: planning, containment,
+selector skip, result conversion) and hands transforms the same verbatim sources ("Source
+encoding"). The CLI (`bin/codemod-workflow.mjs`) is one Node process for every runtime: it
+strips TypeScript in-process (`bin/register-ts.mjs`, cached on disk), loads TypeScript and
+esbuild only on a cache miss, and imports a runtime's executor (and the dashboard) only when
+used; `--runtime=quickjs` then spawns the host binary, the only second process.
 
 ## Files
 
@@ -38,7 +45,12 @@ createHarness({ runtime: "node" })                   // tests
 | `crates/jssg-batch` | the JSSG batch rules every runtime shares: `BatchPlan` (planning, containment, selector skip, parse, result conversion) |
 | `src/runtime/capabilities.ts` | runtime descriptors, `CapabilityExecutor`, `assertRuntimeSupports` |
 | `src/host/runtimes/types.ts` | `RuntimeProvider` contract |
-| `src/host/runtimes/{bridge,node,quickjs}.ts` | one provider per runtime |
+| `src/host/runtimes/{bridge,node,quickjs}.ts` | one provider per runtime (small; executors load in `load()`) |
+| `src/host/runtimes/node-executor.ts` | `NodeExecutor`: `jssg` + `shell` in this process |
+| `crates/orchestration-walker` | native `walk()` of `execution/files.ts` + batched source reads (`Host.selectFiles`, `Host.fs.readSources`) |
+| `tests/files-native.test.ts` | differential test: native selection and reads vs the TypeScript walker |
+| `bin/codemod-workflow.mjs`, `bin/register-ts.mjs` | the CLI: one Node process, in-process type stripping with an on-disk cache |
+| `src/bundle/cache.ts` | the on-disk startup cache (`$CODEMOD_WORKFLOW_CACHE`) |
 | `src/host/runtimes/registry.ts` | `RuntimeRegistry`, `defaultRuntimes`, `runWorkflow`, `prepareLaunch` |
 | `src/portable.ts` | `@codemod.com/orchestration/portable`: the Node-free API |
 | `tests/portable.test.ts` | static import scan of everything reachable from `portable.ts` and `host/quickjs/entry.ts` |
@@ -85,7 +97,14 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
 - **History/resume:** `orchestration-quickjs-host run b.mjs --history h.json` resumes from
   `h.json` and writes the run's history back, success or not.
 - **Cancellation:** SIGINT/SIGTERM/SIGHUP to the host abort the run (the shell's process group
-  is killed). A spinning transform cannot be interrupted (one JS thread).
+  is killed). A spinning transform cannot be interrupted (one JS thread). The signal
+  watcher is a future on the host's event loop, and rquickjs drains every pending promise
+  job before it polls futures again; a JSSG batch awaits only resolved promises (parsing is
+  synchronous here), so the in-context engine awaits `yieldNow()` (a `tokio::task::yield_now`
+  that lets the driver read signals, child output, and timers) before each 64-file chunk.
+  A SIGINT mid-batch therefore cancels the command within one chunk with nothing written
+  (before, it was only seen after the batch, and a jssg-only run finished normally).
+  `tests/quickjs.e2e.test.ts` ("SIGINT cancels a running JSSG batch") pins it.
 - **Console:** workflow and transform `console.*` go to the host's stderr; stdout is the result.
 - **Timings:** `--timings` or `CODEMOD_QUICKJS_TIMINGS=1` prints a `timings: {...}` line.
 - **File selection is native.** The host implements the optional `Host.selectFiles` and
@@ -325,7 +344,10 @@ result). Adding a runtime needs no CLI change.
 (`CODEMOD_JSSG_NAPI` or `packages/jssg-napi/jssg-napi.<platform>-<arch>.node`); `NodeExecutor`
 routes `shell` to `executeShell` and `jssg` to `executeJssgCommand({ dispatch })` with the
 dispatch from `createJssgBatchDispatch({ engine: createNapiJssgEngine() })`, one per run.
-Selection, reads, staging, conflict checks, and the commit are the unchanged portable code.
+Staging, conflict checks, and the commit are the unchanged portable code; selection and reads
+are too, over the Node host plus the addon's native `selectFiles` / `readSources`
+(`createNapiSelectHost`, "Native file selection"; off with `CODEMOD_NATIVE_SELECT=0`, and
+only when the installed host is `NODE_HOST`, so test doubles keep the TypeScript walker).
 
 ## JSSG batches in-process
 

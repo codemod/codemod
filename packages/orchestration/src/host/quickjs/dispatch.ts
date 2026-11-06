@@ -85,7 +85,11 @@ export function createQuickjsDispatch(native: QuickjsNative): QuickjsDispatch {
       };
       return {
         module,
-        parse: (start, contents) => Promise.resolve(native.jssgParse(id, start, contents)),
+        // Yield to the host's event loop once per chunk (64 files) so a
+        // SIGINT, child output, and timers are serviced mid-batch; the loop
+        // checks the abort signal before every file.
+        parse: (start, contents) =>
+          native.yieldNow().then(() => native.jssgParse(id, start, contents)),
         call: (index, root, transform: TransformFunction) =>
           exclusive(() => {
             let value: unknown;

@@ -453,6 +453,33 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: Rc<HostState>) -> rquickjs::Result<()
         )?;
     }
 
+    // --- the event loop ------------------------------------------------------
+    // `yieldNow()`: a promise that settles after the tokio driver has run.
+    // rquickjs drains every pending promise job before it polls spawned
+    // futures again, and a JSSG batch here never waits on I/O (parsing is
+    // synchronous), so without this a batch starves every spawned future
+    // until it ends: the SIGINT/SIGTERM/SIGHUP watcher (a signal mid-batch
+    // was ignored until the run finished), child-process output, timers.
+    // `yield_now` defers its wake-up to the driver (`park_yield` polls I/O
+    // and signals) instead of waking at once.
+    native.set(
+        "yieldNow",
+        Function::new(
+            ctx.clone(),
+            |ctx: Ctx<'js>| -> rquickjs::Result<Promise<'js>> {
+                let (promise, resolve, _reject) = Promise::new(&ctx)?;
+                let ctx2 = ctx.clone();
+                ctx.spawn(async move {
+                    tokio::task::yield_now().await;
+                    if resolve.call::<_, ()>(()).is_err() {
+                        let _ = ctx2.catch();
+                    }
+                });
+                Ok(promise)
+            },
+        )?,
+    )?;
+
     jssg::install(ctx, &native, Rc::clone(&state))?;
     ctx.globals().set(NATIVE_GLOBAL, native)?;
     Ok(())
