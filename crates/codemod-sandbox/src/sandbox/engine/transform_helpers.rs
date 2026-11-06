@@ -1,11 +1,11 @@
 use crate::ast_grep::serde::JsValue;
-use crate::ast_grep::sg_node::{SgNodeRjs, SgRootInner};
+use crate::ast_grep::sg_core::CoreRoot;
+use crate::ast_grep::sg_node::SgNodeRjs;
 use crate::sandbox::engine::execution_engine::{ExecutionResult, ModifiedResult};
 use crate::sandbox::errors::ExecutionError;
 use rquickjs::{Ctx, FromJs, IntoJs, Object, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 /// How to check whether content was modified
 pub enum ModificationCheck<'a> {
@@ -148,15 +148,10 @@ pub fn build_transform_options<'js>(
 /// Uses `ModificationCheck` to determine whether content was actually modified.
 pub fn process_transform_result(
     result_obj: &Value<'_>,
-    sg_root_inner: &Arc<SgRootInner>,
+    sg_root: &CoreRoot,
     modification_check: ModificationCheck<'_>,
 ) -> Result<ExecutionResult, ExecutionError> {
-    let rename_to = sg_root_inner
-        .rename_to
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone()
-        .map(PathBuf::from);
+    let rename_to = sg_root.rename_to().map(PathBuf::from);
 
     if result_obj.is_string() {
         let new_content = result_obj
@@ -188,7 +183,7 @@ pub fn process_transform_result(
         }
     } else if result_obj.is_null() || result_obj.is_undefined() {
         if rename_to.is_some() {
-            let original_content = sg_root_inner.grep.source().to_string();
+            let original_content = sg_root.source();
             Ok(ExecutionResult::Modified(ModifiedResult {
                 content: original_content,
                 rename_to,
