@@ -188,10 +188,11 @@ describe("local TypeScript JSSG workflow end-to-end", () => {
       cpSync(join(packageDir, entry), join(installed, entry), { recursive: true });
     }
     // The package's runtime dependencies, as an install would place them:
-    // `ignore`, `typescript`, `@typesafe-ai/sdk` (dependency-free), and
-    // `esbuild` with its platform binary package.
+    // `ignore`, `typescript`, `@typesafe-ai/sdk` (dependency-free),
+    // `@codemod.com/jssg-napi` (the node runtime's addon package; its binary
+    // is only loaded on demand), and `esbuild` with its platform binary package.
     const modules = join(installed, "node_modules");
-    for (const name of ["ignore", "typescript", "@typesafe-ai/sdk"]) {
+    for (const name of ["ignore", "typescript", "@typesafe-ai/sdk", "@codemod.com/jssg-napi"]) {
       cpSync(join(packageDir, "node_modules", name), join(modules, name), {
         recursive: true,
         dereference: true,

@@ -177,15 +177,20 @@ export function parseArgs(argv: string[]): CliOptions {
   });
   // `run` is the (optional) subcommand: `codemod-workflow run <workflow.ts>`.
   if (args[0] === "run") args.shift();
-  const workflow = args.shift();
-  if (workflow === undefined || workflow.startsWith("-")) throw new Error(USAGE);
+  // The workflow is the one positional argument; options may come before or after it.
+  let workflow: string | undefined;
   let target = process.cwd();
   let bridge = defaultBridgePath();
   let input: { value: Json } | undefined;
   let runtime: string | undefined;
   let dashboard = false;
   while (args.length > 0) {
-    const flag = args.shift();
+    const flag = args.shift()!;
+    if (!flag.startsWith("-")) {
+      if (workflow !== undefined) throw new Error(`unexpected argument: ${flag}\n${USAGE}`);
+      workflow = flag;
+      continue;
+    }
     if (flag === "--dashboard") {
       dashboard = true;
       continue;
@@ -198,6 +203,7 @@ export function parseArgs(argv: string[]): CliOptions {
     else if (flag === "--runtime") runtime = value;
     else throw new Error(`unknown option: ${flag}\n${USAGE}`);
   }
+  if (workflow === undefined) throw new Error(USAGE);
   return {
     workflow: resolve(workflow),
     target: resolve(target),

@@ -46,6 +46,13 @@ describe("--runtime parsing", () => {
       runtime: "node",
     });
     expect(parseArgs(["run", "wf.ts", "--runtime=quickjs"]).runtime).toBe("quickjs");
+    // Options may precede the workflow (the benchmark harness's form).
+    expect(parseArgs(["run", "--runtime=node", "wf.ts", "--target", "repo"])).toMatchObject({
+      workflow: resolve("wf.ts"),
+      runtime: "node",
+      target: resolve("repo"),
+    });
+    expect(() => parseArgs(["run", "a.ts", "b.ts"])).toThrow(/unexpected argument: b\.ts/u);
     expect(parseArgs(["wf.ts", "--target=repo"]).target).toBe(resolve("repo"));
     expect(parseArgs(["wf.ts"])).not.toHaveProperty("runtime");
     expect(() => parseArgs(["run"])).toThrow(USAGE);

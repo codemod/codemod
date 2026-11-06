@@ -242,6 +242,18 @@ pub struct ParseBatch {
 impl ParseBatch {
     fn parse_one(&self, index: usize) -> std::result::Result<Option<CoreRoot>, String> {
         let relative = &self.paths[index];
+        let path = Path::new(relative);
+        if relative.trim().is_empty()
+            || path.has_root()
+            || relative.starts_with(['/', '\\'])
+            || path
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err(format!(
+                "file path '{relative}' must be a safe relative path"
+            ));
+        }
         let joined = self.target_dir.join(relative);
         let filename = joined.canonicalize().unwrap_or(joined);
         if !filename.starts_with(&self.target_dir) {
@@ -824,5 +836,99 @@ impl SgNode {
             return Ok(None);
         };
         request.type_info().map_err(|e| core_error(&env, e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn batch(root: &Path, files: &[(&str, &str)], selector: Option<&str>) -> ParseBatch {
+        let lang = parse_lang("typescript").unwrap();
+        ParseBatch {
+            lang,
+            target_dir: root.to_path_buf(),
+            paths: files.iter().map(|(p, _)| p.to_string()).collect(),
+            contents: files.iter().map(|(_, c)| c.to_string()).collect(),
+            selector: selector.map(|pattern| {
+                Arc::new(
+                    selector_from_value(
+                        lang,
+                        serde_json::json!({ "rule": { "pattern": pattern } }),
+                    )
+                    .unwrap(),
+                )
+            }),
+        }
+    }
+
+    #[test]
+    fn parses_in_parallel_in_order_and_applies_the_selector() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let files: Vec<(String, String)> = (0..37)
+            .map(|i| {
+                let content = if i % 3 == 0 {
+                    format!("oldApi({i});\n")
+                } else {
+                    format!("other({i});\n")
+                };
+                (format!("dir/f{i}.ts"), content)
+            })
+            .collect();
+        std::fs::create_dir_all(root.join("dir")).unwrap();
+        for (path, content) in &files {
+            std::fs::write(root.join(path), content).unwrap();
+        }
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, c)| (p.as_str(), c.as_str()))
+            .collect();
+        let roots = batch(&root, &refs, Some("oldApi($A)")).compute().unwrap();
+        assert_eq!(roots.len(), files.len());
+        for (i, root_handle) in roots.iter().enumerate() {
+            assert_eq!(root_handle.is_some(), i % 3 == 0, "file {i}");
+            if let Some(parsed) = root_handle {
+                assert_eq!(
+                    parsed.relative_filename(),
+                    Some(format!("dir/f{i}.ts").as_str())
+                );
+                assert_eq!(parsed.source(), files[i].1);
+            }
+        }
+        let all = batch(&root, &refs, None).compute().unwrap();
+        assert!(all.iter().all(Option::is_some));
+    }
+
+    #[test]
+    fn refuses_paths_outside_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for path in ["../x.ts", "/etc/passwd", "a/../../x.ts", ""] {
+            let error = batch(&root, &[(path, "x")], None)
+                .compute()
+                .err()
+                .unwrap_or_else(|| panic!("{path:?} was accepted"));
+            assert!(
+                error.reason.contains("safe relative path"),
+                "{}",
+                error.reason
+            );
+        }
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            std::fs::write(outside.path().join("x.ts"), "x").unwrap();
+            std::os::unix::fs::symlink(outside.path(), root.join("link")).unwrap();
+            let error = batch(&root, &[("link/x.ts", "x")], None)
+                .compute()
+                .err()
+                .unwrap();
+            assert!(
+                error.reason.contains("escapes the target root"),
+                "{}",
+                error.reason
+            );
+        }
     }
 }
