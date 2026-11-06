@@ -271,19 +271,26 @@ function parseInput(text: string): Json {
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/**
+ * The command (`bin/codemod-workflow.mjs`): run `argv`, print the result as
+ * JSON on stdout or the error on stderr (exit code 1), with
+ * SIGINT/SIGTERM/SIGHUP aborting the run.
+ */
+export async function main(argv: string[]): Promise<void> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   for (const name of ABORT_SIGNALS) process.once(name, abort);
-  runWorkflowCli(process.argv.slice(2), controller.signal)
-    .then(
-      (output) => process.stdout.write(`${JSON.stringify(output, null, 2)}\n`),
-      (error: unknown) => {
-        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-        process.exitCode = 1;
-      },
-    )
-    .finally(() => {
-      for (const name of ABORT_SIGNALS) process.off(name, abort);
-    });
+  try {
+    const output = await runWorkflowCli(argv, controller.signal);
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  } finally {
+    for (const name of ABORT_SIGNALS) process.off(name, abort);
+  }
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main(process.argv.slice(2));
 }

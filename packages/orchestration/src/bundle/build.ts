@@ -20,14 +20,42 @@
  * `name` must be a string literal; `transform` must be a method, a function
  * or arrow expression, or an imported binding.
  */
-import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
-import { registerHooks, stripTypeScriptTypes } from "node:module";
-import { basename, dirname, extname, resolve, sep } from "node:path";
+import { createRequire, registerHooks, stripTypeScriptTypes } from "node:module";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { buildSync } from "esbuild";
-import ts from "typescript";
+import type * as esbuild from "esbuild";
+import type * as ts from "typescript";
 import type { ArtifactRef } from "../core/protocol.ts";
+import { atomicWrite, fileHash, inputsUnchanged, privateDirectory, sha256 } from "./cache.ts";
+
+// TypeScript and esbuild are loaded on the first build, not on import:
+// TypeScript alone takes ~90 ms to load, and a warm `loadWorkflow` (every
+// rewritten module served from the cache) needs neither. Both are CommonJS,
+// so the synchronous module hooks below can load them on a cache miss.
+const require = createRequire(import.meta.url);
+let typescript: typeof ts;
+let buildSync: typeof esbuild.buildSync;
+function loadCompiler(): void {
+  typescript ??= require("typescript") as typeof ts;
+  buildSync ??= (require("esbuild") as typeof esbuild).buildSync;
+}
+
+let toolchain: string | undefined;
+/**
+ * Identity of the build step: this file and the TypeScript and esbuild
+ * versions. Cached build output is reused only by the same toolchain.
+ */
+export function buildToolchain(): string {
+  toolchain ??= sha256(
+    readFileSync(fileURLToPath(import.meta.url)),
+    ...["esbuild", "typescript"].map((name) => {
+      const manifest = require(`${name}/package.json`) as { version: string };
+      return `${name}@${manifest.version}`;
+    }),
+  );
+  return toolchain;
+}
 
 /** One bundled transform. `source` is what the bridge executes; `hash` identifies it. */
 export interface JssgArtifact extends ArtifactRef {
@@ -83,12 +111,15 @@ function loaderFor(file: string): Loader {
   }
 }
 
-const SCRIPT_KINDS: Record<Loader, ts.ScriptKind> = {
-  ts: ts.ScriptKind.TS,
-  tsx: ts.ScriptKind.TSX,
-  js: ts.ScriptKind.JS,
-  jsx: ts.ScriptKind.JSX,
-};
+function scriptKind(loader: Loader): ts.ScriptKind {
+  const kinds: Record<Loader, ts.ScriptKind> = {
+    ts: typescript.ScriptKind.TS,
+    tsx: typescript.ScriptKind.TSX,
+    js: typescript.ScriptKind.JS,
+    jsx: typescript.ScriptKind.JSX,
+  };
+  return kinds[loader];
+}
 
 /**
  * Split one module. `file` must be absolute: relative imports of the
@@ -96,8 +127,15 @@ const SCRIPT_KINDS: Record<Loader, ts.ScriptKind> = {
  * outside the supported subset and for bundling failures.
  */
 export function buildModule(source: string, file: string): BuiltModule {
+  loadCompiler();
   const loader = loaderFor(file);
-  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, SCRIPT_KINDS[loader]);
+  const sf = typescript.createSourceFile(
+    file,
+    source,
+    typescript.ScriptTarget.Latest,
+    true,
+    scriptKind(loader),
+  );
   const fail: (node: ts.Node, message: string) => never = (node, message) => {
     const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
     throw new BuildError(file, { line: line + 1, column: character + 1 }, message);
@@ -109,7 +147,7 @@ export function buildModule(source: string, file: string): BuiltModule {
 
   for (const call of findJssgCalls(sf)) {
     const argument = call.arguments[0];
-    if (argument === undefined || !ts.isObjectLiteralExpression(argument)) {
+    if (argument === undefined || !typescript.isObjectLiteralExpression(argument)) {
       fail(call, "jssg() must be called with an object literal so its transform can be extracted");
     }
     const name = literalProperty(argument, "name");
@@ -123,7 +161,7 @@ export function buildModule(source: string, file: string): BuiltModule {
     const entry = transformEntry(property, sf, module, fail, name);
     const { text: bundled, inputs: used } = bundle(entry, file, loader);
     for (const input of used) inputs.add(input);
-    const hash = createHash("sha256").update(bundled).digest("hex");
+    const hash = sha256(bundled);
     artifacts.push({ name, hash, source: bundled, origin: file });
     edits.push({
       start: property.getStart(sf),
@@ -152,6 +190,14 @@ export interface LoadedWorkflow {
   artifacts: Map<string, JssgArtifact>;
 }
 
+export interface LoadWorkflowOptions {
+  /**
+   * Directory of the rewritten-module cache, or `false` for none. Default:
+   * `modules/` under the build cache (`bundle/cache.ts`).
+   */
+  cache?: string | false;
+}
+
 /**
  * Import a workflow module for the trusted-local runner, splitting every
  * module in its graph on the way in: a `node:module` load hook rewrites
@@ -159,12 +205,20 @@ export interface LoadedWorkflow {
  * artifacts. The hook is active only while this import runs. Node caches
  * modules per URL, so artifacts are collected the first time a module loads
  * in a process; `buildFile` is the side-effect-free alternative.
+ *
+ * Each rewritten module is cached on disk (`rewriteCached`), keyed by its
+ * path and text, and reused while every file bundled into its artifacts is
+ * unchanged, so a warm load needs neither TypeScript nor esbuild.
  */
-export async function loadWorkflow(file: string): Promise<LoadedWorkflow> {
+export async function loadWorkflow(
+  file: string,
+  options: LoadWorkflowOptions = {},
+): Promise<LoadedWorkflow> {
   const absolute = resolve(file);
   const artifacts = new Map<string, JssgArtifact>();
   // This package's own sources (all of `src/`) define `jssg`; they never call it.
   const own = resolve(import.meta.dirname, "..") + sep;
+  const cache = options.cache === undefined ? privateDirectory("modules") : options.cache;
   const hooks = registerHooks({
     load(url, context, nextLoad) {
       if (!url.startsWith("file:")) return nextLoad(url, context);
@@ -174,12 +228,9 @@ export async function loadWorkflow(file: string): Promise<LoadedWorkflow> {
       }
       const text = readFileSync(path, "utf8");
       if (!text.includes("jssg(")) return nextLoad(url, context);
-      const built = buildModule(text, path);
+      const built = rewriteCached(text, path, url, cache === false ? undefined : cache);
       for (const artifact of built.artifacts) artifacts.set(artifact.hash, artifact);
-      const source = /\.[cm]?ts$/u.test(path)
-        ? stripTypeScriptTypes(built.source, { mode: "transform", sourceUrl: url })
-        : built.source;
-      return { format: "module", source, shortCircuit: true };
+      return { format: "module", source: built.source, shortCircuit: true };
     },
   });
   try {
@@ -187,6 +238,82 @@ export async function loadWorkflow(file: string): Promise<LoadedWorkflow> {
     return { exports, artifacts };
   } finally {
     hooks.deregister();
+  }
+}
+
+/** A rewritten module as Node runs it, plus what it was built from. */
+interface RewrittenModule {
+  /** The rewritten module, types stripped: what the load hook returns. */
+  source: string;
+  artifacts: JssgArtifact[];
+  /** Every file bundled into the artifacts (the module included) -> SHA-256. */
+  inputs: Record<string, string>;
+}
+
+/**
+ * `buildModule` + type stripping for the load hook, through the cache
+ * directory when there is one. The key covers the toolchain, the Node
+ * version (type stripping), the module URL, and the module text; an entry is
+ * used only while every recorded input still has its recorded hash and
+ * every artifact matches its hash. Resolution changes that alter no bundled
+ * file (a new file shadowing an import, an edited `package.json` `exports`
+ * or `tsconfig.json`) are not detected: delete the cache directory.
+ */
+function rewriteCached(
+  text: string,
+  path: string,
+  url: string,
+  cache: string | undefined,
+): RewrittenModule {
+  const entryPath =
+    cache === undefined
+      ? undefined
+      : join(cache, `${sha256(buildToolchain(), process.version, url, text)}.json`);
+  if (entryPath !== undefined) {
+    try {
+      const entry = JSON.parse(readFileSync(entryPath, "utf8")) as RewrittenModule;
+      if (
+        typeof entry.source === "string" &&
+        entry.artifacts.every((artifact) => sha256(artifact.source) === artifact.hash) &&
+        inputsUnchanged(entry.inputs)
+      ) {
+        return entry;
+      }
+    } catch {
+      // Missing or unreadable: build.
+    }
+  }
+  const built = buildModule(text, path);
+  const entry: RewrittenModule = {
+    source: /\.[cm]?ts$/u.test(path) ? stripTypes(built.source, url) : built.source,
+    artifacts: built.artifacts,
+    inputs: Object.fromEntries((built.inputs ?? []).map((input) => [input, fileHash(input) ?? ""])),
+  };
+  if (entryPath !== undefined) {
+    try {
+      atomicWrite(entryPath, JSON.stringify(entry));
+    } catch {
+      // A cache that cannot be written only costs the next run a build.
+    }
+  }
+  return entry;
+}
+
+/**
+ * `stripTypeScriptTypes` in transform mode (what `--experimental-transform-types`
+ * does), without its one-time `ExperimentalWarning` on stderr.
+ */
+function stripTypes(source: string, url: string): string {
+  const emitWarning = process.emitWarning;
+  process.emitWarning = function (this: unknown, warning: string | Error, ...rest: unknown[]) {
+    const type = typeof rest[0] === "string" ? rest[0] : (rest[0] as { type?: string })?.type;
+    if (type === "ExperimentalWarning" && String(warning).includes("stripTypeScriptTypes")) return;
+    return (emitWarning as (...args: unknown[]) => void).call(process, warning, ...rest);
+  } as typeof process.emitWarning;
+  try {
+    return stripTypeScriptTypes(source, { mode: "transform", sourceUrl: url });
+  } finally {
+    process.emitWarning = emitWarning;
   }
 }
 
@@ -203,11 +330,11 @@ function moduleScope(sf: ts.SourceFile): ModuleScope {
   const imports = new Map<string, ts.ImportDeclaration>();
   const locals = new Map<string, ts.Node>();
   for (const statement of sf.statements) {
-    if (ts.isImportDeclaration(statement)) {
+    if (typescript.isImportDeclaration(statement)) {
       const clause = statement.importClause;
       if (clause?.name) imports.set(clause.name.text, statement);
       if (clause?.namedBindings) {
-        if (ts.isNamespaceImport(clause.namedBindings)) {
+        if (typescript.isNamespaceImport(clause.namedBindings)) {
           imports.set(clause.namedBindings.name.text, statement);
         } else {
           for (const element of clause.namedBindings.elements) {
@@ -215,17 +342,17 @@ function moduleScope(sf: ts.SourceFile): ModuleScope {
           }
         }
       }
-    } else if (ts.isVariableStatement(statement)) {
+    } else if (typescript.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         for (const name of bindingNames(declaration.name)) locals.set(name, declaration);
       }
     } else if (
-      (ts.isFunctionDeclaration(statement) ||
-        ts.isClassDeclaration(statement) ||
-        ts.isEnumDeclaration(statement) ||
-        ts.isModuleDeclaration(statement)) &&
+      (typescript.isFunctionDeclaration(statement) ||
+        typescript.isClassDeclaration(statement) ||
+        typescript.isEnumDeclaration(statement) ||
+        typescript.isModuleDeclaration(statement)) &&
       statement.name &&
-      ts.isIdentifier(statement.name)
+      typescript.isIdentifier(statement.name)
     ) {
       locals.set(statement.name.text, statement);
     }
@@ -237,13 +364,13 @@ function findJssgCalls(sf: ts.SourceFile): ts.CallExpression[] {
   const calls: ts.CallExpression[] = [];
   const visit = (node: ts.Node) => {
     if (
-      ts.isCallExpression(node) &&
-      ts.isIdentifier(node.expression) &&
+      typescript.isCallExpression(node) &&
+      typescript.isIdentifier(node.expression) &&
       node.expression.text === "jssg"
     ) {
       calls.push(node);
     }
-    ts.forEachChild(node, visit);
+    typescript.forEachChild(node, visit);
   };
   visit(sf);
   return calls;
@@ -252,15 +379,15 @@ function findJssgCalls(sf: ts.SourceFile): ts.CallExpression[] {
 function propertyName(property: ts.ObjectLiteralElementLike): string | undefined {
   const name = property.name;
   if (name === undefined) return undefined;
-  if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
+  if (typescript.isIdentifier(name) || typescript.isStringLiteral(name)) return name.text;
   return undefined;
 }
 
 function literalProperty(object: ts.ObjectLiteralExpression, key: string): string | undefined {
   const property = object.properties.find((p) => propertyName(p) === key);
-  if (property === undefined || !ts.isPropertyAssignment(property)) return undefined;
+  if (property === undefined || !typescript.isPropertyAssignment(property)) return undefined;
   const value = property.initializer;
-  return ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)
+  return typescript.isStringLiteral(value) || typescript.isNoSubstitutionTemplateLiteral(value)
     ? value.text
     : undefined;
 }
@@ -279,18 +406,21 @@ function transformEntry(
   const text = (node: ts.Node) => sf.text.slice(node.getStart(sf), node.getEnd());
   let body: string;
   let references: Map<string, ts.Identifier>;
-  if (ts.isMethodDeclaration(property)) {
+  if (typescript.isMethodDeclaration(property)) {
     if (property.asteriskToken) fail(property, `jssg '${name}' transform cannot be a generator`);
     if (property.body === undefined) fail(property, `jssg '${name}' transform has no body`);
-    const isAsync = property.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword);
+    const isAsync = property.modifiers?.some((m) => m.kind === typescript.SyntaxKind.AsyncKeyword);
     body = `export default ${isAsync ? "async " : ""}function ${sf.text.slice(property.name.getStart(sf), property.getEnd())}`;
     references = freeIdentifiers(property);
-  } else if (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) {
-    const value = ts.isPropertyAssignment(property) ? property.initializer : property.name;
-    if (ts.isFunctionExpression(value) || ts.isArrowFunction(value)) {
+  } else if (
+    typescript.isPropertyAssignment(property) ||
+    typescript.isShorthandPropertyAssignment(property)
+  ) {
+    const value = typescript.isPropertyAssignment(property) ? property.initializer : property.name;
+    if (typescript.isFunctionExpression(value) || typescript.isArrowFunction(value)) {
       body = `export default (${text(value)});`;
       references = freeIdentifiers(value);
-    } else if (ts.isIdentifier(value)) {
+    } else if (typescript.isIdentifier(value)) {
       body = `export default ${value.text};`;
       references = new Map([[value.text, value]]);
     } else {
@@ -333,9 +463,9 @@ function transformEntry(
 }
 
 function bindingNames(name: ts.BindingName): string[] {
-  if (ts.isIdentifier(name)) return [name.text];
+  if (typescript.isIdentifier(name)) return [name.text];
   return name.elements.flatMap((element) =>
-    ts.isBindingElement(element) ? bindingNames(element.name) : [],
+    typescript.isBindingElement(element) ? bindingNames(element.name) : [],
   );
 }
 
@@ -351,9 +481,9 @@ function freeIdentifiers(fn: ts.SignatureDeclaration): Map<string, ts.Identifier
   const declared = (name: string) => scopes.some((scope) => scope.has(name));
 
   const visit = (node: ts.Node): void => {
-    if (ts.isTypeNode(node) || ts.isTypeParameterDeclaration(node)) return;
-    if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) return;
-    if (ts.isIdentifier(node)) {
+    if (typescript.isTypeNode(node) || typescript.isTypeParameterDeclaration(node)) return;
+    if (typescript.isInterfaceDeclaration(node) || typescript.isTypeAliasDeclaration(node)) return;
+    if (typescript.isIdentifier(node)) {
       if (isValueReference(node) && !declared(node.text) && !free.has(node.text)) {
         free.set(node.text, node);
       }
@@ -361,7 +491,7 @@ function freeIdentifiers(fn: ts.SignatureDeclaration): Map<string, ts.Identifier
     }
     const scope = scopeOf(node);
     if (scope) scopes.push(scope);
-    ts.forEachChild(node, visit);
+    typescript.forEachChild(node, visit);
     if (scope) scopes.pop();
   };
   visit(fn);
@@ -370,8 +500,11 @@ function freeIdentifiers(fn: ts.SignatureDeclaration): Map<string, ts.Identifier
 
 function scopeOf(node: ts.Node): Set<string> | undefined {
   const scope = new Set<string>();
-  if (ts.isFunctionLike(node)) {
-    if ((ts.isFunctionExpression(node) || ts.isFunctionDeclaration(node)) && node.name) {
+  if (typescript.isFunctionLike(node)) {
+    if (
+      (typescript.isFunctionExpression(node) || typescript.isFunctionDeclaration(node)) &&
+      node.name
+    ) {
       scope.add(node.name.text);
     }
     for (const parameter of node.parameters) {
@@ -380,28 +513,32 @@ function scopeOf(node: ts.Node): Set<string> | undefined {
     if ("body" in node && node.body) hoisted(node.body, scope);
     return scope;
   }
-  if (ts.isBlock(node) || ts.isCaseBlock(node)) {
-    const statements = ts.isBlock(node)
+  if (typescript.isBlock(node) || typescript.isCaseBlock(node)) {
+    const statements = typescript.isBlock(node)
       ? node.statements
       : node.clauses.flatMap((clause) => [...clause.statements]);
     for (const statement of statements) lexical(statement, scope);
     return scope;
   }
-  if (ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) {
-    if (node.initializer && ts.isVariableDeclarationList(node.initializer)) {
+  if (
+    typescript.isForStatement(node) ||
+    typescript.isForInStatement(node) ||
+    typescript.isForOfStatement(node)
+  ) {
+    if (node.initializer && typescript.isVariableDeclarationList(node.initializer)) {
       for (const declaration of node.initializer.declarations) {
         for (const name of bindingNames(declaration.name)) scope.add(name);
       }
     }
     return scope;
   }
-  if (ts.isCatchClause(node)) {
+  if (typescript.isCatchClause(node)) {
     if (node.variableDeclaration) {
       for (const name of bindingNames(node.variableDeclaration.name)) scope.add(name);
     }
     return scope;
   }
-  if (ts.isClassExpression(node) && node.name) {
+  if (typescript.isClassExpression(node) && node.name) {
     scope.add(node.name.text);
     return scope;
   }
@@ -410,12 +547,12 @@ function scopeOf(node: ts.Node): Set<string> | undefined {
 
 /** `let`/`const`/`class`/`function` declared directly by a statement. */
 function lexical(statement: ts.Node, scope: Set<string>): void {
-  if (ts.isVariableStatement(statement)) {
+  if (typescript.isVariableStatement(statement)) {
     for (const declaration of statement.declarationList.declarations) {
       for (const name of bindingNames(declaration.name)) scope.add(name);
     }
   } else if (
-    (ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) &&
+    (typescript.isFunctionDeclaration(statement) || typescript.isClassDeclaration(statement)) &&
     statement.name
   ) {
     scope.add(statement.name.text);
@@ -425,14 +562,17 @@ function lexical(statement: ts.Node, scope: Set<string>): void {
 /** `var` and function declarations anywhere in a function body, not crossing nested functions. */
 function hoisted(body: ts.Node, scope: Set<string>): void {
   const visit = (node: ts.Node): void => {
-    if (ts.isFunctionLike(node)) return;
-    if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.BlockScoped) === 0) {
+    if (typescript.isFunctionLike(node)) return;
+    if (
+      typescript.isVariableDeclarationList(node) &&
+      (node.flags & typescript.NodeFlags.BlockScoped) === 0
+    ) {
       for (const declaration of node.declarations) {
         for (const name of bindingNames(declaration.name)) scope.add(name);
       }
     }
-    if (ts.isFunctionDeclaration(node) && node.name) scope.add(node.name.text);
-    ts.forEachChild(node, visit);
+    if (typescript.isFunctionDeclaration(node) && node.name) scope.add(node.name.text);
+    typescript.forEachChild(node, visit);
   };
   visit(body);
 }
@@ -440,31 +580,31 @@ function hoisted(body: ts.Node, scope: Set<string>): void {
 /** False for identifiers that name a property, label, or declaration rather than referencing a binding. */
 function isValueReference(identifier: ts.Identifier): boolean {
   const parent = identifier.parent;
-  if (ts.isPropertyAccessExpression(parent)) return parent.name !== identifier;
-  if (ts.isPropertyAssignment(parent)) return parent.name !== identifier;
-  if (ts.isBindingElement(parent)) return parent.propertyName === identifier && false;
+  if (typescript.isPropertyAccessExpression(parent)) return parent.name !== identifier;
+  if (typescript.isPropertyAssignment(parent)) return parent.name !== identifier;
+  if (typescript.isBindingElement(parent)) return parent.propertyName === identifier && false;
   if (
-    ts.isMethodDeclaration(parent) ||
-    ts.isPropertyDeclaration(parent) ||
-    ts.isGetAccessorDeclaration(parent) ||
-    ts.isSetAccessorDeclaration(parent) ||
-    ts.isPropertySignature(parent) ||
-    ts.isEnumMember(parent) ||
-    ts.isMetaProperty(parent) ||
-    ts.isJsxAttribute(parent)
+    typescript.isMethodDeclaration(parent) ||
+    typescript.isPropertyDeclaration(parent) ||
+    typescript.isGetAccessorDeclaration(parent) ||
+    typescript.isSetAccessorDeclaration(parent) ||
+    typescript.isPropertySignature(parent) ||
+    typescript.isEnumMember(parent) ||
+    typescript.isMetaProperty(parent) ||
+    typescript.isJsxAttribute(parent)
   ) {
     return parent.name !== identifier;
   }
-  if (ts.isLabeledStatement(parent) || ts.isBreakOrContinueStatement(parent)) {
+  if (typescript.isLabeledStatement(parent) || typescript.isBreakOrContinueStatement(parent)) {
     return parent.label !== identifier;
   }
   if (
-    ts.isVariableDeclaration(parent) ||
-    ts.isParameter(parent) ||
-    ts.isFunctionDeclaration(parent) ||
-    ts.isFunctionExpression(parent) ||
-    ts.isClassDeclaration(parent) ||
-    ts.isClassExpression(parent)
+    typescript.isVariableDeclaration(parent) ||
+    typescript.isParameter(parent) ||
+    typescript.isFunctionDeclaration(parent) ||
+    typescript.isFunctionExpression(parent) ||
+    typescript.isClassDeclaration(parent) ||
+    typescript.isClassExpression(parent)
   ) {
     return parent.name !== identifier;
   }
