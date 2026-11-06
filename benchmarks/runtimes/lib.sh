@@ -152,10 +152,10 @@ arm_concurrency() {
       printf 'sequence(): one command at a time; each jssg command is one bridge process transforming its batch serially on 1 thread, one QuickJS runtime per file (file selection/reads/writes in Node)'
       ;;
     ts-node)
-      printf 'one Node process; workflow and every transform on the single JS thread, serially per file (Rust may parse/match off-thread)'
+      printf 'one Node process; workflow and every transform on the single JS thread, serially per file (the napi addon parses and selector-matches 64-file chunks on worker threads, one chunk ahead)'
       ;;
     ts-quickjs)
-      printf 'one QuickJS context in one Rust process; workflow and every transform on the single JS thread, serially per file (Rust may parse/match off-thread)'
+      printf 'one QuickJS context in one Rust process (launched by Node, which reuses the cached bundle); workflow and every transform on the single JS thread, serially per file (Rust parses each file on that same thread)'
       ;;
   esac
 }

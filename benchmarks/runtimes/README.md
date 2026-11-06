@@ -41,16 +41,20 @@ never sets it:
   one bridge process that transforms its whole batch serially on one thread,
   with a fresh QuickJS runtime per file. File selection, reads, conflict
   checks, and writes happen in Node.
-- `ts-node` / `ts-quickjs`: one JS thread runs the workflow and every
-  transform, serially per file.
+- `ts-node`: one Node process. One JS thread runs the workflow and every
+  transform, serially per file. The napi addon parses and selector-matches
+  64-file chunks on worker threads, one chunk ahead of the transforms.
+- `ts-quickjs`: Node builds the bundle, or reuses it from its content-hash
+  cache, then spawns `orchestration-quickjs-host`. One QuickJS context runs
+  the control plane, the workflow, and every transform on one thread,
+  serially per file. Rust parses each file on that same thread.
 
-`ts-node` and `ts-quickjs` are skipped automatically, with a message, until
-those runtimes exist. Every arm is probed first by running it on a two-file
-scratch repository and checking the exact expected edit. `ts-bridge` switches
-to `codemod-workflow run --runtime=bridge` by itself once the CLI accepts that
-form. When the runtimes land, the harness needs no edits. If the CLI shape
-ends up different, set `BENCH_CMD_TS_NODE=...` / `BENCH_CMD_TS_QUICKJS=...`
-(see `lib.sh`).
+`ts-node` and `ts-quickjs` are skipped, with a message, when their addon or
+host binary is not built. Every arm is probed first by running it on a two-file
+scratch repository and checking the exact expected edit. `ts-bridge` uses
+`codemod-workflow run --runtime=bridge` when the CLI accepts that form and the
+legacy form otherwise. To override an arm's command line, set
+`BENCH_CMD_<ARM>=...` (see `lib.sh`).
 
 ## Correctness gate
 
@@ -88,8 +92,11 @@ resets and cleans it with git.
 # once: JS deps, the report UI the CLI embeds, and release binaries
 pnpm install
 pnpm --filter codemod-report-ui build          # crates/cli embeds report-ui/dist/index.html
-cargo build --release -p codemod -p butterflow-execution-bridge
+cargo build --release -p codemod -p butterflow-execution-bridge -p orchestration-quickjs-host
+pnpm --filter @codemod.com/jssg-napi build      # release napi addon for ts-node
 brew install hyperfine                          # or: cargo install hyperfine
+# ts-quickjs picks the newer of target/{release,debug}/orchestration-quickjs-host;
+# pin it with CODEMOD_QUICKJS_HOST_BIN=target/release/orchestration-quickjs-host.
 
 benchmarks/runtimes/setup.sh                    # clone to $HOME/.cache/codemod-bench/vite
 benchmarks/runtimes/verify.sh                   # correctness gate only
@@ -106,7 +113,8 @@ run state in `~/Library/Application Support/butterflow` and the global git
 excludes both walkers honour.
 
 hyperfine runs with `--warmup 1 --runs 5 --shell=bash` and
-`--prepare 'git -C "$REPO" reset -q --hard && git -C "$REPO" clean -fdq'`.
+`--prepare 'git -C "$REPO" reset -q --hard && git -C "$REPO" clean -fdq'` by
+default (the results below used `BENCH_WARMUP=2 BENCH_RUNS=10`).
 Outputs go to `results/`:
 
 - `benchmark.md` (committed)
@@ -121,44 +129,115 @@ a git-ignored `ts/node_modules` symlink, which `lib.sh` creates.
 
 ## Results
 
-Machine: MacBook Pro `Mac16,7`, Apple M4 Pro, 14 cores (10 performance + 4
-efficiency), 48 GB RAM, macOS 26.5.2 (25F84), arm64. node v24.18.0, codemod
-1.13.18 (release build of this branch, base `6d0ad87`), hyperfine 1.20.0.
-Recorded 2026-11-06, `--warmup 1 --runs 5`. Correctness gate: both arms gave
-331 files and diff sha256 `8f7ff40f…c1c95885`.
+All four arms were measured in one session on an otherwise idle machine
+(no other builds or benchmarks; load average 2.0 at the start).
+
+- Machine: MacBook Pro `Mac16,7`, Apple M4 Pro, 14 cores (10 performance + 4
+  efficiency), 48 GB RAM, macOS 26.5.2 (25F84), arm64.
+- Toolchain: node v24.18.0, rustc 1.94.1, hyperfine 1.20.0.
+- Build: codemod 1.13.18, release builds of `rt/integration` at `f8ae6be` in
+  one `CARGO_TARGET_DIR`: `codemod`, `butterflow-execution-bridge`,
+  `orchestration-quickjs-host`, and the release `jssg-napi` addon.
+- Input: a fresh vite v8.3.6 checkout (`BENCH_REPO=~/.cache/codemod-bench/vite-final`).
+- Recorded 2026-11-06 with `BENCH_WARMUP=2 BENCH_RUNS=10 run.sh`.
+- Correctness gate: all four arms gave 331 files and diff sha256
+  `8f7ff40f81b3063b7594dc9d78ce1d290e1dda34bfc389edeb3f8d01c1c95885`. The
+  direct host run in (a) below gave the same diff.
 
 | Arm | Mean [s] | Min [s] | Max [s] | User [s] | System [s] | Relative |
 |:---|---:|---:|---:|---:|---:|---:|
-| `yaml` | 1.416 ± 0.070 | 1.349 | 1.531 | 2.888 | 0.645 | 1.00 |
-| `ts-bridge` | 2.488 ± 0.280 | 2.296 | 2.964 | 2.237 | 0.278 | 1.76 ± 0.22 |
-| `ts-node` | not available yet | | | | | |
-| `ts-quickjs` | not available yet | | | | | |
+| `ts-node` | 0.688 ± 0.003 | 0.686 | 0.692 | 1.147 | 0.304 | 1.00 |
+| `ts-quickjs` | 1.320 ± 0.012 | 1.307 | 1.346 | 1.276 | 0.181 | 1.92 ± 0.02 |
+| `yaml` | 1.324 ± 0.003 | 1.322 | 1.331 | 2.655 | 0.636 | 1.92 ± 0.01 |
+| `ts-bridge` | 1.931 ± 0.011 | 1.915 | 1.944 | 1.868 | 0.238 | 2.81 ± 0.02 |
 
-Fixed cost per arm, measured the same way on the two-file probe repository
-(not part of `run.sh`):
+Extra measurements, from the same session and build, also with
+`--warmup 2 --runs 10`. They are not part of `run.sh`:
+
+| Measurement | Mean [s] | Min [s] | Max [s] | User [s] | System [s] |
+|:---|---:|---:|---:|---:|---:|
+| (a) `orchestration-quickjs-host run <prebuilt bundle> --target <vite>` (no Node) | 1.180 ± 0.006 | 1.174 | 1.194 | 1.018 | 0.160 |
+| (b) `ts-quickjs` with a cold bundle cache (`CODEMOD_WORKFLOW_CACHE` wiped before every run) | 1.479 ± 0.005 | 1.471 | 1.489 | 1.451 | 0.218 |
+
+(c) Fixed floor per arm on the two-file probe repository (`make_probe_repo`
+in `lib.sh`):
 
 | Arm | Mean [s] | User [s] | System [s] |
 |:---|---:|---:|---:|
-| `yaml` | 1.236 ± 0.015 | 0.221 | 0.045 |
-| `ts-bridge` | 0.416 ± 0.118 | 0.483 | 0.051 |
+| `yaml` | 1.341 ± 0.003 | 0.225 | 0.052 |
+| `ts-bridge` | 0.309 ± 0.011 | 0.418 | 0.039 |
+| `ts-node` | 0.275 ± 0.002 | 0.403 | 0.029 |
+| `ts-quickjs` | 0.150 ± 0.003 | 0.266 | 0.021 |
+| quickjs host on a prebuilt bundle | 0.014 ± 0.000 | 0.011 | 0.002 |
 
-How to read these numbers:
+### Where the time goes
 
-- **The `yaml` wall time is mostly a polling sleep, not work.** After it
-  starts a workflow, `codemod workflow run` polls its status
-  (`crates/cli/src/workflow_runner.rs`, `wait_for_workflow_completion`). It
-  sleeps 1 s between checks while the run is not yet `Running`, and 2 s while
-  it is. On a two-file repository the arm uses 0.27 s of CPU but takes 1.24 s.
-  On vite the 12-thread transform work (about 2.9 s of CPU) finishes inside
-  that first sleep. So the `yaml` number is quantized to that poll interval:
-  it is roughly "1 s + startup", and the work it hides is under about 0.2 s of
-  wall time. This is an engine/CLI behaviour, not a harness artifact. It
-  affects any short `codemod workflow run`.
-- **`ts-bridge` is serial.** About 0.4 s is fixed cost (Node startup, TypeScript
-  stripping, the esbuild bundling of the two transforms, two bridge spawns).
-  The remaining ~2.1 s is two bridge processes each transforming 1621 files on
-  one thread, plus Node-side selection and writes. User time below wall time
-  confirms there is no parallelism.
-- A larger input, or a fix for the CLI poll interval, would be needed before
-  the `yaml` row measures transform throughput. The `ts-*` rows measure it
-  already.
+`ts-node`, in-process timers from `profile-node.mjs`, median of 3 runs on
+vite. The 0.69 s wall time also includes the second Node startup
+(`bin/codemod-workflow.mjs` re-spawns Node with TypeScript support):
+
+| Phase | ms |
+|:---|---:|
+| import orchestration (module graph, TypeScript transform) | ~182 |
+| load workflow + build the two artifacts (esbuild) | ~27 |
+| file selection (walker, both commands) | ~176 |
+| parse (napi, worker threads; overlaps transforms) | ~210 (of which ~80 blocks the JS thread) |
+| transforms (JS thread) | ~120 |
+| stage + commit | ~21 |
+
+`ts-quickjs`, from the host's `--timings` on vite (2 runs, about 1.15 s in the
+host). The `ts-quickjs` arm adds about 140 ms of Node on top: two Node
+startups, the CLI, and hashing the bundle-cache inputs.
+
+| Phase | ms |
+|:---|---:|
+| host startup + bundle load | ~3.5 |
+| file selection + reads (portable walker, interpreted in QuickJS) | ~575 |
+| parse (Rust, on the JS thread, inside dispatch) | ~338 |
+| transforms | ~122 |
+| result conversion | ~2 |
+| commit | ~54 |
+
+### Caveats
+
+- **The `yaml` wall time is quantized by a polling sleep.** After it starts a
+  workflow, `codemod workflow run` polls the run's status in
+  `wait_for_workflow_completion` (`crates/cli/src/workflow_runner.rs`). It
+  sleeps 1 s between checks until the run reaches `Running`
+  (`workflow_runner.rs:239`), and 2 s while it is `Running`
+  (`workflow_runner.rs:227`). On the two-file probe the arm uses 0.28 s of
+  CPU but takes 1.34 s. On vite, the 12-thread transform work (about 2.7 s of
+  user CPU) finishes inside the first sleep. So the `yaml` row reads as roughly
+  "1 s + startup", not transform throughput. Its tie with `ts-quickjs` is a
+  coincidence of that quantization. The sleep is CLI behaviour, not a harness
+  artifact.
+- **`ts-bridge` is faster than in phase A** (2.49 ± 0.28 s at `6d0ad87`, now
+  1.93 ± 0.01 s). Three things changed:
+  - the walker fast path for `relative()` in `execution/files.ts` (from the
+    quickjs branch), which speeds up selection on every TS arm;
+  - the CLI option-order fix, which lets the harness use
+    `run --runtime=bridge <workflow>`;
+  - a quieter, longer measurement: phase A used `--warmup 1 --runs 5`, with
+    σ 0.28 s.
+
+  Its probe floor also dropped, from 0.42 s to 0.31 s.
+- **Parallelism differs by design per arm.** Each arm ran with its natural
+  defaults:
+  - `yaml`: 12 transform threads; user + system time is about 2.5× wall time.
+  - `ts-bridge`: one bridge process per command, serial.
+  - `ts-node`: one JS thread, plus napi parse workers; user + system time is
+    about 2.1× wall time.
+  - `ts-quickjs`: strictly one thread for JS and parsing; user + system time
+    is about 1.1× wall time.
+- **`ts-quickjs` is dominated by interpreted selection.** About 575 ms goes to
+  the portable walker and file reads running in the QuickJS interpreter
+  (`ts-node` does the same selection in about 176 ms on V8). Another ~340 ms
+  is parsing on the JS thread. Transforms take about the same time in both
+  runtimes (~120 ms). The fixed floor favours `ts-quickjs`: 0.15 s through
+  Node, and 14 ms for the host alone.
+- **The `ts-quickjs` bundle cache is warm** in the main table (warmup runs
+  fill it). A cold cache (b) adds about 160 ms (esbuild and TypeScript load
+  and build the bundle). The fully Node-free path (a) saves another
+  ~140 ms.
+- The run is too short to measure engine throughput for `yaml`. That would
+  need a larger input, or a shorter poll interval in the CLI.

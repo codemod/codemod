@@ -3,7 +3,11 @@
 // process with simple timers and prints a breakdown (milliseconds) to stdout.
 // Mutates the repository like the arm itself; reset it afterwards.
 //
-//   node benchmarks/runtimes/profile-node.mjs [repo]   # default $BENCH_REPO or ~/.cache/codemod-bench/vite
+// The orchestration sources need full TypeScript transforms (parameter
+// properties), as `bin/codemod-workflow.mjs` sets up:
+//
+//   node --experimental-transform-types --import ./packages/orchestration/bin/register-ts.mjs \
+//     benchmarks/runtimes/profile-node.mjs [repo]   # default $BENCH_REPO or ~/.cache/codemod-bench/vite
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
