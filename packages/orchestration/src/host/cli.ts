@@ -30,8 +30,9 @@ import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Json } from "../core/json.ts";
 import "./node-host.ts";
-import { startDashboard, type Dashboard } from "./dashboard/server.ts";
-import { DashboardSession, type RunSummary } from "./dashboard/session.ts";
+// The dashboard (server, session, monitor, the run loop) loads only for --dashboard.
+import type { Dashboard } from "./dashboard/server.ts";
+import type { DashboardSession, RunSummary } from "./dashboard/session.ts";
 import { defaultBridgePath } from "./runtimes/bridge.ts";
 import {
   defaultRuntimes,
@@ -161,7 +162,12 @@ export async function runWorkflowCli(
   if (createExecutor === undefined) {
     throw new Error(`--dashboard is not supported by runtime '${provider.name}'`);
   }
+  await provider.load?.();
   const { executable, artifacts } = await loadExecutable(options.workflow, hasInput);
+  const [{ startDashboard }, { DashboardSession }] = await Promise.all([
+    import("./dashboard/server.ts"),
+    import("./dashboard/session.ts"),
+  ]);
   // The session owns every run of this configuration; each run gets a fresh
   // executor, monitor, scheduler, and abort controller from it.
   const session = new DashboardSession({
@@ -271,19 +277,26 @@ function parseInput(text: string): Json {
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/**
+ * The command (`bin/codemod-workflow.mjs`): run `argv`, print the result as
+ * JSON on stdout or the error on stderr (exit code 1), with
+ * SIGINT/SIGTERM/SIGHUP aborting the run.
+ */
+export async function main(argv: string[]): Promise<void> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   for (const name of ABORT_SIGNALS) process.once(name, abort);
-  runWorkflowCli(process.argv.slice(2), controller.signal)
-    .then(
-      (output) => process.stdout.write(`${JSON.stringify(output, null, 2)}\n`),
-      (error: unknown) => {
-        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-        process.exitCode = 1;
-      },
-    )
-    .finally(() => {
-      for (const name of ABORT_SIGNALS) process.off(name, abort);
-    });
+  try {
+    const output = await runWorkflowCli(argv, controller.signal);
+    process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  } finally {
+    for (const name of ABORT_SIGNALS) process.off(name, abort);
+  }
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main(process.argv.slice(2));
 }

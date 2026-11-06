@@ -4,7 +4,7 @@
  * hence a subprocess) and run it in Node (AsyncLocalStorage) with an executor
  * that answers `shell` like `echo` would. Prints `{ output, history }`.
  *
- * node --experimental-transform-types --import ../../../bin/register-ts.mjs node-reference.ts <workflow.ts>
+ * node --import ../../../bin/register-ts.mjs node-reference.ts <workflow.ts>
  */
 import {
   MemoryHistoryStore,

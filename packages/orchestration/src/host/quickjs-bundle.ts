@@ -22,14 +22,25 @@
  * go through `Promise.prototype.then`, which carries the orchestration async
  * context in QuickJS (`quickjs/async-context.ts`).
  */
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
-// esbuild and the build step (TypeScript) load only when a bundle is built,
-// so a cache hit (`cachedQuickjsBundle`) costs file hashing only.
+// esbuild and TypeScript load only when a bundle is built (the build step
+// loads TypeScript on first use), so a cache hit costs file hashing only.
 import type { Plugin } from "esbuild";
-import type { BuiltModule, JssgArtifact } from "../bundle/build.ts";
+import {
+  buildModule,
+  buildToolchain,
+  type BuiltModule,
+  type JssgArtifact,
+} from "../bundle/build.ts";
+import {
+  atomicWrite,
+  cacheRoot,
+  fileHash,
+  inputsUnchanged,
+  privateDirectory,
+  sha256,
+} from "../bundle/cache.ts";
 
 export interface QuickjsBundle {
   /** The ES module text. */
@@ -117,10 +128,7 @@ function plugin(
 /** Build the bundle for `workflow` (absolute or relative to the process cwd). */
 export async function buildQuickjsBundle(workflow: string): Promise<QuickjsBundle> {
   const file = resolve(workflow);
-  const [{ build }, { buildModule }] = await Promise.all([
-    import("esbuild"),
-    import("../bundle/build.ts"),
-  ]);
+  const { build } = await import("esbuild");
   const artifacts = new Map<string, JssgArtifact>();
   const transformInputs = new Set<string>();
   // The QuickJS entry first, so the host and the async context are installed
@@ -161,7 +169,7 @@ export async function buildQuickjsBundle(workflow: string): Promise<QuickjsBundl
     sorted.map((artifact) => [artifact.hash, { name: artifact.name, source: artifact.source }]),
   );
   const code = `const ${ARTIFACTS} = JSON.parse(${JSON.stringify(JSON.stringify(table))});\n${result.outputFiles[0]!.text}`;
-  const hash = createHash("sha256").update(code).digest("hex");
+  const hash = sha256(code);
   const inputs = Object.keys(result.metafile.inputs)
     // The generated entry (stdin) is a function of the workflow path and this builder.
     .filter((input) => !input.startsWith("<stdin>") && !input.endsWith(ENTRY_NAME))
@@ -171,19 +179,11 @@ export async function buildQuickjsBundle(workflow: string): Promise<QuickjsBundl
   return { code, hash, artifacts: sorted, inputs: [...new Set(inputs)].sort() };
 }
 
-const fileHash = (path: string): string | undefined => {
-  try {
-    return createHash("sha256").update(readFileSync(path)).digest("hex");
-  } catch {
-    return undefined;
-  }
-};
-
-/** Identity of this builder itself: a cached bundle is reused only by the same build code. */
-const BUILDER = createHash("sha256")
-  .update(readFileSync(join(SRC, "host", "quickjs-bundle.ts")))
-  .update(readFileSync(join(SRC, "bundle", "build.ts")))
-  .digest("hex");
+/**
+ * Identity of this builder (this file and the build step's toolchain): a
+ * cached bundle is reused only by the same build code.
+ */
+const BUILDER = sha256(readFileSync(join(SRC, "host", "quickjs-bundle.ts")), buildToolchain());
 
 interface CacheManifest {
   builder: string;
@@ -193,9 +193,20 @@ interface CacheManifest {
   inputs: Record<string, string>;
 }
 
-/** Default cache: `$CODEMOD_WORKFLOW_CACHE` or `<tmpdir>/codemod-workflow-quickjs`. */
+/**
+ * Default cache: `quickjs/` under the build cache (`bundle/cache.ts`:
+ * `$CODEMOD_WORKFLOW_CACHE` or `<tmpdir>/codemod-workflow-cache-<uid>`).
+ * Throws when that directory is not private to this user.
+ */
 export function defaultBundleCache(env: Record<string, string | undefined> = process.env): string {
-  return env.CODEMOD_WORKFLOW_CACHE ?? join(tmpdir(), "codemod-workflow-quickjs");
+  const root = cacheRoot(env);
+  const directory = privateDirectory("quickjs", root);
+  if (directory === undefined) {
+    throw new Error(
+      `the workflow cache ${join(root, "quickjs")} is not a directory private to this user; fix its owner and permissions or set CODEMOD_WORKFLOW_CACHE`,
+    );
+  }
+  return directory;
 }
 
 export interface CachedBundle {
@@ -216,7 +227,7 @@ export async function cachedQuickjsBundle(
   cache: string = defaultBundleCache(),
 ): Promise<CachedBundle> {
   const file = resolve(workflow);
-  const key = createHash("sha256").update(BUILDER).update("\0").update(file).digest("hex");
+  const key = sha256(BUILDER, file);
   const manifestPath = join(cache, `${key}.json`);
   if (existsSync(manifestPath)) {
     try {
@@ -225,8 +236,8 @@ export async function cachedQuickjsBundle(
       if (
         manifest.builder === BUILDER &&
         manifest.workflow === file &&
-        existsSync(bundle) &&
-        Object.entries(manifest.inputs).every(([input, hash]) => fileHash(input) === hash)
+        fileHash(bundle) === manifest.hash &&
+        inputsUnchanged(manifest.inputs)
       ) {
         return { path: bundle, hash: manifest.hash, cached: true };
       }
@@ -238,7 +249,7 @@ export async function cachedQuickjsBundle(
   mkdirSync(cache, { recursive: true });
   const bundleName = `${built.hash}.mjs`;
   const bundlePath = join(cache, bundleName);
-  if (!existsSync(bundlePath)) atomicWrite(bundlePath, built.code);
+  if (fileHash(bundlePath) !== built.hash) atomicWrite(bundlePath, built.code);
   const manifest: CacheManifest = {
     builder: BUILDER,
     workflow: file,
@@ -248,10 +259,4 @@ export async function cachedQuickjsBundle(
   };
   atomicWrite(manifestPath, JSON.stringify(manifest));
   return { path: bundlePath, hash: built.hash, cached: false };
-}
-
-function atomicWrite(path: string, content: string): void {
-  const temporary = `${path}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(temporary, content);
-  renameSync(temporary, path);
 }

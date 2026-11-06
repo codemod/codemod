@@ -52,7 +52,8 @@ createHarness({ runtime: "node" })                   // tests
 
 ```text
 codemod-workflow run --runtime=quickjs wf.ts --target R
-  Node: cachedQuickjsBundle(wf.ts)   (esbuild; reused while every input file is unchanged)
+  Node: cachedQuickjsBundle(wf.ts)   (esbuild + TypeScript only on a miss; a hit hashes the
+                                      inputs and the bundle, nothing else; see README "Startup")
   spawn orchestration-quickjs-host run <bundle> --target R --json
     Rust: AsyncRuntime + ONE AsyncContext; transform built-ins (codemod:ast-grep over sg_core, ...)
           + LLRT globals; globalThis.__codemodQuickjsNative (fs, env, clock, spawn, jssg*)
@@ -275,6 +276,7 @@ Node-side provider (`src/host/runtimes/types.ts`), one file per runtime, listed 
 interface RuntimeProvider extends RuntimeDescriptor {
   description: string;
   availability(settings: RuntimeSettings): { available: true } | { available: false; reason: string };
+  load?(): Promise<void>; // import the implementation; awaited before createExecutor/launch
   createExecutor?(context: { cwd; artifacts; events?; settings }): OperationExecutor; // in-process
   launch?(request: { workflow; target; input?; signal?; settings; notify? }): Promise<unknown>; // out-of-process
 }
@@ -282,9 +284,13 @@ interface RuntimeProvider extends RuntimeDescriptor {
 
 `runWorkflow`/the CLI: resolve the name (`unknown runtime 'x'; expected one of: ...`), check
 the workflow and target exist, check `availability` (its `reason` is the whole error; the CLI
-exits 1), then either `launch` the file or load it (`loadWorkflow`) and
+exits 1), `await load()`, then either `launch` the file or load it (`loadWorkflow`) and
 `run(executable, { executor: createExecutor(...), runtime: provider })`. `--dashboard` needs
-`createExecutor`.
+`createExecutor`. Provider modules stay small and import their executors in `load()`
+(`bridge`: `execution/executor.ts`; `node`: `runtimes/node-executor.ts`), and the CLI imports
+the dashboard only for `--dashboard`, so the CLI's own startup loads 26 modules and a
+`--runtime=quickjs` run never loads the in-process runtimes. `createExecutor` before `load()`
+throws.
 
 `bridge` and `node` are in-process providers (`createExecutor`); `quickjs` is out-of-process
 (`launch`: build or reuse the cached bundle, spawn the host binary, parse its `--json`
