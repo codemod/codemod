@@ -105,7 +105,7 @@ done
 busy="$(ps -Ao pid=,pcpu=,comm= 2>/dev/null | awk -v max="$MAX_PROC_CPU" -v skip="$ancestors" '
   { pid = $1; cpu = $2; $1 = ""; $2 = ""; sub(/^ +/, "");
     if (cpu + 0 > max + 0 && index(skip, " " pid " ") == 0 && $0 !~ /(^|\/)ps$/)
-      printf "      %6s %5.1f%%  %s\n", pid, cpu, $0 }')"
+      printf "      %6s %5.1f%%  %s\n", pid, cpu, $0 }' || true)"
 if [ -n "$busy" ]; then
   fail "processes over $MAX_PROC_CPU% CPU:"
   printf '%s\n' "$busy"
@@ -115,7 +115,7 @@ fi
 
 # Spotlight: indexing shows up as busy mds/mdworker processes.
 if $darwin; then
-  md_cpu="$(ps -Ao pcpu=,comm= 2>/dev/null | awk '$2 ~ /(mds|mds_stores|mdworker|mdworker_shared|mdsync)$/ { s += $1 } END { printf "%.1f", s + 0 }')"
+  md_cpu="$(ps -Ao pcpu=,comm= 2>/dev/null | awk '$2 ~ /(mds|mds_stores|mdworker|mdworker_shared|mdsync)$/ { s += $1 } END { printf "%.1f", s + 0 }' || true)"
   md_status="$(mdutil -s "$REPO" 2>/dev/null | tail -n1 | sed 's/^[[:space:]]*//' || true)"
   if gt "$md_cpu" 5; then
     fail "Spotlight is indexing (mds/mdworker at ${md_cpu}% CPU; volume: ${md_status:-unknown})"
