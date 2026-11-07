@@ -30,8 +30,8 @@
  * Portable (`tests/portable.test.ts`): nothing here imports Node. A
  * transform that never returns cannot be interrupted in-process.
  */
-import { getHost } from "../core/host.ts";
 import type { Json } from "../core/json.ts";
+import { Phase, lap, now } from "../core/timings.ts";
 import {
   PROTOCOL_VERSION,
   type ArtifactRef,
@@ -87,20 +87,18 @@ export interface JssgBatchEngine<Root = unknown, Ran = unknown> {
   load(artifact: TransformArtifact, module: string): Promise<unknown>;
   /** How a thrown transform error reads after `JSSG failed for '<path>': `. */
   describeError(error: unknown): string;
+  /**
+   * Benchmark timings: `parse` runs off the JS thread, so the loop records
+   * the time it waits for a chunk as `parse` (the engine's workers report
+   * CPU). Otherwise the engine times its parsing itself.
+   */
+  readonly parsesOffThread?: boolean;
 }
 
 export interface JssgBatchDispatchOptions {
   engine: JssgBatchEngine<any, any>;
-  /** Clock for `profile`, in milliseconds. Defaults to the installed host's `now()`. */
-  now?: () => number;
   /** Files parsed per `parse` call; the next chunk is requested before this one transforms. Default 64. */
   chunkSize?: number;
-  /**
-   * Optional timers, phase name and milliseconds: `open` (planning the
-   * batch), `parse` (each chunk, which may overlap transforms), `parse.wait`
-   * (time blocked on it), `load`, `transform`, `convert`.
-   */
-  profile?: (phase: string, ms: number) => void;
 }
 
 /** `Name: message` (what the bridge's sandbox error shows for a thrown `Error`). */
@@ -111,7 +109,8 @@ export function describeError(error: unknown): string {
 
 /** A `JssgDispatch` running transforms in this realm; create one per run. */
 export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): JssgDispatch {
-  const { engine, profile } = options;
+  const { engine } = options;
+  const parseWait = engine.parsesOffThread === true;
   const chunkSize = Math.max(1, options.chunkSize ?? 64);
   const modules = new Map<string, Promise<unknown>>();
   const load = (artifact: TransformArtifact, module: string) => {
@@ -124,8 +123,6 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
   };
 
   return async (request: OperationRequest, signal?: AbortSignal) => {
-    const now = profile === undefined ? () => 0 : (options.now ?? (() => getHost().now()));
-    const timed = (phase: string, start: number) => profile?.(phase, now() - start);
     const failed = (message: string): OperationCompletion => ({
       protocolVersion: PROTOCOL_VERSION,
       commandId: request.commandId,
@@ -137,7 +134,6 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
     const files = request.context?.files ?? [];
     const source = request.context?.artifact?.source;
     let batch: JssgBatch;
-    const opened = now();
     try {
       batch = engine.open(
         {
@@ -154,28 +150,23 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
     } catch (error) {
       return failed((error as Error).message ?? String(error));
     }
-    timed("open", opened);
     const artifact: TransformArtifact = { ...operation.transform, source: source ?? "" };
     let pending: Promise<unknown[]> | undefined;
     try {
-      const parse = (start: number) => {
-        const begun = now();
-        return batch
-          .parse(
-            start,
-            files.slice(start, start + chunkSize).map((file) => file.content),
-          )
-          .then((roots) => {
-            timed("parse", begun);
-            return roots;
-          });
-      };
+      const parse = (start: number) =>
+        batch.parse(
+          start,
+          files.slice(start, start + chunkSize).map((file) => file.content),
+        );
       const outcomes: FileOutcome[] = [];
       pending = files.length > 0 ? parse(0) : undefined;
       for (let start = 0; pending !== undefined; start += chunkSize) {
+        // Benchmark timings (`core/timings.ts`; no-ops when off): blocked on
+        // an off-thread parse is `parse`, the first evaluation of the module
+        // `setup`, the call `transform`; the engine times `convert`.
         const waited = now();
         const roots = await pending;
-        timed("parse.wait", waited);
+        if (parseWait) lap(Phase.parse, waited);
         // Parse the next chunk (off-thread, where the engine can) while this one transforms.
         pending = start + chunkSize < files.length ? parse(start + chunkSize) : undefined;
         for (const [offset, root] of roots.entries()) {
@@ -190,21 +181,18 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
           let ran: unknown;
           try {
             const transform = await load(artifact, batch.module);
-            timed("load", begun);
+            begun = lap(Phase.setup, begun);
             if (typeof transform !== "function") {
               throw new Error(
                 `jssg codemod modules must export a function. ${typeof transform} found.`,
               );
             }
-            begun = now();
             ran = await batch.call(index, root, transform as TransformFunction);
           } catch (error) {
             return failed(`JSSG failed for '${file.path}': ${engine.describeError(error)}`);
           }
-          timed("transform", begun);
-          begun = now();
+          lap(Phase.transform, begun);
           outcomes.push(batch.finish(index, root, ran));
-          timed("convert", begun);
         }
       }
       return {

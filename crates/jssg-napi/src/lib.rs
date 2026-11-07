@@ -742,3 +742,22 @@ pub fn select_files(env: Env, request: String) -> Result<Vec<String>> {
 pub fn read_sources(env: Env, root: String, paths: Vec<String>) -> Result<Vec<Option<String>>> {
     orchestration_walker::read_sources(&root, &paths).map_err(|error| walker_error(&env, error))
 }
+
+// ---------------------------------------------------------------------------
+// Benchmark timings (`timings` feature): the Node CLI merges these phases
+// into its own file (`packages/orchestration/src/core/timings.ts`).
+
+/// Whether this build collects timings (the feature is on and
+/// `CODEMOD_TIMINGS_FILE` is set).
+#[napi(js_name = "timingsEnabled")]
+pub fn timings_enabled() -> bool {
+    bench_timings::enabled()
+}
+
+/// The addon's phases so far (`setup`, `convert` wall on the JS thread;
+/// `parse`, `select`, `read` CPU on worker threads) as the schema's
+/// `phases` JSON object.
+#[napi(js_name = "timingsPhases")]
+pub fn timings_phases() -> String {
+    bench_timings::phases_json()
+}

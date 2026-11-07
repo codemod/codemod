@@ -206,6 +206,12 @@ export interface Host {
   createAsyncContext<T>(): AsyncContextVariable<T>;
   /** Milliseconds since the Unix epoch. */
   now(): number;
+  /**
+   * Optional monotonic clock with sub-microsecond resolution, for the
+   * benchmark timings (`core/timings.ts`): `ns()` is nanoseconds from an
+   * arbitrary origin. Node: `performance.now()`; QuickJS: a Rust clock.
+   */
+  readonly clock?: { ns(): number };
   setTimeout(callback: () => void, ms: number): HostTimer;
   clearTimeout(timer: HostTimer): void;
   /** RFC 4122 v4 UUID; used for unique temporary names. */

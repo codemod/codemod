@@ -78,6 +78,14 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
         run_workflow_tui_with_session(engine.clone(), session, 20).await?;
         workflow_run_id
     } else {
+        // Benchmark timings: CLI start-up until here is `boot`; creating the
+        // run and starting the engine thread is `plan`.
+        bench_timings::add(
+            bench_timings::Phase::Boot,
+            bench_timings::since_start_ns(),
+            1,
+        );
+        let plan = bench_timings::start();
         let workflow_run_id = engine
             .run_workflow(
                 workflow,
@@ -87,6 +95,7 @@ pub async fn run_workflow(engine: &mut Engine, config: WorkflowRunConfig) -> Res
             )
             .await
             .context("Failed to run workflow")?;
+        bench_timings::stop(bench_timings::Phase::Plan, plan);
         println!(
             "{} {}",
             style("Workflow started").cyan(),
@@ -128,6 +137,7 @@ pub async fn wait_for_workflow_completion(
 
         match status {
             WorkflowStatus::Completed => {
+                bench_timings::mark("poll_saw");
                 println!(
                     "{} {}",
                     style("Workflow completed").green(),

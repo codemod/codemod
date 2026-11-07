@@ -74,6 +74,13 @@ export interface Binding {
    * `null` for a missing or non-UTF-8 file.
    */
   readSources(root: string, paths: string[]): (string | null)[];
+  /**
+   * Benchmark timings (`crates/bench-timings`): true when the addon was
+   * built with the `timings` feature and `CODEMOD_TIMINGS_FILE` is set.
+   */
+  timingsEnabled(): boolean;
+  /** The addon's phases so far, as the timings schema's `phases` JSON object. */
+  timingsPhases(): string;
 }
 
 export function bindingPath(env?: Record<string, string | undefined>): string;

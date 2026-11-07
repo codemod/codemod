@@ -4,16 +4,20 @@
 //
 //   node scripts/build.mjs            # debug
 //   node scripts/build.mjs --release  # release (what the benchmark uses)
+//   node scripts/build.mjs --release --features timings   # benchmark phase timings
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 const release = process.argv.includes("--release");
+const featuresAt = process.argv.indexOf("--features");
+const features = featuresAt === -1 ? [] : ["--features", process.argv[featuresAt + 1] ?? ""];
 const root = resolve(import.meta.dirname, "../../..");
-const cargo = spawnSync("cargo", ["build", "-p", "jssg-napi", ...(release ? ["--release"] : [])], {
-  cwd: root,
-  stdio: "inherit",
-});
+const cargo = spawnSync(
+  "cargo",
+  ["build", "-p", "jssg-napi", ...(release ? ["--release"] : []), ...features],
+  { cwd: root, stdio: "inherit" },
+);
 if (cargo.status !== 0) process.exit(cargo.status ?? 1);
 
 const targetDir = resolve(root, process.env.CARGO_TARGET_DIR ?? "target");

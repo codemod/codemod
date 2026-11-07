@@ -49,6 +49,7 @@ impl JssgBatch {
     /// root-relative paths of its files; throws the planning error.
     #[napi(constructor)]
     pub fn new(config: String, paths: Vec<String>) -> Result<Self> {
+        let setup = bench_timings::start();
         let config: BatchConfig = serde_json::from_str(&config)
             .map_err(|error| Error::from_reason(format!("invalid JSSG batch: {error}")))?;
         let plan = BatchPlan::for_paths(
@@ -58,6 +59,7 @@ impl JssgBatch {
             Containment::PerFile,
         )
         .map_err(Error::from_reason)?;
+        bench_timings::stop(bench_timings::Phase::Setup, setup);
         Ok(Self {
             plan: Arc::new(plan),
         })
@@ -121,14 +123,14 @@ impl JssgBatch {
         result: Unknown<'_>,
         staged: Option<&mut StagedChanges>,
     ) -> Result<Option<FileOutcomeJs>> {
+        let convert = bench_timings::start();
         let secondary = staged
             .map(|staged| std::mem::take(&mut staged.changes))
             .unwrap_or_default();
         let output = transform_output(&root.core, result, secondary);
-        let outcome = self
-            .plan
-            .finish(index as usize, output)
-            .map_err(Error::from_reason)?;
+        let outcome = self.plan.finish(index as usize, output);
+        bench_timings::stop(bench_timings::Phase::Convert, convert);
+        let outcome = outcome.map_err(Error::from_reason)?;
         if outcome.edits.is_empty() && outcome.output.is_none() {
             return Ok(None);
         }
@@ -201,9 +203,13 @@ impl Task for ParseChunk {
                     .step_by(chunk)
                     .map(|from| {
                         scope.spawn(move || {
-                            (from..(from + chunk).min(len))
-                                .map(|offset| plan.parse(start + offset, &contents[offset]))
-                                .collect::<std::result::Result<Vec<_>, _>>()
+                            // Benchmark timings: worker CPU; the JS thread
+                            // records the time it waits for the chunk.
+                            bench_timings::span_cpu(bench_timings::Phase::Parse, || {
+                                (from..(from + chunk).min(len))
+                                    .map(|offset| plan.parse(start + offset, &contents[offset]))
+                                    .collect::<std::result::Result<Vec<_>, _>>()
+                            })
                         })
                     })
                     .collect();

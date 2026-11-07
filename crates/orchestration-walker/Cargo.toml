@@ -17,6 +17,12 @@ regress = { version = "0.10", features = ["utf16"] }
 # Fast path for rules whose JS semantics the `regex` crate provably shares
 # on ASCII paths (`node_ignore::fast_source`).
 regex = { workspace = true }
+bench-timings = { workspace = true }
+
+[features]
+default = []
+# Benchmark timings: CPU time of the walk and read worker threads.
+timings = ["bench-timings/timings"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -480,6 +480,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55248b47b0caf0546f7988906588779981c43bb1bc9d0c44087278f80cdb44ba"
 
 [[package]]
+name = "bench-timings"
+version = "1.13.18"
+dependencies = [
+ "libc",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "better_scoped_tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -710,6 +719,7 @@ dependencies = [
  "ast-grep-config",
  "async-trait",
  "base64 0.22.1",
+ "bench-timings",
  "butterflow-models",
  "butterflow-runners",
  "butterflow-scheduler",
@@ -749,6 +759,7 @@ dependencies = [
 name = "butterflow-execution-bridge"
 version = "1.13.18"
 dependencies = [
+ "bench-timings",
  "butterflow-models",
  "butterflow-runners",
  "codemod-ai",
@@ -1080,6 +1091,7 @@ dependencies = [
  "ast-grep-language",
  "async-trait",
  "base64 0.22.1",
+ "bench-timings",
  "butterflow-core",
  "butterflow-models",
  "butterflow-runners",
@@ -1211,6 +1223,7 @@ dependencies = [
  "ast-grep-core",
  "ast-grep-dynamic",
  "ast-grep-language",
+ "bench-timings",
  "bytes",
  "codemod-llrt-capabilities",
  "dashmap 6.1.0",
@@ -3489,6 +3502,7 @@ version = "1.13.18"
 dependencies = [
  "ast-grep-config",
  "ast-grep-core",
+ "bench-timings",
  "codemod-sandbox",
  "jssg-batch",
  "napi",
@@ -4857,6 +4871,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 name = "orchestration-quickjs-host"
 version = "1.13.18"
 dependencies = [
+ "bench-timings",
  "codemod-sandbox",
  "jssg-batch",
  "libc",
@@ -4873,6 +4888,7 @@ dependencies = [
 name = "orchestration-walker"
 version = "1.13.18"
 dependencies = [
+ "bench-timings",
  "libc",
  "regex",
  "regress",

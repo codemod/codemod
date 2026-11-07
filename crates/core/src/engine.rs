@@ -1484,7 +1484,9 @@ impl Engine {
                 .build()
                 .expect("failed to build workflow runtime");
             rt.block_on(async move {
-                if let Err(e) = workflow_engine.execute_workflow(workflow_run_id).await {
+                let result = workflow_engine.execute_workflow(workflow_run_id).await;
+                bench_timings::mark("engine_done");
+                if let Err(e) = result {
                     workflow_engine.emit_error(format!("Workflow execution failed: {e}"));
                 }
             });

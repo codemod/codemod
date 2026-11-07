@@ -22,6 +22,7 @@ members = [
     "crates/tree-sitter-loader",
     "crates/jssg-napi",
     "crates/jssg-batch",
+    "crates/bench-timings",
 ]
 resolver = "2"
 
@@ -58,6 +59,7 @@ language-python = { path = "crates/language-python" }
 semantic-factory = { path = "crates/semantic-factory" }
 tree-sitter-loader = { path = "crates/tree-sitter-loader" }
 jssg-batch = { path = "crates/jssg-batch" }
+bench-timings = { path = "crates/bench-timings" }
 
 # Ruff Python semantic analysis and ty_ide
 ruff_python_semantic = { git = "https://github.com/astral-sh/ruff.git", tag = "0.14.0" }

@@ -33,8 +33,14 @@ export interface QuickjsNative {
   env(): Record<string, string>;
   /** Milliseconds since the Unix epoch. */
   now(): number;
-  /** Milliseconds since the host process started (monotonic). */
-  hrtime(): number;
+  /** Nanoseconds since the host process started (monotonic): `Host.clock.ns()`. */
+  clockNs(): number;
+  /**
+   * Benchmark timings are on: the host has its `timings` feature and
+   * `CODEMOD_TIMINGS_FILE` is set; the entry then returns its JS-side
+   * phases in the result (`core/timings.ts`).
+   */
+  readonly timingsEnabled: boolean;
   randomUUID(): string;
   /** Console output (the host writes it to stderr). */
   print(stream: "stdout" | "stderr", text: string): void;
@@ -81,7 +87,6 @@ export interface QuickjsNative {
   /** The awaited transform result as `FileOutcome` JSON (`undefined`: no edits, no output). Throws `JSSG failed for '<path>': ...`. */
   jssgFinish(batch: number, index: number, root: unknown, result: unknown): string | undefined;
   jssgEnd(batch: number): void;
-  jssgStats(): { prepareMs: number; finishMs: number; files: number; skipped: number };
 }
 
 /** The host's primitives, or an error naming what is missing. */

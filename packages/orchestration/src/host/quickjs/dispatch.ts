@@ -31,20 +31,6 @@ import {
 import type { JssgDispatch } from "../../execution/jssg.ts";
 import type { QuickjsNative } from "./native.ts";
 
-/** Accumulated wall time inside dispatch, for the timer breakdown. */
-export interface DispatchTimings {
-  /** Module registration and evaluation (once per artifact). */
-  loadMs: number;
-  /** Time inside transform functions (including awaits). */
-  transformMs: number;
-  batches: number;
-}
-
-export interface QuickjsDispatch {
-  dispatch: JssgDispatch;
-  timings: DispatchTimings;
-}
-
 /** `Name: message` plus the stack (QuickJS's `stack` holds only the frames). */
 const describe = (error: unknown) => {
   if (!(error instanceof Error)) return String(error);
@@ -54,8 +40,12 @@ const describe = (error: unknown) => {
   return stack.startsWith(head) ? stack : `${head}\n${stack}`;
 };
 
-export function createQuickjsDispatch(native: QuickjsNative): QuickjsDispatch {
-  const timings: DispatchTimings = { loadMs: 0, transformMs: 0, batches: 0 };
+/**
+ * Benchmark timings: the host times `jssgBegin` (setup), `jssgParse`
+ * (parse), and `jssgFinish` (convert) in Rust; the shared loop times the
+ * transform calls and the first module evaluation.
+ */
+export function createQuickjsDispatch(native: QuickjsNative): JssgDispatch {
   // One transform call in flight across the run (the staging is per
   // context). Without contention a call starts at once, and a synchronous
   // transform settles without extra promise hops: in the bundle every
@@ -77,7 +67,6 @@ export function createQuickjsDispatch(native: QuickjsNative): QuickjsDispatch {
 
   const engine: JssgBatchEngine<unknown, unknown> = {
     open(config, paths) {
-      timings.batches += 1;
       const { id, module } = native.jssgBegin(JSON.stringify(config), paths);
       const end = (index: number) => {
         native.jssgCallEnd(id, index);
@@ -133,13 +122,5 @@ export function createQuickjsDispatch(native: QuickjsNative): QuickjsDispatch {
     describeError: describe,
   };
 
-  const dispatch = createJssgBatchDispatch({
-    engine,
-    now: () => native.hrtime(),
-    profile: (phase, ms) => {
-      if (phase === "load") timings.loadMs += ms;
-      else if (phase === "transform") timings.transformMs += ms;
-    },
-  });
-  return { dispatch, timings };
+  return createJssgBatchDispatch({ engine });
 }

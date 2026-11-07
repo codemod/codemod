@@ -360,6 +360,11 @@ where
     R: ModuleResolver + 'static,
     L: Loader + 'static,
 {
+    use bench_timings::Phase;
+    // Benchmark timings (no code without the `timings` feature): runtime,
+    // context, and module evaluation are `setup`; tree-sitter and the
+    // selector `parse`; the call `transform`; reading the result `convert`.
+    let setup = bench_timings::start();
     let script_name = options
         .script_path
         .file_name()
@@ -379,9 +384,13 @@ where
             message: format!("Failed to create AsyncRuntime: {e}"),
         },
     })?;
+    bench_timings::stop(Phase::Setup, setup);
 
     // Create AstGrep instance for the SgRootRjs
-    let ast_grep = AstGrep::new(options.content, options.language);
+    let ast_grep = bench_timings::span(Phase::Parse, || {
+        AstGrep::new(options.content, options.language)
+    });
+    let setup = bench_timings::start();
     let canonical_target_directory = options
         .target_directory
         .canonicalize()
@@ -641,6 +650,8 @@ where
                 .to_string_lossy()
                 .to_string();
             let target_directory = canonical_target_directory.clone();
+            bench_timings::stop(Phase::Setup, setup);
+            let parse = bench_timings::start();
             // Keep a handle to read rename_to after JS execution
             let sg_root = CoreRoot::from_ast_grep(
                 ast_grep,
@@ -658,6 +669,7 @@ where
                 let ast_matches = sg_root.select(&selector_config.matcher);
 
                 if ast_matches.is_empty() {
+                    bench_timings::stop(Phase::Parse, parse);
                     return Ok(CodemodOutput {
                         primary: ExecutionResult::Skipped,
                         secondary: vec![],
@@ -670,6 +682,8 @@ where
                 None
             };
             let parsed_content = SgRootRjs::from_core(sg_root.clone());
+            bench_timings::stop(Phase::Parse, parse);
+            let setup = bench_timings::start();
 
             let language_str = options.language.to_string();
             let target_dir_str = target_directory.to_string_lossy().into_owned();
@@ -693,6 +707,9 @@ where
                     },
                 })?;
 
+            bench_timings::stop(Phase::Setup, setup);
+            let transform = bench_timings::start();
+
             // Call it and return value.
             let result_obj_promise = func.call((parsed_content, run_options_qjs)).catch(&ctx).map_err(|e| {
                 map_transform_execution_error(&runtime_hooks_context, e)
@@ -701,6 +718,8 @@ where
                 .await
                 .catch(&ctx)
                 .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
+            bench_timings::stop(Phase::Transform, transform);
+            let convert = bench_timings::start();
 
             let (content_result, output) = extract_transform_output(&ctx, result_obj)?;
 
@@ -713,6 +732,7 @@ where
             let secondary = jssg_file_changes.changes.lock()
                 .map(|guard| guard.clone())
                 .unwrap_or_default();
+            bench_timings::stop(Phase::Convert, convert);
 
             Ok(CodemodOutput { primary, secondary, output })
         };
