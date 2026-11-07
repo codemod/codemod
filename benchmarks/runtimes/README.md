@@ -361,6 +361,73 @@ on vite for every arm (the gap is code outside any span).
 
 ## Results
 
+### Phase G: four sizes with phase timings (Linux VM)
+
+Full report: [`results/phase-g/report.md`](results/phase-g/report.md)
+(provenance, per-size tables with IQR and bootstrap CIs, the scaling fit,
+and per-phase tables); instrumentation overhead:
+[`overhead-env.md`](results/phase-g/overhead-env.md),
+[`overhead-build.md`](results/phase-g/overhead-build.md).
+
+- Machine: cloud VM, AMD EPYC 9334, 4 vCPUs, 7.8 GiB, Linux 6.12 x86_64;
+  node v24.11.1, rustc 1.96.0, hyperfine 1.19.0. About 2.5x slower than the
+  M4 Pro below, and noisier (run-to-run swings of several percent), so
+  compare arms within a table, not against the macOS numbers.
+- Build: rt/integration at `7266b91f` (worktree dirty only by the preflight
+  `ps` fix committed next as `e2ce57f2`), release binaries and addon built
+  with the `timings` feature; `CODEMOD_TIMINGS_FILE` set on every timed run.
+- `sizes.sh` with `BENCH_ROUNDS=10`, warm caches, `BENCH_TIMEOUT=600`; the
+  identical-diff gate passed at every size, and every timed run was checked
+  against it.
+
+Median wall time [s] (10 interleaved rounds):
+
+| Arm | probe (2 files) | vite (1,615) | vite-x4 (6,460) | vite-x16 (25,840) | Per file [ms] (95 % CI) |
+|:---|---:|---:|---:|---:|---:|
+| `ts-node` | 0.121 | **1.002** | **3.378** | **13.359** | 0.512 [0.501, 0.518] |
+| `ts-quickjs` | 0.130 | 1.392 | 4.926 | 20.102 | 0.774 [0.760, 0.844] |
+| `yaml` | **0.099** | 1.463 | 5.794 | 25.794 | 1.002 [0.997, 1.030] |
+| `ts-bridge` | 0.160 | 4.161 | 16.043 | 65.603 | 2.536 [2.500, 2.554] |
+
+Ratios to `ts-node` at vite-x16 (95 % CI): ts-quickjs 1.50 [1.48, 1.64],
+yaml 1.93 [1.91, 2.00], ts-bridge 4.91 [4.83, 5.02]. Candidate files are
+the walk's selection; the gate counts changed files (331 on vite).
+
+What the phase tables show (medians, ms):
+
+- **Coverage** (merged phases / in-process wall) is 96.4-100 % at every size
+  from vite up, for every arm (94-96 % on the 2-file probe, where startup
+  dominates).
+- **ts-bridge** spends most of its time in `setup`: a fresh QuickJS runtime
+  and context per file plus process start-up (2,442 of 4,118 on vite;
+  40,672 of 65,526 on vite-x16). Parse and transform are about the
+  in-process runtimes' cost.
+- **ts-quickjs** vs **ts-node**: the same transform time (301 vs 341 on
+  vite), but parsing runs on the JS thread in the quickjs host (699) while
+  the napi addon parses on worker threads (289 blocked, the rest
+  overlapped). That is most of the gap.
+- **yaml** parallelizes the file loop over 4 walker threads (user time 2.8x
+  wall), but its `plan` (the engine's scheduling and state bookkeeping
+  around the steps, plus the CLI's dirty-worktree check) grows faster than
+  the input: 163 on vite, 747 on vite-x4, 5,917 on vite-x16 (23 % of that
+  run). That is why its fit has a negative fixed cost; it is worth a
+  profile of the engine's per-step state handling.
+- `idle_wait` (engine done until the CLI notices) is 0.1 ms: the phase F1
+  completion signal removed the old 1-2 s polling floor.
+
+Instrumentation overhead (`overhead.sh`, 20 interleaved off/on pairs per arm
+on vite): every paired ratio is within 0.97-1.01 and every 95 % CI contains
+1.0, both for turning timings on (`CODEMOD_TIMINGS_FILE` set vs unset) and
+for compiling them in (default build vs a build without the feature). On
+this VM the CIs are about ±2-3 % wide, so they verify the 1 % budget only for
+ts-bridge (env mode). A bound from measured costs is far below it: a span
+costs 62 ns in Rust (143 ns inside a 4-thread region), a lap 50 ns in Node
+and about 200 ns in QuickJS, and 0.4-3 ns when compiled in but off; with
+the span counts from the vite timings files that is at most 0.05-0.33 % of
+wall with timings on, and under 0.01 % off.
+
+### Phase E (macOS)
+
 All four arms were measured in one session (rt/integration after phase D:
 `jssg-batch`, native selection, the single-process CLI, the verbatim-source
 and quickjs cancellation fixes). No other builds or benchmarks ran; the
@@ -421,9 +488,10 @@ in `lib.sh`):
 | `ts-quickjs` | 0.045 ± 0.001 | 0.038 | 0.012 | 0.150 |
 | quickjs host on a prebuilt bundle | 0.012 ± 0.000 | 0.009 | 0.004 | 0.014 |
 
-### Where the time goes
+### Where the time goes (phase E, macOS)
 
-`ts-node`, in-process timers from `profile-node.mjs` (3 runs on vite, which
+`ts-node`, in-process timers from `profile-node.mjs` (phase E; the script was
+removed in phase G in favour of the timings files) (3 runs on vite, which
 agree within a few ms). About 335 ms of the 368 ms wall time is in the
 process; the rest is Node boot before the first module, and exit:
 

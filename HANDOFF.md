@@ -1,6 +1,6 @@
 # Handoff: single-runtime orchestration (Node / QuickJS) + benchmark
 
-_Status at handoff: paused by the user after Phase F. Phase G (integrate F, final multi-size report) is not started._
+_Status: Phase G done (2026-11-07): F1-F3 integrated into rt/integration, F2 timings finished and verified, multi-size report recorded on a Linux VM. See section 13._
 _Private repo: https://github.com/devagrawal09/codemod (private, remote `fork`) · base: codemod/codemod `prototype/typescript-orchestration` @ `6d0ad87` · main checkout never modified._
 
 ## 1. Goal
@@ -185,7 +185,7 @@ Commits: `ca8bb5b` feat(core): signal in-process workflow executor exits per run
 - Verification: cargo fmt/clippy clean; `cargo test -p butterflow-core` (3 new tests) and `-p codemod` (456 unit + integration incl. new `tests/workflow_run_completion.rs`) pass.
 - Numbers (release, hyperfine --warmup 2 --runs 10): yaml 2-file floor **1.446 → 0.464 s**; yaml on vite **1.359 → 1.087 s** (0.93–1.35 spread, now engine variance not sleep). Remaining floor ≈ 351 ms is CLI startup before "Workflow started". Single gate pass: yaml 0.75 s, ts-bridge 1.81, ts-node 0.37, ts-quickjs 0.71.
 
-### F2 — zero-overhead timings (rt/f-timings, WIP, NOT verified beyond cargo check)
+### F2 — zero-overhead timings (rt/f-timings, WIP at pause; finished in Phase G, see section 13)
 Commit: `abb52b5` wip(timings): feature-gated bench-timings crate and Rust-side spans (INCOMPLETE) — 45 files, +1,614/−318. Subagent was killed by a server restart mid-task; committed as-is.
 - Present: `crates/bench-timings` (feature-gated), `timings` feature wiring in core/cli/codemod-sandbox/execution-bridge/jssg-napi/orchestration-quickjs-host Cargo.toml, spans/marks in those crates, started `packages/orchestration/src/core/timings.ts` and `src/host/timings-file.ts`.
 - `cargo check -p butterflow-core -p codemod -p jssg-napi -p orchestration-quickjs-host -p butterflow-execution-bridge` passed at commit time (default features; the `timings` feature itself is unverified).
@@ -205,7 +205,7 @@ Commits: `bf7bf8b` interleaved rounds harness with bench-exec launcher, prefligh
 - One early ~1 h quickjs hang never reproduced (140-run stress clean); SIGINT-ignored bug found and fixed instead.
 - Subagent-driven work: three Claude Code sessions stalled silently once each (phases A and F); detect via no file activity + no processes, resume by continuing the session.
 
-## 10. How to resume (Phase G)
+## 10. How Phase G was planned (done; see section 13)
 1. Merge `rt/f-signal`, `rt/f-timings`, `rt/f-harness` into `rt/integration` (expect conflicts in `crates/cli/src/workflow_runner.rs` and `crates/core/src/engine.rs` between F1 and F2 marks; `benchmarks/runtimes/lib.sh` between F3 and F2's env plumbing).
 2. Overhead proof: each arm with `CODEMOD_TIMINGS_FILE` unset vs set, ratio within 1 %; feature-off vs feature-on builds.
 3. `benchmarks/runtimes/preflight.sh && sizes.sh` (probe / vite / vite×4 / vite×16), `analyze.mjs` → report.md with medians, IQR, bootstrap CIs, fixed-vs-per-file fit, per-phase table.
@@ -218,3 +218,31 @@ Commits: `bf7bf8b` interleaved rounds harness with bench-exec launcher, prefligh
 
 ## 12. Incident: stray PRs on codemod/codemod (2026-11-07 06:19–06:23 UTC)
 Two PRs titled "Shell Node" (#2472 head codemod-c4ee35be, #2473 head codemod-ce4907ec, base main) appeared on codemod/codemod under devagrawal09 while the Phase F subagents ran. No command in this project pushed to origin or created PRs; all pushes used the `fork` remote. The same checkpoint automation leaves local `codemod-<hash>` branches in the shared repo (11 exist). Both PRs were closed and their upstream branches deleted; origin has no codemod-* branches left. The automation's identity is recorded in the dashboard status file once found; until it is disabled, assume any agent run in this repo may push checkpoint branches upstream.
+
+## 13. Phase G (done, 2026-11-07, Linux cloud VM)
+
+Commits on rt/integration (on top of `8a7c8f3`): `4cbbd37` / `380faa7` / `e6224e2` merges of rt/f-signal, rt/f-harness, rt/f-timings (one conflict in `crates/core/src/engine.rs`: the F1 executor guard kept, F2's `engine_done` mark added); `316e40d` feat(timings): finish phase timings, full coverage, overhead tooling; `7266b91` drop profile-node.mjs and the unused Rust bench-exec; `e2ce57f` preflight `ps` fix; then the results commit (README, `benchmarks/runtimes/results/phase-g/`, this file). F2 was not squashed: it is already merged and pushed, and rewriting it would need a force push.
+
+### What F2 needed
+- Node CLI wiring: `bin/codemod-workflow.mjs` installs `host/timings-file.ts` only when `CODEMOD_TIMINGS_FILE` is set; arm `ts-<runtime>`; `boot` until `main`, `plan` for workflow load/launch/printing. `execution/child-timings.ts` times bridge and quickjs-host children (registers them, sets `BENCH_T0_NS`, charges spawn-to-close minus the child's wall to `setup`).
+- Merge rule fixed (`crates/bench-timings`): per-thread wall is now **summed** (max-over-threads undercounted async code hopping tokio threads and sequential worker pools). Worker pools run in `bench_timings::parallel(threads, f)` regions (owner records total / pool size as wall, total as cpu). New `Span` (pausable) and `Residual` (scope minus nested spans on the thread). Tests: `tests/regions.rs`, updated `report.rs`/`process.rs`.
+- Gaps closed: QuickJS context/runtime teardown (sandbox + quickjs host) as `setup`; yaml engine scheduling (`Span` in `execute_workflow`/`execute_task`) and pre-run dirty check as `plan`, step preparation as `setup`, walker traversal as `select`, per-file engine glue as `setup` (`Residual`); JS batch loop as back-to-back laps (chunk waits = `parse`, `finish` = `convert`), with the nested Rust convert/parse spans removed (napi, quickjs host); result validation in `jssg.ts` = `conflict`.
+- Removed: `benchmarks/runtimes/profile-node.mjs` (old `profile` hooks are gone), `crates/bench-timings/src/bin/bench-exec.rs` (the harness uses `bench-exec.c`).
+- Harness: `overhead.sh` build mode (`BENCH_OVERHEAD_BASELINE=<target dir without the feature>`), paired bootstrap in `overhead.mjs`/`analysis/stats.mjs` (verdict from the paired CI) + test; preflight tolerates BusyBox `ps`.
+- Tests: `packages/orchestration/tests/timings.test.ts` (unit), `tests/timings.e2e.test.ts` + `pnpm test:e2e:timings` (all runtimes write files, children listed, merged phases ≤ wall and > 80 %).
+
+### Verification
+- Coverage (merged phases / in-process wall): 96.4-100 % for every arm at vite, vite-x4, vite-x16 (target ≥ 95 %); 94-96 % on the 2-file probe.
+- Overhead: 20 interleaved pairs per arm, env mode and build mode: paired ratios 0.97-1.01, all CIs contain 1.0; VM noise (±2-3 % CI) only proves ≤ 1 % for ts-bridge env mode. Measured per-span costs bound it at ≤ 0.33 % on, < 0.01 % compiled-in-off (README "Results").
+- Gate: identical diffs for all four arms at every size (vite `8f7ff40f…c1c95885`, same as macOS).
+- Tests: orchestration vitest (unit) 488 + e2e 47 + timings e2e 4 pass; analysis tests 22 pass; cargo tests 921 pass across bench-timings, codemod-sandbox, jssg-batch, jssg-napi, orchestration-quickjs-host, execution-bridge, butterflow-core, codemod. Two pass alone but flaked once in the full parallel run: `butterflow-core engine_tests::test_trigger_all` / `test_run_script_preserves_platform_inherited_llm_env` (sleep/env-var sensitive) and `execution-bridge jssg::setup_and_transform_failures_fail_the_batch_before_any_result` (tokio "drop a runtime in async context"; 0/180 on reruns incl. 4-way parallel). Core git tests need `TEMBO_ALLOW_GIT_CONFIG=1 TEMBO_BYPASS_GIT_RESTRICTIONS=1` in this sandbox (its git wrapper blocks `git config`/`commit` in scratch repos; the bench scripts need the same).
+- clippy `-D warnings` clean on the touched crates with and without `timings`, except two lints new in rustc 1.96 (the sandbox's toolchain; the repo pins 1.94.1) in untouched files: `codemod-sandbox/src/ast_grep/scanner.rs:70` (unnecessary_sort_by), `cli/src/tui/mod.rs:744` (collapsible_match).
+
+### Results (vite-x16, median of 10)
+ts-node 13.36 s, ts-quickjs 20.10 s (1.50x), yaml 25.79 s (1.93x), ts-bridge 65.60 s (4.91x); per file 0.51 / 0.77 / 1.00 / 2.54 ms. Details: `benchmarks/runtimes/results/phase-g/report.md`.
+
+### Open issues found in Phase G
+- yaml `plan` grows superlinearly (163 ms vite → 747 ms x4 → 5,917 ms x16): engine scheduling/state bookkeeping around steps; profile it.
+- ts-quickjs parses on the JS thread (699 ms vs ts-node's 289 ms blocked on vite); moving parse off-thread in the host is the obvious next win.
+- napi addon now also builds on linux-x64 (`jssg-napi.linux-x64.node`, local build only; still no packaging).
+- Checkpoint automation struck again: a "Node 2" commit and `codemod-*` local branches appeared mid-session, and one commit landed on a pushed `codemod-9e4fa9a2` branch of the fork; it was re-committed onto rt/integration and the stray remote branch deleted. Nothing reached codemod/codemod.
