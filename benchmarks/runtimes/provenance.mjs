@@ -78,10 +78,16 @@ const meta = {
   gate_hash: a["gate-hash"],
   gate_files: Number(a["gate-files"]),
   recorded_at: new Date().toISOString(),
+  // sha/dirty as recorded when the run started (rounds.sh/sizes.sh export
+  // them), plus the state now, so edits made during a run are visible.
   codemod: {
-    sha: git(root, "rev-parse", "HEAD"),
+    sha: env.BENCH_START_SHA ?? git(root, "rev-parse", "HEAD"),
     branch: git(root, "rev-parse", "--abbrev-ref", "HEAD"),
-    dirty: (git(root, "status", "--porcelain") ?? "") !== "",
+    dirty: env.BENCH_START_DIRTY
+      ? env.BENCH_START_DIRTY === "true"
+      : (git(root, "status", "--porcelain") ?? "") !== "",
+    sha_at_end: git(root, "rev-parse", "HEAD"),
+    dirty_at_end: (git(root, "status", "--porcelain") ?? "") !== "",
   },
   input: {
     path: repo,

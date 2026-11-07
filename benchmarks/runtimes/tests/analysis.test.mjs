@@ -308,6 +308,22 @@ describe("analyze", () => {
     assert.match(readFileSync(join(out, "report.md"), "utf8"), /# Runtime benchmark report/);
   });
 
+  test("per-size inputs; sizes from different builds are flagged", () => {
+    const dir = writeSession(join(tmp, "mixed"), { rounds: 2, sizes: SIZES.slice(0, 2) });
+    const metaPath = join(dir, "vite/meta.json");
+    const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+    writeFileSync(
+      metaPath,
+      JSON.stringify({ ...meta, binaries: [{ name: "codemod", sha256: "other" }] }),
+    );
+    const { report, markdown } = analyze([dir], opts);
+    assert.equal(report.warnings.length, 1);
+    assert.match(report.warnings[0], /size vite was recorded with a different build/);
+    assert.match(markdown, /\*\*Warning\*\*/);
+    assert.match(markdown, /Input `probe`: vite v8\.3\.6 at 0fd9a29f/);
+    assert.equal(analyze([session], opts).report.warnings.length, 0);
+  });
+
   test("missing timings are reported, not fatal", () => {
     const dir = writeSession(join(tmp, "notimings"), { timings: false, sizes: [SIZES[1]] });
     const { report, markdown } = analyze([dir], opts);

@@ -36,6 +36,7 @@ OUT="${BENCH_OUT:-$RESULTS_DIR/runs/$(date -u +%Y%m%dT%H%M%SZ)/$SIZE}"
 case "$CACHE" in warm | cold) ;; *) die "BENCH_CACHE must be warm or cold, not $CACHE" ;; esac
 case "$ROUNDS" in '' | *[!0-9]*) die "BENCH_ROUNDS must be a positive integer" ;; esac
 
+record_start_state
 require_hyperfine
 mkdir -p "$OUT/raw" "$OUT/logs"
 OUT="$(cd "$OUT" && pwd)"

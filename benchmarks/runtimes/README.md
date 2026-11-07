@@ -105,13 +105,22 @@ pnpm --filter codemod-report-ui build          # crates/cli embeds report-ui/dis
 cargo build --release -p codemod -p butterflow-execution-bridge -p orchestration-quickjs-host
 pnpm --filter @codemod.com/jssg-napi build      # release napi addon for ts-node
 brew install hyperfine                          # or: cargo install hyperfine
-# ts-quickjs picks the newer of target/{release,debug}/orchestration-quickjs-host;
-# pin it with CODEMOD_QUICKJS_HOST_BIN=target/release/orchestration-quickjs-host.
+# lib.sh pins the release quickjs host and napi addon (CODEMOD_QUICKJS_HOST_BIN,
+# CODEMOD_JSSG_NAPI) instead of letting the runtimes pick the newer debug build.
 
 benchmarks/runtimes/setup.sh                    # clone to $HOME/.cache/codemod-bench/vite
 benchmarks/runtimes/verify.sh                   # correctness gate only
-benchmarks/runtimes/run.sh                      # gate + hyperfine
+benchmarks/runtimes/run.sh                      # quick path: gate + one hyperfine session
+benchmarks/runtimes/preflight.sh                # machine checks only
+benchmarks/runtimes/rounds.sh                   # gate + interleaved rounds + report (one size)
+benchmarks/runtimes/sizes.sh                    # rounds at probe, vite, vite-x4, vite-x16 + scaling fit
+benchmarks/runtimes/overhead.sh                 # cost of CODEMOD_TIMINGS_FILE per arm
+node benchmarks/runtimes/compare.mjs old/report.json new/report.json
+pnpm test:bench                                 # analysis tests on the fixtures
 ```
+
+`run.sh` is the quick path. For numbers that will be compared or published,
+use `rounds.sh` or `sizes.sh` (see "Rounds, sizes, and analysis" below).
 
 Knobs (environment): `BENCH_REPO` (checkout path; `setup.sh` also takes it as
 its argument), `BENCH_RUNS` (default 5), `BENCH_WARMUP` (default 1),
@@ -138,6 +147,167 @@ Outputs go to `results/`:
 a git-ignored `ts/node_modules` symlink, which `lib.sh` creates.
 `yaml/transforms` is a committed symlink to `../transforms`, because a
 `js_file` must be a relative path inside the workflow directory.
+
+## Rounds, sizes, and analysis
+
+`run.sh` runs each arm's runs back to back in one hyperfine session. Slow
+drift (thermal state, background load, a cache warming up) then lands on
+whichever arm happened to run at that moment. The round-based harness is
+designed so that drift and noise show up in the numbers instead.
+
+### Launching: `bench-exec`
+
+Every arm starts as `bin/bench-exec [-t seconds] <arm command...>`, a small C
+program (`bench-exec.c`) that `lib.sh` compiles with `cc` on first use into
+the git-ignored `bin/`. It sets `BENCH_T0_NS` to the monotonic clock
+(`clock_gettime_nsec_np(CLOCK_UPTIME_RAW)` on macOS) and `execvp`s the arm in
+the same process. The timed span therefore has no extra process, and an
+instrumented arm can report `exec_to_main_ns` (process start until `main`).
+With `BENCH_TIMEOUT`, `-t` arms an `alarm` before the exec, so a hung run dies
+with SIGALRM (exit 142). This replaces the old `perl -e 'alarm ...'` wrapper.
+Arm command lines are plain argv (no shell syntax), so hyperfine can run them
+with `-N` (no intermediate shell, no shell-spawn correction).
+
+### `preflight.sh`
+
+`preflight.sh` prints the machine spec block (model, CPU, RAM, OS, toolchain,
+worktree sha + branch + dirty flag, bench repo commit), then one
+PASS/WARN/FAIL line per check:
+
+| Check | Fails when |
+| --- | --- |
+| power | on battery (`pmset -g batt`) |
+| Low Power Mode | `pmset -g` reports `lowpowermode 1` / `powermode 1` |
+| thermal | `pmset -g therm` reports `CPU_Speed_Limit` < 100 |
+| load | 1-minute load average >= `BENCH_MAX_LOAD` (default 2) |
+| busy processes | any process outside the harness's own ancestry is above `BENCH_MAX_PROC_CPU` % CPU (default 20); offenders are listed |
+| Spotlight | `mds`/`mdworker` together above 5 % CPU (indexing) |
+| worktree | the codemod worktree has uncommitted changes |
+| binaries | a release binary for an arm in `BENCH_ARMS` is missing, or is a debug build |
+| tools | `node`, `hyperfine`, `cc`, `git`, or `perl` missing |
+
+It exits 1 on any failure. `BENCH_PREFLIGHT=warn` downgrades failures to
+warnings, and `BENCH_PREFLIGHT=off` skips the checks (the spec block is still
+printed). The output is saved with every run and embedded in the report.
+
+### `rounds.sh`
+
+1. Preflight (saved to `<out>/preflight.txt`), then the `verify.sh` gate. The
+   gate's diff hash and file count are recorded in `results/arms.env`.
+2. Warmup: one untimed run of every arm.
+3. `BENCH_ROUNDS` rounds (default 10). Each round shuffles the arm order
+   (seeded by `BENCH_SEED` and the round number, so it is reproducible) and
+   runs each arm once:
+   `hyperfine -N --runs 1 --prepare '<prepare.sh> <timings file>' --export-json raw/<round>-<arm>.json`,
+   with `CODEMOD_TIMINGS_FILE=raw/<round>-<arm>.timings.json` set. The
+   generated `prepare.sh` resets and cleans the repository, deletes stale
+   timings files, and in cold mode also wipes the workflow cache.
+4. After every timed run, the repository's diff hash must equal the gate's
+   (`BENCH_CHECK_RUNS=0` turns this off). So every sample is a correct run.
+5. `provenance.mjs` writes `meta.json`, and `analyze.mjs` writes the report.
+
+Cache modes (`BENCH_CACHE`): `warm` (default) keeps the CLI's caches across
+runs. `cold` points `CODEMOD_WORKFLOW_CACHE` at `<out>/workflow-cache` (unless
+it is already set) and wipes it before every run. Add `BENCH_PURGE=1` to also
+run `sudo -n purge` before every run, dropping the OS file cache; run
+`sudo -v` first.
+
+Output: `results/runs/<UTC stamp>/<size>/` (git-ignored) holding `raw/`,
+`logs/`, `prepare.sh`, `arms.tsv`, `preflight.txt`, and `meta.json`.
+`results/report.md` and `results/report.json` are also git-ignored. Copy
+what you want to keep.
+
+### `sizes.sh`
+
+`sizes.sh` runs `rounds.sh` once per size in `BENCH_SIZES` (default
+`probe vite vite-x4 vite-x16`) under one session directory and one shared
+preflight, then analyzes them together. Every size is a git repository, so the
+gate works unchanged:
+
+| Size | Repository | Candidate files | Expected changes |
+| --- | --- | ---: | ---: |
+| `probe` | `make_probe_repo` (two files) | 2 | 1 |
+| `vite` | the pinned checkout | 1615 | 331 |
+| `vite-x4` | 4 copies in `copy-0/`..`copy-3/` | 6460 | 1324 |
+| `vite-x16` | 16 copies | 25840 | 5296 |
+
+For a `vite-xN` size, each copy is `git archive` of the pinned commit
+extracted into its own subdirectory. The copies keep their own `.gitignore`
+files, so selection and the expected diff are exactly N times vite's. The
+result is committed once with a fixed author and date, which makes its commit
+id (and so `BENCH_EXPECT_SHA`) reproducible. Any N works. The repositories
+live in `BENCH_SIZES_ROOT` (default `<BENCH_REPO>-sizes`). They are rebuilt
+only when missing or stale, and take about N times the checkout's disk
+space. "Candidate files" is `git ls-files` matching the include globs outside
+`node_modules`. It is the N used in the scaling fit. It runs slightly below
+what the walkers select (1621 on vite, see "The pinned input"), but it scales
+exactly with the number of copies, which is all the fit needs.
+
+### `analyze.mjs`
+
+`node analyze.mjs <size or session dir>... [--out dir] [--seed N] [--resamples N]`
+uses Node only (no dependencies) and writes `report.md` and `report.json`:
+
+- Per arm and size: n, median, IQR, IQR/median, min, max, median user and
+  system time, and a percentile-bootstrap 95 % CI (10 000 resamples, seeded)
+  of the ratio of the arm's median to the fastest arm's median. Each resample
+  draws both arms' runs independently with replacement.
+- Scaling: `wall = fixed + per_file x N` fitted by least squares to the
+  per-size medians. The CIs on both terms come from a stratified bootstrap
+  (each size's runs are resampled, then refitted), plus R^2 and a log-log
+  ASCII plot of median wall time against N.
+- Phases, from the timings files: each run's top-level file plus every child
+  file are merged. Children come from the `children` list, falling back to
+  `<top>.<pid>.json` beside the top-level file, and unlisted siblings are
+  picked up too. Phases sum across processes. The report shows the median ms
+  per phase, plus coverage (sum of phases / in-process wall), `exec_to_main`,
+  in-process wall, time after the exit hook (hyperfine wall − exec_to_main −
+  in-process wall), `idle_wait` and the poll lag (`poll_saw − engine_done`)
+  for `yaml`, the process count, and how many runs had timings. Without
+  timings files, the section says so.
+- Noise check: the script exits 2 when any arm's IQR/median exceeds 5 %,
+  unless `BENCH_ALLOW_NOISY=1`. The reports are written either way.
+- Provenance: worktree sha + dirty flag, sha256 of `codemod`, the bridge, the
+  quickjs host, the napi `.node`, and `bench-exec`; node/rustc/hyperfine/codemod
+  versions; input tag and commit; cache mode; arm commands; and the preflight
+  output.
+
+`report.json` keeps every raw sample (wall and per-phase), so reports can be
+compared later without the raw directories.
+
+### `compare.mjs`
+
+`node compare.mjs old/report.json new/report.json [--threshold 0.03]` prints,
+for every size and arm in both reports and every phase both have, the change
+of the median (new/old − 1) with a bootstrap 95 % CI. A change is flagged
+`REGRESSION` when it is above the threshold (3 %) and its CI excludes 0, and
+`improvement` likewise in the other direction. The script exits 1 on any
+regression.
+
+### `overhead.sh`
+
+`overhead.sh` measures the cost of the timings instrumentation itself. After
+the gate and a warmup, it runs every arm `BENCH_OVERHEAD_RUNS` times (default
+10) with `CODEMOD_TIMINGS_FILE` unset and the same number of times with it
+set. The off/on runs are interleaved in seeded random order, with the same
+launcher and prepare step as `rounds.sh`. `overhead.mjs` then prints
+median(on) / median(off) per arm with a bootstrap 95 % CI, a verdict against
+the 1 % budget (`within`: the CI's upper end is <= 1.01; `OVER`: its lower
+end is above it; otherwise `inconclusive`), and how many "on" runs produced a
+timings file. It exits 1 when an arm is `OVER`.
+
+### Timings files
+
+Arms built with timings support write one JSON file per process when
+`CODEMOD_TIMINGS_FILE=<path>` is set: `<path>` for the top-level process,
+`<path>.<pid>.json` for children (listed in the top-level file's
+`children`). Schema 1:
+`{ schema, arm, pid, parent_pid, exec_to_main_ns, wall_ns, phases: { <phase>: { ns, count, cpu_ns? } }, marks, threads_used?, children }`.
+The phases are `boot plan select read setup parse transform convert conflict
+commit idle_wait`, and the marks are `engine_done` and `poll_saw` (yaml). An
+example file per arm, with child files for the bridge and quickjs-host
+processes, is in `fixtures/timings/`. Those files drive the analysis tests
+(`tests/analysis.test.mjs`, `pnpm test:bench`).
 
 ## Results
 

@@ -108,6 +108,7 @@ export function buildReport(
         rounds: meta.rounds,
         cache: meta.cache,
         gate: { hash: meta.gate_hash, files: meta.gate_files },
+        input: meta.input ?? null,
         fastest,
         arms,
       };
@@ -147,12 +148,32 @@ export function buildReport(
     rounds: _rounds,
     gate_hash: _gh,
     gate_files: _gf,
+    input: _input,
     ...provenance
   } = sizes[0]?.meta ?? {};
+  // Sizes analyzed together must come from the same build and settings.
+  const fingerprint = (m) =>
+    JSON.stringify({
+      codemod: m.codemod?.sha,
+      dirty: m.codemod?.dirty,
+      binaries: (m.binaries ?? []).map((b) => [b.name, b.sha256]),
+      cache: m.cache,
+      purge: m.purge,
+    });
+  const warnings = sizes
+    .filter(({ meta }) => fingerprint(meta) !== fingerprint(sizes[0].meta))
+    .map(
+      ({ meta }) =>
+        `size ${meta.size} was recorded with a different build or settings than ${sizes[0].meta.size} (codemod sha, dirty flag, binary hashes, or cache mode)`,
+    );
+  if (provenance.codemod?.dirty_at_end && !provenance.codemod?.dirty) {
+    warnings.push("the codemod worktree became dirty during the run");
+  }
   return {
     schema: 1,
     analysis: { resamples, seed, noise_threshold: noiseThreshold },
     provenance,
+    warnings,
     sizes: sizeReports,
     fits,
     noise: { ok: noisy.length === 0, noisy },
@@ -238,7 +259,9 @@ export function renderMarkdown(report, { preflight } = {}) {
       "codemod repo",
       `${p.codemod.sha}${p.codemod.dirty ? " (dirty)" : ""} on ${p.codemod.branch}`,
     );
-  if (p.input) line("Input", `${p.input.tag} (${p.input.sha})`);
+  for (const s of report.sizes) {
+    if (s.input) line(`Input \`${s.size}\``, `${s.input.tag ?? "?"} at ${s.input.sha ?? "?"}`);
+  }
   line("Cache mode", p.cache + (p.purge ? " + purge" : ""));
   if (p.versions) {
     line(
@@ -250,7 +273,12 @@ export function renderMarkdown(report, { preflight } = {}) {
   }
   for (const b of p.binaries ?? [])
     line(`\`${b.name}\``, `${b.path} sha256 ${b.sha256 ?? "missing"}`);
-  if (p.arms) for (const a of p.arms) line(`arm \`${a.arm}\``, `\`${a.command}\``);
+  const repoPath = report.sizes[0]?.input?.path;
+  for (const a of p.arms ?? []) {
+    const command = repoPath ? a.command.replaceAll(repoPath, "$REPO") : a.command;
+    line(`arm \`${a.arm}\``, `\`${command}\``);
+  }
+  for (const w of report.warnings ?? []) line("**Warning**", w);
   line(
     "Analysis",
     `${report.analysis.resamples} bootstrap resamples, seed ${report.analysis.seed}; noise threshold IQR/median <= ${pct(report.analysis.noise_threshold)}`,

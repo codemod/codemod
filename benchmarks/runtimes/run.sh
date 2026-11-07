@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Wall-clock benchmark of the available arms with hyperfine. Runs verify.sh
-# first (the correctness gate), then benchmarks exactly the arms it verified.
+# Quick path: wall-clock benchmark of the available arms in one hyperfine
+# session. Runs verify.sh first (the correctness gate), then benchmarks exactly
+# the arms it verified. For interleaved rounds, sizes, CIs, and phase tables
+# use rounds.sh / sizes.sh (README "Rounds, sizes, and analysis").
 #
 #   BENCH_RUNS=5 BENCH_WARMUP=1 ./run.sh
 #
@@ -14,13 +16,7 @@ set -euo pipefail
 RUNS="${BENCH_RUNS:-5}"
 WARMUP="${BENCH_WARMUP:-1}"
 
-if ! command -v hyperfine >/dev/null; then
-  if [ -x "$HOME/.cargo/bin/hyperfine" ]; then
-    PATH="$HOME/.cargo/bin:$PATH"
-  else
-    die "hyperfine is required (brew install hyperfine, or cargo install hyperfine)"
-  fi
-fi
+require_hyperfine
 
 bash "$BENCH_DIR/verify.sh"
 # shellcheck source=/dev/null

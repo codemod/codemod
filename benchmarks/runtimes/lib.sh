@@ -93,6 +93,17 @@ require_repo() {
   [ "$head" = "$expected" ] || die "$REPO is at $head, expected $expected; rerun setup.sh (or sizes.sh)"
 }
 
+# Record the codemod worktree's commit and dirty flag once, when a run starts
+# (exported, so a sizes.sh session records one state for every size).
+record_start_state() {
+  if [ -z "${BENCH_START_SHA:-}" ]; then
+    BENCH_START_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+    BENCH_START_DIRTY=false
+    [ -z "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ] || BENCH_START_DIRTY=true
+    export BENCH_START_SHA BENCH_START_DIRTY
+  fi
+}
+
 # Compile bench-exec.c into bin/ when missing or older than its source.
 ensure_bench_exec() {
   if [ ! -x "$BENCH_EXEC" ] || [ "$BENCH_DIR/bench-exec.c" -nt "$BENCH_EXEC" ]; then

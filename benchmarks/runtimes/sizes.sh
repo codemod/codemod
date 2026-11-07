@@ -29,6 +29,7 @@ SIZES="${BENCH_SIZES:-probe vite vite-x4 vite-x16}"
 SIZES_ROOT="${BENCH_SIZES_ROOT:-$REPO-sizes}"
 SESSION="${BENCH_SESSION:-$RESULTS_DIR/runs/$(date -u +%Y%m%dT%H%M%SZ)}"
 
+record_start_state
 require_repo
 mkdir -p "$SIZES_ROOT" "$SESSION"
 SESSION="$(cd "$SESSION" && pwd)"
