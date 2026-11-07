@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "arm": "quickjs-host",
+  "pid": 52002,
+  "parent_pid": 52001,
+  "exec_to_main_ns": null,
+  "wall_ns": 650000000,
+  "phases": {
+    "boot": {
+      "ns": 4000000,
+      "count": 1
+    },
+    "setup": {
+      "ns": 6500000,
+      "count": 1
+    },
+    "select": {
+      "ns": 42000000,
+      "count": 2
+    },
+    "read": {
+      "ns": 30000000,
+      "count": 2,
+      "cpu_ns": 140000000
+    },
+    "parse": {
+      "ns": 346000000,
+      "count": 3400
+    },
+    "transform": {
+      "ns": 126000000,
+      "count": 3400
+    },
+    "convert": {
+      "ns": 2400000,
+      "count": 2
+    },
+    "commit": {
+      "ns": 58000000,
+      "count": 1
+    }
+  },
+  "marks": {},
+  "threads_used": 5,
+  "children": []
+}

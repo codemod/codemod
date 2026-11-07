@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "arm": "yaml",
+  "pid": 30001,
+  "parent_pid": null,
+  "exec_to_main_ns": 2100000,
+  "wall_ns": 1340000000,
+  "phases": {
+    "boot": {
+      "ns": 8000000,
+      "count": 1
+    },
+    "plan": {
+      "ns": 2000000,
+      "count": 1
+    },
+    "select": {
+      "ns": 45000000,
+      "count": 2,
+      "cpu_ns": 180000000
+    },
+    "read": {
+      "ns": 22000000,
+      "count": 2,
+      "cpu_ns": 150000000
+    },
+    "parse": {
+      "ns": 70000000,
+      "count": 662,
+      "cpu_ns": 600000000
+    },
+    "transform": {
+      "ns": 160000000,
+      "count": 3400,
+      "cpu_ns": 1500000000
+    },
+    "conflict": {
+      "ns": 1000000,
+      "count": 2
+    },
+    "commit": {
+      "ns": 18000000,
+      "count": 2
+    },
+    "idle_wait": {
+      "ns": 1000000000,
+      "count": 1
+    }
+  },
+  "marks": {
+    "engine_done": 330000000,
+    "poll_saw": 1330000000
+  },
+  "threads_used": 12,
+  "children": []
+}
