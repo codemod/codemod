@@ -14,7 +14,9 @@
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { Phase, lap, now } from "../../core/timings.ts";
 import { QUICKJS_RUNTIME } from "../../runtime/capabilities.ts";
+import { timeChildProcess } from "../timings-file.ts";
 import type { RuntimeProvider } from "./types.ts";
 
 export const QUICKJS_HOST_BINARY = "orchestration-quickjs-host";
@@ -58,9 +60,11 @@ export function runQuickjsBundle(options: {
   return new Promise((resolvePromise, reject) => {
     const args = ["run", options.bundle, "--target", options.target, "--json"];
     if (options.hasInput) args.push("--input", JSON.stringify(options.input ?? null));
+    // Benchmark timings (no-op when off): the host writes its own file.
+    const timed = timeChildProcess();
     const child = spawn(options.host, args, {
-      env: { ...process.env, ...options.env },
-      // stderr carries the workflow's console output and `--timings`.
+      env: { ...process.env, ...options.env, ...timed.env },
+      // stderr carries the workflow's console output.
       stdio: ["ignore", "pipe", "inherit"],
     });
     const chunks: Buffer[] = [];
@@ -76,6 +80,7 @@ export function runQuickjsBundle(options: {
     });
     child.once("close", (code) => {
       options.signal?.removeEventListener("abort", onAbort);
+      timed.exited(child.pid);
       const text = Buffer.concat(chunks).toString("utf8");
       let result: HostResult | undefined;
       try {
@@ -103,8 +108,11 @@ export const quickjsRuntime: RuntimeProvider = {
   },
   async launch(request) {
     // Loaded on demand: esbuild and TypeScript load only on a cache miss.
+    // Benchmark timings (no-op when off): finding or building the bundle is `plan`.
+    const planned = now();
     const { cachedQuickjsBundle } = await import("../quickjs-bundle.ts");
     const bundle = await cachedQuickjsBundle(request.workflow);
+    lap(Phase.plan, planned);
     return runQuickjsBundle({
       host: defaultQuickjsHostPath(),
       bundle: bundle.path,

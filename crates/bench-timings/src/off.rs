@@ -27,6 +27,37 @@ pub fn start() -> Timer {
 #[inline(always)]
 pub fn stop(_phase: Phase, _timer: Timer) {}
 
+#[derive(Debug)]
+#[must_use]
+pub struct Span;
+
+impl Span {
+    #[inline(always)]
+    pub fn new(_phase: Phase) -> Span {
+        Span
+    }
+
+    #[inline(always)]
+    pub fn pause(&mut self) {}
+
+    #[inline(always)]
+    pub fn resume(&mut self) {}
+}
+
+#[derive(Debug)]
+#[must_use]
+pub struct Residual;
+
+impl Residual {
+    #[inline(always)]
+    pub fn new(_phase: Phase) -> Residual {
+        Residual
+    }
+
+    #[inline(always)]
+    pub fn finish(self) {}
+}
+
 #[inline(always)]
 pub fn span<T>(_phase: Phase, f: impl FnOnce() -> T) -> T {
     f()
@@ -34,6 +65,11 @@ pub fn span<T>(_phase: Phase, f: impl FnOnce() -> T) -> T {
 
 #[inline(always)]
 pub fn span_cpu<T>(_phase: Phase, f: impl FnOnce() -> T) -> T {
+    f()
+}
+
+#[inline(always)]
+pub fn parallel<T>(_threads: usize, f: impl FnOnce() -> T) -> T {
     f()
 }
 

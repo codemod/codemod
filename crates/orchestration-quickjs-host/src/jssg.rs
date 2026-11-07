@@ -41,9 +41,9 @@ pub struct OpenBatch {
     staged: HashMap<u32, Vec<FileChange>>,
 }
 
-// Benchmark timings (`timings` feature): `jssgBegin` is `setup`,
-// `jssgParse` `parse`, `jssgFinish` `convert`, all wall on the JS thread;
-// the bundle times the transform calls itself.
+// Benchmark timings (`timings` feature): `jssgBegin` is `setup` (wall on
+// the JS thread); the bundle's batch loop times the rest (parse waits,
+// transform calls, `jssgFinish` as convert) itself.
 
 fn with_batch<'js, T>(
     ctx: &Ctx<'js>,
@@ -110,7 +110,8 @@ pub fn install<'js>(
                       start: u32,
                       contents: Vec<String>|
                       -> rquickjs::Result<Vec<Value<'js>>> {
-                    let parse = bench_timings::start();
+                    // Benchmark timings: the JS loop times the wait for this
+                    // chunk (the yield before it, then this call) as `parse`.
                     let roots = with_batch(&ctx, &state, id, |batch| {
                         let mut roots = Vec::with_capacity(contents.len());
                         for (offset, content) in contents.iter().enumerate() {
@@ -126,8 +127,6 @@ pub fn install<'js>(
                         }
                         Ok(roots)
                     })?;
-                    // One span per chunk.
-                    bench_timings::stop(Phase::Parse, parse);
                     Ok(roots)
                 },
             )?,
@@ -169,7 +168,7 @@ pub fn install<'js>(
             Function::new(
                 ctx.clone(),
                 move |ctx: Ctx<'js>, id: u32, index: u32, root: Value<'js>, result: Value<'js>| {
-                    let convert = bench_timings::start();
+                    // Benchmark timings: the JS loop times this call as `convert`.
                     let text = with_batch(&ctx, &state, id, |batch| {
                         let core = core_root(&root).ok_or_else(|| {
                             throw(&ctx, None, &format!("file {index} has no SgRoot"))
@@ -189,7 +188,6 @@ pub fn install<'js>(
                             .map(Some)
                             .map_err(|error| throw(&ctx, None, &error.to_string()))
                     })?;
-                    bench_timings::stop(Phase::Convert, convert);
                     Ok::<_, rquickjs::Error>(text)
                 },
             )?,

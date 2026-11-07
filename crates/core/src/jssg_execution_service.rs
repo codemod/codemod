@@ -101,6 +101,10 @@ impl<'a> JssgExecutionService<'a> {
             "js-ast-grep.base_path",
         )?;
 
+        // Benchmark timings: the pre-run check (the CLI's dirty-worktree
+        // check) is `plan`; preparing the step up to its file loop (resolver,
+        // selector extraction, semantic provider) is `setup`.
+        let plan = bench_timings::Span::new(bench_timings::Phase::Plan);
         if let Some(pre_run_callback) = self
             .engine
             .workflow_run_config()
@@ -123,6 +127,8 @@ impl<'a> JssgExecutionService<'a> {
             )));
         }
 
+        drop(plan);
+        let mut setup = bench_timings::Span::new(bench_timings::Phase::Setup);
         let script_base_dir = js_file_path
             .parent()
             .unwrap_or(Path::new("."))
@@ -282,6 +288,7 @@ impl<'a> JssgExecutionService<'a> {
             request.logger,
         )
         .await;
+        setup.pause();
 
         self.execute_runtime(
             request,

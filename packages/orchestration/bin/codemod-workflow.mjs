@@ -17,5 +17,11 @@ import { privateDirectory } from "./register-ts.mjs";
 const compiled = privateDirectory("v8");
 if (compiled !== undefined) enableCompileCache(compiled);
 
+// Benchmark timings (`src/host/timings-file.ts`): loaded only when asked for.
+if (process.env.CODEMOD_TIMINGS_FILE) {
+  const { installTimingsFile } = await import("../src/host/timings-file.ts");
+  installTimingsFile();
+}
+
 const { main } = await import("../src/host/cli.ts");
 await main(process.argv.slice(2));

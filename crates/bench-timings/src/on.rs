@@ -21,6 +21,14 @@ static CHILDREN: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static THREADS_USED: AtomicU64 = AtomicU64::new(0);
 static FINISHED: OnceLock<Option<String>> = OnceLock::new();
 
+/// The thread owning the active [`parallel`] region (its [`thread_token`]),
+/// 0 when none is active.
+static REGION_OWNER: AtomicU64 = AtomicU64::new(0);
+/// Wall time and span counts other threads recorded during the region.
+static REGION_WALL: [AtomicU64; N_PHASES] = [const { AtomicU64::new(0) }; N_PHASES];
+static REGION_COUNT: [AtomicU64; N_PHASES] = [const { AtomicU64::new(0) }; N_PHASES];
+static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
+
 /// One thread's accumulators. Only the owning thread writes (plain
 /// load + store, never contended); [`finish`] reads every slot.
 struct Slot {
@@ -44,6 +52,19 @@ impl Slot {
 
 thread_local! {
     static SLOT: Cell<Option<&'static Slot>> = const { Cell::new(None) };
+    static TOKEN: Cell<u64> = const { Cell::new(0) };
+    /// Wall this thread has recorded so far (own slot or a region), for [`Residual`].
+    static RECORDED: Cell<u64> = const { Cell::new(0) };
+}
+
+/// A process-unique, non-zero id of the calling thread.
+fn thread_token() -> u64 {
+    TOKEN.with(|token| {
+        if token.get() == 0 {
+            token.set(NEXT_TOKEN.fetch_add(1, Ordering::Relaxed));
+        }
+        token.get()
+    })
 }
 
 #[inline(always)]
@@ -79,7 +100,8 @@ fn with_slot(f: impl FnOnce(&Slot)) {
     });
 }
 
-/// The monotonic raw clock in nanoseconds (`CLOCK_UPTIME_RAW` on macOS).
+/// The monotonic clock in nanoseconds (`CLOCK_UPTIME_RAW` on macOS,
+/// `CLOCK_MONOTONIC` elsewhere: the clocks of Node's `process.hrtime`).
 #[inline(always)]
 pub fn clock_ns() -> u64 {
     #[cfg(target_vendor = "apple")]
@@ -169,6 +191,95 @@ pub fn stop(phase: Phase, timer: Timer) {
     }
 }
 
+/// A wall span of one phase that can pause and resume (an async loop's own
+/// time around the awaits it hands to other code), recorded at each pause
+/// and when dropped.
+#[derive(Debug)]
+#[must_use]
+pub struct Span {
+    phase: Phase,
+    /// Start of the running stretch; 0 when paused or off.
+    started: u64,
+}
+
+impl Span {
+    /// Start a running span of `phase`.
+    #[inline]
+    pub fn new(phase: Phase) -> Span {
+        Span {
+            phase,
+            started: if enabled() { clock_ns() } else { 0 },
+        }
+    }
+
+    /// Record the running stretch (one span) and pause.
+    #[inline]
+    pub fn pause(&mut self) {
+        if self.started != 0 {
+            add(self.phase, clock_ns().saturating_sub(self.started), 1);
+            self.started = 0;
+        }
+    }
+
+    /// Start a new stretch after [`Span::pause`].
+    #[inline]
+    pub fn resume(&mut self) {
+        if self.started == 0 && enabled() {
+            self.started = clock_ns();
+        }
+    }
+}
+
+impl Drop for Span {
+    fn drop(&mut self) {
+        self.pause();
+    }
+}
+
+/// The part of a synchronous scope on this thread that no span inside it
+/// recorded, added to one phase by [`Residual::finish`]: the glue around
+/// instrumented calls (a per-file callback's bookkeeping around the
+/// sandbox), without double counting the spans nested in it. Only spans on
+/// this thread are subtracted, so the scope must not hand work to other
+/// threads.
+#[derive(Debug)]
+#[must_use]
+pub struct Residual {
+    phase: Phase,
+    /// 0 when off.
+    started: u64,
+    recorded: u64,
+}
+
+impl Residual {
+    #[inline]
+    pub fn new(phase: Phase) -> Residual {
+        if !enabled() {
+            return Residual {
+                phase,
+                started: 0,
+                recorded: 0,
+            };
+        }
+        Residual {
+            phase,
+            started: clock_ns(),
+            recorded: RECORDED.with(Cell::get),
+        }
+    }
+
+    /// Add the scope's wall minus the spans this thread recorded in it.
+    #[inline]
+    pub fn finish(self) {
+        if self.started == 0 {
+            return;
+        }
+        let elapsed = clock_ns().saturating_sub(self.started);
+        let nested = RECORDED.with(Cell::get).wrapping_sub(self.recorded);
+        add(self.phase, elapsed.saturating_sub(nested), 1);
+    }
+}
+
 /// `f` as one wall span of `phase` on this thread.
 #[inline(always)]
 pub fn span<T>(phase: Phase, f: impl FnOnce() -> T) -> T {
@@ -191,10 +302,59 @@ pub fn span_cpu<T>(phase: Phase, f: impl FnOnce() -> T) -> T {
     value
 }
 
-/// Add `ns` of wall time in `count` spans to this thread's `phase`.
+/// `f` as a parallel region run by a pool of `threads` threads (a
+/// work-stealing walk, a step's file loop). While it runs, wall spans that
+/// other threads record go to region totals instead of their own slots; at
+/// the end the calling thread records each phase's total divided by
+/// `threads` as wall (the pool's average per-thread time: on the critical
+/// path when the pool is busy and balanced; idle or imbalance stays
+/// uncovered) and the total as `cpu_ns`. Merging per-thread maxima instead
+/// would count one of two sequential pools and mix threads across phases.
+///
+/// Only one region is accounted at a time: a region started while another
+/// is active (nested, or on another thread) just runs `f`, and its threads
+/// count toward the active one.
+pub fn parallel<T>(threads: usize, f: impl FnOnce() -> T) -> T {
+    if !enabled() {
+        return f();
+    }
+    let token = thread_token();
+    if REGION_OWNER
+        .compare_exchange(0, token, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return f();
+    }
+    let value = f();
+    REGION_OWNER.store(0, Ordering::Release);
+    let threads = threads.max(1) as u64;
+    with_slot(|slot| {
+        for phase in 0..N_PHASES {
+            let wall = REGION_WALL[phase].swap(0, Ordering::AcqRel);
+            let count = REGION_COUNT[phase].swap(0, Ordering::AcqRel);
+            if wall == 0 && count == 0 {
+                continue;
+            }
+            bump(&slot.wall[phase], wall / threads);
+            bump(&slot.count[phase], count);
+            bump(&slot.cpu[phase], wall);
+        }
+    });
+    value
+}
+
+/// Add `ns` of wall time in `count` spans to this thread's `phase` (to the
+/// active [`parallel`] region's totals when another thread owns one).
 #[inline]
 pub fn add(phase: Phase, ns: u64, count: u64) {
     if !enabled() {
+        return;
+    }
+    RECORDED.with(|recorded| recorded.set(recorded.get().wrapping_add(ns)));
+    let owner = REGION_OWNER.load(Ordering::Acquire);
+    if owner != 0 && owner != thread_token() {
+        REGION_WALL[phase as usize].fetch_add(ns, Ordering::Relaxed);
+        REGION_COUNT[phase as usize].fetch_add(count, Ordering::Relaxed);
         return;
     }
     with_slot(|slot| {

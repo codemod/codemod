@@ -93,8 +93,9 @@ export async function executeJssgCommand(
   }
 
   // Benchmark timings (`core/timings.ts`; no-ops when off): target root and
-  // walk `select`, reads `read` (native worker CPU adds `cpu_ns`), conflict
-  // checks `conflict`, writes `commit`. The dispatch times its own phases.
+  // walk `select`, reads `read` (native worker CPU adds `cpu_ns`), result
+  // validation and conflict checks `conflict`, writes `commit`. The dispatch
+  // times its own phases.
   let mark = now();
   let targetRoot: string;
   let files: BatchFile[];
@@ -141,6 +142,8 @@ export async function executeJssgCommand(
       error: { message: (error as Error).message ?? String(error) },
     };
   }
+  // Validating the result and the conflict checks below are `conflict`.
+  mark = now();
   // The batch runner never writes, so anything short of success leaves the
   // repository unchanged.
   if (completion.status !== "succeeded") {
@@ -157,7 +160,6 @@ export async function executeJssgCommand(
     return fail("failed", "bridge returned an invalid batch result", { phase: "transform" });
   }
 
-  mark = now();
   let staged: Staged;
   try {
     staged = stage(host, targetRoot, outcomes);

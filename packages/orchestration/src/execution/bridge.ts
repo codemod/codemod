@@ -23,6 +23,7 @@ import type { Json } from "../core/json.ts";
 import { createExchange, readResponse, resolveExchangeRoot } from "./exchange.ts";
 import { executeJssgCommand, type JssgCommandOptions } from "./jssg.ts";
 import { killProcessTree, spawnOptions, trackProcessTree } from "./process-tree.ts";
+import { timeChildProcess } from "./child-timings.ts";
 import {
   PROTOCOL_VERSION,
   parseCompletion,
@@ -124,11 +125,15 @@ export async function spawnBridge(
   try {
     const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       (resolve, reject) => {
+        // Benchmark timings (no-op when off): the bridge writes its own file.
+        const timed = timeChildProcess();
         const child = spawn(options.bin, [requestPath, responsePath], {
           ...spawnOptions(),
           cwd: options.cwd,
           env:
-            options.inheritEnv === false ? { ...options.env } : { ...process.env, ...options.env },
+            options.inheritEnv === false
+              ? { ...options.env }
+              : { ...process.env, ...options.env, ...timed.env },
           stdio: [options.stdin === undefined ? "ignore" : "pipe", "ignore", "ignore"],
         });
         if (options.stdin !== undefined && child.stdin !== null) {
@@ -162,6 +167,7 @@ export async function spawnBridge(
         });
         child.once("close", (code, exitSignal) => {
           settle();
+          timed.exited(child.pid);
           resolve({ code, signal: exitSignal });
         });
       },

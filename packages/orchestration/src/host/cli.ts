@@ -29,6 +29,9 @@
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Json } from "../core/json.ts";
+import { Phase, lap, now, setTimingsArm } from "../core/timings.ts";
+import { DEFAULT_RUNTIME } from "../runtime/capabilities.ts";
+import { endBoot } from "./timings-file.ts";
 import "./node-host.ts";
 // The dashboard (server, session, monitor, the run loop) loads only for --dashboard.
 import type { Dashboard } from "./dashboard/server.ts";
@@ -141,6 +144,7 @@ export async function runWorkflowCli(
 ): Promise<unknown> {
   if (argv[0] === "build") return buildBundleCli(argv.slice(1));
   const options = parseArgs(argv);
+  setTimingsArm(`ts-${options.runtime ?? DEFAULT_RUNTIME}`);
   const hasInput = "input" in options;
   const launch = {
     target: options.target,
@@ -283,17 +287,23 @@ function parseInput(text: string): Json {
  * SIGINT/SIGTERM/SIGHUP aborting the run.
  */
 export async function main(argv: string[]): Promise<void> {
+  // Benchmark timings (no-ops when off): `boot` ends here; printing the
+  // result is `plan` (the run itself times its own phases).
+  endBoot();
+  let printed = 0;
   const controller = new AbortController();
   const abort = () => controller.abort();
   for (const name of ABORT_SIGNALS) process.once(name, abort);
   try {
     const output = await runWorkflowCli(argv, controller.signal);
+    printed = now();
     process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   } finally {
     for (const name of ABORT_SIGNALS) process.off(name, abort);
+    if (printed !== 0) lap(Phase.plan, printed);
   }
 }
 

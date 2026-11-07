@@ -61,7 +61,6 @@ export function createNapiJssgEngine(): JssgBatchEngine<
     addTimingsSource(() => JSON.parse(native.timingsPhases()) as PhaseTotals);
   }
   return {
-    parsesOffThread: true,
     open(config, paths) {
       const batch = new native.JssgBatch(JSON.stringify(config), paths);
       const { targetRoot, params } = batch;

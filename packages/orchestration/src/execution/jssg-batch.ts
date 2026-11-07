@@ -87,12 +87,6 @@ export interface JssgBatchEngine<Root = unknown, Ran = unknown> {
   load(artifact: TransformArtifact, module: string): Promise<unknown>;
   /** How a thrown transform error reads after `JSSG failed for '<path>': `. */
   describeError(error: unknown): string;
-  /**
-   * Benchmark timings: `parse` runs off the JS thread, so the loop records
-   * the time it waits for a chunk as `parse` (the engine's workers report
-   * CPU). Otherwise the engine times its parsing itself.
-   */
-  readonly parsesOffThread?: boolean;
 }
 
 export interface JssgBatchDispatchOptions {
@@ -110,7 +104,6 @@ export function describeError(error: unknown): string {
 /** A `JssgDispatch` running transforms in this realm; create one per run. */
 export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): JssgDispatch {
   const { engine } = options;
-  const parseWait = engine.parsesOffThread === true;
   const chunkSize = Math.max(1, options.chunkSize ?? 64);
   const modules = new Map<string, Promise<unknown>>();
   const load = (artifact: TransformArtifact, module: string) => {
@@ -159,14 +152,17 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
           files.slice(start, start + chunkSize).map((file) => file.content),
         );
       const outcomes: FileOutcome[] = [];
+      // Benchmark timings (`core/timings.ts`; no-ops when off), as
+      // back-to-back laps of the loop: waiting for a chunk is `parse` (the
+      // parse itself on this thread, or blocked on worker threads, whose CPU
+      // the engine reports); per file, the loop's own work and the first
+      // evaluation of the module are `setup`, the call `transform`, and
+      // reading its result `convert`.
+      let mark = now();
       pending = files.length > 0 ? parse(0) : undefined;
       for (let start = 0; pending !== undefined; start += chunkSize) {
-        // Benchmark timings (`core/timings.ts`; no-ops when off): blocked on
-        // an off-thread parse is `parse`, the first evaluation of the module
-        // `setup`, the call `transform`; the engine times `convert`.
-        const waited = now();
         const roots = await pending;
-        if (parseWait) lap(Phase.parse, waited);
+        mark = lap(Phase.parse, mark);
         // Parse the next chunk (off-thread, where the engine can) while this one transforms.
         pending = start + chunkSize < files.length ? parse(start + chunkSize) : undefined;
         for (const [offset, root] of roots.entries()) {
@@ -177,11 +173,10 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
             outcomes.push({ path: file.path, edits: [] });
             continue;
           }
-          let begun = now();
           let ran: unknown;
           try {
             const transform = await load(artifact, batch.module);
-            begun = lap(Phase.setup, begun);
+            mark = lap(Phase.setup, mark);
             if (typeof transform !== "function") {
               throw new Error(
                 `jssg codemod modules must export a function. ${typeof transform} found.`,
@@ -191,8 +186,9 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
           } catch (error) {
             return failed(`JSSG failed for '${file.path}': ${engine.describeError(error)}`);
           }
-          lap(Phase.transform, begun);
+          mark = lap(Phase.transform, mark);
           outcomes.push(batch.finish(index, root, ran));
+          mark = lap(Phase.convert, mark);
         }
       }
       return {

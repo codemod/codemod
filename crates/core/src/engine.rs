@@ -2023,6 +2023,9 @@ impl Engine {
 
     /// Execute a workflow
     async fn execute_workflow(&mut self, workflow_run_id: Uuid) -> Result<()> {
+        // Benchmark timings: the scheduling loop around the tasks (state
+        // reads and writes, matrix recompilation) is `plan`.
+        let mut plan = bench_timings::Span::new(bench_timings::Phase::Plan);
         // Get the workflow run
         let workflow_run = self
             .state_adapter
@@ -2323,6 +2326,7 @@ impl Engine {
                     .unwrap(); // Should exist based on how tasks are created
 
                 // Execute task synchronously to ensure state updates are applied before matrix recompilation
+                plan.pause();
                 let execution_result = std::panic::AssertUnwindSafe(self.execute_task(task_id))
                     .catch_unwind()
                     .await
@@ -2332,6 +2336,7 @@ impl Engine {
                             panic_payload_message(panic_payload.as_ref())
                         )))
                     });
+                plan.resume();
                 if let Err(e) = execution_result {
                     let current_task = self.state_adapter.lock().await.get_task(task_id).await?;
                     if matches!(
@@ -2454,6 +2459,8 @@ impl Engine {
 
     /// Execute a task
     async fn execute_task(&self, task_id: Uuid) -> Result<()> {
+        // Benchmark timings: the task's bookkeeping around its steps is `plan`.
+        let mut plan = bench_timings::Span::new(bench_timings::Phase::Plan);
         let task = self.state_adapter.lock().await.get_task(task_id).await?;
 
         let workflow_run = self
@@ -2625,6 +2632,7 @@ impl Engine {
                 None
             };
 
+            plan.pause();
             let result = std::panic::AssertUnwindSafe(StepExecutor::new(self).execute(
                 StepExecutionRequest {
                     runner: runner.as_ref(),
@@ -2656,6 +2664,7 @@ impl Engine {
                     panic_payload_message(panic_payload.as_ref())
                 )))
             });
+            plan.resume();
             // Drop the capture guard to restore stdout before emitting step_end.
             // This ensures all captured output is flushed and attributed to this step.
             drop(_stdout_capture);

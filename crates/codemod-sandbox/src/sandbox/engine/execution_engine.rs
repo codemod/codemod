@@ -496,7 +496,7 @@ where
     let test_mode = options.test_mode;
 
     // Execute JavaScript code
-    async_with!(context => |ctx| {
+    let output = async_with!(context => |ctx| {
         // Store execution mode flag in runtime userdata
         ctx.store_userdata(ExecutionModeFlag { test_mode }).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -738,7 +738,14 @@ where
         };
         execution.await
     })
-    .await
+    .await;
+    // Dropping the context and the runtime (garbage collection, freeing the
+    // per-file runtime) is `setup` too.
+    let teardown = bench_timings::start();
+    drop(context);
+    drop(runtime);
+    bench_timings::stop(Phase::Setup, teardown);
+    output
 }
 
 fn map_transform_execution_error(

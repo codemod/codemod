@@ -41,9 +41,10 @@ const describe = (error: unknown) => {
 };
 
 /**
- * Benchmark timings: the host times `jssgBegin` (setup), `jssgParse`
- * (parse), and `jssgFinish` (convert) in Rust; the shared loop times the
- * transform calls and the first module evaluation.
+ * Benchmark timings: the host times `jssgBegin` (setup) in Rust; the
+ * shared loop times the chunk waits (parse: the yield, then `jssgParse`),
+ * the loop's per-file work and the first module evaluation (setup), the
+ * transform calls, and `finish` (convert).
  */
 export function createQuickjsDispatch(native: QuickjsNative): JssgDispatch {
   // One transform call in flight across the run (the staging is per

@@ -52,43 +52,39 @@ export class NodeExecutor implements OperationExecutor {
     const { cwd, artifacts, env } = this.options;
     const operation = request.operation;
     switch (operation.kind) {
-        case "shell":
-          return await executeShell(
-            { cwd, ...(env === undefined ? {} : { env }) },
-            request,
-            signal,
-          );
-        case "jssg":
-          return await executeJssgCommand({
-            cwd,
-            artifacts,
-            commandId: request.commandId,
-            operation,
-            signal,
-            host: this.#host,
-            dispatch: this.#dispatch,
-          });
-        default: {
-          const unsupported = `operation kind '${operation.kind}'`;
-          return {
-            protocolVersion: PROTOCOL_VERSION,
-            commandId: request.commandId,
-            status: "failed",
-            error: {
-              message: new UnsupportedInRuntimeError(
-                NODE_RUNTIME.name,
-                unsupported,
-                request.commandId,
-              ).message,
-              details: {
-                phase: "config",
-                runtime: NODE_RUNTIME.name,
-                unsupported,
-                repositoryMayBeModified: false,
-              },
+      case "shell":
+        return await executeShell({ cwd, ...(env === undefined ? {} : { env }) }, request, signal);
+      case "jssg":
+        return await executeJssgCommand({
+          cwd,
+          artifacts,
+          commandId: request.commandId,
+          operation,
+          signal,
+          host: this.#host,
+          dispatch: this.#dispatch,
+        });
+      default: {
+        const unsupported = `operation kind '${operation.kind}'`;
+        return {
+          protocolVersion: PROTOCOL_VERSION,
+          commandId: request.commandId,
+          status: "failed",
+          error: {
+            message: new UnsupportedInRuntimeError(
+              NODE_RUNTIME.name,
+              unsupported,
+              request.commandId,
+            ).message,
+            details: {
+              phase: "config",
+              runtime: NODE_RUNTIME.name,
+              unsupported,
+              repositoryMayBeModified: false,
             },
-          };
-        }
+          },
+        };
       }
+    }
   }
 }

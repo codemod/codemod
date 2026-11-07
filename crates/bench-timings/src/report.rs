@@ -32,25 +32,21 @@ impl PhaseTotal {
     }
 }
 
-/// `ns` = max wall over threads, `count` = sum, `cpu_ns` = the sum of CPU
-/// spans plus, when two or more threads recorded wall, the sum of wall.
+/// `ns` and `count` = sums over threads, `cpu_ns` = the sum of CPU spans.
+///
+/// Wall spans on different threads are sequential stretches of one critical
+/// path (an async task resuming on another runtime thread), so they add up.
+/// Concurrent work does not record wall per thread: a worker pool's spans go
+/// to its [`crate::parallel`] region (the owner records the pool's average
+/// as wall and its total as CPU), and helper threads under a span another
+/// thread records use `span_cpu`.
 pub fn merge(threads: &[ThreadPhases]) -> [PhaseTotal; N_PHASES] {
     let mut totals = [PhaseTotal::default(); N_PHASES];
     for (phase, total) in totals.iter_mut().enumerate() {
-        let mut walls = 0u32;
-        let mut wall_sum = 0u64;
         for thread in threads {
-            let wall = thread.wall[phase];
-            if wall > 0 || thread.count[phase] > 0 {
-                walls += 1;
-            }
-            wall_sum += wall;
-            total.ns = total.ns.max(wall);
+            total.ns += thread.wall[phase];
             total.count += thread.count[phase];
             total.cpu_ns += thread.cpu[phase];
-        }
-        if walls >= 2 {
-            total.cpu_ns += wall_sum;
         }
     }
     totals
@@ -197,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn several_threads_take_the_max_wall_and_sum_into_cpu() {
+    fn wall_spans_on_several_threads_add_up() {
         let totals = merge(&[
             thread(&[(Phase::Transform, 300, 3, 0), (Phase::Setup, 10, 3, 0)]),
             thread(&[(Phase::Transform, 500, 5, 0)]),
@@ -206,12 +202,11 @@ mod tests {
         assert_eq!(
             totals[Phase::Transform as usize],
             PhaseTotal {
-                ns: 500,
+                ns: 1000,
                 count: 10,
-                cpu_ns: 1000
+                cpu_ns: 0
             }
         );
-        // Only one thread recorded setup: no cpu_ns.
         assert_eq!(
             totals[Phase::Setup as usize],
             PhaseTotal {

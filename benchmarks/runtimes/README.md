@@ -102,9 +102,13 @@ resets and cleans it with git.
 # once: JS deps, the report UI the CLI embeds, and release binaries
 pnpm install
 pnpm --filter codemod-report-ui build          # crates/cli embeds report-ui/dist/index.html
-cargo build --release -p codemod -p butterflow-execution-bridge -p orchestration-quickjs-host
-pnpm --filter @codemod.com/jssg-napi build      # release napi addon for ts-node
+cargo build --release -p codemod -p butterflow-execution-bridge -p orchestration-quickjs-host \
+  --features codemod/timings,butterflow-execution-bridge/timings,orchestration-quickjs-host/timings
+node packages/jssg-napi/scripts/build.mjs --release --features timings   # napi addon for ts-node
 brew install hyperfine                          # or: cargo install hyperfine
+# The `timings` feature only compiles the phase timers in; they stay off
+# unless CODEMOD_TIMINGS_FILE is set (overhead.sh measures both costs). Drop
+# the --features flags for plain builds; the arms then write no timings.
 # lib.sh pins the release quickjs host and napi addon (CODEMOD_QUICKJS_HOST_BIN,
 # CODEMOD_JSSG_NAPI) instead of letting the runtimes pick the newer debug build.
 
@@ -115,6 +119,7 @@ benchmarks/runtimes/preflight.sh                # machine checks only
 benchmarks/runtimes/rounds.sh                   # gate + interleaved rounds + report (one size)
 benchmarks/runtimes/sizes.sh                    # rounds at probe, vite, vite-x4, vite-x16 + scaling fit
 benchmarks/runtimes/overhead.sh                 # cost of CODEMOD_TIMINGS_FILE per arm
+BENCH_OVERHEAD_BASELINE=<target-dir> benchmarks/runtimes/overhead.sh  # cost of the feature itself
 node benchmarks/runtimes/compare.mjs old/report.json new/report.json
 pnpm test:bench                                 # analysis tests on the fixtures
 ```
@@ -296,6 +301,12 @@ the 1 % budget (`within`: the CI's upper end is <= 1.01; `OVER`: its lower
 end is above it; otherwise `inconclusive`), and how many "on" runs produced a
 timings file. It exits 1 when an arm is `OVER`.
 
+With `BENCH_OVERHEAD_BASELINE=<cargo target dir>` (a release build of
+`codemod`, the bridge, the quickjs host, and `jssg-napi` *without* the
+`timings` feature), it measures the feature instead: "off" runs the baseline
+build and "on" the default build, both with `CODEMOD_TIMINGS_FILE` unset.
+The mode is recorded in `<out>/mode`.
+
 ### Timings files
 
 Arms built with timings support write one JSON file per process when
@@ -308,6 +319,45 @@ commit idle_wait`, and the marks are `engine_done` and `poll_saw` (yaml). An
 example file per arm, with child files for the bridge and quickjs-host
 processes, is in `fixtures/timings/`. Those files drive the analysis tests
 (`tests/analysis.test.mjs`, `pnpm test:bench`).
+
+What each phase covers:
+
+| Phase | Covers |
+|:---|:---|
+| `boot` | process start until the entry point is ready: the CLI's `main` (Node: until `src/host/cli.ts` is loaded), a child's runtime and context |
+| `plan` | loading and planning the workflow (module load or the cached quickjs bundle, the YAML run record, the yaml CLI's dirty-worktree check), the scheduler's bookkeeping between steps, printing the result |
+| `select` | target root and the file walk (yaml: the walker's traversal between files) |
+| `read` | reading the selected sources |
+| `setup` | per batch and per file: planning the batch, the first evaluation of the transform module, a QuickJS runtime and context per file (bridge, yaml) and its teardown, the loop's per-file bookkeeping (yaml: the engine's per-file task handoff); per child process: spawn until close minus the child's own wall (exec, loader, exit) |
+| `parse` | tree-sitter and the selector check, or the time blocked on it when it runs on worker threads (ts-node: their CPU is `cpu_ns`) |
+| `transform` | the transform call |
+| `convert` | reading its result into edits (the bridge also: writing its response) |
+| `conflict` | validating the batch result and the cross-file conflict checks |
+| `commit` | writing the files |
+| `idle_wait` | yaml: from the engine finishing to the CLI's status poll seeing it |
+
+How the numbers are taken (`crates/bench-timings`, `packages/orchestration/src/core/timings.ts`):
+
+- Spans are wall time. Each thread accumulates into its own slot; per phase,
+  a process reports the **sum** over threads (sequential async code resuming
+  on another runtime thread adds up, it does not overlap).
+- A worker pool (the yaml engine's walker threads, one pool per step) runs
+  inside a `parallel` region: its threads' spans go to region totals, and the
+  coordinating thread records each phase's total divided by the pool size as
+  wall (the pool's average per-thread time) and the total as `cpu_ns`. Load
+  imbalance and idle threads therefore stay uncovered instead of inflating a
+  phase.
+- Helper threads under a span another thread records (napi parse workers, the
+  native walk and reads) report CPU time only.
+- The JS side (`ts-node`, the quickjs bundle) times its batch loop with
+  back-to-back laps; native code it calls inside a lap records no span of its
+  own, so nothing is counted twice.
+- A child's phases join its parent's in `analyze.mjs`; the parent charges the
+  rest of the child's spawn-to-close span to `setup`.
+
+`coverage` in the report is merged phases / in-process wall of the top-level
+process; with these rules it stays at or below 100 % and should be >= 95 %
+on vite for every arm (the gap is code outside any span).
 
 ## Results
 

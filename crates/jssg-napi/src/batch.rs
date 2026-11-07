@@ -123,13 +123,12 @@ impl JssgBatch {
         result: Unknown<'_>,
         staged: Option<&mut StagedChanges>,
     ) -> Result<Option<FileOutcomeJs>> {
-        let convert = bench_timings::start();
+        // Benchmark timings: the JS loop times this call as `convert`.
         let secondary = staged
             .map(|staged| std::mem::take(&mut staged.changes))
             .unwrap_or_default();
         let output = transform_output(&root.core, result, secondary);
         let outcome = self.plan.finish(index as usize, output);
-        bench_timings::stop(bench_timings::Phase::Convert, convert);
         let outcome = outcome.map_err(Error::from_reason)?;
         if outcome.edits.is_empty() && outcome.output.is_none() {
             return Ok(None);

@@ -78,6 +78,27 @@ export function bootstrapMedianRatio(a, b, { resamples = 10000, seed = 1, alpha 
   };
 }
 
+/**
+ * Percentile-bootstrap CI of the median of per-pair ratios a[i] / b[i]
+ * (pairs measured together, e.g. one off and one on run per interleaved
+ * round): each resample redraws whole pairs, so drift shared by a pair
+ * cancels. Returns the point estimate and the (1 - alpha) interval.
+ */
+export function bootstrapPairedRatio(a, b, { resamples = 10000, seed = 1, alpha = 0.05 } = {}) {
+  if (a.length !== b.length) throw new Error("paired samples differ in length");
+  if (a.length === 0) return { ratio: NaN, lo: NaN, hi: NaN };
+  const ratios = a.map((x, i) => x / b[i]);
+  const rand = rng(seed);
+  const stats = new Float64Array(resamples);
+  for (let i = 0; i < resamples; i++) stats[i] = median(resample(ratios, rand));
+  stats.sort();
+  return {
+    ratio: median(ratios),
+    lo: quantileSorted(stats, alpha / 2),
+    hi: quantileSorted(stats, 1 - alpha / 2),
+  };
+}
+
 /** Ordinary least squares y = intercept + slope * x. */
 export function ols(xs, ys) {
   const n = xs.length;

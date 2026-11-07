@@ -189,6 +189,12 @@ async fn run_async(options: HostOptions, started: Instant) -> Result<HostOutcome
             .map_err(|error| format!("main() failed: {error}"))
     })
     .await;
+    // Dropping the context and the runtime (garbage collection of every
+    // object the run left) is `setup`.
+    let teardown = bench_timings::start();
+    drop(context);
+    drop(runtime);
+    bench_timings::stop(Phase::Setup, teardown);
     let text = result?;
     let result = serde_json::from_str(&text)
         .map_err(|error| format!("main() returned invalid JSON: {error}"))?;

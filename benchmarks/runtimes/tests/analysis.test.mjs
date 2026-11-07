@@ -447,5 +447,28 @@ describe("overhead", () => {
     assert.equal(node.timings_files, 10);
     assert.equal(yaml.verdict, "OVER");
     assert.equal(yaml.timings_files, 0);
+    assert.equal(node.paired.n, 10);
+  });
+
+  test("pairs each round's off and on runs, cancelling drift between rounds", () => {
+    const dir = join(tmp, "overhead-drift");
+    mkdirSync(join(dir, "raw"), { recursive: true });
+    // Rounds drift by up to 40 %, while on is a steady 0.5 % slower than off.
+    for (let i = 1; i <= 12; i++) {
+      const base = 1 + (0.4 * ((i * 7) % 12)) / 12;
+      writeFileSync(
+        join(dir, "raw", `${i}-ts-node-off.json`),
+        JSON.stringify(hyperfineExport("ts-node", base)),
+      );
+      writeFileSync(
+        join(dir, "raw", `${i}-ts-node-on.json`),
+        JSON.stringify(hyperfineExport("ts-node", base * 1.005)),
+      );
+    }
+    const [row] = summarizeOverhead(dir, { seed: 1, resamples: 2000 }).rows;
+    assert.ok(row.hi - row.lo > 0.1, "the unpaired interval spans the drift");
+    assert.ok(Math.abs(row.paired.ratio - 1.005) < 1e-9);
+    assert.ok(row.paired.hi - row.paired.lo < 1e-9);
+    assert.equal(row.verdict, "within");
   });
 });

@@ -13,6 +13,7 @@ import {
 import type { ArtifactStore } from "../../bundle/build.ts";
 import type { Json } from "../../core/json.ts";
 import { DEFAULT_RUNTIME } from "../../runtime/capabilities.ts";
+import { Phase, lap, now } from "../../core/timings.ts";
 import "../node-host.ts";
 import { bridgeRuntime, defaultBridgePath } from "./bridge.ts";
 import { nodeRuntime } from "./node.ts";
@@ -170,6 +171,9 @@ export async function runWorkflow(
   workflowPath: string,
   options: RunWorkflowOptions = {},
 ): Promise<unknown> {
+  // Benchmark timings (no-ops when off): resolving, loading, and planning
+  // the workflow up to the run is `plan`.
+  const planned = now();
   const { provider, workflow, target, settings } = prepareLaunch(workflowPath, options);
   const hasInput = "input" in options;
   await provider.load?.();
@@ -180,6 +184,7 @@ export async function runWorkflow(
         `runtime '${provider.name}' provides neither an executor nor a launcher`,
       );
     }
+    lap(Phase.plan, planned);
     return provider.launch({
       workflow,
       target,
@@ -192,6 +197,7 @@ export async function runWorkflow(
   const { executable, artifacts } = await loadExecutable(workflow, hasInput);
   // In-process runs only: an out-of-process runtime runs its own control plane.
   const { run } = await import("../../runtime/run.ts");
+  lap(Phase.plan, planned);
   const result = await run(executable, {
     executor: provider.createExecutor({ cwd: target, artifacts, settings }),
     runtime: provider,

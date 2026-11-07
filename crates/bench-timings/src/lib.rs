@@ -22,20 +22,24 @@
 //!
 //! Accumulators are per thread (each thread owns a slot it alone writes; the
 //! slots are only read at exit), so hot paths touch no shared cache line.
-//! Merge across threads, per phase:
+//! Merge across threads, per phase: `ns` and `count` are sums, `cpu_ns`
+//! (present when non-zero) the sum of CPU time. Wall spans on different
+//! threads are sequential parts of one critical path (async code resuming on
+//! another runtime thread). Concurrent work records no per-thread wall:
 //!
-//! - `ns`: the maximum over threads of each thread's wall time (the
-//!   critical thread's wall);
-//! - `count`: the sum of wall spans;
-//! - `cpu_ns` (present when non-zero): the per-thread CPU time of
-//!   [`span_cpu`] spans (worker threads under a region whose wall another
-//!   thread records), plus the sum of wall time over threads when two or
-//!   more threads recorded wall for the phase.
+//! - a worker pool runs inside [`parallel`]: its threads' spans go to region
+//!   totals, and the owning thread records each phase's total divided by the
+//!   pool size as wall (the pool's average per-thread time) and the total as
+//!   `cpu_ns`;
+//! - a helper thread under a region whose wall another thread records uses
+//!   [`span_cpu`] (its CPU time only).
 //!
 //! `exec_to_main_ns` is the process's main start minus `BENCH_T0_NS`, the
-//! monotonic raw clock (`CLOCK_UPTIME_RAW` on macOS, the clock of
-//! `mach_absolute_time`, Node's `process.hrtime`, and Rust's `Instant`) read by
-//! the `bench-exec` launcher right before it execs the command.
+//! monotonic clock read by the `bench-exec` launcher
+//! (`benchmarks/runtimes/bench-exec.c`) right before it execs the command:
+//! `CLOCK_UPTIME_RAW` on macOS (the clock of `mach_absolute_time` and Node's
+//! `process.hrtime`), `CLOCK_MONOTONIC` elsewhere (Node's `process.hrtime`
+//! on Linux). A Node parent sets it for the children it times.
 
 /// The environment variable that turns timings on and names the file.
 pub const FILE_ENV: &str = "CODEMOD_TIMINGS_FILE";

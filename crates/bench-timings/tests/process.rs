@@ -59,10 +59,7 @@ fn writes_one_merged_file_at_finish() {
     assert!(phases["boot"]["ns"].as_u64().unwrap() <= wall);
     assert_eq!(phases["boot"]["count"], 1);
     assert_eq!(phases["transform"]["count"], 1);
-    assert_eq!(
-        phases["parse"],
-        serde_json::json!({ "ns": 10, "count": 3, "cpu_ns": 30 })
-    );
+    assert_eq!(phases["parse"], serde_json::json!({ "ns": 30, "count": 3 }));
     assert_eq!(phases["read"]["ns"], 0);
     assert!(phases["read"]["cpu_ns"].as_u64().unwrap() > 0);
     assert!(phases.get("commit").is_none());

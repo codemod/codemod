@@ -17,20 +17,19 @@ default = []
 timings = ["dep:libc"]
 
 [dependencies]
-# The monotonic raw clock (CLOCK_UPTIME_RAW on macOS) and per-thread CPU time.
+# The monotonic clock (CLOCK_UPTIME_RAW on macOS, CLOCK_MONOTONIC elsewhere) and per-thread CPU time.
 libc = { version = "0.2", optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
-# `bench-exec <command...>`: records BENCH_T0_NS and execs the command.
-[[bin]]
-name = "bench-exec"
-path = "src/bin/bench-exec.rs"
-required-features = ["timings"]
-
 [[test]]
 name = "process"
 path = "tests/process.rs"
+required-features = ["timings"]
+
+[[test]]
+name = "regions"
+path = "tests/regions.rs"
 required-features = ["timings"]
