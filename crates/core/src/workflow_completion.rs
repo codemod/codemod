@@ -88,9 +88,10 @@ impl WorkflowExecutorGuard {
 
 impl Drop for WorkflowExecutorGuard {
     fn drop(&mut self) {
-        let error = self.error.take().or_else(|| {
-            std::thread::panicking().then(|| "Workflow executor panicked".to_string())
-        });
+        let error = self
+            .error
+            .take()
+            .or_else(|| std::thread::panicking().then(|| "Workflow executor panicked".to_string()));
         self.sender.send_modify(|activity| {
             activity.active = activity.active.saturating_sub(1);
             activity.exits += 1;
@@ -120,7 +121,11 @@ impl WorkflowCompletionSignal {
     /// executor exits, so pair it with a fallback timer.
     pub async fn executor_exited(&mut self) -> WorkflowExecutorActivity {
         let seen = self.seen_exits;
-        match self.receiver.wait_for(|activity| activity.exits > seen).await {
+        match self
+            .receiver
+            .wait_for(|activity| activity.exits > seen)
+            .await
+        {
             Ok(activity) => {
                 let activity = activity.clone();
                 self.seen_exits = activity.exits;
