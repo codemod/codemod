@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# Shared configuration for setup.sh, verify.sh, and run.sh. Sourced, not run.
+# Shared configuration for every harness script (setup, verify, run, preflight,
+# rounds, sizes, overhead). Sourced, not run.
 #
 # Environment overrides:
 #   BENCH_REPO           vite checkout (default: $HOME/.cache/codemod-bench/vite)
@@ -12,8 +13,15 @@
 #   BENCH_CMD_<ARM>      replace an arm's command line, e.g. BENCH_CMD_TS_QUICKJS='...'.
 #                        Evaluated by bash with $REPO and the variables below in scope.
 #   BENCH_TIMEOUT        if set, seconds after which any single arm run is killed (SIGALRM,
-#                        via `perl -e 'alarm ...; exec ...'`), so a hung run fails the
-#                        gate or the benchmark instead of stalling it
+#                        armed by bench-exec before it execs the arm), so a hung run fails
+#                        the gate or the benchmark instead of stalling it
+#   BENCH_EXPECT_SHA     commit the checkout must be at (default: the pinned vite commit;
+#                        sizes.sh sets it for its scaled repositories)
+#   CODEMOD_QUICKJS_HOST_BIN  release quickjs host (default: <cargo target>/release/...)
+#   CODEMOD_JSSG_NAPI    napi addon (default: packages/jssg-napi/jssg-napi.<platform>-<arch>.node)
+#
+# Every arm is launched through bin/bench-exec (compiled from bench-exec.c on
+# first use), which sets BENCH_T0_NS and execs the arm in the same process.
 
 set -euo pipefail
 
@@ -30,12 +38,26 @@ REPO="${BENCH_REPO:-$HOME/.cache/codemod-bench/vite}"
 
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 case "$TARGET_DIR" in /*) ;; *) TARGET_DIR="$ROOT/$TARGET_DIR" ;; esac
+if [ -d "$TARGET_DIR" ]; then TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"; fi
 CODEMOD_BIN="${CODEMOD_BIN:-$TARGET_DIR/release/codemod}"
 CODEMOD_BRIDGE_BIN="${CODEMOD_BRIDGE_BIN:-$TARGET_DIR/release/butterflow-execution-bridge}"
 WORKFLOW_CLI="$ROOT/packages/orchestration/bin/codemod-workflow.mjs"
 YAML_WORKFLOW="$BENCH_DIR/yaml/workflow.yaml"
 TS_WORKFLOW="$BENCH_DIR/ts/workflow.ts"
 export CODEMOD_BRIDGE_BIN
+# Pin the release host and addon explicitly (the runtimes would otherwise pick
+# the newer of release/debug for the host).
+CODEMOD_QUICKJS_HOST_BIN="${CODEMOD_QUICKJS_HOST_BIN:-$TARGET_DIR/release/orchestration-quickjs-host}"
+node_arch() {
+  case "$(uname -m)" in x86_64 | amd64) echo x64 ;; aarch64) echo arm64 ;; *) uname -m ;; esac
+}
+CODEMOD_JSSG_NAPI="${CODEMOD_JSSG_NAPI:-$ROOT/packages/jssg-napi/jssg-napi.$(uname -s | tr 'A-Z' 'a-z')-$(node_arch).node}"
+export CODEMOD_QUICKJS_HOST_BIN CODEMOD_JSSG_NAPI
+# Read by provenance.mjs.
+export CODEMOD_BIN VITE_TAG VITE_SHA
+
+BIN_DIR="$BENCH_DIR/bin"
+BENCH_EXEC="$BIN_DIR/bench-exec"
 
 # No telemetry from either engine.
 export DISABLE_ANALYTICS=true
@@ -66,9 +88,78 @@ die() {
 # and cleaned by git; nothing inside it is executed.
 require_repo() {
   [ -d "$REPO/.git" ] || die "no vite checkout at $REPO; run setup.sh first (or set BENCH_REPO)"
-  local head
+  local head expected="${BENCH_EXPECT_SHA:-$VITE_SHA}"
   head="$(git -C "$REPO" rev-parse HEAD)"
-  [ "$head" = "$VITE_SHA" ] || die "$REPO is at $head, expected $VITE_SHA ($VITE_TAG); rerun setup.sh"
+  [ "$head" = "$expected" ] || die "$REPO is at $head, expected $expected; rerun setup.sh (or sizes.sh)"
+}
+
+# Compile bench-exec.c into bin/ when missing or older than its source.
+ensure_bench_exec() {
+  if [ ! -x "$BENCH_EXEC" ] || [ "$BENCH_DIR/bench-exec.c" -nt "$BENCH_EXEC" ]; then
+    command -v cc >/dev/null || die "a C compiler (cc) is required to build bench-exec"
+    mkdir -p "$BIN_DIR"
+    cc -O2 -Wall -o "$BENCH_EXEC.tmp.$$" "$BENCH_DIR/bench-exec.c" ||
+      die "failed to compile bench-exec.c"
+    mv -f "$BENCH_EXEC.tmp.$$" "$BENCH_EXEC"
+  fi
+}
+
+# Release binary (or addon) an arm needs, for preflight and provenance.
+arm_binary() {
+  case "$1" in
+    yaml) printf '%s' "$CODEMOD_BIN" ;;
+    ts-bridge) printf '%s' "$CODEMOD_BRIDGE_BIN" ;;
+    ts-node) printf '%s' "$CODEMOD_JSSG_NAPI" ;;
+    ts-quickjs) printf '%s' "$CODEMOD_QUICKJS_HOST_BIN" ;;
+  esac
+}
+
+# Fisher-Yates shuffle of the remaining arguments, seeded (reproducible).
+shuffle() {
+  local seed="$1"
+  shift
+  perl -MList::Util=shuffle -e 'srand(shift); print join(" ", shuffle @ARGV), "\n"' "$seed" "$@"
+}
+
+# Locate hyperfine (PATH or ~/.cargo/bin); dies when it is missing.
+require_hyperfine() {
+  if ! command -v hyperfine >/dev/null; then
+    if [ -x "$HOME/.cargo/bin/hyperfine" ]; then
+      PATH="$HOME/.cargo/bin:$PATH"
+    else
+      die "hyperfine is required (brew install hyperfine, or cargo install hyperfine)"
+    fi
+  fi
+}
+
+# Hash of the repository's full change set (staged, binary), as verify.sh computes it.
+diff_hash() {
+  git -C "$1" add -A
+  git -C "$1" diff --cached --binary | shasum -a 256 | cut -d' ' -f1
+}
+
+# bench_once <out.json> <name> <prepare-cmd> <timings-file|""> <arm-cmd>
+# One timed run through hyperfine without a shell (-N): the timed process is
+# bench-exec, which execs the arm. CODEMOD_TIMINGS_FILE is set only when a
+# timings path is given. hyperfine's own output goes to <out.json%.json>.log.
+bench_once() {
+  local out="$1" name="$2" prepare="$3" timings="$4" cmd="$5"
+  local log="${out%.json}.log"
+  if [ -n "$timings" ]; then
+    CODEMOD_TIMINGS_FILE="$timings" BENCH_ARM="$name" hyperfine -N --runs 1 --style basic \
+      --prepare "$prepare" --export-json "$out" -n "$name" "$cmd" >"$log" 2>&1
+  else
+    env -u CODEMOD_TIMINGS_FILE BENCH_ARM="$name" hyperfine -N --runs 1 --style basic \
+      --prepare "$prepare" --export-json "$out" -n "$name" "$cmd" >"$log" 2>&1
+  fi || {
+    tail -n 30 "$log" >&2
+    die "run $name failed (log: $log)"
+  }
+}
+
+# Wall time (s) of the single run in a hyperfine export.
+hyperfine_time() {
+  awk -F': *' '/"mean"/ { gsub(/[ ,]/, "", $2); print $2; exit }' "$1"
 }
 
 reset_repo() {
@@ -112,11 +203,16 @@ arm_var() { printf 'BENCH_CMD_%s' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"; }
 # `ts-bridge` uses the `run --runtime=bridge` form once the CLI has it and the
 # legacy `codemod-workflow <workflow.ts>` form until then (see probe_arm).
 q() { printf '%q' "$1"; }
-# With BENCH_TIMEOUT, the command is exec'd by perl after `alarm`, so the arm
-# itself is the process hyperfine waits on and SIGALRM ends it (exit 142).
+# Every arm starts as bin/bench-exec, which sets BENCH_T0_NS and execs the arm
+# (same process, so the arm itself is what hyperfine waits on). With
+# BENCH_TIMEOUT it arms an alarm first and SIGALRM ends the arm (exit 142).
+# The result is a plain command line (no shell syntax), so it also runs under
+# `hyperfine -N`; a BENCH_CMD_<ARM> override must be plain too (or `bash -c '...'`).
 arm_command() {
+  ensure_bench_exec
+  printf '%s ' "$(q "$BENCH_EXEC")"
   if [ -n "${BENCH_TIMEOUT:-}" ]; then
-    printf "perl -e 'alarm shift; exec @ARGV or die' %s " "$(q "$BENCH_TIMEOUT")"
+    printf -- '-t %s ' "$(q "$BENCH_TIMEOUT")"
   fi
   arm_command_unbounded "$@"
 }

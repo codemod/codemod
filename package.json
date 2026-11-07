@@ -31,6 +31,7 @@
     "format": "oxfmt --check",
     "format:rust": "cargo fmt --check",
     "format:rust:fix": "cargo fmt",
+    "test:bench": "node --test benchmarks/runtimes/tests/*.test.mjs",
     "prepare": "husky"
   },
   "lint-staged": {
