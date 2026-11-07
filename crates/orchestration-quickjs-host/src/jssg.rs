@@ -24,8 +24,8 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
 
+use bench_timings::Phase;
 use codemod_sandbox::sandbox::engine::embedded::{
     begin_call, core_root, end_call, root_value, transform_output,
 };
@@ -41,16 +41,9 @@ pub struct OpenBatch {
     staged: HashMap<u32, Vec<FileChange>>,
 }
 
-/// Time spent in Rust around transforms, for the timer breakdown.
-#[derive(Default)]
-pub struct Stats {
-    /// `jssgParse`: selector check and parse.
-    pub prepare: Duration,
-    /// `jssgFinish`: result conversion and path validation.
-    pub finish: Duration,
-    pub files: u64,
-    pub skipped: u64,
-}
+// Benchmark timings (`timings` feature): `jssgBegin` is `setup`,
+// `jssgParse` `parse`, `jssgFinish` `convert`, all wall on the JS thread;
+// the bundle times the transform calls itself.
 
 fn with_batch<'js, T>(
     ctx: &Ctx<'js>,
@@ -77,6 +70,7 @@ pub fn install<'js>(
             Function::new(
                 ctx.clone(),
                 move |ctx: Ctx<'js>, config: String, paths: Vec<String>| {
+                    let setup = bench_timings::start();
                     let config: BatchConfig = serde_json::from_str(&config).map_err(|error| {
                         throw(&ctx, None, &format!("invalid JSSG batch: {error}"))
                     })?;
@@ -87,6 +81,7 @@ pub fn install<'js>(
                         Containment::PerFile,
                     )
                     .map_err(|error| throw(&ctx, None, &error))?;
+                    bench_timings::stop(Phase::Setup, setup);
                     let id = state.next_id();
                     let module = plan.module.clone();
                     state.batches.borrow_mut().insert(
@@ -115,9 +110,8 @@ pub fn install<'js>(
                       start: u32,
                       contents: Vec<String>|
                       -> rquickjs::Result<Vec<Value<'js>>> {
-                    let started = Instant::now();
+                    let parse = bench_timings::start();
                     let roots = with_batch(&ctx, &state, id, |batch| {
-                        let mut stats = state.stats.borrow_mut();
                         let mut roots = Vec::with_capacity(contents.len());
                         for (offset, content) in contents.iter().enumerate() {
                             let root = batch
@@ -125,20 +119,15 @@ pub fn install<'js>(
                                 .parse(start as usize + offset, content)
                                 .map_err(|error| throw(&ctx, None, &error))?;
                             roots.push(match root {
-                                None => {
-                                    stats.skipped += 1;
-                                    Value::new_null(ctx.clone())
-                                }
-                                Some(root) => {
-                                    stats.files += 1;
-                                    root_value(&ctx, root)
-                                        .map_err(|error| throw(&ctx, None, &error.to_string()))?
-                                }
+                                None => Value::new_null(ctx.clone()),
+                                Some(root) => root_value(&ctx, root)
+                                    .map_err(|error| throw(&ctx, None, &error.to_string()))?,
                             });
                         }
                         Ok(roots)
                     })?;
-                    state.stats.borrow_mut().prepare += started.elapsed();
+                    // One span per chunk.
+                    bench_timings::stop(Phase::Parse, parse);
                     Ok(roots)
                 },
             )?,
@@ -180,7 +169,7 @@ pub fn install<'js>(
             Function::new(
                 ctx.clone(),
                 move |ctx: Ctx<'js>, id: u32, index: u32, root: Value<'js>, result: Value<'js>| {
-                    let started = Instant::now();
+                    let convert = bench_timings::start();
                     let text = with_batch(&ctx, &state, id, |batch| {
                         let core = core_root(&root).ok_or_else(|| {
                             throw(&ctx, None, &format!("file {index} has no SgRoot"))
@@ -200,31 +189,16 @@ pub fn install<'js>(
                             .map(Some)
                             .map_err(|error| throw(&ctx, None, &error.to_string()))
                     })?;
-                    state.stats.borrow_mut().finish += started.elapsed();
+                    bench_timings::stop(Phase::Convert, convert);
                     Ok::<_, rquickjs::Error>(text)
                 },
             )?,
         )?;
     }
-    {
-        let state = Rc::clone(&state);
-        native.set(
-            "jssgEnd",
-            Function::new(ctx.clone(), move |id: u32| {
-                state.batches.borrow_mut().remove(&id);
-            })?,
-        )?;
-    }
     native.set(
-        "jssgStats",
-        Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
-            let stats = state.stats.borrow();
-            let object = Object::new(ctx.clone())?;
-            object.set("prepareMs", stats.prepare.as_secs_f64() * 1000.0)?;
-            object.set("finishMs", stats.finish.as_secs_f64() * 1000.0)?;
-            object.set("files", stats.files as f64)?;
-            object.set("skipped", stats.skipped as f64)?;
-            Ok::<_, rquickjs::Error>(object)
+        "jssgEnd",
+        Function::new(ctx.clone(), move |id: u32| {
+            state.batches.borrow_mut().remove(&id);
         })?,
     )?;
     Ok(())

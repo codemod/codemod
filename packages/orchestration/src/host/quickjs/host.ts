@@ -87,6 +87,7 @@ export function createQuickjsHost(native: QuickjsNative): Host {
     spawn: (options) => spawn(native, options),
     createAsyncContext: createPropagatingAsyncContext,
     now: () => native.now(),
+    clock: { ns: () => native.clockNs() },
     setTimeout: (callback, ms) => timers.setTimeout(callback, ms),
     clearTimeout: (timer) => timers.clearTimeout(timer),
     randomUUID: () => native.randomUUID(),

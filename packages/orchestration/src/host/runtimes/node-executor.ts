@@ -27,14 +27,6 @@ export interface NodeExecutorOptions {
   artifacts: ArtifactStore;
   /** Added to the environment of `shell` commands. */
   env?: Record<string, string>;
-  /**
-   * Optional timers (milliseconds): `jssg.select` (walk + reads),
-   * `jssg.stage`, `jssg.commit` from `executeJssgCommand`; `jssg.parse`
-   * (off-thread), `jssg.parse.wait` (blocked on it), `jssg.load`,
-   * `jssg.transform`, `jssg.convert` from the batch runner; `jssg.dispatch`
-   * (the whole batch); `jssg.command` (all of it); and `shell`.
-   */
-  profile?: (phase: string, ms: number) => void;
 }
 
 /** Executes `jssg` and `shell` in this process; refuses everything else. */
@@ -48,37 +40,18 @@ export class NodeExecutor implements OperationExecutor {
   readonly #host: Host;
 
   constructor(private readonly options: NodeExecutorOptions) {
-    const { profile } = options;
     const host = getHost();
     this.#host =
       process.env.CODEMOD_NATIVE_SELECT === "0" || host !== NODE_HOST
         ? host
         : createNapiSelectHost(host);
-    const dispatch = createJssgBatchDispatch({
-      engine: createNapiJssgEngine(),
-      ...(profile === undefined
-        ? {}
-        : { profile: (phase: string, ms: number) => profile(`jssg.${phase}`, ms) }),
-    });
-    this.#dispatch =
-      profile === undefined
-        ? dispatch
-        : async (request, signal) => {
-            const start = performance.now();
-            try {
-              return await dispatch(request, signal);
-            } finally {
-              profile("jssg.dispatch", performance.now() - start);
-            }
-          };
+    this.#dispatch = createJssgBatchDispatch({ engine: createNapiJssgEngine() });
   }
 
   async execute(request: OperationRequest, signal?: AbortSignal): Promise<OperationCompletion> {
-    const { cwd, artifacts, env, profile } = this.options;
-    const start = performance.now();
+    const { cwd, artifacts, env } = this.options;
     const operation = request.operation;
-    try {
-      switch (operation.kind) {
+    switch (operation.kind) {
         case "shell":
           return await executeShell(
             { cwd, ...(env === undefined ? {} : { env }) },
@@ -94,9 +67,6 @@ export class NodeExecutor implements OperationExecutor {
             signal,
             host: this.#host,
             dispatch: this.#dispatch,
-            ...(profile === undefined
-              ? {}
-              : { profile: (phase: string, ms: number) => profile(`jssg.${phase}`, ms) }),
           });
         default: {
           const unsupported = `operation kind '${operation.kind}'`;
@@ -120,11 +90,5 @@ export class NodeExecutor implements OperationExecutor {
           };
         }
       }
-    } finally {
-      profile?.(
-        operation.kind === "jssg" ? "jssg.command" : operation.kind,
-        performance.now() - start,
-      );
-    }
   }
 }

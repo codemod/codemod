@@ -154,6 +154,7 @@ export function createNodeHost(): Host {
       return { get: () => storage.getStore(), run: (value, fn) => storage.run(value, fn) };
     },
     now: () => Date.now(),
+    clock: { ns: () => performance.now() * 1e6 },
     setTimeout: (callback, ms) => setTimeout(callback, ms),
     clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
     randomUUID: () => randomUUID(),

@@ -38,7 +38,6 @@ pub struct HostState {
     /// Live children by spawn id: their process id (= process group id).
     pub children: RefCell<HashMap<u32, u32>>,
     pub next_id: Cell<u32>,
-    pub stats: RefCell<jssg::Stats>,
 }
 
 impl HostState {
@@ -372,14 +371,19 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: Rc<HostState>) -> rquickjs::Result<()
         })?,
     )?;
     {
+        // `Host.clock.ns()`: monotonic nanoseconds since the host started
+        // (benchmark timings; `Date.now()` has 1 ms resolution).
         let state = Rc::clone(&state);
         native.set(
-            "hrtime",
+            "clockNs",
             Function::new(ctx.clone(), move || {
-                state.started.elapsed().as_secs_f64() * 1000.0
+                state.started.elapsed().as_nanos() as f64
             })?,
         )?;
     }
+    // Whether the bundle collects its JS-side phases (`core/timings.ts`):
+    // this build has the `timings` feature and CODEMOD_TIMINGS_FILE is set.
+    native.set("timingsEnabled", bench_timings::enabled())?;
     native.set(
         "randomUUID",
         Function::new(ctx.clone(), || uuid::Uuid::new_v4().to_string())?,

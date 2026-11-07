@@ -1,15 +1,17 @@
 //! `orchestration-quickjs-host run <bundle.mjs> [--target <dir>] [--input <json>]
-//! [--history <file>] [--timings] [--json]`
+//! [--history <file>] [--json]`
 //!
 //! Runs a workflow bundle built by `codemod-workflow build --runtime=quickjs`
 //! in one QuickJS context and prints the final output as JSON on stdout, as
 //! `codemod-workflow run` does. `--history <file>` resumes from the history
 //! in the file when it exists and writes the run's history back to it
 //! (whether or not the run succeeded), so a failed run can be resumed.
-//! `--timings` (or `CODEMOD_QUICKJS_TIMINGS=1`) prints a timer breakdown as
-//! one `timings: {...}` JSON line on stderr. Workflow and transform console
-//! output goes to stderr. `--json` prints `{ ok, output | error }` on stdout
-//! instead (what the Node provider parses).
+//! Workflow and transform console output goes to stderr. `--json` prints
+//! `{ ok, output | error }` on stdout instead (what the Node provider parses).
+//!
+//! Benchmark timings: built with the `timings` feature and run with
+//! `CODEMOD_TIMINGS_FILE` set, the host writes one `quickjs-host` timings
+//! file (`crates/bench-timings`) with the bundle's JS-side phases merged in.
 //!
 //! Exit codes: 0 completed, 1 the workflow failed or was cancelled, 2 usage,
 //! 3 the host could not run the bundle.
@@ -26,10 +28,45 @@ use std::time::Instant;
 
 use orchestration_quickjs_host::{run, select, HostOptions};
 
-const USAGE: &str = "usage: orchestration-quickjs-host run <bundle.mjs> [--target <directory>] [--input <json>] [--history <file>] [--timings] [--json]\n       orchestration-quickjs-host select < jobs.json";
+const USAGE: &str = "usage: orchestration-quickjs-host run <bundle.mjs> [--target <directory>] [--input <json>] [--history <file>] [--json]\n       orchestration-quickjs-host select < jobs.json";
 
 fn main() -> ExitCode {
     let started = Instant::now();
+    bench_timings::init("quickjs-host");
+    let code = run_main(started);
+    bench_timings::finish();
+    code
+}
+
+/// Exit now (the runtime and any still-pending JS futures are not torn
+/// down), writing the timings file first.
+fn exit(code: i32) -> ! {
+    bench_timings::finish();
+    std::process::exit(code);
+}
+
+/// The bundle's JS-side phases (`result.timings`, the schema's `phases`
+/// shape) into this thread's accumulators: the JS thread is this one.
+fn merge_js_timings(timings: &serde_json::Value) {
+    let Some(phases) = timings.as_object() else {
+        return;
+    };
+    for (name, phase) in phases {
+        let Some(phase_id) = bench_timings::Phase::from_name(name) else {
+            continue;
+        };
+        let field = |key: &str| {
+            phase
+                .get(key)
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0)
+        };
+        bench_timings::add(phase_id, field("ns") as u64, field("count") as u64);
+        bench_timings::add_cpu(phase_id, field("cpu_ns") as u64);
+    }
+}
+
+fn run_main(started: Instant) -> ExitCode {
     let mut args = std::env::args()
         .skip(1)
         .flat_map(|arg| match arg.split_once('=') {
@@ -69,13 +106,8 @@ fn main() -> ExitCode {
     let mut target = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut input = None;
     let mut history_file: Option<PathBuf> = None;
-    let mut timings = std::env::var("CODEMOD_QUICKJS_TIMINGS").is_ok_and(|value| value == "1");
     let mut json = false;
     while let Some(flag) = args.next() {
-        if flag == "--timings" {
-            timings = true;
-            continue;
-        }
         if flag == "--json" {
             json = true;
             continue;
@@ -112,7 +144,6 @@ fn main() -> ExitCode {
             target,
             input,
             history,
-            timings,
         },
         started,
     ) {
@@ -120,7 +151,7 @@ fn main() -> ExitCode {
         Err(error) => {
             eprintln!("{error}");
             // Skip tearing down the QuickJS runtime: the process is done.
-            std::process::exit(3);
+            exit(3);
         }
     };
     let result = outcome.result;
@@ -130,7 +161,7 @@ fn main() -> ExitCode {
         }
     }
     if let Some(timings) = result.get("timings") {
-        eprintln!("timings: {timings}");
+        merge_js_timings(timings);
     }
     let ok = result.get("ok").and_then(|ok| ok.as_bool()) == Some(true);
     if json {
@@ -142,7 +173,7 @@ fn main() -> ExitCode {
             }
         }
         println!("{}", serde_json::Value::Object(summary));
-        std::process::exit(if ok { 0 } else { 1 });
+        exit(if ok { 0 } else { 1 });
     }
     let code = if ok {
         let output = result
@@ -163,5 +194,5 @@ fn main() -> ExitCode {
         1
     };
     // The runtime (and any still-pending JS futures) is not torn down: exit now.
-    std::process::exit(code);
+    exit(code);
 }

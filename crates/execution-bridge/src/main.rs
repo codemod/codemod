@@ -16,11 +16,22 @@ use butterflow_execution_bridge::{
 use butterflow_runners::direct_runner::DirectRunner;
 
 fn main() -> ExitCode {
+    // Benchmark timings (`timings` feature, CODEMOD_TIMINGS_FILE): this
+    // process's file, `<path>.<pid>.json` under a timed host.
+    bench_timings::init("bridge");
+    let code = run();
+    bench_timings::finish();
+    code
+}
+
+fn run() -> ExitCode {
+    use bench_timings::Phase;
     let args: Vec<String> = std::env::args().skip(1).collect();
     let [request_path, response_path] = args.as_slice() else {
         return ExitCode::from(2);
     };
     let response_path = Path::new(response_path);
+    let read = bench_timings::start();
     let text = match read_request(Path::new(request_path)) {
         Ok(text) => text,
         Err(error) => {
@@ -35,6 +46,8 @@ fn main() -> ExitCode {
         Ok(request) => request,
         Err(error) => return write_error(response_path, &command_id_hint(&text), error),
     };
+    bench_timings::stop(Phase::Read, read);
+    let boot = bench_timings::start();
     // A builtin agent's settings are read (the key from stdin when the host
     // sends it there), and the key removed from the process environment,
     // before any thread exists: the agent's tool processes inherit this
@@ -51,6 +64,7 @@ fn main() -> ExitCode {
     let Ok(runtime) = tokio::runtime::Runtime::new() else {
         return ExitCode::from(4);
     };
+    bench_timings::stop(Phase::Boot, boot);
     let completion = match (agent_task, agent_settings) {
         (Some(task), Some(settings)) => runtime.block_on(agent::run(
             &request.command_id,
@@ -60,7 +74,10 @@ fn main() -> ExitCode {
         )),
         _ => runtime.block_on(execute(&DirectRunner::with_quiet(true), &request)),
     };
-    match write_completion(response_path, &completion) {
+    // Serializing and writing the response: the bridge's side of `convert`.
+    match bench_timings::span(Phase::Convert, || {
+        write_completion(response_path, &completion)
+    }) {
         Ok(()) => ExitCode::SUCCESS,
         Err(_) => ExitCode::from(4),
     }

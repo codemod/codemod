@@ -28,13 +28,14 @@ import {
   type OperationCompletion,
   type OperationRequest,
 } from "../../core/protocol.ts";
-import { executeJssgCommand } from "../../execution/jssg.ts";
+import { configureTimings, timingsEnabled, timingsSnapshot } from "../../core/timings.ts";
+import { executeJssgCommand, type JssgDispatch } from "../../execution/jssg.ts";
 import type { OperationExecutor } from "../../execution/operation-executor.ts";
 import { executeShell } from "../../execution/shell.ts";
 import { QUICKJS_RUNTIME, UnsupportedInRuntimeError } from "../../runtime/capabilities.ts";
 import { run } from "../../runtime/run.ts";
 import { installPromiseContextPropagation } from "./async-context.ts";
-import { createQuickjsDispatch, type QuickjsDispatch } from "./dispatch.ts";
+import { createQuickjsDispatch } from "./dispatch.ts";
 import { createQuickjsConsole, createQuickjsHost } from "./host.ts";
 import { ABORT_GLOBAL, quickjsNative, type QuickjsNative } from "./native.ts";
 
@@ -52,25 +53,6 @@ export interface QuickjsRequest {
   input?: string;
   /** A `History` (JSON text) to resume from. */
   history?: string;
-  timings?: boolean;
-  /** Host milestones, milliseconds since the host process started. */
-  startup?: { runtimeReadyMs: number; bundleLoadedMs: number };
-}
-
-/** Per-kind wall time inside the executor, for the timer breakdown. */
-interface ExecutorTimings {
-  /** Target-root resolution, file selection, and reads (before dispatch). */
-  selectMs: number;
-  /** Of `selectMs`: target root and the walk (`profile` phase `select`, whole ms). */
-  walkMs: number;
-  /** Of `selectMs`: reading the selected sources (`profile` phase `read`, whole ms). */
-  readMs: number;
-  /** Validation, conflict checks, and writes (after dispatch). */
-  commitMs: number;
-  /** The batch runner (parse, transform, convert). */
-  dispatchMs: number;
-  /** Shell operations end to end. */
-  shellMs: number;
 }
 
 const globals = globalThis as Record<string, unknown>;
@@ -80,70 +62,33 @@ const host = createQuickjsHost(native);
 setHost(host);
 globals[HOST_GLOBAL] = host;
 globals.console = createQuickjsConsole(native);
+// Benchmark timings: on when the Rust host collects them; the JS-side phases
+// go back in the result and the host merges them into its file.
+configureTimings({ enabled: native.timingsEnabled === true, clock: host.clock?.ns });
 
 /** `jssg` in context, `shell` through the Rust spawn; everything else refused. */
 class QuickjsExecutor implements OperationExecutor {
-  readonly timings: ExecutorTimings = {
-    selectMs: 0,
-    walkMs: 0,
-    readMs: 0,
-    commitMs: 0,
-    dispatchMs: 0,
-    shellMs: 0,
-  };
-
   constructor(
     private readonly cwd: string,
     private readonly artifacts: Map<string, JssgArtifact>,
-    private readonly jssg: QuickjsDispatch,
+    private readonly dispatch: JssgDispatch,
   ) {}
 
   async execute(request: OperationRequest, signal?: AbortSignal): Promise<OperationCompletion> {
     const operation = request.operation;
-    const started = native.hrtime();
     switch (operation.kind) {
-      case "shell": {
-        try {
-          return await executeShell({ cwd: this.cwd, host }, request, signal);
-        } finally {
-          this.timings.shellMs += native.hrtime() - started;
-        }
-      }
-      case "jssg": {
-        let dispatchStart = started;
-        let dispatchEnd = started;
-        try {
-          return await executeJssgCommand({
-            cwd: this.cwd,
-            artifacts: this.artifacts,
-            commandId: request.commandId,
-            operation,
-            signal,
-            host,
-            profile: (phase, ms) => {
-              if (phase === "select") this.timings.walkMs += ms;
-              else if (phase === "read") this.timings.readMs += ms;
-            },
-            dispatch: async (batch, batchSignal) => {
-              dispatchStart = native.hrtime();
-              try {
-                return await this.jssg.dispatch(batch, batchSignal);
-              } finally {
-                dispatchEnd = native.hrtime();
-              }
-            },
-          });
-        } finally {
-          const end = native.hrtime();
-          if (dispatchEnd > dispatchStart) {
-            this.timings.selectMs += dispatchStart - started;
-            this.timings.dispatchMs += dispatchEnd - dispatchStart;
-            this.timings.commitMs += end - dispatchEnd;
-          } else {
-            this.timings.selectMs += end - started;
-          }
-        }
-      }
+      case "shell":
+        return await executeShell({ cwd: this.cwd, host }, request, signal);
+      case "jssg":
+        return await executeJssgCommand({
+          cwd: this.cwd,
+          artifacts: this.artifacts,
+          commandId: request.commandId,
+          operation,
+          signal,
+          host,
+          dispatch: this.dispatch,
+        });
       default:
         // `run()` refuses these before they get here (`CapabilityExecutor`).
         return {
@@ -160,15 +105,15 @@ class QuickjsExecutor implements OperationExecutor {
   }
 }
 
-const round = (ms: number) => Math.round(ms * 10) / 10;
-
-/** Run the bundled workflow; resolves with `{ ok, output | error, history, timings? }` as JSON text. */
+/**
+ * Run the bundled workflow; resolves with `{ ok, output | error, history,
+ * timings? }` as JSON text (`timings`: the JS-side phases, when on).
+ */
 export async function runBundled(
   workflow: Record<string, unknown>,
   bundled: Record<string, BundledArtifact>,
   request: QuickjsRequest,
 ): Promise<string> {
-  const mainStarted = native.hrtime();
   const controller = new AbortController();
   globals[ABORT_GLOBAL] = () => controller.abort();
   const artifacts = new Map<string, JssgArtifact>(
@@ -177,8 +122,7 @@ export async function runBundled(
       { hash, name: artifact.name, source: artifact.source, origin: artifact.name },
     ]),
   );
-  const jssg = createQuickjsDispatch(native);
-  const executor = new QuickjsExecutor(request.target, artifacts, jssg);
+  const executor = new QuickjsExecutor(request.target, artifacts, createQuickjsDispatch(native));
   let store: MemoryHistoryStore | undefined;
   const result: {
     ok: boolean;
@@ -218,29 +162,6 @@ export async function runBundled(
     result.error = error instanceof Error ? error.message : String(error);
   }
   if (store !== undefined) result.history = store.toJSON();
-  if (request.timings === true) {
-    const stats = native.jssgStats();
-    const end = native.hrtime();
-    result.timings = {
-      hostStartupMs: round(request.startup?.runtimeReadyMs ?? 0),
-      bundleLoadMs: round(
-        (request.startup?.bundleLoadedMs ?? 0) - (request.startup?.runtimeReadyMs ?? 0),
-      ),
-      runMs: round(end - mainStarted),
-      selectAndReadMs: round(executor.timings.selectMs),
-      walkMs: round(executor.timings.walkMs),
-      readMs: round(executor.timings.readMs),
-      dispatchMs: round(executor.timings.dispatchMs),
-      parseMs: round(stats.prepareMs),
-      moduleLoadMs: round(jssg.timings.loadMs),
-      transformMs: round(jssg.timings.transformMs),
-      convertMs: round(stats.finishMs),
-      commitMs: round(executor.timings.commitMs),
-      shellMs: round(executor.timings.shellMs),
-      files: stats.files,
-      skipped: stats.skipped,
-      totalMs: round(end),
-    };
-  }
+  if (timingsEnabled()) result.timings = timingsSnapshot() as unknown as Json;
   return JSON.stringify(result);
 }

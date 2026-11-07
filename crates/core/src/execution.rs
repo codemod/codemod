@@ -118,6 +118,8 @@ impl CodemodExecutionConfig {
         }
 
         let explicit_files = self.explicit_files.clone();
+        // Benchmark timings: building the globs and the counting walk.
+        let select = bench_timings::start();
         let globs = if explicit_files.is_some() {
             None
         } else {
@@ -129,6 +131,7 @@ impl CodemodExecutionConfig {
         } else {
             self.count_files(&search_base, &globs)?
         };
+        bench_timings::stop(bench_timings::Phase::Select, select);
 
         if let Some(ref progress_cb) = self.progress_callback.as_ref() {
             (progress_cb.callback)(task_id, "start", "counting", Some(&total_files), &0);
@@ -178,6 +181,7 @@ impl CodemodExecutionConfig {
                     .map_or(1, |n| n.get())
                     .min(12)
             });
+            bench_timings::set_threads_used(num_threads);
 
             let walker = self
                 .create_walk_builder(&search_base, globs)

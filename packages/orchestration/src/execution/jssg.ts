@@ -26,6 +26,7 @@ import { comparePaths, readSelectedSources, selectFiles } from "./files.ts";
 import { getHost, type Host } from "../core/host.ts";
 import type { Json } from "../core/json.ts";
 import { lexists, resolveInsideRoot } from "../core/paths.ts";
+import { Phase, lap, now } from "../core/timings.ts";
 import {
   PROTOCOL_VERSION,
   isFileOutcomes,
@@ -63,11 +64,6 @@ export interface JssgCommandOptions {
   host?: Host;
   /** Test hook: global git excludes file (`null` disables). */
   globalExcludes?: string | null;
-  /**
-   * Optional timers in milliseconds: `select` (target root + walk), `read`
-   * (selected sources), `stage`, `commit`.
-   */
-  profile?: (phase: string, ms: number) => void;
 }
 
 export async function executeJssgCommand(
@@ -96,15 +92,10 @@ export async function executeJssgCommand(
     );
   }
 
-  const { profile } = options;
-  let mark = profile === undefined ? 0 : host.now();
-  const lap = (phase: string) => {
-    if (profile === undefined) return;
-    const now = host.now();
-    profile(phase, now - mark);
-    mark = now;
-  };
-
+  // Benchmark timings (`core/timings.ts`; no-ops when off): target root and
+  // walk `select`, reads `read` (native worker CPU adds `cpu_ns`), conflict
+  // checks `conflict`, writes `commit`. The dispatch times its own phases.
+  let mark = now();
   let targetRoot: string;
   let files: BatchFile[];
   try {
@@ -123,12 +114,12 @@ export async function executeJssgCommand(
       globalExcludes: options.globalExcludes,
       host,
     });
-    lap("select");
+    mark = lap(Phase.select, mark);
     files = readSelectedSources(host, targetRoot, paths);
   } catch (error) {
     return fail("failed", (error as Error).message, { phase: "select" });
   }
-  lap("read");
+  lap(Phase.read, mark);
 
   let completion: OperationCompletion;
   try {
@@ -166,14 +157,14 @@ export async function executeJssgCommand(
     return fail("failed", "bridge returned an invalid batch result", { phase: "transform" });
   }
 
-  mark = profile === undefined ? 0 : host.now();
+  mark = now();
   let staged: Staged;
   try {
     staged = stage(host, targetRoot, outcomes);
   } catch (error) {
     return fail("failed", (error as Error).message, { phase: "stage" });
   }
-  lap("stage");
+  mark = lap(Phase.conflict, mark);
   if (signal?.aborted) return fail("cancelled", "cancelled before commit", { phase: "commit" });
   const applied: string[] = [];
   const steps = [
@@ -203,7 +194,7 @@ export async function executeJssgCommand(
     }
     applied.push(step.path);
   }
-  lap("commit");
+  lap(Phase.commit, mark);
   return {
     protocolVersion: PROTOCOL_VERSION,
     commandId,

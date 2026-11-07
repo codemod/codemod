@@ -1,0 +1,36 @@
+[package]
+name = "bench-timings"
+version.workspace = true
+edition = "2021"
+authors.workspace = true
+description = "Near-zero-overhead phase timings for the runtime benchmark (CODEMOD_TIMINGS_FILE); compiles to nothing without the `timings` feature"
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+# `std::sync::LazyLock`.
+rust-version = "1.80"
+publish = false
+
+[features]
+default = []
+# Without it every function is an empty `#[inline(always)]` body.
+timings = ["dep:libc"]
+
+[dependencies]
+# The monotonic raw clock (CLOCK_UPTIME_RAW on macOS) and per-thread CPU time.
+libc = { version = "0.2", optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+# `bench-exec <command...>`: records BENCH_T0_NS and execs the command.
+[[bin]]
+name = "bench-exec"
+path = "src/bin/bench-exec.rs"
+required-features = ["timings"]
+
+[[test]]
+name = "process"
+path = "tests/process.rs"
+required-features = ["timings"]

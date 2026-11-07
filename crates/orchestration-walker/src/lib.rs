@@ -346,7 +346,11 @@ impl Walk<'_> {
                     take().then(|| {
                         let levels = levels.clone();
                         scope.spawn(move || {
-                            let result = self.visit(dir, Some(levels));
+                            // Benchmark timings: worker CPU (the caller times the wall).
+                            let result =
+                                bench_timings::span_cpu(bench_timings::Phase::Select, || {
+                                    self.visit(dir, Some(levels))
+                                });
                             self.spare.fetch_add(1, Atomic::AcqRel);
                             result
                         })
@@ -469,7 +473,14 @@ pub fn read_sources(root: &str, paths: &[String]) -> Result<Vec<Option<String>>,
     let results: Vec<Vec<Result<Option<String>, Error>>> = std::thread::scope(|scope| {
         let handles: Vec<_> = paths
             .chunks(chunk)
-            .map(|slice| scope.spawn(move || slice.iter().map(read).collect::<Vec<_>>()))
+            .map(|slice| {
+                scope.spawn(move || {
+                    // Benchmark timings: worker CPU (the caller times the wall).
+                    bench_timings::span_cpu(bench_timings::Phase::Read, || {
+                        slice.iter().map(read).collect::<Vec<_>>()
+                    })
+                })
+            })
             .collect();
         handles
             .into_iter()

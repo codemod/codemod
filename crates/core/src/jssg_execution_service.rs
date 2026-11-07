@@ -610,7 +610,9 @@ impl<'a> JssgExecutionService<'a> {
                     );
                     Self::signal_progress(&progress_tx_for_closure);
 
-                    let content = match std::fs::read_to_string(file_path) {
+                    let content = match bench_timings::span(bench_timings::Phase::Read, || {
+                        std::fs::read_to_string(file_path)
+                    }) {
                         Ok(content) => content,
                         Err(e) => {
                             slog!(
@@ -899,6 +901,7 @@ impl<'a> JssgExecutionService<'a> {
                                                 });
                                             }
 
+                                            let commit = bench_timings::start();
                                             let write_result =
                                                 block_on_runtime_handle(&runtime_handle, async {
                                                     file_writer
@@ -908,6 +911,10 @@ impl<'a> JssgExecutionService<'a> {
                                                         )
                                                         .await
                                                 });
+                                            bench_timings::stop(
+                                                bench_timings::Phase::Commit,
+                                                commit,
+                                            );
 
                                             if let Err(e) = write_result {
                                                 slog!(

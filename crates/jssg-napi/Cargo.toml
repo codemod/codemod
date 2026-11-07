@@ -19,6 +19,13 @@ napi-derive = "3"
 serde_json = { workspace = true }
 # Native file selection for the orchestration `node` runtime.
 orchestration-walker = { path = "../orchestration-walker" }
+bench-timings = { workspace = true }
+
+[features]
+default = []
+# Benchmark timings (CODEMOD_TIMINGS_FILE): `timingsPhases()` reports the
+# addon's phases to the Node CLI, which writes the file.
+timings = ["bench-timings/timings", "orchestration-walker/timings"]
 
 [dev-dependencies]
 sha2 = "0.10"

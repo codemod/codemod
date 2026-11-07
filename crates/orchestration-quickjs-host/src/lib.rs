@@ -53,13 +53,12 @@ pub struct HostOptions {
     pub input: Option<String>,
     /// History JSON to resume from (text of a `History`), if any.
     pub history: Option<String>,
-    /// Collect a timer breakdown.
-    pub timings: bool,
 }
 
 /// What the bundle's `main` resolved to: a JSON object with `ok`, then
-/// `output` (success) or `error` (failure), plus `history` and, when asked,
-/// `timings`.
+/// `output` (success) or `error` (failure), plus `history` and, when
+/// benchmark timings are on, `timings` (the JS-side phases, in the timings
+/// schema's `phases` shape).
 pub struct HostOutcome {
     pub result: serde_json::Value,
 }
@@ -74,6 +73,11 @@ pub fn run(options: HostOptions, started: Instant) -> Result<HostOutcome, String
 }
 
 async fn run_async(options: HostOptions, started: Instant) -> Result<HostOutcome, String> {
+    use bench_timings::Phase;
+    // Benchmark timings: process start-up, the runtime, and the context are
+    // `boot`; reading, compiling, and evaluating the bundle is `plan`.
+    bench_timings::add(Phase::Boot, bench_timings::since_start_ns(), 1);
+    let plan = bench_timings::start();
     let source = std::fs::read_to_string(&options.bundle).map_err(|error| {
         format!(
             "failed to read bundle {}: {error}",
@@ -84,16 +88,16 @@ async fn run_async(options: HostOptions, started: Instant) -> Result<HostOutcome
         .target
         .canonicalize()
         .map_err(|error| format!("target {}: {error}", options.target.display()))?;
+    bench_timings::stop(Phase::Plan, plan);
 
+    let boot = bench_timings::start();
     let runtime = AsyncRuntime::new().map_err(|error| format!("QuickJS runtime: {error}"))?;
     let registry = modules::ModuleRegistry::default();
     let globals = configure_runtime(&runtime, registry.resolver(), registry.loader()).await;
     let context = AsyncContext::full(&runtime)
         .await
         .map_err(|error| format!("QuickJS context: {error}"))?;
-    let runtime_ready_ms = started.elapsed().as_secs_f64() * 1000.0;
 
-    let timings = options.timings;
     let input = options.input;
     let history = options.history;
     let result: Result<String, String> = async_with!(context => |ctx| {
@@ -104,10 +108,11 @@ async fn run_async(options: HostOptions, started: Instant) -> Result<HostOutcome
             batches: RefCell::default(),
             children: RefCell::default(),
             next_id: Default::default(),
-            stats: RefCell::default(),
         });
         native::install(&ctx, state).map_err(|error| format!("failed to install host: {error}"))?;
+        bench_timings::stop(Phase::Boot, boot);
 
+        let plan = bench_timings::start();
         let module = Module::declare(ctx.clone(), BUNDLE_MODULE, source)
             .catch(&ctx)
             .map_err(|error| format!("failed to compile the bundle: {error}"))?;
@@ -120,7 +125,7 @@ async fn run_async(options: HostOptions, started: Instant) -> Result<HostOutcome
             .await
             .catch(&ctx)
             .map_err(|error| format!("failed to evaluate the bundle: {error}"))?;
-        let bundle_loaded_ms = started.elapsed().as_secs_f64() * 1000.0;
+        bench_timings::stop(Phase::Plan, plan);
 
         let main: Function = module
             .get("main")
@@ -136,11 +141,6 @@ async fn run_async(options: HostOptions, started: Instant) -> Result<HostOutcome
         if let Some(history) = &history {
             request.set("history", history.as_str()).map_err(|error| error.to_string())?;
         }
-        request.set("timings", timings).map_err(|error| error.to_string())?;
-        let startup = Object::new(ctx.clone()).map_err(|error| error.to_string())?;
-        startup.set("runtimeReadyMs", runtime_ready_ms).map_err(|error| error.to_string())?;
-        startup.set("bundleLoadedMs", bundle_loaded_ms).map_err(|error| error.to_string())?;
-        request.set("startup", startup).map_err(|error| error.to_string())?;
 
         // SIGINT/SIGTERM/SIGHUP abort the run (the bundle's entry publishes
         // the abort function); children run in their own process groups, so

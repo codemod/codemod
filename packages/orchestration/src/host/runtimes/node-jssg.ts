@@ -19,6 +19,7 @@ import {
 } from "@codemod.com/jssg-napi";
 import { importArtifact } from "@codemod.com/jssg-napi/loader";
 import type { FileOutcome } from "../../core/protocol.ts";
+import { addTimingsSource, timingsEnabled, type PhaseTotals } from "../../core/timings.ts";
 import { describeError, type JssgBatchEngine } from "../../execution/jssg-batch.ts";
 
 import type { Host } from "../../core/host.ts";
@@ -44,6 +45,7 @@ export function createNapiSelectHost(base: Host): Host {
 }
 
 let engines = 0;
+let timingsSourceAdded = false;
 
 /** One engine per run: each artifact is evaluated once per engine. */
 export function createNapiJssgEngine(): JssgBatchEngine<
@@ -52,7 +54,14 @@ export function createNapiJssgEngine(): JssgBatchEngine<
 > {
   const native = loadBinding();
   const runId = `r${++engines}`;
+  // Benchmark timings: the addon's phases (process-wide) join the CLI's file
+  // once, when this build of the addon records them (older builds lack it).
+  if (!timingsSourceAdded && timingsEnabled() && native.timingsEnabled?.() === true) {
+    timingsSourceAdded = true;
+    addTimingsSource(() => JSON.parse(native.timingsPhases()) as PhaseTotals);
+  }
   return {
+    parsesOffThread: true,
     open(config, paths) {
       const batch = new native.JssgBatch(JSON.stringify(config), paths);
       const { targetRoot, params } = batch;

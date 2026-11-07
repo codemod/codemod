@@ -30,7 +30,13 @@ pub use jssg_batch::{
 };
 
 pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, String> {
-    let plan = BatchPlan::new(&batch, SemanticSupport::Enabled)?;
+    use bench_timings::Phase;
+    // Benchmark timings: planning is `plan`; the sandbox records setup,
+    // parse, transform, and convert per file; the selector check is `parse`
+    // and `BatchPlan::finish` is `convert`.
+    let plan = bench_timings::span(Phase::Plan, || {
+        BatchPlan::new(&batch, SemanticSupport::Enabled)
+    })?;
     let provider = semantic_provider(plan.semantic.as_ref());
     let source = batch.source.unwrap_or_default();
     let module = plan.module.clone();
@@ -53,7 +59,7 @@ pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, Strin
 
     let mut outcomes = Vec::with_capacity(batch.files.len());
     for (index, (file, source)) in batch.files.iter().zip(&plan.sources).enumerate() {
-        if plan.skips(&file.content) {
+        if bench_timings::span(Phase::Parse, || plan.skips(&file.content)) {
             outcomes.push(FileOutcome::skipped(&file.path));
             continue;
         }
@@ -83,7 +89,9 @@ pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, Strin
         )
         .await
         .map_err(|error| error.to_string());
-        outcomes.push(plan.finish(index, output)?);
+        outcomes.push(bench_timings::span(Phase::Convert, || {
+            plan.finish(index, output)
+        })?);
     }
     Ok(outcomes)
 }
