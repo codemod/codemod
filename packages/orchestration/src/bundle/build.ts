@@ -170,6 +170,33 @@ export function buildModule(source: string, file: string): BuiltModule {
     });
   }
 
+  // Imports used only inside extracted transforms live in the artifacts now.
+  // Keeping them would make the trusted runner evaluate transform modules
+  // (and their `codemod:*` imports, which only the runtimes can resolve).
+  const extracted = edits.map(({ start, end }) => ({ start, end }));
+  const inExtracted = (pos: number) => extracted.some((r) => pos >= r.start && pos < r.end);
+  const usedOutside = new Set<string>();
+  const usedInside = new Set<string>();
+  const visitRefs = (node: ts.Node): void => {
+    if (typescript.isImportDeclaration(node)) return;
+    if (typescript.isIdentifier(node) && module.imports.has(node.text)) {
+      (inExtracted(node.getStart(sf)) ? usedInside : usedOutside).add(node.text);
+    }
+    typescript.forEachChild(node, visitRefs);
+  };
+  visitRefs(sf);
+  for (const statement of sf.statements) {
+    if (!typescript.isImportDeclaration(statement) || !statement.importClause) continue;
+    const names = [...module.imports].filter(([, d]) => d === statement).map(([n]) => n);
+    if (
+      names.length > 0 &&
+      names.every((n) => !usedOutside.has(n)) &&
+      names.some((n) => usedInside.has(n))
+    ) {
+      edits.push({ start: statement.getStart(sf), end: statement.getEnd(), text: "" });
+    }
+  }
+
   let rewritten = source;
   for (const edit of edits.sort((a, b) => b.start - a.start)) {
     rewritten = rewritten.slice(0, edit.start) + edit.text + rewritten.slice(edit.end);

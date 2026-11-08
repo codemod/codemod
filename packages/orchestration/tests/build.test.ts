@@ -210,6 +210,12 @@ export const b = jssg({ name: "b", language: "typescript", transform: () => "b" 
     expect(source.match(/transform: \{"name":"[ab]","hash"/gu)).toHaveLength(2);
   });
 
+  it("drops imports only transforms use, so the runner never loads transform modules", () => {
+    const { source } = build(`${HEADER}
+export default jssg({ name: "imported", language: "typescript", transform: transformFn });`);
+    expect(source).not.toContain("import transformFn");
+  });
+
   it("hashes the bundled content: stable across checkouts, sensitive to helpers", () => {
     const first = build(METHOD).artifacts[0]!;
     const moved = mkdtempSync(join(tmpdir(), "codemod-moved-"));
