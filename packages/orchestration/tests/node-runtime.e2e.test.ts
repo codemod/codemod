@@ -343,25 +343,48 @@ describe("node runtime: runs", () => {
     expect(readFileSync(join(repo, "beta/other.ts"), "utf8")).toBe("newApi('beta');\n");
   });
 
-  it("refuses semantic analysis issued inside dynamic() with nothing executed", async () => {
-    const repo = makeRepo({ "a.ts": "a;\n" });
+  it("semantic analysis: the workspace index covers files the selector skips; write() stages", async () => {
+    const repo = makeRepo({
+      "main.ts": 'import { add } from "./utils";\nconst result = add(1, 2);\n',
+      "utils.ts": "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+      "other.ts": "export const unrelated = 1;\n",
+    });
     const semantic = jssg({
       name: "semantic",
       language: "typescript",
       semanticAnalysis: "workspace",
+      selector: { rule: { pattern: "add($A, $B)" } },
       transform: artifactRef("semantic"),
     });
-    const history = new MemoryHistoryStore();
-    await expect(
-      run(
-        dynamic(() => semantic()),
-        {
-          executor: new NodeExecutor({ cwd: repo, artifacts }),
-          runtime: NODE_RUNTIME,
-          history,
-        },
-      ),
-    ).rejects.toThrow("JSSG semantic analysis is unsupported in runtime 'node'");
+    const { output } = await run(
+      dynamic(() => semantic()),
+      { executor: new NodeExecutor({ cwd: repo, artifacts }), runtime: NODE_RUNTIME },
+    );
+    expect(output).toEqual([{ file: "main.ts", definition: "utils.ts" }]);
+    expect(readFileSync(join(repo, "utils.ts"), "utf8")).toContain("function sum");
+    expect(readFileSync(join(repo, "main.ts"), "utf8")).toContain("add(1, 2)");
+  });
+
+  it("semantic analysis: file scope resolves local definitions", async () => {
+    const repo = makeRepo({
+      "a.ts": "function add(a: number, b: number) {\n  return a + b;\n}\nadd(1, 2);\n",
+      "b.ts": 'import { add } from "./a";\nadd(3, 4);\n',
+    });
+    const definitionKind = jssg({
+      name: "definitionKind",
+      language: "typescript",
+      semanticAnalysis: "file",
+      transform: artifactRef("definitionKind"),
+    });
+    const { output } = await run(definitionKind, {
+      executor: new NodeExecutor({ cwd: repo, artifacts }),
+      runtime: NODE_RUNTIME,
+    });
+    expect(output).toEqual([
+      { file: "a.ts", kind: "local", line: 0 },
+      // File scope cannot follow the import: the local import binding.
+      { file: "b.ts", kind: "local", line: 0 },
+    ]);
   });
 
   // Through the CLI: loading a workflow file needs Node's module hooks, which

@@ -21,6 +21,10 @@ export interface JssgBatch {
   readonly module: string;
   readonly targetRoot: string;
   readonly params: Record<string, unknown>;
+  /** Whether every file goes through `index` before the first transform (workspace semantic analysis). */
+  readonly indexesWorkspace: boolean;
+  /** Add files `start ..< start + contents.length` to the workspace index, off-thread. */
+  index(start: number, contents: string[]): Promise<void>;
   /** Roots of files `start ..< start + contents.length`, parsed off-thread; `null` where the selector skips. */
   parse(start: number, contents: string[]): Promise<(NativeRoot | null)[]>;
   /** A fresh transform `options` object. */

@@ -7,8 +7,11 @@
  * through the engine:
  *
  * - `open` plans the batch (`BatchPlan`: hash check, canonical target root,
- *   every path contained in it, language, compiled selector, params;
- *   semantic analysis refused) and fails before anything runs;
+ *   every path contained in it, language, compiled selector, params, the
+ *   semantic provider) and fails before anything runs;
+ * - `index` builds the workspace index from every file's content before the
+ *   first transform (workspace semantic analysis only), so a transform can
+ *   resolve definitions in files the selector skips;
  * - `parse` parses files from the content the host sent (snapshot
  *   semantics: no transform sees another's edits) and answers `null` for
  *   files the static selector does not match (`{ path, edits: [] }`), so a
@@ -65,6 +68,10 @@ export type TransformFunction = (root: unknown, options: unknown) => unknown;
 export interface JssgBatch<Root = unknown, Ran = unknown> {
   /** Virtual module name of the artifact (`<name>.jssg.js`). */
   readonly module: string;
+  /** Whether every file must go through `index` before the first transform (workspace semantic analysis). */
+  readonly indexesWorkspace: boolean;
+  /** Add files `start ..< start + contents.length` to the workspace index. */
+  index(start: number, contents: string[]): Promise<void>;
   /** Roots of files `start ..< start + contents.length`; `null` where the selector skips. */
   parse(start: number, contents: string[]): Promise<(Root | null)[]>;
   /**
@@ -159,6 +166,16 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
       // evaluation of the module are `setup`, the call `transform`, and
       // reading its result `convert`.
       let mark = now();
+      if (batch.indexesWorkspace) {
+        for (let start = 0; start < files.length; start += chunkSize) {
+          if (signal?.aborted) return failed("cancelled");
+          await batch.index(
+            start,
+            files.slice(start, start + chunkSize).map((file) => file.content),
+          );
+        }
+        mark = lap(Phase.setup, mark);
+      }
       pending = files.length > 0 ? parse(0) : undefined;
       for (let start = 0; pending !== undefined; start += chunkSize) {
         const roots = await pending;

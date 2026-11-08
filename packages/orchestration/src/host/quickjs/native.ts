@@ -91,7 +91,12 @@ export interface QuickjsNative {
    * Plan a JSSG batch exactly as the execution bridge does (hash check,
    * canonical root, selector, every path contained). Throws on a bad batch.
    */
-  jssgBegin(config: string, paths: string[]): { id: number; module: string };
+  jssgBegin(
+    config: string,
+    paths: string[],
+  ): { id: number; module: string; indexesWorkspace: boolean };
+  /** Add files `start ..< start + contents.length` to the batch's workspace index. */
+  jssgIndex(batch: number, start: number, contents: string[]): void;
   /** Roots of files `start ..< start + contents.length`; `null` where the static selector skips. */
   jssgParse(batch: number, start: number, contents: string[]): unknown[];
   /** Start one transform call (staging cleared, params set); the transform's `options`. */

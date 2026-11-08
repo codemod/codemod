@@ -15,6 +15,9 @@ publish = false
 ast-grep-config = { workspace = true }
 ast-grep-core = { workspace = true }
 codemod-sandbox = { workspace = true, features = ["native"] }
+# The batch's semantic provider (`semanticAnalysis`).
+language-core = { workspace = true }
+semantic-factory = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Verifies that the artifact source in the request context is the one the

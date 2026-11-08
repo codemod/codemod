@@ -68,6 +68,8 @@ export function createNapiJssgEngine(): JssgBatchEngine<
       const options = batch.options();
       return {
         module: batch.module,
+        indexesWorkspace: batch.indexesWorkspace,
+        index: (start, contents) => batch.index(start, contents),
         parse: (start, contents) => batch.parse(start, contents),
         call: (_index, root, transform) =>
           runTransform(targetRoot, params, () =>

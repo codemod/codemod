@@ -6,8 +6,9 @@
 //!   [`FileOutcome`]);
 //! - [`BatchPlan`]: everything a batch needs before its first transform runs
 //!   (hash-verified artifact, canonical target root, language, compiled
-//!   selector, params, semantic scope, every requested path contained in the
-//!   root), the static selector skip, parsing a file into a [`CoreRoot`], and
+//!   selector, params, semantic scope and its provider, every requested path
+//!   contained in the root), the workspace index, the static selector skip,
+//!   parsing a file into a [`CoreRoot`] (answering semantic queries), and
 //!   turning a transform's [`CodemodOutput`] into a validated
 //!   [`FileOutcome`] (`/`-separated, contained secondary paths and rename
 //!   targets).
@@ -25,6 +26,7 @@
 use std::{
     collections::HashMap,
     path::{Component, Path, PathBuf},
+    sync::Arc,
 };
 
 use ast_grep_config::RuleConfig;
@@ -33,7 +35,9 @@ use codemod_sandbox::sandbox::engine::{
     codemod_lang::CodemodLang, selector_from_value, selector_matches, CodemodOutput,
     ExecutionResult,
 };
-use codemod_sandbox::sg_core::{CoreRoot, RootOptions};
+use codemod_sandbox::sg_core::{CoreRoot, RootOptions, SemanticSeam};
+use language_core::{ProviderMode, SemanticProvider};
+use semantic_factory::LazySemanticProvider;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -188,17 +192,8 @@ impl BatchConfig {
     }
 }
 
-/// Whether the runner executing a batch can provide semantic analysis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SemanticSupport {
-    Enabled,
-    /// Refuse `semanticAnalysis` with `JSSG semantic analysis is unsupported
-    /// in runtime '<name>'` (the runtime capability contract's wording).
-    Unsupported(&'static str),
-}
-
-/// The semantic analysis a batch asked for, validated against the root. The
-/// runner that supports it builds the provider.
+/// The semantic analysis a batch asked for, validated against the root;
+/// [`BatchPlan`] builds its provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SemanticScope {
     File,
@@ -235,6 +230,10 @@ pub struct BatchPlan {
     /// `{ input }` when the operation has an input.
     pub params: Option<HashMap<String, Value>>,
     pub semantic: Option<SemanticScope>,
+    /// The batch's one semantic provider (one per batch, shared by every
+    /// file's root), built lazily on first use; `None` without
+    /// `semanticAnalysis`.
+    pub provider: Option<Arc<dyn SemanticProvider>>,
     /// The requested (root-relative) path of every file, in request order.
     pub paths: Vec<String>,
     /// Absolute, contained path of every requested file, in request order
@@ -245,11 +244,10 @@ pub struct BatchPlan {
 
 impl BatchPlan {
     /// Plan `batch` for its own `files`, every path resolved up front.
-    pub fn new(batch: &Batch<'_>, semantic: SemanticSupport) -> Result<Self, String> {
+    pub fn new(batch: &Batch<'_>) -> Result<Self, String> {
         Self::for_paths(
             batch,
             batch.files.iter().map(|file| file.path.as_str()),
-            semantic,
             Containment::Upfront,
         )
     }
@@ -259,7 +257,6 @@ impl BatchPlan {
     pub fn for_paths<'p>(
         batch: &Batch<'_>,
         paths: impl IntoIterator<Item = &'p str>,
-        semantic: SemanticSupport,
         containment: Containment,
     ) -> Result<Self, String> {
         let root = canonical_dir(batch.target_root, "targetRoot")?;
@@ -279,14 +276,8 @@ impl BatchPlan {
             })
             .transpose()
             .map_err(|error| format!("invalid JSSG selector: {error}"))?;
-        let semantic = match (semantic, batch.semantic_analysis) {
-            (SemanticSupport::Unsupported(runtime), Some(_)) => {
-                return Err(format!(
-                    "JSSG semantic analysis is unsupported in runtime '{runtime}'"
-                ))
-            }
-            _ => semantic_scope(batch.semantic_analysis, &root)?,
-        };
+        let semantic = semantic_scope(batch.semantic_analysis, &root)?;
+        let provider = semantic.as_ref().map(semantic_provider);
         let params = batch
             .input
             .map(|value| HashMap::from([("input".to_string(), value.clone())]));
@@ -311,6 +302,7 @@ impl BatchPlan {
             selector,
             params,
             semantic,
+            provider,
             paths,
             sources,
         })
@@ -353,7 +345,8 @@ impl BatchPlan {
     /// its canonical path as `filename()` and the root as the target
     /// directory, or `None` when the static selector matches nothing in it.
     /// Contains the path first ([`BatchPlan::source`]). Parses once; safe to
-    /// call from any thread. No semantic provider.
+    /// call from any thread. The root answers semantic queries through the
+    /// batch's provider, if any.
     pub fn parse(&self, index: usize, content: &str) -> Result<Option<CoreRoot>, String> {
         let source = self.source(index)?;
         let filename = source.to_string_lossy().into_owned();
@@ -363,7 +356,7 @@ impl BatchPlan {
                 filename: Some(filename.clone()),
                 target_directory: Some(&self.root),
                 current_file_path: Some(filename),
-                ..Default::default()
+                semantic: SemanticSeam::from_provider(self.provider.clone()),
             },
         );
         let skipped = self.selector.as_ref().is_some_and(|selector| {
@@ -374,6 +367,30 @@ impl BatchPlan {
                 .any(|node| selector.matcher.match_node(node).is_some())
         });
         Ok((!skipped).then_some(root))
+    }
+
+    /// Whether the batch indexes a workspace: every file must then go
+    /// through [`BatchPlan::index`] before the first transform runs.
+    pub fn indexes_workspace(&self) -> bool {
+        self.provider
+            .as_ref()
+            .is_some_and(|provider| provider.mode() == ProviderMode::WorkspaceScope)
+    }
+
+    /// Add file `index` with `content` (the snapshot the host read) to the
+    /// workspace index; a no-op unless [`BatchPlan::indexes_workspace`].
+    /// Every file of the batch is indexed, including ones the selector will
+    /// skip, so a matching transform can resolve definitions in them. Safe to
+    /// call from any thread.
+    pub fn index(&self, index: usize, content: &str) -> Result<(), String> {
+        if !self.indexes_workspace() {
+            return Ok(());
+        }
+        let provider = self.provider.as_ref().expect("workspace provider");
+        let (path, source) = (self.path(index)?, self.source(index)?);
+        provider
+            .notify_file_processed(&source, content)
+            .map_err(|error| format!("failed to index '{path}': {error}"))
     }
 
     /// File `index`'s transform output as a validated [`FileOutcome`]; an
@@ -469,6 +486,15 @@ fn push_edit(
         });
     }
     Ok(())
+}
+
+fn semantic_provider(scope: &SemanticScope) -> Arc<dyn SemanticProvider> {
+    match scope {
+        SemanticScope::File => Arc::new(LazySemanticProvider::file_scope()),
+        SemanticScope::Workspace(root) => {
+            Arc::new(LazySemanticProvider::workspace_scope(root.clone()))
+        }
+    }
 }
 
 fn semantic_scope(
@@ -643,13 +669,7 @@ mod tests {
             input: None,
             files: &[],
         };
-        BatchPlan::for_paths(
-            &batch,
-            paths.iter().copied(),
-            SemanticSupport::Enabled,
-            Containment::Upfront,
-        )
-        .expect("plan")
+        BatchPlan::for_paths(&batch, paths.iter().copied(), Containment::Upfront).expect("plan")
     }
 
     fn modified(content: &str, rename_to: Option<&str>) -> ExecutionResult {
@@ -709,27 +729,92 @@ mod tests {
             files: &[],
         };
         for path in ["../x.ts", "/etc/passwd", "a/../../b.ts", ""] {
-            let error = BatchPlan::for_paths(
-                &batch,
-                [path],
-                SemanticSupport::Enabled,
-                Containment::Upfront,
-            )
-            .err()
-            .expect(path);
+            let error = BatchPlan::for_paths(&batch, [path], Containment::Upfront)
+                .err()
+                .expect(path);
             assert!(error.contains("file path"), "{path}: {error}");
         }
-        let error = BatchPlan::for_paths(
-            &batch,
-            ["a.ts"],
-            SemanticSupport::Unsupported("node"),
-            Containment::PerFile,
-        )
-        .err()
-        .unwrap();
+    }
+
+    #[test]
+    fn semantic_analysis_resolves_through_the_batch_provider() {
+        use codemod_sandbox::sg_core::DefinitionOptions;
+        let dir = tempfile::tempdir().unwrap();
+        let main = "import { add } from \"./utils\";\nconst result = add(1, 2);\n";
+        let utils = "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
+        std::fs::write(dir.path().join("main.ts"), main).unwrap();
+        std::fs::write(dir.path().join("utils.ts"), utils).unwrap();
+        let source = "x";
+        let artifact = ArtifactRef {
+            name: "t".to_string(),
+            hash: format!("{:x}", Sha256::digest(source.as_bytes())),
+        };
+        let root = dir.path().to_string_lossy().into_owned();
+        let definition_of_add = |mode: SemanticMode, index: bool| {
+            let analysis = SemanticAnalysis::Mode(mode);
+            let batch = Batch {
+                artifact: &artifact,
+                source: Some(source),
+                language: "typescript",
+                selector: None,
+                target_root: Some(&root),
+                semantic_analysis: Some(&analysis),
+                input: None,
+                files: &[],
+            };
+            let plan = BatchPlan::for_paths(&batch, ["main.ts", "utils.ts"], Containment::PerFile)
+                .unwrap();
+            assert!(plan.provider.is_some());
+            assert_eq!(plan.indexes_workspace(), mode == SemanticMode::Workspace);
+            if index {
+                plan.index(0, main).unwrap();
+                plan.index(1, utils).unwrap();
+            }
+            let parsed = plan.parse(0, main).unwrap().unwrap();
+            let pattern = ast_grep_core::Pattern::new("add($A, $B)", plan.language);
+            let call = parsed.root().find_all(&pattern).remove(0);
+            let callee = call.children().remove(0);
+            assert_eq!(callee.text(), "add");
+            // Follow the local import binding to the export, as the TS
+            // fixture does: at most three hops.
+            let mut definition = callee
+                .semantic()
+                .unwrap()
+                .expect("provider attached")
+                .definition(DefinitionOptions::default())
+                .unwrap();
+            for _ in 0..3 {
+                match &definition {
+                    Some(found) if found.root.relative_filename() == Some("main.ts") => {
+                        let next = found
+                            .node
+                            .semantic()
+                            .unwrap()
+                            .expect("provider inherited")
+                            .definition(DefinitionOptions::default())
+                            .unwrap();
+                        match next {
+                            Some(next)
+                                if next.node.text() != found.node.text()
+                                    || next.root.relative_filename() != Some("main.ts") =>
+                            {
+                                definition = Some(next)
+                            }
+                            _ => break,
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            definition.map(|definition| definition.root.relative_filename().map(str::to_string))
+        };
         assert_eq!(
-            error,
-            "JSSG semantic analysis is unsupported in runtime 'node'"
+            definition_of_add(SemanticMode::Workspace, true),
+            Some(Some("utils.ts".to_string()))
+        );
+        assert_eq!(
+            definition_of_add(SemanticMode::File, false),
+            Some(Some("main.ts".to_string()))
         );
     }
 
@@ -754,12 +839,7 @@ mod tests {
             files: &[],
         };
         let plan_for = |paths: &[&str]| {
-            BatchPlan::for_paths(
-                &batch,
-                paths.iter().copied(),
-                SemanticSupport::Enabled,
-                Containment::PerFile,
-            )
+            BatchPlan::for_paths(&batch, paths.iter().copied(), Containment::PerFile)
         };
         // Syntax is still checked while planning.
         let error = plan_for(&["a.ts", "../x.ts"]).err().unwrap();
@@ -810,7 +890,6 @@ mod tests {
         let error = BatchPlan::for_paths(
             &batch,
             paths.iter().map(String::as_str),
-            SemanticSupport::Enabled,
             Containment::Upfront,
         )
         .err()
@@ -820,7 +899,6 @@ mod tests {
         let error = BatchPlan::for_paths(
             &batch,
             paths.iter().map(String::as_str),
-            SemanticSupport::Enabled,
             Containment::Upfront,
         )
         .err()

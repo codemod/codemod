@@ -27,7 +27,8 @@
 //! Calls must be serialized: the staged-changes accumulator and the
 //! `jssgTransform` params are per context, so one transform call is in
 //! flight at a time (between [`begin_call`] and [`end_call`]). Semantic
-//! analysis is not wired here; roots get no semantic provider.
+//! analysis comes with the roots: a root answers through the provider it
+//! was created with (`jssg_batch::BatchPlan::parse`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -91,9 +91,12 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
   `{ content, output }` handling, `rename()`, staged `jssgTransform`, and path validation as
   the bridge (shared Rust code, `crates/jssg-batch`). Transform calls run one at a time
   across the run; files serially.
-- **Unsupported:** `agent`/`assessment` (`UnsupportedInRuntimeError`, statically or as a
-  `config` failure), JSSG semantic analysis (`JSSG semantic analysis is unsupported in
-  runtime 'quickjs'`, also refused by `BatchPlan` in Rust).
+- **Assessment:** the TypeSafe SDK in the bundle, with a `fetch` over the host's
+  `httpRequest`, which reaches only the TypeSafe API root (`TYPESAFE_BASE_URL`).
+- **Semantic analysis:** the batch's provider (`BatchPlan`), workspace index built by
+  `jssgIndex` before the first transform.
+- **Unsupported:** `agent` (`UnsupportedInRuntimeError`, statically or as a `config`
+  failure).
 - **History/resume:** `orchestration-quickjs-host run b.mjs --history h.json` resumes from
   `h.json` and writes the run's history back, success or not.
 - **Cancellation:** SIGINT/SIGTERM/SIGHUP to the host abort the run (the shell's process group
@@ -308,8 +311,7 @@ interface RuntimeDescriptor { name: string; capabilities: RuntimeCapabilities }
 - At the execution boundary (`CapabilityExecutor`, outside the scheduler, so no permit is
   taken), operations issued inside `dynamic()` that the runtime cannot execute complete as
   `failed` with `details: { phase: "config", runtime, unsupported, repositoryMayBeModified: false }`;
-  the awaited command rejects with `OperationError`. JSSG `semanticAnalysis` is refused the same
-  way (`JSSG semantic analysis is unsupported in runtime 'node'`).
+  the awaited command rejects with `OperationError`.
 
 Node-side provider (`src/host/runtimes/types.ts`), one file per runtime, listed in
 `registry.ts`:
@@ -359,7 +361,8 @@ and the napi addon (`crates/jssg-napi`). No runtime re-implements them in TypeSc
 
 | Step | Rust (`jssg-batch`) | `node` (napi `JssgBatch`) | `quickjs` (host primitives) |
 | --- | --- | --- | --- |
-| plan: hash check, canonical root, every path a safe relative path, language, selector, params; semantic analysis refused | `BatchPlan::for_paths(.., Containment::PerFile)` | `new JssgBatch(config, paths)` | `jssgBegin` |
+| plan: hash check, canonical root, every path a safe relative path, language, selector, params, semantic provider | `BatchPlan::for_paths(.., Containment::PerFile)` | `new JssgBatch(config, paths)` | `jssgBegin` |
+| workspace semantic analysis only: index every file before the first transform | `BatchPlan::index` | `index(start, contents)`: a worker thread | `jssgIndex`: on the JS thread |
 | contain each path in the root (`stat` + `realpath`), then parse a chunk (64 files); `null` where the selector matches nothing | `BatchPlan::parse` | `parse(start, contents)`: worker threads, one chunk ahead | `jssgParse`: on the JS thread |
 | call the transform, staging `write()`/`jssgTransform()` | (sandbox result rules) | `runTransform` + options (built once per batch, copied per file) | `jssgCall` / `jssgCallEnd` |
 | result -> `FileOutcome` (string/null/`{ content, output }`, rename, `/` paths after containment) | `classify_transform_result` + `BatchPlan::finish` | `finish(index, root, result, staged)` (`null`: no edits, no output) | `jssgFinish` |

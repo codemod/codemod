@@ -3,8 +3,10 @@
 //! batch loop (`packages/orchestration/src/execution/jssg-batch.ts`).
 //!
 //! - `new JssgBatch(config, paths)`: hash-verified artifact, canonical target
-//!   root, every path contained in it, language, compiled selector, params;
-//!   semantic analysis refused (`unsupported in runtime 'node'`);
+//!   root, every path contained in it, language, compiled selector, params,
+//!   and the batch's semantic provider (`semanticAnalysis`);
+//! - `index(start, contents)`: adds files to the workspace index off the JS
+//!   thread (workspace semantic analysis only, before the first transform);
 //! - `parse(start, contents)`: parses a chunk on worker threads (in
 //!   parallel) and answers `null` where the static selector matches nothing;
 //! - `options()`: a fresh transform `options` object;
@@ -23,7 +25,7 @@ use codemod_sandbox::sandbox::engine::{
     ExecutionResult, FileChange, ModificationCheck, ReturnedContent,
 };
 use codemod_sandbox::sg_core::CoreRoot;
-use jssg_batch::{BatchConfig, BatchPlan, Containment, SemanticSupport};
+use jssg_batch::{BatchConfig, BatchPlan, Containment};
 use napi::bindgen_prelude::*;
 use napi::{JsValue, ValueType};
 use napi_derive::napi;
@@ -55,7 +57,6 @@ impl JssgBatch {
         let plan = BatchPlan::for_paths(
             &config.batch(),
             paths.iter().map(String::as_str),
-            SemanticSupport::Unsupported("node"),
             Containment::PerFile,
         )
         .map_err(Error::from_reason)?;
@@ -98,6 +99,24 @@ impl JssgBatch {
         options.set("dryRun", false)?;
         options.set("targetDir", self.target_root())?;
         Ok(options)
+    }
+
+    /// Whether every file must go through `index` before the first
+    /// transform (workspace semantic analysis).
+    #[napi(getter, js_name = "indexesWorkspace")]
+    pub fn indexes_workspace(&self) -> bool {
+        self.plan.indexes_workspace()
+    }
+
+    /// Add files `start ..< start + contents.length` to the workspace index
+    /// off the JS thread; a no-op unless `indexesWorkspace`.
+    #[napi(ts_return_type = "Promise<void>")]
+    pub fn index(&self, start: u32, contents: Vec<String>) -> AsyncTask<IndexChunk> {
+        AsyncTask::new(IndexChunk {
+            plan: Arc::clone(&self.plan),
+            start: start as usize,
+            contents,
+        })
     }
 
     /// Parse files `start ..< start + contents.length` off the JS thread (in
@@ -174,6 +193,34 @@ fn params(plan: &BatchPlan) -> serde_json::Value {
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect(),
     )
+}
+
+/// One chunk of a batch added to the workspace index on a worker thread
+/// (serially: the provider's index is one shared structure).
+pub struct IndexChunk {
+    plan: Arc<BatchPlan>,
+    start: usize,
+    contents: Vec<String>,
+}
+
+impl Task for IndexChunk {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        bench_timings::span_cpu(bench_timings::Phase::Setup, || {
+            for (offset, content) in self.contents.iter().enumerate() {
+                self.plan
+                    .index(self.start + offset, content)
+                    .map_err(Error::from_reason)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn resolve(&mut self, _env: Env, _output: Self::Output) -> Result<Self::JsValue> {
+        Ok(())
+    }
 }
 
 /// One chunk of a batch parsed on worker threads.
@@ -466,12 +513,7 @@ mod tests {
             config["selector"] = serde_json::json!({ "rule": { "pattern": pattern } });
         }
         let config: BatchConfig = serde_json::from_value(config).unwrap();
-        BatchPlan::for_paths(
-            &config.batch(),
-            paths.iter().copied(),
-            SemanticSupport::Unsupported("node"),
-            Containment::PerFile,
-        )
+        BatchPlan::for_paths(&config.batch(), paths.iter().copied(), Containment::PerFile)
     }
 
     #[test]
@@ -525,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_paths_outside_the_root_and_semantic_analysis() {
+    fn refuses_paths_outside_the_root() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         for path in ["../x.ts", "/etc/passwd", "a/../../x.ts", ""] {

@@ -53,6 +53,31 @@ export const semantic = jssg({
   },
 });
 
+/**
+ * File-scope semantic analysis: what `definition()` of the first `add(...)`
+ * call resolves to, and where (`kind`: local / import / external).
+ */
+export const definitionKind = jssg({
+  name: "definitionKind",
+  language: "typescript",
+  semanticAnalysis: "file",
+  transform(root) {
+    const call = root
+      .root()
+      .findAll({ rule: { pattern: "add" } })
+      .find((node) => node.parent()?.kind() === "call_expression");
+    const definition = call?.definition();
+    return {
+      content: null,
+      output: {
+        file: posixPath(root.relativeFilename()),
+        kind: definition?.kind ?? null,
+        line: definition ? definition.node.range().start.line : null,
+      },
+    };
+  },
+});
+
 /** Throws for any file the selector should have skipped; the legacy string result form. */
 export const guarded = jssg({
   name: "guarded",

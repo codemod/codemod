@@ -264,14 +264,26 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
     ).toEqual(["a1", "a2", "b1", "b2"]);
   });
 
-  it("refuses agent and JSSG semantic analysis with a clear error", async () => {
-    const agentRun = await runOn("quickjs", "unsupported.ts", "agent");
+  it("runs JSSG semantic analysis (workspace and file scope) as the node runtime does", async () => {
+    const files = {
+      "main.ts": 'import { add } from "./utils";\nconst result = add(1, 2);\n',
+      "utils.ts": "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+    };
+    const quickjs = runOn("quickjs", "semantic.ts", undefined, { files });
+    const node = runOn("node", "semantic.ts", undefined, { files });
+    expect(quickjs.ok, quickjs.ok ? "" : quickjs.error).toBe(true);
+    expect(quickjs).toEqual(node);
+    const [workspace, file] = (quickjs as { output: [unknown, { file: string; kind: unknown }[]] })
+      .output;
+    expect(workspace).toEqual([{ file: "main.ts", definition: "utils.ts" }]);
+    expect(quickjs.files["utils.ts"]).toContain("function sum");
+    expect(file.find((entry) => entry.file === "main.ts")).toMatchObject({ kind: "local" });
+  });
+
+  it("refuses agent with a clear error", async () => {
+    const agentRun = await runOn("quickjs", "unsupported.ts");
     expect(agentRun.ok === false && agentRun.error).toMatch(
       /operation kind 'agent' is unsupported in runtime 'quickjs'/u,
-    );
-    const semanticRun = await runOn("quickjs", "unsupported.ts", "semantic");
-    expect(semanticRun.ok === false && semanticRun.error).toMatch(
-      /JSSG semantic analysis is unsupported in runtime 'quickjs'/u,
     );
     const staticRun = await runOn("quickjs", "static-agent.ts");
     expect(staticRun.ok === false && staticRun.error).toMatch(

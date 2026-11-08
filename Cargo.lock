@@ -3490,6 +3490,8 @@ dependencies = [
  "ast-grep-config",
  "ast-grep-core",
  "codemod-sandbox",
+ "language-core",
+ "semantic-factory",
  "serde",
  "serde_json",
  "sha2",

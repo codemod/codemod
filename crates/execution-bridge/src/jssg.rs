@@ -22,22 +22,16 @@ use codemod_sandbox::sandbox::{
     engine::{execute_codemod_with_loader, JssgExecutionOptions},
     resolvers::{InMemoryLoader, InMemoryResolver},
 };
-use language_core::{ProviderMode, SemanticProvider};
-use semantic_factory::LazySemanticProvider;
 
-pub use jssg_batch::{
-    validate_relative_path, Batch, BatchPlan, Edit, FileOutcome, SemanticScope, SemanticSupport,
-};
+pub use jssg_batch::{validate_relative_path, Batch, BatchPlan, Edit, FileOutcome, SemanticScope};
 
 pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, String> {
     use bench_timings::Phase;
     // Benchmark timings: planning is `plan`; the sandbox records setup,
     // parse, transform, and convert per file; the selector check is `parse`
     // and `BatchPlan::finish` is `convert`.
-    let plan = bench_timings::span(Phase::Plan, || {
-        BatchPlan::new(&batch, SemanticSupport::Enabled)
-    })?;
-    let provider = semantic_provider(plan.semantic.as_ref());
+    let plan = bench_timings::span(Phase::Plan, || BatchPlan::new(&batch))?;
+    let provider = plan.provider.clone();
     let source = batch.source.unwrap_or_default();
     let module = plan.module.clone();
     let mut resolver = InMemoryResolver::new();
@@ -46,15 +40,8 @@ pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, Strin
 
     // The whole selected set is indexed, including files the selector will
     // skip, so a matching transform can resolve definitions in them.
-    if let Some(provider) = provider
-        .as_ref()
-        .filter(|provider| provider.mode() == ProviderMode::WorkspaceScope)
-    {
-        for (file, source) in batch.files.iter().zip(&plan.sources) {
-            provider
-                .notify_file_processed(source, &file.content)
-                .map_err(|error| format!("failed to index '{}': {error}", file.path))?;
-        }
+    for (index, file) in batch.files.iter().enumerate() {
+        plan.index(index, &file.content)?;
     }
 
     let mut outcomes = Vec::with_capacity(batch.files.len());
@@ -94,13 +81,4 @@ pub async fn transform_batch(batch: Batch<'_>) -> Result<Vec<FileOutcome>, Strin
         })?);
     }
     Ok(outcomes)
-}
-
-fn semantic_provider(scope: Option<&SemanticScope>) -> Option<Arc<dyn SemanticProvider>> {
-    Some(match scope? {
-        SemanticScope::File => Arc::new(LazySemanticProvider::file_scope()),
-        SemanticScope::Workspace(root) => {
-            Arc::new(LazySemanticProvider::workspace_scope(root.clone()))
-        }
-    })
 }

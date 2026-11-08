@@ -274,17 +274,19 @@ describe("the capability contract", () => {
       expect(h.executed).toEqual([]);
       expect((await h.store.load()).events).toEqual([]);
     }
-    const bare = createHarness({ runtime: "quickjs", fallback: () => [] });
-    await expect(bare.run(semantic)).rejects.toThrow(
-      "JSSG semantic analysis is unsupported in runtime 'quickjs' (command 'semantic')",
-    );
   });
 
-  it("lets assessment through on node and quickjs", async () => {
+  it("lets assessment and JSSG semantic analysis through on node and quickjs", async () => {
     for (const runtime of ["node", "quickjs"] as const) {
-      const h = createHarness({ runtime, fallback: () => [] });
-      await h.run(parallel(lint(), judge()));
-      expect(h.executed.map((request) => request.commandId).sort()).toEqual(["judge", "lint"]);
+      for (const [root, ids] of [
+        [parallel(lint(), judge()), ["judge", "lint"]],
+        [semantic, ["semantic"]],
+        [dynamic(async () => semantic()), ["semantic"]],
+      ] as const) {
+        const h = createHarness({ runtime, fallback: () => [] });
+        await (h.run as (root: unknown) => Promise<unknown>)(root);
+        expect(h.executed.map((request) => request.commandId).sort()).toEqual(ids);
+      }
     }
   });
 
@@ -300,12 +302,6 @@ describe("the capability contract", () => {
       "operation kind 'agent' is unsupported in runtime 'node'",
     );
     expect(h.executed.map((request) => request.commandId)).toEqual(["lint"]);
-
-    const semanticRun = createHarness({ runtime: "node", fallback: () => [] });
-    await expect(semanticRun.run(dynamic(async () => semantic()))).rejects.toThrow(
-      "JSSG semantic analysis is unsupported in runtime 'node'",
-    );
-    expect(semanticRun.executed).toEqual([]);
   });
 
   it("lets every kind through on the bridge runtime and without a runtime", async () => {

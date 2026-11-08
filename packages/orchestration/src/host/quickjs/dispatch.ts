@@ -6,7 +6,9 @@
  * primitives (`crates/orchestration-quickjs-host/src/jssg.rs`):
  *
  * - `jssgBegin(config, paths)`: `BatchPlan` (hash check, containment of
- *   every path, selector, params; semantic analysis refused);
+ *   every path, selector, params, semantic provider);
+ * - `jssgIndex(batch, start, contents)`: the workspace index (workspace
+ *   semantic analysis, before the first transform);
  * - `jssgParse(batch, start, contents)`: roots, `null` where the selector
  *   skips (on this thread: QuickJS values cannot cross threads);
  * - `jssgCall(batch)` / `jssgCallEnd(batch, index)`: around one transform
@@ -68,13 +70,16 @@ export function createQuickjsDispatch(native: QuickjsNative): JssgDispatch {
 
   const engine: JssgBatchEngine<unknown, unknown> = {
     open(config, paths) {
-      const { id, module } = native.jssgBegin(JSON.stringify(config), paths);
+      const { id, module, indexesWorkspace } = native.jssgBegin(JSON.stringify(config), paths);
       const end = (index: number) => {
         native.jssgCallEnd(id, index);
         release();
       };
       return {
         module,
+        indexesWorkspace,
+        index: (start, contents) =>
+          native.yieldNow().then(() => native.jssgIndex(id, start, contents)),
         // Yield to the host's event loop once per chunk (64 files) so a
         // SIGINT, child output, and timers are serviced mid-batch; the loop
         // checks the abort signal before every file.

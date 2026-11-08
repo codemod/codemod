@@ -115,9 +115,21 @@ test("a selector that matches nothing skips the file before JavaScript sees it",
       /invalid JSSG language 'klingon'/u,
     );
     assert.throws(() => batchFor(native, temp, ["../x.ts"]), /must be a safe relative path/u);
+    assert.equal(
+      batchFor(native, temp, ["a.ts"], { config: { semanticAnalysis: "file" } }).indexesWorkspace,
+      false,
+    );
+    assert.equal(
+      batchFor(native, temp, ["a.ts"], { config: { semanticAnalysis: "workspace" } })
+        .indexesWorkspace,
+      true,
+    );
     assert.throws(
-      () => batchFor(native, temp, ["a.ts"], { config: { semanticAnalysis: "file" } }),
-      /JSSG semantic analysis is unsupported in runtime 'node'/u,
+      () =>
+        batchFor(native, temp, ["a.ts"], {
+          config: { semanticAnalysis: { mode: "file", root: "src" } },
+        }),
+      /semanticAnalysis.root requires workspace mode/u,
     );
     assert.throws(() => native.engineLanguageName("klingon"), /invalid JSSG language 'klingon'/u);
   } finally {

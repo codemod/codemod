@@ -7,8 +7,10 @@
 //!
 //! - `jssgBegin(config, paths)`: [`BatchPlan`]: hash-verified artifact,
 //!   canonical target root, compiled selector, params, every path resolved
-//!   inside the root; semantic analysis is refused (`unsupported in runtime
-//!   'quickjs'`);
+//!   inside the root, and the batch's semantic provider (`semanticAnalysis`);
+//! - `jssgIndex(batch, start, contents)`: [`BatchPlan::index`], the
+//!   workspace index (workspace semantic analysis, before the first
+//!   transform);
 //! - `jssgParse(batch, start, contents)`: [`BatchPlan::parse`] for each
 //!   file, an `SgRoot` or `null` where the static selector skips it;
 //! - `jssgCall(batch)`: the transform `options`, staging cleared
@@ -30,7 +32,7 @@ use codemod_sandbox::sandbox::engine::embedded::{
     begin_call, core_root, end_call, root_value, transform_output,
 };
 use codemod_sandbox::sandbox::engine::FileChange;
-use jssg_batch::{BatchConfig, BatchPlan, Containment, SemanticSupport};
+use jssg_batch::{BatchConfig, BatchPlan, Containment};
 use rquickjs::{Ctx, Function, Object, Value};
 
 use crate::native::{throw, HostState};
@@ -77,13 +79,13 @@ pub fn install<'js>(
                     let plan = BatchPlan::for_paths(
                         &config.batch(),
                         paths.iter().map(String::as_str),
-                        SemanticSupport::Unsupported("quickjs"),
                         Containment::PerFile,
                     )
                     .map_err(|error| throw(&ctx, None, &error))?;
                     bench_timings::stop(Phase::Setup, setup);
                     let id = state.next_id();
                     let module = plan.module.clone();
+                    let indexes_workspace = plan.indexes_workspace();
                     state.batches.borrow_mut().insert(
                         id,
                         OpenBatch {
@@ -94,7 +96,29 @@ pub fn install<'js>(
                     let handle = Object::new(ctx.clone())?;
                     handle.set("id", id)?;
                     handle.set("module", module)?;
+                    handle.set("indexesWorkspace", indexes_workspace)?;
                     Ok::<_, rquickjs::Error>(handle)
+                },
+            )?,
+        )?;
+    }
+    {
+        let state = Rc::clone(&state);
+        native.set(
+            "jssgIndex",
+            Function::new(
+                ctx.clone(),
+                move |ctx: Ctx<'js>, id: u32, start: u32, contents: Vec<String>| {
+                    // On this thread: the index is the batch's, like every root.
+                    with_batch(&ctx, &state, id, |batch| {
+                        for (offset, content) in contents.iter().enumerate() {
+                            batch
+                                .plan
+                                .index(start as usize + offset, content)
+                                .map_err(|error| throw(&ctx, None, &error))?;
+                        }
+                        Ok(())
+                    })
                 },
             )?,
         )?;
