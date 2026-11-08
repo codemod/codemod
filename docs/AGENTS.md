@@ -24,7 +24,7 @@ This tree is **human product documentation** only.
 - Do **not** document Wish internals here: `load_skill`, `execute` / `execute_server`, page SDK
   method lists, Zod dumps for chat tools, or agent consent/policy rules.
 - A short product overview of Wish (what it is, when to open it) is fine — e.g.
-  `docs/enterprise/codemod-wish.mdx`.
+  `docs/enterprise/codemod-agent.mdx`.
 - Same product topic may appear in both corpora; keep concepts/how-tos here and agent contracts in
   `codemod-app` skill-docs. Do not paste skill-docs into Mintlify or Mintlify pages into skill-docs.
 

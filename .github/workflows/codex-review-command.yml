@@ -98,13 +98,13 @@ jobs:
       issues: write # Let the composite action upsert its summary comment.
     steps:
       # The sync workflow replaces @main; pin it manually when copying this template elsewhere.
-      - uses: codemod/codex-review-action@7c41c4cf933b0e367e12cc045cb50a72cfdc36bc # zizmor: ignore[unpinned-uses] -- sync-action-pins replaces this template ref with a full SHA.
+      - uses: codemod/codex-review-action@d49c8fe12fbe11de606f337a662b2d36086c2fa7 # zizmor: ignore[unpinned-uses] -- sync-action-pins replaces this template ref with a full SHA.
         with:
           github_token: ${{ github.token }}
           pr_number: ${{ github.event.issue.number }}
           codex_model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
           azure_openai_api_key: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          azure_openai_responses_endpoint: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
+          azure_openai_endpoint: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
           node_version: "24"
           pnpm_version: "10.19.0"
           install_command: pnpm install --frozen-lockfile
@@ -129,7 +129,7 @@ jobs:
       pull-requests: write # Let only the called workflow's posting job write reviews.
       issues: write # Let only the called workflow's posting job upsert its summary.
     # The sync workflow replaces @main; pin it manually when copying this template elsewhere.
-    uses: codemod/codex-review-action/.github/workflows/fork-review.yml@7c41c4cf933b0e367e12cc045cb50a72cfdc36bc # zizmor: ignore[unpinned-uses] -- sync-action-pins replaces this template ref with a full SHA.
+    uses: codemod/codex-review-action/.github/workflows/fork-review.yml@d49c8fe12fbe11de606f337a662b2d36086c2fa7 # zizmor: ignore[unpinned-uses] -- sync-action-pins replaces this template ref with a full SHA.
     with:
       pr_number: ${{ github.event.issue.number }}
       codex_model: ${{ vars.AZURE_OPENAI_CODEX_MODEL }}
@@ -145,4 +145,4 @@ jobs:
         Follow repository-specific review guidance from the trusted base checkout when present.
     secrets:
       azure_openai_api_key: ${{ secrets.AZURE_OPENAI_API_KEY }}
-      azure_openai_responses_endpoint: ${{ secrets.AZURE_OPENAI_RESPONSES_ENDPOINT }}
+      azure_openai_endpoint: ${{ secrets.AZURE_OPENAI_ENDPOINT }}

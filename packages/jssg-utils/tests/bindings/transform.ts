@@ -24,7 +24,7 @@ async function transform(root: SgRoot<TSX>): Promise<string | null> {
       from: "lib",
       specifiers: [{ name: "cleanUrl", to: "getCleanUrlString" }],
     });
-    if (renamed) edits.push(renamed);
+    if (renamed) edits.push(...renamed);
   }
 
   const calls = rootNode.findAll({ rule: { kind: "call_expression" } });

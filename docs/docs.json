@@ -1,7 +1,7 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "maple",
-  "name": "Codemod.com",
+  "name": "Codemod",
   "colors": {
     "primary": "#7faa09",
     "light": "#d5ff61",
@@ -85,12 +85,7 @@
             "group": "Enterprise",
             "pages": [
               "enterprise/quickstart",
-              {
-                "icon": "wand-magic-sparkles",
-                "group": "Wish",
-                "root": "enterprise/codemod-wish",
-                "pages": ["enterprise/wish-investigation"]
-              },
+              "enterprise/codemod-agent",
               "enterprise/grep",
               "enterprise/codemod-mcp",
               {
@@ -101,7 +96,8 @@
                   "enterprise/insights/jssg-queries",
                   "enterprise/insights/ast-grep-queries",
                   "enterprise/insights/dependency-queries",
-                  "enterprise/insights/smart-queries"
+                  "enterprise/insights/smart-queries",
+                  "enterprise/insights/mcp-troubleshooting"
                 ]
               },
               "enterprise/campaigns",
@@ -388,11 +384,19 @@
     },
     {
       "source": "/platform/codemod-wish",
-      "destination": "/enterprise/codemod-wish"
+      "destination": "/enterprise/codemod-agent"
     },
     {
       "source": "/platform/codemod-wish.md",
-      "destination": "/enterprise/codemod-wish.md"
+      "destination": "/enterprise/codemod-agent.md"
+    },
+    {
+      "source": "/enterprise/codemod-wish",
+      "destination": "/enterprise/codemod-agent"
+    },
+    {
+      "source": "/enterprise/codemod-wish.md",
+      "destination": "/enterprise/codemod-agent.md"
     },
     {
       "source": "/platform/insights",
@@ -488,11 +492,19 @@
     },
     {
       "source": "/codemod-wish",
-      "destination": "/enterprise/codemod-wish"
+      "destination": "/enterprise/codemod-agent"
     },
     {
       "source": "/wish",
-      "destination": "/enterprise/codemod-wish"
+      "destination": "/enterprise/codemod-agent"
+    },
+    {
+      "source": "/enterprise/wish-investigation",
+      "destination": "/enterprise/codemod-agent"
+    },
+    {
+      "source": "/enterprise/wish-investigation.md",
+      "destination": "/enterprise/codemod-agent.md"
     },
     {
       "source": "/campaigns",

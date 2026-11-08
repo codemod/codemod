@@ -1,0 +1,77 @@
+---
+title: "Troubleshoot Insights with MCP"
+sidebarTitle: "Troubleshooting with MCP"
+description: "Fix common problems when an AI assistant reads, previews, or saves Insights dashboards through Codemod MCP."
+---
+
+Use this page when an assistant connected to [Codemod MCP](/enterprise/codemod-mcp) can't read a dashboard, preview a widget, or save your changes. For sign-in, scopes, and approval prompts, see [MCP troubleshooting](/enterprise/codemod-mcp#troubleshooting).
+
+## Before you start
+
+Check these first:
+
+- You connected with **OAuth** (the browser sign-in) and approved `insights:read`. To create or change dashboards, you also approved `insights:write`.
+- You're signed in to the organization that owns the repositories the dashboard uses.
+- The assistant previews each widget before it saves the dashboard.
+
+## Authentication and access
+
+<AccordionGroup>
+  <Accordion title="Insights tools fail when you use an API key">
+    Codemod API keys work only with the Grep read tools. If a tool call returns `This API key can only call Grep read tools`, remove the API key from your client configuration and connect with OAuth instead. See [Connect your client](/enterprise/codemod-mcp#connect-your-client).
+  </Accordion>
+  <Accordion title="The server returns Invalid API key">
+    The server doesn't recognize the key. Check that you copied the whole key, or create a new one in the Codemod app. If you need Insights tools, connect with OAuth instead.
+  </Accordion>
+  <Accordion title="A dashboard you can see in the app is missing">
+    The assistant acts in the organization you were signed into when you approved the connection. Sign in to that organization in the browser, then reconnect the server. You also need access to every repository a dashboard references. See [Insights access](/enterprise/insights#access).
+  </Accordion>
+  <Accordion title="Saving fails for a dashboard that uses a repository or repository group">
+    Confirm that the repository is connected and that your git account or organization can access it. For repository groups, confirm that the group belongs to your active organization. The error might not say which repository caused the problem, so test repositories separately in previews. Only save a narrower dashboard if you intend to change its scope.
+  </Accordion>
+</AccordionGroup>
+
+## Widget and query input
+
+<AccordionGroup>
+  <Accordion title="A preview or save is rejected because of invalid input">
+    Ask the assistant to read the widget format again and fix the fields it reports. Common causes are a misspelled query source, a metric name that the package doesn't emit, or a formula that references a query letter that doesn't exist.
+  </Accordion>
+  <Accordion title="A package metric returns no results or shows a warning">
+    Insights runs one workflow step at a time. Insights can show a warning for a package if the metric is defined in an imported file (`metric-in-imported-file`), outside the workflow steps (`metric-outside-workflow-steps`), or depends on files written by another step (`step-depends-on-other-step-files`). Update the package so the selected step emits the metric itself, then publish a new version. See [Metrics in Insights](/community/jssg/metrics#insights).
+  </Accordion>
+</AccordionGroup>
+
+## Preview, save, and freshness
+
+Preview each query-backed widget before you save, so you can see real results and fix errors early.
+
+<Steps>
+  <Step title="Preview the widget">
+    `insights_dashboard_preview_widget` waits up to 90 seconds and returns `ready`, `error`, or `pending`. If it returns `pending`, wait, then ask the assistant to check again. Don't start a new preview of the same widget.
+  </Step>
+  <Step title="Save the widget as previewed">
+    Ask the assistant to save the widget exactly as you previewed it. If it changes the code or query names, preview it again before saving.
+  </Step>
+  <Step title="Check the saved dashboard">
+    Ask the assistant to read the dashboard with `insights_dashboard_get` and check each widget's status.
+  </Step>
+</Steps>
+
+| Status | What it means | What to do |
+| --- | --- | --- |
+| `ready` | The widget has a computed result. | Use the result. |
+| `stale` | The widget changed after its result was computed. | Preview the widget to get current values. |
+| `no-saved-result` | Nothing has been computed yet. This doesn't mean zero. | Open the dashboard in the app or preview the widget. |
+| `unavailable` | The result couldn't be loaded. | Read the error details, fix the input or access problem, and preview again. |
+
+<Tip>
+  If an update returns `CONFLICT`, someone changed the dashboard after the assistant read it. Ask the assistant to read the dashboard again and reapply your change.
+</Tip>
+
+## Related
+
+- [Codemod MCP](/enterprise/codemod-mcp)
+- [Insights](/enterprise/insights)
+- [JSSG (JS ast-grep) queries](/enterprise/insights/jssg-queries)
+- [Template variables](/enterprise/insights#template-variables)

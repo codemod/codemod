@@ -65,10 +65,10 @@ ty_project = { git = "https://github.com/astral-sh/ruff.git", tag = "0.14.0", fe
 ty_python_semantic = { git = "https://github.com/astral-sh/ruff.git", tag = "0.14.0" }
 
 anyhow = "1.0"
-ast-grep-core = "0.39.7"
-ast-grep-config = "0.39.7"
-ast-grep-dynamic = "0.39.7"
-ast-grep-language = "0.39.7"
+ast-grep-core = "0.45.1"
+ast-grep-config = "0.45.1"
+ast-grep-dynamic = "0.45.1"
+ast-grep-language = "0.45.1"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }

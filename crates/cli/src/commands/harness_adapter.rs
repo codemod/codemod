@@ -19,12 +19,12 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
-const MCS_SKILL_VERSION: &str = "1.1.3";
+const MCS_SKILL_VERSION: &str = "1.2.0";
 const MCS_COMMAND_NAME: &str = "codemod";
 const SKILL_PACKAGE_COMPATIBILITY_MARKER: &str = "codemod-compatibility: skill-package-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
-const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.1.3";
+const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.2.0";
 const CODEMOD_VERSION_MARKER_PREFIX: &str = "codemod-skill-version:";
 const MCP_SERVER_NAME: &str = "codemod";
 const CODEMOD_CLI_COMMAND: &str = "codemod";
@@ -6549,43 +6549,39 @@ codemod-skill-version: 0.1.0
         let _ = release_managed_state_lock(&lock_path);
     }
 
-    #[test]
-    fn skill_md_routes_to_cli_ai_tools_mcp_resources_and_validation_tool() {
-        assert!(MCS_SKILL_MD.contains("codemod-creation-workflow-instructions"));
-        assert!(MCS_SKILL_MD.contains("codemod-maintainer-monorepo-instructions"));
-        assert!(MCS_SKILL_MD.contains("codemod-troubleshooting-instructions"));
-        assert!(MCS_SKILL_MD.contains("jssg-instructions"));
-        assert!(MCS_SKILL_MD.contains("jssg-runtime-capabilities-instructions"));
-        assert!(MCS_SKILL_MD.contains("codemod-cli-instructions"));
-        assert!(MCS_SKILL_MD.contains("jssg-gotchas"));
-        assert!(MCS_SKILL_MD.contains("ast-grep-gotchas"));
-        assert!(MCS_SKILL_MD.contains("Creates a mining / Insights metrics package"));
-        assert!(MCS_SKILL_MD.contains("Performant codemods"));
-        assert!(MCS_SKILL_MD.contains("validate_codemod_package"));
-        assert!(MCS_SKILL_MD.contains("npx codemod ai dump-ast"));
-        assert!(MCS_SKILL_MD.contains("npx codemod ai node-types"));
-        assert!(MCS_SKILL_MD.contains("npx codemod ai docs"));
-        assert!(MCS_SKILL_MD.contains("npx codemod ai call validate_codemod_package"));
-        assert!(MCS_SKILL_MD.contains("codemod init <path> --no-interactive"));
-        assert!(MCS_SKILL_MD.contains("do not invent `--author`"));
-        assert!(MCS_SKILL_MD.contains("publish-time auth fallback"));
-        assert!(MCS_SKILL_MD.contains("do not stop authoring only because MCP is missing"));
-        assert!(!MCS_SKILL_MD.contains("scaffold_codemod_package"));
+    fn assert_bundled_args_are_known(prefix: &str, known: Vec<&str>) {
+        let unknown: Vec<&str> = [MCS_SKILL_MD, MCS_COMMAND_MD]
+            .iter()
+            .flat_map(|doc| doc.split(prefix).skip(1))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .map(|arg| arg.trim_matches(|c: char| "`'\",.".contains(c)))
+            .filter(|arg| !arg.starts_with('<') && !known.contains(arg))
+            .collect();
+        assert!(unknown.is_empty(), "unknown after `{prefix}`: {unknown:?}");
     }
 
     #[test]
-    fn command_md_routes_to_resources_and_direct_init_scaffolding() {
-        assert!(MCS_COMMAND_MD.contains("jssg-runtime-capabilities-instructions"));
-        assert!(MCS_COMMAND_MD.contains("codemod-creation-workflow-instructions"));
-        assert!(MCS_COMMAND_MD.contains("jssg-gotchas"));
-        assert!(MCS_COMMAND_MD.contains("Performant codemods"));
-        assert!(MCS_COMMAND_MD.contains("codemod init"));
-        assert!(MCS_COMMAND_MD.contains("do not invent author"));
-        assert!(MCS_COMMAND_MD.contains("authenticated user"));
-        assert!(MCS_COMMAND_MD.contains("validate_codemod_package"));
-        assert!(MCS_COMMAND_MD.contains("npx codemod ai dump-ast"));
-        assert!(MCS_COMMAND_MD.contains("npx codemod ai node-types"));
-        assert!(MCS_COMMAND_MD.contains("npx codemod ai call"));
+    fn every_doc_the_skill_names_is_readable_with_codemod_ai_docs() {
+        let docs = codemod_mcp::CodemodMcpServer::default().cli_resources();
+        let names = docs
+            .iter()
+            .map(|d| d.name.trim_end_matches("-instructions"));
+        assert_bundled_args_are_known("npx codemod ai docs ", names.collect());
+    }
+
+    #[test]
+    fn every_tool_the_skill_calls_is_exposed_by_codemod_ai_call() {
+        let tools = codemod_mcp::CodemodMcpServer::default().cli_tools();
+        let names = tools.iter().map(|tool| tool.name);
+        assert_bundled_args_are_known("npx codemod ai call ", names.collect());
+    }
+
+    #[test]
+    fn repository_skill_matches_the_skill_codemod_ai_installs() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../skills/codemod/");
+        let read = |file| fs::read_to_string(format!("{dir}{file}")).unwrap();
+        let repo_copy = [read("SKILL.md"), read("commands/codemod.md")];
+        assert_eq!(repo_copy, [MCS_SKILL_MD, MCS_COMMAND_MD]);
     }
 
     #[test]
