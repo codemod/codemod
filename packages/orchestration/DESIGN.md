@@ -2,6 +2,13 @@
 
 > Status: prototype for team review. This is not a shipped API or migration commitment.
 
+> 2026-11-08: the `bridge` runtime (one Rust process per command, `crates/execution-bridge`)
+> was removed. `node` is the default runtime and `quickjs` the sandboxed one; both execute
+> every operation kind, JSSG transforms run in-process over the shared Rust batch rules
+> (`crates/jssg-batch`), and `agent` runs in a `codemod-agent` runner process. See
+> `RUNTIMES.md` and `PROTOCOL.md`. The sections below that describe execution have been
+> updated minimally; the proposal itself is unchanged.
+
 ## Problem
 
 Most Codemod workflows are small, but every package uses the same YAML graph,
@@ -50,10 +57,11 @@ runtime executing the body is what an awaited command reaches.
 | per-step `base_path`, `include`, `exclude` | `{ target }` on a JSSG invocation |
 | `shard` step and `max_threads` | automatic scheduler behavior, no public helper |
 
-The prototype defines all four operation shapes. The Rust bridge executes
-`shell()`, inline JSSG transforms that a build step has bundled, and `agent()`
-through the built-in agent; the TypeScript host executes `assessment()` as
-file-oriented per-file calls to the TypeSafe System One API through TypeSafe's
+The prototype defines all four operation shapes, and both runtimes execute
+all of them: `shell()` in-process with `DirectRunner` semantics, inline JSSG
+transforms that a build step has bundled in-process over the shared Rust batch
+rules, `agent()` in a `codemod-agent` runner process on the built-in agent or
+an external CLI, and `assessment()` as file-oriented per-file calls to the TypeSafe System One API through TypeSafe's
 official JavaScript SDK (`@typesafe-ai/sdk`), which owns authentication,
 transport, and retries.
 
@@ -225,7 +233,7 @@ so sequences, procedural workflows, and dynamically built groups are all bounded
 one budget, and a future Rust executor inherits the same seam. It is a weighted
 semaphore with a strict FIFO queue. Weights charge a JSSG batch more than an
 `shell` because it reads and holds the whole selected file set, and charge a
-workspace-semantic batch more again because the bridge also parses and indexes
+workspace-semantic batch more again because the runtime also parses and indexes
 that set as one workspace. Capacity is derived from `availableParallelism()`
 and host memory and never exceeds the available CPU count. On a host whose
 capacity is below an operation's nominal weight, that operation consumes the
@@ -333,7 +341,8 @@ unknown fields), recorded in history, sent on the wire as `operation.target`,
 and enforced by the TypeScript JSSG orchestrator: it enumerates the files
 accepted by both the definition and the target (with the workflow engine's
 walker semantics, pinned by a shared contract the engine walker also runs),
-sends them in component-wise order as one batch to one Rust bridge process,
+hands them in component-wise order as one batch to the runtime's in-process
+batch loop over the shared Rust batch rules,
 checks the returned edits for cross-file conflicts, commits all edits only
 after every transform succeeded, and returns the per-file structured outputs
 in that order.
@@ -422,7 +431,7 @@ export default dynamic(async () => {
 });
 ```
 
-`agent()` runs through the bridge, in the target directory, on the backend the
+`agent()` runs in a `codemod-agent` runner process, in the target directory, on the backend the
 step names; the backend is part of the recorded command. The default,
 `builtin`, is the Butterflow agent (`codemod-ai`, the Rig runtime behind YAML
 `ai` steps) with a recorded tool list and step limit. `claude-code` and
@@ -516,24 +525,26 @@ and the parts that need rapid iteration:
   reading sources, cross-file conflict validation, the transactional commit,
   typed output aggregation, cancellation, and failure classification
 
-Rust owns only execution and the checks on its own side of the boundary. The
-versioned JSON bridge calls the existing `butterflow_runners::DirectRunner`
-for shell commands. For JSSG, one bridge process per command receives the
-bundled transform source and the selected files with their contents, verifies
-the source against the recorded hash, loads it from memory, builds one
-semantic provider, evaluates the static selector natively, transforms every
-eligible file through the existing QuickJS sandbox, validates every path it
-receives or produces against the target root, and returns the edits and
-outputs as plain JSON. It never reads author files, never enumerates the
-repository, and never writes repository files on this path. It does not
-implement planning, replay, or persistence, and it builds without the full
-Codemod CLI.
+Rust owns only execution and the checks on its own side of the boundary.
+Shell commands run in-process with the semantics of the existing
+`butterflow_runners::DirectRunner`. For JSSG, the shared Rust batch rules
+(`crates/jssg-batch`, reached through the napi addon in `node` and the QuickJS
+host in `quickjs`) receive the bundled transform source and the selected files
+with their contents, verify the source against the recorded hash, build one
+semantic provider, evaluate the static selector natively, parse every eligible
+file for the transform, validate every path they receive or produce against
+the target root, and return the edits and outputs as plain data. They never
+read author files, never enumerate the repository, and never write repository
+files on this path. They do not implement planning, replay, or persistence,
+and build without the full Codemod CLI.
 
 ```text
-workflow.ts -> build step -> workflow module (Node) + transform artifacts (QuickJS)
-TypeScript workflow -> replay gate -> BridgeExecutor
-    shell -> bridge process -> DirectRunner
-    jssg -> executeJssg (artifact, select, read) -> bridge process (one batch) -> executeJssg (validate, stage, commit)
+workflow.ts -> build step -> workflow module + transform artifacts
+TypeScript workflow -> replay gate -> NodeExecutor (node) / the bundle's executor (quickjs)
+    shell -> executeShell over Host.spawn (DirectRunner semantics)
+    jssg -> executeJssgCommand (artifact, select, read) -> in-process batch (crates/jssg-batch) -> (validate, stage, commit)
+    agent -> codemod-agent runner process (request on stdin, completion on stdout)
+    assessment -> TypeSafe SDK in-process
 ```
 
 The workflow and its transforms are split because they will run in
@@ -549,7 +560,7 @@ carries the source in the request context, outside history.
 The split keeps the new authoring API and its policy easy to change while
 reusing the execution behavior we already have. It also avoids rewriting shell
 execution or the sandbox in Node. The boundary is plain JSON. For example,
-TypeScript sends:
+a request is:
 
 ```json
 {
@@ -559,7 +570,7 @@ TypeScript sends:
 }
 ```
 
-Rust returns plain data:
+and its completion is plain data:
 
 ```json
 {
@@ -570,16 +581,15 @@ Rust returns plain data:
 }
 ```
 
-The bridge exchanges request and completion files because non-CLI crates
-must not write protocol messages to the terminal. `RUST_BRIDGE.md` documents
-the protocol, the batch, the security model, and the transaction semantics.
+`PROTOCOL.md` documents the protocol, the batch, the agent runner, the
+security model, and the transaction semantics.
 
 The existing YAML engine is untouched: Butterflow keeps its graph,
 scheduling, state, reporting, JSSG execution (including `getSelector`), and
 filesystem mutation path. The shared changes are additive sandbox
-primitives the bridge uses and the engine does not: the `stage_writes`
-option, a loader-generic `execute_codemod_with_loader` behind the unchanged
-`execute_codemod_with_quickjs`, and static selector helpers.
+primitives the orchestration runtimes use and the engine does not: the
+`stage_writes` option, the embedded-context API for the QuickJS host, and
+static selector helpers.
 
 ## Replay Model
 
@@ -639,23 +649,25 @@ Included:
 - append-only in-memory history and replay checks
 - scripted TypeScript tests
 - real `shell` calls through the existing Rust runner
-- real `agent` tasks through the bridge on a recorded backend: the existing
+- real `agent` tasks in a `codemod-agent` runner on a recorded backend: the existing
   `codemod-ai` agent with a recorded tool list whose default has no shell, or
   the installed Claude Code or Codex CLI run non-interactively with their own
   login, restricted settings loading, credential-free tool environments, a
-  host wall-clock limit, and no bypass flags; all with an allowlisted bridge
-  environment, exchange files outside the target and any agent sandbox's
-  writable roots, and best-effort process-tree cleanup on cancellation
-- read-only `assessment` calls to the TypeSafe System One API from the host
-  through the official `@typesafe-ai/sdk` client,
+  host wall-clock limit, and no bypass flags; all with an allowlisted runner
+  environment, the key and the request on stdin and the completion on a stdout
+  the agent's tools cannot reach, and best-effort process-tree cleanup on
+  cancellation
+- read-only `assessment` calls to the TypeSafe System One API in-process
+  through the official `@typesafe-ai/sdk` client (in `quickjs`, over a host
+  `fetch` limited to the TypeSafe API root),
   with answers validated against the questions
 - inline JSSG transforms split into bundled artifacts at build time and run
-  through the existing sandbox as one Rust batch per command, with a static
+  in-process over the shared Rust batch rules, one batch per command, with a static
   selector prefilter and workspace semantic analysis
 - TypeScript-owned file selection with the engine's walker semantics,
   deterministic ordering, conflict checks, transactional commit, structured
   output aggregation, and failure classification
-- cancellation of the operations in flight (bridge killed, nothing written) and
+- cancellation of the operations in flight (child process trees killed, nothing written) and
   refusal of the ones still queued (never started)
 - weighted, host-derived bounded admission of parallel operations at the
   execution boundary, with operator/test capacity overrides and no
@@ -670,8 +682,10 @@ Included:
 
 Not included:
 
-- QuickJS workflow sandboxing and host-bound runtime (the prototype uses
-  `AsyncLocalStorage`; the workflow side of the build split runs in Node)
+- a reviewed sandbox boundary for untrusted workflow bodies (the `quickjs`
+  runtime now runs the whole workflow in one QuickJS context with a
+  host-bound async context and no Node, but has not been reviewed as one;
+  `node`, the default, uses `AsyncLocalStorage` and runs the workflow in Node)
 - transform authoring beyond the supported subset: capturing the workflow
   module's own declarations, `options.matches` from the static selector,
   source-mapped sandbox errors

@@ -21,7 +21,6 @@ require_hyperfine
 bash "$BENCH_DIR/verify.sh"
 # shellcheck source=/dev/null
 . "$RESULTS_DIR/arms.env"
-export TS_BRIDGE_FORM
 
 prepare="git -C $(q "$REPO") reset -q --hard && git -C $(q "$REPO") clean -fdq"
 args=(

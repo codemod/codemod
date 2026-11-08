@@ -4,7 +4,7 @@ import { bootstrapFit, bootstrapMedianRatio, median, summarize } from "./stats.m
 
 export const NOISE_THRESHOLD = 0.05;
 
-const ARM_ORDER = ["yaml", "ts-bridge", "ts-node", "ts-quickjs"];
+const ARM_ORDER = ["yaml", "ts-node", "ts-quickjs"];
 const armRank = (a) => (ARM_ORDER.includes(a) ? ARM_ORDER.indexOf(a) : ARM_ORDER.length);
 const byArm = (a, b) => armRank(a) - armRank(b) || a.localeCompare(b);
 
@@ -207,12 +207,12 @@ function table(header, rows, align) {
 /** Log-log ASCII plot of median wall time against file count, one marker per arm. */
 export function asciiPlot(sizeReports, { width = 60, height = 16 } = {}) {
   const arms = [...new Set(sizeReports.flatMap((s) => Object.keys(s.arms)))].sort(byArm);
-  const markers = "YBNQ0123456789".split("");
+  const markers = "YNQ0123456789".split("");
   const marker = (arm) => {
     const i = ARM_ORDER.indexOf(arm);
     return i >= 0
       ? markers[i]
-      : markers[4 + (arms.filter((a) => !ARM_ORDER.includes(a)).indexOf(arm) % 10)];
+      : markers[ARM_ORDER.length + (arms.filter((a) => !ARM_ORDER.includes(a)).indexOf(arm) % 10)];
   };
   const pts = sizeReports.flatMap((s) =>
     Object.entries(s.arms).map(([arm, a]) => ({

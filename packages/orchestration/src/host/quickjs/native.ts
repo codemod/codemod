@@ -88,7 +88,7 @@ export interface QuickjsNative {
   registerModule(specifier: string, source: string): void;
 
   /**
-   * Plan a JSSG batch exactly as the execution bridge does (hash check,
+   * Plan a JSSG batch with the shared rules (`BatchPlan`: hash check,
    * canonical root, selector, every path contained). Throws on a bad batch.
    */
   jssgBegin(

@@ -3,7 +3,7 @@ name = "jssg-batch"
 version.workspace = true
 edition = "2021"
 authors.workspace = true
-description = "Binding-agnostic JSSG batch rules shared by every TypeScript orchestration runtime (bridge, node, quickjs): batch planning, path containment, selector skip, and transform result conversion"
+description = "Binding-agnostic JSSG batch rules shared by the TypeScript orchestration runtimes (node, quickjs): batch planning, path containment, selector skip, and transform result conversion"
 documentation.workspace = true
 repository.workspace = true
 license.workspace = true
@@ -25,4 +25,6 @@ serde_json = { workspace = true }
 sha2 = "0.10"
 
 [dev-dependencies]
+# The walker parity contract (`tests/contracts.rs`) uses the engine's walker.
+ignore = { workspace = true }
 tempfile = { workspace = true }

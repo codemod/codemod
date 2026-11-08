@@ -1,6 +1,6 @@
 // Tests for analyze.mjs / compare.mjs / overhead.mjs on the timings fixtures
-// (fixtures/timings, one file per arm plus child files for the bridge and
-// quickjs-host processes) and synthetic hyperfine exports. Run with
+// (fixtures/timings, one file per arm plus child files for the quickjs-host
+// process, and a synthetic multi-child run) and synthetic hyperfine exports. Run with
 // `node --test benchmarks/runtimes/tests/` (or `pnpm test:bench`).
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -32,11 +32,10 @@ import { summarizeOverhead } from "../overhead.mjs";
 
 const HERE = import.meta.dirname;
 const FIXTURES = join(HERE, "../fixtures/timings");
-const ARMS = ["yaml", "ts-bridge", "ts-node", "ts-quickjs"];
+const ARMS = ["yaml", "ts-node", "ts-quickjs"];
 // Synthetic truth: wall = fixed + per_file * N (seconds).
 const MODEL = {
   yaml: { fixed: 1.3, perFile: 0.00002 },
-  "ts-bridge": { fixed: 0.07, perFile: 0.001 },
   "ts-node": { fixed: 0.045, perFile: 0.00019 },
   "ts-quickjs": { fixed: 0.045, perFile: 0.00038 },
 };
@@ -173,8 +172,8 @@ describe("stats", () => {
 });
 
 describe("timings loading", () => {
-  test("merges top-level and child processes (bridge)", () => {
-    const t = loadTimings(join(FIXTURES, "ts-bridge.timings.json"));
+  test("merges top-level and child processes (two children)", () => {
+    const t = loadTimings(join(FIXTURES, "multi-child.timings.json"));
     assert.equal(t.children.length, 2);
     assert.deepEqual(t.missing, []);
     const m = t.merged;
@@ -245,13 +244,13 @@ describe("analyze", () => {
     assert.equal(vite.fastest, "ts-node");
     assert.equal(vite.arms["ts-node"].n, 5);
     assert.deepEqual(vite.arms["ts-node"].vs_fastest, { ratio: 1, lo: 1, hi: 1 });
-    const bridge = vite.arms["ts-bridge"];
-    const truth = (0.07 + 1.7) / (0.045 + 0.00019 * 1700);
+    const quickjs = vite.arms["ts-quickjs"];
+    const truth = (0.045 + 0.00038 * 1700) / (0.045 + 0.00019 * 1700);
     assert.ok(
-      bridge.vs_fastest.lo <= truth * 1.03 && truth * 0.97 <= bridge.vs_fastest.hi,
-      JSON.stringify(bridge.vs_fastest),
+      quickjs.vs_fastest.lo <= truth * 1.03 && truth * 0.97 <= quickjs.vs_fastest.hi,
+      JSON.stringify(quickjs.vs_fastest),
     );
-    assert.ok(bridge.min_s <= bridge.median_s && bridge.median_s <= bridge.max_s);
+    assert.ok(quickjs.min_s <= quickjs.median_s && quickjs.median_s <= quickjs.max_s);
     assert.ok(report.noise.ok, JSON.stringify(report.noise));
   });
 
@@ -293,7 +292,7 @@ describe("analyze", () => {
     assert.deepEqual(a.report, b.report);
     assert.match(a.markdown, /## Wall time: vite \(1700 files, 5 rounds, warm cache/);
     assert.match(a.markdown, /## Scaling: wall = fixed \+ per_file x N/);
-    assert.match(a.markdown, /log-log; Y = yaml, B = ts-bridge, N = ts-node, Q = ts-quickjs/);
+    assert.match(a.markdown, /log-log; Y = yaml, N = ts-node, Q = ts-quickjs/);
     assert.match(a.markdown, /codemod repo: abc123 on rt\/f-harness/);
     assert.match(a.markdown, /PASS {2}power: AC/);
     assert.match(a.markdown, /Noise check\n\nPassed/);
@@ -381,7 +380,7 @@ describe("compare", () => {
     const r = compareReports(base, same, opts);
     assert.equal(r.regressions.length, 0, renderComparison(r));
     const wall = r.rows.filter((x) => x.metric === "wall");
-    assert.equal(wall.length, 12);
+    assert.equal(wall.length, 9); // 3 arms x 3 sizes
     // Identical timings fixtures: every phase change is exactly 0.
     assert.ok(r.rows.filter((x) => x.metric !== "wall").every((x) => x.change === 0));
   });

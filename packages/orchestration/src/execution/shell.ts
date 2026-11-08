@@ -1,7 +1,6 @@
 /**
  * One `shell` operation executed in-process through the `Host`, with the
- * semantics the bridge gets from `butterflow_runners::DirectRunner` and
- * `crates/execution-bridge/src/lib.rs::completion_from_result`:
+ * semantics of the workflow engine's `butterflow_runners::DirectRunner`:
  *
  * - the environment is the host's, plus the executor's `env`, plus the
  *   operation's `env` (later wins), and nothing else;
@@ -15,9 +14,7 @@
  *   `unknown`;
  * - aborting the signal kills the process tree: `cancelled` when the child
  *   died by a signal, `unknown` when it exited on its own meanwhile.
- *
- * Used by in-process runtimes; the bridge runtime still runs `shell` in a
- * bridge process (`bridge.ts`).
+
  */
 import { getHost, type Host } from "../core/host.ts";
 import type { Json } from "../core/json.ts";

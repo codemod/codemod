@@ -1,10 +1,8 @@
 /**
  * The JSSG batch loop of the in-process runtimes (`node`, `quickjs`): a
  * `JssgDispatch` that runs transforms in the same JS realm as the control
- * plane. It is the in-process twin of the bridge's
- * `crates/execution-bridge/src/jssg.rs::transform_batch`, and every rule of
- * that batch lives in Rust, in one place (`crates/jssg-batch`), reached
- * through the engine:
+ * plane. Every rule of the batch lives in Rust, in one place
+ * (`crates/jssg-batch`), reached through the engine:
  *
  * - `open` plans the batch (`BatchPlan`: hash check, canonical target root,
  *   every path contained in it, language, compiled selector, params, the
@@ -20,7 +18,7 @@
  * - `call` runs one transform as the only one in flight in the realm, with
  *   `write()` / `jssgTransform()` staged (never written) and contained to
  *   the target root, and the options the sandbox builds;
- * - `finish` converts the result exactly as the bridge does (string / null /
+ * - `finish` converts the result with the shared rules (string / null /
  *   `{ content, output }`, `rename()`, staged edits, root-relative `/` paths
  *   after a containment check) and names the file in any error.
  *
@@ -102,7 +100,7 @@ export interface JssgBatchDispatchOptions {
   chunkSize?: number;
 }
 
-/** `Name: message` (what the bridge's sandbox error shows for a thrown `Error`). */
+/** `Name: message` (what the sandbox's error shows for a thrown `Error`). */
 export function describeError(error: unknown): string {
   if (error instanceof Error) return `${error.name}: ${error.message}`;
   return String(error);

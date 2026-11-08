@@ -44,7 +44,6 @@ export interface CommandView {
   concurrent?: true;
   target?: Target;
   weight?: number;
-  pid?: number;
   /** The recorded completion status of a replayed command. */
   status?: CompletionStatus;
   error?: string;
@@ -108,7 +107,7 @@ export type DashboardEvent =
   | { type: "run.finished"; replayed: boolean }
   | { type: "run.failed"; message: string }
   | { type: "run.cancelled"; message: string }
-  | Extract<RunEvent, { type: `scheduler.${string}` | "bridge.spawned" }>;
+  | Extract<RunEvent, { type: `scheduler.${string}` }>;
 
 /**
  * One stream entry. Besides the event it carries the run and scheduler state
@@ -369,11 +368,6 @@ export class RunMonitor implements EventSink {
         scheduler.active = event.active;
         scheduler.used = event.used;
         return this.#command(event.commandId, ts);
-      }
-      case "bridge.spawned": {
-        const view = this.#command(event.commandId, ts);
-        if (event.pid !== undefined) view.pid = event.pid;
-        return view;
       }
       case "command.completed": {
         const view = this.#command(event.commandId, ts);

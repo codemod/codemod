@@ -9,13 +9,13 @@
 #   BENCH_OVERHEAD_RUNS=10 ./overhead.sh
 #
 # Build mode: with BENCH_OVERHEAD_BASELINE=<cargo target dir> holding a
-# release build *without* the `timings` feature (codemod, the bridge, the
-# quickjs host, and libjssg_napi), "off" runs that build and "on" runs the
+# release build *without* the `timings` feature (codemod, the quickjs host,
+# and libjssg_napi), "off" runs that build and "on" runs the
 # default one, both with CODEMOD_TIMINGS_FILE unset: the cost of compiling
 # the instrumentation in, rather than of turning it on.
 #
-#   cargo build --release --target-dir /tmp/off -p codemod -p butterflow-execution-bridge \
-#     -p orchestration-quickjs-host -p jssg-napi
+#   cargo build --release --target-dir /tmp/off -p codemod -p orchestration-quickjs-host \
+#     -p jssg-napi
 #   BENCH_OVERHEAD_BASELINE=/tmp/off ./overhead.sh
 #
 # Output: results/overhead/<stamp>/raw/<i>-<arm>-{off,on}.json (+ .timings.json
@@ -37,7 +37,7 @@ MODE=env
 if [ -n "$BASELINE" ]; then
   MODE=build
   BASELINE="$(cd "$BASELINE" && pwd)"
-  for bin in codemod butterflow-execution-bridge orchestration-quickjs-host; do
+  for bin in codemod orchestration-quickjs-host; do
     [ -x "$BASELINE/release/$bin" ] || die "baseline build lacks $BASELINE/release/$bin"
   done
   lib="$BASELINE/release/libjssg_napi.$([ "$(uname -s)" = Darwin ] && echo dylib || echo so)"
@@ -53,8 +53,7 @@ log "overhead mode: $MODE${BASELINE:+ (baseline $BASELINE)}"
 # "off" points every binary at the baseline build).
 arm_for() {
   if [ "$MODE" = build ] && [ "$1" = off ]; then
-    CODEMOD_BIN="$BASELINE/release/codemod" \
-      CODEMOD_BRIDGE_BIN="$BASELINE/release/butterflow-execution-bridge" arm_command "$2"
+    CODEMOD_BIN="$BASELINE/release/codemod" arm_command "$2"
   else
     arm_command "$2"
   fi
@@ -64,8 +63,7 @@ run_env() {
   local mode="$1"
   shift
   if [ "$MODE" = build ] && [ "$mode" = off ]; then
-    CODEMOD_BRIDGE_BIN="$BASELINE/release/butterflow-execution-bridge" \
-      CODEMOD_QUICKJS_HOST_BIN="$BASELINE/release/orchestration-quickjs-host" \
+    CODEMOD_QUICKJS_HOST_BIN="$BASELINE/release/orchestration-quickjs-host" \
       CODEMOD_JSSG_NAPI="$BASELINE_NAPI" "$@"
   else
     "$@"
@@ -75,7 +73,6 @@ run_env() {
 bash "$BENCH_DIR/verify.sh"
 # shellcheck source=/dev/null
 . "$RESULTS_DIR/arms.env"
-export TS_BRIDGE_FORM
 ensure_bench_exec
 
 {

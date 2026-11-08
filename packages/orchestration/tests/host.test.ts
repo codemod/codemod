@@ -4,7 +4,7 @@
  * - `executeJssgCommand` against an in-memory host (no Node filesystem):
  *   selection with ignore files, the batch handed to `dispatch`, containment,
  *   conflict checks, the transactional commit, and nothing written on failure;
- * - `executeShell` against the Node host, with the bridge's DirectRunner
+ * - `executeShell` against the Node host, with the workflow engine's DirectRunner
  *   semantics (merged output, line normalization, exit codes, env, shebang
  *   scripts, abort);
  * - the Node host's own contract (EILSEQ, symlink-free directory entries).

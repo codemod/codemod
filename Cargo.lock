@@ -756,26 +756,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "butterflow-execution-bridge"
-version = "1.13.18"
-dependencies = [
- "bench-timings",
- "butterflow-models",
- "butterflow-runners",
- "codemod-ai",
- "codemod-sandbox",
- "ignore",
- "jssg-batch",
- "language-core",
- "semantic-factory",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
-]
-
-[[package]]
 name = "butterflow-models"
 version = "1.13.18"
 dependencies = [
@@ -3490,6 +3470,7 @@ dependencies = [
  "ast-grep-config",
  "ast-grep-core",
  "codemod-sandbox",
+ "ignore",
  "language-core",
  "semantic-factory",
  "serde",

@@ -5,11 +5,10 @@
 # Environment overrides:
 #   BENCH_REPO           vite checkout (default: $HOME/.cache/codemod-bench/vite)
 #   CODEMOD_BIN          release `codemod` CLI (default: <cargo target>/release/codemod)
-#   CODEMOD_BRIDGE_BIN   release bridge (default: <cargo target>/release/butterflow-execution-bridge)
-#   CARGO_TARGET_DIR     honoured when locating the two binaries (default: <repo>/target)
+#   CARGO_TARGET_DIR     honoured when locating the binaries (default: <repo>/target)
 #   BENCH_HOME           if set, HOME for every arm (isolates engine state and git config)
-#   BENCH_ARMS           space-separated arms to consider (default: "yaml ts-bridge ts-node ts-quickjs")
-#   BENCH_REQUIRE_ARMS   space-separated arms that must be available (default: "yaml ts-bridge")
+#   BENCH_ARMS           space-separated arms to consider (default: "yaml ts-node ts-quickjs")
+#   BENCH_REQUIRE_ARMS   space-separated arms that must be available (default: "yaml ts-node")
 #   BENCH_CMD_<ARM>      replace an arm's command line, e.g. BENCH_CMD_TS_QUICKJS='...'.
 #                        Evaluated by bash with $REPO and the variables below in scope.
 #   BENCH_TIMEOUT        if set, seconds after which any single arm run is killed (SIGALRM,
@@ -40,11 +39,9 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 case "$TARGET_DIR" in /*) ;; *) TARGET_DIR="$ROOT/$TARGET_DIR" ;; esac
 if [ -d "$TARGET_DIR" ]; then TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"; fi
 CODEMOD_BIN="${CODEMOD_BIN:-$TARGET_DIR/release/codemod}"
-CODEMOD_BRIDGE_BIN="${CODEMOD_BRIDGE_BIN:-$TARGET_DIR/release/butterflow-execution-bridge}"
 WORKFLOW_CLI="$ROOT/packages/orchestration/bin/codemod-workflow.mjs"
 YAML_WORKFLOW="$BENCH_DIR/yaml/workflow.yaml"
 TS_WORKFLOW="$BENCH_DIR/ts/workflow.ts"
-export CODEMOD_BRIDGE_BIN
 # Pin the release host and addon explicitly (the runtimes would otherwise pick
 # the newer of release/debug for the host).
 CODEMOD_QUICKJS_HOST_BIN="${CODEMOD_QUICKJS_HOST_BIN:-$TARGET_DIR/release/orchestration-quickjs-host}"
@@ -73,9 +70,9 @@ if [ -n "${BENCH_HOME:-}" ]; then
   export HOME
 fi
 
-ALL_ARMS="yaml ts-bridge ts-node ts-quickjs"
+ALL_ARMS="yaml ts-node ts-quickjs"
 BENCH_ARMS="${BENCH_ARMS:-$ALL_ARMS}"
-BENCH_REQUIRE_ARMS="${BENCH_REQUIRE_ARMS:-yaml ts-bridge}"
+BENCH_REQUIRE_ARMS="${BENCH_REQUIRE_ARMS:-yaml ts-node}"
 
 now() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
 log() { printf '[bench] %s\n' "$*" >&2; }
@@ -119,7 +116,6 @@ ensure_bench_exec() {
 arm_binary() {
   case "$1" in
     yaml) printf '%s' "$CODEMOD_BIN" ;;
-    ts-bridge) printf '%s' "$CODEMOD_BRIDGE_BIN" ;;
     ts-node) printf '%s' "$CODEMOD_JSSG_NAPI" ;;
     ts-quickjs) printf '%s' "$CODEMOD_QUICKJS_HOST_BIN" ;;
   esac
@@ -202,17 +198,13 @@ ensure_yaml_link() {
 
 require_binaries() {
   [ -x "$CODEMOD_BIN" ] ||
-    die "codemod CLI not found at $CODEMOD_BIN; run 'cargo build --release -p codemod -p butterflow-execution-bridge'"
-  [ -x "$CODEMOD_BRIDGE_BIN" ] ||
-    die "bridge not found at $CODEMOD_BRIDGE_BIN; run 'cargo build --release -p codemod -p butterflow-execution-bridge'"
+    die "codemod CLI not found at $CODEMOD_BIN; run 'cargo build --release -p codemod'"
   command -v node >/dev/null || die "node is required"
 }
 
 arm_var() { printf 'BENCH_CMD_%s' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"; }
 
 # The command line for an arm, run with `bash -c` (hyperfine uses the same).
-# `ts-bridge` uses the `run --runtime=bridge` form once the CLI has it and the
-# legacy `codemod-workflow <workflow.ts>` form until then (see probe_arm).
 q() { printf '%q' "$1"; }
 # Every arm starts as bin/bench-exec, which sets BENCH_T0_NS and execs the arm
 # (same process, so the arm itself is what hyperfine waits on). With
@@ -240,15 +232,6 @@ arm_command_unbounded() {
       printf '%s workflow run --workflow %s --target %s --no-interactive --disable-analytics' \
         "$(q "$CODEMOD_BIN")" "$(q "$YAML_WORKFLOW")" "$(q "$repo")"
       ;;
-    ts-bridge)
-      if [ "${TS_BRIDGE_FORM:-legacy}" = "run" ]; then
-        printf 'node %s run --runtime=bridge %s --target %s --bridge %s' \
-          "$(q "$WORKFLOW_CLI")" "$(q "$TS_WORKFLOW")" "$(q "$repo")" "$(q "$CODEMOD_BRIDGE_BIN")"
-      else
-        printf 'node %s %s --target %s --bridge %s' \
-          "$(q "$WORKFLOW_CLI")" "$(q "$TS_WORKFLOW")" "$(q "$repo")" "$(q "$CODEMOD_BRIDGE_BIN")"
-      fi
-      ;;
     ts-node | ts-quickjs)
       printf 'node %s run --runtime=%s %s --target %s' \
         "$(q "$WORKFLOW_CLI")" "${arm#ts-}" "$(q "$TS_WORKFLOW")" "$(q "$repo")"
@@ -265,9 +248,6 @@ arm_concurrency() {
     yaml)
       printf 'js-ast-grep steps run one after another; each walks and transforms files on min(available_parallelism=%s, 12) = %s threads (no max_threads), one QuickJS runtime per file' \
         "$cpus" "$((cpus < 12 ? cpus : 12))"
-      ;;
-    ts-bridge)
-      printf 'sequence(): one command at a time; each jssg command is one bridge process transforming its batch serially on 1 thread, one QuickJS runtime per file (file selection/reads/writes in Node)'
       ;;
     ts-node)
       printf 'one Node process; workflow and every transform on the single JS thread, serially per file (the napi addon walks/reads the selection natively and parses and selector-matches 64-file chunks on worker threads, one chunk ahead)'
@@ -341,8 +321,7 @@ EOF
 }
 
 # probe_arm <arm>: 0 when the arm runs on the probe repo and produces the
-# expected edit. Sets TS_BRIDGE_FORM for ts-bridge. Diagnostics go to
-# $PROBE_LOG.
+# expected edit. Diagnostics go to $PROBE_LOG.
 probe_arm() {
   local arm="$1" scratch rc=1
   scratch="$(mktemp -d "${TMPDIR:-/tmp}/codemod-bench-probe.XXXXXX")"
@@ -353,14 +332,7 @@ probe_arm() {
     bash -c "$(arm_command "$arm" "$scratch/repo")" >"$PROBE_LOG" 2>&1 &&
       [ "$(cat "$scratch/repo/src/a.ts")" = "$(probe_expected)" ]
   }
-  if [ "$arm" = "ts-bridge" ] && [ -z "${BENCH_CMD_TS_BRIDGE:-}" ]; then
-    if TS_BRIDGE_FORM=run try; then
-      TS_BRIDGE_FORM=run rc=0
-    elif TS_BRIDGE_FORM=legacy try; then
-      TS_BRIDGE_FORM=legacy rc=0
-    fi
-    export TS_BRIDGE_FORM
-  elif try; then
+  if try; then
     rc=0
   fi
   rm -rf "$scratch"

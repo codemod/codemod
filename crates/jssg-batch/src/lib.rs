@@ -13,9 +13,8 @@
 //!   [`FileOutcome`] (`/`-separated, contained secondary paths and rename
 //!   targets).
 //!
-//! Users: the execution bridge (`crates/execution-bridge`, a fresh QuickJS
-//! runtime per file), the orchestration QuickJS host
-//! (`crates/orchestration-quickjs-host`, one context for the whole run), and
+//! Users: the orchestration QuickJS host
+//! (`crates/orchestration-quickjs-host`, one context for the whole run) and
 //! the napi addon of the `node` runtime (`crates/jssg-napi`). Each binds the
 //! transform call itself; none re-implements these rules.
 //!
@@ -61,7 +60,7 @@ pub struct ArtifactRef {
 }
 
 /// The ast-grep rule data a definition declares as its selector. Only the
-/// matching fields are accepted; `id` and `language` are set by the bridge.
+/// matching fields are accepted; `id` and `language` are set when compiling.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Selector {
@@ -207,8 +206,8 @@ pub enum SemanticScope {
 /// file of the batch passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Containment {
-    /// All of them while planning, before anything runs (the bridge, whose
-    /// semantic index needs every source path up front).
+    /// All of them while planning, before anything runs ([`BatchPlan::new`],
+    /// for a runner that has every file's content up front).
     Upfront,
     /// Each in [`BatchPlan::parse`], before that file can reach a transform:
     /// the in-process runtimes parse on worker threads a chunk ahead, so the

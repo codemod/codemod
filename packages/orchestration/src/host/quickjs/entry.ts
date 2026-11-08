@@ -29,10 +29,8 @@ import {
   type OperationRequest,
 } from "../../core/protocol.ts";
 import { configureTimings, timingsEnabled, timingsSnapshot } from "../../core/timings.ts";
-import { getAssessmentAsk } from "../../core/assessment.ts";
 import {
-  executeAssessment,
-  executeFileAssessment,
+  executeAssessmentOperation,
   type AssessmentExecutorOptions,
 } from "../../execution/assessment.ts";
 import { AGENT_BIN_ENV, executeAgent } from "../../execution/agent.ts";
@@ -104,19 +102,8 @@ class QuickjsExecutor implements OperationExecutor {
           request,
           signal,
         );
-      case "assessment": {
-        const ask = getAssessmentAsk(operation);
-        return ask === undefined
-          ? await executeAssessment(this.assessment, request.commandId, operation, signal)
-          : await executeFileAssessment(
-              this.assessment,
-              this.cwd,
-              request.commandId,
-              operation,
-              ask,
-              signal,
-            );
-      }
+      case "assessment":
+        return await executeAssessmentOperation(this.assessment, this.cwd, request, signal);
       default:
         // `run()` refuses these before they get here (`CapabilityExecutor`).
         return {

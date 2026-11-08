@@ -14,7 +14,7 @@
 //! Node CLI sets it for its children). Schema 1:
 //!
 //! ```json
-//! { "schema": 1, "arm": "bridge", "pid": 1, "parent_pid": 0,
+//! { "schema": 1, "arm": "quickjs-host", "pid": 1, "parent_pid": 0,
 //!   "exec_to_main_ns": 1200000, "wall_ns": 52000000,
 //!   "phases": { "parse": { "ns": 1, "count": 2, "cpu_ns": 3 } },
 //!   "marks": { "engine_done": 40000000 }, "threads_used": 12, "children": [] }

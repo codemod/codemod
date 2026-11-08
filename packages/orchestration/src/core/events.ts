@@ -12,8 +12,6 @@ export type RunEvent =
     }
   | { type: "command.completed"; commandId: string; completion: OperationCompletion }
   | { type: "run.finished"; output: Json; replayed: boolean }
-  /** One bridge process was spawned for a command. */
-  | { type: "bridge.spawned"; commandId: string; pid: number | undefined }
   /** A command had to wait for execution capacity; nothing is spawned yet. */
   | { type: "scheduler.queued"; commandId: string; weight: number }
   /** A command took a permit. `active`/`used` are the totals including it. */

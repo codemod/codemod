@@ -17,7 +17,7 @@ import { ref } from "./helpers.ts";
 const dir = join(import.meta.dirname, "..", "fixtures", "protocol");
 const fixture = (name: string) => JSON.parse(readFileSync(join(dir, name), "utf8")) as unknown;
 
-describe("protocol fixtures shared with crates/execution-bridge", () => {
+describe("protocol fixtures shared with crates/orchestration-agent", () => {
   it("every fixture is valid and round-trips", () => {
     for (const name of readdirSync(dir).filter((f) => f.endsWith("-request.json"))) {
       const value = fixture(name);

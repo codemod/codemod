@@ -54,7 +54,6 @@ fi
 bash "$BENCH_DIR/verify.sh"
 # shellcheck source=/dev/null
 . "$RESULTS_DIR/arms.env"
-export TS_BRIDGE_FORM
 ensure_bench_exec
 
 if [ "$CACHE" = "cold" ]; then

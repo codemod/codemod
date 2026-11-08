@@ -15,7 +15,6 @@ import type { Json } from "../../core/json.ts";
 import { DEFAULT_RUNTIME } from "../../runtime/capabilities.ts";
 import { Phase, lap, now } from "../../core/timings.ts";
 import "../node-host.ts";
-import { bridgeRuntime, defaultBridgePath } from "./bridge.ts";
 import { nodeRuntime } from "./node.ts";
 import { quickjsRuntime } from "./quickjs.ts";
 import type { RuntimeProvider, RuntimeSettings } from "./types.ts";
@@ -73,7 +72,7 @@ export class RuntimeRegistry {
   }
 }
 
-export const defaultRuntimes = new RuntimeRegistry([bridgeRuntime, nodeRuntime, quickjsRuntime]);
+export const defaultRuntimes = new RuntimeRegistry([nodeRuntime, quickjsRuntime]);
 
 /** Throws `RuntimeUnavailableError` with the provider's reason. */
 export function assertAvailable(provider: RuntimeProvider, settings: RuntimeSettings): void {
@@ -84,12 +83,10 @@ export function assertAvailable(provider: RuntimeProvider, settings: RuntimeSett
 }
 
 export interface RunWorkflowOptions {
-  /** Runtime name. Default `bridge`. */
+  /** Runtime name. Default `node`. */
   runtime?: string;
   /** Repository the workflow operates on. Default: the process working directory. */
   target?: string;
-  /** Bridge binary. Default `defaultBridgePath()`. */
-  bridge?: string;
   /** Extra environment for spawned processes. */
   env?: Record<string, string>;
   /** The root input; the key's presence matters (`null` is a value). */
@@ -154,7 +151,6 @@ export function prepareLaunch(
   if (!existsSync(workflow)) throw new Error(`workflow does not exist: ${workflow}`);
   if (!existsSync(target)) throw new Error(`target does not exist: ${target}`);
   const settings: RuntimeSettings = {
-    bridge: resolve(options.bridge ?? defaultBridgePath()),
     ...(options.env === undefined ? {} : { env: options.env }),
   };
   assertAvailable(provider, settings);

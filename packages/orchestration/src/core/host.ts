@@ -2,8 +2,8 @@
  * The host seam: everything the portable control plane (authoring, runtime,
  * history, replay, scheduling) and the portable JSSG + shell execution path
  * need from the platform they run on. Nothing outside the Node host
- * implementation (`src/host/node-host.ts`) and the Node-only bridge/agent/
- * assessment/build modules may import `node:*` or touch `process`;
+ * implementation (`src/host/node-host.ts`) and the Node-only build and
+ * runtime-launch modules may import `node:*` or touch `process`;
  * `tests/portable.test.ts` enforces it with a static import scan.
  *
  * Two implementations are planned:

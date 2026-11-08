@@ -2,11 +2,11 @@
  * Runtime selection: `--runtime` parsing, the registry contract (in-process
  * `createExecutor` vs out-of-process `launch`), the `node` and `quickjs`
  * availability checks the benchmark harness probes for, and the capability
- * contract (`agent`/`assessment`/semantic analysis fail fast outside
- * `bridge`).
+ * contract (a runtime that lacks a capability refuses it fast; `node` and
+ * `quickjs` have every one).
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { isAvailable as isNapiAvailable } from "@codemod.com/jssg-napi";
@@ -14,7 +14,7 @@ import { parseArgs, runWorkflowCli, USAGE } from "../src/host/cli.ts";
 import { createHarness } from "../src/host/harness.ts";
 import { defaultQuickjsHostPath } from "../src/host/runtimes/quickjs.ts";
 import {
-  BRIDGE_RUNTIME,
+  DEFAULT_RUNTIME,
   NODE_RUNTIME,
   OperationError,
   PROTOCOL_VERSION,
@@ -22,7 +22,6 @@ import {
   UnsupportedInRuntimeError,
   agent,
   assessment,
-  bridgeRuntime,
   defaultRuntimes,
   dynamic,
   jssg,
@@ -38,7 +37,6 @@ import { ref } from "./helpers.ts";
 
 const fixtures = resolve(import.meta.dirname, "fixtures");
 const shellWorkflow = resolve(fixtures, "load/shell.ts");
-const fakeBridge = resolve(fixtures, "fake-bridge.mjs");
 const bin = resolve(import.meta.dirname, "../bin/codemod-workflow.mjs");
 
 describe("--runtime parsing", () => {
@@ -59,21 +57,23 @@ describe("--runtime parsing", () => {
     expect(parseArgs(["wf.ts"])).not.toHaveProperty("runtime");
     expect(() => parseArgs(["run"])).toThrow(USAGE);
     expect(() => parseArgs(["wf.ts", "--runtime"])).toThrow(/missing value for --runtime/u);
-    expect(USAGE).toContain("--runtime <bridge|node|quickjs>");
+    expect(USAGE).toContain("--runtime <node|quickjs>");
   });
 });
 
 describe("the runtime registry", () => {
-  it("lists bridge (default), node, and quickjs", () => {
-    expect(defaultRuntimes.names()).toEqual(["bridge", "node", "quickjs"]);
-    expect(defaultRuntimes.resolve("bridge")).toBe(bridgeRuntime);
-    expect(() => defaultRuntimes.resolve("deno")).toThrow(
-      "unknown runtime 'deno'; expected one of: bridge, node, quickjs",
-    );
+  it("lists node (default) and quickjs", () => {
+    expect(defaultRuntimes.names()).toEqual(["node", "quickjs"]);
+    expect(DEFAULT_RUNTIME).toBe("node");
+    for (const removed of ["bridge", "deno"]) {
+      expect(() => defaultRuntimes.resolve(removed)).toThrow(
+        `unknown runtime '${removed}'; expected one of: node, quickjs`,
+      );
+    }
   });
 
   it("reports node and quickjs available exactly when their addon / host binary is built", () => {
-    const settings = { bridge: "/b" };
+    const settings = {};
     const node = defaultRuntimes.resolve("node").availability(settings);
     const quickjs = defaultRuntimes.resolve("quickjs").availability(settings);
     expect(node.available).toBe(isNapiAvailable());
@@ -106,25 +106,10 @@ describe("the runtime registry", () => {
     }
   });
 
-  it("keeps the bridge runtime's missing-binary error", async () => {
-    await expect(
-      runWorkflowCli([shellWorkflow, "--target", fixtures, "--bridge", "/nonexistent/bridge"]),
-    ).rejects.toThrow("bridge binary not found at /nonexistent/bridge");
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "runs the default runtime through the registry exactly as before",
+  it.skipIf(process.platform === "win32" || !isNapiAvailable())(
+    "runs the default runtime (node) through the registry",
     async () => {
-      chmodSync(fakeBridge, 0o755);
-      const output = (await runWorkflow(shellWorkflow, {
-        target: fixtures,
-        bridge: fakeBridge,
-      })) as { stdout: string };
-      const echoed = JSON.parse(output.stdout) as { request: OperationRequest };
-      expect(echoed.request).toMatchObject({
-        commandId: "inspect",
-        operation: { kind: "shell", command: "true" },
-      });
+      expect(await runWorkflow(shellWorkflow, { target: fixtures })).toEqual({ stdout: "" });
     },
   );
 
@@ -132,7 +117,7 @@ describe("the runtime registry", () => {
     const requests: OperationRequest[] = [];
     const provider: RuntimeProvider = {
       name: "scripted",
-      capabilities: BRIDGE_RUNTIME.capabilities,
+      capabilities: NODE_RUNTIME.capabilities,
       description: "test",
       availability: () => ({ available: true }),
       createExecutor: (context) => ({
@@ -148,7 +133,7 @@ describe("the runtime registry", () => {
         },
       }),
     };
-    const registry = new RuntimeRegistry([bridgeRuntime, provider]);
+    const registry = new RuntimeRegistry([provider]);
     const output = await runWorkflowCli(
       ["run", shellWorkflow, "--runtime=scripted", "--target", fixtures],
       undefined,
@@ -176,13 +161,13 @@ describe("the runtime registry", () => {
     const output = await runWorkflow(shellWorkflow, {
       runtime: "remote",
       target: fixtures,
-      bridge: "/b",
+      env: { EXTRA: "1" },
       input: null,
       registry,
     });
     expect(output).toEqual({ launched: true });
     expect(launches).toEqual([
-      { workflow: shellWorkflow, target: fixtures, settings: { bridge: "/b" }, input: null },
+      { workflow: shellWorkflow, target: fixtures, settings: { env: { EXTRA: "1" } }, input: null },
     ]);
     await expect(
       runWorkflowCli(
@@ -319,11 +304,9 @@ describe("the capability contract", () => {
     expect(h.executed.map((request) => request.commandId)).toEqual(["lint"]);
   });
 
-  it("lets every kind through on the bridge runtime and without a runtime", async () => {
-    for (const runtime of ["bridge", undefined] as const) {
-      const h = createHarness({ ...(runtime ? { runtime } : {}), fallback: () => "ok" });
-      await h.run(sequence(lint(), fix()));
-      expect(h.executed.map((request) => request.commandId)).toEqual(["lint", "fix"]);
-    }
+  it("lets every kind through without a runtime", async () => {
+    const h = createHarness({ fallback: () => "ok" });
+    await h.run(sequence(lint(), fix()));
+    expect(h.executed.map((request) => request.commandId)).toEqual(["lint", "fix"]);
   });
 });

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { cancelled, createHarness, failed, unknown } from "../src/host/harness.ts";
 import {
   DuplicateCommandIdError,
-  BridgeExecutor,
   MemoryHistoryStore,
   NoActiveRunError,
   OperationError,
@@ -202,9 +201,16 @@ describe("workflow execution", () => {
     );
   });
 
-  it("records a missing bridge binary as an unknown completion", async () => {
+  it("records an executor failure as an unknown completion", async () => {
     const store = new MemoryHistoryStore();
-    const executor = new BridgeExecutor({ bin: "missing-butterflow-execution-bridge" });
+    const executor = {
+      execute: async (request: { commandId: string }) => ({
+        protocolVersion: PROTOCOL_VERSION,
+        commandId: request.commandId,
+        status: "unknown" as const,
+        error: { message: "failed to start" },
+      }),
+    };
 
     await expect(
       run(

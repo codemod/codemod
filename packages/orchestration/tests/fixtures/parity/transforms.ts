@@ -111,9 +111,7 @@ export const secondaryAt = jssg({
 });
 
 /**
- * Throws on `b.ts` (after `a.ts` succeeded). A plain `Error`: the bridge's
- * sandbox renders every thrown error as `Error: <message>`, dropping a
- * subclass name such as `TypeError` that the in-process runtimes keep.
+ * Throws on `b.ts` (after `a.ts` succeeded), a plain `Error`.
  */
 export const throwing = jssg({
   name: "throwing",

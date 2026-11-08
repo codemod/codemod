@@ -8,8 +8,8 @@
  * (`setHost` or `globalThis[HOST_GLOBAL]`) before the first run.
  *
  * The Node entry (`src/index.ts`) re-exports all of this, installs the Node
- * host, and adds the Node-only pieces: the build step, the bridge runtime,
- * agents, assessment, and the runtime registry.
+ * host, and adds the Node-only pieces: the build step, the runtime registry
+ * and providers, and the agent and assessment executors.
  */
 export {
   agent,
@@ -79,7 +79,6 @@ export type { Awaitable, Dynamic } from "./authoring/dynamic.ts";
 export { run } from "./runtime/run.ts";
 export type { RootInput, RunOptions, RunResult, RunSettings } from "./runtime/run.ts";
 export {
-  BRIDGE_RUNTIME,
   BUILTIN_RUNTIMES,
   CapabilityExecutor,
   DEFAULT_RUNTIME,

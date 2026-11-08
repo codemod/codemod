@@ -1,6 +1,6 @@
 # Handoff: single-runtime orchestration (Node / QuickJS) + benchmark
 
-_Status: Phase G done (2026-11-07): F1-F3 integrated into rt/integration, F2 timings finished and verified, multi-size report recorded on a Linux VM. See section 13._
+_Status: Phase H done (2026-11-08): two runtimes, `node` (default) and `quickjs` (sandboxed); the `bridge` runtime and `crates/execution-bridge` are removed after agent, assessment, and JSSG semantic analysis were ported to both. See section 14. Sections 1-13 describe earlier phases and mention bridge as it was then._
 _Private repo: https://github.com/devagrawal09/codemod (private, remote `fork`) · base: codemod/codemod `prototype/typescript-orchestration` @ `6d0ad87` · main checkout never modified._
 
 ## 1. Goal
@@ -246,3 +246,21 @@ ts-node 13.36 s, ts-quickjs 20.10 s (1.50x), yaml 25.79 s (1.93x), ts-bridge 65.
 - ts-quickjs parses on the JS thread (699 ms vs ts-node's 289 ms blocked on vite); moving parse off-thread in the host is the obvious next win.
 - napi addon now also builds on linux-x64 (`jssg-napi.linux-x64.node`, local build only; still no packaging).
 - Checkpoint automation struck again: a "Node 2" commit and `codemod-*` local branches appeared mid-session, and one commit landed on a pushed `codemod-9e4fa9a2` branch of the fork; it was re-committed onto rt/integration and the stray remote branch deleted. Nothing reached codemod/codemod.
+
+## 14. Phase H (done, 2026-11-08): two runtimes, bridge removed
+
+Decision (user, 2026-11-08): `node` is the simple, fast runtime and the default; `quickjs` is the sandboxed one; `bridge` goes away. Agreed order: port everything only bridge could do to both runtimes first, then delete it (no regression window).
+
+Commits on rt/integration after `3498eb1` (each verified before commit):
+- `5d3d2bf` assessment on node and quickjs: `execution/assessment.ts` portable (Host fs), one entry `executeAssessmentOperation`; quickjs gets a `fetch` (`host/quickjs/fetch.ts`) over a new host function `httpRequest` (`crates/orchestration-quickjs-host/src/http.rs`, reqwest blocking) that only reaches the TypeSafe API root (`TYPESAFE_BASE_URL`; same origin, path under the root, no redirects). No global `fetch` in the context. e2e against a local stub (`tests/fixtures/typesafe-stub.mjs`), plus workflow code calling `httpRequest` directly with outside URLs (refused `EACCES`).
+- `395e6c9` JSSG semantic analysis on node and quickjs: `jssg-batch::BatchPlan` builds the batch's provider (`LazySemanticProvider`) and attaches it to every root; workspace mode indexes every file first (`BatchPlan::index`; napi `JssgBatch.index` AsyncTask, quickjs `jssgIndex`); `SemanticSupport` removed.
+- `7d169d0` agent on node and quickjs via `codemod-agent` (`crates/orchestration-agent`, the bridge's agent.rs/external.rs). Out of process on purpose: codemod-ai tools use the process cwd and inherit its env. stdin = request line + optional `{"LLM_API_KEY"}` (`CODEMOD_AGENT_SECRETS=stdin`); stdout = completion; the runner moves stdout to a private CLOEXEC fd and points fds 0/1 at /dev/null before anything starts (tested: a child CLI inherits no fd 3-9). Portable launcher `execution/agent.ts` over `Host.spawn` (no exchange files). quickjs `native.kill` now kills the whole tree like Node's `killProcessTree` (descendants that left the group, via one `ps` snapshot).
+- H4 (this commit): `crates/execution-bridge` deleted (walker/languages contract moved to `crates/jssg-batch/tests/contracts.rs`); TS bridge files, `--bridge`, `RuntimeSettings.bridge`, `bridge.spawned`, `BRIDGE_RUNTIME` removed; `RUNTIME_NAMES = ["node","quickjs"]`, `DEFAULT_RUNTIME = "node"`. Tests that used the fake bridge now use a scripted `JssgDispatch`, `tests/echo-runtime.ts`, `executeAgent` + `tests/fixtures/fake-agent.mjs`, or the real node runtime; parity e2es use node as the reference (quickjs vs node); the YAML engine stays the external reference via `verify.sh`. Benchmark arm `ts-bridge` removed (`yaml ts-node ts-quickjs`; historical results untouched; the two-child timings fixture renamed `multi-child`). Docs: `RUST_BRIDGE.md` → `PROTOCOL.md`; README, RUNTIMES, DESIGN (dated note), demo README, benchmark README updated.
+
+Verification at H4: cargo test 189 pass (jssg-batch, jssg-napi, orchestration-quickjs-host, orchestration-agent, bench-timings, codemod-sandbox); clippy `-D warnings --no-deps` clean on the touched crates; `cargo check --workspace --all-targets` clean; orchestration unit 480 (with `CODEMOD_REQUIRE_RUNTIMES=1`), e2e 38, timings e2e 3; napi API 3; benchmark analysis 22; oxfmt clean. Benchmark gate: yaml, ts-node, ts-quickjs identical diffs on vite (`8f7ff40f…c1c95885`, unchanged); `run.sh` vite 10 runs: ts-node 0.907 s, ts-quickjs 1.316 s, yaml ~1.47 s (Phase G: 1.002 / 1.392 / 1.463), so no regression.
+
+Open items:
+- Live agent and live assessment tests (`pnpm test:live:*`) not run (no keys or CLIs in the sandbox); ported to `codemod-agent` / `executeAssessmentOperation`.
+- In quickjs, `RuntimeSettings.env` is merged into the host process env, so explicit variables reach an agent only if allowlisted (node passes them as explicit env). Minor divergence.
+- The napi addon in `packages/jssg-napi` is the debug `timings` build after `test:e2e:timings`; rebuild release (`node scripts/build.mjs --release --features timings`) before benchmarking.
+- Still open from Phase G: yaml `plan` superlinear; quickjs parses on the JS thread.

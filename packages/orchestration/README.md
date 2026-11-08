@@ -3,31 +3,36 @@
 TypeScript-first prototype of the Codemod orchestration runtime. Workflows are
 plain async TypeScript; calling a runnable creates a command, awaiting it inside
 a workflow issues it, and every issued command is recorded in an append-only
-history and replayed from that history on later runs. `shell` runs through a
-small Rust bridge over `butterflow_runners::DirectRunner`, and `agent` runs
-through the same bridge on the built-in Butterflow agent (`codemod-ai`) or,
-when the step asks for it, the installed Claude Code or Codex CLI.
-`assessment` is file-oriented: it selects files using JSSG-style
-include/exclude globs, reads each file, and asks a System One model (TypeSafe
-Jev by default) typed questions about each file individually, from the host
-process, with bounded concurrency and no repository access beyond the matched
-files. JSSG transforms are
-written inline next to the workflow, split off into standalone bundles at
-build time, and orchestrated here in TypeScript (file selection, ordering,
-conflict checks, transactional commit, output aggregation, failure
-classification) around one Rust bridge process per command that owns the
-QuickJS sandbox and semantic providers and transforms the whole batch (see
-`RUST_BRIDGE.md`). The evidence, problem statement, proposal, boundaries, and
-migration path are summarized in `DESIGN.md`.
+history and replayed from that history on later runs. A workflow runs in one
+of two runtimes (`RUNTIMES.md`): `node` (the default, the simple and fast
+option: the whole workflow in one Node process, JSSG transforms in-process over
+the napi addon `@codemod.com/jssg-napi`) or `quickjs` (the sandboxed option:
+the whole bundled workflow in one QuickJS context hosted by a Rust binary, no
+Node at run time). Both execute every operation kind. `shell` runs in-process
+over the host's `spawn` with the semantics of
+`butterflow_runners::DirectRunner`, and `agent` runs in a `codemod-agent`
+runner process on the built-in Butterflow agent (`codemod-ai`) or, when the
+step asks for it, the installed Claude Code or Codex CLI. `assessment` is
+file-oriented: it selects files using JSSG-style include/exclude globs, reads
+each file, and asks a System One model (TypeSafe Jev by default) typed
+questions about each file individually, in-process, with bounded concurrency
+and no repository access beyond the matched files. JSSG transforms are written
+inline next to the workflow, split off into standalone bundles at build time,
+and orchestrated here in TypeScript (file selection, ordering, conflict
+checks, transactional commit, output aggregation, failure classification)
+around the shared Rust batch rules (`crates/jssg-batch`: containment, static
+selector, semantic providers, result conversion), which both runtimes call
+in-process (see `PROTOCOL.md`). The evidence, problem statement, proposal,
+boundaries, and migration path are summarized in `DESIGN.md`.
 
 ## Layout
 
 ```
 packages/orchestration/
   DESIGN.md              problem statement, proposal, scope, and migration path
-  RUST_BRIDGE.md         the Rust boundary: protocol, batch, security model, transactions
-  RUNTIMES.md            --runtime bridge|node|quickjs, the Host seam, async context, registry
-  src/index.ts           Node API: portable.ts + Node host + build, bridge, agents, registry
+  PROTOCOL.md            the operation protocol, JSSG batch, agent runner, security model, transactions
+  RUNTIMES.md            --runtime node|quickjs, the Host seam, async context, registry
+  src/index.ts           Node API: portable.ts + Node host + build, runtimes, agent runner path, registry
   src/portable.ts        Node-free API (`./portable` export) for non-Node hosts such as QuickJS
   src/core/              plain data contracts shared by every layer
     host.ts              Host seam (fs, path, os, env, spawn, async context, clock) + install
@@ -36,7 +41,7 @@ packages/orchestration/
     json.ts              Json type and canonical JSON (command identity)
     paths.ts             safe-relative-path rules and root containment (realpath)
     history.ts           HistoryStore seam + MemoryHistoryStore
-    events.ts            EventSink seam (+ bridge.spawned, scheduler.*)
+    events.ts            EventSink seam (command.*, run.finished, scheduler.*)
     errors.ts            error classes thrown across layers
     posix.ts             dependency-free node:path.posix port
     async-context.ts     stopgap AsyncContextVariable for hosts without promise hooks
@@ -53,23 +58,24 @@ packages/orchestration/
     build.ts             build step: extract inline transforms, bundle, rewrite, loadWorkflow
   src/execution/         how one OperationRequest becomes an OperationCompletion
     operation-executor.ts OperationExecutor seam
-    executor.ts          BridgeExecutor (shell, jssg, agent, assessment)
     shell.ts             executeShell: in-process shell over Host.spawn (DirectRunner semantics)
-    assessment.ts        executeAssessment: one TypeSafe SDK systemOne() call per command
+    assessment.ts        executeAssessmentOperation: TypeSafe SDK systemOne() calls over the Host fs
+    agent.ts             executeAgent: one codemod-agent runner process per agent operation
+    agent-env.ts         agentLaunch: the runner's allowlisted environment and stdin key channel
     scheduler.ts         AdmissionScheduler: weighted, bounded admission at the executor
-    bridge.ts            spawnBridge: one bridge process per request; executeJssg over it
-    exchange.ts          host-owned exchange directory, exclusive request, no-follow response read
-    process-tree.ts      best-effort process-tree kill on abort, timeout, and host exit
+    process-tree.ts      best-effort process-tree kill on abort, timeout, and host exit (Node host)
     jssg.ts              executeJssgCommand: artifact, select, dispatch batch, validate, stage, commit
+    jssg-batch.ts        the shared JSSG batch loop of both runtimes (over crates/jssg-batch)
     files.ts             file selection with the engine's walker semantics (npm `ignore`)
     languages.json       language -> extensions, pinned to the engine table by a cargo test
   src/runtime/           runs a workflow: issue commands, replay or execute, record history
     run.ts               run lifecycle, history, and command execution
     gate.ts              CommandGate seam + ReplayGate (replay matching, errors)
-    capabilities.ts      runtime descriptors and capability checks (agent/assessment refusal)
+    capabilities.ts      runtime descriptors (node, quickjs) and capability checks
   src/host/              entry points that assemble a run (Node only)
     node-host.ts         the Node Host; importing it installs it
-    runtimes/            one RuntimeProvider per runtime + registry/runWorkflow
+    runtimes/            one RuntimeProvider per runtime (node, quickjs) + registry/runWorkflow
+    quickjs/             the bundle entry and Host inside the QuickJS host (incl. fetch.ts)
     cli.ts               experimental local runner behind bin/codemod-workflow.mjs
     harness.ts           test harness with scripted completions (`./harness` export)
     dashboard/           local run dashboard behind `--dashboard` (`./dashboard` export)
@@ -80,10 +86,13 @@ packages/orchestration/
       ui.html            the page, dependency-free
   fixtures/protocol      shared JSON fixtures checked by TS and Rust tests
   fixtures/walker        file-walker contract checked by TS and Rust (engine walker) tests
-  tests/                 unit tests (fast, no Rust; fake bridge) + bridge.e2e.test.ts + *.live.test.ts (opt-in)
+  tests/                 unit tests (fast; fake agent runner) + *.e2e.test.ts + *.live.test.ts (opt-in)
   bin/                   codemod-workflow.mjs and its node_modules type-stripping hook
-crates/execution-bridge/ protocol structs, shell through DirectRunner, one JSSG batch, agent via codemod-ai or an external CLI
-  src/main.rs            `butterflow-execution-bridge <request.json> <response.json>`
+crates/jssg-batch/       the JSSG batch rules both runtimes share (BatchPlan)
+crates/jssg-napi/        the napi addon of the node runtime (packages/jssg-napi)
+crates/orchestration-quickjs-host/ the quickjs runtime's Rust host binary
+crates/orchestration-walker/       native file selection and reads for both runtimes
+crates/orchestration-agent/        `codemod-agent`: one agent operation over stdin/stdout
 ```
 
 Dependencies between `src/` folders point one way; a folder imports only from
@@ -217,7 +226,7 @@ export default dynamic(async () => {
   beneath the target root and is only valid with `workspace`. Without
   `include`, the definition applies to the language's file extensions, exactly
   as a YAML `js-ast-grep` step without `include`; the list is
-  `src/execution/languages.json`, which `cargo test -p butterflow-execution-bridge`
+  `src/execution/languages.json`, which `cargo test -p jssg-batch`
   checks against the engine's table so it cannot drift silently. Languages
   outside that table need an explicit `include`.
 
@@ -235,12 +244,12 @@ come back as an array in file order, typed as the element type of the
 definition's `output` schema. An existing `Codemod<T>` value is assignable.
 Invocation input reaches the transform as `options.params.input`. Only the
 top-level transform may be structured: `jssgTransform` accepts a plain
-`Codemod` and the sandbox rejects a structured result from a secondary
+`Codemod` and the runtime rejects a structured result from a secondary
 transform.
 
 The workflow and its transforms are authored together but never run
-together. A transform runs in the bridge's QuickJS sandbox, the workflow body
-in Node; nothing is serialized with `Function.prototype.toString()` and no
+together. The workflow body runs in the control plane and each transform is
+evaluated from its own bundled artifact; nothing is serialized with `Function.prototype.toString()` and no
 closure crosses the boundary. Instead, a build step splits the module before
 it runs (`src/bundle/build.ts`):
 
@@ -251,8 +260,8 @@ it runs (`src/bundle/build.ts`):
 2. For each transform, a virtual entry `export default <transform>` plus
    the import declarations it references is bundled with esbuild into one
    self-contained ES module: helpers imported from other modules (and their
-   imports, including packages) are inlined; `codemod:*` modules and Node
-   built-ins that the sandbox provides stay as imports; types are erased.
+   imports, including packages) are inlined; `codemod:*` modules and
+   built-ins that the runtime provides stay as imports; types are erased.
 3. The artifact's identity is its `name` and the SHA-256 of the bundled
    source. The module is rewritten so `transform` is that `{ name, hash }`
    reference, and the rewritten module is what Node executes. Module comments
@@ -260,7 +269,7 @@ it runs (`src/bundle/build.ts`):
    checkout and changes whenever the transform or a bundled helper changes.
 
 Supported subset, checked at build time with a source position rather than
-failing in the sandbox:
+failing at run time:
 
 - A transform may use its own parameters and locals, globals, and bindings
   the workflow module imports from other modules.
@@ -269,7 +278,7 @@ failing in the sandbox:
   Move such helpers into a module and import them; dynamic values enter
   through invocation input, never through capture.
 - It may not use bindings imported from `@codemod.com/orchestration`; the
-  orchestration runtime does not exist inside the sandbox.
+  orchestration API is not part of an artifact.
 - `name` must be a string literal and the argument an object literal.
   Generators are rejected. `jssg(options)` with a variable is not extracted.
 
@@ -280,9 +289,9 @@ loaded without the build step; the call throws with that explanation.
 including definitions in imported files and packages under `node_modules`,
 and returns the module namespace with the artifacts it collected.
 `buildModule(source, file)` and `buildFile(file)` do the split without
-importing anything. Artifacts are executor-side data (`BridgeExecutor({
-artifacts })`); a JSSG command whose artifact the executor does not hold
-fails in phase `artifact` before anything is spawned.
+importing anything. Artifacts are executor-side data (`new NodeExecutor({
+artifacts })`, or the bundle for `quickjs`); a JSSG command whose artifact the
+executor does not hold fails in phase `artifact` before anything runs.
 
 `esbuild` is the one dependency added for this: it is the bundler the
 monorepo already resolves (through Vite), it bundles TypeScript and package
@@ -293,8 +302,8 @@ parser; it moved to `dependencies` so the installed package can build.
 ### The static selector
 
 `selector` is optional ast-grep rule data, `{ rule, constraints?, utils? }`,
-typed for the definition's language. The executor evaluates it natively,
-before any transform sandbox starts, on every selected file; files without a
+typed for the definition's language. The runtime evaluates it natively
+(`crates/jssg-batch`), before the file reaches JavaScript, on every selected file; files without a
 match are skipped and produce no edit and no output. It is an eligibility
 prefilter and nothing else: the transform finds its nodes with the normal
 `root.find` / `root.findAll` APIs, and `options.matches` is not populated.
@@ -329,14 +338,15 @@ the default are ignored.
    gitignored directory is never entered). Order is component-wise byte order.
    Every selected file is read; files that vanished or are not UTF-8 are
    skipped, as the engine does.
-4. One bridge process receives the artifact source and the whole batch. It
-   verifies the source against the recorded hash, loads it from memory under
-   a virtual module name, builds one semantic provider, indexes the whole
-   batch in workspace mode, skips the files the selector does not match, and
-   transforms the rest from the content it was given. Snapshot semantics: no
-   transform sees another transform's edits, unlike the workflow engine, which
-   writes each file before moving to the next. Disk reads inside the sandbox
-   (`jssgTransform`, the curated `fs`) see the same pre-command snapshot.
+4. The runtime's batch loop (`src/execution/jssg-batch.ts`, in-process in
+   both runtimes) receives the artifact source and the whole batch. It
+   verifies the source against the recorded hash, evaluates it under a
+   virtual module name (once per run), builds one semantic provider, indexes
+   the whole batch in workspace mode, skips the files the selector does not
+   match, and transforms the rest from the content it was given. Snapshot
+   semantics: no transform sees another transform's edits, unlike the
+   workflow engine, which writes each file before moving to the next.
+   `write()` and `jssgTransform()` are staged, never written.
 5. The returned edits (primary edits, `jssgTransform` and staged `write()`
    edits, renames) and JSON outputs are validated, merged into one write set,
    and checked for conflicts; then every destination is written and rename
@@ -352,8 +362,8 @@ to a path another edit renames away, or a rename onto an existing file that is
 not itself renamed away fail the command before any write. The workflow engine
 would instead let the last write win; this prototype prefers a loud failure.
 
-A transform that writes through the curated `fs` module bypasses the batch
-result and is not tracked.
+A transform that writes through a filesystem module (the curated `fs` in
+`quickjs`, Node's in `node`) bypasses the batch result and is not tracked.
 
 ## Agent and assessment steps
 
@@ -482,17 +492,23 @@ calls it through TypeSafe's official JavaScript SDK:
   scores, probabilities, and confidence may exceed their range by
   floating-point noise (at most `1e-6`) and are kept unmodified.
 - It decides nothing. Thresholds, fallbacks, and routing are workflow code.
-- `BridgeExecutor` runs it in the host process through the official TypeSafe
-  JavaScript SDK, `@typesafe-ai/sdk` (0.6.x): one `TypeSafeClient.systemOne()`
-  call per command, no bridge process. The SDK owns authentication, the
-  `TYPESAFE_API_KEY` (required), `TYPESAFE_BASE_URL` (default
+- Both runtimes run it in-process through the official TypeSafe JavaScript
+  SDK, `@typesafe-ai/sdk` (0.6.x): one `TypeSafeClient.systemOne()` call per
+  command (`executeAssessmentOperation` in `src/execution/assessment.ts`,
+  portable, reading files through the `Host`). The SDK owns authentication,
+  the `TYPESAFE_API_KEY` (required), `TYPESAFE_BASE_URL` (default
   `https://api.typesafe.ai`), and `TYPESAFE_DEFAULT_MODEL` (default
   `jev-latest`) fallbacks, request encoding, HTTP transport, and response
-  decoding. Explicit settings win over the environment:
-  `new BridgeExecutor({ ..., assessment: { apiKey, baseURL, defaultModel,
-  timeoutMs, retry } })`. SDK logging is turned off (`logLevel: "off"`,
-  regardless of `TYPESAFE_LOG_LEVEL`), so assessments never write to the
-  terminal.
+  decoding. In `node` the SDK uses the global `fetch`. In `quickjs` there is
+  no global `fetch`: the SDK gets an adapter (`src/host/quickjs/fetch.ts`)
+  over the host function `httpRequest`, which only allows URLs under the
+  TypeSafe API root (`TYPESAFE_BASE_URL`: same scheme, host, and port, a path
+  under the root's path, no redirects followed), so workflow and transform
+  code get no general network access. Explicit settings win over the
+  environment: `new NodeExecutor({ ..., assessment: { apiKey, baseURL,
+  defaultModel, timeoutMs, retry } })`. SDK logging is turned off
+  (`logLevel: "off"`, regardless of `TYPESAFE_LOG_LEVEL`), so assessments
+  never write to the terminal.
 - Retries and timeouts are the SDK's; nothing in this package retries an
   assessment, so there is one retry layer. With the SDK's default
   `RetryPolicy` that is up to 2 retries for HTTP 408, 429, and 500-599,
@@ -551,15 +567,28 @@ agent({ name: "fix", prompt, backend: { kind: "codex", sandbox: "workspace-write
   `workspace-write` (default `workspace-write`); `danger-full-access` is not
   representable and Codex's own tools cannot be listed. `maxSteps` on an
   external backend, `tools` on `codex`, an unknown backend, or an unknown
-  setting throws when the step is defined; the bridge rejects the same
+  setting throws when the step is defined; the agent runner rejects the same
   requests as parse errors. Top-level `tools`/`maxSteps` are not accepted.
-- The bridge runs the backend in `--target`, so it may change files. Validated
-  input is appended to the prompt as JSON; the prompt goes to external CLIs on
-  stdin, never in argv.
+- Both runtimes run an agent out of process, in one `codemod-agent` runner
+  per step (`crates/orchestration-agent`, launched by the portable
+  `src/execution/agent.ts` through the host's `spawn`), because its tools
+  (`bash`, file tools, MCP servers, the `claude`/`codex` CLIs) run in the
+  process working directory and inherit its environment. The runner starts in
+  `--target`, so the backend may change files. The request goes to it as one
+  line of JSON on stdin and the completion comes back as JSON on stdout (see
+  `PROTOCOL.md`). Validated input is appended to the prompt as JSON; the
+  prompt goes to external CLIs on stdin, never in argv.
+- The runner is found through `CODEMOD_AGENT_BIN`, else the newer of the
+  monorepo's `target/{release,debug}/codemod-agent` (honouring
+  `CARGO_TARGET_DIR`); build it with `pnpm build:agent`
+  (`cargo build -p orchestration-agent`). It is checked only when an agent
+  step runs: a missing runner is `failed` with `phase: "config"`. For
+  `quickjs` the Node launcher resolves it and passes it to the host in
+  `CODEMOD_AGENT_BIN`.
 - The result is `{ text }` for every backend: the builtin agent's final
   response, Claude Code's `result`, or Codex's last message. Progress and
   event streams are not kept. With an `output` schema the operation carries
-  `responseFormat: "json"`, the bridge appends an instruction to reply with a
+  `responseFormat: "json"`, the runner appends an instruction to reply with a
   single JSON value, and the text is parsed (bare JSON, or the content of
   exactly one ```json or bare ``` fence) and validated. A decode error names
   the step and quotes the start of the response. The response is recorded
@@ -574,7 +603,7 @@ agent({ name: "fix", prompt, backend: { kind: "codex", sandbox: "workspace-write
   tool implementations, authenticate with the CLI's existing local login and
   spend that subscription's quota, may load repository instructions
   (`CLAUDE.md`, `AGENTS.md`) from the target, and do not exercise codemod-ai or
-  Rig at all. They never receive `LLM_API_KEY`. The bridge checks login state
+  Rig at all. They never receive `LLM_API_KEY`. The runner checks login state
   first (`claude auth status --json`, keeping only `loggedIn`; the exit code of
   `codex login status`) and never reads credential files. The check runs from
   an empty private directory, never the target, with exactly the environment
@@ -601,7 +630,7 @@ agent({ name: "fix", prompt, backend: { kind: "codex", sandbox: "workspace-write
     it runs; approvals never block; commands see only Codex's core variables
     (`PATH`, `HOME`, `TMPDIR`, ...) minus its default `*KEY*`/`*SECRET*`/
     `*TOKEN*` excludes; `/tmp` is not writable and `TMPDIR` is a private empty
-    directory the bridge creates for the run; `config.toml` (MCP servers,
+    directory the runner creates for the run; `config.toml` (MCP servers,
     profiles, trust overrides, `notify`) and execpolicy `.rules` files are not
     loaded, while auth still comes from `CODEX_HOME`. The final text is the
     last `agent_message` in the `--json` event stream, scanned line by line
@@ -610,82 +639,71 @@ agent({ name: "fix", prompt, backend: { kind: "codex", sandbox: "workspace-write
     name looks like a credential or provider setting (`*_API_KEY`, `*TOKEN*`,
     `*SECRET*`, `AUTH`, `ANTHROPIC_*`, `OPENAI_*`, `CODEX_*` except
     `CODEX_HOME`, `AWS_*`, ...), so their tools cannot inherit one.
-    `BridgeOptions.env` containing such a name is refused for external
-    backends as a `config` failure before anything starts.
-- Host wall-clock limit: `new BridgeExecutor({ ..., externalAgentTimeoutMs })`,
+    An explicit runtime `env` (`RuntimeSettings.env`, `NodeExecutorOptions.env`)
+    containing such a name is refused for external backends as a `config`
+    failure before anything starts.
+- Host wall-clock limit: `new NodeExecutor({ ..., externalAgentTimeoutMs })`,
   default `DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS` (30 minutes), applies to
-  `claude-code` and `codex` bridges. When it passes, the bridge's process tree
+  `claude-code` and `codex` runners. When it passes, the runner's process tree
   is killed as on abort and the command is `unknown` with
   `details: { phase: "execute", timedOut: true, repositoryMayBeModified: true }`.
   It is host configuration, not part of history; an invalid value is a
-  `config` failure. Inside the bridge, a CLI that exits while a descendant
+  `config` failure. Inside the runner, a CLI that exits while a descendant
   still holds its stdout is read for at most 2 more seconds.
 - Outcomes. `failed` with `details: { phase: "config",
-  repositoryMayBeModified: false }` means the agent never started: no
-  `LLM_API_KEY` or repeated tools or invalid `maxSteps` (builtin); the CLI
-  missing from PATH, not logged in, its login check failing or timing out
-  (30 s), the process failing to spawn, (codex) no git repository, a
-  credential-looking `BridgeOptions.env` name, an invalid
-  `externalAgentTimeoutMs`, or no usable exchange directory.
-  `failed` with `phase: "execute", repositoryMayBeModified: true` means the
-  agent started and did not produce a successful final response (a model or
-  tool error, a non-zero CLI exit, an error result, a missing final message),
-  so files may have changed. `unknown` (`repositoryMayBeModified: true`) means
-  the host lost track of a started bridge: aborted, killed, or timed out after
-  spawn, no response, a response that is a symlink, not a regular file, or
-  not a valid completion, or a bridge that could not start. `cancelled` only happens for an
-  abort before the bridge was spawned.
+  repositoryMayBeModified: false }` means the agent never started: no runner
+  binary; no `LLM_API_KEY` or repeated tools or invalid `maxSteps` (builtin);
+  the CLI missing from PATH, not logged in, its login check failing or timing
+  out (30 s), the process failing to spawn, (codex) no git repository, a
+  credential-looking explicit `env` name, or an invalid
+  `externalAgentTimeoutMs`. `failed` with `phase: "execute",
+  repositoryMayBeModified: true` means the agent started and did not produce a
+  successful final response (a model or tool error, a non-zero CLI exit, an
+  error result, a missing final message), so files may have changed. `unknown`
+  (`repositoryMayBeModified: true`) means the host lost track of a started
+  runner: it failed to start, was aborted, killed, or timed out, crashed, no completion on
+  stdout, or a completion that is invalid or names another command.
+  `cancelled` only happens for an abort before the runner was spawned.
 
 Security model of `agent` (a trusted-local prototype, not a sandbox):
 
-- Environment: the bridge does not inherit the host environment. It gets
+- Environment: the runner does not inherit the host environment. It gets
   `AGENT_ENV_ALLOWLIST` (process basics such as `PATH`, `HOME`, `TMPDIR`,
   `LANG`, `LC_*`, the Windows equivalents, proxy and CA variables,
   `CLAUDE_CONFIG_DIR` and `CODEX_HOME` so a non-default CLI home is found, and
-  for `builtin` only `LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL`) plus
-  `BridgeOptions.env`, which wins (names compared case-insensitively on
-  Windows). External backends get no `LLM_*` variables and no stdin secret.
-  `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, cloud, CI, and
-  registry credentials stay out unless passed explicitly.
-- The API key: `BridgeExecutor` never puts `LLM_API_KEY` in the bridge's launch
-  environment, so `ps eww` or `/proc/<pid>/environ` of the bridge does not show
-  it. It sends `{"LLM_API_KEY": ...}` on the bridge's stdin with
-  `CODEMOD_BRIDGE_SECRETS=stdin`; it never enters the request file or
-  history. The bridge binary reads it before any thread starts and removes
-  `LLM_API_KEY` and the marker from its environment, so tool processes do not
-  inherit them. When the bridge is launched another way with `LLM_API_KEY` in
-  its environment, removal only affects inheritance: the launch environment
-  stays readable through `/proc` and `ps` for the process's lifetime. Either
-  way the key is in the bridge's memory, and the host's own environment (with
-  whatever the user exported) is readable by same-user processes. Opting into
-  `bash` or `mcp_tool` therefore lets the model read anything the user can,
-  including other processes' environments where the OS permits. The Rust
-  library's `execute()` reads `LLM_API_KEY` from the environment and leaves it
-  there; embedders must scrub it themselves.
+  for `builtin` only `LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL`) plus the
+  runtime's explicit `env`, which wins (names compared case-insensitively on
+  Windows). External backends get no `LLM_*` or provider variables and no
+  stdin secret. `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+  cloud, CI, and registry credentials stay out unless passed explicitly.
+- The API key: the launcher (`agentLaunch`) never puts `LLM_API_KEY` in the
+  runner's launch environment, so `ps eww` or `/proc/<pid>/environ` of the
+  runner does not show it. It sends the request line and then
+  `{"LLM_API_KEY": ...}` on the runner's stdin with
+  `CODEMOD_AGENT_SECRETS=stdin`; the key never enters the request or history.
+  The runner reads it before any thread starts and removes `LLM_API_KEY` and
+  the marker from its environment, so tool processes do not inherit them.
+  When the runner is launched another way with `LLM_API_KEY` in its
+  environment, removal only affects inheritance: the launch environment stays
+  readable through `/proc` and `ps` for the process's lifetime. Either way the
+  key is in the runner's memory, and the host's own environment (with whatever
+  the user exported) is readable by same-user processes. Opting into `bash` or
+  `mcp_tool` therefore lets the model read anything the user can, including
+  other processes' environments where the OS permits.
+- The response channel: before any thread or child exists, the runner moves
+  stdout to a private close-on-exec descriptor and points fds 0 and 1 at
+  `/dev/null`, so tool processes never see the request (or the key) and
+  cannot write the completion.
 - Builtin tools are not confined. The file tools accept any absolute path the
   user can read or write, not just `--target`, and the editor's directory view
   shells out to `find`. `bash` and `mcp_tool` run arbitrary commands with
-  network access. There is no filesystem, process, or network sandbox.
-- Bridge exchange files (request and response) live outside the target in a
-  host-owned per-user directory: `CODEMOD_BRIDGE_EXCHANGE_DIR` if set (used as
-  is or the bridge is not started), else `~/Library/Caches/codemod/bridge`
-  (macOS), `$XDG_RUNTIME_DIR/codemod/bridge` or
-  `${XDG_CACHE_HOME:-~/.cache}/codemod/bridge` (other POSIX),
-  `%LOCALAPPDATA%\codemod\bridge` (Windows), falling back to
-  `<os tmpdir>/codemod-bridge-<uid>` when those cannot be created. The root
-  must be a real directory owned by the user with mode 0700 (tightened when
-  owned but looser) and not inside the target; each request gets a fresh
-  0700 directory, removed afterwards. The request is created exclusively
-  (0600); the bridge creates the response exclusively (`O_CREAT|O_EXCL`,
-  0600), so a planted file or symlink is never written through; the host
-  opens it with `O_NOFOLLOW` and accepts only a regular file up to 512 MiB.
-  None of these locations is a Codex writable root. An opted-in Claude Code
-  `Bash`, or builtin `bash`, runs unsandboxed as the same user and can still
-  reach them; Windows has no ownership or mode check.
+  network access. There is no filesystem, process, or network sandbox, in
+  either runtime: `quickjs` sandboxes the workflow and its transforms, not
+  the agent runner.
 - External harness confinement is whatever the CLI enforces: Claude Code's
   `--restricted` file-tool confinement and permission rules (an opted-in
   `Bash` runs commands as the user, with network access), and Codex's OS
-  sandbox (`read-only` or `workspace-write`). The bridge cannot verify either,
+  sandbox (`read-only` or `workspace-write`). The runner cannot verify either,
   and a CLI update can change them. Both CLIs read the user's own login state
   and may load `CLAUDE.md`/`AGENTS.md` from the repository, which steers the
   agent like any prompt text. `--restricted` ignores project settings, so a
@@ -693,23 +711,24 @@ Security model of `agent` (a trusted-local prototype, not a sandbox):
   (the claude-code live test asserts both left no trace); Codex ignores user
   and project `config.toml` under `--ignore-user-config` (the codex live test
   asserts a project `notify` command did not run).
-- Cancellation kills the bridge and, best effort, its process tree. On POSIX
-  the bridge leads its own process group: the group is stopped, one `ps`
+- Cancellation kills the runner and, best effort, its process tree. On POSIX
+  the runner leads its own process group: the group is stopped, one `ps`
   snapshot (1 s timeout) finds descendants that left the group by parent id
   (such as the bash tool's session), those are stopped parents first and
   killed children first, then the group is killed. A stopped parent cannot
   reap an exited child, so its PID cannot be reused before the kill; the only
   reuse window is between the snapshot and stopping a parent outside the
-  group. On Windows `taskkill /T /F` is used. A descendant that daemonized, or
-  a sandbox that hides the process list (only the group is reached then), can
-  leave processes behind.
-- Host lifetime: bridges are detached, so they do not receive the terminal's
+  group. The Node host (`killProcessTree`) and the QuickJS host's `kill` do
+  the same. On Windows (Node host) `taskkill /T /F` is used. A descendant that
+  daemonized, or a sandbox that hides the process list (only the group is
+  reached then), can leave processes behind.
+- Host lifetime: runners are detached, so they do not receive the terminal's
   signals. `codemod-workflow` turns SIGINT, SIGTERM, and SIGHUP into an abort,
-  and any normal exit of the host process kills bridges still running.
-  Programs that embed `run()` or `BridgeExecutor` must do the same: abort the
+  and any normal exit of the Node host process kills runners still running.
+  Programs that embed `run()` or `NodeExecutor` must do the same: abort the
   run's `signal` on SIGINT, SIGTERM, and SIGHUP (or exit normally). If the
-  host is killed with SIGKILL or crashes, nothing runs and bridges and their
-  agents can keep working orphaned. There is no parent-death channel: a bridge
+  host is killed with SIGKILL or crashes, nothing runs and runners and their
+  agents can keep working orphaned. There is no parent-death channel: a runner
   that noticed its host dying could kill its own group, but not the
   descendants outside it without the same process listing, so it would be a
   partial cleanup and is deliberately not implemented.
@@ -720,21 +739,32 @@ For the trusted local prototype, run a TypeScript workflow with the
 experimental `codemod-workflow` bin (Node 24):
 
 ```sh
-cargo build -p butterflow-execution-bridge
+pnpm --filter @codemod.com/jssg-napi build               # the node runtime's napi addon
+pnpm --filter @codemod.com/orchestration build:quickjs   # only for --runtime quickjs
+pnpm --filter @codemod.com/orchestration build:agent     # only for agent() steps
 pnpm --filter @codemod.com/orchestration workflow ./path/to/workflow.ts --target ./repository
 # or, once the package is installed in another project:
-npx codemod-workflow ./workflow.ts --target ./repository --bridge /path/to/butterflow-execution-bridge
+npx codemod-workflow ./workflow.ts --target ./repository --runtime quickjs
 ```
 
 ```text
-codemod-workflow <workflow.ts> [--target <directory>] [--bridge <binary>] [--input <json>] [--dashboard]
+codemod-workflow [run] <workflow.ts> [--runtime <node|quickjs>] [--target <directory>] [--input <json>] [--dashboard]
+codemod-workflow build <workflow.ts> --runtime quickjs -o <bundle.mjs>
 ```
 
+- `--runtime` (default `node`) picks the runtime (`RUNTIMES.md`): `node`, the
+  simple and fast option, runs the whole workflow in this Node process with
+  JSSG transforms in-process over the napi addon; `quickjs`, the sandboxed
+  option, runs the bundled workflow in one QuickJS context hosted by
+  `orchestration-quickjs-host` (`cargo build -p orchestration-quickjs-host`),
+  with no Node at run time. Both execute every operation kind and JSSG
+  semantic analysis. A runtime whose addon or binary is missing fails before
+  anything loads, and the error says how to build it.
 - `--target` (default: current directory) is where `shell` and `agent` run
   and the root JSSG targets are resolved beneath.
-- `--bridge` or `CODEMOD_BRIDGE_BIN` (default: the monorepo's
-  `target/debug/butterflow-execution-bridge`) locates the bridge binary; the
-  command fails early when it is missing.
+- `CODEMOD_AGENT_BIN` (default: the newer of the monorepo's
+  `target/{release,debug}/codemod-agent`) locates the agent runner; it is
+  checked only when an `agent` step runs.
 - `--input <json>` supplies the root input when the workflow declares one.
 - `--dashboard` hosts the local run dashboard (below), prints its URL on
   stderr, and keeps the command alive after the run so the page can start it
@@ -742,8 +772,8 @@ codemod-workflow <workflow.ts> [--target <directory>] [--bridge <binary>] [--inp
 
 The command prints the workflow's final value as JSON on stdout and errors on
 stderr with exit code 1; it is the only place that writes to the terminal.
-`SIGINT`/`SIGTERM`/`SIGHUP` abort the run: the bridge process tree is killed and the
-command in flight is recorded as `cancelled` with nothing written (an `agent`
+`SIGINT`/`SIGTERM`/`SIGHUP` abort the run: child process trees (`shell`, agent
+runners) are killed and the command in flight is recorded as `cancelled` with nothing written (an `agent`
 already running is recorded as `unknown`, since it may have edited files). (In dashboard mode
 the same holds for the newest run when the host exits; see Dashboard.) The bin runs in
 one Node process (Node >= 22.15; the repository requires 24): `bin/register-ts.mjs`
@@ -753,8 +783,8 @@ then the CLI loads the workflow through `loadWorkflow`, so it works both from th
 checkout and from a workspace or package installation of `@codemod.com/orchestration`
 (the e2e suite installs a copy under a consumer's `node_modules`, with `esbuild` and
 `typescript` beside it, to prove it). The workflow module and the sources it imports
-are expected to be ESM. This is a trusted-local runner: it does not sandbox the
-workflow body and makes no claim about untrusted registry packages.
+are expected to be ESM. This is a trusted-local runner: with `--runtime node` it does not sandbox the
+workflow body, and it makes no claim about untrusted registry packages.
 
 Startup is cached on disk under `$CODEMOD_WORKFLOW_CACHE` (default
 `<tmpdir>/codemod-workflow-cache-<uid>`; a directory that is not private to the user
@@ -773,41 +803,68 @@ Remaining work before Solid Migration Assistant can move onto this package:
 - add the package to that repository and author its workflow with inline
   transforms and structured outputs; helpers it shares between transforms
   must be imported modules, not top-level declarations of the workflow file;
-- ship the bridge binary with the package or as a `codemod` subcommand; today it
-  must be built from this monorepo and pointed at with `--bridge`;
+- ship the napi addon, the QuickJS host, and the `codemod-agent` runner with
+  the package or as `codemod` subcommands; today they must be built from this
+  monorepo (or pointed at with `CODEMOD_JSSG_NAPI` / `CODEMOD_AGENT_BIN`);
 - decide the cross-file edit policy Solid needs: today every transform sees
   the pre-command snapshot and two edits of one file in one command fail the
   command instead of chaining or merging;
 - approvals and durable history remain unimplemented, so any Solid step that
   needs them stays in YAML;
-- restricted QuickJS execution of the workflow body and registry loading are
-  still required before TypeScript workflows become an untrusted registry
-  format; the build split already keeps transform artifacts independent of
-  the workflow bundle so each can get its own bindings.
+- registry loading, and a review of the `quickjs` runtime as a boundary for
+  untrusted workflow bodies, are still required before TypeScript workflows
+  become an untrusted registry format; the build split already keeps
+  transform artifacts independent of the workflow bundle so each can get its
+  own bindings.
 
-Prototype limitations of the build step: sandbox errors report positions in
+Prototype limitations of the build step: transform errors report positions in
 the bundled artifact (named `<name>.jssg.js`), not the workflow source; a
 module is split the first time Node loads it in a process, so a second
 `loadWorkflow` of an already-imported module collects no artifacts; modules
 loaded lazily after `loadWorkflow` returns are not split.
 
-The programmatic API is:
+The programmatic API is `runWorkflow` for a whole run in either runtime, or
+`run()` with an executor for control over history and settings:
 
 ```ts
-import { BridgeExecutor, MemoryHistoryStore, loadWorkflow, run } from "@codemod.com/orchestration";
+import {
+  MemoryHistoryStore,
+  NodeExecutor,
+  NODE_RUNTIME,
+  loadWorkflow,
+  run,
+  runWorkflow,
+} from "@codemod.com/orchestration";
 
-const { exports, artifacts } = await loadWorkflow("./workflow.ts");
 const controller = new AbortController();
-const executor = new BridgeExecutor({
-  bin: "target/debug/butterflow-execution-bridge",
+
+// What the CLI does: resolve the runtime, check it is available, run.
+const output = await runWorkflow("./workflow.ts", {
+  runtime: "node", // or "quickjs"
+  target: repoDir,
+  signal: controller.signal,
+});
+
+// In-process, with your own history:
+const { exports, artifacts } = await loadWorkflow("./workflow.ts");
+const executor = new NodeExecutor({
   cwd: repoDir, // shell and agent cwd, JSSG target root
   artifacts, // built transforms by hash; their source never enters history
-  events: sink, // optional: bridge.spawned events
   assessment: { timeoutMs: 10_000 }, // optional: TypeSafe SDK settings over TYPESAFE_*
+  // agentBin: optional, default defaultAgentPath()
 });
 const history = new MemoryHistoryStore();
-const first = await run(exports.default, { executor, history, signal: controller.signal });
-const again = await run(exports.default, { executor, history: MemoryHistoryStore.fromJSON(history.serialize()) });
+const first = await run(exports.default, {
+  executor,
+  runtime: NODE_RUNTIME,
+  history,
+  signal: controller.signal,
+});
+const again = await run(exports.default, {
+  executor,
+  runtime: NODE_RUNTIME,
+  history: MemoryHistoryStore.fromJSON(history.serialize()),
+});
 // again.replayed === true, nothing was executed
 ```
 
@@ -876,11 +933,11 @@ to the runtime:
   refused, admitted ones are killed). Pause state lives in the process only;
   there is no durable cross-process resume.
 - **Restart / Run again.** Both launch a fresh run of the same loaded
-  workflow, target, bridge, built artifacts, and root input, under a new run
+  workflow, target, runtime, built artifacts, and root input, under a new run
   id with a fresh scheduler and an empty history, so nothing is replayed from
   the earlier run. Restart while a run is open first asks ("Stop what's
   running and start the workflow over?"), then aborts it exactly as SIGINT
-  would (queued steps refused, running bridge processes killed), waits until
+  would (queued steps refused, running child processes killed), waits until
   every step has settled, and only then starts the next run: the two never
   overlap. Restart on a finished run and Run again are the same fresh launch.
   Run again while a run is open is refused (`409`) and the page points at
@@ -951,13 +1008,13 @@ The pieces (`src/host/dashboard/`):
 Programmatically, the same pieces compose around `run()`:
 
 ```ts
-import { BridgeExecutor } from "@codemod.com/orchestration";
+import { NodeExecutor } from "@codemod.com/orchestration";
 import { DashboardSession, startDashboard } from "@codemod.com/orchestration/dashboard";
 
 const session = new DashboardSession({
   executable: workflow,
   workflow: "migrate.ts",
-  executor: (events) => new BridgeExecutor({ bin, cwd, artifacts, events }),
+  executor: () => new NodeExecutor({ cwd, artifacts }),
 });
 const dashboard = await startDashboard({ session });
 const first = await session.start(); // a RunSummary; session.settled(first.runId) resolves when it is over
@@ -986,7 +1043,7 @@ The model is a weighted semaphore with a strict FIFO queue:
 | --- | --- | --- |
 | `shell`, `agent` | 1 | one child process |
 | `assessment` | 1 | one HTTP request, no local work |
-| `jssg` (no semantics or `"file"`) | 2 | a bridge process plus the whole selected file set in memory |
+| `jssg` (no semantics or `"file"`) | 2 | parsing and transforming plus the whole selected file set in memory |
 | `jssg` with `"workspace"` semantics | 4 | the batch is also parsed and indexed as one workspace |
 
 Default capacity is `min(availableParallelism(), memory budget)` and never
@@ -1019,8 +1076,9 @@ reports to the run's sink). This is the dashboard's one control.
 Cancellation splits by admission state. A command aborted while queued is
 removed from the queue and completes `cancelled` without the executor ever
 being called, so nothing is spawned for it. A command that was already admitted
-keeps the existing behavior: the bridge process is killed and the completion is
-`cancelled` or `unknown`. Permits are released on success, on a non-success
+keeps the existing behavior: its signal is aborted (a child process tree is
+killed, a JSSG batch stops between files) and the completion is `cancelled` or
+`unknown`. Permits are released on success, on a non-success
 completion, on cancellation, and when the executor throws while launching.
 
 ## Replay semantics
@@ -1053,8 +1111,8 @@ awaited anywhere in the body's async continuations issue to that run, two
 concurrent runs never see
 each other's runtime, and nothing is stored on a process-global. A command
 awaited outside any run rejects instead of running. In production the same
-binding belongs to the host: a restricted QuickJS instance would expose the
-runtime to the workflow bundle it executes, with no ambient storage at all.
+binding belongs to the host: the `quickjs` runtime provides it from its own
+async context (see `RUNTIMES.md`), with no Node API at all.
 
 ## Determinism warning
 
@@ -1062,16 +1120,20 @@ Normal Node execution is NOT a secure deterministic sandbox. Workflow code only
 needs the runnables it imports, but nothing prevents it from reading `Date`,
 `Math.random`, `fs`, or `process`. Determinism is validated after the fact by
 replay comparison; if a workflow uses such inputs the replay will fail with
-`NondeterminismError`. QuickJS sandboxing is out of scope for this prototype.
+`NondeterminismError`. The `quickjs` runtime removes Node, `process`, and
+general network access from the workflow body, but `Date` and `Math.random`
+remain, so it does not make a workflow deterministic either.
 
 ## Migration seams
 
 `OperationExecutor`, `HistoryStore`, `CommandGate`, and `EventSink` are small
 interfaces with JSON-only inputs and outputs. Each in-memory implementation can
-move to Rust one at a time without changing workflow source. `shell` has a
-bridge adapter, local `jssg` has the TypeScript orchestrator around the Rust
-batch, `agent` has a bridge adapter over `codemod-ai`, and `assessment` has a
-host-side HTTP adapter (the bridge decodes it for parity and refuses it); the
+move to Rust one at a time without changing workflow source. `shell` runs
+in-process over `Host.spawn`, local `jssg` has the TypeScript orchestrator
+around the shared Rust batch rules (`crates/jssg-batch`), `agent` has a
+process adapter over the `codemod-agent` runner (`codemod-ai` or an external
+CLI), and `assessment` has an in-process HTTP adapter over the TypeSafe SDK;
+the executors are `NodeExecutor` and the QuickJS bundle's executor; the
 harness can script any operation in unit tests (for `shell` and `agent` a
 non-string value becomes JSON `stdout` / `text`).
 `OperationExecutor.execute` takes an optional `AbortSignal`.
@@ -1080,11 +1142,19 @@ non-string value becomes JSON `stdout` / `text`).
 
 ```
 pnpm install
-pnpm --filter @codemod.com/orchestration test          # fast TS tests, no Rust (fake bridge)
+pnpm --filter @codemod.com/orchestration test          # fast TS tests (fake agent runner, echo runtime)
 pnpm --filter @codemod.com/orchestration typecheck
-pnpm --filter @codemod.com/orchestration test:e2e     # builds only the bridge crate, then cross-language tests
-cargo test -p butterflow-execution-bridge              # protocol, batch, binary, walker and language contracts
+pnpm --filter @codemod.com/orchestration test:e2e      # builds the napi addon and the QuickJS host, then
+                                                       # node-runtime, quickjs, and jssg-parity e2e tests
+pnpm --filter @codemod.com/orchestration build:agent   # = cargo build -p orchestration-agent
+cargo test -p jssg-batch                               # batch rules, walker and language contracts
+cargo test -p orchestration-agent                      # agent protocol fixtures, binary, external CLIs
 ```
+
+`test:e2e` runs `CODEMOD_QUICKJS_E2E=1 vitest run tests/node-runtime.e2e.test.ts
+tests/quickjs.e2e.test.ts tests/jssg-parity.e2e.test.ts`. The parity tests use
+`node` as the reference (`jssg-parity` compares `quickjs` with it); the YAML
+engine is the external reference through `benchmarks/runtimes/verify.sh`.
 
 Live tests call real services, cost money or subscription quota, and are
 opt-in, one flag per backend. Each live agent test uses a temporary git
@@ -1099,20 +1169,21 @@ set; opting in without the required credentials fails instead of skipping.
 TYPESAFE_API_KEY=... pnpm --filter @codemod.com/orchestration test:live:assessment
 #   = CODEMOD_LIVE_ASSESSMENT=1 vitest run tests/assessment.live.test.ts
 
-# builtin agent() through the real bridge (LLM_PROVIDER, LLM_MODEL, LLM_BASE_URL, CODEMOD_BRIDGE_BIN optional)
+# builtin agent() through the real agent runner (LLM_PROVIDER, LLM_MODEL, LLM_BASE_URL, CODEMOD_AGENT_BIN optional)
 LLM_API_KEY=... pnpm --filter @codemod.com/orchestration test:live:agent:builtin
-#   = pnpm build:bridge && CODEMOD_LIVE_AGENT_BUILTIN=1 vitest run tests/agent.builtin.live.test.ts
+#   = pnpm build:agent && CODEMOD_LIVE_AGENT_BUILTIN=1 vitest run tests/agent.builtin.live.test.ts
 
 # claude-code agent() with the installed `claude` CLI and its existing login
 pnpm --filter @codemod.com/orchestration test:live:agent:claude-code
-#   = pnpm build:bridge && CODEMOD_LIVE_AGENT_CLAUDE_CODE=1 vitest run tests/agent.claude-code.live.test.ts
+#   = pnpm build:agent && CODEMOD_LIVE_AGENT_CLAUDE_CODE=1 vitest run tests/agent.claude-code.live.test.ts
 
 # codex agent() with the installed `codex` CLI and its existing login
 pnpm --filter @codemod.com/orchestration test:live:agent:codex
-#   = pnpm build:bridge && CODEMOD_LIVE_AGENT_CODEX=1 vitest run tests/agent.codex.live.test.ts
+#   = pnpm build:agent && CODEMOD_LIVE_AGENT_CODEX=1 vitest run tests/agent.codex.live.test.ts
 ```
 
-The TypeSafe SDK uses the global `fetch`, which ignores `HTTPS_PROXY`; behind a
-proxy add `NODE_USE_ENV_PROXY=1` (Node 24) to the assessment command.
+In `node` the TypeSafe SDK uses the global `fetch`, which ignores
+`HTTPS_PROXY`; behind a proxy add `NODE_USE_ENV_PROXY=1` (Node 24) to the
+assessment command.
 
 The full `codemod` CLI is never built or used by this package.

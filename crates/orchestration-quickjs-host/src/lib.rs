@@ -15,7 +15,7 @@
 //!   virtual-module registry for transform artifacts, and the per-file JSSG
 //!   calls ([`jssg`]) that parse a file into an `SgRoot` before the
 //!   transform and convert its result into a `FileOutcome` after it, with
-//!   the same code the execution bridge uses.
+//!   the same code the `node` runtime's addon uses (`crates/jssg-batch`).
 //!
 //! The bundle's entry builds the orchestration `Host` from those primitives
 //! and exports `main(request)`, which resolves to the run's JSON result.

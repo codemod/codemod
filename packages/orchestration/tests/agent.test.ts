@@ -1,9 +1,9 @@
 /**
  * Mocked contract tests for `agent()`: request serialization, response
- * parsing, validation and failure behavior, and execution plumbing through
- * the bridge seam (`tests/fixtures/fake-bridge.mjs` stands in for the Rust
- * binary): environment allowlisting, abort semantics, and process-tree
- * cleanup. No model is called; the live check is `agent.live.test.ts`.
+ * parsing, validation and failure behavior, the launch environment
+ * (`agent-env.ts`), and process-tree cleanup. Execution through the
+ * `codemod-agent` runner is `agent-runner.test.ts`. No model is called; the
+ * live checks are `agent.*.live.test.ts`.
  */
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,7 +13,6 @@ import { canListProcesses, descendants, killProcessTree } from "../src/execution
 import { createHarness, failed } from "../src/host/harness.ts";
 import {
   BUILTIN_AGENT_TOOLS,
-  BridgeExecutor,
   CLAUDE_CODE_TOOLS,
   CollectingSink,
   DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS,
@@ -32,6 +31,7 @@ import {
   externalAgentEnvProblem,
   isSecretEnvName,
   dynamic,
+  executeAgent,
   guard,
   isOperation,
   isOperationRequest,
@@ -44,7 +44,7 @@ import {
 
 const dir = join(import.meta.dirname, "..", "fixtures", "protocol");
 const fixture = (name: string) => JSON.parse(readFileSync(join(dir, name), "utf8")) as unknown;
-const fakeBridge = resolve(import.meta.dirname, "fixtures/fake-bridge.mjs");
+const fakeAgent = resolve(import.meta.dirname, "fixtures/fake-agent.mjs");
 
 interface Packages {
   packages: string[];
@@ -381,74 +381,6 @@ describe("agent failures and plumbing", () => {
     expect((detailed as OperationError).detail).toEqual({ message: "model error", details });
   });
 
-  it("reports a bridge that cannot start as unknown, since an agent may change files", async () => {
-    const executor = new BridgeExecutor({ bin: join(repo, "missing-bridge"), cwd: repo });
-    const completion = await executor.execute(request);
-    expect(completion.status).toBe("unknown");
-    expect(completion.error?.details).toEqual({ phase: "bridge", repositoryMayBeModified: true });
-  });
-
-  it("is cancelled with nothing modified only when aborted before the bridge starts", async () => {
-    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
-    for (const r of [request, ...externalRequests]) {
-      const completion = await executor.execute(r, AbortSignal.abort());
-      expect(completion).toMatchObject({
-        status: "cancelled",
-        error: { details: { phase: "start", repositoryMayBeModified: false } },
-      });
-    }
-  });
-
-  it.each([
-    ["builtin", request],
-    ["claude-code", externalRequests[0]!],
-    ["codex", externalRequests[1]!],
-  ] as const)(
-    "is unknown when a %s agent is aborted after spawn, and kills the processes the bridge started",
-    async (_backend, request) => {
-      const pidFile = join(repo, "pids.json");
-      const executor = new BridgeExecutor({
-        bin: fakeBridge,
-        cwd: repo,
-        env: { FAKE_BRIDGE_MODE: "hang", FAKE_PID_FILE: pidFile, FAKE_CHILDREN: "2" },
-      });
-      const controller = new AbortController();
-      const pending = executor.execute(request, controller.signal);
-      const children = await waitFor(() =>
-        existsSync(pidFile) ? (JSON.parse(readFileSync(pidFile, "utf8")) as number[]) : undefined,
-      );
-      expect(children.every(isAlive)).toBe(true);
-      controller.abort();
-      const completion = await pending;
-      expect(completion.status).toBe("unknown");
-      expect(completion.error).toEqual({
-        message: expect.stringMatching(/killed by SIGKILL on abort|aborted while/),
-        details: { phase: "execute", repositoryMayBeModified: true },
-      });
-      await waitFor(() => (children.some(isAlive) ? undefined : true));
-    },
-  );
-
-  it.skipIf(process.platform === "win32" || !canListProcesses())(
-    "also kills children that left the bridge's process group",
-    async () => {
-      const pidFile = join(repo, "pids.json");
-      const executor = new BridgeExecutor({
-        bin: fakeBridge,
-        cwd: repo,
-        env: { FAKE_BRIDGE_MODE: "hang", FAKE_PID_FILE: pidFile, FAKE_DETACH_CHILDREN: "1" },
-      });
-      const controller = new AbortController();
-      const pending = executor.execute(request, controller.signal);
-      const children = await waitFor(() =>
-        existsSync(pidFile) ? (JSON.parse(readFileSync(pidFile, "utf8")) as number[]) : undefined,
-      );
-      controller.abort();
-      expect((await pending).status).toBe("unknown");
-      await waitFor(() => (children.some(isAlive) ? undefined : true));
-    },
-  );
-
   it("walks descendants through parent ids, parents first", () => {
     const table = new Map([
       [14, 12],
@@ -472,7 +404,7 @@ describe("agent failures and plumbing", () => {
       killProcessTree(100, "darwin", () => {
         listings += 1;
         return {
-          // 101 stays in the bridge's group; 102 (the bash tool's session) and
+          // 101 stays in the child's group; 102 (the bash tool's session) and
           // its child 103 moved to group 102; 200 is unrelated.
           parents: new Map([
             [100, 1],
@@ -518,7 +450,7 @@ describe("agent failures and plumbing", () => {
       PATH: "b",
     });
     expect(agentLaunch(host, { LLM_API_KEY: "upper" }, "win32")).toEqual({
-      env: { Path: "C:\\host", SystemRoot: "C:\\Windows", CODEMOD_BRIDGE_SECRETS: "stdin" },
+      env: { Path: "C:\\host", SystemRoot: "C:\\Windows", CODEMOD_AGENT_SECRETS: "stdin" },
       stdin: JSON.stringify({ LLM_API_KEY: "upper" }),
     });
     expect(agentLaunch({ PATH: "/bin", LLM_API_KEY: " " }, {}, "linux")).toEqual({
@@ -549,7 +481,7 @@ describe("agent failures and plumbing", () => {
         },
       });
     }
-    // Credential-looking explicit variables never reach an external bridge:
+    // Credential-looking explicit variables never reach an external runner:
     // the executor refuses them, and the launch strips them regardless.
     const stripped = agentLaunch(
       host,
@@ -560,31 +492,9 @@ describe("agent failures and plumbing", () => {
     expect(stripped).toMatchObject({ EXTRA: "1" });
     expect(stripped).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(stripped).not.toHaveProperty("GITHUB_TOKEN");
-
-    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo, hostEnv: host });
-    for (const external of externalRequests) {
-      const completion = await executor.execute(external);
-      const { env, secrets } = JSON.parse((completion.output as { text: string }).text) as {
-        env: Record<string, string>;
-        secrets: unknown;
-      };
-      expect(secrets).toBeNull();
-      expect(env).toMatchObject({ HOME: "/home/dev", CODEX_HOME: "/home/dev/.codex-work" });
-      for (const name of [
-        "LLM_API_KEY",
-        "LLM_PROVIDER",
-        "llm_model",
-        "CODEMOD_BRIDGE_SECRETS",
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY",
-        "TYPESAFE_API_KEY",
-      ]) {
-        expect(env).not.toHaveProperty(name);
-      }
-    }
   });
 
-  it("starts the bridge with an allowlisted environment plus explicit variables", async () => {
+  it("allowlists the launch environment plus explicit variables", async () => {
     const host = {
       PATH: process.env.PATH,
       HOME: "/home/dev",
@@ -606,57 +516,6 @@ describe("agent failures and plumbing", () => {
       LLM_MODEL: "gpt-4o",
       EXTRA: "1",
     });
-
-    const executor = new BridgeExecutor({
-      bin: fakeBridge,
-      cwd: repo,
-      hostEnv: host,
-      env: { EXTRA: "1" },
-    });
-    const completion = await executor.execute(request);
-    const { env, secrets } = JSON.parse((completion.output as { text: string }).text) as {
-      env: Record<string, string>;
-      secrets: unknown;
-    };
-    expect(env).toMatchObject({ EXTRA: "1", HOME: "/home/dev", CODEMOD_BRIDGE_SECRETS: "stdin" });
-    // The key reaches the bridge on stdin, never in its launch environment.
-    expect(env).not.toHaveProperty("LLM_API_KEY");
-    expect(secrets).toEqual({ LLM_API_KEY: "llm-key" });
-    for (const secret of [
-      "TYPESAFE_API_KEY",
-      "AWS_SECRET_ACCESS_KEY",
-      "GITHUB_TOKEN",
-      "NPM_TOKEN",
-    ]) {
-      expect(env).not.toHaveProperty(secret);
-    }
-  });
-
-  it("sends the request to the bridge in the target directory, records it, and replays", async () => {
-    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
-    const store = new MemoryHistoryStore();
-    const workflow = dynamic(async () => {
-      const { text } = await fixTests({ input: { packages: ["web"] } });
-      const echoed = JSON.parse(text) as { request: OperationRequest; cwd: string };
-      return { request: echoed.request, cwd: echoed.cwd };
-    });
-    const first = await run(workflow, { executor, history: store });
-    expect(first.output.request.operation).toEqual({
-      kind: "agent",
-      prompt: "Fix the failing tests in the listed packages.",
-      input: { packages: ["web"] },
-      backend: builtin(),
-    });
-    expect(realpathSync(first.output.cwd)).toBe(realpathSync(repo));
-    expect(store.toJSON().events.map((e) => e.type)).toEqual([
-      "scheduled",
-      "completed",
-      "finalized",
-    ]);
-
-    const offline = new BridgeExecutor({ bin: join(repo, "missing-bridge"), cwd: repo });
-    const replay = await run(workflow, { executor: offline, history: store });
-    expect(replay.output).toEqual(first.output);
   });
 
   it("classifies credential-looking variable names and refuses them for external backends", async () => {
@@ -675,7 +534,7 @@ describe("agent failures and plumbing", () => {
       "MY_SECRET",
       "STRIPE_KEY",
       "LLM_API_KEY",
-      "CODEMOD_BRIDGE_SECRETS",
+      "CODEMOD_AGENT_SECRETS",
     ]) {
       expect(isSecretEnvName(name), name).toBe(true);
     }
@@ -684,100 +543,24 @@ describe("agent failures and plumbing", () => {
       "HOME",
       "CLAUDE_CONFIG_DIR",
       "codex_home",
-      "FAKE_BRIDGE_MODE",
+      "FAKE_AGENT_MODE",
       "KEYBOARD",
       "MONKEY",
     ]) {
       expect(isSecretEnvName(name), name).toBe(false);
     }
 
-    const events = new CollectingSink();
-    for (const external of externalRequests) {
-      const executor = new BridgeExecutor({
-        bin: fakeBridge,
-        cwd: repo,
-        events,
-        env: { OPENAI_API_KEY: "sk-test", EXTRA: "1" },
-      });
-      const completion = await executor.execute(external);
-      expect(completion).toEqual({
-        protocolVersion: PROTOCOL_VERSION,
-        commandId: "fix-tests",
-        status: "failed",
-        error: {
-          message: expect.stringContaining("(OPENAI_API_KEY)"),
-          details: { phase: "config", repositoryMayBeModified: false },
-        },
-      });
-      expect(JSON.stringify(completion)).not.toContain("sk-test");
-    }
-    expect(events.events.filter((e) => e.type === "bridge.spawned")).toHaveLength(0);
-    // The builtin backend keeps its documented behavior.
-    const builtinCompletion = await new BridgeExecutor({
-      bin: fakeBridge,
-      cwd: repo,
-      env: { OPENAI_API_KEY: "sk-test" },
-    }).execute(request);
-    expect(builtinCompletion.status).toBe("succeeded");
+    expect(externalAgentEnvProblem({ OPENAI_API_KEY: "sk-test", EXTRA: "1" })).toContain(
+      "(OPENAI_API_KEY)",
+    );
     expect(externalAgentEnvProblem({ CLAUDE_CONFIG_DIR: "/x", CODEX_HOME: "/y" })).toBeUndefined();
   });
 
-  it("times external agents out on the host clock, killing the process tree", async () => {
-    const pidFile = join(repo, "pids.json");
-    for (const external of externalRequests) {
-      rmSync(pidFile, { force: true });
-      const executor = new BridgeExecutor({
-        bin: fakeBridge,
-        cwd: repo,
-        env: { FAKE_BRIDGE_MODE: "hang", FAKE_PID_FILE: pidFile, FAKE_CHILDREN: "2" },
-        externalAgentTimeoutMs: 1_500,
-      });
-      const started = Date.now();
-      const pending = executor.execute(external);
-      const children = await waitFor(() =>
-        existsSync(pidFile) ? (JSON.parse(readFileSync(pidFile, "utf8")) as number[]) : undefined,
-      );
-      const completion = await pending;
-      expect(Date.now() - started).toBeLessThan(10_000);
-      expect(completion).toEqual({
-        protocolVersion: PROTOCOL_VERSION,
-        commandId: "fix-tests",
-        status: "unknown",
-        error: {
-          message: "bridge timed out after 1500ms",
-          details: { phase: "execute", timedOut: true, repositoryMayBeModified: true },
-        },
-      });
-      await waitFor(() => (children.some(isAlive) ? undefined : true));
-    }
-  });
-
-  it("refuses an invalid external agent timeout without starting anything", async () => {
-    for (const externalAgentTimeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31]) {
-      const completion = await new BridgeExecutor({
-        bin: fakeBridge,
-        cwd: repo,
-        externalAgentTimeoutMs,
-      }).execute(externalRequests[0]!);
-      expect(completion.status, String(externalAgentTimeoutMs)).toBe("failed");
-      expect(completion.error?.details).toEqual({
-        phase: "config",
-        repositoryMayBeModified: false,
-      });
-    }
-    expect(DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS).toBe(30 * 60 * 1000);
-    // The builtin backend has no host timeout.
-    expect(
-      (
-        await new BridgeExecutor({ bin: fakeBridge, cwd: repo, externalAgentTimeoutMs: 0 }).execute(
-          request,
-        )
-      ).status,
-    ).toBe("succeeded");
-  });
-
   it("records the backend in history, replays it offline, and treats a backend change as changed", async () => {
-    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
+    const executor = {
+      execute: (r: OperationRequest, signal?: AbortSignal) =>
+        executeAgent({ bin: fakeAgent, cwd: repo, hostEnv: { PATH: process.env.PATH } }, r, signal),
+    };
     const step = (backend: Parameters<typeof agent>[0]["backend"]) =>
       agent({ name: "review", prompt: "Review the diff.", backend });
     const workflow = (backend: Parameters<typeof agent>[0]["backend"]) =>
@@ -792,7 +575,9 @@ describe("agent failures and plumbing", () => {
       },
     });
 
-    const offline = new BridgeExecutor({ bin: join(repo, "missing-bridge"), cwd: repo });
+    const offline = {
+      execute: (r: OperationRequest) => executeAgent({ bin: undefined, cwd: repo }, r),
+    };
     const replay = await run(workflow({ kind: "codex", sandbox: "read-only" }), {
       executor: offline,
       history: store,

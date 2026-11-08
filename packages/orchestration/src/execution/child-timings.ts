@@ -1,6 +1,6 @@
 /**
- * Benchmark timings for child processes the Node CLI waits on (the bridge,
- * the quickjs host), each of which writes its own timings file
+ * Benchmark timings for child processes the Node CLI waits on (the quickjs
+ * host), each of which writes its own timings file
  * (`<CODEMOD_TIMINGS_FILE>.<pid>.json`, `crates/bench-timings`). Node-only;
  * the accumulators are `core/timings.ts`, the CLI's own file
  * `host/timings-file.ts`.

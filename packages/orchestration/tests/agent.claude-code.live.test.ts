@@ -1,14 +1,14 @@
 /**
- * Live `claude-code` `agent()`: the real bridge and the installed, logged-in
+ * Live `claude-code` `agent()`: the real `codemod-agent` runner and the installed, logged-in
  * `claude` CLI (Claude Code subscription quota; not codemod-ai/Rig). Opt-in
  * only; ordinary test runs skip it and start nothing.
  *
  *   pnpm --filter @codemod.com/orchestration test:live:agent:claude-code
- *   # = pnpm build:bridge && CODEMOD_LIVE_AGENT_CLAUDE_CODE=1 vitest run tests/agent.claude-code.live.test.ts
+ *   # = pnpm build:agent && CODEMOD_LIVE_AGENT_CLAUDE_CODE=1 vitest run tests/agent.claude-code.live.test.ts
  *
  * Requires `claude` on PATH and `claude auth login` done. The login check
  * reads only `loggedIn` from `claude auth status --json`, run with the
- * bridge's filtered environment from an empty private directory. One call
+ * runner's filtered environment from an empty private directory. One call
  * with the default claude-code tools (Read, Edit, Write, Glob, Grep; no Bash)
  * and no bypass flags; it also checks that a shell command is denied, a write
  * outside the target is refused, and a project `.claude/settings.json`

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "arm": "ts-bridge",
+  "arm": "ts-multi-child",
   "pid": 40001,
   "parent_pid": null,
   "exec_to_main_ns": 1500000,
@@ -33,7 +33,7 @@
   },
   "marks": {},
   "children": [
-    "/private/tmp/bench-run/raw/1-ts-bridge.timings.json.41002.json",
-    "/private/tmp/bench-run/raw/1-ts-bridge.timings.json.41003.json"
+    "/private/tmp/bench-run/raw/1-multi-child.timings.json.41002.json",
+    "/private/tmp/bench-run/raw/1-multi-child.timings.json.41003.json"
   ]
 }

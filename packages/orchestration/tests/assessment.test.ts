@@ -21,13 +21,13 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHarness } from "../src/host/harness.ts";
 import {
-  BridgeExecutor,
   MemoryHistoryStore,
   OperationError,
   assessment,
   canonicalJson,
   dynamic,
   executeAssessment,
+  executeAssessmentOperation,
   getAssessmentAsk,
   guard,
   isOperation,
@@ -46,11 +46,20 @@ import {
   type AssessmentOperation,
   type AssessmentQuestions,
   type Json,
+  type OperationRequest,
 } from "../src/index.ts";
 
 // --- Fixture directory helpers ---
 
 let fixtureCount = 0;
+
+/** What a runtime's executor does with `assessment` operations. */
+function assessmentExecutor(options: { cwd: string; assessment: AssessmentExecutorOptions }) {
+  return {
+    execute: (request: OperationRequest, signal?: AbortSignal) =>
+      executeAssessmentOperation(options.assessment, options.cwd, request, signal),
+  };
+}
 
 function createFixture(files: Record<string, string>): string {
   fixtureCount++;
@@ -685,8 +694,7 @@ describe("assessment replay", () => {
 
     const { calls, createClient } = fakeClient(() => makeReviewResponse());
     const store = new MemoryHistoryStore();
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -712,8 +720,7 @@ describe("assessment replay", () => {
       replayCalls.push("sdk-call");
       throw new Error("should not call SDK on replay");
     });
-    const replayExecutor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const replayExecutor = assessmentExecutor({
       cwd: dir, // directory no longer exists!
       assessment: { apiKey: "test-key", createClient: replayClient },
     });
@@ -731,8 +738,7 @@ describe("assessment replay", () => {
 
     const { createClient } = fakeClient(() => makeReviewResponse("low"));
     const store = new MemoryHistoryStore();
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -751,8 +757,7 @@ describe("assessment replay", () => {
 
     // Replay — still returns the original "low" result
     const { createClient: replayClient } = fakeClient(() => makeReviewResponse("high"));
-    const replayExecutor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const replayExecutor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient: replayClient },
     });
@@ -777,8 +782,7 @@ describe("assessment execution layer (file assessment)", () => {
     });
 
     const { calls, createClient } = fakeClient(() => makeReviewResponse());
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir, // NOT process.cwd()
       assessment: { apiKey: "test-key", createClient },
     });
@@ -811,8 +815,7 @@ describe("assessment execution layer (file assessment)", () => {
     });
 
     const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -835,8 +838,7 @@ describe("assessment execution layer (file assessment)", () => {
     const dir = createFixture({ "readme.md": "hello" });
 
     const { calls, createClient } = fakeClient(() => makeReviewResponse());
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -864,8 +866,7 @@ describe("assessment execution layer (file assessment)", () => {
     }
 
     const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -891,8 +892,7 @@ describe("assessment execution layer (file assessment)", () => {
     });
 
     const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -935,8 +935,7 @@ describe("assessment execution layer (file assessment)", () => {
         usage: { input_tokens: 10, output_tokens: 5 },
       };
     });
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -972,8 +971,7 @@ describe("assessment execution layer (file assessment)", () => {
     // Single file
     const dir1 = createFixture({ "only.ts": "code" });
     const { calls: calls1, createClient: c1 } = fakeClient(() => makeReviewResponse());
-    const e1 = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const e1 = assessmentExecutor({
       cwd: dir1,
       assessment: { apiKey: "test-key", createClient: c1 },
     });
@@ -986,8 +984,7 @@ describe("assessment execution layer (file assessment)", () => {
     // Multiple files
     const dir2 = createFixture({ "a.ts": "a", "b.ts": "b" });
     const { calls: calls2, createClient: c2 } = fakeClient(() => makeReviewResponse());
-    const e2 = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const e2 = assessmentExecutor({
       cwd: dir2,
       assessment: { apiKey: "test-key", createClient: c2 },
     });
@@ -1018,8 +1015,7 @@ describe("assessment cancellation", () => {
       }
       return makeReviewResponse();
     });
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -1051,8 +1047,7 @@ describe("assessment cancellation", () => {
       }
       return makeReviewResponse();
     });
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -1192,8 +1187,7 @@ describe("assessment bounded concurrency", () => {
       active--;
       return makeReviewResponse();
     });
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient, fileConcurrency: 2 },
     });
@@ -1225,8 +1219,7 @@ describe("assessment bounded concurrency", () => {
       active--;
       return makeReviewResponse();
     });
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -1256,8 +1249,7 @@ describe("assessment bounded concurrency", () => {
       }
       return makeReviewResponse();
     });
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient, fileConcurrency: 1 },
     });
@@ -1287,8 +1279,7 @@ describe("assessment bounded concurrency", () => {
       if (myIndex % 2 === 1) await new Promise((r) => setTimeout(r, 20));
       return makeReviewResponse();
     });
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient, fileConcurrency: 2 },
     });
@@ -1313,8 +1304,7 @@ describe("assessment strict UTF-8 and read errors", () => {
     writeFileSync(join(dir, "bad.ts"), Buffer.from([0x80, 0x81, 0x82]), "binary" as BufferEncoding);
 
     const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -1336,8 +1326,7 @@ describe("assessment strict UTF-8 and read errors", () => {
     writeFileSync(join(dir, "ok.ts"), "ok", "utf8");
 
     const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });
@@ -1369,8 +1358,7 @@ describe("assessment strict UTF-8 and read errors", () => {
     const dir = createFixture({ "a.ts": "content" });
 
     const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = new BridgeExecutor({
-      bin: "/nonexistent/bridge",
+    const executor = assessmentExecutor({
       cwd: dir,
       assessment: { apiKey: "test-key", createClient },
     });

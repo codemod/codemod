@@ -1,7 +1,7 @@
 /**
  * Build-time split of a workflow module into the trusted workflow (run in
  * Node) and one self-contained JavaScript artifact per inline `jssg()`
- * transform (run in the QuickJS sandbox by the bridge).
+ * transform (run in-process by the `node` or `quickjs` runtime).
  *
  * `buildModule` parses the module with the TypeScript compiler API, finds
  * every `jssg({ ..., transform })` call, bundles each transform with esbuild
@@ -57,7 +57,7 @@ export function buildToolchain(): string {
   return toolchain;
 }
 
-/** One bundled transform. `source` is what the bridge executes; `hash` identifies it. */
+/** One bundled transform. `source` is what a runtime executes; `hash` identifies it. */
 export interface JssgArtifact extends ArtifactRef {
   source: string;
   /** Module the transform was extracted from, for messages only. */

@@ -8,7 +8,7 @@
  * history store, so nothing is ever replayed from an earlier run and no
  * `ReplayGate` history crosses between runs. At most one run is active at a
  * time. `start()` refuses while one is; `restart()` aborts the active run,
- * waits for it to settle (every bridge process gone, every completion
+ * waits for it to settle (every child process gone, every completion
  * recorded), and only then launches the next, so the side effects of two runs
  * never overlap. Every transition goes through one serial chain, so a double
  * tap queues behind the first and then sees the run it would have duplicated.
@@ -26,7 +26,7 @@ import {
 } from "../../authoring/composition.ts";
 import type { EventSink } from "../../core/events.ts";
 import type { Json } from "../../core/json.ts";
-import type { OperationExecutor } from "../../execution/executor.ts";
+import type { OperationExecutor } from "../../execution/operation-executor.ts";
 import { AdmissionScheduler, defaultCapacity } from "../../execution/scheduler.ts";
 import type { RuntimeDescriptor } from "../../runtime/capabilities.ts";
 import { run } from "../../runtime/run.ts";
@@ -47,7 +47,7 @@ export interface SessionOptions {
   workflow?: string;
   /**
    * Builds the executor for one run. Called once per run with that run's
-   * event sink, so `bridge.spawned` reaches the right monitor.
+   * event sink, so executor events reach the right monitor.
    */
   executor: (events: EventSink) => OperationExecutor;
   /** The runtime executing every run; see `RunSettings.runtime`. */

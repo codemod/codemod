@@ -32,10 +32,21 @@ beyond the monorepo's existing `node_modules`. Workflow 08 requires
 CLI, and workflow 10 requires both.
 
 ```sh
-# from the repository root: build the Rust execution bridge (once)
-cargo build -p butterflow-execution-bridge
+# from the repository root, once:
+pnpm --filter @codemod.com/jssg-napi build     # the napi addon of the default `node` runtime
+cargo build -p orchestration-quickjs-host      # only for --runtime quickjs
+cargo build -p orchestration-agent             # only for the agent demos (09, 10): the codemod-agent runner
 
 cd packages/orchestration
+```
+
+Every workflow runs on the default `node` runtime (the whole workflow in one
+Node process) or, with `--runtime quickjs`, in the sandboxed QuickJS host;
+both produce the same results, including 08-10 (assessment and agent steps).
+For example:
+
+```sh
+node bin/codemod-workflow.mjs demo/02-jssg.ts --target /tmp/codemod-demo --runtime quickjs
 ```
 
 The target is a copy of the fixture outside the repository. It cannot live
@@ -228,7 +239,8 @@ node bin/codemod-workflow.mjs demo/07-input.ts --target /tmp/codemod-demo --inpu
 
 ```text
 --input must be valid JSON (Expected property name or '}' in JSON at position 1 (line 1 column 2)); got: {replacement: newApi}
-usage: codemod-workflow <workflow.ts> [--target <directory>] [--bridge <binary>] [--input <json>]
+usage: codemod-workflow [run] <workflow.ts> [--runtime <node|quickjs>] [--target <directory>] [--input <json>] [--dashboard]
+       codemod-workflow build <workflow.ts> --runtime quickjs -o <bundle.mjs>
 ```
 
 ## `08-assessment.ts`: file-oriented assessment
@@ -268,6 +280,12 @@ node bin/codemod-workflow.mjs demo/09-agent.ts --target /tmp/codemod-demo
 { "remaining": 0 }
 ```
 
+The agent runs in a `codemod-agent` runner process started in the target
+directory (`cargo build -p orchestration-agent`, or point `CODEMOD_AGENT_BIN`
+at the binary); without it the step fails with a `config` error before
+anything starts. Add `--runtime quickjs` to run the same workflow in the
+QuickJS host.
+
 The backend can be changed to `builtin` or `codex` in the workflow. Each
 backend has its own enforceable settings; the example uses Claude Code so it
 can explicitly omit the shell tool.
@@ -295,9 +313,17 @@ unchanged.
 `codemod-workflow` loads a workflow through a build step that finds every
 `jssg({ ... })` call in the module graph, bundles its `transform` (with the
 helpers it imports, here `lib/ast.ts`) into a standalone artifact, and
-replaces the function with the artifact's `{ name, hash }`. The workflow then
-runs in Node and each artifact in the bridge's QuickJS sandbox, one bridge
-process per command. That is why a transform may use its parameters, globals,
-and imported bindings, but not a `const` or `function` declared in the
-workflow file: nothing is serialized across the boundary. Dynamic values reach
+replaces the function with the artifact's `{ name, hash }`. With the default
+`node` runtime the workflow then runs in Node and each artifact is evaluated
+once per run in the same process, its transforms called in-process over the
+napi addon (`@codemod.com/jssg-napi`); with `--runtime quickjs` the workflow
+and its artifacts are bundled and run in one QuickJS context hosted by
+`orchestration-quickjs-host`. Either way the batch rules (hash check, path
+containment, the static selector, semantic analysis, result conversion) are
+the same Rust code, `crates/jssg-batch`, and nothing is written until every
+transform of a command succeeded. Assessment steps call TypeSafe in-process;
+agent steps run in a `codemod-agent` runner process. A transform may use its
+parameters, globals, and imported bindings, but not a `const` or `function`
+declared in the workflow file: the artifact is built separately and nothing is
+serialized across the boundary. Dynamic values reach
 a transform through its step's `input` (see `wrap-options` and `migrate-to`).

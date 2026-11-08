@@ -11,7 +11,7 @@
  * - with `readOnly`, a second step asks the backend to create a file under a
  *   read-only sandbox and the test asserts it does not exist.
  *
- * Login preconditions run with exactly the environment the bridge would give
+ * Login preconditions run with exactly the environment the runner would give
  * the backend and from an empty private directory, and read only a yes/no.
  * Nothing here runs unless the file's own flag is set.
  */
@@ -29,21 +29,28 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  BridgeExecutor,
   MemoryHistoryStore,
   agent,
   agentLaunch,
   dynamic,
+  executeAgent,
   guard,
   run,
   type AgentBackendOptions,
+  type OperationRequest,
 } from "../src/index.ts";
 
 export const LIVE_TIMEOUT_MS = 300_000;
 
-export const bridgeBin =
-  process.env.CODEMOD_BRIDGE_BIN ??
-  resolve(import.meta.dirname, "../../../target/debug/butterflow-execution-bridge");
+export const agentBin =
+  process.env.CODEMOD_AGENT_BIN ??
+  resolve(import.meta.dirname, "../../../target/debug/codemod-agent");
+
+/** What the `node` and `quickjs` runtimes do with `agent` operations. */
+const agentExecutor = (cwd: string) => ({
+  execute: (request: OperationRequest, signal?: AbortSignal) =>
+    executeAgent({ bin: agentBin, cwd }, request, signal),
+});
 
 const Release = guard(
   "release",
@@ -62,7 +69,7 @@ const Attempted = guard(
 );
 
 /**
- * Run a CLI's login-status command as the bridge would for `backend` (same
+ * Run a CLI's login-status command as the runner would for `backend` (same
  * filtered environment, empty private working directory) and report only
  * whether it succeeded and what `read` extracts; output is never printed.
  */
@@ -102,9 +109,9 @@ export function liveAgentSuite(options: {
     let outside: string;
 
     beforeAll(() => {
-      if (!existsSync(bridgeBin)) {
+      if (!existsSync(agentBin)) {
         throw new Error(
-          `bridge binary not found at ${bridgeBin}; run 'cargo build -p butterflow-execution-bridge' or set CODEMOD_BRIDGE_BIN`,
+          `agent runner not found at ${agentBin}; run 'cargo build -p orchestration-agent' or set CODEMOD_AGENT_BIN`,
         );
       }
       options.precondition();
@@ -158,7 +165,7 @@ export function liveAgentSuite(options: {
         const history = new MemoryHistoryStore();
         const { output } = await run(
           dynamic(() => release()),
-          { executor: new BridgeExecutor({ bin: bridgeBin, cwd: repo }), history },
+          { executor: agentExecutor(repo), history },
         );
         expect(output).toEqual({ version: "4.2.0" });
         expect(readFileSync(join(repo, "RELEASE.txt"), "utf8").trim()).toBe("release 4.2.0");
@@ -193,7 +200,7 @@ export function liveAgentSuite(options: {
         });
         const { output } = await run(
           dynamic(() => attempt()),
-          { executor: new BridgeExecutor({ bin: bridgeBin, cwd: repo }) },
+          { executor: agentExecutor(repo) },
         );
         expect(output).toEqual({ attempted: true });
         expect(existsSync(join(repo, "BLOCKED.txt"))).toBe(false);

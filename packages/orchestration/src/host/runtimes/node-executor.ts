@@ -9,11 +9,9 @@
  * `codemod-agent` runner process each (`execution/agent.ts`).
  */
 import type { ArtifactStore } from "../../bundle/build.ts";
-import { getAssessmentAsk } from "../../core/assessment.ts";
 import { executeAgent } from "../../execution/agent.ts";
 import {
-  executeAssessment,
-  executeFileAssessment,
+  executeAssessmentOperation,
   type AssessmentExecutorOptions,
 } from "../../execution/assessment.ts";
 import { executeJssgCommand, type JssgDispatch } from "../../execution/jssg.ts";
@@ -100,14 +98,13 @@ export class NodeExecutor implements OperationExecutor {
           signal,
         );
       }
-      case "assessment": {
-        // File-oriented batch: the operation carries the per-file question resolver.
-        const ask = getAssessmentAsk(operation);
-        const options = this.options.assessment ?? {};
-        return ask === undefined
-          ? await executeAssessment(options, request.commandId, operation, signal)
-          : await executeFileAssessment(options, cwd, request.commandId, operation, ask, signal);
-      }
+      case "assessment":
+        return await executeAssessmentOperation(
+          this.options.assessment ?? {},
+          cwd,
+          request,
+          signal,
+        );
       default: {
         const unsupported = `operation kind '${(operation as { kind: string }).kind}'`;
         return {

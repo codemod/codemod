@@ -1,9 +1,9 @@
 /**
- * The TypeScript JSSG orchestrator against the scripted fake bridge
- * (`fixtures/fake-bridge.mjs`): selection, the batch request with the
- * artifact source, validation of returned edits, conflict rules,
- * transactional commit, failure classification, and cancellation. No Rust
- * is involved; the real bridge is exercised by `bridge.e2e.test.ts`.
+ * The TypeScript JSSG orchestrator (`executeJssgCommand`) against a scripted
+ * batch dispatch: selection, the batch request with the artifact source,
+ * validation of returned edits, conflict rules, transactional commit,
+ * failure classification, and cancellation. No Rust is involved; the real
+ * batch runners are exercised by the runtimes' e2e tests.
  */
 import {
   chmodSync,
@@ -19,10 +19,16 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CollectingSink, executeJssg, type JssgOperation } from "../src/index.ts";
+import { executeJssgCommand, type JssgDispatch } from "../src/execution/jssg.ts";
+import {
+  PROTOCOL_VERSION,
+  type FileOutcome,
+  type Json,
+  type JssgOperation,
+  type OperationCompletion,
+} from "../src/index.ts";
 import { artifact } from "./helpers.ts";
 
-const bin = resolve(import.meta.dirname, "fixtures/fake-bridge.mjs");
 const built = artifact("transform", "export default () => null;\n");
 
 let repo: string;
@@ -40,7 +46,6 @@ const snapshot = () =>
   );
 
 beforeEach(() => {
-  chmodSync(bin, 0o755);
   repo = realpathSync.native(mkdtempSync(join(tmpdir(), "codemod-jssg-")));
   write("a.ts", "a\n");
   write("b.ts", "b\n");
@@ -56,30 +61,108 @@ const operation = (extra: Partial<JssgOperation> = {}): JssgOperation => ({
   ...extra,
 });
 
+/**
+ * A scripted batch runner. Default: every file gets `// fake\n` appended and
+ * outputs `{ path, context, input }` (the request context without files).
+ * Modes: fail, hang (answers only once aborted), escape, escape-symlink,
+ * escape-absolute, conflict, rename, rename-twice, write-renamed, secondary
+ * (a.ts also edits `secondary`).
+ */
+function scriptedDispatch(mode: string, secondary?: string): JssgDispatch {
+  return async (request, signal) => {
+    const reply = (completion: Omit<OperationCompletion, "protocolVersion" | "commandId">) =>
+      ({
+        protocolVersion: PROTOCOL_VERSION,
+        commandId: request.commandId,
+        ...completion,
+      }) as OperationCompletion;
+    if (mode === "fail") {
+      return reply({ status: "failed", error: { message: "scripted transform failure" } });
+    }
+    if (mode === "hang") {
+      await new Promise<void>((resolve) =>
+        signal?.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      return reply({ status: "cancelled", error: { message: "aborted" } });
+    }
+    const { files = [], ...context } = request.context ?? {};
+    const edit = (path: string, content: string, renameTo?: string) =>
+      renameTo === undefined ? { path, content } : { path, content, renameTo };
+    const outcome = ({ path, content }: { path: string; content: string }): FileOutcome => {
+      switch (mode) {
+        case "escape":
+          return { path, edits: [edit(path, content, "../escaped.ts")] };
+        case "escape-symlink":
+          return { path, edits: [edit(path, content, "linkdir/out.ts")] };
+        case "escape-absolute":
+          return { path, edits: [edit("/etc/passwd", "pwned")] };
+        case "conflict":
+          return { path, edits: [edit(path, content, "same.ts")] };
+        case "rename":
+          return { path, edits: [edit(path, content, path.replace(/\.ts$/u, ".moved.ts"))] };
+        case "rename-twice":
+          return {
+            path,
+            edits:
+              path === "a.ts"
+                ? [edit(path, content), edit("b.ts", "b\n", "x.ts")]
+                : [edit(path, content, "y.ts")],
+          };
+        case "write-renamed":
+          return {
+            path,
+            edits:
+              path === "a.ts"
+                ? [edit(path, content), edit("b.ts", "b\n", "b.moved.ts")]
+                : [edit(path, `${content}// b\n`)],
+          };
+        case "secondary":
+          return {
+            path,
+            edits: [
+              edit(path, `${content}// primary ${path}\n`),
+              ...(path === "a.ts" ? [edit(secondary!, "// secondary\n")] : []),
+            ],
+          };
+        default:
+          return {
+            path,
+            edits: [edit(path, `${content}// fake\n`)],
+            output: {
+              path,
+              context: context as Json,
+              input: (request.operation as JssgOperation).input ?? null,
+            },
+          };
+      }
+    };
+    return reply({ status: "succeeded", output: { files: files.map(outcome) as unknown as Json } });
+  };
+}
+
 function run(
   op: JssgOperation,
   options: { mode?: string; signal?: AbortSignal; secondary?: string } = {},
 ) {
-  const events = new CollectingSink();
-  const env: Record<string, string> = {};
-  if (options.mode) env.FAKE_BRIDGE_MODE = options.mode;
-  if (options.secondary) env.FAKE_SECONDARY_PATH = options.secondary;
-  return executeJssg({
-    bin,
+  let dispatched = 0;
+  const dispatch = scriptedDispatch(options.mode ?? "echo", options.secondary);
+  return executeJssgCommand({
     cwd: repo,
     artifacts: new Map([[built.hash, built]]),
     commandId: "migrate",
     operation: op,
     signal: options.signal,
-    events,
-    env,
+    dispatch: (request, signal) => {
+      dispatched += 1;
+      return dispatch(request, signal);
+    },
     globalExcludes: null,
-  }).then((completion) => ({ completion, events: events.events }));
+  }).then((completion) => ({ completion, dispatched }));
 }
 
-describe("executeJssg", () => {
+describe("executeJssgCommand", () => {
   it("selects by language, sends one batch with the root, source, and input, commits, and collects outputs", async () => {
-    const { completion, events } = await run(
+    const { completion, dispatched } = await run(
       operation({ semanticAnalysis: "workspace", input: { n: 1 } }),
     );
 
@@ -97,7 +180,7 @@ describe("executeJssg", () => {
       "c.js": "c\n// fake\n",
       "d.md": "d\n",
     });
-    expect(events.filter((e) => e.type === "bridge.spawned")).toHaveLength(1);
+    expect(dispatched).toBe(1);
   });
 
   it("intersects definition globs (repository-relative) with the invocation target", async () => {
@@ -120,7 +203,7 @@ describe("executeJssg", () => {
 
   it.each<[string, { mode: string; include?: string[]; existing?: string }, string, RegExp]>([
     // (description, fake mode and selection, expected phase, expected message)
-    ["the bridge fails", { mode: "fail" }, "transform", /scripted transform failure/],
+    ["the batch fails", { mode: "fail" }, "transform", /scripted transform failure/],
     ["an edit renames outside the root", { mode: "escape" }, "transform", /invalid batch result/],
     [
       "an edit targets an absolute path",
@@ -229,19 +312,17 @@ describe("executeJssg", () => {
     },
   );
 
-  it("cancels before commit, kills the bridge, and leaves files untouched", async () => {
+  it("cancels before commit and leaves files untouched", async () => {
     const before = snapshot();
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 200);
-    const { completion, events } = await run(operation(), {
+    const { completion } = await run(operation(), {
       mode: "hang",
       signal: controller.signal,
     });
     expect(completion.status).toBe("cancelled");
     expect(completion.error?.details).toEqual({ phase: "transform" });
     expect(snapshot()).toEqual(before);
-    const pid = (events.find((e) => e.type === "bridge.spawned") as { pid?: number }).pid!;
-    await expectGone(pid);
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -262,15 +343,3 @@ describe("executeJssg", () => {
     },
   );
 });
-
-async function expectGone(pid: number): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt++) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(`bridge ${pid} is still alive`);
-}

@@ -1,15 +1,14 @@
 /**
  * The runtime provider contract: what `codemod-workflow run --runtime=<name>`
  * and `runWorkflow(path, { runtime })` need from a runtime. One provider per
- * file in this folder (`bridge.ts`, `node.ts`, `quickjs.ts`); `registry.ts`
+ * file in this folder (`node.ts`, `quickjs.ts`); `registry.ts`
  * lists them. Adding or replacing a runtime never touches the CLI.
  *
  * A provider is one of two shapes:
  *
  * - in-process (`createExecutor`): the control plane (`run()`, replay,
  *   history, scheduler) runs in this Node process over the loaded workflow
- *   module; the provider only decides how operations execute. `bridge` and
- *   `node`.
+ *   module; the provider only decides how operations execute. `node`.
  * - out-of-process (`launch`): the provider runs the whole workflow file
  *   elsewhere and returns its final output. `quickjs` (build the bundle, run
  *   it in the Rust QuickJS host binary).
@@ -27,9 +26,7 @@ import type { RuntimeDescriptor } from "../../runtime/capabilities.ts";
 
 /** Host configuration shared by every runtime; never part of history. */
 export interface RuntimeSettings {
-  /** `butterflow-execution-bridge` binary (the `bridge` runtime; others may ignore it). */
-  bridge: string;
-  /** Extra environment for spawned processes, as `BridgeOptions.env`. */
+  /** Extra environment for spawned processes (`shell` steps, agent runners). */
   env?: Record<string, string>;
 }
 

@@ -1,4 +1,4 @@
-// A shell + jssg workflow run end to end on both the bridge and node runtimes.
+// A shell + jssg workflow run end to end on both the node and quickjs runtimes.
 import { jssg, sequence, shell } from "../../../src/index.ts";
 import { migrateText, posixPath } from "../jssg/helpers.ts";
 

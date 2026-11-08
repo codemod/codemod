@@ -19,7 +19,7 @@
 //! - `jssgCallEnd(batch, index)`: the changes the call staged, kept for
 //!   `jssgFinish` (`embedded::end_call`);
 //! - `jssgFinish(batch, index, root, result)`: the awaited result as the
-//!   `FileOutcome` JSON the bridge would have returned (`undefined` when it
+//!   `FileOutcome` JSON of the shared rules (`undefined` when it
 //!   has no edits and no output)
 //!   (`embedded::transform_output` then [`BatchPlan::finish`]);
 //! - `jssgEnd(batch)`.

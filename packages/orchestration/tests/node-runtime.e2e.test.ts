@@ -1,14 +1,14 @@
 /**
- * Parity of the `node` runtime with the `bridge` runtime: the same JSSG
- * fixtures run through `executeJssgCommand` with the real bridge process and
- * with the in-process napi dispatch, on identical repositories. The batch
- * results (`FileOutcome`s), the command completion, and the resulting file
- * trees must be identical; failures must fail in the same phase with the
- * repository untouched. Whole workflows (shell + jssg) are compared through
- * `runWorkflow` as well.
+ * The `node` runtime end to end: JSSG fixtures through `executeJssgCommand`
+ * with the in-process napi dispatch (results, completions, file trees;
+ * failures fail in the expected phase with the repository untouched), runs
+ * through `NodeExecutor` (module state, parallel staging, agent, semantic
+ * analysis), and a whole workflow file through the CLI on `node` and
+ * `quickjs`. Cross-runtime parity of the batch rules is
+ * `jssg-parity.e2e.test.ts`.
  *
  * Run with: pnpm --filter @codemod.com/orchestration test:e2e
- * (needs the bridge binary and the napi addon; both are built by the script).
+ * (needs the napi addon and the QuickJS host; the script builds both).
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -38,7 +38,6 @@ import {
   jssg,
   parallel,
   run,
-  spawnBridge,
   type JssgArtifact,
   type JssgDispatch,
   type JssgOperation,
@@ -46,17 +45,17 @@ import {
   type Selector,
 } from "../src/index.ts";
 
-const bin =
-  process.env.CODEMOD_BRIDGE_BIN ??
-  resolve(import.meta.dirname, "../../../target/debug/butterflow-execution-bridge");
+const quickjsHost =
+  process.env.CODEMOD_QUICKJS_HOST_BIN ??
+  resolve(import.meta.dirname, "../../../target/debug/orchestration-quickjs-host");
 const fixtures = resolve(import.meta.dirname, "fixtures");
 const cli = resolve(import.meta.dirname, "../bin/codemod-workflow.mjs");
 const benchmarkTransforms = resolve(import.meta.dirname, "../../../benchmarks/runtimes/transforms");
 
 beforeAll(() => {
-  if (!existsSync(bin)) {
+  if (!existsSync(quickjsHost)) {
     throw new Error(
-      `bridge binary not found at ${bin}; run 'cargo build -p butterflow-execution-bridge'`,
+      `quickjs host not found at ${quickjsHost}; run 'cargo build -p orchestration-quickjs-host'`,
     );
   }
   if (!isNapiAvailable()) {
@@ -126,6 +125,7 @@ interface Arm {
   batch: OperationCompletion | undefined;
   completion: OperationCompletion;
   tree: Record<string, string>;
+  initial: Record<string, string>;
 }
 
 type Spec = Omit<JssgOperation, "kind" | "transform" | "language"> & {
@@ -134,11 +134,8 @@ type Spec = Omit<JssgOperation, "kind" | "transform" | "language"> & {
   selector?: Selector;
 };
 
-/** Run one JSSG command on both runtimes against copies of `files`. */
-async function both(
-  spec: Spec,
-  files: Record<string, string>,
-): Promise<Record<"bridge" | "node", Arm>> {
+/** Run one JSSG command on the node runtime's dispatch against a copy of `files`. */
+async function both(spec: Spec, files: Record<string, string>): Promise<{ node: Arm }> {
   const { transform, language = "typescript", ...rest } = spec;
   const operation: JssgOperation = {
     kind: "jssg",
@@ -146,43 +143,33 @@ async function both(
     language,
     ...rest,
   };
-  const arms = {} as Record<"bridge" | "node", Arm>;
-  for (const runtime of ["bridge", "node"] as const) {
-    const repo = makeRepo(files);
-    const inner: JssgDispatch =
-      runtime === "bridge"
-        ? (request, signal) => spawnBridge({ bin, cwd: repo }, request, signal)
-        : createJssgBatchDispatch({ engine: createNapiJssgEngine() });
-    let batch: OperationCompletion | undefined;
-    const completion = await executeJssgCommand({
-      cwd: repo,
-      artifacts,
-      commandId: "parity",
-      operation,
-      globalExcludes: null,
-      dispatch: async (request, signal) => (batch = await inner(request, signal)),
-    });
-    arms[runtime] = { batch, completion, tree: tree(repo) };
-  }
-  return arms;
+  const repo = makeRepo(files);
+  const initial = tree(repo);
+  const inner: JssgDispatch = createJssgBatchDispatch({ engine: createNapiJssgEngine() });
+  let batch: OperationCompletion | undefined;
+  const completion = await executeJssgCommand({
+    cwd: repo,
+    artifacts,
+    commandId: "parity",
+    operation,
+    globalExcludes: null,
+    dispatch: async (request, signal) => (batch = await inner(request, signal)),
+  });
+  return { node: { batch, completion, tree: tree(repo), initial } };
 }
 
-/** Same batch result, same completion, same files; messages compared loosely on failure. */
-function expectParity(arms: Record<"bridge" | "node", Arm>, status: OperationCompletion["status"]) {
-  const { bridge, node } = arms;
-  expect(bridge.completion.status, JSON.stringify(bridge.completion)).toBe(status);
+/** The expected status; a failure leaves the repository untouched and fails in the batch's phase. */
+function expectParity(arms: { node: Arm }, status: OperationCompletion["status"]) {
+  const { node } = arms;
   expect(node.completion.status, JSON.stringify(node.completion)).toBe(status);
-  expect(node.tree).toEqual(bridge.tree);
-  expect(node.batch?.status).toEqual(bridge.batch?.status);
   if (status === "succeeded") {
-    expect(node.batch).toEqual(bridge.batch);
-    expect(node.completion).toEqual(bridge.completion);
+    expect(node.batch?.status).toBe("succeeded");
   } else {
-    expect(node.completion.error?.details).toEqual(bridge.completion.error?.details);
+    expect(node.tree).toEqual(node.initial);
   }
 }
 
-describe("node runtime parity with the bridge", () => {
+describe("node runtime: JSSG commands", () => {
   it("structured results, relative filenames, and helpers bundled into the artifact", async () => {
     const arms = await both(
       { transform: "replace" },
@@ -417,17 +404,17 @@ describe("node runtime: runs", () => {
       "lib/c.ts": "oldApi(2);\n",
     };
     const results: Record<string, { output: unknown; tree: Record<string, string> }> = {};
-    for (const runtime of ["bridge", "node"]) {
+    for (const runtime of ["node", "quickjs"]) {
       const repo = makeRepo(files);
       const result = spawnSync(
         process.execPath,
-        [cli, "run", workflow, `--runtime=${runtime}`, "--target", repo, "--bridge", bin],
-        { encoding: "utf8" },
+        [cli, "run", workflow, `--runtime=${runtime}`, "--target", repo],
+        { encoding: "utf8", env: { ...process.env, CODEMOD_QUICKJS_HOST_BIN: quickjsHost } },
       );
       expect(result.status, result.stderr).toBe(0);
       results[runtime] = { output: JSON.parse(result.stdout), tree: tree(repo) };
     }
-    expect(results.node).toEqual(results.bridge);
+    expect(results.quickjs).toEqual(results.node);
     expect(results.node!.output).toEqual(["src/a.ts", "src/seeded.ts"]);
     expect(results.node!.tree["lib/c.ts"]).toBe("oldApi(2);\n");
   });

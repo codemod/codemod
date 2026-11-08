@@ -2,7 +2,7 @@
  * The `JssgBatchEngine` of the `node` runtime, over the napi addon
  * (`@codemod.com/jssg-napi`, built from `crates/jssg-napi`):
  *
- * - batches are the bridge's own Rust rules (`JssgBatch`, over
+ * - batches are the shared Rust rules (`JssgBatch`, over
  *   `crates/jssg-batch`): planning, containment, the selector skip, parsing
  *   on worker threads, and result conversion;
  * - artifacts are evaluated as ES modules in this process

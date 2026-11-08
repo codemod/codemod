@@ -1,7 +1,8 @@
 /**
  * Versioned JSON wire protocol between the TypeScript runtime and any
- * OperationExecutor, including the Rust execution bridge
- * (`crates/execution-bridge`). Keep this file JSON-only: no classes, no
+ * OperationExecutor, including the Rust agent runner
+ * (`crates/orchestration-agent`) and the JSSG batch rules
+ * (`crates/jssg-batch`). Keep this file JSON-only: no classes, no
  * functions on the wire. The Rust serde structs mirror these shapes exactly;
  * `fixtures/protocol/*.json` are the shared conformance fixtures.
  */
@@ -116,7 +117,7 @@ export const DEFAULT_BUILTIN_AGENT_TOOLS: readonly BuiltinAgentTool[] = [
 ];
 
 /**
- * Claude Code built-in tools a `claude-code` agent may be given. The bridge
+ * Claude Code built-in tools a `claude-code` agent may be given. The runner
  * passes the list as both `--tools` (what exists) and `--allowedTools` (what
  * runs without a prompt); nothing else is available, and anything that would
  * still ask for permission is denied. `Bash` runs arbitrary commands.
@@ -166,11 +167,11 @@ export const AGENT_BACKENDS = ["builtin", "claude-code", "codex"] as const;
 export type AgentBackendKind = AgentBackend["kind"];
 
 /**
- * An agent task: a prompt plus optional input, run by the bridge in the
- * executor's working directory through `backend`. It may change files. A
- * succeeded completion's output is `{ text }`, the agent's final response;
- * `responseFormat: "json"` makes the bridge ask the agent for a JSON reply;
- * the bridge does not check the reply, TypeScript decoding
+ * An agent task: a prompt plus optional input, run by the agent runner
+ * (`codemod-agent`) in the target directory through `backend`. It may change
+ * files. A succeeded completion's output is `{ text }`, the agent's final
+ * response; `responseFormat: "json"` makes the runner ask the agent for a
+ * JSON reply; the runner does not check the reply, TypeScript decoding
  * (`parseAgentJson` plus the step's output schema) enforces it.
  */
 export interface AgentOperation {
@@ -237,7 +238,7 @@ export interface Edit {
 /**
  * What one batch file's transform produced: its own edit if modified,
  * `jssgTransform` and `write()` edits, and the `StructuredCodemod` output.
- * A file the selector skipped has no edits and no output. The bridge returns
+ * A file the selector skipped has no edits and no output. A batch returns
  * `{ files: FileOutcome[] }` in batch order.
  */
 export interface FileOutcome {
@@ -314,7 +315,7 @@ export function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly st
 /**
  * Field sets per operation kind. Validation is strict: a field from another
  * variant, most importantly a `target` on `shell`, `agent`, or `assessment`, makes the operation
- * invalid rather than being ignored. Mirrors `deny_unknown_fields` in the Rust bridge.
+ * invalid rather than being ignored. Mirrors `deny_unknown_fields` in the Rust crates.
  */
 const OPERATION_FIELDS = {
   shell: ["kind", "command", "env"],
@@ -334,7 +335,7 @@ const OPERATION_FIELDS = {
 } as const satisfies Record<Operation["kind"], readonly string[]>;
 
 /**
- * Wire shape plus the path rule the bridge also enforces (`root` is a safe
+ * Wire shape plus the path rule Rust also enforces (`root` is a safe
  * relative path). Normalization and non-empty lists live in `authoring/target.ts`.
  */
 export function isTarget(value: unknown): value is Target {
@@ -361,7 +362,7 @@ export function isSemanticAnalysis(value: unknown): value is SemanticAnalysis {
   );
 }
 
-/** A non-empty name and a lowercase hex SHA-256; the bridge checks the same. */
+/** A non-empty name and a lowercase hex SHA-256; `jssg-batch` checks the same. */
 export function isArtifactRef(value: unknown): value is ArtifactRef {
   return (
     isRecord(value) &&
@@ -422,7 +423,7 @@ function isEdit(value: unknown): value is Edit {
   );
 }
 
-/** Every path the bridge returns must be a safe relative path. */
+/** Every path a batch returns must be a safe relative path. */
 export function isFileOutcomes(value: unknown): value is FileOutcome[] {
   return (
     Array.isArray(value) &&
@@ -571,7 +572,7 @@ export function isOperationCompletion(value: unknown): value is OperationComplet
   return value.output === undefined && isCompletionError(value.error);
 }
 
-/** Parse a completion produced by an external executor, e.g. the Rust bridge. */
+/** Parse a completion produced by an external executor, e.g. the agent runner. */
 export function parseCompletion(text: string): OperationCompletion {
   let value: unknown;
   try {

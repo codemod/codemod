@@ -1,5 +1,5 @@
 /**
- * Benchmark arms `ts-bridge`, `ts-node`, `ts-quickjs`: the two benchmark
+ * Benchmark arms `ts-node`, `ts-quickjs`: the two benchmark
  * transforms as a sequence of JSSG steps for the TypeScript orchestration
  * runtime (`packages/orchestration`). Equivalent to ../yaml/workflow.yaml:
  * the same transform files (imported bindings, bundled into artifacts by the

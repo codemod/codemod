@@ -13,15 +13,23 @@
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  BridgeExecutor,
   MemoryHistoryStore,
+  executeAssessmentOperation,
   assessment,
   dynamic,
   run,
+  type AssessmentExecutorOptions,
   type AssessmentFileResult,
+  type OperationRequest,
 } from "../src/index.ts";
+
+/** What the `node` runtime's executor does with `assessment` operations. */
+const assessmentExecutor = (cwd: string, options: AssessmentExecutorOptions = {}) => ({
+  execute: (request: OperationRequest, signal?: AbortSignal) =>
+    executeAssessmentOperation(options, cwd, request, signal),
+});
 
 const optedIn = process.env.CODEMOD_LIVE_ASSESSMENT === "1";
 
@@ -75,8 +83,7 @@ describe.skipIf(!optedIn)("assessment() against the live TypeSafe API", () => {
   });
 
   it("returns typed per-file answers, the answering model, and usage through run()", async () => {
-    const spy = vi.spyOn(process, "cwd").mockReturnValue(fixtureDir);
-    const executor = new BridgeExecutor({ bin: "/nonexistent/butterflow-execution-bridge" });
+    const executor = assessmentExecutor(fixtureDir);
     const store = new MemoryHistoryStore();
     const workflow = dynamic(() => buildReport());
     const { output } = await run(workflow, { executor, history: store });
@@ -99,19 +106,14 @@ describe.skipIf(!optedIn)("assessment() against the live TypeSafe API", () => {
 
     // Recorded, so a replay answers without another request.
     const replay = await run(workflow, {
-      executor: new BridgeExecutor({
-        bin: "/nonexistent/butterflow-execution-bridge",
-        assessment: {
-          apiKey: "not-used",
-          createClient: () => {
-            throw new Error("replay must not build a client");
-          },
+      executor: assessmentExecutor(fixtureDir, {
+        apiKey: "not-used",
+        createClient: () => {
+          throw new Error("replay must not build a client");
         },
       }),
       history: store,
     });
     expect(replay.output).toEqual(output);
-
-    spy.mockRestore();
   }, 60_000);
 });

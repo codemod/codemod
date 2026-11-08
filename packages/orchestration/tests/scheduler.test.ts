@@ -301,7 +301,7 @@ describe("cancellation", () => {
     expect(started).toEqual(["s0"]);
     controller.abort();
     await settle();
-    // s1 was refused while queued: no executor call, so no bridge process.
+    // s1 was refused while queued: no executor call.
     expect(started).toEqual(["s0"]);
     expect(scheduler.stats()).toMatchObject({ queued: 0, active: 1 });
 

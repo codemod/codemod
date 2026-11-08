@@ -1,17 +1,14 @@
 /**
  * The runtime capability contract, portable so it is enforced by the control
- * plane wherever it runs (in Node for `bridge`/`node`, inside QuickJS for
- * `quickjs`).
+ * plane wherever it runs (in Node for `node`, inside QuickJS for `quickjs`).
  *
  * A runtime is where workflow code and its operations execute:
  *
- * - `bridge` (default): the control plane in Node; every `shell`, `jssg`,
- *   and `agent` operation in one `butterflow-execution-bridge` process;
- *   `assessment` from the Node host.
- * - `node`: the whole workflow in one Node process; JSSG transforms in-process
- *   over a napi-rs ast-grep addon; `shell` through `child_process`.
- * - `quickjs`: the whole prebuilt workflow bundle in one QuickJS context
- *   hosted by a Rust binary; no Node at runtime.
+ * - `node` (default, the simple and fast one): the whole workflow in one
+ *   Node process; JSSG transforms in-process over a napi-rs ast-grep addon;
+ *   `shell` through `child_process`.
+ * - `quickjs` (the sandboxed one): the whole prebuilt workflow bundle in one
+ *   QuickJS context hosted by a Rust binary; no Node at runtime.
  *
  * `node` and `quickjs` execute every kind: `jssg` (with semantic analysis),
  * `shell`, and `assessment` in-process, `agent` in a `codemod-agent` runner
@@ -34,9 +31,9 @@ import {
 } from "../core/protocol.ts";
 
 /** The runtimes `codemod-workflow run --runtime` knows by name. */
-export const RUNTIME_NAMES = ["bridge", "node", "quickjs"] as const;
+export const RUNTIME_NAMES = ["node", "quickjs"] as const;
 export type BuiltinRuntimeName = (typeof RUNTIME_NAMES)[number];
-export const DEFAULT_RUNTIME: BuiltinRuntimeName = "bridge";
+export const DEFAULT_RUNTIME: BuiltinRuntimeName = "node";
 
 export interface RuntimeCapabilities {
   /** Operation kinds the runtime executes. */
@@ -56,20 +53,10 @@ const ALL: RuntimeCapabilities = {
   semanticAnalysis: true,
 };
 
-const IN_PROCESS: RuntimeCapabilities = {
-  operations: { shell: true, jssg: true, agent: true, assessment: true },
-  semanticAnalysis: true,
-};
-
-export const BRIDGE_RUNTIME: RuntimeDescriptor = { name: "bridge", capabilities: ALL };
-export const NODE_RUNTIME: RuntimeDescriptor = { name: "node", capabilities: IN_PROCESS };
-export const QUICKJS_RUNTIME: RuntimeDescriptor = {
-  name: "quickjs",
-  capabilities: IN_PROCESS,
-};
+export const NODE_RUNTIME: RuntimeDescriptor = { name: "node", capabilities: ALL };
+export const QUICKJS_RUNTIME: RuntimeDescriptor = { name: "quickjs", capabilities: ALL };
 
 export const BUILTIN_RUNTIMES: Readonly<Record<BuiltinRuntimeName, RuntimeDescriptor>> = {
-  bridge: BRIDGE_RUNTIME,
   node: NODE_RUNTIME,
   quickjs: QUICKJS_RUNTIME,
 };

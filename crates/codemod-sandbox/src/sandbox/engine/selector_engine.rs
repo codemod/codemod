@@ -25,7 +25,7 @@ use crate::workflow_global::WorkflowGlobalModule;
 /// Build a selector from static rule data: the object a `getSelector` returns
 /// (`rule`, optional `constraints` and `utils`), with `id` and `language`
 /// supplied here. Hosts that declare the selector as data instead of a
-/// function (the TypeScript orchestration bridge) skip QuickJS entirely.
+/// function (the TypeScript orchestration runtimes) skip QuickJS entirely.
 pub fn selector_from_value(
     language: CodemodLang,
     value: serde_json::Value,

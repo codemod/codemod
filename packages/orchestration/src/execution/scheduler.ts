@@ -9,7 +9,7 @@
  *
  * The model is a weighted semaphore with a strict FIFO queue. Weights make one
  * workspace-semantic JSSG command, which reads and retains the whole selected
- * file set and then has a bridge process parse and index it, cost more than an
+ * file set and then parses and indexes it, cost more than an
  * ordinary `shell`. Strict FIFO (only the head of the queue may be admitted)
  * costs some utilization when a heavy command blocks lighter ones behind it,
  * and buys the guarantee that a heavy command is never starved.
@@ -45,7 +45,7 @@ export interface OperationWeights {
   agent: number;
   /** One System One HTTP request; no local work. */
   assessment: number;
-  /** A JSSG batch: a bridge process plus the whole selected file set in memory. */
+  /** A JSSG batch: the whole selected file set in memory, parsed. */
   jssg: number;
   /** Workspace semantics additionally index the whole batch; the dominant cost. */
   jssgWorkspace: number;
@@ -83,8 +83,7 @@ const MEMORY_BUDGET_FRACTION = 0.5;
 
 /**
  * Memory one concurrent workspace-semantic pass is assumed to need: the batch
- * as host strings, the same batch as request JSON, and the bridge's parse and
- * semantic index of it.
+ * as host strings, its parsed roots, and the semantic index of it.
  */
 const WORKSPACE_FOOTPRINT_BYTES = 512 * 1024 * 1024;
 
@@ -344,7 +343,7 @@ export class AdmissionScheduler {
  * `run()` wraps the executor it is given, and nothing below this point is
  * aware of scheduling.
  *
- * A command aborted while still queued is refused here, so no bridge process
+ * A command aborted while still queued is refused here, so no process
  * is ever spawned for it. A command that was already admitted keeps the
  * existing behavior: the inner executor observes the same signal and kills its
  * child.

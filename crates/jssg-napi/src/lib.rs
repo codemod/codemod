@@ -10,7 +10,7 @@
 //!   implemented in JavaScript by `packages/jssg-napi` on top of the engine
 //!   helpers below.
 //! * Engine helpers used by the orchestration `node` runtime's in-process
-//!   JSSG batches: the `JssgBatch` class (see [`batch`]: the bridge's own
+//!   JSSG batches: the `JssgBatch` class (see [`batch`]: the shared
 //!   batch rules from `crates/jssg-batch`, parsing off the JS thread, result
 //!   conversion), and the per-call execution context that stages
 //!   `write()` / `jssgTransform()` edits instead of touching the disk

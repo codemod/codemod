@@ -2,7 +2,7 @@ use ignore::WalkBuilder;
 use std::path::Path;
 
 /// Directory walker settings shared by every codemod file enumeration: the
-/// workflow engine's JSSG steps, shard planning, and the execution bridge.
+/// workflow engine's JSSG steps and shard planning.
 ///
 /// Hidden files are visited, `.gitignore` / `.ignore` / global git excludes
 /// are honored even outside a git repository, symlinks are not followed, and

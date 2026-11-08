@@ -1,7 +1,7 @@
 /**
  * The quickjs bundle (`src/host/quickjs-bundle.ts`, `codemod-workflow
  * build --runtime=quickjs`): self-contained, Node-free, async lowered, and
- * carrying exactly the artifacts (same hashes) the bridge runtime would run.
+ * carrying exactly the artifacts (same hashes) the node runtime would run.
  */
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -17,7 +17,7 @@ const scratch = mkdtempSync(join(tmpdir(), "quickjs-bundle-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 describe("buildQuickjsBundle", () => {
-  it("is one ES module with no imports, lowered async, and the bridge's artifacts", async () => {
+  it("is one ES module with no imports, lowered async, and the build's artifacts", async () => {
     const bundle = await buildQuickjsBundle(join(fixtures, "quickjs/jssg-sequence.ts"));
     expect(bundle.hash).toBe(createHash("sha256").update(bundle.code).digest("hex"));
     expect(bundle.code).not.toMatch(/^\s*import\s/mu);
@@ -95,7 +95,7 @@ describe("codemod-workflow build", () => {
       runWorkflowCli([
         "build",
         join(fixtures, "quickjs/jssg-sequence.ts"),
-        "--runtime=bridge",
+        "--runtime=node",
         "-o",
         "x",
       ]),

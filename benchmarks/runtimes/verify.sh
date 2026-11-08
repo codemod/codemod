@@ -58,7 +58,6 @@ done
 
 {
   printf 'AVAILABLE_ARMS=%q\n' "$AVAILABLE_ARMS"
-  printf 'TS_BRIDGE_FORM=%q\n' "${TS_BRIDGE_FORM:-legacy}"
   printf 'GATE_HASH=%q\n' "${first_hash:-}"
   printf 'GATE_FILES=%q\n' "${count:-0}"
 } >"$RESULTS_DIR/arms.env"

@@ -1,13 +1,13 @@
 /**
- * Live `codex` `agent()`: the real bridge and the installed, logged-in `codex`
+ * Live `codex` `agent()`: the real `codemod-agent` runner and the installed, logged-in `codex`
  * CLI (Codex subscription quota; not codemod-ai/Rig). Opt-in only; ordinary
  * test runs skip it and start nothing.
  *
  *   pnpm --filter @codemod.com/orchestration test:live:agent:codex
- *   # = pnpm build:bridge && CODEMOD_LIVE_AGENT_CODEX=1 vitest run tests/agent.codex.live.test.ts
+ *   # = pnpm build:agent && CODEMOD_LIVE_AGENT_CODEX=1 vitest run tests/agent.codex.live.test.ts
  *
  * Requires `codex` on PATH and `codex login` done. The login check uses only
- * the exit code of `codex login status`, run with the bridge's filtered
+ * the exit code of `codex login status`, run with the runner's filtered
  * environment from an empty private directory. Two calls: a `workspace-write`
  * step (also checks a shell command and a write outside the target are
  * blocked and a project `.codex/config.toml` is ignored) and a `read-only`

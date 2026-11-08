@@ -1,5 +1,5 @@
 /**
- * Extra transforms for the bridge-vs-node parity tests
+ * Extra transforms for the node runtime e2e tests
  * (`tests/node-runtime.e2e.test.ts`): the rest of the `codemod:ast-grep`
  * surface a transform reaches (`jssgTransform`, `parse`, `parseFile` +
  * `write()`, `kind`, options) and the result rules. Only ever built.
@@ -109,7 +109,7 @@ export const badResult = jssg({
   },
 });
 
-/** Reports a module-level counter: once per run in-process, once per file in the bridge. */
+/** Reports a module-level counter: evaluated once per run, so it counts across files. */
 export const counter = jssg({
   name: "counter",
   language: "typescript",

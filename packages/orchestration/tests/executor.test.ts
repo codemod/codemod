@@ -4,27 +4,25 @@
  * context only, and a history replays on any checkout. Also the local CLI's
  * argument parsing.
  */
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ABORT_SIGNALS, parseArgs, runWorkflowCli, USAGE, type CliHooks } from "../src/host/cli.ts";
 import type { DashboardSession } from "../src/host/dashboard/index.ts";
 import {
-  BridgeExecutor,
-  CollectingSink,
   MemoryHistoryStore,
   OperationError,
-  shell,
+  RuntimeRegistry,
   isSafeRelativePath,
   jssg,
   run,
   dynamic,
   type OperationRequest,
 } from "../src/index.ts";
+import { echoExecutor, echoRuntime } from "./echo-runtime.ts";
 import { artifact, canListen, ref } from "./helpers.ts";
 
-const fakeBridge = resolve(import.meta.dirname, "fixtures/fake-bridge.mjs");
 /** `--dashboard` opens a loopback listener, which a sandbox may deny. */
 const listenable = await canListen();
 
@@ -117,10 +115,9 @@ interface EchoOutput {
   context: { targetRoot: string; artifact: { source: string } };
 }
 
-describe.skipIf(process.platform === "win32")("BridgeExecutor artifacts", () => {
+describe("artifacts through an executor", () => {
   let repo: string;
   beforeEach(() => {
-    chmodSync(fakeBridge, 0o755);
     repo = realpathSync.native(mkdtempSync(join(tmpdir(), "codemod-shell-")));
     mkdirSync(join(repo, "apps/web"), { recursive: true });
     writeFileSync(join(repo, "apps/web/a.ts"), "a\n");
@@ -128,11 +125,7 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor artifacts", () => 
   afterEach(() => rmSync(repo, { recursive: true, force: true }));
 
   it("records the reference in history and sends the source only in the request context", async () => {
-    const executor = new BridgeExecutor({
-      bin: fakeBridge,
-      cwd: repo,
-      artifacts: new Map([[built.hash, built]]),
-    });
+    const executor = echoExecutor({ cwd: repo, artifacts: new Map([[built.hash, built]]) });
     const store = new MemoryHistoryStore();
 
     const first = await run(wf, { executor, history: store });
@@ -157,14 +150,14 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor artifacts", () => 
         },
       },
     });
-    // Only the completion (which this fake bridge fills with the echoed
+    // Only the completion (which the echo executor fills with the echoed
     // context) mentions the source or the root; the recorded command does not.
     expect(JSON.stringify(scheduled)).not.toContain("transform(root");
     expect(JSON.stringify(scheduled)).not.toContain(repo);
 
     // A replay needs neither the artifact nor the checkout it was built on.
     const executed: OperationRequest[] = [];
-    const elsewhere = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
+    const elsewhere = echoExecutor({ cwd: repo });
     const second = await run(wf, {
       executor: {
         execute(request, signal) {
@@ -179,11 +172,10 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor artifacts", () => 
     expect(executed).toHaveLength(0);
   });
 
-  it("fails a command whose artifact the executor does not hold, without spawning", async () => {
-    const events = new CollectingSink();
-    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo, events });
+  it("fails a command whose artifact the executor does not hold, before dispatching", async () => {
+    const executor = echoExecutor({ cwd: repo });
     const store = new MemoryHistoryStore();
-    const error = await run(wf, { executor, history: store, events }).catch((e: unknown) => e);
+    const error = await run(wf, { executor, history: store }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OperationError);
     expect((error as OperationError).status).toBe("failed");
     expect((error as OperationError).detail).toEqual({
@@ -192,21 +184,7 @@ describe.skipIf(process.platform === "win32")("BridgeExecutor artifacts", () => 
       ),
       details: { phase: "artifact" },
     });
-    expect(events.events.filter((e) => e.type === "bridge.spawned")).toHaveLength(0);
     expect(store.toJSON().events.map((e) => e.type)).toEqual(["scheduled", "completed"]);
-  });
-
-  it("runs shell through the one-shot file protocol", async () => {
-    const executor = new BridgeExecutor({ bin: fakeBridge, cwd: repo });
-    const inspect = shell({ name: "inspect", command: "true" });
-    const result = await run(
-      dynamic(() => inspect()),
-      { executor },
-    );
-    const echoed = JSON.parse((result.output as { stdout: string }).stdout) as {
-      request: OperationRequest;
-    };
-    expect(echoed.request.operation).toEqual({ kind: "shell", command: "true" });
   });
 });
 
@@ -215,19 +193,13 @@ describe("codemod-workflow argument parsing", () => {
     expect([...ABORT_SIGNALS].sort()).toEqual(["SIGHUP", "SIGINT", "SIGTERM"]);
   });
 
-  it("resolves every path and defaults the target and bridge", () => {
+  it("resolves every path and defaults the target", () => {
     const options = parseArgs(["fixtures/jssg/dynamic.ts"]);
     expect(options.workflow).toBe(resolve("fixtures/jssg/dynamic.ts"));
     expect(options.target).toBe(process.cwd());
-    expect(options.bridge).toBe(
-      process.env.CODEMOD_BRIDGE_BIN === undefined
-        ? resolve(import.meta.dirname, "../../../target/debug/butterflow-execution-bridge")
-        : resolve(process.env.CODEMOD_BRIDGE_BIN),
-    );
-    expect(parseArgs(["wf.ts", "--target", "repo", "--bridge", "bin/bridge"])).toEqual({
+    expect(parseArgs(["wf.ts", "--target", "repo"])).toEqual({
       workflow: resolve("wf.ts"),
       target: resolve("repo"),
-      bridge: resolve("bin/bridge"),
       dashboard: false,
     });
     expect(options).not.toHaveProperty("input");
@@ -273,27 +245,24 @@ describe("codemod-workflow argument parsing", () => {
     expect(() => parseArgs([])).toThrow(USAGE);
     expect(() => parseArgs(["--target", "x"])).toThrow(USAGE);
     expect(() => parseArgs(["wf.ts", "--nope", "x"])).toThrow(/unknown option: --nope/u);
-    expect(() => parseArgs(["wf.ts", "--script-root", "x"])).toThrow(
-      /unknown option: --script-root/u,
-    );
+    for (const removed of ["--script-root", "--bridge"]) {
+      expect(() => parseArgs(["wf.ts", removed, "x"])).toThrow(`unknown option: ${removed}`);
+    }
     expect(() => parseArgs(["wf.ts", "--target"])).toThrow(/missing value for --target/u);
     expect(USAGE).toContain("[--input <json>]");
   });
 });
 
-describe.skipIf(process.platform === "win32")("codemod-workflow runs", () => {
+describe("codemod-workflow runs", () => {
   const load = (file: string) => resolve(import.meta.dirname, "fixtures/load", file);
-  const base = (file: string) => [
-    load(file),
-    "--target",
-    import.meta.dirname,
-    "--bridge",
-    fakeBridge,
-  ];
-  beforeEach(() => chmodSync(fakeBridge, 0o755));
+  const base = (file: string) => [load(file), "--target", import.meta.dirname, "--runtime", "echo"];
+  // Slow enough that an abort right after a run starts lands before it answers.
+  const registry = new RuntimeRegistry([echoRuntime(50)]);
 
   it("runs a bare shell step as the root", async () => {
-    const output = (await runWorkflowCli(base("shell.ts"))) as { stdout: string };
+    const output = (await runWorkflowCli(base("shell.ts"), undefined, undefined, {
+      registry,
+    })) as { stdout: string };
     const echoed = JSON.parse(output.stdout) as { request: OperationRequest };
     expect(echoed.request.commandId).toBe("inspect");
     expect(echoed.request.operation).toEqual({ kind: "shell", command: "true" });
@@ -307,7 +276,7 @@ describe.skipIf(process.platform === "win32")("codemod-workflow runs", () => {
   function dashboardHooks(fakeServer: boolean) {
     let session: DashboardSession | undefined;
     let closed = 0;
-    const hooks: CliHooks = {};
+    const hooks: CliHooks = { registry };
     const firstRun = new Promise<string>((resolve) => {
       hooks.onSession = (s) => {
         session = s;
@@ -420,7 +389,7 @@ describe.skipIf(process.platform === "win32")("codemod-workflow runs", () => {
     const session = seams.session();
     await session.settled(first);
     // Stop the host while a second run is active: the abort lands before its
-    // bridge process can answer, so that run is cancelled and reported as such.
+    // command answers, so that run is cancelled and reported as such.
     const second = await session.start();
     controller.abort();
     await expect(finished).rejects.toThrow(/cancelled|aborted/iu);
@@ -430,16 +399,17 @@ describe.skipIf(process.platform === "win32")("codemod-workflow runs", () => {
   });
 
   it("requires --input for a root that declares input, and passes null and JSON through", async () => {
-    await expect(runWorkflowCli(base("input.ts"))).rejects.toThrow(
+    const cli = (argv: string[]) => runWorkflowCli(argv, undefined, undefined, { registry });
+    await expect(cli(base("input.ts"))).rejects.toThrow(
       /workflow requires an input value; pass --input <json>/u,
     );
-    expect(await runWorkflowCli([...base("input.ts"), "--input", "null"])).toEqual({
+    expect(await cli([...base("input.ts"), "--input", "null"])).toEqual({
       received: null,
     });
-    expect(await runWorkflowCli([...base("input.ts"), "--input", '{"name":"x"}'])).toEqual({
+    expect(await cli([...base("input.ts"), "--input", '{"name":"x"}'])).toEqual({
       received: { name: "x" },
     });
-    await expect(runWorkflowCli([...base("input.ts"), "--input", "{name: x}"])).rejects.toThrow(
+    await expect(cli([...base("input.ts"), "--input", "{name: x}"])).rejects.toThrow(
       /--input must be valid JSON/u,
     );
   });

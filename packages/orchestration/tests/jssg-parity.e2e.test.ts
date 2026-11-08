@@ -1,17 +1,17 @@
 /**
  * Cross-runtime JSSG parity: the same edge-case commands
- * (`fixtures/parity/`) run through `codemod-workflow run` on the `bridge`,
- * `node`, and `quickjs` runtimes against identical repositories. All three
- * reach the same Rust batch rules (`crates/jssg-batch`: planning, path
- * containment, the selector skip, result conversion), so outputs, file
- * trees, and errors must be identical: errors produced by those rules
- * byte-for-byte; errors a transform throws byte-for-byte once the bridge
- * sandbox's wrapper and stack frames are removed.
+ * (`fixtures/parity/`) run through `codemod-workflow run` on the `node`
+ * and `quickjs` runtimes against identical repositories. Both reach the same
+ * Rust batch rules (`crates/jssg-batch`: planning, path containment, the
+ * selector skip, result conversion), so outputs, file trees, and errors
+ * must be identical: errors produced by those rules byte-for-byte; errors a
+ * transform throws byte-for-byte once stack frames are removed. The YAML
+ * engine is the reference for the benchmark transforms
+ * (`benchmarks/runtimes/verify.sh`).
  *
  * Run with: pnpm --filter @codemod.com/orchestration test:e2e
- * (needs the bridge, the napi addon, and the QuickJS host; the script builds
- * all three). Override the binaries with CODEMOD_BRIDGE_BIN and
- * CODEMOD_QUICKJS_HOST_BIN.
+ * (needs the napi addon and the QuickJS host; the script builds both).
+ * Override the host binary with CODEMOD_QUICKJS_HOST_BIN.
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -31,27 +31,20 @@ import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isAvailable as isNapiAvailable } from "@codemod.com/jssg-napi";
 
-const enabled = process.env.CODEMOD_QUICKJS_E2E === "1" || process.env.CODEMOD_BRIDGE_E2E === "1";
+const enabled = process.env.CODEMOD_QUICKJS_E2E === "1";
 const repoRoot = resolve(import.meta.dirname, "../../..");
-const bridge =
-  process.env.CODEMOD_BRIDGE_BIN ?? join(repoRoot, "target/debug/butterflow-execution-bridge");
 const host =
   process.env.CODEMOD_QUICKJS_HOST_BIN ?? join(repoRoot, "target/debug/orchestration-quickjs-host");
 const cli = resolve(import.meta.dirname, "../bin/codemod-workflow.mjs");
 const workflow = resolve(import.meta.dirname, "fixtures/parity/workflow.ts");
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), "jssg-parity-")));
 
-const RUNTIMES = ["bridge", "node", "quickjs"] as const;
+const RUNTIMES = ["node", "quickjs"] as const;
 type Runtime = (typeof RUNTIMES)[number];
 
 beforeAll(() => {
   if (!enabled) return;
-  for (const [name, path] of [
-    ["bridge", bridge],
-    ["quickjs host", host],
-  ] as const) {
-    if (!existsSync(path)) throw new Error(`${name} binary not found at ${path}`);
-  }
+  if (!existsSync(host)) throw new Error(`quickjs host binary not found at ${host}`);
   if (!isNapiAvailable()) {
     throw new Error(
       "jssg napi addon not built; run 'pnpm --filter @codemod.com/jssg-napi build:debug'",
@@ -122,8 +115,6 @@ function runOn(runtime: Runtime, setup: Setup, input: unknown): Outcome {
       workflow,
       "--target",
       repo,
-      "--bridge",
-      bridge,
       "--input",
       JSON.stringify(input),
     ],
@@ -171,25 +162,13 @@ function parity(
       expect(outcome.tree, `${runtime}: tree\n${context}`).toEqual(outcome.initial);
     }
   }
-  for (const runtime of ["node", "quickjs"] as const) {
-    const { error, ...rest } = outcomes[runtime];
-    const { error: reference, ...bridgeRest } = outcomes.bridge;
-    expect(rest, `${runtime} vs bridge\n${context}`).toEqual(bridgeRest);
-    // An error the transform throws reaches the bridge through its sandbox,
-    // which wraps it; past that wrapper (and the stack) it is the same text.
-    const unwrap = (text: string | undefined) =>
-      "thrown" in expected ? text?.replace(SANDBOX_WRAPPER, "") : text;
-    expect(unwrap(error), `${runtime} vs bridge\n${context}`).toBe(unwrap(reference));
-  }
+  expect(outcomes.quickjs, `quickjs vs node\n${context}`).toEqual(outcomes.node);
   return outcomes;
 }
 
-/** How the bridge's per-file sandbox wraps an error a transform throws. */
-const SANDBOX_WRAPPER = "Runtime error JavaScript execution failed: ";
-
 const TWO = { "a.ts": "oldApi(1);\n", "b.ts": "plain(2);\n" };
 
-describe.skipIf(!enabled)("JSSG parity: bridge, node, quickjs", () => {
+describe.skipIf(!enabled)("JSSG parity: node, quickjs", () => {
   it("string results: changed, unchanged; nullish results", () => {
     const changed = parity({ files: TWO }, { step: "returns", input: "changed" }, { ok: true });
     expect(changed.node.tree["a.ts"]).toBe("newApi(1);\n");
@@ -226,7 +205,7 @@ describe.skipIf(!enabled)("JSSG parity: bridge, node, quickjs", () => {
       { step: "returns", input: "output-shapes" },
       { ok: true },
     );
-    expect(shapes.bridge.output).toEqual([
+    expect(shapes.node.output).toEqual([
       {
         file: "a.ts",
         nested: { list: [1, "two", null, null, 2.5, -3, [true]] },
@@ -305,9 +284,9 @@ describe.skipIf(!enabled)("JSSG parity: bridge, node, quickjs", () => {
 
   it("BOM, CRLF, and no trailing newline: the same input and bytes as the workflow engine", () => {
     const outcomes = parity({ files: ENCODING_FILES }, { step: "encoding" }, { ok: true });
-    // `parity` already required node and quickjs to equal bridge: the same
+    // `parity` already required quickjs to equal node: the same
     // trees (read back losslessly, a BOM included) and the same outputs.
-    const { tree } = outcomes.bridge;
+    const { tree } = outcomes.node;
     const seen = (path: string) =>
       JSON.parse(/\/\* seen (.*) \*\/$/su.exec(tree[path]!)![1]!) as {
         head: number[];

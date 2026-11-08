@@ -4,7 +4,8 @@
  * over the napi-rs ast-grep addon (`@codemod.com/jssg-napi`), through the
  * portable orchestrator (`execution/jssg.ts::executeJssgCommand` with the
  * portable batch loop of `execution/jssg-batch.ts`, whose batch rules are
- * the bridge's own Rust through the addon's `JssgBatch`); `shell` runs
+ * the shared Rust (`crates/jssg-batch`) through the addon's `JssgBatch`);
+ * `shell` runs
  * through the host (`execution/shell.ts::executeShell`); `assessment` is one
  * TypeSafe SDK call per request from this process; JSSG semantic analysis
  * through the batch's provider; `agent` in one `codemod-agent` runner

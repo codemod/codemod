@@ -43,6 +43,7 @@ import {
   isRecord,
   type AssessmentOperation,
   type OperationCompletion,
+  type OperationRequest,
 } from "../core/protocol.ts";
 import { getHost } from "../core/host.ts";
 import { selectFiles } from "./files.ts";
@@ -250,6 +251,24 @@ function readAssessmentFile(absolute: string): string | undefined {
 
 function errorCode(error: unknown): unknown {
   return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+}
+
+/**
+ * One `assessment` operation as a runtime executes it: file-oriented when the
+ * operation carries its per-file question resolver (`assessment()` steps),
+ * else a single request.
+ */
+export function executeAssessmentOperation(
+  options: AssessmentExecutorOptions,
+  cwd: string,
+  request: OperationRequest,
+  signal?: AbortSignal,
+): Promise<OperationCompletion> {
+  const operation = request.operation as AssessmentOperation;
+  const ask = getAssessmentAsk(operation);
+  return ask === undefined
+    ? executeAssessment(options, request.commandId, operation, signal)
+    : executeFileAssessment(options, cwd, request.commandId, operation, ask, signal);
 }
 
 // Re-export from core for backward compatibility of the public API surface.

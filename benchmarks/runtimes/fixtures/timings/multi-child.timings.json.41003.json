@@ -1,25 +1,25 @@
 {
   "schema": 1,
-  "arm": "bridge",
-  "pid": 41002,
+  "arm": "child",
+  "pid": 41003,
   "parent_pid": 40001,
   "exec_to_main_ns": null,
-  "wall_ns": 700000000,
+  "wall_ns": 720000000,
   "phases": {
     "setup": {
       "ns": 5000000,
       "count": 1
     },
     "parse": {
-      "ns": 210000000,
+      "ns": 215000000,
       "count": 1700
     },
     "transform": {
-      "ns": 400000000,
+      "ns": 420000000,
       "count": 1700
     },
     "convert": {
-      "ns": 60000000,
+      "ns": 55000000,
       "count": 1700
     }
   },

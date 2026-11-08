@@ -7,12 +7,10 @@
  *    invocation target, engine walker semantics), reading every file;
  * 3. hand the artifact source and the whole batch to `dispatch`, which
  *    returns one `FileOutcome` per file (snapshot semantics: no transform
- *    sees another's edits). The bridge runtime dispatches to one
- *    `butterflow-execution-bridge` process (`bridge.ts::executeJssg`), which
- *    verifies the hash, indexes the batch for workspace semantics, skips
- *    files the static selector does not match, and transforms the rest;
- *    in-process runtimes dispatch to their own batch runner with the same
- *    contract;
+ *    sees another's edits). The runtimes dispatch to the shared batch loop
+ *    (`jssg-batch.ts`), which verifies the hash, indexes the batch for
+ *    workspace semantics, skips files the static selector does not match,
+ *    and transforms the rest;
  * 4. validate the returned edits, check cross-file conflicts, then commit.
  *
  * Nothing touches the repository before step 4's commit. Failures before it
@@ -87,7 +85,7 @@ export async function executeJssgCommand(
   if (artifact === undefined) {
     return fail(
       "failed",
-      `no built artifact for jssg '${operation.transform.name}' (hash ${operation.transform.hash.slice(0, 12)}); load the workflow with loadWorkflow() or codemod-workflow and pass its artifacts to BridgeExecutor`,
+      `no built artifact for jssg '${operation.transform.name}' (hash ${operation.transform.hash.slice(0, 12)}); load the workflow with loadWorkflow() or codemod-workflow and pass its artifacts to the executor`,
       { phase: "artifact" },
     );
   }
@@ -157,7 +155,9 @@ export async function executeJssgCommand(
     outcomes.length !== files.length ||
     outcomes.some((outcome, index) => outcome.path !== files[index]!.path)
   ) {
-    return fail("failed", "bridge returned an invalid batch result", { phase: "transform" });
+    return fail("failed", "the batch runner returned an invalid batch result", {
+      phase: "transform",
+    });
   }
 
   let staged: Staged;

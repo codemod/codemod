@@ -337,7 +337,7 @@ export interface AgentRunnable<I = void, O = AgentOutput> extends Runnable<I, O,
  * Agent step: the selected backend works on the repository and may change
  * files. Without `output` the result is
  * `{ text }`, the final response. With `output` the operation carries
- * `responseFormat: "json"` (the bridge tells the agent to answer with JSON
+ * `responseFormat: "json"` (the runner tells the agent to answer with JSON
  * only) and the text, bare or inside one markdown JSON fence, is parsed and
  * validated.
  */

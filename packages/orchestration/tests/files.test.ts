@@ -1,7 +1,7 @@
 /**
  * File selection: the walker contract shared with the workflow engine
  * (`fixtures/walker/cases.json`, also run by
- * `crates/execution-bridge/tests/contracts.rs`), definition/target
+ * `crates/jssg-batch/tests/contracts.rs`), definition/target
  * intersection, language defaults, and global excludes discovery.
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";

@@ -1,12 +1,12 @@
 /**
  * Benchmark timings end to end: `codemod-workflow run` on every runtime with
  * `CODEMOD_TIMINGS_FILE` set writes one top-level file (`ts-<runtime>`) plus
- * one file per child process (each bridge, the quickjs host), whose merged
+ * one file per child process (the quickjs host), whose merged
  * phases cover the run without double counting; unset, nothing is written.
  *
  * Needs binaries and the addon built with the `timings` feature:
  *   pnpm --filter @codemod.com/orchestration test:e2e:timings
- * (`CODEMOD_BRIDGE_BIN` / `CODEMOD_QUICKJS_HOST_BIN` / `CODEMOD_JSSG_NAPI`
+ * (`CODEMOD_QUICKJS_HOST_BIN` / `CODEMOD_JSSG_NAPI`
  * override the debug builds, e.g. with the release ones the benchmark uses).
  */
 import { spawnSync } from "node:child_process";
@@ -18,8 +18,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 const enabled = process.env.CODEMOD_TIMINGS_E2E === "1";
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const cli = resolve(import.meta.dirname, "../bin/codemod-workflow.mjs");
-const bridge =
-  process.env.CODEMOD_BRIDGE_BIN ?? join(repoRoot, "target/debug/butterflow-execution-bridge");
 const transforms = join(repoRoot, "benchmarks/runtimes/transforms");
 
 interface Phase {
@@ -69,14 +67,14 @@ function makeRepo(): string {
 }
 
 function runCli(runtime: string, repo: string, timings: string | undefined, cwd?: string) {
-  const env: Record<string, string | undefined> = { ...process.env, CODEMOD_BRIDGE_BIN: bridge };
+  const env: Record<string, string | undefined> = { ...process.env };
   delete env.CODEMOD_TIMINGS_FILE;
   delete env.CODEMOD_TIMINGS_ROOT_PID;
   delete env.BENCH_T0_NS;
   if (timings !== undefined) env.CODEMOD_TIMINGS_FILE = timings;
   const result = spawnSync(
     process.execPath,
-    [cli, "run", `--runtime=${runtime}`, workflow, "--target", repo, "--bridge", bridge],
+    [cli, "run", `--runtime=${runtime}`, workflow, "--target", repo],
     { env, encoding: "utf8", ...(cwd === undefined ? {} : { cwd }) },
   );
   expect(result.status, result.stderr).toBe(0);
@@ -88,7 +86,7 @@ const total = (phases: Record<string, Phase>) =>
   Object.values(phases).reduce((sum, phase) => sum + phase.ns, 0);
 
 describe.runIf(enabled)("benchmark timings files", () => {
-  const children = { bridge: ["bridge", "bridge"], node: [], quickjs: ["quickjs-host"] };
+  const children = { node: [], quickjs: ["quickjs-host"] };
 
   for (const [runtime, childArms] of Object.entries(children)) {
     it(`${runtime}: one top-level file, one per child, phases within the wall`, () => {

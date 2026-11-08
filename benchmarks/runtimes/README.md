@@ -1,6 +1,6 @@
 # Runtime benchmark: YAML engine vs TypeScript workflow runtimes
 
-Wall-clock comparison of the same two-step JSSG codemod run four ways on a
+Wall-clock comparison of the same two-step JSSG codemod run three ways on a
 pinned checkout of [vitejs/vite](https://github.com/vitejs/vite), gated by a
 byte-identical-diff correctness check.
 
@@ -27,8 +27,7 @@ transform in every arm. On vite v8.3.6 the result is 331 modified files
 | Arm | Definition | Command |
 | --- | --- | --- |
 | `yaml` | `yaml/workflow.yaml` (two `js-ast-grep` steps) | release `codemod workflow run --no-interactive --disable-analytics` |
-| `ts-bridge` | `ts/workflow.ts` (`sequence()` of two `jssg()` steps) | `node packages/orchestration/bin/codemod-workflow.mjs` with the release `butterflow-execution-bridge` |
-| `ts-node` | same | `codemod-workflow run --runtime=node` |
+| `ts-node` | `ts/workflow.ts` (`sequence()` of two `jssg()` steps) | `node packages/orchestration/bin/codemod-workflow.mjs run --runtime=node` |
 | `ts-quickjs` | same | `codemod-workflow run --runtime=quickjs` |
 
 Each arm uses its default (natural) parallelism. The harness prints it but
@@ -37,16 +36,12 @@ never sets it:
 - `yaml`: steps run one after another. Each step walks and transforms files on
   `min(available_parallelism, 12)` threads (no `max_threads`), with a fresh
   QuickJS runtime per file.
-- `ts-bridge`: `sequence()` runs one command at a time. Each jssg command is
-  one bridge process that transforms its whole batch serially on one thread,
-  with a fresh QuickJS runtime per file. File selection (the TypeScript
-  walker), reads, conflict checks, and writes happen in Node.
 - `ts-node`: one Node process (the CLI strips TypeScript in-process through
   `bin/register-ts.mjs`; no re-spawn). One JS thread runs the workflow and
   every transform, serially per file. The napi addon walks and reads the
   selection natively (`crates/orchestration-walker`, worker threads), and
   plans, contains, parses, selector-matches, and converts results with the
-  bridge's own batch rules (`crates/jssg-batch`), parsing 64-file chunks on
+  shared batch rules (`crates/jssg-batch`), parsing 64-file chunks on
   worker threads one chunk ahead of the transforms.
 - `ts-quickjs`: Node builds the bundle, or reuses it from its content-hash
   cache, then spawns `orchestration-quickjs-host`. One QuickJS context runs
@@ -55,12 +50,16 @@ never sets it:
   (the same `crates/orchestration-walker`, worker threads); batch rules are
   `crates/jssg-batch`, and Rust parses each file on the JS thread.
 
-`ts-node` and `ts-quickjs` are skipped, with a message, when their addon or
-host binary is not built. Every arm is probed first by running it on a two-file
-scratch repository and checking the exact expected edit. `ts-bridge` uses
-`codemod-workflow run --runtime=bridge` when the CLI accepts that form and the
-legacy form otherwise. To override an arm's command line, set
-`BENCH_CMD_<ARM>=...` (see `lib.sh`).
+An arm whose binary (the napi addon for `ts-node`, the host for `ts-quickjs`)
+is not built is skipped with a message, unless it is in `BENCH_REQUIRE_ARMS`
+(default `yaml ts-node`), which fails instead. Every arm is probed first by
+running it on a two-file scratch repository and checking the exact expected
+edit. To override an arm's command line, set `BENCH_CMD_<ARM>=...` (see
+`lib.sh`).
+
+The `ts-bridge` arm (one `butterflow-execution-bridge` process per command)
+was removed with the bridge runtime on 2026-11-08; it appears only in the
+recorded results below.
 
 ## Correctness gate
 
@@ -102,8 +101,8 @@ resets and cleans it with git.
 # once: JS deps, the report UI the CLI embeds, and release binaries
 pnpm install
 pnpm --filter codemod-report-ui build          # crates/cli embeds report-ui/dist/index.html
-cargo build --release -p codemod -p butterflow-execution-bridge -p orchestration-quickjs-host \
-  --features codemod/timings,butterflow-execution-bridge/timings,orchestration-quickjs-host/timings
+cargo build --release -p codemod -p orchestration-quickjs-host \
+  --features codemod/timings,orchestration-quickjs-host/timings
 node packages/jssg-napi/scripts/build.mjs --release --features timings   # napi addon for ts-node
 brew install hyperfine                          # or: cargo install hyperfine
 # The `timings` feature only compiles the phase timers in; they stay off
@@ -129,9 +128,9 @@ use `rounds.sh` or `sizes.sh` (see "Rounds, sizes, and analysis" below).
 
 Knobs (environment): `BENCH_REPO` (checkout path; `setup.sh` also takes it as
 its argument), `BENCH_RUNS` (default 5), `BENCH_WARMUP` (default 1),
-`BENCH_ARMS`, `BENCH_REQUIRE_ARMS` (default `yaml ts-bridge`, which fail
-instead of being skipped), `CARGO_TARGET_DIR` / `CODEMOD_BIN` /
-`CODEMOD_BRIDGE_BIN`, `BENCH_CMD_<ARM>`, `BENCH_TIMEOUT` (seconds; kills any
+`BENCH_ARMS` (default `yaml ts-node ts-quickjs`), `BENCH_REQUIRE_ARMS` (default
+`yaml ts-node`, which fail instead of being skipped), `CARGO_TARGET_DIR` /
+`CODEMOD_BIN` / `CODEMOD_QUICKJS_HOST_BIN` / `CODEMOD_JSSG_NAPI`, `BENCH_CMD_<ARM>`, `BENCH_TIMEOUT` (seconds; kills any
 single arm run that exceeds it, so a hang fails instead of stalling the
 session), and `BENCH_HOME`. `BENCH_HOME` runs
 every arm with `HOME` set to a scratch directory, which isolates the engine's
@@ -272,7 +271,7 @@ uses Node only (no dependencies) and writes `report.md` and `report.json`:
   timings files, the section says so.
 - Noise check: the script exits 2 when any arm's IQR/median exceeds 5 %,
   unless `BENCH_ALLOW_NOISY=1`. The reports are written either way.
-- Provenance: worktree sha + dirty flag, sha256 of `codemod`, the bridge, the
+- Provenance: worktree sha + dirty flag, sha256 of `codemod`, the
   quickjs host, the napi `.node`, and `bench-exec`; node/rustc/hyperfine/codemod
   versions; input tag and commit; cache mode; arm commands; and the preflight
   output.
@@ -302,7 +301,7 @@ end is above it; otherwise `inconclusive`), and how many "on" runs produced a
 timings file. It exits 1 when an arm is `OVER`.
 
 With `BENCH_OVERHEAD_BASELINE=<cargo target dir>` (a release build of
-`codemod`, the bridge, the quickjs host, and `jssg-napi` *without* the
+`codemod`, the quickjs host, and `jssg-napi` *without* the
 `timings` feature), it measures the feature instead: "off" runs the baseline
 build and "on" the default build, both with `CODEMOD_TIMINGS_FILE` unset.
 The mode is recorded in `<out>/mode`.
@@ -316,8 +315,9 @@ Arms built with timings support write one JSON file per process when
 `{ schema, arm, pid, parent_pid, exec_to_main_ns, wall_ns, phases: { <phase>: { ns, count, cpu_ns? } }, marks, threads_used?, children }`.
 The phases are `boot plan select read setup parse transform convert conflict
 commit idle_wait`, and the marks are `engine_done` and `poll_saw` (yaml). An
-example file per arm, with child files for the bridge and quickjs-host
-processes, is in `fixtures/timings/`. Those files drive the analysis tests
+example file per arm, with child files for the quickjs-host process, is in
+`fixtures/timings/` (`multi-child.timings.json` exercises a parent with
+several children). Those files drive the analysis tests
 (`tests/analysis.test.mjs`, `pnpm test:bench`).
 
 What each phase covers:
@@ -328,10 +328,10 @@ What each phase covers:
 | `plan` | loading and planning the workflow (module load or the cached quickjs bundle, the YAML run record, the yaml CLI's dirty-worktree check), the scheduler's bookkeeping between steps, printing the result |
 | `select` | target root and the file walk (yaml: the walker's traversal between files) |
 | `read` | reading the selected sources |
-| `setup` | per batch and per file: planning the batch, the first evaluation of the transform module, a QuickJS runtime and context per file (bridge, yaml) and its teardown, the loop's per-file bookkeeping (yaml: the engine's per-file task handoff); per child process: spawn until close minus the child's own wall (exec, loader, exit) |
+| `setup` | per batch and per file: planning the batch, the first evaluation of the transform module, a QuickJS runtime and context per file (yaml) and its teardown, the loop's per-file bookkeeping (yaml: the engine's per-file task handoff); per child process: spawn until close minus the child's own wall (exec, loader, exit) |
 | `parse` | tree-sitter and the selector check, or the time blocked on it when it runs on worker threads (ts-node: their CPU is `cpu_ns`) |
 | `transform` | the transform call |
-| `convert` | reading its result into edits (the bridge also: writing its response) |
+| `convert` | reading its result into edits |
 | `conflict` | validating the batch result and the cross-file conflict checks |
 | `commit` | writing the files |
 | `idle_wait` | yaml: from the engine finishing to the CLI's status poll seeing it |
@@ -360,6 +360,9 @@ process; with these rules it stays at or below 100 % and should be >= 95 %
 on vite for every arm (the gap is code outside any span).
 
 ## Results
+
+The `ts-bridge` arm was removed after Phase G (2026-11-08), with the bridge runtime; it
+appears only in these historical results.
 
 ### Phase G: four sizes with phase timings (Linux VM)
 

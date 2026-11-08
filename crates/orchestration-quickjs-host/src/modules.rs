@@ -2,7 +2,7 @@
 //! (`registerModule(specifier, source)`) and then imports with a dynamic
 //! `import(specifier)`, so each artifact is evaluated once per run by the
 //! engine's own module cache. The source is declared verbatim, exactly as the
-//! execution bridge's in-memory loader declares it.
+//! sandbox's in-memory loader declares it.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

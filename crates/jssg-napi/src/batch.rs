@@ -1,4 +1,4 @@
-//! The `node` runtime's JSSG batch: the bridge's own batch rules
+//! The `node` runtime's JSSG batch: the shared batch rules
 //! ([`jssg_batch::BatchPlan`]) behind a napi class, driven by the portable
 //! batch loop (`packages/orchestration/src/execution/jssg-batch.ts`).
 //!
@@ -11,7 +11,7 @@
 //!   parallel) and answers `null` where the static selector matches nothing;
 //! - `options()`: a fresh transform `options` object;
 //! - `finish(index, root, result, staged)`: the transform's awaited result
-//!   and its staged changes as the `FileOutcome` the bridge would return.
+//!   and its staged changes as the `FileOutcome` the shared rules build.
 //!
 //! The only binding-specific code here is reading the transform's return
 //! value ([`read_return`]), which mirrors the QuickJS facade's

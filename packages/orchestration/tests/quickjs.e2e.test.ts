@@ -1,10 +1,10 @@
 /**
  * End-to-end tests of `--runtime=quickjs` against the real Rust host
- * (`crates/orchestration-quickjs-host`) and, for parity, the real bridge.
+ * (`crates/orchestration-quickjs-host`) and, for parity, the `node` runtime.
  *
  * Run with: pnpm --filter @codemod.com/orchestration test:e2e
- * (builds both binaries). Override them with CODEMOD_QUICKJS_HOST_BIN and
- * CODEMOD_BRIDGE_BIN.
+ * (builds the host and the napi addon). Override the host with
+ * CODEMOD_QUICKJS_HOST_BIN.
  */
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -26,20 +26,13 @@ const enabled = process.env.CODEMOD_QUICKJS_E2E === "1";
 const repoRoot = resolve(import.meta.dirname, "../../..");
 const host =
   process.env.CODEMOD_QUICKJS_HOST_BIN ?? join(repoRoot, "target/debug/orchestration-quickjs-host");
-const bridge =
-  process.env.CODEMOD_BRIDGE_BIN ?? join(repoRoot, "target/debug/butterflow-execution-bridge");
 const fixtures = resolve(import.meta.dirname, "fixtures/quickjs");
 const fakeAgent = resolve(import.meta.dirname, "fixtures/fake-agent.mjs");
 const scratch = mkdtempSync(join(tmpdir(), "quickjs-e2e-"));
 
 beforeAll(() => {
   if (!enabled) return;
-  for (const [name, path] of [
-    ["quickjs host", host],
-    ["bridge", bridge],
-  ]) {
-    if (!existsSync(path!)) throw new Error(`${name} binary not found at ${path}`);
-  }
+  if (!existsSync(host)) throw new Error(`quickjs host binary not found at ${host}`);
   process.env.CODEMOD_QUICKJS_HOST_BIN = host;
   process.env.CODEMOD_WORKFLOW_CACHE = join(scratch, "cache");
 });
@@ -96,14 +89,13 @@ const register = resolve(import.meta.dirname, "../bin/register-ts.mjs");
  * path (vitest's module loader would bypass `loadWorkflow`'s Node hooks).
  */
 function runOn(
-  runtime: "bridge" | "node" | "quickjs",
+  runtime: "node" | "quickjs",
   fixture: string,
   input?: unknown,
   options: { files?: Record<string, string>; env?: Record<string, string> } = {},
 ): Outcome {
   const target = makeRepo(options.files);
   const args = [cli, "run", `--runtime=${runtime}`, join(fixtures, fixture), "--target", target];
-  args.push("--bridge", bridge);
   if (input !== undefined) args.push("--input", JSON.stringify(input));
   const result = spawnSync(process.execPath, args, {
     encoding: "utf8",
@@ -146,10 +138,10 @@ async function bundleFor(fixture: string): Promise<string> {
   return path;
 }
 
-describe.runIf(enabled)("quickjs runtime vs bridge runtime: JSSG parity", () => {
+describe.runIf(enabled)("quickjs runtime vs node runtime: JSSG parity", () => {
   it("a sequence: structured outputs, selector skips, renames", async () => {
     const [b, q] = [
-      await runOn("bridge", "jssg-sequence.ts"),
+      await runOn("node", "jssg-sequence.ts"),
       await runOn("quickjs", "jssg-sequence.ts"),
     ];
     expect(b.ok).toBe(true);
@@ -160,7 +152,7 @@ describe.runIf(enabled)("quickjs runtime vs bridge runtime: JSSG parity", () => 
 
   it("dynamic bodies, concurrent commands, invocation targets, and a shell step", async () => {
     const [b, q] = [
-      await runOn("bridge", "jssg-dynamic.ts"),
+      await runOn("node", "jssg-dynamic.ts"),
       await runOn("quickjs", "jssg-dynamic.ts"),
     ];
     expect(b.ok).toBe(true);
@@ -173,7 +165,7 @@ describe.runIf(enabled)("quickjs runtime vs bridge runtime: JSSG parity", () => 
     ["escape", /is outside the target directory/u],
   ])("failure '%s' fails on both and writes nothing", async (which, message) => {
     const [b, q] = [
-      await runOn("bridge", "jssg-failures.ts", which),
+      await runOn("node", "jssg-failures.ts", which),
       await runOn("quickjs", "jssg-failures.ts", which),
     ];
     for (const outcome of [b, q]) {
@@ -200,17 +192,17 @@ describe.runIf(enabled)("quickjs runtime: native file selection", () => {
   };
 
   it.each(["jssg-sequence.ts", "jssg-dynamic.ts"])(
-    "%s: the same run with the walker interpreted, and the same as the bridge",
+    "%s: the same run with the walker interpreted, and the same as node",
     async (fixture) => {
       const native = runOn("quickjs", fixture, undefined, { files });
       const interpreted = runOn("quickjs", fixture, undefined, {
         files,
         env: { CODEMOD_NATIVE_SELECT: "0" },
       });
-      const bridged = runOn("bridge", fixture, undefined, { files });
+      const onNode = runOn("node", fixture, undefined, { files });
       expect(native.ok).toBe(true);
       expect(interpreted).toEqual(native);
-      expect(bridged).toEqual(native);
+      expect(onNode).toEqual(native);
     },
   );
 });

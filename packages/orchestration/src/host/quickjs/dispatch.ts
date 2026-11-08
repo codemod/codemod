@@ -1,8 +1,8 @@
 /**
  * In-context JSSG for the `quickjs` runtime: the `JssgBatchEngine` the
  * portable batch loop (`execution/jssg-batch.ts`, shared with the `node`
- * runtime) drives instead of spawning a bridge process. Every batch rule is
- * the bridge's own Rust (`crates/jssg-batch`), reached through the host's
+ * runtime) drives. Every batch rule is the shared Rust
+ * (`crates/jssg-batch`), reached through the host's
  * primitives (`crates/orchestration-quickjs-host/src/jssg.rs`):
  *
  * - `jssgBegin(config, paths)`: `BatchPlan` (hash check, containment of
@@ -14,7 +14,7 @@
  * - `jssgCall(batch)` / `jssgCallEnd(batch, index)`: around one transform
  *   call, the per-context staging of `write()`/`jssgTransform()` and the
  *   transform options;
- * - `jssgFinish(batch, index, root, result)`: the bridge's result
+ * - `jssgFinish(batch, index, root, result)`: the shared result
  *   conversion, as `FileOutcome` JSON.
  *
  * Transform modules are evaluated once per run, cached by artifact hash;

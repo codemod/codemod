@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 codemod-sandbox = { workspace = true }
 ast-grep-core = { workspace = true }
 ast-grep-config = { workspace = true }
-# The JSSG batch rules shared with the bridge and the QuickJS host.
+# The JSSG batch rules shared with the QuickJS host.
 jssg-batch = { workspace = true }
 napi = { version = "3", default-features = false, features = ["napi6", "serde-json", "dyn-symbols"] }
 napi-derive = "3"

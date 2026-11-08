@@ -4,7 +4,7 @@
  * every run of one configuration, the HTTP surface as plain functions, and
  * the loopback host itself. Every run is driven by an executor the test
  * releases by hand, so nothing depends on durations; the executor honours the
- * abort signal so restarts settle the way a killed bridge would.
+ * abort signal so restarts settle the way a killed child process would.
  */
 import { request } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
@@ -53,7 +53,7 @@ async function settle(turns = 8): Promise<void> {
 
 /**
  * An executor whose operations stay open until the test finishes them. An
- * aborted operation completes `cancelled` on its own, as the bridge does when
+ * aborted operation completes `cancelled` on its own, as a runtime does when
  * it is killed, so a run that is aborted always settles.
  */
 function controllable(): {

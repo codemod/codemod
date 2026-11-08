@@ -1,14 +1,14 @@
 /**
- * The environment an `agent` bridge starts with. An agent's tools run
+ * The environment the `agent` runner (`codemod-agent`) starts with. An agent's tools run
  * commands chosen by a model, so the host environment is not inherited: only
  * what a process needs to start, reach the network, and configure the agent,
- * plus variables the host passed explicitly (`BridgeOptions.env`).
+ * plus variables the runtime passed explicitly (its `env` setting).
  * Everything else (TypeSafe keys, cloud and CI credentials, tokens) stays out.
  *
  * `LLM_API_KEY` is allowlisted only so it can be found: `agentLaunch` moves
- * it out of the launch environment and onto the bridge's stdin
- * (`CODEMOD_BRIDGE_SECRETS=stdin`), so it is not visible through `ps eww` or
- * `/proc/<pid>/environ` of the bridge. The bridge also removes it from its own
+ * it out of the launch environment and onto the runner's stdin
+ * (`CODEMOD_AGENT_SECRETS=stdin`), so it is not visible through `ps eww` or
+ * `/proc/<pid>/environ` of the runner. The runner also removes it from its own
  * environment before the agent starts.
  *
  * External backends (`claude-code`, `codex`) get no `LLM_*` variables and no
@@ -161,21 +161,19 @@ export function externalAgentEnvProblem(explicit: Record<string, string> = {}): 
   return `external agent backends do not accept credential or provider variables in the runtime's env (${refused.join(", ")}); they use the CLI's own login`;
 }
 
-/** Marker telling the bridge to read `{ "LLM_API_KEY": ... }` from stdin. */
-export const BRIDGE_SECRETS_ENV = "CODEMOD_BRIDGE_SECRETS";
 /** Marker telling `codemod-agent` that `{ "LLM_API_KEY": ... }` follows the request on stdin. */
 export const AGENT_SECRETS_ENV = "CODEMOD_AGENT_SECRETS";
 
 /**
- * How an agent bridge is launched: the allowlisted environment without
- * `LLM_API_KEY`, and the key as JSON for the bridge's stdin when there is one.
+ * How an agent runner is launched: the allowlisted environment without
+ * `LLM_API_KEY`, and the key as JSON for the runner's stdin when there is one.
  */
 export function agentLaunch(
   host: Record<string, string | undefined>,
   explicit: Record<string, string> = {},
   platform: string,
   backend: AgentBackendKind = "builtin",
-  secretsEnv: string = BRIDGE_SECRETS_ENV,
+  secretsEnv: string = AGENT_SECRETS_ENV,
 ): { env: Record<string, string>; stdin?: string } {
   const env = agentEnvironment(host, explicit, platform);
   let apiKey: string | undefined;

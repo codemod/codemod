@@ -5,16 +5,18 @@
  * Loads a TypeScript workflow module through the build step (`bundle/build.ts`:
  * inline JSSG transforms are bundled into artifacts and the module is
  * rewritten to reference them), runs its default export on the selected
- * runtime (`runtimes/`; default `bridge`: the Rust execution bridge, one
- * process per `shell` or JSSG command), and prints the final value as JSON.
+ * runtime (`runtimes/`; default `node`: the whole workflow in this Node
+ * process, `quickjs`: the sandboxed QuickJS host), and prints the final
+ * value as JSON.
  * A runtime that cannot run here fails before anything is loaded with its
  * own reason (e.g. `runtime 'node' not available yet`), and the command
  * exits nonzero. Trusted local use only: the workflow runs in plain
  * Node, not a restricted sandbox, and nothing here validates registry
  * packages. SIGINT/SIGTERM/SIGHUP abort the run: the operation in flight is
- * cancelled (bridge process tree killed, nothing written; an agent that had
- * started is `unknown`). Bridges run in their own process groups, so a closed
- * terminal only reaches them through this abort.
+ * cancelled (a shell's or agent runner's process tree killed, nothing
+ * written; an agent that had started is `unknown`). Child processes run in
+ * their own process groups, so a closed terminal only reaches them through
+ * this abort.
  *
  * `--dashboard` turns the command into a host: it serves the local run
  * dashboard (`dashboard/`), starts the first run, and stays alive after that
@@ -36,7 +38,6 @@ import "./node-host.ts";
 // The dashboard (server, session, monitor, the run loop) loads only for --dashboard.
 import type { Dashboard } from "./dashboard/server.ts";
 import type { DashboardSession, RunSummary } from "./dashboard/session.ts";
-import { defaultBridgePath } from "./runtimes/bridge.ts";
 import {
   defaultRuntimes,
   loadExecutable,
@@ -50,11 +51,9 @@ export interface CliOptions {
   workflow: string;
   /** Repository the workflow operates on; `shell` cwd and JSSG target root. */
   target: string;
-  /** Path to the `butterflow-execution-bridge` binary. */
-  bridge: string;
   /**
-   * `--runtime <name>` (`bridge`, `node`, `quickjs`, or any registered
-   * runtime). Present only when the flag was given; the default is `bridge`.
+   * `--runtime <name>` (`node`, `quickjs`, or any registered runtime).
+   * Present only when the flag was given; the default is `node`.
    */
   runtime?: string;
   /**
@@ -78,13 +77,14 @@ export interface CliHooks {
 }
 
 /**
- * Signals the CLI turns into an abort of the run. Bridges run detached in
- * their own process groups, so a terminal's SIGINT or SIGHUP reaches them
- * only through this abort; hosts embedding `run()` must do the same.
+ * Signals the CLI turns into an abort of the run. Child processes run
+ * detached in their own process groups, so a terminal's SIGINT or SIGHUP
+ * reaches them only through this abort; hosts embedding `run()` must do the
+ * same.
  */
 export const ABORT_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
-export const USAGE = `usage: codemod-workflow [run] <workflow.ts> [--runtime <${defaultRuntimes.names().join("|")}>] [--target <directory>] [--bridge <binary>] [--input <json>] [--dashboard]
+export const USAGE = `usage: codemod-workflow [run] <workflow.ts> [--runtime <${defaultRuntimes.names().join("|")}>] [--target <directory>] [--input <json>] [--dashboard]
        codemod-workflow build <workflow.ts> --runtime quickjs -o <bundle.mjs>`;
 
 /**
@@ -148,7 +148,6 @@ export async function runWorkflowCli(
   const hasInput = "input" in options;
   const launch = {
     target: options.target,
-    bridge: options.bridge,
     ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
     ...(hooks.registry === undefined ? {} : { registry: hooks.registry }),
   };
@@ -220,10 +219,7 @@ function describeOutcome(run: RunSummary): string {
   }
 }
 
-/**
- * All paths come back absolute. The bridge defaults to the monorepo debug
- * build when the package runs from the source checkout.
- */
+/** All paths come back absolute. */
 export function parseArgs(argv: string[]): CliOptions {
   // `--flag=value` is the same as `--flag value`.
   const args = argv.flatMap((arg) => {
@@ -236,7 +232,6 @@ export function parseArgs(argv: string[]): CliOptions {
   // (`run --runtime=quickjs <workflow.ts>`) or after it.
   let workflow: string | undefined;
   let target = process.cwd();
-  let bridge = defaultBridgePath();
   let input: { value: Json } | undefined;
   let runtime: string | undefined;
   let dashboard = false;
@@ -254,7 +249,6 @@ export function parseArgs(argv: string[]): CliOptions {
     const value = args.shift();
     if (value === undefined) throw new Error(`missing value for ${flag}\n${USAGE}`);
     if (flag === "--target") target = value;
-    else if (flag === "--bridge") bridge = value;
     else if (flag === "--input") input = { value: parseInput(value) };
     else if (flag === "--runtime") runtime = value;
     else throw new Error(`unknown option: ${flag}\n${USAGE}`);
@@ -263,7 +257,6 @@ export function parseArgs(argv: string[]): CliOptions {
   return {
     workflow: resolve(workflow),
     target: resolve(target),
-    bridge: resolve(bridge),
     ...(runtime === undefined ? {} : { runtime }),
     ...(input === undefined ? {} : { input: input.value }),
     dashboard,
