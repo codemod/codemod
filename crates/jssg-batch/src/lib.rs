@@ -386,10 +386,12 @@ impl BatchPlan {
             return Ok(());
         }
         let provider = self.provider.as_ref().expect("workspace provider");
-        let (path, source) = (self.path(index)?, self.source(index)?);
-        provider
-            .notify_file_processed(&source, content)
-            .map_err(|error| format!("failed to index '{path}': {error}"))
+        let source = self.source(index)?;
+        // A file the semantic parser cannot read (JSX in a `.js` file, for
+        // one) is left out of the index, as the YAML engine's pre-index does;
+        // the transform still runs on it.
+        let _ = provider.notify_file_processed(&source, content);
+        Ok(())
     }
 
     /// File `index`'s transform output as a validated [`FileOutcome`]; an
@@ -815,6 +817,32 @@ mod tests {
             definition_of_add(SemanticMode::File, false),
             Some(Some("main.ts".to_string()))
         );
+    }
+
+    #[test]
+    fn workspace_indexing_skips_a_file_the_semantic_parser_rejects() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsx_in_js = "export const A = () => <div>{x}</div>;\n";
+        std::fs::write(dir.path().join("a.js"), jsx_in_js).unwrap();
+        let source = "x";
+        let artifact = ArtifactRef {
+            name: "t".to_string(),
+            hash: format!("{:x}", Sha256::digest(source.as_bytes())),
+        };
+        let root = dir.path().to_string_lossy().into_owned();
+        let analysis = SemanticAnalysis::Mode(SemanticMode::Workspace);
+        let batch = Batch {
+            artifact: &artifact,
+            source: Some(source),
+            language: "typescript",
+            selector: None,
+            target_root: Some(&root),
+            semantic_analysis: Some(&analysis),
+            input: None,
+            files: &[],
+        };
+        let plan = BatchPlan::for_paths(&batch, ["a.js"], Containment::PerFile).unwrap();
+        assert_eq!(plan.index(0, jsx_in_js), Ok(()));
     }
 
     #[test]
