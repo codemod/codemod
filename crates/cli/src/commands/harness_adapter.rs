@@ -4517,6 +4517,12 @@ mod tests {
 
     const CLAUDE_PROJECT_RUNNER_COMMAND: &str =
         "\"$CLAUDE_PROJECT_DIR\"/.claude/codemod/periodic-update/check-updates.sh";
+    const LEGACY_UNIX_NPX_LAUNCHER: &str =
+        "/Users/dev/.npm/_npx/0a1b2c3d/node_modules/@codemod.com/cli-darwin-arm64/codemod";
+    const LEGACY_WINDOWS_NPX_LAUNCHER: &str = r"C:\Users\dev\AppData\Local\npm-cache\_npx\0a1b2c3d\node_modules\@codemod.com\cli-win32-x64-msvc\codemod.exe";
+    const LEGACY_PROJECT_RUNNER: &str =
+        "/machine-a/project/.claude/codemod/periodic-update/check-updates.sh";
+    const PROJECT_RUNNER_RELATIVE_PATH: &str = ".claude/codemod/periodic-update/check-updates.sh";
 
     fn claude_session_start_commands(settings: &str) -> Vec<String> {
         let settings: Value = serde_json::from_str(settings).unwrap();
@@ -4592,101 +4598,163 @@ mod tests {
         }
     }
 
-    #[test]
-    fn project_mcp_configs_are_portable_across_machines_and_checkouts() {
-        let temp_dir = tempdir().unwrap();
-        let original = npx_launched_runtime_paths(temp_dir.path(), "my project");
-        let relocated = npx_launched_runtime_paths(temp_dir.path(), "other checkout");
-        let request = InstallRequest {
-            scope: InstallScope::Project,
-            force: false,
-        };
+    fn install_mcp(
+        harness: Harness,
+        scope: InstallScope,
+        force: bool,
+        runtime_paths: &RuntimePaths,
+    ) -> AdapterResult<PathBuf> {
+        install_mcp_server_config(harness, &InstallRequest { scope, force }, runtime_paths)
+    }
 
-        for harness in [
+    /// Writes a Claude MCP config holding `codemod` plus an unrelated user server.
+    fn write_claude_mcp_config(path: &Path, codemod: Value) -> String {
+        let content = json!({ "mcpServers": {
+            "codemod": codemod,
+            "custom": { "command": "node", "args": ["server.js"] }
+        } })
+        .to_string();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, &content).unwrap();
+        content
+    }
+
+    fn install_claude_project_hook(
+        runtime_paths: &RuntimePaths,
+    ) -> PeriodicUpdateTriggerUpsertResult {
+        upsert_periodic_update_trigger_with_runtime(
             Harness::Claude,
-            Harness::Goose,
-            Harness::Cursor,
-            Harness::Opencode,
-            Harness::Codex,
-        ] {
-            let config_path = install_mcp_server_config(harness, &request, &original).unwrap();
-            let content = fs::read_to_string(&config_path).unwrap();
+            InstallScope::Project,
+            PeriodicUpdatePolicy::Manual,
+            runtime_paths,
+        )
+        .unwrap()
+    }
+
+    /// Commits `.claude/settings.json` with one SessionStart entry per given entry.
+    fn commit_claude_session_start(runtime_paths: &RuntimePaths, entries: Vec<Value>) -> PathBuf {
+        let settings_path = runtime_paths.cwd.join(".claude/settings.json");
+        fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
+        fs::write(
+            &settings_path,
+            json!({ "hooks": { "SessionStart": entries } }).to_string(),
+        )
+        .unwrap();
+        settings_path
+    }
+
+    fn command_hook(command: &str) -> Value {
+        json!({ "hooks": [{ "type": "command", "command": command }] })
+    }
+
+    fn session_start_after_project_install(runtime_paths: &RuntimePaths) -> Vec<String> {
+        install_claude_project_hook(runtime_paths);
+        claude_session_start_commands(
+            &fs::read_to_string(runtime_paths.cwd.join(".claude/settings.json")).unwrap(),
+        )
+    }
+
+    #[test]
+    fn project_mcp_config_launches_codemod_through_pinned_npx_for_every_harness() {
+        let temp_dir = tempdir().unwrap();
+        let runtime_paths = npx_launched_runtime_paths(temp_dir.path(), "my project");
+        for harness in MCP_CAPABLE_HARNESSES {
+            let config_path =
+                install_mcp(harness, InstallScope::Project, false, &runtime_paths).unwrap();
             assert_eq!(
                 generated_mcp_command(harness, &config_path),
                 pinned_npx_mcp_command(),
-                "{harness:?}: {content}"
+                "{harness:?}"
             );
-            let root = temp_dir.path().to_string_lossy();
-            assert!(!content.contains(root.as_ref()), "{harness:?}: {content}");
-            assert!(
-                !content.contains(NPX_CACHE_DIR_NAME),
-                "{harness:?}: {content}"
-            );
-            assert!(!content.contains("latest"), "{harness:?}: {content}");
-
-            // A checked-in config copied into another checkout is already current there.
-            let relocated_path = relocated
-                .cwd
-                .join(config_path.strip_prefix(&original.cwd).unwrap());
-            fs::create_dir_all(relocated_path.parent().unwrap()).unwrap();
-            fs::copy(&config_path, &relocated_path).unwrap();
-            assert_eq!(
-                install_mcp_server_config(harness, &request, &relocated).unwrap(),
-                relocated_path
-            );
-            assert_eq!(fs::read_to_string(&relocated_path).unwrap(), content);
         }
     }
 
     #[test]
-    fn user_mcp_config_keeps_installing_executable_unless_launched_from_npx_cache() {
+    fn project_install_writes_no_machine_specific_paths_into_committed_files() {
+        let temp_dir = tempdir().unwrap();
+        let runtime_paths = npx_launched_runtime_paths(temp_dir.path(), "my project");
+        let mut committed = vec![runtime_paths.cwd.join(".mcp.json")];
+        install_mcp(
+            Harness::Claude,
+            InstallScope::Project,
+            false,
+            &runtime_paths,
+        )
+        .unwrap();
+        committed.extend(install_claude_project_hook(&runtime_paths).tracked_paths);
+        let machine_root = temp_dir.path().to_string_lossy().to_string();
+        let leaks: Vec<_> = committed
+            .iter()
+            .filter(|path| {
+                let content = fs::read_to_string(path).unwrap();
+                content.contains(&machine_root) || content.contains(NPX_CACHE_DIR_NAME)
+            })
+            .collect();
+        assert!(leaks.is_empty(), "machine paths leaked into {leaks:?}");
+    }
+
+    #[test]
+    fn project_mcp_config_committed_in_another_checkout_is_left_unchanged() {
+        let temp_dir = tempdir().unwrap();
+        let original = npx_launched_runtime_paths(temp_dir.path(), "my project");
+        let teammate = npx_launched_runtime_paths(temp_dir.path(), "other checkout");
+        for harness in MCP_CAPABLE_HARNESSES {
+            let config_path =
+                install_mcp(harness, InstallScope::Project, false, &original).unwrap();
+            let committed = fs::read_to_string(&config_path).unwrap();
+            let checkout_path = teammate
+                .cwd
+                .join(config_path.strip_prefix(&original.cwd).unwrap());
+            fs::create_dir_all(checkout_path.parent().unwrap()).unwrap();
+            fs::write(&checkout_path, &committed).unwrap();
+            install_mcp(harness, InstallScope::Project, false, &teammate).unwrap();
+            assert_eq!(
+                fs::read_to_string(&checkout_path).unwrap(),
+                committed,
+                "{harness:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn user_mcp_config_launches_the_installed_executable() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
-        let installed_executable = runtime_paths
-            .current_executable
-            .clone()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        let user_request = InstallRequest {
-            scope: InstallScope::User,
-            force: false,
-        };
+        let executable = runtime_paths.current_executable.clone().unwrap();
         let config_path =
-            install_mcp_server_config(Harness::Claude, &user_request, &runtime_paths).unwrap();
+            install_mcp(Harness::Claude, InstallScope::User, false, &runtime_paths).unwrap();
         assert_eq!(
             generated_mcp_command(Harness::Claude, &config_path),
-            vec![installed_executable, "mcp".to_string()]
+            vec![executable.to_string_lossy().to_string(), "mcp".to_string()]
         );
+    }
 
+    #[test]
+    fn user_mcp_config_launched_from_the_npx_cache_uses_pinned_npx() {
+        let temp_dir = tempdir().unwrap();
+        let runtime_paths = npx_launched_runtime_paths(temp_dir.path(), "my project");
+        let config_path =
+            install_mcp(Harness::Claude, InstallScope::User, false, &runtime_paths).unwrap();
+        assert_eq!(
+            generated_mcp_command(Harness::Claude, &config_path),
+            pinned_npx_mcp_command()
+        );
+    }
+
+    #[test]
+    fn user_mcp_config_prefers_a_codemod_on_path_outside_the_npx_cache() {
         let temp_dir = tempdir().unwrap();
         let npx_runtime = npx_launched_runtime_paths(temp_dir.path(), "my project");
-        let config_path =
-            install_mcp_server_config(Harness::Claude, &user_request, &npx_runtime).unwrap();
-        let command = generated_mcp_command(Harness::Claude, &config_path);
-        // The only codemod on PATH is npx's transient shim, so persist pinned npx.
-        assert_eq!(command, pinned_npx_mcp_command());
-        let installed =
-            install_mcs_skill_bundle_with_runtime(Harness::Claude, &user_request, &npx_runtime)
-                .unwrap();
-        let mcp = installed
-            .iter()
-            .find(|entry| entry.name == "codemod-mcp")
-            .unwrap();
-        assert_eq!(mcp.version.as_deref(), Some(CODEMOD_CLI_VERSION));
-
-        // A codemod installed outside the npx cache is still preferred.
         let global_bin = temp_dir.path().join("global bin");
         write_fake_executable(&global_bin.join("codemod"), "#!/bin/sh\nexit 0\n");
         let npx_shim_dir = std::env::split_paths(npx_runtime.path_env.as_ref().unwrap())
             .next()
             .unwrap();
-        let with_global = RuntimePaths {
+        let runtime_paths = RuntimePaths {
             path_env: Some(std::env::join_paths([npx_shim_dir, global_bin]).unwrap()),
-            home_dir: Some(temp_dir.path().join("other home")),
             ..npx_runtime
         };
         let config_path =
-            install_mcp_server_config(Harness::Claude, &user_request, &with_global).unwrap();
+            install_mcp(Harness::Claude, InstallScope::User, false, &runtime_paths).unwrap();
         assert_eq!(
             generated_mcp_command(Harness::Claude, &config_path),
             vec!["codemod".to_string(), "mcp".to_string()]
@@ -4694,180 +4762,185 @@ mod tests {
     }
 
     #[test]
-    fn reinstall_repairs_only_legacy_npx_cache_mcp_launchers_without_force() {
-        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
-        let custom_server = json!({ "command": "node", "args": ["server.js"] });
-        let unix_npx_cache =
-            "/Users/dev/.npm/_npx/0a1b2c3d/node_modules/@codemod.com/cli-darwin-arm64/codemod";
-        let install = |scope, force| {
-            install_mcp_server_config(
+    fn installed_mcp_reports_the_pinned_cli_version() {
+        let temp_dir = tempdir().unwrap();
+        let runtime_paths = npx_launched_runtime_paths(temp_dir.path(), "my project");
+        let request = InstallRequest {
+            scope: InstallScope::User,
+            force: false,
+        };
+        let installed =
+            install_mcs_skill_bundle_with_runtime(Harness::Claude, &request, &runtime_paths)
+                .unwrap();
+        let mcp = installed.iter().find(|entry| entry.name == "codemod-mcp");
+        assert_eq!(
+            mcp.and_then(|entry| entry.version.as_deref()),
+            Some(CODEMOD_CLI_VERSION)
+        );
+    }
+
+    #[test]
+    fn reinstall_repairs_legacy_npx_cache_project_launchers() {
+        for legacy in [LEGACY_UNIX_NPX_LAUNCHER, LEGACY_WINDOWS_NPX_LAUNCHER] {
+            let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+            let config_path = runtime_paths.cwd.join(".mcp.json");
+            write_claude_mcp_config(&config_path, json!({ "command": legacy, "args": ["mcp"] }));
+            install_mcp(
                 Harness::Claude,
-                &InstallRequest { scope, force },
+                InstallScope::Project,
+                false,
                 &runtime_paths,
             )
-        };
-        let write_config = |config_path: &Path, codemod: Value| {
-            let content = json!({ "mcpServers": { "codemod": codemod, "custom": custom_server } })
-                .to_string();
-            fs::create_dir_all(config_path.parent().unwrap()).unwrap();
-            fs::write(config_path, &content).unwrap();
-            content
-        };
-        let project_path = runtime_paths.cwd.join(".mcp.json");
-
-        // The broken npx-cache executable written by earlier project installs is repaired.
-        for legacy in [
-            json!({ "command": unix_npx_cache, "args": ["mcp"] }),
-            json!({ "command": "C:\\Users\\dev\\AppData\\Local\\npm-cache\\_npx\\0a1b2c3d\\node_modules\\@codemod.com\\cli-win32-x64-msvc\\codemod.exe", "args": ["mcp"] }),
-        ] {
-            write_config(&project_path, legacy);
-            install(InstallScope::Project, false).unwrap();
-            let repaired = fs::read_to_string(&project_path).unwrap();
-            let parsed: Value = serde_json::from_str(&repaired).unwrap();
+            .unwrap();
             assert_eq!(
-                generated_mcp_command(Harness::Claude, &project_path),
-                pinned_npx_mcp_command()
+                generated_mcp_command(Harness::Claude, &config_path),
+                pinned_npx_mcp_command(),
+                "{legacy}"
             );
-            assert_eq!(parsed["mcpServers"]["custom"], custom_server);
-            install(InstallScope::Project, false).unwrap();
-            assert_eq!(fs::read_to_string(&project_path).unwrap(), repaired);
         }
+    }
 
-        // Anything else may be deliberate: it stays a conflict until --force.
-        for preserved in [
+    #[test]
+    fn repairing_a_legacy_launcher_keeps_other_mcp_servers() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let config_path = runtime_paths.cwd.join(".mcp.json");
+        let committed = write_claude_mcp_config(
+            &config_path,
+            json!({ "command": LEGACY_UNIX_NPX_LAUNCHER, "args": ["mcp"] }),
+        );
+        install_mcp(
+            Harness::Claude,
+            InstallScope::Project,
+            false,
+            &runtime_paths,
+        )
+        .unwrap();
+        let before: Value = serde_json::from_str(&committed).unwrap();
+        let after: Value =
+            serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(
+            after["mcpServers"]["custom"],
+            before["mcpServers"]["custom"]
+        );
+    }
+
+    #[test]
+    fn reinstall_refuses_customized_project_launchers_without_force() {
+        for customized in [
             json!({ "command": "codemod", "args": ["mcp"] }),
             json!({ "command": "/usr/local/bin/codemod", "args": ["mcp"] }),
             json!({ "command": "npx", "args": ["codemod@latest", "mcp"] }),
             json!({ "command": "npx", "args": ["-y", "codemod@1.0.0", "mcp"] }),
             json!({ "command": "_npx/0a1b2c3d/node_modules/.bin/codemod", "args": ["mcp"] }),
             json!({ "command": "${CUSTOM_ROOT}/_npx/0a1b2c3d/node_modules/.bin/codemod", "args": ["mcp"] }),
-            json!({ "command": unix_npx_cache, "args": ["mcp"], "env": { "DEBUG": "1" } }),
+            json!({ "command": LEGACY_UNIX_NPX_LAUNCHER, "args": ["mcp"], "env": { "DEBUG": "1" } }),
         ] {
-            let content = write_config(&project_path, preserved.clone());
-            let error = install(InstallScope::Project, false)
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("--force"), "{preserved}: {error}");
-            assert_eq!(
-                fs::read_to_string(&project_path).unwrap(),
-                content,
-                "{preserved}"
+            let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+            let config_path = runtime_paths.cwd.join(".mcp.json");
+            let committed = write_claude_mcp_config(&config_path, customized.clone());
+            let _ = install_mcp(
+                Harness::Claude,
+                InstallScope::Project,
+                false,
+                &runtime_paths,
             );
-
-            install(InstallScope::Project, true).unwrap();
-            let parsed: Value =
-                serde_json::from_str(&fs::read_to_string(&project_path).unwrap()).unwrap();
             assert_eq!(
-                generated_mcp_command(Harness::Claude, &project_path),
-                pinned_npx_mcp_command()
+                fs::read_to_string(&config_path).unwrap(),
+                committed,
+                "{customized}"
             );
-            assert_eq!(parsed["mcpServers"]["custom"], custom_server);
         }
-
-        // User-scope entries are never repaired implicitly, even the npx-cache shape.
-        let user_path =
-            mcp_config_path_for_harness(Harness::Claude, InstallScope::User, &runtime_paths)
-                .unwrap();
-        let content = write_config(
-            &user_path,
-            json!({ "command": unix_npx_cache, "args": ["mcp"] }),
-        );
-        let error = install(InstallScope::User, false).unwrap_err().to_string();
-        assert!(error.contains("--force"), "{error}");
-        assert_eq!(fs::read_to_string(&user_path).unwrap(), content);
     }
 
     #[test]
-    fn reinstall_keeps_customized_codex_and_opencode_mcp_entries_as_conflicts() {
+    fn reinstall_never_repairs_user_scope_launchers_implicitly() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
-        let request = InstallRequest {
-            scope: InstallScope::Project,
-            force: false,
-        };
+        let user_path =
+            mcp_config_path_for_harness(Harness::Claude, InstallScope::User, &runtime_paths)
+                .unwrap();
+        let committed = write_claude_mcp_config(
+            &user_path,
+            json!({ "command": LEGACY_UNIX_NPX_LAUNCHER, "args": ["mcp"] }),
+        );
+        let _ = install_mcp(Harness::Claude, InstallScope::User, false, &runtime_paths);
+        assert_eq!(fs::read_to_string(&user_path).unwrap(), committed);
+    }
+
+    #[test]
+    fn reinstall_repairs_a_legacy_codex_launcher() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
         let codex_path = runtime_paths.cwd.join(".codex/config.toml");
         fs::create_dir_all(codex_path.parent().unwrap()).unwrap();
-
-        let generated_codex = "[mcp_servers.codemod]\ncommand = \"/Users/dev/.npm/_npx/0a1b2c3d/node_modules/@codemod.com/cli-darwin-arm64/codemod\"\nargs = [\"mcp\"]\n";
-        fs::write(&codex_path, generated_codex).unwrap();
-        install_mcp_server_config(Harness::Codex, &request, &runtime_paths).unwrap();
+        fs::write(
+            &codex_path,
+            format!("[mcp_servers.codemod]\ncommand = \"{LEGACY_UNIX_NPX_LAUNCHER}\"\nargs = [\"mcp\"]\n"),
+        )
+        .unwrap();
+        install_mcp(Harness::Codex, InstallScope::Project, false, &runtime_paths).unwrap();
         assert_eq!(
             generated_mcp_command(Harness::Codex, &codex_path),
             pinned_npx_mcp_command()
         );
-
-        let customized_codex = "[mcp_servers.codemod]\ncommand = \"codemod\"\nargs = [\"mcp\"]\nenv = { DEBUG = \"1\" }\n";
-        fs::write(&codex_path, customized_codex).unwrap();
-        let error = install_mcp_server_config(Harness::Codex, &request, &runtime_paths)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("--force"), "{error}");
-        assert_eq!(fs::read_to_string(&codex_path).unwrap(), customized_codex);
-
-        let opencode_path = runtime_paths.cwd.join("opencode.json");
-        let customized_opencode = json!({
-            "$schema": OPENCODE_CONFIG_SCHEMA_URL,
-            "mcp": {
-                "codemod": {
-                    "type": "local",
-                    "enabled": true,
-                    "command": ["codemod", "mcp"],
-                    "environment": { "DEBUG": "1" }
-                }
-            }
-        })
-        .to_string();
-        fs::write(&opencode_path, &customized_opencode).unwrap();
-        let error = install_mcp_server_config(Harness::Opencode, &request, &runtime_paths)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("--force"), "{error}");
-        assert_eq!(
-            fs::read_to_string(&opencode_path).unwrap(),
-            customized_opencode
-        );
     }
 
     #[test]
-    fn npx_cache_detection_matches_npm_cache_layout_only() {
-        assert!(is_npx_cache_path(Path::new(
-            "/Users/dev/.npm/_npx/0a1b2c3d/node_modules/@codemod.com/cli-darwin-arm64/codemod"
-        )));
-        assert!(!is_npx_cache_path(Path::new("/usr/local/bin/codemod")));
-        assert!(!is_npx_cache_path(Path::new("/opt/my_npx_tools/codemod")));
-        #[cfg(windows)]
-        assert!(is_npx_cache_path(Path::new(
-            r"C:\Users\dev\AppData\Local\npm-cache\_npx\0a1b2c3d\node_modules\@codemod.com\cli-win32-x64-msvc\codemod.exe"
-        )));
-    }
-
-    #[test]
-    fn claude_project_hook_replaces_previous_absolute_runner_hook() {
+    fn reinstall_keeps_customized_codex_and_opencode_launchers() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
-        let runner_path =
-            expected_periodic_runner_path(&runtime_paths, Harness::Claude, InstallScope::Project);
-        let settings_path =
-            expected_harness_root(&runtime_paths, Harness::Claude, InstallScope::Project)
-                .join(CODEMOD_PERIODIC_TRIGGER_CLAUDE_SETTINGS_FILE_NAME);
-        fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-        upsert_claude_session_start_periodic_hook(&settings_path, &runner_path).unwrap();
-        let mut settings: Value =
-            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
-        settings["hooks"]["SessionStart"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({ "hooks": [{ "type": "command", "command": "echo user-hook" }] }));
-        fs::write(&settings_path, settings.to_string()).unwrap();
+        let customized = [
+            (
+                Harness::Codex,
+                ".codex/config.toml",
+                "[mcp_servers.codemod]\ncommand = \"codemod\"\nargs = [\"mcp\"]\nenv = { DEBUG = \"1\" }\n".to_string(),
+            ),
+            (
+                Harness::Opencode,
+                "opencode.json",
+                json!({ "$schema": OPENCODE_CONFIG_SCHEMA_URL, "mcp": { "codemod": {
+                    "type": "local", "enabled": true,
+                    "command": ["codemod", "mcp"], "environment": { "DEBUG": "1" }
+                } } })
+                .to_string(),
+            ),
+        ];
+        for (harness, relative_path, committed) in customized {
+            let config_path = runtime_paths.cwd.join(relative_path);
+            fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+            fs::write(&config_path, &committed).unwrap();
+            let _ = install_mcp(harness, InstallScope::Project, false, &runtime_paths);
+            assert_eq!(
+                fs::read_to_string(&config_path).unwrap(),
+                committed,
+                "{harness:?}"
+            );
+        }
+    }
 
-        upsert_periodic_update_trigger_with_runtime(
-            Harness::Claude,
-            InstallScope::Project,
-            PeriodicUpdatePolicy::Manual,
+    #[test]
+    fn npx_cache_detection_matches_only_the_npm_cache_layout() {
+        let cases = [
+            (LEGACY_UNIX_NPX_LAUNCHER, true),
+            ("/usr/local/bin/codemod", false),
+            ("/opt/my_npx_tools/codemod", false),
+            #[cfg(windows)]
+            (LEGACY_WINDOWS_NPX_LAUNCHER, true),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(is_npx_cache_path(Path::new(path)), expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn claude_project_hook_replaces_a_legacy_absolute_runner_hook_and_keeps_user_hooks() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        commit_claude_session_start(
             &runtime_paths,
-        )
-        .unwrap();
-
+            vec![
+                command_hook(LEGACY_PROJECT_RUNNER),
+                command_hook("echo user-hook"),
+            ],
+        );
         assert_eq!(
-            claude_session_start_commands(&fs::read_to_string(&settings_path).unwrap()),
+            session_start_after_project_install(&runtime_paths),
             vec![
                 CLAUDE_PROJECT_RUNNER_COMMAND.to_string(),
                 "echo user-hook".to_string()
@@ -4876,140 +4949,71 @@ mod tests {
     }
 
     #[test]
-    fn claude_project_hook_migrates_absolute_runner_hook_from_another_checkout() {
+    fn claude_project_hook_migration_keeps_unrelated_settings() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
-        let settings_path =
-            expected_harness_root(&runtime_paths, Harness::Claude, InstallScope::Project)
-                .join(CODEMOD_PERIODIC_TRIGGER_CLAUDE_SETTINGS_FILE_NAME);
+        let settings_path = runtime_paths.cwd.join(".claude/settings.json");
         fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-        let custom_runner_hook =
-            "/bin/sh /machine-a/project/.claude/codemod/periodic-update/check-updates.sh";
-        let matcher_entry = json!({
-            "matcher": "startup",
-            "hooks": [{ "type": "command", "command": "echo user-hook" }]
-        });
-        let empty_user_entry = json!({ "hooks": [] });
-        let committed = json!({
-            "permissions": { "allow": ["Bash(ls)"] },
-            "hooks": {
-                "SessionStart": [
-                    { "hooks": [{ "type": "command", "command": "/machine-a/project/.claude/codemod/periodic-update/check-updates.sh" }] },
-                    { "hooks": [{ "type": "command", "command": "/machine-a/my project/.claude/codemod/periodic-update/check-updates.sh" }] },
-                    matcher_entry,
-                    { "hooks": [{ "type": "command", "command": "C:\\Users\\dev\\my project\\.claude\\codemod\\periodic-update\\check-updates.sh" }] },
-                    { "hooks": [{ "type": "command", "command": custom_runner_hook }] },
-                    empty_user_entry
-                ]
-            }
-        });
-        fs::write(&settings_path, committed.to_string()).unwrap();
-
-        upsert_periodic_update_trigger_with_runtime(
-            Harness::Claude,
-            InstallScope::Project,
-            PeriodicUpdatePolicy::Manual,
-            &runtime_paths,
+        let permissions = json!({ "allow": ["Bash(ls)"] });
+        fs::write(
+            &settings_path,
+            json!({ "permissions": permissions,
+                    "hooks": { "SessionStart": [command_hook(LEGACY_PROJECT_RUNNER)] } })
+            .to_string(),
         )
         .unwrap();
-
-        let migrated = fs::read_to_string(&settings_path).unwrap();
-        let parsed: Value = serde_json::from_str(&migrated).unwrap();
-        assert_eq!(
-            parsed["hooks"]["SessionStart"],
-            json!([
-                { "hooks": [{ "type": "command", "command": CLAUDE_PROJECT_RUNNER_COMMAND }] },
-                committed["hooks"]["SessionStart"][1],
-                matcher_entry,
-                committed["hooks"]["SessionStart"][3],
-                { "hooks": [{ "type": "command", "command": custom_runner_hook }] },
-                empty_user_entry
-            ])
-        );
-        assert_eq!(parsed["permissions"], committed["permissions"]);
-
-        let second = upsert_periodic_update_trigger_with_runtime(
-            Harness::Claude,
-            InstallScope::Project,
-            PeriodicUpdatePolicy::Manual,
-            &runtime_paths,
-        )
-        .unwrap();
-        assert!(!second.updated_paths.contains(&settings_path));
-        assert_eq!(fs::read_to_string(&settings_path).unwrap(), migrated);
+        install_claude_project_hook(&runtime_paths);
+        let migrated: Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(migrated["permissions"], permissions);
     }
 
     #[test]
-    fn claude_project_hook_migration_preserves_customized_legacy_hooks() {
+    fn claude_project_hook_migration_keeps_customized_legacy_entries() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
-        let settings_path =
-            expected_harness_root(&runtime_paths, Harness::Claude, InstallScope::Project)
-                .join(CODEMOD_PERIODIC_TRIGGER_CLAUDE_SETTINGS_FILE_NAME);
-        fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-        let legacy = "/machine-a/project/.claude/codemod/periodic-update/check-updates.sh";
-        let resume_entry = json!({
-            "matcher": "resume",
-            "hooks": [{ "type": "command", "command": legacy }]
-        });
-        let timeout_entry = json!({
-            "hooks": [{ "type": "command", "command": legacy, "timeout": 30 }]
-        });
-        let committed = json!({
-            "hooks": {
-                "SessionStart": [
-                    { "hooks": [{ "type": "command", "command": legacy }] },
-                    resume_entry,
-                    timeout_entry,
-                    { "hooks": [{ "type": "command", "command": "C:\\machine-b\\project\\.claude\\codemod\\periodic-update\\check-updates.sh" }] }
-                ]
-            }
-        });
-        fs::write(&settings_path, committed.to_string()).unwrap();
-
-        let install = || {
-            upsert_periodic_update_trigger_with_runtime(
-                Harness::Claude,
-                InstallScope::Project,
-                PeriodicUpdatePolicy::Manual,
-                &runtime_paths,
+        let customized = vec![
+            json!({ "matcher": "resume", "hooks": [{ "type": "command", "command": LEGACY_PROJECT_RUNNER }] }),
+            json!({ "hooks": [{ "type": "command", "command": LEGACY_PROJECT_RUNNER, "timeout": 30 }] }),
+            json!({ "matcher": "startup", "hooks": [{ "type": "command", "command": "echo user-hook" }] }),
+            json!({ "hooks": [] }),
+        ];
+        let settings_path = commit_claude_session_start(
+            &runtime_paths,
+            std::iter::once(command_hook(LEGACY_PROJECT_RUNNER))
+                .chain(customized.clone())
+                .collect(),
+        );
+        install_claude_project_hook(&runtime_paths);
+        let migrated: Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(
+            migrated["hooks"]["SessionStart"],
+            Value::Array(
+                std::iter::once(command_hook(CLAUDE_PROJECT_RUNNER_COMMAND))
+                    .chain(customized)
+                    .collect()
             )
-            .unwrap()
-        };
-        install();
-
-        let migrated = fs::read_to_string(&settings_path).unwrap();
-        let parsed: Value = serde_json::from_str(&migrated).unwrap();
-        let session_start = parsed["hooks"]["SessionStart"].as_array().unwrap();
-        assert_eq!(
-            session_start,
-            &vec![
-                json!({ "hooks": [{ "type": "command", "command": CLAUDE_PROJECT_RUNNER_COMMAND }] }),
-                resume_entry.clone(),
-                timeout_entry.clone(),
-            ]
         );
-        assert_eq!(session_start[1].to_string(), resume_entry.to_string());
-        assert_eq!(session_start[2].to_string(), timeout_entry.to_string());
-
-        let second = install();
-        assert!(!second.updated_paths.contains(&settings_path));
-        assert_eq!(fs::read_to_string(&settings_path).unwrap(), migrated);
     }
 
     #[test]
-    fn absolute_project_runner_detection_ignores_custom_commands() {
-        let relative = ".claude/codemod/periodic-update/check-updates.sh";
-        for generated in [
-            "/machine-a/project/.claude/codemod/periodic-update/check-updates.sh",
+    fn claude_project_hook_reinstall_is_a_no_op_after_migration() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let settings_path =
+            commit_claude_session_start(&runtime_paths, vec![command_hook(LEGACY_PROJECT_RUNNER)]);
+        install_claude_project_hook(&runtime_paths);
+        let second = install_claude_project_hook(&runtime_paths);
+        assert!(!second.updated_paths.contains(&settings_path));
+    }
+
+    #[test]
+    fn legacy_runner_detection_accepts_only_bare_absolute_runner_paths() {
+        let generated = [
+            LEGACY_PROJECT_RUNNER,
             "D:/work/project/.claude/codemod/periodic-update/check-updates.sh",
             "C:/.claude/codemod/periodic-update/check-updates.sh",
             "/.claude/codemod/periodic-update/check-updates.sh",
-        ] {
-            assert!(
-                is_absolute_project_runner_command(generated, relative),
-                "{generated}"
-            );
-        }
-        for custom in [
+        ];
+        let custom = [
             CLAUDE_PROJECT_RUNNER_COMMAND,
             "/Users/dev/my project/.claude/codemod/periodic-update/check-updates.sh",
             r"C:\Users\dev\my project\.claude\codemod\periodic-update\check-updates.sh",
@@ -5028,62 +5032,22 @@ mod tests {
             "/p/other/check-updates.sh",
             "/bin/custom\n/p/.claude/codemod/periodic-update/check-updates.sh",
             "/bin/custom\r/p/.claude/codemod/periodic-update/check-updates.sh",
-        ] {
-            assert!(
-                !is_absolute_project_runner_command(custom, relative),
-                "{custom}"
+        ];
+        let cases = generated
+            .iter()
+            .map(|command| (*command, true))
+            .chain(custom.iter().map(|command| (*command, false)));
+        for (command, expected) in cases {
+            assert_eq!(
+                is_absolute_project_runner_command(command, PROJECT_RUNNER_RELATIVE_PATH),
+                expected,
+                "{command:?}"
             );
         }
     }
 
     #[test]
-    fn claude_project_hook_preserves_ambiguous_commands_on_reinstall() {
-        for portable_present in [false, true] {
-            let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
-            let settings_path = runtime_paths.cwd.join(".claude/settings.json");
-            fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
-            let custom = vec![
-                "/bin/echo --runner=/old/.claude/codemod/periodic-update/check-updates.sh",
-                "/bin/sh\t/p/.claude/codemod/periodic-update/check-updates.sh",
-                "C:project/.claude/codemod/periodic-update/check-updates.sh",
-                "/Users/dev/my project/.claude/codemod/periodic-update/check-updates.sh",
-            ];
-            let mut commands = custom.clone();
-            if portable_present {
-                commands.push(CLAUDE_PROJECT_RUNNER_COMMAND);
-            }
-            let entries = commands
-                .iter()
-                .map(|command| json!({ "hooks": [{ "type": "command", "command": command }] }))
-                .collect::<Vec<_>>();
-            fs::write(
-                &settings_path,
-                json!({ "hooks": { "SessionStart": entries } }).to_string(),
-            )
-            .unwrap();
-            for _ in 0..2 {
-                upsert_periodic_update_trigger_with_runtime(
-                    Harness::Claude,
-                    InstallScope::Project,
-                    PeriodicUpdatePolicy::Manual,
-                    &runtime_paths,
-                )
-                .unwrap();
-                let actual =
-                    claude_session_start_commands(&fs::read_to_string(&settings_path).unwrap());
-                let expected = custom
-                    .iter()
-                    .copied()
-                    .chain([CLAUDE_PROJECT_RUNNER_COMMAND])
-                    .map(str::to_string)
-                    .collect::<Vec<_>>();
-                assert_eq!(actual, expected);
-            }
-        }
-    }
-
-    #[test]
-    fn user_scope_periodic_runner_keeps_absolute_paths() {
+    fn user_scope_claude_hook_keeps_the_absolute_runner_path() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
         upsert_periodic_update_trigger_with_runtime(
             Harness::Claude,
@@ -5101,70 +5065,44 @@ mod tests {
             claude_session_start_commands(&fs::read_to_string(&settings_path).unwrap()),
             vec![runner_path.to_string_lossy().to_string()]
         );
-        let script = fs::read_to_string(&runner_path).unwrap();
-        let installed_executable = runtime_paths.current_executable.as_ref().unwrap();
-        assert!(script.contains(&shell_single_quote(&installed_executable.to_string_lossy())));
     }
 
-    /// Runs the generated Claude SessionStart hook the way Claude Code does (a shell
-    /// command with CLAUDE_PROJECT_DIR set) after the project has been moved.
+    /// Runs the generated SessionStart hook the way Claude Code does (a shell command
+    /// with CLAUDE_PROJECT_DIR set) after the project has moved to another directory.
     #[cfg(unix)]
     #[test]
-    fn claude_project_hook_runs_runner_after_project_is_moved() {
+    fn claude_project_hook_runs_pinned_npx_after_the_project_moves() {
         let temp_dir = tempdir().unwrap();
         let runtime_paths = npx_launched_runtime_paths(temp_dir.path(), "my project");
-        let result = upsert_periodic_update_trigger_with_runtime(
-            Harness::Claude,
-            InstallScope::Project,
-            PeriodicUpdatePolicy::Manual,
-            &runtime_paths,
-        )
-        .unwrap();
-        let root = temp_dir.path().to_string_lossy().to_string();
-        for path in &result.tracked_paths {
-            let content = fs::read_to_string(path).unwrap();
-            assert!(!content.contains(&root), "{}: {content}", path.display());
-        }
-
+        install_claude_project_hook(&runtime_paths);
         let moved_project = temp_dir.path().join("moved project dir");
         fs::rename(&runtime_paths.cwd, &moved_project).unwrap();
-        let settings = fs::read_to_string(moved_project.join(".claude/settings.json")).unwrap();
-        let commands = claude_session_start_commands(&settings);
-        assert_eq!(commands, vec![CLAUDE_PROJECT_RUNNER_COMMAND.to_string()]);
 
         let fake_bin = temp_dir.path().join("fake bin");
         let log_path = temp_dir.path().join("invocations.log");
-        write_fake_executable(
-            &fake_bin.join("codemod"),
-            "#!/bin/sh\nprintf 'codemod cwd=%s args=%s\\n' \"$(pwd -P)\" \"$*\" >> \"$FAKE_LOG\"\n",
-        );
-        write_fake_executable(
-            &fake_bin.join("npx"),
-            "#!/bin/sh\nprintf 'npx cwd=%s args=%s\\n' \"$(pwd -P)\" \"$*\" >> \"$FAKE_LOG\"\n",
-        );
-        let status = std::process::Command::new("sh")
+        for tool in ["codemod", "npx"] {
+            write_fake_executable(
+                &fake_bin.join(tool),
+                &format!("#!/bin/sh\nprintf '{tool} cwd=%s args=%s\\n' \"$(pwd -P)\" \"$*\" >> \"$FAKE_LOG\"\n"),
+            );
+        }
+        std::process::Command::new("sh")
             .arg("-c")
-            .arg(&commands[0])
+            .arg(CLAUDE_PROJECT_RUNNER_COMMAND)
             .current_dir(temp_dir.path().join("home dir"))
             .env("CLAUDE_PROJECT_DIR", &moved_project)
             .env("FAKE_LOG", &log_path)
             .env("PATH", format!("{}:/usr/bin:/bin", fake_bin.display()))
             .status()
             .unwrap();
-        assert!(status.success());
 
-        let log = fs::read_to_string(&log_path).unwrap();
-        let moved_project = moved_project.canonicalize().unwrap();
         assert_eq!(
-            log,
+            fs::read_to_string(&log_path).unwrap(),
             format!(
-                "npx cwd={} args=-y codemod@{} ai --harness claude --project --update-policy manual --require-signed-manifest --format json\n",
-                moved_project.display(), CODEMOD_CLI_VERSION
+                "npx cwd={} args=-y codemod@{CODEMOD_CLI_VERSION} ai --harness claude --project --update-policy manual --require-signed-manifest --format json\n",
+                moved_project.canonicalize().unwrap().display()
             )
         );
-        assert!(moved_project
-            .join(".claude/codemod/periodic-update/last-check-epoch-secs")
-            .is_file());
     }
 
     fn create_authored_skill_source(base_dir: &Path, package_id: &str) -> PathBuf {
@@ -7321,42 +7259,6 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
-    fn upsert_mcp_server_creates_expected_config() {
-        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
-        let config_path = runtime_paths.cwd.join(".mcp.json");
-
-        upsert_codemod_mcp_server(
-            Harness::Claude,
-            &config_path,
-            InstallScope::Project,
-            false,
-            &runtime_paths,
-        )
-        .unwrap();
-
-        let content = fs::read_to_string(&config_path).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(
-            parsed
-                .get("mcpServers")
-                .and_then(|servers| servers.get("codemod"))
-                .and_then(|server| server.get("command"))
-                .and_then(|value| value.as_str()),
-            Some(NPX_COMMAND)
-        );
-        assert_eq!(
-            parsed
-                .get("mcpServers")
-                .and_then(|servers| servers.get("codemod"))
-                .and_then(|server| server.get("args"))
-                .and_then(|args| args.as_array())
-                .and_then(|args| args.last())
-                .and_then(|value| value.as_str()),
-            Some("mcp")
-        );
-    }
-
-    #[test]
     fn upsert_mcp_server_preserves_existing_non_codemod_entries() {
         let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
         let config_path = runtime_paths.cwd.join(".mcp.json");
@@ -7474,29 +7376,6 @@ codemod-skill-version: 0.1.0
                 .and_then(|value| value.as_str()),
             Some("mcp")
         );
-    }
-
-    #[test]
-    fn upsert_mcp_server_writes_codex_toml_entry() {
-        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
-        let config_path = runtime_paths.cwd.join(".codex/config.toml");
-
-        upsert_codemod_mcp_server(
-            Harness::Codex,
-            &config_path,
-            InstallScope::Project,
-            false,
-            &runtime_paths,
-        )
-        .unwrap();
-
-        let content = fs::read_to_string(&config_path).unwrap();
-        let document = content.parse::<DocumentMut>().unwrap();
-        let server = read_codex_mcp_server(&document)
-            .unwrap()
-            .expect("expected codex MCP server entry");
-        assert_eq!(server.command, NPX_COMMAND);
-        assert_eq!(server.args.last().map(String::as_str), Some("mcp"));
     }
 
     #[test]
