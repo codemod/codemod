@@ -485,6 +485,8 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: Rc<HostState>) -> rquickjs::Result<()
     )?;
 
     jssg::install(ctx, &native, Rc::clone(&state))?;
+    let env: HashMap<String, String> = std::env::vars().collect();
+    crate::http::install(ctx, &native, crate::http::allowed_base(&env))?;
     ctx.globals().set(NATIVE_GLOBAL, native)?;
     Ok(())
 }

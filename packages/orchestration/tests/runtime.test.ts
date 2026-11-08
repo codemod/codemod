@@ -262,7 +262,7 @@ describe("the capability contract", () => {
   it("refuses unsupported static operations before anything runs", async () => {
     for (const [root, kind, id] of [
       [sequence(lint(), fix()), "agent", "fix"],
-      [parallel(lint(), judge()), "assessment", "judge"],
+      [parallel(judge(), fix()), "agent", "fix"],
       [fix, "agent", "fix"],
     ] as const) {
       const h = createHarness({ runtime: "node", fallback: () => "ok" });
@@ -278,6 +278,14 @@ describe("the capability contract", () => {
     await expect(bare.run(semantic)).rejects.toThrow(
       "JSSG semantic analysis is unsupported in runtime 'quickjs' (command 'semantic')",
     );
+  });
+
+  it("lets assessment through on node and quickjs", async () => {
+    for (const runtime of ["node", "quickjs"] as const) {
+      const h = createHarness({ runtime, fallback: () => [] });
+      await h.run(parallel(lint(), judge()));
+      expect(h.executed.map((request) => request.commandId).sort()).toEqual(["judge", "lint"]);
+    }
   });
 
   it("fails dynamically issued unsupported operations fast, without executing them", async () => {

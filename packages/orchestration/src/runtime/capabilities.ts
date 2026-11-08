@@ -13,8 +13,8 @@
  * - `quickjs`: the whole prebuilt workflow bundle in one QuickJS context
  *   hosted by a Rust binary; no Node at runtime.
  *
- * `node` and `quickjs` execute `jssg` and `shell` only; `agent` and
- * `assessment` fail fast, and so does JSSG semantic analysis (deferred). The
+ * `node` and `quickjs` execute `jssg`, `shell`, and `assessment`; `agent`
+ * fails fast, and so does JSSG semantic analysis (both being ported). The
  * refusal happens twice: statically, before the run starts, for every
  * operation the static topology names (`assertRuntimeSupports`), and at the
  * execution boundary for operations issued inside `dynamic()`
@@ -54,16 +54,16 @@ const ALL: RuntimeCapabilities = {
   semanticAnalysis: true,
 };
 
-const JSSG_AND_SHELL: RuntimeCapabilities = {
-  operations: { shell: true, jssg: true, agent: false, assessment: false },
+const IN_PROCESS: RuntimeCapabilities = {
+  operations: { shell: true, jssg: true, agent: false, assessment: true },
   semanticAnalysis: false,
 };
 
 export const BRIDGE_RUNTIME: RuntimeDescriptor = { name: "bridge", capabilities: ALL };
-export const NODE_RUNTIME: RuntimeDescriptor = { name: "node", capabilities: JSSG_AND_SHELL };
+export const NODE_RUNTIME: RuntimeDescriptor = { name: "node", capabilities: IN_PROCESS };
 export const QUICKJS_RUNTIME: RuntimeDescriptor = {
   name: "quickjs",
-  capabilities: JSSG_AND_SHELL,
+  capabilities: IN_PROCESS,
 };
 
 export const BUILTIN_RUNTIMES: Readonly<Record<BuiltinRuntimeName, RuntimeDescriptor>> = {

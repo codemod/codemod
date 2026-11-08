@@ -95,7 +95,7 @@ const register = resolve(import.meta.dirname, "../bin/register-ts.mjs");
  * path (vitest's module loader would bypass `loadWorkflow`'s Node hooks).
  */
 function runOn(
-  runtime: "bridge" | "quickjs",
+  runtime: "bridge" | "node" | "quickjs",
   fixture: string,
   input?: unknown,
   options: { files?: Record<string, string>; env?: Record<string, string> } = {},
@@ -278,6 +278,67 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
       /operation kind 'agent' is unsupported in runtime 'quickjs' \(command 'fix'\)/u,
     );
     expect(staticRun.files["ran.marker"]).toBeUndefined();
+  });
+
+  it("runs assessment through the host's httpRequest, only to the TypeSafe API root", async () => {
+    const log = join(scratch, "typesafe-requests.jsonl");
+    writeFileSync(log, "");
+    const stub = spawn(
+      process.execPath,
+      [join(import.meta.dirname, "fixtures/typesafe-stub.mjs"), log],
+      {
+        stdio: ["ignore", "pipe", "inherit"],
+      },
+    );
+    try {
+      const port = await new Promise<number>((resolvePort, reject) => {
+        stub.stdout!.setEncoding("utf8");
+        stub.stdout!.once("data", (line: string) => resolvePort(Number(line.trim())));
+        stub.once("error", reject);
+      });
+      const env = { TYPESAFE_API_KEY: "test-key", TYPESAFE_BASE_URL: `http://127.0.0.1:${port}` };
+      const expected = ["a.ts", "b.ts", "c.ts", "sub/d.old.ts"].map((file) => ({
+        file,
+        assessment: {
+          model: "stub-1",
+          answers: { risky: { type: "noul", noul: 0.25 } },
+          usage: { inputTokens: 3, outputTokens: 1 },
+        },
+      }));
+      const quickjs = runOn("quickjs", "assessment.ts", undefined, { env });
+      expect(quickjs).toMatchObject({ ok: true });
+      expect(quickjs.ok && quickjs.output).toEqual(expected);
+      const requests = readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { path: string; authorization: string });
+      expect(requests).toHaveLength(4);
+      expect(new Set(requests.map((request) => request.path))).toEqual(new Set(["/v1/systemone"]));
+      expect(requests.every((request) => request.authorization === "Bearer test-key")).toBe(true);
+      // The node runtime gives the same output through the SDK's global fetch.
+      expect(runOn("node", "assessment.ts", undefined, { env })).toMatchObject({
+        ok: true,
+        output: expected,
+      });
+
+      // Workflow code calling the primitive directly: only the API root.
+      writeFileSync(log, "");
+      const scoped = { ...env, TYPESAFE_BASE_URL: `http://127.0.0.1:${port}/v1` };
+      for (const [url, code] of [
+        [`http://127.0.0.1:${port}/other`, "EACCES"],
+        [`http://localhost:${port}/v1/systemone`, "EACCES"],
+        [`https://example.com/v1/systemone`, "EACCES"],
+        [`http://127.0.0.1:${port}/v1/models`, "reached"],
+      ] as const) {
+        expect(runOn("quickjs", "http-escape.ts", url, { env: scoped })).toMatchObject({
+          ok: true,
+          output: code,
+        });
+      }
+      expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(1);
+    } finally {
+      stub.kill();
+    }
   });
 
   it("SIGTERM aborts the run and kills the running shell's process group", async () => {

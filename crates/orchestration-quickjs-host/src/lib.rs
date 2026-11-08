@@ -32,6 +32,7 @@ use rquickjs::{
     async_with, AsyncContext, AsyncRuntime, CatchResultExt, Function, Module, Object, Promise,
 };
 
+pub mod http;
 pub mod jssg;
 pub mod modules;
 pub mod native;

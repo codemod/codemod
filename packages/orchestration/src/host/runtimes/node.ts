@@ -5,9 +5,10 @@
  * portable orchestrator (`execution/jssg.ts::executeJssgCommand` with the
  * portable batch loop of `execution/jssg-batch.ts`, whose batch rules are
  * the bridge's own Rust through the addon's `JssgBatch`); `shell` runs
- * through the host (`execution/shell.ts::executeShell`). `agent`,
- * `assessment`, and JSSG semantic analysis are refused by the capability
- * contract (`NODE_RUNTIME`) before anything executes. The executor is
+ * through the host (`execution/shell.ts::executeShell`); `assessment` is one
+ * TypeSafe SDK call per request from this process. `agent` and JSSG
+ * semantic analysis are refused by the capability contract
+ * (`NODE_RUNTIME`) before anything executes. The executor is
  * `node-executor.ts`, imported by `load()`.
  *
  * Parsing (and the static selector test) happens on worker threads, a chunk

@@ -4876,6 +4876,7 @@ dependencies = [
  "jssg-batch",
  "libc",
  "orchestration-walker",
+ "reqwest 0.12.23",
  "rquickjs",
  "serde",
  "serde_json",

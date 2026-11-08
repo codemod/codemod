@@ -29,6 +29,12 @@ import {
   type OperationRequest,
 } from "../../core/protocol.ts";
 import { configureTimings, timingsEnabled, timingsSnapshot } from "../../core/timings.ts";
+import { getAssessmentAsk } from "../../core/assessment.ts";
+import {
+  executeAssessment,
+  executeFileAssessment,
+  type AssessmentExecutorOptions,
+} from "../../execution/assessment.ts";
 import { executeJssgCommand, type JssgDispatch } from "../../execution/jssg.ts";
 import type { OperationExecutor } from "../../execution/operation-executor.ts";
 import { executeShell } from "../../execution/shell.ts";
@@ -36,6 +42,7 @@ import { QUICKJS_RUNTIME, UnsupportedInRuntimeError } from "../../runtime/capabi
 import { run } from "../../runtime/run.ts";
 import { installPromiseContextPropagation } from "./async-context.ts";
 import { createQuickjsDispatch } from "./dispatch.ts";
+import { createQuickjsFetch } from "./fetch.ts";
 import { createQuickjsConsole, createQuickjsHost } from "./host.ts";
 import { ABORT_GLOBAL, quickjsNative, type QuickjsNative } from "./native.ts";
 
@@ -72,6 +79,7 @@ class QuickjsExecutor implements OperationExecutor {
     private readonly cwd: string,
     private readonly artifacts: Map<string, JssgArtifact>,
     private readonly dispatch: JssgDispatch,
+    private readonly assessment: AssessmentExecutorOptions,
   ) {}
 
   async execute(request: OperationRequest, signal?: AbortSignal): Promise<OperationCompletion> {
@@ -89,6 +97,19 @@ class QuickjsExecutor implements OperationExecutor {
           host,
           dispatch: this.dispatch,
         });
+      case "assessment": {
+        const ask = getAssessmentAsk(operation);
+        return ask === undefined
+          ? await executeAssessment(this.assessment, request.commandId, operation, signal)
+          : await executeFileAssessment(
+              this.assessment,
+              this.cwd,
+              request.commandId,
+              operation,
+              ask,
+              signal,
+            );
+      }
       default:
         // `run()` refuses these before they get here (`CapabilityExecutor`).
         return {
@@ -122,7 +143,9 @@ export async function runBundled(
       { hash, name: artifact.name, source: artifact.source, origin: artifact.name },
     ]),
   );
-  const executor = new QuickjsExecutor(request.target, artifacts, createQuickjsDispatch(native));
+  const executor = new QuickjsExecutor(request.target, artifacts, createQuickjsDispatch(native), {
+    fetch: createQuickjsFetch(native) as unknown as AssessmentExecutorOptions["fetch"],
+  });
   let store: MemoryHistoryStore | undefined;
   const result: {
     ok: boolean;

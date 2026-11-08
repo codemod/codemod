@@ -23,6 +23,8 @@ libc = "0.2"
 # Native `Host.selectFiles` / `Host.fs.readSources` (files.ts semantics).
 orchestration-walker = { path = "../orchestration-walker" }
 rquickjs = { version = "0.11", features = ["full-async"] }
+# `httpRequest` (assessment only; restricted to the TypeSafe API root).
+reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

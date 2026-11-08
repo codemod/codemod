@@ -29,8 +29,6 @@ import {
   type SystemOneRequest,
   type TypeSafeClientConfig,
 } from "@typesafe-ai/sdk";
-import { readFileSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
 import {
   ANSWER_FIELDS,
   assessmentResultProblem,
@@ -46,6 +44,7 @@ import {
   type AssessmentOperation,
   type OperationCompletion,
 } from "../core/protocol.ts";
+import { getHost } from "../core/host.ts";
 import { selectFiles } from "./files.ts";
 
 /** The part of the SDK client used here; `TypeSafeClient` satisfies it. */
@@ -87,6 +86,12 @@ export interface AssessmentExecutorOptions {
   retry?: Partial<RetryPolicy>;
   /** Default `new TypeSafeClient(config)`; tests substitute a client. */
   createClient?: AssessmentClientFactory;
+  /**
+   * HTTP implementation handed to the SDK. Default: the SDK's global
+   * `fetch` (Node). The QuickJS host has no global `fetch` and passes one
+   * backed by its `httpRequest` host function.
+   */
+  fetch?: TypeSafeClientConfig["fetch"];
   /**
    * Maximum concurrent per-file SDK calls within a single batch assessment
    * command. Clamped to `[1, 32]`. Default `DEFAULT_ASSESSMENT_FILE_CONCURRENCY` (4).
@@ -131,6 +136,7 @@ export async function executeAssessment(
       defaultModel: options.defaultModel?.trim() || undefined,
       timeout,
       retry: options.retry,
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       logLevel: "off",
       logger: { debug: silent, info: silent, warn: silent, error: silent },
     });
@@ -227,8 +233,6 @@ function messageOf(error: unknown): string {
 // File-oriented batch assessment (execution layer)
 // ---------------------------------------------------------------------------
 
-const fileDecoder = new TextDecoder("utf-8", { fatal: true });
-
 /**
  * Read a selected file with strict UTF-8. Returns `undefined` ONLY for a
  * genuine `ENOENT` race (file vanished between selection and read, matching
@@ -237,13 +241,15 @@ const fileDecoder = new TextDecoder("utf-8", { fatal: true });
  */
 function readAssessmentFile(absolute: string): string | undefined {
   try {
-    return fileDecoder.decode(readFileSync(absolute));
+    return getHost().fs.readText(absolute, { fatal: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
+    if (errorCode(error) === "ENOENT") return undefined;
     throw error;
   }
+}
+
+function errorCode(error: unknown): unknown {
+  return typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
 }
 
 // Re-export from core for backward compatibility of the public API surface.
@@ -299,7 +305,8 @@ export async function executeFileAssessment(
   let targetRoot: string;
   let filePaths: string[];
   try {
-    targetRoot = realpathSync.native(resolve(cwd));
+    const host = getHost();
+    targetRoot = host.fs.realpath(host.path.resolve(cwd));
     filePaths = selectFiles({
       cwd: targetRoot,
       targetRoot,
@@ -321,13 +328,13 @@ export async function executeFileAssessment(
   for (const path of filePaths) {
     let content: string | undefined;
     try {
-      content = readAssessmentFile(join(targetRoot, path));
+      content = readAssessmentFile(getHost().path.join(targetRoot, path));
     } catch (error) {
-      const phase = error instanceof TypeError ? "utf8" : "read";
-      const detail =
-        error instanceof TypeError
-          ? `file '${path}' is not valid UTF-8`
-          : `reading '${path}' failed: ${messageOf(error)}`;
+      const invalidUtf8 = errorCode(error) === "EILSEQ";
+      const phase = invalidUtf8 ? "utf8" : "read";
+      const detail = invalidUtf8
+        ? `file '${path}' is not valid UTF-8`
+        : `reading '${path}' failed: ${messageOf(error)}`;
       return fail(detail, { phase, file: path });
     }
     if (content !== undefined) fileEntries.push({ path, content });

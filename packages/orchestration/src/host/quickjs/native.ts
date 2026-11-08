@@ -70,6 +70,20 @@ export interface QuickjsNative {
    */
   yieldNow(): Promise<void>;
 
+  /**
+   * One HTTP request, only to the TypeSafe API root (`TYPESAFE_BASE_URL`,
+   * default `https://api.typesafe.ai`); anything else throws `EACCES`.
+   * Redirects are not followed. The body is buffered. A transport failure
+   * rejects with `code: "ECONNECTION"`.
+   */
+  httpRequest(request: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    body?: string;
+    timeoutMs: number;
+  }): Promise<{ status: number; headers: [string, string][]; body: string }>;
+
   /** Make `source` importable as `import(specifier)` (evaluated once by the engine). */
   registerModule(specifier: string, source: string): void;
 

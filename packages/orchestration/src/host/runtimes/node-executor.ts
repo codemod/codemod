@@ -4,9 +4,17 @@
  * portable orchestrator (`execution/jssg.ts::executeJssgCommand` with the
  * portable batch loop of `execution/jssg-batch.ts` over the addon's
  * `JssgBatch`, and the addon's native file selection); `shell` through the
- * host (`execution/shell.ts::executeShell`); everything else refused.
+ * host (`execution/shell.ts::executeShell`); `assessment` through the
+ * TypeSafe SDK in this process (`execution/assessment.ts`); everything else
+ * refused.
  */
 import type { ArtifactStore } from "../../bundle/build.ts";
+import { getAssessmentAsk } from "../../core/assessment.ts";
+import {
+  executeAssessment,
+  executeFileAssessment,
+  type AssessmentExecutorOptions,
+} from "../../execution/assessment.ts";
 import { executeJssgCommand, type JssgDispatch } from "../../execution/jssg.ts";
 import { createJssgBatchDispatch } from "../../execution/jssg-batch.ts";
 import type { OperationExecutor } from "../../execution/operation-executor.ts";
@@ -27,9 +35,14 @@ export interface NodeExecutorOptions {
   artifacts: ArtifactStore;
   /** Added to the environment of `shell` commands. */
   env?: Record<string, string>;
+  /**
+   * TypeSafe SDK settings for `assessment`; unset fields fall back to the
+   * SDK's `TYPESAFE_*` variables and defaults.
+   */
+  assessment?: AssessmentExecutorOptions;
 }
 
-/** Executes `jssg` and `shell` in this process; refuses everything else. */
+/** Executes `jssg`, `shell`, and `assessment` in this process; refuses everything else. */
 export class NodeExecutor implements OperationExecutor {
   readonly #dispatch: JssgDispatch;
   /**
@@ -64,6 +77,14 @@ export class NodeExecutor implements OperationExecutor {
           host: this.#host,
           dispatch: this.#dispatch,
         });
+      case "assessment": {
+        // File-oriented batch: the operation carries the per-file question resolver.
+        const ask = getAssessmentAsk(operation);
+        const options = this.options.assessment ?? {};
+        return ask === undefined
+          ? await executeAssessment(options, request.commandId, operation, signal)
+          : await executeFileAssessment(options, cwd, request.commandId, operation, ask, signal);
+      }
       default: {
         const unsupported = `operation kind '${operation.kind}'`;
         return {
