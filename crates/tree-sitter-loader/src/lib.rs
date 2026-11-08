@@ -319,9 +319,7 @@ pub fn register_all() -> Result<(), LoaderError> {
     let cache_dir = get_cache_dir()?;
     let registrations = prepare_registrations(get_definitions(), &cache_dir)?;
 
-    unsafe {
-        DynamicLang::register(registrations).map_err(|e| LoaderError::Register(format!("{e}")))?;
-    }
+    DynamicLang::register(registrations).map_err(|e| LoaderError::Register(format!("{e}")))?;
 
     Ok(())
 }
