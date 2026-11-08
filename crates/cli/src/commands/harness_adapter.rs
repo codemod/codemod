@@ -1237,12 +1237,18 @@ fn upsert_claude_session_start_hook_command(
         hook.get("type").and_then(Value::as_str) == Some("command")
             && hook.get("command").and_then(Value::as_str) == Some(expected)
     };
-    let mut already_present = session_start_hooks.iter().any(|entry| {
+    let runs_command = |entry: &Value| {
         entry
             .get("hooks")
             .and_then(Value::as_array)
             .is_some_and(|hooks| hooks.iter().any(|hook| is_command_hook(hook, command)))
-    });
+    };
+    let mut already_present = session_start_hooks.iter().any(runs_command);
+    // A legacy hook may be dropped only when the new command already runs for every
+    // session; a copy under a matcher covers just some sessions.
+    let mut runs_unconditionally = session_start_hooks
+        .iter()
+        .any(|entry| entry.get("matcher").is_none() && runs_command(entry));
     // Rewrite the first legacy hook in place and drop the rest, removing only the
     // entries this leaves empty. Only the exact shapes earlier installs wrote are
     // touched: an entry with just `hooks`, holding hooks with just `type` and
@@ -1268,11 +1274,12 @@ fn upsert_claude_session_start_hook_command(
             if !is_legacy {
                 return true;
             }
-            if already_present {
+            if runs_unconditionally {
                 return false;
             }
             hook["command"] = json!(command);
             already_present = true;
+            runs_unconditionally = true;
             true
         });
         !(hooks.is_empty() && hooks.len() < original_len)
@@ -5003,6 +5010,23 @@ mod tests {
         install_claude_project_hook(&runtime_paths);
         let second = install_claude_project_hook(&runtime_paths);
         assert!(!second.updated_paths.contains(&settings_path));
+    }
+
+    #[test]
+    fn claude_project_hook_migration_keeps_an_unconditional_hook_beside_a_matcher_restricted_one() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let resume_only = json!({ "matcher": "resume", "hooks": [{ "type": "command", "command": CLAUDE_PROJECT_RUNNER_COMMAND }] });
+        let settings_path = commit_claude_session_start(
+            &runtime_paths,
+            vec![command_hook(LEGACY_PROJECT_RUNNER), resume_only.clone()],
+        );
+        install_claude_project_hook(&runtime_paths);
+        let migrated: Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(
+            migrated["hooks"]["SessionStart"],
+            json!([command_hook(CLAUDE_PROJECT_RUNNER_COMMAND), resume_only])
+        );
     }
 
     #[test]
