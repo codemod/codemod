@@ -27,6 +27,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { isAvailable as isNapiAvailable } from "@codemod.com/jssg-napi";
 import {
   MemoryHistoryStore,
+  agent,
   NODE_RUNTIME,
   NodeExecutor,
   buildFile,
@@ -341,6 +342,25 @@ describe("node runtime: runs", () => {
     ]);
     expect(readFileSync(join(repo, "alpha/other.ts"), "utf8")).toBe("newApi('alpha');\n");
     expect(readFileSync(join(repo, "beta/other.ts"), "utf8")).toBe("newApi('beta');\n");
+  });
+
+  it("agent steps run through codemod-agent in the target, the default runner from CODEMOD_AGENT_BIN", async () => {
+    const repo = makeRepo({ "a.ts": "a;\n" });
+    const fix = agent({ name: "fix", prompt: "fix it", backend: { kind: "builtin", tools: [] } });
+    const previous = process.env.CODEMOD_AGENT_BIN;
+    process.env.CODEMOD_AGENT_BIN = resolve(import.meta.dirname, "fixtures/fake-agent.mjs");
+    try {
+      const { output } = await run(fix, {
+        executor: new NodeExecutor({ cwd: repo, artifacts }),
+        runtime: NODE_RUNTIME,
+      });
+      const echo = JSON.parse(output.text) as { cwd: string; request: { commandId: string } };
+      expect(realpathSync(echo.cwd)).toBe(repo);
+      expect(echo.request.commandId).toBe("fix");
+    } finally {
+      if (previous === undefined) delete process.env.CODEMOD_AGENT_BIN;
+      else process.env.CODEMOD_AGENT_BIN = previous;
+    }
   });
 
   it("semantic analysis: the workspace index covers files the selector skips; write() stages", async () => {

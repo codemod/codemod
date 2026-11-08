@@ -5,11 +5,12 @@
  * portable batch loop of `execution/jssg-batch.ts` over the addon's
  * `JssgBatch`, and the addon's native file selection); `shell` through the
  * host (`execution/shell.ts::executeShell`); `assessment` through the
- * TypeSafe SDK in this process (`execution/assessment.ts`); everything else
- * refused.
+ * TypeSafe SDK in this process (`execution/assessment.ts`); `agent` in one
+ * `codemod-agent` runner process each (`execution/agent.ts`).
  */
 import type { ArtifactStore } from "../../bundle/build.ts";
 import { getAssessmentAsk } from "../../core/assessment.ts";
+import { executeAgent } from "../../execution/agent.ts";
 import {
   executeAssessment,
   executeFileAssessment,
@@ -27,6 +28,7 @@ import {
 import { NODE_RUNTIME, UnsupportedInRuntimeError } from "../../runtime/capabilities.ts";
 import { getHost, type Host } from "../../core/host.ts";
 import { NODE_HOST } from "../node-host.ts";
+import { defaultAgentPath } from "./agent-bin.ts";
 import { createNapiJssgEngine, createNapiSelectHost } from "./node-jssg.ts";
 
 export interface NodeExecutorOptions {
@@ -40,9 +42,15 @@ export interface NodeExecutorOptions {
    * SDK's `TYPESAFE_*` variables and defaults.
    */
   assessment?: AssessmentExecutorOptions;
+  /** The `codemod-agent` runner. Default `defaultAgentPath()`. */
+  agentBin?: string;
+  /** Environment the agent allowlist reads from. Default: the host's. */
+  hostEnv?: Readonly<Record<string, string | undefined>>;
+  /** Wall-clock limit for one external agent; see `AgentExecutionOptions`. */
+  externalAgentTimeoutMs?: number;
 }
 
-/** Executes `jssg`, `shell`, and `assessment` in this process; refuses everything else. */
+/** Executes `jssg`, `shell`, and `assessment` in this process, and `agent` in a runner process. */
 export class NodeExecutor implements OperationExecutor {
   readonly #dispatch: JssgDispatch;
   /**
@@ -77,6 +85,21 @@ export class NodeExecutor implements OperationExecutor {
           host: this.#host,
           dispatch: this.#dispatch,
         });
+      case "agent": {
+        const { agentBin, hostEnv, externalAgentTimeoutMs } = this.options;
+        return await executeAgent(
+          {
+            bin: agentBin ?? defaultAgentPath(),
+            cwd,
+            host: this.#host,
+            ...(env === undefined ? {} : { env }),
+            ...(hostEnv === undefined ? {} : { hostEnv }),
+            ...(externalAgentTimeoutMs === undefined ? {} : { externalAgentTimeoutMs }),
+          },
+          request,
+          signal,
+        );
+      }
       case "assessment": {
         // File-oriented batch: the operation carries the per-file question resolver.
         const ask = getAssessmentAsk(operation);
@@ -86,7 +109,7 @@ export class NodeExecutor implements OperationExecutor {
           : await executeFileAssessment(options, cwd, request.commandId, operation, ask, signal);
       }
       default: {
-        const unsupported = `operation kind '${operation.kind}'`;
+        const unsupported = `operation kind '${(operation as { kind: string }).kind}'`;
         return {
           protocolVersion: PROTOCOL_VERSION,
           commandId: request.commandId,

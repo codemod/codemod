@@ -28,6 +28,7 @@
   },
   "scripts": {
     "test": "vitest run",
+    "build:agent": "cargo build -p orchestration-agent",
     "build:bridge": "cargo build -p butterflow-execution-bridge",
     "build:napi": "pnpm --filter @codemod.com/jssg-napi build:debug",
     "build:quickjs": "cargo build -p orchestration-quickjs-host",

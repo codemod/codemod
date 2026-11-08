@@ -13,8 +13,10 @@
  * - `quickjs`: the whole prebuilt workflow bundle in one QuickJS context
  *   hosted by a Rust binary; no Node at runtime.
  *
- * `node` and `quickjs` execute `jssg` (with semantic analysis), `shell`,
- * and `assessment`; `agent` fails fast (being ported). The
+ * `node` and `quickjs` execute every kind: `jssg` (with semantic analysis),
+ * `shell`, and `assessment` in-process, `agent` in a `codemod-agent` runner
+ * process (`execution/agent.ts`). A runtime that lacks a capability refuses
+ * it fast. The
  * refusal happens twice: statically, before the run starts, for every
  * operation the static topology names (`assertRuntimeSupports`), and at the
  * execution boundary for operations issued inside `dynamic()`
@@ -55,7 +57,7 @@ const ALL: RuntimeCapabilities = {
 };
 
 const IN_PROCESS: RuntimeCapabilities = {
-  operations: { shell: true, jssg: true, agent: false, assessment: true },
+  operations: { shell: true, jssg: true, agent: true, assessment: true },
   semanticAnalysis: true,
 };
 

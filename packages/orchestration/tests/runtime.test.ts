@@ -31,6 +31,7 @@ import {
   sequence,
   shell,
   type OperationRequest,
+  type RuntimeDescriptor,
   type RuntimeProvider,
 } from "../src/index.ts";
 import { ref } from "./helpers.ts";
@@ -258,6 +259,15 @@ describe("the capability contract", () => {
     transform: ref("semantic"),
     semanticAnalysis: "file",
   });
+  // The contract applies to any runtime; the built-in ones support every
+  // kind, so a limited one exercises the refusals.
+  const limited: RuntimeDescriptor = {
+    name: "limited",
+    capabilities: {
+      operations: { shell: true, jssg: true, agent: false, assessment: true },
+      semanticAnalysis: false,
+    },
+  };
 
   it("refuses unsupported static operations before anything runs", async () => {
     for (const [root, kind, id] of [
@@ -265,21 +275,26 @@ describe("the capability contract", () => {
       [parallel(judge(), fix()), "agent", "fix"],
       [fix, "agent", "fix"],
     ] as const) {
-      const h = createHarness({ runtime: "node", fallback: () => "ok" });
+      const h = createHarness({ runtime: limited, fallback: () => "ok" });
       const run = (h.run as (root: unknown) => Promise<unknown>)(root);
       await expect(run).rejects.toThrow(UnsupportedInRuntimeError);
       await expect(run).rejects.toThrow(
-        `operation kind '${kind}' is unsupported in runtime 'node' (command '${id}')`,
+        `operation kind '${kind}' is unsupported in runtime 'limited' (command '${id}')`,
       );
       expect(h.executed).toEqual([]);
       expect((await h.store.load()).events).toEqual([]);
     }
+    const bare = createHarness({ runtime: limited, fallback: () => [] });
+    await expect(bare.run(semantic)).rejects.toThrow(
+      "JSSG semantic analysis is unsupported in runtime 'limited' (command 'semantic')",
+    );
   });
 
-  it("lets assessment and JSSG semantic analysis through on node and quickjs", async () => {
+  it("lets every kind through on node and quickjs", async () => {
     for (const runtime of ["node", "quickjs"] as const) {
       for (const [root, ids] of [
         [parallel(lint(), judge()), ["judge", "lint"]],
+        [sequence(lint(), fix()), ["fix", "lint"]],
         [semantic, ["semantic"]],
         [dynamic(async () => semantic()), ["semantic"]],
       ] as const) {
@@ -291,7 +306,7 @@ describe("the capability contract", () => {
   });
 
   it("fails dynamically issued unsupported operations fast, without executing them", async () => {
-    const h = createHarness({ runtime: "node", fallback: () => "ok" });
+    const h = createHarness({ runtime: limited, fallback: () => "ok" });
     const workflow = dynamic(async () => {
       await lint();
       await fix();
@@ -299,7 +314,7 @@ describe("the capability contract", () => {
     const error = await h.run(workflow).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(OperationError);
     expect((error as Error).message).toContain(
-      "operation kind 'agent' is unsupported in runtime 'node'",
+      "operation kind 'agent' is unsupported in runtime 'limited'",
     );
     expect(h.executed.map((request) => request.commandId)).toEqual(["lint"]);
   });

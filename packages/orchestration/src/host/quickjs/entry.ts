@@ -35,6 +35,7 @@ import {
   executeFileAssessment,
   type AssessmentExecutorOptions,
 } from "../../execution/assessment.ts";
+import { AGENT_BIN_ENV, executeAgent } from "../../execution/agent.ts";
 import { executeJssgCommand, type JssgDispatch } from "../../execution/jssg.ts";
 import type { OperationExecutor } from "../../execution/operation-executor.ts";
 import { executeShell } from "../../execution/shell.ts";
@@ -97,6 +98,12 @@ class QuickjsExecutor implements OperationExecutor {
           host,
           dispatch: this.dispatch,
         });
+      case "agent":
+        return await executeAgent(
+          { bin: host.env()[AGENT_BIN_ENV], cwd: this.cwd, host },
+          request,
+          signal,
+        );
       case "assessment": {
         const ask = getAssessmentAsk(operation);
         return ask === undefined
@@ -117,8 +124,10 @@ class QuickjsExecutor implements OperationExecutor {
           commandId: request.commandId,
           status: "failed",
           error: {
-            message: new UnsupportedInRuntimeError("quickjs", `operation kind '${operation.kind}'`)
-              .message,
+            message: new UnsupportedInRuntimeError(
+              "quickjs",
+              `operation kind '${(operation as { kind: string }).kind}'`,
+            ).message,
             details: { phase: "config", runtime: "quickjs", repositoryMayBeModified: false },
           },
         };

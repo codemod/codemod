@@ -7,8 +7,8 @@
  * the bridge's own Rust through the addon's `JssgBatch`); `shell` runs
  * through the host (`execution/shell.ts::executeShell`); `assessment` is one
  * TypeSafe SDK call per request from this process; JSSG semantic analysis
- * through the batch's provider. `agent` is refused by the capability
- * contract (`NODE_RUNTIME`) before anything executes. The executor is
+ * through the batch's provider; `agent` in one `codemod-agent` runner
+ * process per step. The executor is
  * `node-executor.ts`, imported by `load()`.
  *
  * Parsing (and the static selector test) happens on worker threads, a chunk

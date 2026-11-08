@@ -3,9 +3,10 @@
  * transform) in one QuickJS context hosted by a Rust binary
  * (`crates/orchestration-quickjs-host`); no Node at runtime. `launch` builds
  * the workflow bundle (`host/quickjs-bundle.ts`, cached by the content of
- * every input file) and runs the host binary on it. `agent` is refused by
- * the capability contract inside the bundle's control plane; `assessment`
- * reaches the TypeSafe API through the host's `httpRequest` only.
+ * every input file) and runs the host binary on it. `agent` steps run the
+ * `codemod-agent` runner through the host's `spawn` (`CODEMOD_AGENT_BIN`,
+ * resolved here); `assessment` reaches the TypeSafe API through the host's
+ * `httpRequest` only.
  *
  * The binary: `CODEMOD_QUICKJS_HOST_BIN`, else the newer of the monorepo's
  * `target/{release,debug}/orchestration-quickjs-host` (honouring
@@ -17,6 +18,8 @@ import { isAbsolute, join, resolve } from "node:path";
 import { Phase, lap, now } from "../../core/timings.ts";
 import { QUICKJS_RUNTIME } from "../../runtime/capabilities.ts";
 import { timeChildProcess } from "../timings-file.ts";
+import { AGENT_BIN_ENV } from "../../execution/agent.ts";
+import { defaultAgentPath } from "./agent-bin.ts";
 import type { RuntimeProvider } from "./types.ts";
 
 export const QUICKJS_HOST_BINARY = "orchestration-quickjs-host";
@@ -63,7 +66,13 @@ export function runQuickjsBundle(options: {
     // Benchmark timings (no-op when off): the host writes its own file.
     const timed = timeChildProcess();
     const child = spawn(options.host, args, {
-      env: { ...process.env, ...options.env, ...timed.env },
+      // The bundle finds the agent runner through `CODEMOD_AGENT_BIN`.
+      env: {
+        ...process.env,
+        [AGENT_BIN_ENV]: defaultAgentPath(),
+        ...options.env,
+        ...timed.env,
+      },
       // stderr carries the workflow's console output.
       stdio: ["ignore", "pipe", "inherit"],
     });

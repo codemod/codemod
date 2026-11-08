@@ -95,8 +95,11 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
   `httpRequest`, which reaches only the TypeSafe API root (`TYPESAFE_BASE_URL`).
 - **Semantic analysis:** the batch's provider (`BatchPlan`), workspace index built by
   `jssgIndex` before the first transform.
-- **Unsupported:** `agent` (`UnsupportedInRuntimeError`, statically or as a `config`
-  failure).
+- **Agent:** one `codemod-agent` runner process per step (`crates/orchestration-agent`,
+  `execution/agent.ts`) through the host's `spawn`: allowlisted environment, the key on
+  stdin, the completion on stdout; `CODEMOD_AGENT_BIN` (the Node launcher resolves the
+  default). Cancelling kills the runner's process tree, including children that left its
+  process group.
 - **History/resume:** `orchestration-quickjs-host run b.mjs --history h.json` resumes from
   `h.json` and writes the run's history back, success or not.
 - **Cancellation:** SIGINT/SIGTERM/SIGHUP to the host abort the run (the shell's process group

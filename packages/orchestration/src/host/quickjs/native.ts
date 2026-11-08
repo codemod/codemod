@@ -60,7 +60,7 @@ export interface QuickjsNative {
       onOutput?: (stream: "stdout" | "stderr", chunk: string) => void;
     },
   ): { id: number; pid?: number; result: Promise<HostSpawnResult> };
-  /** SIGKILL the child's process group (no-op once it exited). */
+  /** SIGKILL the child's process tree: its group, then descendants that left it (no-op once it exited). */
   kill(id: number): void;
   /**
    * Settles after the host's event loop has run once (signals, child output,

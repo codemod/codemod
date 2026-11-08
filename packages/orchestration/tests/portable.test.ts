@@ -19,14 +19,14 @@ const rel = (file: string) => relative(src, file).split("\\").join("/");
 /**
  * The only modules allowed to use Node: the Node host itself, the build step
  * and its on-disk cache (esbuild/TypeScript run ahead of time in Node), the bridge runtime
- * (process exchange files, process trees, child timings), agents (not
- * supported outside the bridge runtime yet), and the Node entry/CLI layer.
+ * (process exchange files, process trees, child timings), and the Node
+ * entry/CLI layer.
  */
 const NODE_ONLY = [
   /^index\.ts$/u,
   /^host\//u,
   /^bundle\/(build|cache)\.ts$/u,
-  /^execution\/(bridge|child-timings|exchange|process-tree|agent-env|executor)\.ts$/u,
+  /^execution\/(bridge|child-timings|exchange|process-tree|executor)\.ts$/u,
 ];
 const isNodeOnly = (file: string) => NODE_ONLY.some((pattern) => pattern.test(rel(file)));
 

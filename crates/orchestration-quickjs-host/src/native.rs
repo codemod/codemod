@@ -445,13 +445,7 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: Rc<HostState>) -> rquickjs::Result<()
             "kill",
             Function::new(ctx.clone(), move |id: u32| {
                 if let Some(pid) = state.children.borrow().get(&id).copied() {
-                    // The child leads its own process group: kill the group,
-                    // then the child itself in case it left it.
-                    // SAFETY: plain signal delivery to a pid we spawned.
-                    unsafe {
-                        libc::killpg(pid as libc::pid_t, libc::SIGKILL);
-                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
-                    }
+                    kill_tree(pid);
                 }
             })?,
         )?;
@@ -489,6 +483,93 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: Rc<HostState>) -> rquickjs::Result<()
     crate::http::install(ctx, &native, crate::http::allowed_base(&env))?;
     ctx.globals().set(NATIVE_GLOBAL, native)?;
     Ok(())
+}
+
+/// Kill a spawned child's whole process tree, as the Node host does
+/// (`execution/process-tree.ts::killProcessTree`): the child leads its own
+/// process group; descendants that left the group (an agent's `bash`
+/// session, `setsid` daemons) are found through one `ps` snapshot taken while
+/// the group is stopped, so nothing forks past it. Best effort.
+fn kill_tree(pid: u32) {
+    let pid = pid as libc::pid_t;
+    let send = |target: libc::pid_t, signal: libc::c_int| {
+        // SAFETY: plain signal delivery; a vanished pid is not an error here.
+        unsafe {
+            libc::kill(target, signal);
+        }
+    };
+    send(-pid, libc::SIGSTOP);
+    send(pid, libc::SIGSTOP);
+    let outside: Vec<libc::pid_t> = process_table()
+        .map(|table| {
+            descendants(pid, &table)
+                .into_iter()
+                .filter(|child| table.get(child).map(|&(_, group)| group) != Some(pid))
+                .collect()
+        })
+        .unwrap_or_default();
+    for &child in &outside {
+        send(child, libc::SIGSTOP);
+    }
+    for &child in outside.iter().rev() {
+        send(child, libc::SIGKILL);
+    }
+    send(-pid, libc::SIGKILL);
+    send(pid, libc::SIGKILL);
+}
+
+/// pid -> (parent pid, process group id), from one `ps` listing.
+fn process_table() -> Option<HashMap<libc::pid_t, (libc::pid_t, libc::pid_t)>> {
+    let output = Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,pgid="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let table: HashMap<_, _> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace().map(str::parse::<libc::pid_t>);
+            match (fields.next(), fields.next(), fields.next()) {
+                (Some(Ok(pid)), Some(Ok(parent)), Some(Ok(group))) => Some((pid, (parent, group))),
+                _ => None,
+            }
+        })
+        .collect();
+    (!table.is_empty()).then_some(table)
+}
+
+/// Descendants of `root`, breadth first: every parent precedes its children.
+fn descendants(
+    root: libc::pid_t,
+    table: &HashMap<libc::pid_t, (libc::pid_t, libc::pid_t)>,
+) -> Vec<libc::pid_t> {
+    let mut children: HashMap<libc::pid_t, Vec<libc::pid_t>> = HashMap::new();
+    for (&child, &(parent, _)) in table {
+        if child != root {
+            children.entry(parent).or_default().push(child);
+        }
+    }
+    for list in children.values_mut() {
+        list.sort_unstable();
+    }
+    let mut found = Vec::new();
+    let mut seen = std::collections::HashSet::from([root]);
+    let mut queue = vec![root];
+    while !queue.is_empty() {
+        let mut next = Vec::new();
+        for parent in queue {
+            for &child in children.get(&parent).into_iter().flatten() {
+                if seen.insert(child) {
+                    found.push(child);
+                    next.push(child);
+                }
+            }
+        }
+        queue = next;
+    }
+    found
 }
 
 enum ChildEvent {
@@ -678,4 +759,50 @@ fn spawn<'js>(
         }
     });
     Ok(handle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn descendants_walk_parents_first() {
+        let table = HashMap::from([
+            (14, (12, 14)),
+            (10, (1, 10)),
+            (12, (11, 10)),
+            (11, (10, 10)),
+            (13, (1, 13)),
+            (15, (10, 15)),
+        ]);
+        assert_eq!(descendants(10, &table), vec![11, 15, 12, 14]);
+        assert_eq!(descendants(13, &table), Vec::<libc::pid_t>::new());
+    }
+
+    #[test]
+    fn kill_tree_reaches_children_that_left_the_group() {
+        // A group leader whose child starts its own session (`setsid`).
+        let mut leader = Command::new("sh")
+            .args(["-c", "setsid sleep 30 & echo $!; wait"])
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        use std::io::BufRead;
+        std::io::BufReader::new(leader.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let detached: libc::pid_t = line.trim().parse().unwrap();
+        let alive = |pid: libc::pid_t| unsafe { libc::kill(pid, 0) } == 0;
+        assert!(alive(detached));
+        kill_tree(leader.id());
+        leader.wait().unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        // Reaped by init once killed; `kill(pid, 0)` then fails.
+        while alive(detached) && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(!alive(detached), "the detached child survived");
+    }
 }

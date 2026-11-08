@@ -29,6 +29,7 @@ const host =
 const bridge =
   process.env.CODEMOD_BRIDGE_BIN ?? join(repoRoot, "target/debug/butterflow-execution-bridge");
 const fixtures = resolve(import.meta.dirname, "fixtures/quickjs");
+const fakeAgent = resolve(import.meta.dirname, "fixtures/fake-agent.mjs");
 const scratch = mkdtempSync(join(tmpdir(), "quickjs-e2e-"));
 
 beforeAll(() => {
@@ -280,16 +281,71 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
     expect(file.find((entry) => entry.file === "main.ts")).toMatchObject({ kind: "local" });
   });
 
-  it("refuses agent with a clear error", async () => {
-    const agentRun = await runOn("quickjs", "unsupported.ts");
-    expect(agentRun.ok === false && agentRun.error).toMatch(
-      /operation kind 'agent' is unsupported in runtime 'quickjs'/u,
+  it("runs agent steps through codemod-agent with the allowlisted environment", async () => {
+    const run = runOn("quickjs", "static-agent.ts", undefined, {
+      env: { CODEMOD_AGENT_BIN: fakeAgent, LLM_API_KEY: "llm-key", TYPESAFE_API_KEY: "ts-key" },
+    });
+    expect(run.ok, run.ok ? "" : run.error).toBe(true);
+    expect(run.files["ran.marker"]).toBe("");
+    const echo = JSON.parse((run as { output: { text: string } }).output.text) as {
+      request: { commandId: string; operation: { kind: string } };
+      env: Record<string, string>;
+      secrets: unknown;
+    };
+    expect(echo.request).toMatchObject({ commandId: "fix", operation: { kind: "agent" } });
+    expect(echo.secrets).toEqual({ LLM_API_KEY: "llm-key" });
+    expect(echo.env).toMatchObject({ CODEMOD_AGENT_SECRETS: "stdin" });
+    expect(echo.env).not.toHaveProperty("LLM_API_KEY");
+    expect(echo.env).not.toHaveProperty("TYPESAFE_API_KEY");
+
+    const missing = runOn("quickjs", "static-agent.ts", undefined, {
+      env: { CODEMOD_AGENT_BIN: join(scratch, "no-such-agent") },
+    });
+    expect(missing.ok === false && missing.error).toMatch(
+      /agent steps need the codemod-agent runner/u,
     );
-    const staticRun = await runOn("quickjs", "static-agent.ts");
-    expect(staticRun.ok === false && staticRun.error).toMatch(
-      /operation kind 'agent' is unsupported in runtime 'quickjs' \(command 'fix'\)/u,
+  });
+
+  it("SIGTERM during an agent step kills the runner's whole process tree", async () => {
+    const bundle = await bundleFor("static-agent.ts");
+    const target = makeRepo();
+    const pidFile = join(target, "pids.json");
+    writeFileSync(
+      join(target, "fake-agent.json"),
+      JSON.stringify({
+        FAKE_AGENT_MODE: "hang",
+        FAKE_PID_FILE: pidFile,
+        FAKE_CHILDREN: "2",
+        FAKE_DETACH_CHILDREN: "1",
+      }),
     );
-    expect(staticRun.files["ran.marker"]).toBeUndefined();
+    const child = spawn(host, ["run", bundle, "--target", target, "--json"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, CODEMOD_AGENT_BIN: fakeAgent },
+    });
+    let stdout = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    const deadline = Date.now() + 10_000;
+    while (!existsSync(pidFile) || readFileSync(pidFile, "utf8").trim() === "") {
+      if (Date.now() > deadline) throw new Error("the agent never started");
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const pids = JSON.parse(readFileSync(pidFile, "utf8")) as number[];
+    child.kill("SIGTERM");
+    const code = await new Promise<number | null>((r) => child.once("close", r));
+    expect(code).toBe(1);
+    expect(JSON.parse(stdout)).toMatchObject({ ok: false });
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const until = Date.now() + 5_000;
+    while (pids.some(alive) && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+    expect(pids.filter(alive)).toEqual([]);
   });
 
   it("runs assessment through the host's httpRequest, only to the TypeSafe API root", async () => {

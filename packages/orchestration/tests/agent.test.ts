@@ -597,7 +597,7 @@ describe("agent failures and plumbing", () => {
       GITHUB_TOKEN: "gh",
       NPM_TOKEN: "npm",
     };
-    expect(agentEnvironment(host, { EXTRA: "1" })).toEqual({
+    expect(agentEnvironment(host, { EXTRA: "1" }, process.platform)).toEqual({
       PATH: process.env.PATH,
       HOME: "/home/dev",
       LC_ALL: "C",

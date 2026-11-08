@@ -1,4 +1,5 @@
-// A static agent step: refused before anything runs (static preflight).
+// A shell step, then a builtin agent step (through `codemod-agent`; the
+// e2e test points CODEMOD_AGENT_BIN at a stand-in that echoes its launch).
 import { agent, sequence, shell } from "../../../src/index.ts";
 
 const before = shell({ name: "before", command: "touch ran.marker" });

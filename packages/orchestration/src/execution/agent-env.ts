@@ -80,7 +80,7 @@ const allowed = new Set(AGENT_ENV_ALLOWLIST);
 export function agentEnvironment(
   host: Record<string, string | undefined>,
   explicit: Record<string, string> = {},
-  platform: NodeJS.Platform = process.platform,
+  platform: string,
 ): Record<string, string> {
   const key = (name: string) => (platform === "win32" ? name.toUpperCase() : name);
   const merged = new Map<string, [string, string]>();
@@ -158,11 +158,13 @@ export function isSecretEnvName(name: string): boolean {
 export function externalAgentEnvProblem(explicit: Record<string, string> = {}): string | undefined {
   const refused = Object.keys(explicit).filter(isSecretEnvName).sort();
   if (refused.length === 0) return undefined;
-  return `external agent backends do not accept credential or provider variables in BridgeOptions.env (${refused.join(", ")}); they use the CLI's own login`;
+  return `external agent backends do not accept credential or provider variables in the runtime's env (${refused.join(", ")}); they use the CLI's own login`;
 }
 
 /** Marker telling the bridge to read `{ "LLM_API_KEY": ... }` from stdin. */
 export const BRIDGE_SECRETS_ENV = "CODEMOD_BRIDGE_SECRETS";
+/** Marker telling `codemod-agent` that `{ "LLM_API_KEY": ... }` follows the request on stdin. */
+export const AGENT_SECRETS_ENV = "CODEMOD_AGENT_SECRETS";
 
 /**
  * How an agent bridge is launched: the allowlisted environment without
@@ -171,8 +173,9 @@ export const BRIDGE_SECRETS_ENV = "CODEMOD_BRIDGE_SECRETS";
 export function agentLaunch(
   host: Record<string, string | undefined>,
   explicit: Record<string, string> = {},
-  platform: NodeJS.Platform = process.platform,
+  platform: string,
   backend: AgentBackendKind = "builtin",
+  secretsEnv: string = BRIDGE_SECRETS_ENV,
 ): { env: Record<string, string>; stdin?: string } {
   const env = agentEnvironment(host, explicit, platform);
   let apiKey: string | undefined;
@@ -190,7 +193,7 @@ export function agentLaunch(
   }
   if (apiKey === undefined || apiKey.trim() === "") return { env };
   return {
-    env: { ...env, [BRIDGE_SECRETS_ENV]: "stdin" },
+    env: { ...env, [secretsEnv]: "stdin" },
     stdin: JSON.stringify({ LLM_API_KEY: apiKey }),
   };
 }
