@@ -74,7 +74,6 @@ function decodeAnswer(answer: Record<string, unknown>, question: AssessmentQuest
 }
 
 export const openai: DecisionAdapter = {
-  calibrated: true,
   encode({ state, questions, model }) {
     const entries = Object.entries(questions);
     if (entries.length > MAX_QUESTIONS) {

@@ -36,7 +36,6 @@ function decodeAnswer(answer: unknown): unknown {
 }
 
 export const systemone: DecisionAdapter = {
-  calibrated: true,
   encode({ state, questions, model }) {
     const encoded = Object.entries(questions).map(([id, q]) => [id, encodeQuestion(q)]);
     return { body: { state, questions: Object.fromEntries(encoded), model } };

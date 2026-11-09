@@ -22,8 +22,6 @@ export interface DecodedResponse {
 }
 
 export interface DecisionAdapter {
-  /** Whether the API documents its probabilities and confidence as calibrated. */
-  calibrated: boolean;
   /** The request body, or why this provider cannot ask these questions. */
   encode(request: DecisionRequest): { body: unknown } | { problem: string };
   /**

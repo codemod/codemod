@@ -580,6 +580,21 @@ describe("the System One adapter", () => {
     ]);
   });
 
+  it.each<[string, Record<string, string>, boolean]>([
+    ["TypeSafe by default", {}, true],
+    ["Microsoft Decision on Foundry", { DECISION_PATH: "providers/microsoft/v1/systemone" }, false],
+    [
+      "Microsoft Decision when DECISION_CALIBRATED says so",
+      { DECISION_PATH: "providers/microsoft/v1/systemone", DECISION_CALIBRATED: "true" },
+      true,
+    ],
+    ["TypeSafe when DECISION_CALIBRATED=false", { DECISION_CALIBRATED: "FALSE" }, false],
+  ])("records whether answers are calibrated: %s", async (_, env, calibrated) => {
+    const { fetch } = api(() => yesNoReply);
+    const result = await ask(single(yesNo), fetch, { env: { ...KEY, ...env } });
+    expect(result.output).toMatchObject({ calibrated });
+  });
+
   it("falls back to TYPESAFE_API_KEY and TYPESAFE_BASE_URL", async () => {
     const env = { TYPESAFE_API_KEY: "legacy", TYPESAFE_BASE_URL: "http://127.0.0.1:9" };
     const { sent, fetch } = api(() => yesNoReply);
@@ -771,6 +786,11 @@ describe("assessment failures", () => {
       "a base URL with a query",
       { env: { ...KEY, DECISION_BASE_URL: "https://x/?a=1" } },
       "decision base URL 'https://x/?a=1' must not carry a query, fragment, or user",
+    ],
+    [
+      "a calibration flag that is not true or false",
+      { env: { ...KEY, DECISION_CALIBRATED: "yes" } },
+      "DECISION_CALIBRATED 'yes' is not true or false",
     ],
     [
       "a timeout too large for a timer",

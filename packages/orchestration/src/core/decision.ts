@@ -13,10 +13,17 @@
  * | `DECISION_API_KEY`     | the key                                              |
  * | `DECISION_AUTH_HEADER` | `authorization` (default, sends `Bearer <key>`) or a |
  * |                        | header that carries the raw key, such as `api-key`   |
+ * | `DECISION_CALIBRATED`  | `true` or `false`: whether answers are calibrated    |
+ * |                        | probabilities (see below)                            |
  *
  * `systemone` still reads `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL` and
  * `TYPESAFE_API_KEY` when the `DECISION_*` value is unset, and `openai` reads
  * `OPENAI_API_KEY`. Blank values count as unset.
+ *
+ * Calibration is a property of the deployment, not the wire format: TypeSafe
+ * and OpenAI document calibrated probabilities, while Microsoft-Decision-1 on
+ * Foundry (a path under `/providers/microsoft/`) documents its scores only for
+ * ordering and thresholds. `DECISION_CALIBRATED` overrides either default.
  */
 
 export const DECISION_PROVIDERS = ["systemone", "openai"] as const;
@@ -30,6 +37,8 @@ export interface DecisionSettings {
   apiKey?: string;
   /** Lower-case header name; `authorization` sends `Bearer <key>`. */
   authHeader: string;
+  /** Whether answers are calibrated probabilities; recorded in each result. */
+  calibrated: boolean;
 }
 
 const DEFAULTS: Record<
@@ -110,8 +119,19 @@ export function decisionSettings(env: Env, provider = decisionProvider(env)): De
     provider,
     url: `${baseURL.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`,
     authHeader: (read(env, "DECISION_AUTH_HEADER") ?? "authorization").toLowerCase(),
+    calibrated: calibrated(env, path),
   };
   const apiKey = setting(env, provider, "apiKey", "DECISION_API_KEY");
   if (apiKey !== undefined) settings.apiKey = apiKey;
   return settings;
+}
+
+function calibrated(env: Env, path: string): boolean {
+  const override = read(env, "DECISION_CALIBRATED")?.toLowerCase();
+  if (override === "true") return true;
+  if (override === "false") return false;
+  if (override !== undefined) {
+    throw new Error(`DECISION_CALIBRATED '${override}' is not true or false`);
+  }
+  return !/(^|\/)providers\/microsoft\//u.test(path);
 }

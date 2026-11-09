@@ -145,7 +145,7 @@ export async function executeAssessment(
       : {
           provider: operation.provider,
           model: decoded.model,
-          calibrated: adapter.calibrated,
+          calibrated: settings.calibrated,
           answers: decoded.answers,
           usage: decoded.usage,
         };

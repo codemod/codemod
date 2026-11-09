@@ -494,7 +494,8 @@ picks the provider and model:
   code narrows on `answer.type` (see `demo/10-assisted.ts`). `provider` is
   the adapter that asked, `model` is the versioned model that answered (e.g.
   `jev-1.13.0` for `jev-latest`), `calibrated` says whether the provider
-  documents its probabilities and confidence as calibrated, and `usage` is
+  documents its probabilities and confidence as calibrated (configurable,
+  below), and `usage` is
   `{ inputTokens?, outputTokens? }`, each count present only when the API
   reported it. Answers are validated against the concrete resolved questions
   both when the API responds and when a result is decoded (replay included);
@@ -531,10 +532,12 @@ picks the provider and model:
   instructions are stringified and yes/no criteria are appended to the
   instructions; JSON state is sent as an `input_json` user message and text
   state as the `input` string. A refusal becomes `{ type: "refused" }`, and
-  usage reports input tokens only. Both adapters report `calibrated: true`.
-  For Microsoft Decision that follows System One's contract; Microsoft's docs
-  describe its probabilities as useful for relative ordering and thresholds
-  and do not claim calibration.
+  usage reports input tokens only.
+- `calibrated` is `true` for TypeSafe and OpenAI, and `false` when
+  `DECISION_PATH` is under `/providers/microsoft/`: Microsoft's docs describe
+  its probabilities as useful for relative ordering and thresholds and do not
+  claim calibration. `DECISION_CALIBRATED=true|false` overrides either
+  default; any other value fails the command as a config error.
 - In `quickjs` there is no global `fetch`: the executor gets an adapter
   (`src/host/quickjs/fetch.ts`) over the host function `httpRequest`, which
   only allows URLs under the decision API root, resolved as `decision.ts`
