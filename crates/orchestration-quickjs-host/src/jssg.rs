@@ -1,6 +1,5 @@
 //! In-context JSSG batches. The portable batch loop
-//! (`packages/orchestration/src/execution/jssg-batch.ts`, shared with the
-//! `node` runtime) drives one batch per `jssg` command through the bundle's
+//! (`packages/orchestration/src/execution/jssg-batch.ts`) drives one batch per `jssg` command through the bundle's
 //! engine (`packages/orchestration/src/host/quickjs/dispatch.ts`), one
 //! transform call at a time on the JS thread. Every batch rule is the
 //! shared [`jssg_batch::BatchPlan`]:

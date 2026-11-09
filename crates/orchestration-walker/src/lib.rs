@@ -5,9 +5,9 @@
 //! `src/execution/jssg.ts` over a whole selection. A `Host` that offers them
 //! (`Host.selectFiles`, `Host.fs.readSources`; the QuickJS host does) lets
 //! `files.ts` skip interpreting the walk. The contract is exact equality with
-//! the TypeScript walker, file list and errors, which
-//! `packages/orchestration/tests/files-native.test.ts` checks differentially
-//! on a fixture tree built to be awkward.
+//! the TypeScript walker, file list and errors, which the quickjs e2e tests
+//! check by running the same workflows with `CODEMOD_NATIVE_SELECT=0` (the
+//! TypeScript walk inside QuickJS) on a tree built to be awkward.
 //!
 //! This is deliberately not the engine's walker (`codemod_walk_builder`, the
 //! `ignore` crate). The TypeScript walker has semantics of its own that the
@@ -28,7 +28,6 @@
 //! or an ancestor of the walk root), the override patterns (braces expanded,
 //! includes negated), and the global excludes file already discovered.
 
-pub mod errors;
 pub mod node_ignore;
 
 use std::cmp::Ordering;

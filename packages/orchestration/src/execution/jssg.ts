@@ -87,7 +87,7 @@ export async function executeJssgCommand(
   if (artifact === undefined) {
     return fail(
       "failed",
-      `no built artifact for jssg '${operation.transform.name}' (hash ${operation.transform.hash.slice(0, 12)}); load the workflow with loadWorkflow() or codemod-workflow and pass its artifacts to the executor`,
+      `no built artifact for jssg '${operation.transform.name}' (hash ${operation.transform.hash.slice(0, 12)}); run the workflow with codemod-workflow, which bundles its artifacts`,
       { phase: "artifact" },
     );
   }

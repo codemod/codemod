@@ -12,7 +12,6 @@ import {
   PHASE_NAMES,
   Phase,
   add,
-  addTimingsSource,
   configureTimings,
   lap,
   now,
@@ -65,7 +64,6 @@ describe("core/timings", () => {
     expect(now()).toBe(0);
     expect(lap(Phase.parse, 0)).toBe(0);
     add(Phase.transform, 5);
-    addTimingsSource(() => ({ parse: { ns: 1, count: 1 } }));
     registerTimingsChild(42);
     expect(timingsSnapshot()).toEqual({});
     expect(timingsChildren()).toEqual([]);
@@ -94,18 +92,10 @@ describe("core/timings", () => {
     });
   });
 
-  it("sums native sources into the snapshot and rounds to whole nanoseconds", () => {
+  it("rounds the snapshot to whole nanoseconds", () => {
     configureTimings({ enabled: true, clock: () => 0 });
-    add(Phase.parse, 10.4, 1);
-    addTimingsSource(() => ({
-      parse: { ns: 5, count: 2, cpu_ns: 30.6 },
-      convert: { ns: 2, count: 1 },
-    }));
-    addTimingsSource(() => undefined);
-    expect(timingsSnapshot()).toEqual({
-      parse: { ns: 15, count: 3, cpu_ns: 31 },
-      convert: { ns: 2, count: 1 },
-    });
+    add(Phase.parse, 10.4, 1, 30.6);
+    expect(timingsSnapshot()).toEqual({ parse: { ns: 10, count: 1, cpu_ns: 31 } });
   });
 
   it("keeps the arm and children until reset", () => {

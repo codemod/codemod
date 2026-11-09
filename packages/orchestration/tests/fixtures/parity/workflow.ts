@@ -1,4 +1,4 @@
-// Cross-runtime JSSG parity (`tests/jssg-parity.e2e.test.ts`): one JSSG
+// JSSG edge cases (`tests/jssg-parity.e2e.test.ts`): one JSSG
 // command per run, picked by the workflow input `{ step, input?, include? }`.
 import { dynamic, type Json } from "../../../src/index.ts";
 import {

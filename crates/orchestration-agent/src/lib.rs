@@ -1,7 +1,7 @@
-//! The agent runner of the TypeScript orchestration runtimes (`node`,
-//! `quickjs`): `codemod-agent` reads one `agent` request on stdin and writes
+//! The agent runner of the TypeScript orchestration runtime (`quickjs`):
+//! `codemod-agent` reads one `agent` request on stdin and writes
 //! its completion on stdout (`src/main.rs`). Every other operation kind
-//! runs in the runtimes themselves; an agent runs here, in its own process,
+//! runs in the runtime itself; an agent runs here, in its own process,
 //! because its tools (`bash`, file tools, MCP servers, the `claude` and
 //! `codex` CLIs) run in the process working directory and inherit its
 //! environment: the host starts the runner in the target directory with an

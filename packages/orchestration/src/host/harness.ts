@@ -65,8 +65,9 @@ export interface HarnessOptions {
   signal?: AbortSignal;
   /**
    * Apply a runtime's capability contract (`RunSettings.runtime`) around the
-   * scripted executor: `"node"` makes `agent`/`assessment` fail fast exactly
-   * as the real runtime would. Default: none (every kind is scripted).
+   * scripted executor: a descriptor without `agent` makes agent steps fail
+   * fast exactly as such a runtime would. Default: none (every kind is
+   * scripted).
    */
   runtime?: BuiltinRuntimeName | RuntimeDescriptor;
 }

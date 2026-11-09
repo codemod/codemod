@@ -9,13 +9,12 @@
 #   BENCH_OVERHEAD_RUNS=10 ./overhead.sh
 #
 # Build mode: with BENCH_OVERHEAD_BASELINE=<cargo target dir> holding a
-# release build *without* the `timings` feature (codemod, the quickjs host,
-# and libjssg_napi), "off" runs that build and "on" runs the
+# release build *without* the `timings` feature (codemod and the quickjs
+# host), "off" runs that build and "on" runs the
 # default one, both with CODEMOD_TIMINGS_FILE unset: the cost of compiling
 # the instrumentation in, rather than of turning it on.
 #
-#   cargo build --release --target-dir /tmp/off -p codemod -p orchestration-quickjs-host \
-#     -p jssg-napi
+#   cargo build --release --target-dir /tmp/off -p codemod -p orchestration-quickjs-host
 #   BENCH_OVERHEAD_BASELINE=/tmp/off ./overhead.sh
 #
 # Output: results/overhead/<stamp>/raw/<i>-<arm>-{off,on}.json (+ .timings.json
@@ -40,11 +39,6 @@ if [ -n "$BASELINE" ]; then
   for bin in codemod orchestration-quickjs-host; do
     [ -x "$BASELINE/release/$bin" ] || die "baseline build lacks $BASELINE/release/$bin"
   done
-  lib="$BASELINE/release/libjssg_napi.$([ "$(uname -s)" = Darwin ] && echo dylib || echo so)"
-  [ -f "$lib" ] || die "baseline build lacks $lib"
-  # Node loads addons by the .node extension only.
-  BASELINE_NAPI="$OUT/baseline-jssg-napi.node"
-  cp "$lib" "$BASELINE_NAPI"
 fi
 printf '%s\n' "$MODE" >"$OUT/mode"
 log "overhead mode: $MODE${BASELINE:+ (baseline $BASELINE)}"
@@ -63,8 +57,7 @@ run_env() {
   local mode="$1"
   shift
   if [ "$MODE" = build ] && [ "$mode" = off ]; then
-    CODEMOD_QUICKJS_HOST_BIN="$BASELINE/release/orchestration-quickjs-host" \
-      CODEMOD_JSSG_NAPI="$BASELINE_NAPI" "$@"
+    CODEMOD_QUICKJS_HOST_BIN="$BASELINE/release/orchestration-quickjs-host" "$@"
   else
     "$@"
   fi

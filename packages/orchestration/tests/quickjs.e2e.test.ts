@@ -1,10 +1,9 @@
 /**
  * End-to-end tests of `--runtime=quickjs` against the real Rust host
- * (`crates/orchestration-quickjs-host`) and, for parity, the `node` runtime.
+ * (`crates/orchestration-quickjs-host`).
  *
  * Run with: pnpm --filter @codemod.com/orchestration test:e2e
- * (builds the host and the napi addon). Override the host with
- * CODEMOD_QUICKJS_HOST_BIN.
+ * (builds the host). Override it with CODEMOD_QUICKJS_HOST_BIN.
  */
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -19,7 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { scheduledCommands, type History } from "../src/index.ts";
+import { buildFile, scheduledCommands, type History } from "../src/index.ts";
 import { buildQuickjsBundle } from "../src/host/quickjs-bundle.ts";
 
 const enabled = process.env.CODEMOD_QUICKJS_E2E === "1";
@@ -82,20 +81,15 @@ type Outcome =
     };
 
 const cli = resolve(import.meta.dirname, "../bin/codemod-workflow.mjs");
-const register = resolve(import.meta.dirname, "../bin/register-ts.mjs");
 
-/**
- * `codemod-workflow run --runtime=<runtime>` in a subprocess: the real CLI
- * path (vitest's module loader would bypass `loadWorkflow`'s Node hooks).
- */
+/** `codemod-workflow run --runtime=quickjs` in a subprocess: the real CLI path. */
 function runOn(
-  runtime: "node" | "quickjs",
   fixture: string,
   input?: unknown,
   options: { files?: Record<string, string>; env?: Record<string, string> } = {},
 ): Outcome {
   const target = makeRepo(options.files);
-  const args = [cli, "run", `--runtime=${runtime}`, join(fixtures, fixture), "--target", target];
+  const args = [cli, "run", "--runtime=quickjs", join(fixtures, fixture), "--target", target];
   if (input !== undefined) args.push("--input", JSON.stringify(input));
   const result = spawnSync(process.execPath, args, {
     encoding: "utf8",
@@ -105,17 +99,6 @@ function runOn(
     return { ok: true, output: JSON.parse(result.stdout) as unknown, files: snapshot(target) };
   }
   return { ok: false, error: result.stderr.trim(), files: snapshot(target) };
-}
-
-/** The workflow run in Node (AsyncLocalStorage) by `fixtures/quickjs/node-reference.ts`. */
-function nodeReference(fixture: string): { output: unknown; history: History } {
-  const result = spawnSync(
-    process.execPath,
-    ["--import", register, join(fixtures, "node-reference.ts"), join(fixtures, fixture)],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0) throw new Error(`node reference failed: ${result.stderr}`);
-  return JSON.parse(result.stdout) as { output: unknown; history: History };
 }
 
 function runHost(args: string[]): {
@@ -138,41 +121,71 @@ async function bundleFor(fixture: string): Promise<string> {
   return path;
 }
 
-describe.runIf(enabled)("quickjs runtime vs node runtime: JSSG parity", () => {
-  it("a sequence: structured outputs, selector skips, renames", async () => {
-    const [b, q] = [
-      await runOn("node", "jssg-sequence.ts"),
-      await runOn("quickjs", "jssg-sequence.ts"),
-    ];
-    expect(b.ok).toBe(true);
-    expect(q).toEqual(b);
-    expect(q.files["sub/d.new.ts"]).toBe("export const d = 3;\n");
-    expect(q.files["a.ts"]).toBe("newApi(1);\n");
+/** `FILES` after the fixtures' `replace` and `rename` transforms. */
+const MIGRATED = {
+  "a.ts": "newApi(1);\n",
+  "b.ts": "export const b = 1;\n",
+  "c.ts": "export const c = newApi(2);\n",
+  "sub/d.new.ts": "export const d = 3;\n",
+};
+
+describe.runIf(enabled)("quickjs runtime: JSSG commands", () => {
+  it("runs a sequence: structured outputs, selector skips, renames", () => {
+    expect(runOn("jssg-sequence.ts")).toEqual({ ok: true, output: [], files: MIGRATED });
   });
 
-  it("dynamic bodies, concurrent commands, invocation targets, and a shell step", async () => {
-    const [b, q] = [
-      await runOn("node", "jssg-dynamic.ts"),
-      await runOn("quickjs", "jssg-dynamic.ts"),
-    ];
-    expect(b.ok).toBe(true);
-    expect(q).toEqual(b);
+  it("runs dynamic bodies, concurrent commands, invocation targets, and a shell step", () => {
+    expect(runOn("jssg-dynamic.ts")).toEqual({
+      ok: true,
+      output: {
+        first: [{ file: "a.ts" }],
+        second: [],
+        third: [],
+        stdout: "./a.ts\n./b.ts\n./c.ts\n./sub/d.new.ts\nnewApi(1);\n",
+      },
+      files: MIGRATED,
+    });
+  });
+
+  it("splits every module in the workflow's graph into artifacts", () => {
+    const workflow = resolve(import.meta.dirname, "fixtures/load/dynamic.ts");
+    const built = buildFile(resolve(import.meta.dirname, "fixtures/load/definitions.ts"));
+    const run = runOn(relative(fixtures, workflow));
+    expect(run.ok, run.ok ? "" : run.error).toBe(true);
+    expect((run as { output: { transform: unknown } }).output.transform).toEqual({
+      name: "migrate",
+      hash: built.artifacts[0]!.hash,
+    });
+    expect(run.files["a.ts"]).toBe("newApi(1);\n");
   });
 
   it.each([
     ["fail-second", /second file exploded/u],
     ["conflict", /same\.ts/u],
     ["escape", /is outside the target directory/u],
-  ])("failure '%s' fails on both and writes nothing", async (which, message) => {
-    const [b, q] = [
-      await runOn("node", "jssg-failures.ts", which),
-      await runOn("quickjs", "jssg-failures.ts", which),
-    ];
-    for (const outcome of [b, q]) {
-      expect(outcome.ok).toBe(false);
-      expect(outcome.ok === false && outcome.error).toMatch(message);
-      expect(outcome.files).toEqual(FILES);
-    }
+  ])("failure '%s' fails the run and writes nothing", (which, message) => {
+    const outcome = runOn("jssg-failures.ts", which);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.error).toMatch(message);
+    expect(outcome.files).toEqual(FILES);
+  });
+});
+
+describe.runIf(enabled)("quickjs runtime: root input", () => {
+  const echo = "../load/input.ts";
+
+  it("requires --input for a root that declares input", () => {
+    expect(runOn(echo)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/workflow requires an input value; pass --input <json>/u),
+    });
+  });
+
+  it.each([
+    ["null", null],
+    ['{"name":"x"}', { name: "x" }],
+  ])("passes --input %s through", (text, value) => {
+    expect(runOn(echo, JSON.parse(text))).toMatchObject({ ok: true, output: { received: value } });
   });
 });
 
@@ -192,17 +205,15 @@ describe.runIf(enabled)("quickjs runtime: native file selection", () => {
   };
 
   it.each(["jssg-sequence.ts", "jssg-dynamic.ts"])(
-    "%s: the same run with the walker interpreted, and the same as node",
-    async (fixture) => {
-      const native = runOn("quickjs", fixture, undefined, { files });
-      const interpreted = runOn("quickjs", fixture, undefined, {
+    "%s: the same run with the walker interpreted",
+    (fixture) => {
+      const native = runOn(fixture, undefined, { files });
+      const interpreted = runOn(fixture, undefined, {
         files,
         env: { CODEMOD_NATIVE_SELECT: "0" },
       });
-      const onNode = runOn("node", fixture, undefined, { files });
       expect(native.ok).toBe(true);
       expect(interpreted).toEqual(native);
-      expect(onNode).toEqual(native);
     },
   );
 });
@@ -232,40 +243,28 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
     expect(log()).toBe("count\ngate\n");
   });
 
-  it("propagates the run context like AsyncLocalStorage: same history as a Node run", async () => {
+  it("propagates the run context like AsyncLocalStorage", async () => {
     const bundle = await bundleFor("parallel-dynamic.ts");
     const target = makeRepo();
     const history = join(scratch, `history-parallel-${counter}.json`);
     const quickjs = runHost(["run", bundle, "--target", target, "--history", history, "--json"]);
-    expect(quickjs.json.ok).toBe(true);
-
-    // Reference: the same module in Node (AsyncLocalStorage).
-    const node = nodeReference("parallel-dynamic.ts");
-    expect(quickjs.json.output).toEqual(node.output);
-    const byId = (history: History) =>
-      scheduledCommands(history).sort((a, b) => (a.id < b.id ? -1 : 1));
-    const recorded = byId(JSON.parse(readFileSync(history, "utf8")) as History);
-    expect(recorded).toEqual(byId(node.history));
-    // Commands issued after awaits in the parallel members' bodies are
-    // concurrent; the nested dynamic's command is not (as on Node). With the
-    // fallback context they would all lose the flag.
-    expect(
-      recorded
-        .filter((command) => command.concurrent === true)
-        .map((c) => c.id)
-        .sort(),
-    ).toEqual(["a1", "a2", "b1", "b2"]);
+    expect(quickjs.json).toEqual({ ok: true, output: ["a2\n", ["b1\n", "c1\n", "b2\n"]] });
+    const recorded = scheduledCommands(JSON.parse(readFileSync(history, "utf8")) as History);
+    expect(recorded.map((command) => command.id).sort()).toEqual(["a1", "a2", "b1", "b2", "c1"]);
+    // Every command is issued from a parallel member's body, after awaits
+    // or inside a nested sequence, so all are concurrent, as with
+    // AsyncLocalStorage (the Node test harness records the same). Without
+    // propagation they would lose the flag.
+    expect(recorded.filter((command) => command.concurrent === true)).toHaveLength(5);
   });
 
-  it("runs JSSG semantic analysis (workspace and file scope) as the node runtime does", async () => {
+  it("runs JSSG semantic analysis (workspace and file scope)", () => {
     const files = {
       "main.ts": 'import { add } from "./utils";\nconst result = add(1, 2);\n',
       "utils.ts": "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
     };
-    const quickjs = runOn("quickjs", "semantic.ts", undefined, { files });
-    const node = runOn("node", "semantic.ts", undefined, { files });
+    const quickjs = runOn("semantic.ts", undefined, { files });
     expect(quickjs.ok, quickjs.ok ? "" : quickjs.error).toBe(true);
-    expect(quickjs).toEqual(node);
     const [workspace, file] = (quickjs as { output: [unknown, { file: string; kind: unknown }[]] })
       .output;
     expect(workspace).toEqual([{ file: "main.ts", definition: "utils.ts" }]);
@@ -274,7 +273,7 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
   });
 
   it("runs agent steps through codemod-agent with the allowlisted environment", async () => {
-    const run = runOn("quickjs", "static-agent.ts", undefined, {
+    const run = runOn("static-agent.ts", undefined, {
       env: { CODEMOD_AGENT_BIN: fakeAgent, LLM_API_KEY: "llm-key", TYPESAFE_API_KEY: "ts-key" },
     });
     expect(run.ok, run.ok ? "" : run.error).toBe(true);
@@ -290,7 +289,7 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
     expect(echo.env).not.toHaveProperty("LLM_API_KEY");
     expect(echo.env).not.toHaveProperty("TYPESAFE_API_KEY");
 
-    const missing = runOn("quickjs", "static-agent.ts", undefined, {
+    const missing = runOn("static-agent.ts", undefined, {
       env: { CODEMOD_AGENT_BIN: join(scratch, "no-such-agent") },
     });
     expect(missing.ok === false && missing.error).toMatch(
@@ -365,7 +364,7 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
           usage: { inputTokens: 3, outputTokens: 1 },
         },
       }));
-      const quickjs = runOn("quickjs", "assessment.ts", undefined, { env });
+      const quickjs = runOn("assessment.ts", undefined, { env });
       expect(quickjs).toMatchObject({ ok: true });
       expect(quickjs.ok && quickjs.output).toEqual(expected);
       const requests = readFileSync(log, "utf8")
@@ -375,12 +374,6 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
       expect(requests).toHaveLength(4);
       expect(new Set(requests.map((request) => request.path))).toEqual(new Set(["/v1/systemone"]));
       expect(requests.every((request) => request.authorization === "Bearer test-key")).toBe(true);
-      // The node runtime gives the same output through the SDK's global fetch.
-      expect(runOn("node", "assessment.ts", undefined, { env })).toMatchObject({
-        ok: true,
-        output: expected,
-      });
-
       // Workflow code calling the primitive directly: only the API root.
       writeFileSync(log, "");
       const scoped = { ...env, TYPESAFE_BASE_URL: `http://127.0.0.1:${port}/v1` };
@@ -390,7 +383,7 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
         [`https://example.com/v1/systemone`, "EACCES"],
         [`http://127.0.0.1:${port}/v1/models`, "reached"],
       ] as const) {
-        expect(runOn("quickjs", "http-escape.ts", url, { env: scoped })).toMatchObject({
+        expect(runOn("http-escape.ts", url, { env: scoped })).toMatchObject({
           ok: true,
           output: code,
         });

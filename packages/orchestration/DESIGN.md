@@ -3,11 +3,12 @@
 > Status: prototype for team review. This is not a shipped API or migration commitment.
 
 > 2026-11-08: the `bridge` runtime (one Rust process per command, `crates/execution-bridge`)
-> was removed. `node` is the default runtime and `quickjs` the sandboxed one; both execute
-> every operation kind, JSSG transforms run in-process over the shared Rust batch rules
-> (`crates/jssg-batch`), and `agent` runs in a `codemod-agent` runner process. See
-> `RUNTIMES.md` and `PROTOCOL.md`. The sections below that describe execution have been
-> updated minimally; the proposal itself is unchanged.
+> was removed. The `node` runtime (the workflow in one Node process, JSSG over a napi addon)
+> was removed after it, so `quickjs` is the only runtime: it executes every operation kind,
+> JSSG transforms run in-process over the shared Rust batch rules (`crates/jssg-batch`), and
+> `agent` runs in a `codemod-agent` runner process. See `RUNTIMES.md` and `PROTOCOL.md`. The
+> sections below that describe execution have been updated minimally; the proposal itself
+> is unchanged.
 
 ## Problem
 
@@ -57,8 +58,8 @@ runtime executing the body is what an awaited command reaches.
 | per-step `base_path`, `include`, `exclude` | `{ target }` on a JSSG invocation |
 | `shard` step and `max_threads` | automatic scheduler behavior, no public helper |
 
-The prototype defines all four operation shapes, and both runtimes execute
-all of them: `shell()` in-process with `DirectRunner` semantics, inline JSSG
+The prototype defines all four operation shapes, and the `quickjs` runtime
+executes all of them: `shell()` in-process with `DirectRunner` semantics, inline JSSG
 transforms that a build step has bundled in-process over the shared Rust batch
 rules, `agent()` in a `codemod-agent` runner process on the built-in agent or
 an external CLI, and `assessment()` as file-oriented per-file calls to the TypeSafe System One API through TypeSafe's
@@ -528,8 +529,7 @@ and the parts that need rapid iteration:
 Rust owns only execution and the checks on its own side of the boundary.
 Shell commands run in-process with the semantics of the existing
 `butterflow_runners::DirectRunner`. For JSSG, the shared Rust batch rules
-(`crates/jssg-batch`, reached through the napi addon in `node` and the QuickJS
-host in `quickjs`) receive the bundled transform source and the selected files
+(`crates/jssg-batch`, reached through the QuickJS host) receive the bundled transform source and the selected files
 with their contents, verify the source against the recorded hash, build one
 semantic provider, evaluate the static selector natively, parse every eligible
 file for the transform, validate every path they receive or produce against
@@ -540,7 +540,7 @@ and build without the full Codemod CLI.
 
 ```text
 workflow.ts -> build step -> workflow module + transform artifacts
-TypeScript workflow -> replay gate -> NodeExecutor (node) / the bundle's executor (quickjs)
+TypeScript workflow -> replay gate -> the bundle's executor (quickjs)
     shell -> executeShell over Host.spawn (DirectRunner semantics)
     jssg -> executeJssgCommand (artifact, select, read) -> in-process batch (crates/jssg-batch) -> (validate, stage, commit)
     agent -> codemod-agent runner process (request on stdin, completion on stdout)
@@ -624,19 +624,20 @@ finalization: the runtime waits for running work to finish, then throws
 instead of recording an output. This prevents command results from being
 appended after finalization.
 
-A command finds its run without a context argument. The Node prototype binds
-the run's runtime to the body with `AsyncLocalStorage`, which follows the
-body's async continuations, keeps concurrent runs apart, and is not a
-process-global; a command awaited outside any run rejects. That binding is a
-host concern, so in production it moves into the host: a restricted QuickJS
-instance exposes the runtime to the workflow bundle it executes and nothing
-else.
+A command finds its run without a context argument. The prototype binds the
+run's runtime to the body through the host's async context (in the `quickjs`
+runtime, propagation through `Promise.prototype.then`; `AsyncLocalStorage` on
+the Node host the test harness uses), which follows the body's async
+continuations, keeps concurrent runs apart, and is not a process-global; a
+command awaited outside any run rejects. That binding is a host concern: the
+QuickJS host provides it to the workflow bundle it executes.
 
-The prototype only detects nondeterminism after the fact. Workflow functions run
-directly in Node and can access time, randomness, the filesystem, the network,
-and process state. Durable or untrusted execution requires moving the same
-workflow bundle into that restricted QuickJS host, which only exposes approved
-APIs and the bound runtime.
+The prototype only detects nondeterminism after the fact. Workflow functions in
+the `quickjs` runtime have no Node, `process`, or general network access, but
+can still read time and randomness (and under the Node test harness, also the
+filesystem, the network, and process state). Durable or untrusted execution
+requires a reviewed, restricted QuickJS host that only exposes approved APIs and
+the bound runtime.
 
 ## Prototype Scope
 
@@ -673,19 +674,18 @@ Included:
   execution boundary, with operator/test capacity overrides and no
   author-facing concurrency knob
 - an experimental trusted-local TypeScript workflow CLI
-- a loopback-only dashboard behind that CLI's `--dashboard`: live command
-  status, the static topology with dynamic stages left opaque, an operator
-  admission pause/resume at the scheduler seam, and a host-layer session that
-  restarts or re-runs the loaded configuration (abort, settle, then a fresh
-  run with a new id, scheduler, and empty history) and keeps the last 20 runs
-  of the process for read-only viewing (in-process only, not durable)
+- the page and run model of a local run dashboard: live command status, the
+  static topology with dynamic stages left opaque, an operator admission
+  pause/resume at the scheduler seam, restart and re-run, and the last runs of
+  the process for read-only viewing; the server that hosted it behind the
+  CLI's `--dashboard` was removed with the `node` runtime, so `--dashboard` is
+  not available for now and returns with the Rust `codemod` CLI
 
 Not included:
 
 - a reviewed sandbox boundary for untrusted workflow bodies (the `quickjs`
   runtime now runs the whole workflow in one QuickJS context with a
-  host-bound async context and no Node, but has not been reviewed as one;
-  `node`, the default, uses `AsyncLocalStorage` and runs the workflow in Node)
+  host-bound async context and no Node, but has not been reviewed as one)
 - transform authoring beyond the supported subset: capturing the workflow
   module's own declarations, `options.matches` from the static selector,
   source-mapped sandbox errors

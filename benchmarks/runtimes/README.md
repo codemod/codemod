@@ -27,8 +27,7 @@ transform in every arm. On vite v8.3.6 the result is 331 modified files
 | Arm | Definition | Command |
 | --- | --- | --- |
 | `yaml` | `yaml/workflow.yaml` (two `js-ast-grep` steps) | release `codemod workflow run --no-interactive --disable-analytics` |
-| `ts-node` | `ts/workflow.ts` (`sequence()` of two `jssg()` steps) | `node packages/orchestration/bin/codemod-workflow.mjs run --runtime=node` |
-| `ts-quickjs` | same | `codemod-workflow run --runtime=quickjs` |
+| `ts-quickjs` | `ts/workflow.ts` (`sequence()` of two `jssg()` steps) | `node packages/orchestration/bin/codemod-workflow.mjs run --runtime=quickjs` |
 
 Each arm uses its default (natural) parallelism. The harness prints it but
 never sets it:
@@ -36,30 +35,26 @@ never sets it:
 - `yaml`: steps run one after another. Each step walks and transforms files on
   `min(available_parallelism, 12)` threads (no `max_threads`), with a fresh
   QuickJS runtime per file.
-- `ts-node`: one Node process (the CLI strips TypeScript in-process through
-  `bin/register-ts.mjs`; no re-spawn). One JS thread runs the workflow and
-  every transform, serially per file. The napi addon walks and reads the
-  selection natively (`crates/orchestration-walker`, worker threads), and
-  plans, contains, parses, selector-matches, and converts results with the
-  shared batch rules (`crates/jssg-batch`), parsing 64-file chunks on
-  worker threads one chunk ahead of the transforms.
 - `ts-quickjs`: Node builds the bundle, or reuses it from its content-hash
   cache, then spawns `orchestration-quickjs-host`. One QuickJS context runs
-  the control plane, the workflow, and every transform on one thread,
-  serially per file. File selection and reads are native host primitives
-  (the same `crates/orchestration-walker`, worker threads); batch rules are
-  `crates/jssg-batch`, and Rust parses each file on the JS thread.
+  the control plane and the workflow. A JSSG command of 64 files or more
+  runs on the host's transform pool (`CODEMOD_JSSG_WORKERS` threads, default
+  `min(available_parallelism, 4)`, one QuickJS context each); a smaller one
+  runs serially on the JS thread. File selection and reads are native host
+  primitives (`crates/orchestration-walker`, worker threads); batch rules
+  are `crates/jssg-batch`.
 
-An arm whose binary (the napi addon for `ts-node`, the host for `ts-quickjs`)
-is not built is skipped with a message, unless it is in `BENCH_REQUIRE_ARMS`
-(default `yaml ts-node`), which fails instead. Every arm is probed first by
+An arm whose binary (the host for `ts-quickjs`) is not built is skipped with
+a message, unless it is in `BENCH_REQUIRE_ARMS` (default
+`yaml ts-quickjs`), which fails instead. Every arm is probed first by
 running it on a two-file scratch repository and checking the exact expected
 edit. To override an arm's command line, set `BENCH_CMD_<ARM>=...` (see
 `lib.sh`).
 
 The `ts-bridge` arm (one `butterflow-execution-bridge` process per command)
-was removed with the bridge runtime on 2026-11-08; it appears only in the
-recorded results below.
+was removed with the bridge runtime on 2026-11-08, and the `ts-node` arm
+(the in-process Node runtime over a napi addon) with the node runtime on
+2026-11-09; both appear only in the recorded results below.
 
 ## Correctness gate
 
@@ -73,8 +68,9 @@ the arms it verified.
 
 File selection is the same in both engines because every walker has the
 engine's semantics (`packages/orchestration/src/execution/files.ts`, pinned by
-`fixtures/walker/cases.json`; the native walker used by `ts-node` and
-`ts-quickjs` is held to it by `packages/orchestration/tests/files-native.test.ts`).
+`fixtures/walker/cases.json`; the native walker used by `ts-quickjs` is held
+to it by the quickjs e2e tests, which rerun workflows with the TypeScript
+walker, `CODEMOD_NATIVE_SELECT=0`).
 Sources reach transforms verbatim in every arm (a leading BOM included, as
 the engine's `read_to_string` does; see "Source encoding" in
 `packages/orchestration/RUNTIMES.md`). The globs are written out explicitly in both
@@ -103,13 +99,12 @@ pnpm install
 pnpm --filter codemod-report-ui build          # crates/cli embeds report-ui/dist/index.html
 cargo build --release -p codemod -p orchestration-quickjs-host \
   --features codemod/timings,orchestration-quickjs-host/timings
-node packages/jssg-napi/scripts/build.mjs --release --features timings   # napi addon for ts-node
 brew install hyperfine                          # or: cargo install hyperfine
 # The `timings` feature only compiles the phase timers in; they stay off
 # unless CODEMOD_TIMINGS_FILE is set (overhead.sh measures both costs). Drop
 # the --features flags for plain builds; the arms then write no timings.
-# lib.sh pins the release quickjs host and napi addon (CODEMOD_QUICKJS_HOST_BIN,
-# CODEMOD_JSSG_NAPI) instead of letting the runtimes pick the newer debug build.
+# lib.sh pins the release quickjs host (CODEMOD_QUICKJS_HOST_BIN) instead of
+# letting the runtime pick the newer debug build.
 
 benchmarks/runtimes/setup.sh                    # clone to $HOME/.cache/codemod-bench/vite
 benchmarks/runtimes/verify.sh                   # correctness gate only
@@ -128,9 +123,9 @@ use `rounds.sh` or `sizes.sh` (see "Rounds, sizes, and analysis" below).
 
 Knobs (environment): `BENCH_REPO` (checkout path; `setup.sh` also takes it as
 its argument), `BENCH_RUNS` (default 5), `BENCH_WARMUP` (default 1),
-`BENCH_ARMS` (default `yaml ts-node ts-quickjs`), `BENCH_REQUIRE_ARMS` (default
-`yaml ts-node`, which fail instead of being skipped), `CARGO_TARGET_DIR` /
-`CODEMOD_BIN` / `CODEMOD_QUICKJS_HOST_BIN` / `CODEMOD_JSSG_NAPI`, `BENCH_CMD_<ARM>`, `BENCH_TIMEOUT` (seconds; kills any
+`BENCH_ARMS` (default `yaml ts-quickjs`), `BENCH_REQUIRE_ARMS` (default
+`yaml ts-quickjs`, which fail instead of being skipped), `CARGO_TARGET_DIR` /
+`CODEMOD_BIN` / `CODEMOD_QUICKJS_HOST_BIN`, `BENCH_CMD_<ARM>`, `BENCH_TIMEOUT` (seconds; kills any
 single arm run that exceeds it, so a hang fails instead of stalling the
 session), and `BENCH_HOME`. `BENCH_HOME` runs
 every arm with `HOME` set to a scratch directory, which isolates the engine's
@@ -272,7 +267,7 @@ uses Node only (no dependencies) and writes `report.md` and `report.json`:
 - Noise check: the script exits 2 when any arm's IQR/median exceeds 5 %,
   unless `BENCH_ALLOW_NOISY=1`. The reports are written either way.
 - Provenance: worktree sha + dirty flag, sha256 of `codemod`, the
-  quickjs host, the napi `.node`, and `bench-exec`; node/rustc/hyperfine/codemod
+  quickjs host, and `bench-exec`; node/rustc/hyperfine/codemod
   versions; input tag and commit; cache mode; arm commands; and the preflight
   output.
 
@@ -301,7 +296,7 @@ end is above it; otherwise `inconclusive`), and how many "on" runs produced a
 timings file. It exits 1 when an arm is `OVER`.
 
 With `BENCH_OVERHEAD_BASELINE=<cargo target dir>` (a release build of
-`codemod`, the quickjs host, and `jssg-napi` *without* the
+`codemod` and the quickjs host *without* the
 `timings` feature), it measures the feature instead: "off" runs the baseline
 build and "on" the default build, both with `CODEMOD_TIMINGS_FILE` unset.
 The mode is recorded in `<out>/mode`.
@@ -329,7 +324,7 @@ What each phase covers:
 | `select` | target root and the file walk (yaml: the walker's traversal between files) |
 | `read` | reading the selected sources |
 | `setup` | per batch and per file: planning the batch, the first evaluation of the transform module, a QuickJS runtime and context per file (yaml) and its teardown, the loop's per-file bookkeeping (yaml: the engine's per-file task handoff); per child process: spawn until close minus the child's own wall (exec, loader, exit) |
-| `parse` | tree-sitter and the selector check, or the time blocked on it when it runs on worker threads (ts-node: their CPU is `cpu_ns`) |
+| `parse` | tree-sitter and the selector check, or the time blocked on it when it runs on worker threads (their CPU is `cpu_ns`) |
 | `transform` | the transform call |
 | `convert` | reading its result into edits |
 | `conflict` | validating the batch result and the cross-file conflict checks |
@@ -347,9 +342,9 @@ How the numbers are taken (`crates/bench-timings`, `packages/orchestration/src/c
   wall (the pool's average per-thread time) and the total as `cpu_ns`. Load
   imbalance and idle threads therefore stay uncovered instead of inflating a
   phase.
-- Helper threads under a span another thread records (napi parse workers, the
-  native walk and reads) report CPU time only.
-- The JS side (`ts-node`, the quickjs bundle) times its batch loop with
+- Helper threads under a span another thread records (the native walk and
+  reads) report CPU time only.
+- The JS side (the quickjs bundle) times its batch loop with
   back-to-back laps; native code it calls inside a lap records no span of its
   own, so nothing is counted twice.
 - A child's phases join its parent's in `analyze.mjs`; the parent charges the
@@ -361,8 +356,9 @@ on vite for every arm (the gap is code outside any span).
 
 ## Results
 
-The `ts-bridge` arm was removed after Phase G (2026-11-08), with the bridge runtime; it
-appears only in these historical results.
+The `ts-bridge` arm was removed after Phase G (2026-11-08), with the bridge runtime, and
+the `ts-node` arm on 2026-11-09, with the node runtime; both appear only in these
+historical results.
 
 ### Phase G: four sizes with phase timings (Linux VM)
 

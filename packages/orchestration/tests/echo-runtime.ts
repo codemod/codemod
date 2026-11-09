@@ -1,5 +1,5 @@
 /**
- * An in-process test runtime that echoes instead of executing: `shell`
+ * A test executor that echoes instead of executing: `shell`
  * answers `{ stdout: JSON.stringify({ request }) }`, and `jssg` goes through
  * the real orchestrator (`executeJssgCommand`: artifact lookup, selection,
  * reading, commit) with a dispatch that appends `// echo\n` to every file
@@ -10,14 +10,12 @@
 import type { ArtifactStore } from "../src/bundle/build.ts";
 import { executeJssgCommand, type JssgDispatch } from "../src/execution/jssg.ts";
 import {
-  NODE_RUNTIME,
   PROTOCOL_VERSION,
   type FileOutcome,
   type Json,
   type OperationCompletion,
   type OperationExecutor,
   type OperationRequest,
-  type RuntimeProvider,
 } from "../src/index.ts";
 
 const pause = (ms: number, signal?: AbortSignal) =>
@@ -79,16 +77,5 @@ export function echoExecutor(options: {
         output: { stdout: JSON.stringify({ request }) },
       };
     },
-  };
-}
-
-/** `--runtime echo` for the CLI (`CliHooks.registry`). */
-export function echoRuntime(delayMs = 0): RuntimeProvider {
-  return {
-    name: "echo",
-    capabilities: NODE_RUNTIME.capabilities,
-    description: "test runtime that echoes requests",
-    availability: () => ({ available: true }),
-    createExecutor: ({ cwd, artifacts }) => echoExecutor({ cwd, artifacts, delayMs }),
   };
 }

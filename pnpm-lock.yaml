@@ -155,8 +155,6 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@22.16.0)(jsdom@23.2.0)(lightningcss@1.31.1)(terser@5.44.1)
 
-  packages/jssg-napi: {}
-
   packages/jssg-types:
     devDependencies:
       '@codemod.com/tsconfig':
@@ -180,9 +178,6 @@ importers:
 
   packages/orchestration:
     dependencies:
-      '@codemod.com/jssg-napi':
-        specifier: workspace:*
-        version: link:../jssg-napi
       '@codemod.com/jssg-types':
         specifier: workspace:*
         version: link:../jssg-types

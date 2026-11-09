@@ -47,8 +47,7 @@ pub struct Pool {
     jobs: Sender<Job>,
 }
 
-/// Workers per run: `CODEMOD_JSSG_WORKERS`, else the core count capped at 4
-/// (as the `node` runtime's pool).
+/// Workers per run: `CODEMOD_JSSG_WORKERS`, else the core count capped at 4.
 pub fn size() -> usize {
     std::env::var("CODEMOD_JSSG_WORKERS")
         .ok()

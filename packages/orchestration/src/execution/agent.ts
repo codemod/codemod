@@ -1,8 +1,7 @@
 /**
- * `agent` operations for the in-process runtimes (`node`, `quickjs`): one
- * `codemod-agent` process per operation (`crates/orchestration-agent`),
- * started through the host, so the same code runs in Node and inside the
- * QuickJS host.
+ * `agent` operations: one `codemod-agent` process per operation
+ * (`crates/orchestration-agent`), started through the host, so the same
+ * code runs inside the QuickJS host and in the Node test harness.
  *
  * An agent runs out of process because its tools (the builtin `bash`, file
  * tools, MCP servers, the `claude`/`codex` CLIs) run in the process working

@@ -7,9 +7,5 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     exclude: e2e ? configDefaults.exclude : [...configDefaults.exclude, "**/*.e2e.test.ts"],
     testTimeout: 60_000,
-    // The addon's JS keeps per-process transform state and evaluates
-    // artifacts through Node's own module loader; it must be one native
-    // module instance, never a vite-transformed copy.
-    server: { deps: { external: [/jssg-napi/] } },
   },
 });

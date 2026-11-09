@@ -242,7 +242,7 @@ function assertJssgOptions(options: {
   const where = `jssg '${options.name}'`;
   if (typeof options.transform === "function") {
     throw new Error(
-      `${where}: inline transform was not extracted; run the workflow with codemod-workflow or load it with loadWorkflow() so the build step can bundle it`,
+      `${where}: inline transform was not extracted; run the workflow with codemod-workflow so the build step can bundle it`,
     );
   }
   if (!isArtifactRef(options.transform)) {

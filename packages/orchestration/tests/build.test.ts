@@ -2,23 +2,13 @@
  * The build step: inline transforms become standalone artifacts (helpers
  * bundled, identity by content hash, no paths), the workflow module is
  * rewritten to reference them, unsupported capture is refused with a
- * position, and the trusted-local loader applies it to a whole module graph.
+ * position. The whole-graph split is in `quickjs.e2e.test.ts`.
  */
-import { spawnSync } from "node:child_process";
-import {
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { isAvailable as isNapiAvailable } from "@codemod.com/jssg-napi";
-import { BuildError, buildFile, buildModule } from "../src/index.ts";
+import { BuildError, buildModule } from "../src/index.ts";
 import { sha256 } from "./helpers.ts";
 
 const HEADER = `import { jssg, workflow } from "@codemod.com/orchestration";
@@ -237,38 +227,4 @@ export default jssg({ name: "imported", language: "typescript", transform: trans
     const bodyChanged = build(METHOD.replace("output: { input }", "output: { input, v: 2 }"));
     expect(bodyChanged.artifacts[0]!.hash).not.toBe(first.hash);
   });
-});
-
-describe("loadWorkflow through codemod-workflow", () => {
-  it.skipIf(!isNapiAvailable())(
-    "splits every module in the graph and hands the artifacts to the executor",
-    () => {
-      // A real run on the node runtime: the transform from the imported
-      // module ran, so its artifact reached the executor.
-      const repo = mkdtempSync(join(tmpdir(), "codemod-load-"));
-      writeFileSync(join(repo, "a.ts"), "oldApi(1);\n");
-      const workflowPath = resolve(import.meta.dirname, "fixtures/load/dynamic.ts");
-      try {
-        const result = spawnSync(
-          process.execPath,
-          [
-            resolve(import.meta.dirname, "../bin/codemod-workflow.mjs"),
-            workflowPath,
-            "--target",
-            repo,
-            "--runtime",
-            "node",
-          ],
-          { encoding: "utf8" },
-        );
-        expect(result.status, result.stderr).toBe(0);
-        const built = buildFile(join(dirname(workflowPath), "definitions.ts")).artifacts[0]!;
-        const output = JSON.parse(result.stdout) as { transform: unknown };
-        expect(output.transform).toEqual({ name: "migrate", hash: built.hash });
-        expect(readFileSync(join(repo, "a.ts"), "utf8")).toBe("newApi(1);\n");
-      } finally {
-        rmSync(repo, { recursive: true, force: true });
-      }
-    },
-  );
 });

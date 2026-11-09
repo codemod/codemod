@@ -1,16 +1,12 @@
 /**
  * The runtime capability contract, portable so it is enforced by the control
- * plane wherever it runs (in Node for `node`, inside QuickJS for `quickjs`).
+ * plane wherever it runs (inside QuickJS for `quickjs`).
  *
- * A runtime is where workflow code and its operations execute:
+ * A runtime is where workflow code and its operations execute. The one
+ * built-in runtime is `quickjs`: the whole prebuilt workflow bundle in one
+ * QuickJS context hosted by a Rust binary; no Node at runtime.
  *
- * - `node` (default, the simple and fast one): the whole workflow in one
- *   Node process; JSSG transforms in-process over a napi-rs ast-grep addon;
- *   `shell` through `child_process`.
- * - `quickjs` (the sandboxed one): the whole prebuilt workflow bundle in one
- *   QuickJS context hosted by a Rust binary; no Node at runtime.
- *
- * `node` and `quickjs` execute every kind: `jssg` (with semantic analysis),
+ * `quickjs` executes every kind: `jssg` (with semantic analysis),
  * `shell`, and `assessment` in-process, `agent` in a `codemod-agent` runner
  * process (`execution/agent.ts`). A runtime that lacks a capability refuses
  * it fast. The
@@ -31,9 +27,9 @@ import {
 } from "../core/protocol.ts";
 
 /** The runtimes `codemod-workflow run --runtime` knows by name. */
-export const RUNTIME_NAMES = ["node", "quickjs"] as const;
+export const RUNTIME_NAMES = ["quickjs"] as const;
 export type BuiltinRuntimeName = (typeof RUNTIME_NAMES)[number];
-export const DEFAULT_RUNTIME: BuiltinRuntimeName = "node";
+export const DEFAULT_RUNTIME: BuiltinRuntimeName = "quickjs";
 
 export interface RuntimeCapabilities {
   /** Operation kinds the runtime executes. */
@@ -53,11 +49,9 @@ const ALL: RuntimeCapabilities = {
   semanticAnalysis: true,
 };
 
-export const NODE_RUNTIME: RuntimeDescriptor = { name: "node", capabilities: ALL };
 export const QUICKJS_RUNTIME: RuntimeDescriptor = { name: "quickjs", capabilities: ALL };
 
 export const BUILTIN_RUNTIMES: Readonly<Record<BuiltinRuntimeName, RuntimeDescriptor>> = {
-  node: NODE_RUNTIME,
   quickjs: QUICKJS_RUNTIME,
 };
 

@@ -44,7 +44,6 @@ const env = process.env;
 const binaries = [
   ["codemod", env.CODEMOD_BIN],
   ["orchestration-quickjs-host", env.CODEMOD_QUICKJS_HOST_BIN],
-  ["jssg-napi", env.CODEMOD_JSSG_NAPI],
   ["bench-exec", join(import.meta.dirname, "bin/bench-exec")],
 ]
   .filter(([, path]) => path)

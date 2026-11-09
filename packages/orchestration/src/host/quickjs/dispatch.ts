@@ -1,8 +1,7 @@
 /**
  * In-context JSSG for the `quickjs` runtime: the `JssgBatchEngine` the
- * portable batch loop (`execution/jssg-batch.ts`, shared with the `node`
- * runtime) drives. Every batch rule is the shared Rust
- * (`crates/jssg-batch`), reached through the host's
+ * portable batch loop (`execution/jssg-batch.ts`) drives. Every batch rule
+ * is the shared Rust (`crates/jssg-batch`), reached through the host's
  * primitives (`crates/orchestration-quickjs-host/src/jssg.rs`):
  *
  * - `jssgBegin(config, paths)`: `BatchPlan` (hash check, containment of

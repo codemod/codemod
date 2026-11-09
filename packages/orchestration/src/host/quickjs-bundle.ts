@@ -9,8 +9,8 @@
  *   primitives, in-context JSSG dispatch);
  * - the workflow module graph, every module that calls `jssg(` rewritten by
  *   the build step (`bundle/build.ts`) so each inline transform is an
- *   `ArtifactRef`, exactly as `loadWorkflow` does for the Node runtimes, so
- *   command identities and history match the other runtimes;
+ *   `ArtifactRef`, so command identities and history are the transforms'
+ *   content hashes;
  * - every transform artifact's source, verbatim, keyed by hash (the host
  *   registers each as a module and evaluates it once per run, on first use).
  *

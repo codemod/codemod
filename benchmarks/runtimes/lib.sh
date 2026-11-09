@@ -7,8 +7,8 @@
 #   CODEMOD_BIN          release `codemod` CLI (default: <cargo target>/release/codemod)
 #   CARGO_TARGET_DIR     honoured when locating the binaries (default: <repo>/target)
 #   BENCH_HOME           if set, HOME for every arm (isolates engine state and git config)
-#   BENCH_ARMS           space-separated arms to consider (default: "yaml ts-node ts-quickjs")
-#   BENCH_REQUIRE_ARMS   space-separated arms that must be available (default: "yaml ts-node")
+#   BENCH_ARMS           space-separated arms to consider (default: "yaml ts-quickjs")
+#   BENCH_REQUIRE_ARMS   space-separated arms that must be available (default: "yaml ts-quickjs")
 #   BENCH_CMD_<ARM>      replace an arm's command line, e.g. BENCH_CMD_TS_QUICKJS='...'.
 #                        Evaluated by bash with $REPO and the variables below in scope.
 #   BENCH_TIMEOUT        if set, seconds after which any single arm run is killed (SIGALRM,
@@ -17,7 +17,6 @@
 #   BENCH_EXPECT_SHA     commit the checkout must be at (default: the pinned vite commit;
 #                        sizes.sh sets it for its scaled repositories)
 #   CODEMOD_QUICKJS_HOST_BIN  release quickjs host (default: <cargo target>/release/...)
-#   CODEMOD_JSSG_NAPI    napi addon (default: packages/jssg-napi/jssg-napi.<platform>-<arch>.node)
 #
 # Every arm is launched through bin/bench-exec (compiled from bench-exec.c on
 # first use), which sets BENCH_T0_NS and execs the arm in the same process.
@@ -42,14 +41,10 @@ CODEMOD_BIN="${CODEMOD_BIN:-$TARGET_DIR/release/codemod}"
 WORKFLOW_CLI="$ROOT/packages/orchestration/bin/codemod-workflow.mjs"
 YAML_WORKFLOW="$BENCH_DIR/yaml/workflow.yaml"
 TS_WORKFLOW="$BENCH_DIR/ts/workflow.ts"
-# Pin the release host and addon explicitly (the runtimes would otherwise pick
-# the newer of release/debug for the host).
+# Pin the release host explicitly (the runtime would otherwise pick the newer
+# of release/debug).
 CODEMOD_QUICKJS_HOST_BIN="${CODEMOD_QUICKJS_HOST_BIN:-$TARGET_DIR/release/orchestration-quickjs-host}"
-node_arch() {
-  case "$(uname -m)" in x86_64 | amd64) echo x64 ;; aarch64) echo arm64 ;; *) uname -m ;; esac
-}
-CODEMOD_JSSG_NAPI="${CODEMOD_JSSG_NAPI:-$ROOT/packages/jssg-napi/jssg-napi.$(uname -s | tr 'A-Z' 'a-z')-$(node_arch).node}"
-export CODEMOD_QUICKJS_HOST_BIN CODEMOD_JSSG_NAPI
+export CODEMOD_QUICKJS_HOST_BIN
 # Read by provenance.mjs.
 export CODEMOD_BIN VITE_TAG VITE_SHA
 
@@ -70,9 +65,9 @@ if [ -n "${BENCH_HOME:-}" ]; then
   export HOME
 fi
 
-ALL_ARMS="yaml ts-node ts-quickjs"
+ALL_ARMS="yaml ts-quickjs"
 BENCH_ARMS="${BENCH_ARMS:-$ALL_ARMS}"
-BENCH_REQUIRE_ARMS="${BENCH_REQUIRE_ARMS:-yaml ts-node}"
+BENCH_REQUIRE_ARMS="${BENCH_REQUIRE_ARMS:-yaml ts-quickjs}"
 
 now() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
 log() { printf '[bench] %s\n' "$*" >&2; }
@@ -112,11 +107,10 @@ ensure_bench_exec() {
   fi
 }
 
-# Release binary (or addon) an arm needs, for preflight and provenance.
+# Release binary an arm needs, for preflight and provenance.
 arm_binary() {
   case "$1" in
     yaml) printf '%s' "$CODEMOD_BIN" ;;
-    ts-node) printf '%s' "$CODEMOD_JSSG_NAPI" ;;
     ts-quickjs) printf '%s' "$CODEMOD_QUICKJS_HOST_BIN" ;;
   esac
 }
@@ -232,9 +226,9 @@ arm_command_unbounded() {
       printf '%s workflow run --workflow %s --target %s --no-interactive --disable-analytics' \
         "$(q "$CODEMOD_BIN")" "$(q "$YAML_WORKFLOW")" "$(q "$repo")"
       ;;
-    ts-node | ts-quickjs)
-      printf 'node %s run --runtime=%s %s --target %s' \
-        "$(q "$WORKFLOW_CLI")" "${arm#ts-}" "$(q "$TS_WORKFLOW")" "$(q "$repo")"
+    ts-quickjs)
+      printf 'node %s run --runtime=quickjs %s --target %s' \
+        "$(q "$WORKFLOW_CLI")" "$(q "$TS_WORKFLOW")" "$(q "$repo")"
       ;;
     *) die "unknown arm: $arm" ;;
   esac
@@ -249,11 +243,9 @@ arm_concurrency() {
       printf 'js-ast-grep steps run one after another; each walks and transforms files on min(available_parallelism=%s, 12) = %s threads (no max_threads), one QuickJS runtime per file' \
         "$cpus" "$((cpus < 12 ? cpus : 12))"
       ;;
-    ts-node)
-      printf 'one Node process; workflow and every transform on the single JS thread, serially per file (the napi addon walks/reads the selection natively and parses and selector-matches 64-file chunks on worker threads, one chunk ahead)'
-      ;;
     ts-quickjs)
-      printf 'one QuickJS context in one Rust process (launched by Node, which reuses the cached bundle); workflow and every transform on the single JS thread, serially per file (native walk/reads on worker threads; Rust parses each file on the JS thread)'
+      printf 'one Rust process (launched by Node, which reuses the cached bundle); the workflow in one QuickJS context; a JSSG command of 64+ files on a transform pool of min(available_parallelism=%s, 4) = %s worker threads (CODEMOD_JSSG_WORKERS), one QuickJS context each; smaller commands serially on the JS thread (native walk/reads on worker threads)' \
+        "$cpus" "$((cpus < 4 ? cpus : 4))"
       ;;
   esac
 }

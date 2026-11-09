@@ -39,8 +39,8 @@ pub fn output_json_error(error: impl std::fmt::Display) -> ExecutionError {
 }
 
 /// A transform's (awaited) content as plain data, read from the JavaScript
-/// value by a binding (this rquickjs facade, or the napi facade of
-/// `crates/jssg-napi`), so the result rules in
+/// value by a binding (this rquickjs facade, or the orchestration QuickJS
+/// host's), so the result rules in
 /// [`classify_transform_result`] are binding-agnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReturnedContent {

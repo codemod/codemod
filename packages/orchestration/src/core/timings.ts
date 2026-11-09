@@ -66,7 +66,6 @@ let arm: string | undefined;
 const wall = new Float64Array(PHASE_NAMES.length);
 const count = new Float64Array(PHASE_NAMES.length);
 const cpu = new Float64Array(PHASE_NAMES.length);
-const sources: (() => PhaseTotals | undefined)[] = [];
 const children: number[] = [];
 
 /**
@@ -113,14 +112,6 @@ export function timingsArm(): string | undefined {
   return arm;
 }
 
-/**
- * Phases recorded natively in this process (the napi addon's
- * `timingsPhases()`), summed into `snapshot()`.
- */
-export function addTimingsSource(source: () => PhaseTotals | undefined): void {
-  if (ON) sources.push(source);
-}
-
 /** A child process that writes its own timings file (`<path>.<pid>.json`). */
 export function registerTimingsChild(pid: number | undefined): void {
   if (ON && pid !== undefined) children.push(pid);
@@ -145,14 +136,6 @@ export function timingsSnapshot(): PhaseTotals {
     if (cpuNs > 0) total.cpu_ns = (total.cpu_ns ?? 0) + cpuNs;
   };
   PHASE_NAMES.forEach((name, index) => merge(name, wall[index]!, count[index]!, cpu[index]!));
-  for (const source of sources) {
-    const phases = source();
-    if (phases === undefined) continue;
-    for (const name of PHASE_NAMES) {
-      const phase = phases[name];
-      if (phase !== undefined) merge(name, phase.ns, phase.count, phase.cpu_ns ?? 0);
-    }
-  }
   for (const total of Object.values(totals)) {
     total.ns = Math.round(total.ns);
     if (total.cpu_ns !== undefined) total.cpu_ns = Math.round(total.cpu_ns);
@@ -165,7 +148,6 @@ export function resetTimings(): void {
   wall.fill(0);
   count.fill(0);
   cpu.fill(0);
-  sources.length = 0;
   children.length = 0;
   arm = undefined;
 }

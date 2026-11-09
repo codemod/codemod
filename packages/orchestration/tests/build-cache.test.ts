@@ -1,12 +1,10 @@
 /**
- * Startup caches (`src/bundle/cache.ts`): the rewritten-module cache of
- * `loadWorkflow`, the type-stripping cache of `bin/register-ts.mjs`, and the
- * quickjs bundle cache. A warm load must not need TypeScript, and every
- * change to a module, a bundled helper, or a cache entry must rebuild.
+ * Startup caches (`src/bundle/cache.ts`): the type-stripping cache of
+ * `bin/register-ts.mjs` and the quickjs bundle cache. Every change to a
+ * module, a bundled helper, or a cache entry must rebuild.
  *
- * `loadWorkflow` and the module hooks are exercised in child processes:
- * Node caches modules per URL for the life of a process, and vitest's own
- * loader would bypass the hooks.
+ * The module hooks are exercised in child processes: Node caches modules per
+ * URL for the life of a process, and vitest's own loader would bypass them.
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -21,13 +19,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { buildFile } from "../src/index.ts";
+import { privateDirectory } from "../src/bundle/cache.ts";
 import { cachedQuickjsBundle } from "../src/host/quickjs-bundle.ts";
 
 const register = resolve(import.meta.dirname, "../bin/register-ts.mjs");
-const buildUrl = pathToFileURL(resolve(import.meta.dirname, "../src/bundle/build.ts")).href;
 const index = JSON.stringify(resolve(import.meta.dirname, "../src/index.ts"));
 
 const scratch = realpathSync.native(mkdtempSync(join(tmpdir(), "codemod-build-cache-")));
@@ -62,99 +58,17 @@ export default jssg({
   );
 });
 
-interface Loaded {
-  artifacts: { name: string; hash: string; source: string }[];
-  /** Whether the TypeScript compiler was loaded in the process. */
-  typescript: boolean;
-}
-
-/** `loadWorkflow(workflow)` in a fresh Node process with the bin's module hooks. */
-function load(env: Record<string, string> = {}): Loaded {
-  const probe = `
-import { createRequire } from "node:module";
-const { loadWorkflow } = await import(${JSON.stringify(buildUrl)});
-const { artifacts } = await loadWorkflow(process.argv[1]);
-const loaded = Object.keys(createRequire(process.cwd() + "/").cache);
-process.stdout.write(JSON.stringify({
-  artifacts: [...artifacts.values()].map(({ name, hash, source }) => ({ name, hash, source })),
-  typescript: loaded.some((path) => /[\\\\/]typescript[\\\\/]lib[\\\\/]typescript\\.js$/.test(path)),
-}));
-`;
-  const result = spawnSync(
-    process.execPath,
-    ["--import", register, "--input-type=module", "--eval", probe, workflow],
-    { encoding: "utf8", env: { ...process.env, CODEMOD_WORKFLOW_CACHE: cache, ...env } },
-  );
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stderr).toBe("");
-  return JSON.parse(result.stdout) as Loaded;
-}
-
-const expected = () =>
-  buildFile(workflow).artifacts.map(({ name, hash, source }) => ({ name, hash, source }));
-
-const entries = () => readdirSync(join(cache, "modules")).filter((name) => name.endsWith(".json"));
-
-describe("loadWorkflow's rewritten-module cache", () => {
-  it("builds once, then serves the same artifacts without loading TypeScript", () => {
-    const cold = load();
-    expect(cold.typescript).toBe(true);
-    expect(cold.artifacts).toEqual(expected());
-    expect(entries()).toHaveLength(1);
-
-    const warm = load();
-    expect(warm.typescript).toBe(false);
-    expect(warm.artifacts).toEqual(cold.artifacts);
-  });
-
-  it("rebuilds when a helper bundled into a transform changes", () => {
-    const before = load();
-    writeFileSync(
-      helper,
-      `export const rewrite = (text: string): string => text.replace("a", "two");\n`,
-    );
-    const after = load();
-    expect(after.typescript).toBe(true);
-    expect(after.artifacts).toEqual(expected());
-    expect(after.artifacts[0]!.hash).not.toBe(before.artifacts[0]!.hash);
-    expect(after.artifacts[0]!.source).toContain('"two"');
-    expect(load().typescript).toBe(false);
-  });
-
-  it("rebuilds when the workflow module changes", () => {
-    const before = load();
-    writeFileSync(
-      workflow,
-      readFileSync(workflow, "utf8").replace("root.root().text()", "root.root().text().trim()"),
-    );
-    const after = load();
-    expect(after.typescript).toBe(true);
-    expect(after.artifacts).toEqual(expected());
-    expect(after.artifacts[0]!.hash).not.toBe(before.artifacts[0]!.hash);
-  });
-
-  it("ignores an entry whose artifact no longer matches its hash", () => {
-    const cold = load();
-    const [entry] = entries();
-    const path = join(cache, "modules", entry!);
-    const data = JSON.parse(readFileSync(path, "utf8")) as Loaded;
-    data.artifacts[0]!.source = "export default () => 'tampered';\n";
-    writeFileSync(path, JSON.stringify(data));
-    const reloaded = load();
-    expect(reloaded.typescript).toBe(true);
-    expect(reloaded.artifacts).toEqual(cold.artifacts);
-  });
-
-  it("does not use a cache directory other users can write to", () => {
+describe("the cache directory", () => {
+  it("is not used when other users can write to it", () => {
     mkdirSync(cache, { recursive: true });
     chmodSync(cache, 0o777);
     try {
-      expect(load().typescript).toBe(true);
-      expect(load().typescript).toBe(true);
-      expect(readdirSync(cache)).not.toContain("modules");
+      expect(privateDirectory("quickjs", cache)).toBeUndefined();
+      expect(readdirSync(cache)).toEqual([]);
     } finally {
       chmodSync(cache, 0o700);
     }
+    expect(privateDirectory("quickjs", cache)).toBe(join(cache, "quickjs"));
   });
 });
 

@@ -1,17 +1,14 @@
 /**
- * Cross-runtime JSSG parity: the same edge-case commands
- * (`fixtures/parity/`) run through `codemod-workflow run` on the `node`
- * and `quickjs` runtimes against identical repositories. Both reach the same
- * Rust batch rules (`crates/jssg-batch`: planning, path containment, the
- * selector skip, result conversion), so outputs, file trees, and errors
- * must be identical: errors produced by those rules byte-for-byte; errors a
- * transform throws byte-for-byte once stack frames are removed. The YAML
- * engine is the reference for the benchmark transforms
- * (`benchmarks/runtimes/verify.sh`).
+ * JSSG edge cases (`fixtures/parity/`) run through `codemod-workflow run` on
+ * the `quickjs` runtime: result conversion, path containment, the selector
+ * skip, per-file skips, and the transform pool, all reaching the Rust batch
+ * rules (`crates/jssg-batch`) the YAML engine shares. The encoding case also
+ * runs the YAML engine (`codemod workflow run`) and requires the same bytes;
+ * the benchmark transforms are compared with it in
+ * `benchmarks/runtimes/verify.sh`.
  *
  * Run with: pnpm --filter @codemod.com/orchestration test:e2e
- * (needs the napi addon and the QuickJS host; the script builds both).
- * Override the host binary with CODEMOD_QUICKJS_HOST_BIN.
+ * (builds the QuickJS host). Override it with CODEMOD_QUICKJS_HOST_BIN.
  */
 import { spawnSync } from "node:child_process";
 import {
@@ -29,7 +26,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { isAvailable as isNapiAvailable } from "@codemod.com/jssg-napi";
 
 const enabled = process.env.CODEMOD_QUICKJS_E2E === "1";
 const repoRoot = resolve(import.meta.dirname, "../../..");
@@ -39,17 +35,9 @@ const cli = resolve(import.meta.dirname, "../bin/codemod-workflow.mjs");
 const workflow = resolve(import.meta.dirname, "fixtures/parity/workflow.ts");
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), "jssg-parity-")));
 
-const RUNTIMES = ["node", "quickjs"] as const;
-type Runtime = (typeof RUNTIMES)[number];
-
 beforeAll(() => {
   if (!enabled) return;
   if (!existsSync(host)) throw new Error(`quickjs host binary not found at ${host}`);
-  if (!isNapiAvailable()) {
-    throw new Error(
-      "jssg napi addon not built; run 'pnpm --filter @codemod.com/jssg-napi build:debug'",
-    );
-  }
 });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -98,7 +86,7 @@ function normalize(text: string, repo: string): string {
     .trim();
 }
 
-function runOn(runtime: Runtime, setup: Setup, input: unknown): Outcome {
+function runOn(setup: Setup, input: unknown): Outcome {
   const dir = join(scratch, `case-${++repos}`);
   const repo = join(dir, "repo");
   const outside = join(dir, "outside");
@@ -112,16 +100,7 @@ function runOn(runtime: Runtime, setup: Setup, input: unknown): Outcome {
   const initial = tree(repo);
   const result = spawnSync(
     process.execPath,
-    [
-      cli,
-      "run",
-      `--runtime=${runtime}`,
-      workflow,
-      "--target",
-      repo,
-      "--input",
-      JSON.stringify(input),
-    ],
+    [cli, "run", "--runtime=quickjs", workflow, "--target", repo, "--input", JSON.stringify(input)],
     {
       encoding: "utf8",
       env: {
@@ -147,43 +126,37 @@ function runOn(runtime: Runtime, setup: Setup, input: unknown): Outcome {
   return outcome;
 }
 
-/** Runs one case on every runtime; asserts identical results and returns them. */
-function parity(
+/**
+ * Runs one case; nothing outside the root changes, and a failing command
+ * writes nothing.
+ */
+function check(
   setup: Setup,
   input: unknown,
   expected: { ok: true } | { error: string; thrown?: true },
-): Record<Runtime, Outcome> {
-  const outcomes = Object.fromEntries(
-    RUNTIMES.map((runtime) => [runtime, runOn(runtime, setup, input)]),
-  ) as Record<Runtime, Outcome>;
-  const context = JSON.stringify(outcomes, null, 2);
-  for (const runtime of RUNTIMES) {
-    const outcome = outcomes[runtime];
-    expect(outcome.outside, `${runtime}: outside the root\n${context}`).toEqual({
-      "keep.ts": "keep;\n",
-    });
-    if ("ok" in expected) {
-      expect(outcome.ok, `${runtime} failed\n${context}`).toBe(true);
-    } else {
-      expect(outcome.ok, `${runtime} succeeded\n${context}`).toBe(false);
-      expect(outcome.error, `${runtime}\n${context}`).toContain(expected.error);
-      // Failing commands write nothing.
-      expect(outcome.tree, `${runtime}: tree\n${context}`).toEqual(outcome.initial);
-    }
+): Outcome {
+  const outcome = runOn(setup, input);
+  const context = JSON.stringify(outcome, null, 2);
+  expect(outcome.outside, `outside the root\n${context}`).toEqual({ "keep.ts": "keep;\n" });
+  if ("ok" in expected) {
+    expect(outcome.ok, `failed\n${context}`).toBe(true);
+  } else {
+    expect(outcome.ok, `succeeded\n${context}`).toBe(false);
+    expect(outcome.error, context).toContain(expected.error);
+    expect(outcome.tree, `tree\n${context}`).toEqual(outcome.initial);
   }
-  expect(outcomes.quickjs, `quickjs vs node\n${context}`).toEqual(outcomes.node);
-  return outcomes;
+  return outcome;
 }
 
 const TWO = { "a.ts": "oldApi(1);\n", "b.ts": "plain(2);\n" };
 
-describe.skipIf(!enabled)("JSSG parity: node, quickjs", () => {
+describe.skipIf(!enabled)("JSSG edge cases on quickjs", () => {
   it("string results: changed, unchanged; nullish results", () => {
-    const changed = parity({ files: TWO }, { step: "returns", input: "changed" }, { ok: true });
-    expect(changed.node.tree["a.ts"]).toBe("newApi(1);\n");
+    const changed = check({ files: TWO }, { step: "returns", input: "changed" }, { ok: true });
+    expect(changed.tree["a.ts"]).toBe("newApi(1);\n");
     for (const input of ["unchanged", "null", "undefined", "structured-null"]) {
-      const same = parity({ files: TWO }, { step: "returns", input }, { ok: true });
-      expect(same.quickjs.tree).toEqual(TWO);
+      const same = check({ files: TWO }, { step: "returns", input }, { ok: true });
+      expect(same.tree).toEqual(TWO);
     }
   });
 
@@ -199,9 +172,9 @@ describe.skipIf(!enabled)("JSSG parity: node, quickjs", () => {
         input === "array"
           ? "Object codemod results must contain an 'output' field"
           : `must return either a string or null/undefined. Received ${type}`;
-      parity({ files: TWO }, { step: "returns", input }, { error: message });
+      check({ files: TWO }, { step: "returns", input }, { error: message });
     }
-    parity(
+    check(
       { files: TWO },
       { step: "returns", input: "missing-output" },
       { error: "Object codemod results must contain an 'output' field" },
@@ -209,12 +182,8 @@ describe.skipIf(!enabled)("JSSG parity: node, quickjs", () => {
   });
 
   it("structured outputs convert to the same JSON", () => {
-    const shapes = parity(
-      { files: TWO },
-      { step: "returns", input: "output-shapes" },
-      { ok: true },
-    );
-    expect(shapes.node.output).toEqual([
+    const shapes = check({ files: TWO }, { step: "returns", input: "output-shapes" }, { ok: true });
+    expect(shapes.output).toEqual([
       {
         file: "a.ts",
         nested: { list: [1, "two", null, null, 2.5, -3, [true]] },
@@ -235,13 +204,13 @@ describe.skipIf(!enabled)("JSSG parity: node, quickjs", () => {
   });
 
   it("a thrown error fails the command and writes nothing", () => {
-    parity({ files: TWO }, { step: "throwing" }, { error: "JSSG failed for 'b.ts'", thrown: true });
+    check({ files: TWO }, { step: "throwing" }, { error: "JSSG failed for 'b.ts'", thrown: true });
   });
 
   it("a file whose transform throws is skipped and reported; the others are written", () => {
-    const outcomes = parity({ files: TWO }, { step: "skipping" }, { ok: true });
-    expect(outcomes.node.tree).toEqual({ "a.ts": "newApi(1);\n", "b.ts": TWO["b.ts"] });
-    expect(outcomes.node.skipped).toEqual([
+    const outcome = check({ files: TWO }, { step: "skipping" }, { ok: true });
+    expect(outcome.tree).toEqual({ "a.ts": "newApi(1);\n", "b.ts": TWO["b.ts"] });
+    expect(outcome.skipped).toEqual([
       "jssg 'skipping': skipped JSSG failed for 'b.ts': Error: b.ts is not allowed",
     ]);
   });
@@ -254,16 +223,16 @@ describe.skipIf(!enabled)("JSSG parity: node, quickjs", () => {
       ]),
     );
     for (const step of ["selected", "skipping"]) {
-      const serial = parity({ files }, { step }, { ok: true });
-      const pooled = parity({ files, workers: 3 }, { step }, { ok: true });
-      expect(pooled.node).toEqual(serial.node);
+      const serial = check({ files }, { step }, { ok: true });
+      const pooled = check({ files, workers: 3 }, { step }, { ok: true });
+      expect(pooled).toEqual(serial);
     }
   });
 
   it("the static selector skips files before the transform runs", () => {
     const files = { "a.ts": "oldApi(1);\n", "b.ts": "plain(2);\n", "c/d.ts": "x(oldApi(3));\n" };
-    const outcomes = parity({ files }, { step: "selected" }, { ok: true });
-    expect(outcomes.node.output).toEqual(["a.ts", "c/d.ts"]);
+    const outcome = check({ files }, { step: "selected" }, { ok: true });
+    expect(outcome.output).toEqual(["a.ts", "c/d.ts"]);
   });
 
   it("multiple edits, a staged write(), and a staged jssgTransform()", () => {
@@ -272,41 +241,41 @@ describe.skipIf(!enabled)("JSSG parity: node, quickjs", () => {
       "lib/other.ts": "oldApi(3);\n",
       "lib/plain.ts": "plain();\n",
     };
-    const outcomes = parity({ files }, { step: "multi", include: ["main.ts"] }, { ok: true });
-    expect(outcomes.quickjs.tree).toEqual({
+    const outcome = check({ files }, { step: "multi", include: ["main.ts"] }, { ok: true });
+    expect(outcome.tree).toEqual({
       "lib/other.ts": "newApi(3);\n",
       "lib/plain.ts": "export const written = true;\n",
       "main.ts": "newApi(1);\nnewApi(2);\nkeep();\n",
     });
-    expect(outcomes.quickjs.output).toEqual([2]);
+    expect(outcome.output).toEqual([2]);
   });
 
   it("renames inside the root; renames and secondary writes outside it are rejected", () => {
-    const renamed = parity(
+    const renamed = check(
       { files: TWO },
       { step: "renameInto", input: "moved", include: ["a.ts"] },
       { ok: true },
     );
-    expect(renamed.node.tree).toEqual({ "b.ts": TWO["b.ts"], "moved/a.ts": TWO["a.ts"] });
+    expect(renamed.tree).toEqual({ "b.ts": TWO["b.ts"], "moved/a.ts": TWO["a.ts"] });
     // `..` is refused by `rename()` itself.
-    parity(
+    check(
       { files: TWO },
       { step: "renameInto", input: "..", include: ["a.ts"] },
       { error: "outside the target directory", thrown: true },
     );
     // Through a symlinked directory: `rename()` resolves it and refuses too
     // (converting the outcome would refuse it again: `crates/jssg-batch` tests).
-    parity(
+    check(
       { files: TWO, outsideLinks: ["out"] },
       { step: "renameInto", input: "out", include: ["a.ts"] },
       { error: "is outside the target directory", thrown: true },
     );
-    parity(
+    check(
       { files: TWO, outsideLinks: ["out"] },
       { step: "secondaryAt", input: "out/keep.ts", include: ["a.ts"] },
       { error: "outside the target directory", thrown: true },
     );
-    parity(
+    check(
       { files: TWO },
       { step: "secondaryAt", input: "../escaped.ts", include: ["a.ts"] },
       { error: "outside the target directory", thrown: true },
@@ -314,10 +283,7 @@ describe.skipIf(!enabled)("JSSG parity: node, quickjs", () => {
   });
 
   it("BOM, CRLF, and no trailing newline: the same input and bytes as the workflow engine", () => {
-    const outcomes = parity({ files: ENCODING_FILES }, { step: "encoding" }, { ok: true });
-    // `parity` already required quickjs to equal node: the same
-    // trees (read back losslessly, a BOM included) and the same outputs.
-    const { tree } = outcomes.node;
+    const { tree } = check({ files: ENCODING_FILES }, { step: "encoding" }, { ok: true });
     const seen = (path: string) =>
       JSON.parse(/\/\* seen (.*) \*\/$/su.exec(tree[path]!)![1]!) as {
         head: number[];

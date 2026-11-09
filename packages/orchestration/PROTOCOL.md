@@ -2,8 +2,8 @@
 
 `src/core/protocol.ts` (protocol version 8) is the one wire contract between
 the control plane and whatever executes an operation: an `OperationRequest`
-goes in, an `OperationCompletion` comes out. Both runtimes, `node` (default)
-and `quickjs` (see `RUNTIMES.md`), execute every operation kind against it.
+goes in, an `OperationCompletion` comes out. The runtime, `quickjs` (see
+`RUNTIMES.md`), executes every operation kind against it.
 The control plane never reads author files, and an executor never walks a
 repository, interprets globs, orders files, applies edits, aggregates outputs,
 or decides repository-level failure policy; all of that is
@@ -11,7 +11,7 @@ or decides repository-level failure policy; all of that is
 
 ```text
 shell       executeShell (shell.ts) over Host.spawn                    in-process, DirectRunner semantics
-jssg        executeJssgCommand (jssg.ts) -> shared batch loop           in-process (napi addon / QuickJS host)
+jssg        executeJssgCommand (jssg.ts) -> shared batch loop           in-process (QuickJS host)
               (jssg-batch.ts) -> crates/jssg-batch BatchPlan
 agent       executeAgent (agent.ts) -> Host.spawn codemod-agent         one runner process per operation
               -> codemod_ai::execute::execute_ai_step (builtin)
@@ -24,7 +24,9 @@ Until 2026-11-08 a third runtime, `bridge`, ran `shell`, `jssg`, and `agent`
 in one Rust process per command (`crates/execution-bridge`), exchanging the
 same JSON through request and response files. It was removed; the protocol,
 the JSSG batch rules (now `crates/jssg-batch`), and the agent runner (now
-`crates/orchestration-agent`) are what remains of it.
+`crates/orchestration-agent`) are what remains of it. A `node` runtime (the
+workflow in one Node process, JSSG over a napi addon, `crates/jssg-napi`) was
+removed after it.
 
 ## Files
 
@@ -33,12 +35,12 @@ the JSSG batch rules (now `crates/jssg-batch`), and the agent runner (now
 - `fixtures/protocol/*.json`: shared conformance fixtures, checked by
   `tests/protocol.test.ts` and, for the agent fixtures, by
   `crates/orchestration-agent/tests/protocol.rs`.
-- `crates/jssg-batch`: the JSSG batch rules both runtimes share (`BatchPlan`:
+- `crates/jssg-batch`: the JSSG batch rules of the runtime (`BatchPlan`:
   planning, containment, workspace index, selector skip, parse, result
   conversion) and the serde mirror of the batch's protocol data (`ArtifactRef`,
   `Selector`, `SemanticAnalysis`, `BatchFile`, `Edit`, `FileOutcome`). Used by
-  the napi addon of `node` (`crates/jssg-napi`) and by the QuickJS host
-  (`crates/orchestration-quickjs-host`). `tests/contracts.rs` is the engine
+  the QuickJS host (`crates/orchestration-quickjs-host`), in the bundle's
+  context and in each transform pool worker. `tests/contracts.rs` is the engine
   side of `fixtures/walker/cases.json` and of `src/execution/languages.json`.
 - `crates/orchestration-agent`: the `codemod-agent` binary (below).
   - `src/lib.rs`: serde structs mirroring `protocol.ts`, restricted to
@@ -205,8 +207,8 @@ failure), or answer ranges.
 
 ## How each kind is executed
 
-- **`shell`**: `executeShell` in the control plane's own process (Node, or
-  the QuickJS host), over `Host.spawn`, with the semantics of the workflow
+- **`shell`**: `executeShell` in the control plane's own process (the QuickJS
+  host; Node under the test harness), over `Host.spawn`, with the semantics of the workflow
   engine's `butterflow_runners::DirectRunner` (the environment is the host's
   plus the runtime's `env` plus the operation's `env`; `#!/` scripts run
   directly, anything else as `sh -c`; one merged output stream; abort kills
@@ -214,17 +216,16 @@ failure), or answer ranges.
 - **`jssg`**: `executeJssgCommand` builds the request (artifact, target root,
   selected files with their content) and hands it to the runtime's dispatch,
   the shared batch loop `src/execution/jssg-batch.ts`, in the same JS realm as
-  the workflow. The batch rules are Rust, reached through the napi addon
-  (`JssgBatch`, `node`) or the QuickJS host's primitives (`jssgBegin`,
-  `jssgIndex`, `jssgParse`, `jssgCall`, `jssgFinish`, `quickjs`). No process
-  is spawned. See "A jssg batch".
+  the workflow. The batch rules are Rust, reached through the QuickJS host's
+  primitives (`jssgBegin`, `jssgIndex`, `jssgParse`, `jssgCall`, `jssgFinish`,
+  and `jssgTransformRange` for the transform pool). No process is spawned.
+  See "A jssg batch".
 - **`agent`**: one `codemod-agent` process per operation. See "The agent
   runner".
 - **`assessment`**: `executeAssessmentOperation(options, cwd, request,
   signal)` in the control plane's process through the TypeSafe SDK
   (`@typesafe-ai/sdk`). File-oriented assessments read their files through
-  the `Host`. In `node` the SDK uses Node's global `fetch`. The QuickJS
-  context has no global `fetch`; the SDK gets an adapter
+  the `Host`. The QuickJS context has no global `fetch`; the SDK gets an adapter
   (`src/host/quickjs/fetch.ts`) over the host function `httpRequest`
   (`crates/orchestration-quickjs-host/src/http.rs`), which only reaches the
   TypeSafe API root (see "Security model"). An assessment cannot change the
@@ -244,8 +245,7 @@ batch and attached to every parsed root). The source is registered under
 module name transform errors mention. Then:
 
 1. in workspace mode (`indexesWorkspace`), every batch file is fed to the
-   provider before the first transform (`BatchPlan::index`; napi
-   `JssgBatch.index(start, contents)` on a worker thread, QuickJS
+   provider before the first transform (`BatchPlan::index`; QuickJS
    `jssgIndex`): the whole selected set, including files the selector will
    skip, so a matching transform can resolve definitions and references in
    them;
@@ -272,7 +272,10 @@ The first transform error fails the whole batch; nothing is returned for
 earlier files because nothing would be written anyway. Each artifact module is
 evaluated once per run (cached by hash) and transforms run one at a time in
 the realm, so module-level state persists across files and commands of one
-run (unsupported).
+run (unsupported). A batch of 64 files or more runs in chunks on the QuickJS
+host's transform pool (`CODEMOD_JSSG_WORKERS` threads, else the core count
+capped at 4), each thread with its own context and its own evaluation of the
+artifact, so there that state is per worker.
 
 The artifact is self-contained (esbuild inlined every helper), so there is no
 module resolver, no tsconfig discovery, and no transpiler on this path: the
@@ -287,7 +290,7 @@ exactly as before through the unchanged `extract_selector_with_quickjs`.
 writes straight to disk in the workflow engine. With
 `JssgExecutionOptions::stage_writes` the same call validates the path against
 the target directory and records a `FileChange` in the secondary results
-instead. The in-process runtimes always stage; the engine, CLI, and MCP
+instead. The QuickJS host always stages; the engine, CLI, and MCP
 callers pass `false`, so their behavior is unchanged.
 
 ### The agent runner
@@ -371,12 +374,8 @@ TypeScript (`paths.ts`, `jssg.ts`, `protocol.ts`):
   way, so a target root that is a symlink out of the repository fails before
   any file is selected.
 
-The runtimes differ in what else a transform can reach:
+What else a transform can reach:
 
-- `node` is not a sandbox: transforms and workflow code share the Node
-  process, its global `fetch`, and Node built-ins (a built-in a bundle left
-  external resolves to Node's). `codemod:ast-grep` is the only `codemod:*`
-  module; any other is refused.
 - `quickjs` is the sandboxed runtime: transforms get the sandbox's built-in
   modules (`codemod:ast-grep`, `codemod:workflow`, `codemod:metrics`,
   `codemod:runtime`, the curated `fs` limited to the target root, LLRT's safe
@@ -452,8 +451,8 @@ cross-file transaction on ordinary filesystems.
 ## Why this shape
 
 - Rust keeps what only Rust can do: ast-grep, the semantic providers, and the
-  batch rules, in one crate (`jssg-batch`) both runtimes call, so no runtime
-  re-implements them.
+  batch rules, in one crate (`jssg-batch`) the runtime calls, so nothing
+  re-implements them in TypeScript.
 - Everything that is policy (which files, in what order, what counts as a
   conflict, when to write, how to classify a failure) and everything that is
   build (extraction, bundling, identity) is TypeScript, where the authoring

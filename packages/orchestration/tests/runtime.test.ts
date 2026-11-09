@@ -1,23 +1,20 @@
 /**
- * Runtime selection: `--runtime` parsing, the registry contract (in-process
- * `createExecutor` vs out-of-process `launch`), the `node` and `quickjs`
- * availability checks the benchmark harness probes for, and the capability
- * contract (a runtime that lacks a capability refuses it fast; `node` and
- * `quickjs` have every one).
+ * Runtime selection: `--runtime` parsing, the registry contract (a provider
+ * launches the whole workflow out of process), the `quickjs` availability
+ * check the benchmark harness probes for, and the capability contract (a
+ * runtime that lacks a capability refuses it fast; `quickjs` has every one).
  */
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isAvailable as isNapiAvailable } from "@codemod.com/jssg-napi";
 import { parseArgs, runWorkflowCli, USAGE } from "../src/host/cli.ts";
 import { createHarness } from "../src/host/harness.ts";
 import { defaultQuickjsHostPath } from "../src/host/runtimes/quickjs.ts";
 import {
   DEFAULT_RUNTIME,
-  NODE_RUNTIME,
   OperationError,
-  PROTOCOL_VERSION,
+  QUICKJS_RUNTIME,
   RuntimeRegistry,
   UnsupportedInRuntimeError,
   agent,
@@ -29,27 +26,44 @@ import {
   runWorkflow,
   sequence,
   shell,
-  type OperationRequest,
+  type LaunchRequest,
   type RuntimeDescriptor,
-  type RuntimeProvider,
 } from "../src/index.ts";
 import { ref } from "./helpers.ts";
 
 const fixtures = resolve(import.meta.dirname, "fixtures");
 const shellWorkflow = resolve(fixtures, "load/shell.ts");
 const bin = resolve(import.meta.dirname, "../bin/codemod-workflow.mjs");
+const missingHost = "/nonexistent/orchestration-quickjs-host";
+
+/** A registry whose one runtime records each launch instead of running it. */
+function recordingRegistry() {
+  const launches: LaunchRequest[] = [];
+  const registry = new RuntimeRegistry([
+    {
+      name: "remote",
+      capabilities: QUICKJS_RUNTIME.capabilities,
+      description: "test",
+      availability: () => ({ available: true }),
+      launch: async (request) => {
+        launches.push(request);
+        return { launched: true };
+      },
+    },
+  ]);
+  return { registry, launches };
+}
 
 describe("--runtime parsing", () => {
   it("accepts an optional run subcommand and --runtime in both spellings", () => {
-    expect(parseArgs(["run", "wf.ts", "--runtime", "node"])).toMatchObject({
+    expect(parseArgs(["run", "wf.ts", "--runtime", "quickjs"])).toMatchObject({
       workflow: resolve("wf.ts"),
-      runtime: "node",
+      runtime: "quickjs",
     });
-    expect(parseArgs(["run", "wf.ts", "--runtime=quickjs"]).runtime).toBe("quickjs");
     // Options may precede the workflow (the benchmark harness's form).
-    expect(parseArgs(["run", "--runtime=node", "wf.ts", "--target", "repo"])).toMatchObject({
+    expect(parseArgs(["run", "--runtime=quickjs", "wf.ts", "--target", "repo"])).toMatchObject({
       workflow: resolve("wf.ts"),
-      runtime: "node",
+      runtime: "quickjs",
       target: resolve("repo"),
     });
     expect(() => parseArgs(["run", "a.ts", "b.ts"])).toThrow(/unexpected argument: b\.ts/u);
@@ -57,107 +71,45 @@ describe("--runtime parsing", () => {
     expect(parseArgs(["wf.ts"])).not.toHaveProperty("runtime");
     expect(() => parseArgs(["run"])).toThrow(USAGE);
     expect(() => parseArgs(["wf.ts", "--runtime"])).toThrow(/missing value for --runtime/u);
-    expect(USAGE).toContain("--runtime <node|quickjs>");
+    expect(USAGE).toContain("--runtime <quickjs>");
   });
 });
 
 describe("the runtime registry", () => {
-  it("lists node (default) and quickjs", () => {
-    expect(defaultRuntimes.names()).toEqual(["node", "quickjs"]);
-    expect(DEFAULT_RUNTIME).toBe("node");
-    for (const removed of ["bridge", "deno"]) {
+  it("has quickjs as its only and default runtime", () => {
+    expect(defaultRuntimes.names()).toEqual(["quickjs"]);
+    expect(DEFAULT_RUNTIME).toBe("quickjs");
+    for (const removed of ["node", "bridge", "deno"]) {
       expect(() => defaultRuntimes.resolve(removed)).toThrow(
-        `unknown runtime '${removed}'; expected one of: node, quickjs`,
+        `unknown runtime '${removed}'; expected one of: quickjs`,
       );
     }
   });
 
-  it("reports node and quickjs available exactly when their addon / host binary is built", () => {
-    const settings = {};
-    const node = defaultRuntimes.resolve("node").availability(settings);
-    const quickjs = defaultRuntimes.resolve("quickjs").availability(settings);
-    expect(node.available).toBe(isNapiAvailable());
+  it("reports quickjs available exactly when its host binary is built", () => {
+    const quickjs = defaultRuntimes.resolve("quickjs").availability({});
     expect(quickjs.available).toBe(existsSync(defaultQuickjsHostPath()));
-    // Neither is a placeholder any more.
-    for (const availability of [node, quickjs]) {
-      if (!availability.available) expect(availability.reason).not.toContain("not available yet");
-    }
-    // The full verification builds both; CODEMOD_REQUIRE_RUNTIMES=1 makes that a hard check.
-    if (process.env.CODEMOD_REQUIRE_RUNTIMES === "1") {
-      expect(node).toEqual({ available: true });
-      expect(quickjs).toEqual({ available: true });
-    }
+    // The full verification builds it; CODEMOD_REQUIRE_RUNTIMES=1 makes that a hard check.
+    if (process.env.CODEMOD_REQUIRE_RUNTIMES === "1") expect(quickjs).toEqual({ available: true });
   });
 
-  it("refuses runtime 'quickjs' before loading anything when its host binary is missing", async () => {
+  it("refuses runtime 'quickjs' before building anything when its host binary is missing", async () => {
     const previous = process.env.CODEMOD_QUICKJS_HOST_BIN;
-    process.env.CODEMOD_QUICKJS_HOST_BIN = "/nonexistent/orchestration-quickjs-host";
+    process.env.CODEMOD_QUICKJS_HOST_BIN = missingHost;
     try {
-      const reason = "quickjs host binary not found at /nonexistent/orchestration-quickjs-host";
-      await expect(
-        runWorkflowCli(["run", shellWorkflow, "--runtime", "quickjs", "--target", fixtures]),
-      ).rejects.toThrow(reason);
-      await expect(
-        runWorkflow(shellWorkflow, { runtime: "quickjs", target: fixtures }),
-      ).rejects.toThrow(reason);
+      const reason = `quickjs host binary not found at ${missingHost}`;
+      await expect(runWorkflowCli(["run", shellWorkflow, "--target", fixtures])).rejects.toThrow(
+        reason,
+      );
+      await expect(runWorkflow(shellWorkflow, { target: fixtures })).rejects.toThrow(reason);
     } finally {
       if (previous === undefined) delete process.env.CODEMOD_QUICKJS_HOST_BIN;
       else process.env.CODEMOD_QUICKJS_HOST_BIN = previous;
     }
   });
 
-  it.skipIf(process.platform === "win32" || !isNapiAvailable())(
-    "runs the default runtime (node) through the registry",
-    async () => {
-      expect(await runWorkflow(shellWorkflow, { target: fixtures })).toEqual({ stdout: "" });
-    },
-  );
-
-  it("uses a registered in-process provider without any CLI change", async () => {
-    const requests: OperationRequest[] = [];
-    const provider: RuntimeProvider = {
-      name: "scripted",
-      capabilities: NODE_RUNTIME.capabilities,
-      description: "test",
-      availability: () => ({ available: true }),
-      createExecutor: (context) => ({
-        async execute(request) {
-          requests.push(request);
-          expect(context.cwd).toBe(fixtures);
-          return {
-            protocolVersion: PROTOCOL_VERSION,
-            commandId: request.commandId,
-            status: "succeeded",
-            output: { stdout: "scripted" },
-          };
-        },
-      }),
-    };
-    const registry = new RuntimeRegistry([provider]);
-    const output = await runWorkflowCli(
-      ["run", shellWorkflow, "--runtime=scripted", "--target", fixtures],
-      undefined,
-      () => {},
-      { registry },
-    );
-    expect(output).toEqual({ stdout: "scripted" });
-    expect(requests.map((request) => request.commandId)).toEqual(["inspect"]);
-  });
-
-  it("hands an out-of-process provider the whole launch", async () => {
-    const launches: unknown[] = [];
-    const registry = new RuntimeRegistry([
-      {
-        name: "remote",
-        capabilities: NODE_RUNTIME.capabilities,
-        description: "test",
-        availability: () => ({ available: true }),
-        launch: async (request) => {
-          launches.push(request);
-          return { launched: true };
-        },
-      },
-    ]);
+  it("hands a registered provider the whole launch", async () => {
+    const { registry, launches } = recordingRegistry();
     const output = await runWorkflow(shellWorkflow, {
       runtime: "remote",
       target: fixtures,
@@ -169,63 +121,35 @@ describe("the runtime registry", () => {
     expect(launches).toEqual([
       { workflow: shellWorkflow, target: fixtures, settings: { env: { EXTRA: "1" } }, input: null },
     ]);
-    await expect(
-      runWorkflowCli(
-        [shellWorkflow, "--runtime", "remote", "--target", fixtures, "--dashboard"],
-        undefined,
-        () => {},
-        { registry },
-      ),
-    ).rejects.toThrow("--dashboard is not supported by runtime 'remote'");
+  });
+
+  it("passes --input from the CLI to the launch, keeping explicit null apart from no input", async () => {
+    const { registry, launches } = recordingRegistry();
+    const cli = (...extra: string[]) =>
+      runWorkflowCli([shellWorkflow, "--runtime=remote", ...extra], undefined, () => {}, {
+        registry,
+      });
+    await cli();
+    await cli("--input", "null");
+    await cli("--input", '{"name":"x"}');
+    expect(launches.map((launch) => ("input" in launch ? launch.input : "absent"))).toEqual([
+      "absent",
+      null,
+      { name: "x" },
+    ]);
   });
 
   it.skipIf(process.platform === "win32")(
     "codemod-workflow exits nonzero with the reason for an unavailable runtime",
     () => {
-      for (const [name, reason, env] of [
-        [
-          "quickjs",
-          "quickjs host binary not found at /nonexistent/orchestration-quickjs-host",
-          { CODEMOD_QUICKJS_HOST_BIN: "/nonexistent/orchestration-quickjs-host" },
-        ],
-        [
-          "node",
-          "runtime 'node' needs the jssg napi addon, not found at /nonexistent/addon.node",
-          { CODEMOD_JSSG_NAPI: "/nonexistent/addon.node" },
-        ],
-      ] as const) {
-        const result = spawnSync(
-          process.execPath,
-          [bin, "run", shellWorkflow, `--runtime=${name}`, "--target", fixtures],
-          { encoding: "utf8", env: { ...process.env, ...env } },
-        );
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain(reason);
-        expect(result.stdout).toBe("");
-      }
-    },
-  );
-
-  it("refuses runtime 'node' before loading anything when the addon is missing", async () => {
-    const saved = process.env.CODEMOD_JSSG_NAPI;
-    process.env.CODEMOD_JSSG_NAPI = "/nonexistent/addon.node";
-    try {
-      await expect(
-        runWorkflow(shellWorkflow, { runtime: "node", target: fixtures }),
-      ).rejects.toThrow(
-        "runtime 'node' needs the jssg napi addon, not found at /nonexistent/addon.node; build it with 'pnpm --filter @codemod.com/jssg-napi build' or set CODEMOD_JSSG_NAPI",
+      const result = spawnSync(
+        process.execPath,
+        [bin, "run", shellWorkflow, "--runtime=quickjs", "--target", fixtures],
+        { encoding: "utf8", env: { ...process.env, CODEMOD_QUICKJS_HOST_BIN: missingHost } },
       );
-    } finally {
-      if (saved === undefined) delete process.env.CODEMOD_JSSG_NAPI;
-      else process.env.CODEMOD_JSSG_NAPI = saved;
-    }
-  });
-
-  it.skipIf(process.platform === "win32" || !isNapiAvailable())(
-    "runs a shell workflow in-process on runtime 'node'",
-    async () => {
-      const output = await runWorkflow(shellWorkflow, { runtime: "node", target: fixtures });
-      expect(output).toEqual({ stdout: "" });
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(`quickjs host binary not found at ${missingHost}`);
+      expect(result.stdout).toBe("");
     },
   );
 });
@@ -275,19 +199,15 @@ describe("the capability contract", () => {
     );
   });
 
-  it("lets every kind through on node and quickjs", async () => {
-    for (const runtime of ["node", "quickjs"] as const) {
-      for (const [root, ids] of [
-        [parallel(lint(), judge()), ["judge", "lint"]],
-        [sequence(lint(), fix()), ["fix", "lint"]],
-        [semantic, ["semantic"]],
-        [dynamic(async () => semantic()), ["semantic"]],
-      ] as const) {
-        const h = createHarness({ runtime, fallback: () => [] });
-        await (h.run as (root: unknown) => Promise<unknown>)(root);
-        expect(h.executed.map((request) => request.commandId).sort()).toEqual(ids);
-      }
-    }
+  it.each([
+    ["parallel shell and assessment", parallel(lint(), judge()), ["judge", "lint"]],
+    ["sequence shell then agent", sequence(lint(), fix()), ["fix", "lint"]],
+    ["static semantic jssg", semantic, ["semantic"]],
+    ["dynamic semantic jssg", dynamic(async () => semantic()), ["semantic"]],
+  ] as const)("lets every kind through on quickjs: %s", async (_name, root, ids) => {
+    const h = createHarness({ runtime: "quickjs", fallback: () => [] });
+    await (h.run as (root: unknown) => Promise<unknown>)(root);
+    expect(h.executed.map((request) => request.commandId).sort()).toEqual(ids);
   });
 
   it("fails dynamically issued unsupported operations fast, without executing them", async () => {

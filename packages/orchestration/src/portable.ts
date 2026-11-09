@@ -45,7 +45,7 @@ export type {
   JssgTransformResult,
   JssgTypes,
 } from "./authoring/transform.ts";
-export type { ArtifactStore, BuiltModule, JssgArtifact, LoadedWorkflow } from "./bundle/build.ts";
+export type { ArtifactStore, BuiltModule, JssgArtifact } from "./bundle/build.ts";
 export { isCommand } from "./authoring/command.ts";
 export type { Command, Invocation, JssgInvocation } from "./authoring/command.ts";
 export { NoActiveRunError } from "./authoring/context.ts";
@@ -82,7 +82,6 @@ export {
   BUILTIN_RUNTIMES,
   CapabilityExecutor,
   DEFAULT_RUNTIME,
-  NODE_RUNTIME,
   QUICKJS_RUNTIME,
   RUNTIME_NAMES,
   UnsupportedInRuntimeError,
@@ -196,7 +195,6 @@ export type {
   HostTimer,
 } from "./core/host.ts";
 export { createPosixPath } from "./core/posix.ts";
-export { createFallbackAsyncContext } from "./core/async-context.ts";
 export {
   comparePaths,
   discoverGlobalExcludesPath,

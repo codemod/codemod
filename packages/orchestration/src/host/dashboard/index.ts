@@ -1,4 +1,10 @@
-/** `@codemod.com/orchestration/dashboard`: the local run dashboard the CLI hosts behind `--dashboard`. */
+/**
+ * `@codemod.com/orchestration/dashboard`: the run model of the local run
+ * dashboard (`RunMonitor`: run events projected into the snapshot and event
+ * stream `ui.html` renders). The server that hosted it behind `--dashboard`
+ * ran only on the removed `node` runtime; it comes back in the Rust CLI, fed
+ * by the QuickJS host's run events.
+ */
 export { RunMonitor, projectEvent } from "./monitor.ts";
 export type {
   CommandState,
@@ -10,39 +16,3 @@ export type {
   RunStatus,
   SchedulerView,
 } from "./monitor.ts";
-export {
-  DEFAULT_RUN_LIMIT,
-  DashboardSession,
-  RunConflictError,
-  RunNotFoundError,
-} from "./session.ts";
-export type {
-  ConflictCode,
-  ControlResult,
-  RestartResult,
-  RunOutcome,
-  RunSummary,
-  SessionNotice,
-  SessionOptions,
-} from "./session.ts";
-export {
-  handleApi,
-  matchRoute,
-  openEventStream,
-  parseStreamId,
-  runsView,
-  sseFrame,
-  streamId,
-} from "./api.ts";
-export type {
-  ApiRequestContext,
-  ApiResponse,
-  ApiRoute,
-  MatchedRoute,
-  Method,
-  RouteName,
-  RunFrame,
-  RunsView,
-} from "./api.ts";
-export { DASHBOARD_HOST, startDashboard } from "./server.ts";
-export type { Dashboard, DashboardOptions } from "./server.ts";

@@ -1,7 +1,7 @@
 /**
- * Build-time split of a workflow module into the trusted workflow (run in
- * Node) and one self-contained JavaScript artifact per inline `jssg()`
- * transform (run in-process by the `node` or `quickjs` runtime).
+ * Build-time split of a workflow module into the workflow and one
+ * self-contained JavaScript artifact per inline `jssg()` transform, both run
+ * by the `quickjs` runtime (`host/quickjs-bundle.ts` bundles them).
  *
  * `buildModule` parses the module with the TypeScript compiler API, finds
  * every `jssg({ ..., transform })` call, bundles each transform with esbuild
@@ -21,18 +21,17 @@
  * or arrow expression, or an imported binding.
  */
 import { readFileSync, realpathSync } from "node:fs";
-import { createRequire, registerHooks, stripTypeScriptTypes } from "node:module";
-import { basename, dirname, extname, join, resolve, sep } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
+import { basename, dirname, extname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type * as esbuild from "esbuild";
 import type * as ts from "typescript";
 import type { ArtifactRef } from "../core/protocol.ts";
-import { atomicWrite, fileHash, inputsUnchanged, privateDirectory, sha256 } from "./cache.ts";
+import { sha256 } from "./cache.ts";
 
 // TypeScript and esbuild are loaded on the first build, not on import:
-// TypeScript alone takes ~90 ms to load, and a warm `loadWorkflow` (every
-// rewritten module served from the cache) needs neither. Both are CommonJS,
-// so the synchronous module hooks below can load them on a cache miss.
+// TypeScript alone takes ~90 ms to load, and a warm run (the bundle served
+// from the cache) needs neither.
 const require = createRequire(import.meta.url);
 let typescript: typeof ts;
 let buildSync: typeof esbuild.buildSync;
@@ -208,140 +207,6 @@ export function buildModule(source: string, file: string): BuiltModule {
 export function buildFile(file: string): BuiltModule {
   const absolute = resolve(file);
   return buildModule(readFileSync(absolute, "utf8"), absolute);
-}
-
-export interface LoadedWorkflow {
-  /** The module namespace; `default` is an executable composition node. */
-  exports: Record<string, unknown>;
-  /** Every artifact extracted while the module graph loaded, by hash. */
-  artifacts: Map<string, JssgArtifact>;
-}
-
-export interface LoadWorkflowOptions {
-  /**
-   * Directory of the rewritten-module cache, or `false` for none. Default:
-   * `modules/` under the build cache (`bundle/cache.ts`).
-   */
-  cache?: string | false;
-}
-
-/**
- * Import a workflow module for the trusted-local runner, splitting every
- * module in its graph on the way in: a `node:module` load hook rewrites
- * modules that call `jssg(` (and strips their types) and collects their
- * artifacts. The hook is active only while this import runs. Node caches
- * modules per URL, so artifacts are collected the first time a module loads
- * in a process; `buildFile` is the side-effect-free alternative.
- *
- * Each rewritten module is cached on disk (`rewriteCached`), keyed by its
- * path and text, and reused while every file bundled into its artifacts is
- * unchanged, so a warm load needs neither TypeScript nor esbuild.
- */
-export async function loadWorkflow(
-  file: string,
-  options: LoadWorkflowOptions = {},
-): Promise<LoadedWorkflow> {
-  const absolute = resolve(file);
-  const artifacts = new Map<string, JssgArtifact>();
-  // This package's own sources (all of `src/`) define `jssg`; they never call it.
-  const own = resolve(import.meta.dirname, "..") + sep;
-  const cache = options.cache === undefined ? privateDirectory("modules") : options.cache;
-  const hooks = registerHooks({
-    load(url, context, nextLoad) {
-      if (!url.startsWith("file:")) return nextLoad(url, context);
-      const path = fileURLToPath(url);
-      if (path.startsWith(own) || !/\.(?:[cm]?[jt]s|[jt]sx)$/u.test(path)) {
-        return nextLoad(url, context);
-      }
-      const text = readFileSync(path, "utf8");
-      if (!text.includes("jssg(")) return nextLoad(url, context);
-      const built = rewriteCached(text, path, url, cache === false ? undefined : cache);
-      for (const artifact of built.artifacts) artifacts.set(artifact.hash, artifact);
-      return { format: "module", source: built.source, shortCircuit: true };
-    },
-  });
-  try {
-    const exports = (await import(pathToFileURL(absolute).href)) as Record<string, unknown>;
-    return { exports, artifacts };
-  } finally {
-    hooks.deregister();
-  }
-}
-
-/** A rewritten module as Node runs it, plus what it was built from. */
-interface RewrittenModule {
-  /** The rewritten module, types stripped: what the load hook returns. */
-  source: string;
-  artifacts: JssgArtifact[];
-  /** Every file bundled into the artifacts (the module included) -> SHA-256. */
-  inputs: Record<string, string>;
-}
-
-/**
- * `buildModule` + type stripping for the load hook, through the cache
- * directory when there is one. The key covers the toolchain, the Node
- * version (type stripping), the module URL, and the module text; an entry is
- * used only while every recorded input still has its recorded hash and
- * every artifact matches its hash. Resolution changes that alter no bundled
- * file (a new file shadowing an import, an edited `package.json` `exports`
- * or `tsconfig.json`) are not detected: delete the cache directory.
- */
-function rewriteCached(
-  text: string,
-  path: string,
-  url: string,
-  cache: string | undefined,
-): RewrittenModule {
-  const entryPath =
-    cache === undefined
-      ? undefined
-      : join(cache, `${sha256(buildToolchain(), process.version, url, text)}.json`);
-  if (entryPath !== undefined) {
-    try {
-      const entry = JSON.parse(readFileSync(entryPath, "utf8")) as RewrittenModule;
-      if (
-        typeof entry.source === "string" &&
-        entry.artifacts.every((artifact) => sha256(artifact.source) === artifact.hash) &&
-        inputsUnchanged(entry.inputs)
-      ) {
-        return entry;
-      }
-    } catch {
-      // Missing or unreadable: build.
-    }
-  }
-  const built = buildModule(text, path);
-  const entry: RewrittenModule = {
-    source: /\.[cm]?ts$/u.test(path) ? stripTypes(built.source, url) : built.source,
-    artifacts: built.artifacts,
-    inputs: Object.fromEntries((built.inputs ?? []).map((input) => [input, fileHash(input) ?? ""])),
-  };
-  if (entryPath !== undefined) {
-    try {
-      atomicWrite(entryPath, JSON.stringify(entry));
-    } catch {
-      // A cache that cannot be written only costs the next run a build.
-    }
-  }
-  return entry;
-}
-
-/**
- * `stripTypeScriptTypes` in transform mode (what `--experimental-transform-types`
- * does), without its one-time `ExperimentalWarning` on stderr.
- */
-function stripTypes(source: string, url: string): string {
-  const emitWarning = process.emitWarning;
-  process.emitWarning = function (this: unknown, warning: string | Error, ...rest: unknown[]) {
-    const type = typeof rest[0] === "string" ? rest[0] : (rest[0] as { type?: string })?.type;
-    if (type === "ExperimentalWarning" && String(warning).includes("stripTypeScriptTypes")) return;
-    return (emitWarning as (...args: unknown[]) => void).call(process, warning, ...rest);
-  } as typeof process.emitWarning;
-  try {
-    return stripTypeScriptTypes(source, { mode: "transform", sourceUrl: url });
-  } finally {
-    process.emitWarning = emitWarning;
-  }
 }
 
 // --- extraction -------------------------------------------------------------

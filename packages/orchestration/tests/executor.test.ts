@@ -8,23 +8,18 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ABORT_SIGNALS, parseArgs, runWorkflowCli, USAGE, type CliHooks } from "../src/host/cli.ts";
-import type { DashboardSession } from "../src/host/dashboard/index.ts";
+import { ABORT_SIGNALS, parseArgs, USAGE } from "../src/host/cli.ts";
 import {
   MemoryHistoryStore,
   OperationError,
-  RuntimeRegistry,
   isSafeRelativePath,
   jssg,
   run,
   dynamic,
   type OperationRequest,
 } from "../src/index.ts";
-import { echoExecutor, echoRuntime } from "./echo-runtime.ts";
-import { artifact, canListen, ref } from "./helpers.ts";
-
-/** `--dashboard` opens a loopback listener, which a sandbox may deny. */
-const listenable = await canListen();
+import { echoExecutor } from "./echo-runtime.ts";
+import { artifact, ref } from "./helpers.ts";
 
 describe("safe relative paths", () => {
   it.each([
@@ -180,7 +175,7 @@ describe("artifacts through an executor", () => {
     expect((error as OperationError).status).toBe("failed");
     expect((error as OperationError).detail).toEqual({
       message: expect.stringMatching(
-        /no built artifact for jssg 'migrate' \(hash [0-9a-f]{12}\); load the workflow with loadWorkflow\(\)/u,
+        /no built artifact for jssg 'migrate' \(hash [0-9a-f]{12}\); run the workflow with codemod-workflow/u,
       ),
       details: { phase: "artifact" },
     });
@@ -200,19 +195,8 @@ describe("codemod-workflow argument parsing", () => {
     expect(parseArgs(["wf.ts", "--target", "repo"])).toEqual({
       workflow: resolve("wf.ts"),
       target: resolve("repo"),
-      dashboard: false,
     });
     expect(options).not.toHaveProperty("input");
-  });
-
-  it("treats --dashboard as a value-less opt-in flag", () => {
-    expect(parseArgs(["wf.ts", "--dashboard"]).dashboard).toBe(true);
-    expect(parseArgs(["wf.ts", "--dashboard", "--target", "repo"])).toMatchObject({
-      dashboard: true,
-      target: resolve("repo"),
-    });
-    expect(parseArgs(["wf.ts", "--target", "repo", "--dashboard"]).dashboard).toBe(true);
-    expect(USAGE).toContain("[--dashboard]");
   });
 
   it("parses --input as strict JSON and keeps an explicit null apart from no input", () => {
@@ -250,167 +234,5 @@ describe("codemod-workflow argument parsing", () => {
     }
     expect(() => parseArgs(["wf.ts", "--target"])).toThrow(/missing value for --target/u);
     expect(USAGE).toContain("[--input <json>]");
-  });
-});
-
-describe("codemod-workflow runs", () => {
-  const load = (file: string) => resolve(import.meta.dirname, "fixtures/load", file);
-  const base = (file: string) => [load(file), "--target", import.meta.dirname, "--runtime", "echo"];
-  // Slow enough that an abort right after a run starts lands before it answers.
-  const registry = new RuntimeRegistry([echoRuntime(50)]);
-
-  it("runs a bare shell step as the root", async () => {
-    const output = (await runWorkflowCli(base("shell.ts"), undefined, undefined, {
-      registry,
-    })) as { stdout: string };
-    const echoed = JSON.parse(output.stdout) as { request: OperationRequest };
-    expect(echoed.request.commandId).toBe("inspect");
-    expect(echoed.request.operation).toEqual({ kind: "shell", command: "true" });
-  });
-
-  /**
-   * Seams into a `--dashboard` host: the session as soon as it exists, a
-   * promise for the first run's creation, and (when asked) a server stand-in
-   * so the test needs no socket.
-   */
-  function dashboardHooks(fakeServer: boolean) {
-    let session: DashboardSession | undefined;
-    let closed = 0;
-    const hooks: CliHooks = { registry };
-    const firstRun = new Promise<string>((resolve) => {
-      hooks.onSession = (s) => {
-        session = s;
-        s.subscribe((notice) => {
-          if (notice.type === "run.created") resolve(notice.run.runId);
-        });
-      };
-    });
-    if (fakeServer) {
-      hooks.serve = async () => ({
-        url: "http://127.0.0.1:0/",
-        port: 0,
-        close: async () => {
-          closed += 1;
-        },
-      });
-    }
-    return {
-      hooks,
-      firstRun,
-      session: () => session!,
-      closed: () => closed,
-    };
-  }
-
-  it.skipIf(!listenable)(
-    "announces the dashboard out of band and still returns the result",
-    async () => {
-      const lines: string[] = [];
-      const controller = new AbortController();
-      const seams = dashboardHooks(false);
-      const finished = runWorkflowCli(
-        [...base("shell.ts"), "--dashboard"],
-        controller.signal,
-        (line) => lines.push(line),
-        seams.hooks,
-      );
-      const firstRun = await seams.firstRun;
-      await seams.session().settled(firstRun);
-      controller.abort();
-      const output = (await finished) as { stdout: string };
-      expect(lines[0]).toMatch(/^dashboard: http:\/\/127\.0\.0\.1:\d+\/$/u);
-      const echoed = JSON.parse(output.stdout) as { request: OperationRequest };
-      expect(echoed.request.commandId).toBe("inspect");
-    },
-  );
-
-  it("keeps the dashboard host alive after a run and exits cleanly on the signal", async () => {
-    const lines: string[] = [];
-    const controller = new AbortController();
-    const seams = dashboardHooks(true);
-    const finished = runWorkflowCli(
-      [...base("shell.ts"), "--dashboard"],
-      controller.signal,
-      (line) => lines.push(line),
-      seams.hooks,
-    );
-    let settled = false;
-    void finished.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-
-    // The first run starts on its own and finishes, and the host stays up.
-    const first = await seams.firstRun;
-    const session = seams.session();
-    await session.settled(first);
-    expect(session.run(first)).toMatchObject({ number: 1, status: "completed" });
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(settled).toBe(false);
-    expect(session.isClosed).toBe(false);
-    expect(seams.closed()).toBe(0);
-
-    // Run again works while hosting, with a fresh run id.
-    const second = await session.start();
-    expect(second.runId).not.toBe(first);
-    await session.settled(second.runId);
-    expect(session.runs().map((r) => r.status)).toEqual(["completed", "completed"]);
-
-    // Ctrl-C: the session closes, the server closes, and the newest result is the answer.
-    controller.abort();
-    const output = (await finished) as { stdout: string };
-    expect(session.isClosed).toBe(true);
-    expect(seams.closed()).toBe(1);
-    expect(JSON.parse(output.stdout).request.commandId).toBe("inspect");
-    expect(lines).toEqual([
-      "dashboard: http://127.0.0.1:0/",
-      "run 1 started",
-      expect.stringMatching(/^run 1 done in \d+\.\ds$/u),
-      "run 2 started",
-      expect.stringMatching(/^run 2 done in \d+\.\ds$/u),
-    ]);
-  });
-
-  it("fails like a plain run when the newest run did not complete", async () => {
-    const lines: string[] = [];
-    const controller = new AbortController();
-    const seams = dashboardHooks(true);
-    const finished = runWorkflowCli(
-      [...base("shell.ts"), "--dashboard"],
-      controller.signal,
-      (line) => lines.push(line),
-      seams.hooks,
-    );
-    const first = await seams.firstRun;
-    const session = seams.session();
-    await session.settled(first);
-    // Stop the host while a second run is active: the abort lands before its
-    // command answers, so that run is cancelled and reported as such.
-    const second = await session.start();
-    controller.abort();
-    await expect(finished).rejects.toThrow(/cancelled|aborted/iu);
-    expect(session.run(second.runId)).toMatchObject({ status: "cancelled" });
-    expect(seams.closed()).toBe(1);
-    expect(lines.at(-1)).toMatch(/^run 2 stopped after/u);
-  });
-
-  it("requires --input for a root that declares input, and passes null and JSON through", async () => {
-    const cli = (argv: string[]) => runWorkflowCli(argv, undefined, undefined, { registry });
-    await expect(cli(base("input.ts"))).rejects.toThrow(
-      /workflow requires an input value; pass --input <json>/u,
-    );
-    expect(await cli([...base("input.ts"), "--input", "null"])).toEqual({
-      received: null,
-    });
-    expect(await cli([...base("input.ts"), "--input", '{"name":"x"}'])).toEqual({
-      received: { name: "x" },
-    });
-    await expect(cli([...base("input.ts"), "--input", "{name: x}"])).rejects.toThrow(
-      /--input must be valid JSON/u,
-    );
   });
 });

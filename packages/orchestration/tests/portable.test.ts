@@ -5,13 +5,12 @@
  *   history, scheduling, the capability contract, and the JSSG + shell
  *   execution path) imports no `node:*` module, no Node-only package, and uses
  *   no Node global; only the files in `NODE_ONLY` may;
- * - `core/posix.ts` matches `node:path.posix`;
- * - the fallback async context does what its documentation says.
+ * - `core/posix.ts` matches `node:path.posix`.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { posix as nodePosix, dirname, join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createFallbackAsyncContext, createPosixPath } from "../src/portable.ts";
+import { createPosixPath } from "../src/portable.ts";
 
 const src = resolve(import.meta.dirname, "../src");
 const rel = (file: string) => relative(src, file).split("\\").join("/");
@@ -250,46 +249,5 @@ describe("core/posix.ts", () => {
         );
       }
     }
-  });
-});
-
-describe("createFallbackAsyncContext", () => {
-  it("binds synchronously, nests, and restores", () => {
-    const variable = createFallbackAsyncContext<string>();
-    expect(variable.get()).toBeUndefined();
-    const seen = variable.run("outer", () => [
-      variable.get(),
-      variable.run("inner", () => variable.get()),
-      variable.get(),
-    ]);
-    expect(seen).toEqual(["outer", "inner", "outer"]);
-    expect(variable.get()).toBeUndefined();
-  });
-
-  it("keeps the oldest pending run as the ambient value after an await, then clears it", async () => {
-    const variable = createFallbackAsyncContext<string>();
-    const tick = () => new Promise<void>((done) => setTimeout(done, 1));
-    const observed: (string | undefined)[] = [];
-    await variable.run("root", async () => {
-      await tick();
-      observed.push(variable.get());
-      await variable.run("child", async () => {
-        observed.push(variable.get()); // synchronous part of the child
-        await tick();
-        observed.push(variable.get()); // after an await: the child is lost
-      });
-    });
-    expect(observed).toEqual(["root", "child", "root"]);
-    expect(variable.get()).toBeUndefined();
-  });
-
-  it("clears a run whose body rejects", async () => {
-    const variable = createFallbackAsyncContext<string>();
-    await expect(
-      variable.run("root", async () => {
-        throw new Error("boom");
-      }),
-    ).rejects.toThrow("boom");
-    expect(variable.get()).toBeUndefined();
   });
 });

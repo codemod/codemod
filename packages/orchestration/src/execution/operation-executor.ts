@@ -1,8 +1,7 @@
 /**
  * Migration seam: how an `OperationRequest` becomes an `OperationCompletion`.
- * Implementations: the runtime executors (`NodeExecutor`, the QuickJS
- * bundle's executor) and the harness's
- * scripted executor. Portable: no host access.
+ * Implementations: the QuickJS bundle's executor and the harness's scripted
+ * executor. Portable: no host access.
  */
 import type { OperationCompletion, OperationRequest } from "../core/protocol.ts";
 

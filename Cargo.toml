@@ -20,7 +20,6 @@ members = [
     "crates/language-python",
     "crates/semantic-factory",
     "crates/tree-sitter-loader",
-    "crates/jssg-napi",
     "crates/jssg-batch",
     "crates/bench-timings",
 ]

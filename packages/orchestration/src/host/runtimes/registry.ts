@@ -5,17 +5,9 @@
  */
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import {
-  executableRequiresInput,
-  isExecutable,
-  type Executable,
-} from "../../authoring/composition.ts";
-import type { ArtifactStore } from "../../bundle/build.ts";
 import type { Json } from "../../core/json.ts";
 import { DEFAULT_RUNTIME } from "../../runtime/capabilities.ts";
 import { Phase, lap, now } from "../../core/timings.ts";
-import "../node-host.ts";
-import { nodeRuntime } from "./node.ts";
 import { quickjsRuntime } from "./quickjs.ts";
 import type { RuntimeProvider, RuntimeSettings } from "./types.ts";
 
@@ -47,10 +39,7 @@ export class RuntimeRegistry {
     for (const provider of providers) this.register(provider);
   }
 
-  /**
-   * Add or replace (by name). A provider with neither `createExecutor` nor
-   * `launch` is a placeholder whose `availability` explains why.
-   */
+  /** Add or replace (by name). */
   register(provider: RuntimeProvider): this {
     this.#providers.set(provider.name, provider);
     return this;
@@ -72,7 +61,7 @@ export class RuntimeRegistry {
   }
 }
 
-export const defaultRuntimes = new RuntimeRegistry([nodeRuntime, quickjsRuntime]);
+export const defaultRuntimes = new RuntimeRegistry([quickjsRuntime]);
 
 /** Throws `RuntimeUnavailableError` with the provider's reason. */
 export function assertAvailable(provider: RuntimeProvider, settings: RuntimeSettings): void {
@@ -83,7 +72,7 @@ export function assertAvailable(provider: RuntimeProvider, settings: RuntimeSett
 }
 
 export interface RunWorkflowOptions {
-  /** Runtime name. Default `node`. */
+  /** Runtime name. Default `quickjs`. */
   runtime?: string;
   /** Repository the workflow operates on. Default: the process working directory. */
   target?: string;
@@ -92,39 +81,10 @@ export interface RunWorkflowOptions {
   /** The root input; the key's presence matters (`null` is a value). */
   input?: Json;
   signal?: AbortSignal;
-  /** Out-of-band lines (out-of-process runtimes). */
+  /** Out-of-band lines (stderr in the CLI). */
   notify?: (line: string) => void;
   /** Default `defaultRuntimes`. */
   registry?: RuntimeRegistry;
-}
-
-/** A loaded, validated workflow module ready for an in-process run. */
-export interface LoadedExecutable {
-  executable: Executable;
-  artifacts: ArtifactStore;
-}
-
-/**
- * Load a workflow module through the build step and validate its default
- * export, and that an input is given when the root needs one.
- */
-export async function loadExecutable(
-  workflow: string,
-  hasInput: boolean,
-): Promise<LoadedExecutable> {
-  // Loaded on demand (TypeScript and esbuild): out-of-process runtimes never need it.
-  const { loadWorkflow } = await import("../../bundle/build.ts");
-  const { exports, artifacts } = await loadWorkflow(workflow);
-  const executable = exports.default;
-  if (!isExecutable(executable)) {
-    throw new Error(
-      "workflow module must default-export a shell or jssg step, a step invocation, dynamic(...), sequence(...), or parallel(...)",
-    );
-  }
-  if (!hasInput && executableRequiresInput(executable)) {
-    throw new Error("workflow requires an input value; pass --input <json>");
-  }
-  return { executable, artifacts };
 }
 
 export interface PreparedLaunch {
@@ -150,9 +110,7 @@ export function prepareLaunch(
   const target = resolve(options.target ?? process.cwd());
   if (!existsSync(workflow)) throw new Error(`workflow does not exist: ${workflow}`);
   if (!existsSync(target)) throw new Error(`target does not exist: ${target}`);
-  const settings: RuntimeSettings = {
-    ...(options.env === undefined ? {} : { env: options.env }),
-  };
+  const settings: RuntimeSettings = options.env === undefined ? {} : { env: options.env };
   assertAvailable(provider, settings);
   return { provider, workflow, target, settings };
 }
@@ -160,45 +118,22 @@ export function prepareLaunch(
 /**
  * Run a workflow file on a named runtime and resolve with its final output:
  * the programmatic form of `codemod-workflow run --runtime=<name>`.
- * In-process runtimes load the module here and run it with the provider's
- * executor and capability contract; out-of-process runtimes `launch` it.
  */
 export async function runWorkflow(
   workflowPath: string,
   options: RunWorkflowOptions = {},
 ): Promise<unknown> {
-  // Benchmark timings (no-ops when off): resolving, loading, and planning
-  // the workflow up to the run is `plan`.
+  // Benchmark timings (no-ops when off): resolving the runtime is `plan`
+  // (the provider times finding or building its bundle itself).
   const planned = now();
   const { provider, workflow, target, settings } = prepareLaunch(workflowPath, options);
-  const hasInput = "input" in options;
-  await provider.load?.();
-  if (provider.createExecutor === undefined) {
-    if (provider.launch === undefined) {
-      throw new RuntimeUnavailableError(
-        provider.name,
-        `runtime '${provider.name}' provides neither an executor nor a launcher`,
-      );
-    }
-    lap(Phase.plan, planned);
-    return provider.launch({
-      workflow,
-      target,
-      settings,
-      ...(hasInput ? { input: options.input } : {}),
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-      ...(options.notify === undefined ? {} : { notify: options.notify }),
-    });
-  }
-  const { executable, artifacts } = await loadExecutable(workflow, hasInput);
-  // In-process runs only: an out-of-process runtime runs its own control plane.
-  const { run } = await import("../../runtime/run.ts");
   lap(Phase.plan, planned);
-  const result = await run(executable, {
-    executor: provider.createExecutor({ cwd: target, artifacts, settings }),
-    runtime: provider,
-    signal: options.signal,
-    ...(hasInput ? { input: options.input } : {}),
+  return provider.launch({
+    workflow,
+    target,
+    settings,
+    ...("input" in options ? { input: options.input } : {}),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.notify === undefined ? {} : { notify: options.notify }),
   });
-  return result.output;
 }

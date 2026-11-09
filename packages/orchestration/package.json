@@ -2,7 +2,7 @@
   "name": "@codemod.com/orchestration",
   "version": "0.0.0",
   "private": true,
-  "description": "TypeScript prototype of the Codemod orchestration runtime (static composition, workflows, replay history) on two runtimes: node (in-process) and quickjs (sandboxed)",
+  "description": "TypeScript prototype of the Codemod orchestration runtime (static composition, workflows, replay history) run in a sandboxed QuickJS runtime",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
@@ -29,11 +29,10 @@
   "scripts": {
     "test": "vitest run",
     "build:agent": "cargo build -p orchestration-agent",
-    "build:napi": "pnpm --filter @codemod.com/jssg-napi build:debug",
     "build:quickjs": "cargo build -p orchestration-quickjs-host",
-    "test:e2e": "pnpm build:napi && pnpm build:quickjs && CODEMOD_QUICKJS_E2E=1 vitest run tests/node-runtime.e2e.test.ts tests/quickjs.e2e.test.ts tests/jssg-parity.e2e.test.ts",
-    "test:e2e:timings": "cargo build -p orchestration-quickjs-host --features orchestration-quickjs-host/timings && node ../jssg-napi/scripts/build.mjs --features timings && CODEMOD_TIMINGS_E2E=1 vitest run tests/timings.e2e.test.ts",
-    "test:e2e:quickjs": "pnpm build:napi && pnpm build:quickjs && CODEMOD_QUICKJS_E2E=1 vitest run tests/quickjs.e2e.test.ts",
+    "test:e2e": "pnpm build:quickjs && CODEMOD_QUICKJS_E2E=1 vitest run tests/quickjs.e2e.test.ts tests/jssg-parity.e2e.test.ts",
+    "test:e2e:timings": "cargo build -p orchestration-quickjs-host --features orchestration-quickjs-host/timings && CODEMOD_TIMINGS_E2E=1 vitest run tests/timings.e2e.test.ts",
+    "test:e2e:quickjs": "pnpm build:quickjs && CODEMOD_QUICKJS_E2E=1 vitest run tests/quickjs.e2e.test.ts",
     "test:live:agent:builtin": "pnpm build:agent && CODEMOD_LIVE_AGENT_BUILTIN=1 vitest run tests/agent.builtin.live.test.ts",
     "test:live:agent:claude-code": "pnpm build:agent && CODEMOD_LIVE_AGENT_CLAUDE_CODE=1 vitest run tests/agent.claude-code.live.test.ts",
     "test:live:agent:codex": "pnpm build:agent && CODEMOD_LIVE_AGENT_CODEX=1 vitest run tests/agent.codex.live.test.ts",
@@ -42,7 +41,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@codemod.com/jssg-napi": "workspace:*",
     "@codemod.com/jssg-types": "workspace:*",
     "@typesafe-ai/sdk": "^0.6.0",
     "esbuild": "^0.27.2",

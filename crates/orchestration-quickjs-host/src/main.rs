@@ -15,20 +15,14 @@
 //!
 //! Exit codes: 0 completed, 1 the workflow failed or was cancelled, 2 usage,
 //! 3 the host could not run the bundle.
-//!
-//! `orchestration-quickjs-host select` runs the native file selection the
-//! context's `Host.selectFiles` / `Host.fs.readSources` use on a JSON array of
-//! `{ request, read? }` jobs from stdin and prints one result per job
-//! (`select.rs`); the differential walker test drives it.
 
-use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use orchestration_quickjs_host::{run, select, HostOptions};
+use orchestration_quickjs_host::{run, HostOptions};
 
-const USAGE: &str = "usage: orchestration-quickjs-host run <bundle.mjs> [--target <directory>] [--input <json>] [--history <file>] [--json]\n       orchestration-quickjs-host select < jobs.json";
+const USAGE: &str = "usage: orchestration-quickjs-host run <bundle.mjs> [--target <directory>] [--input <json>] [--history <file>] [--json]";
 
 fn main() -> ExitCode {
     let started = Instant::now();
@@ -77,23 +71,6 @@ fn run_main(started: Instant) -> ExitCode {
         });
     match args.next().as_deref() {
         Some("run") => {}
-        Some("select") => {
-            let mut input = String::new();
-            if let Err(error) = std::io::stdin().read_to_string(&mut input) {
-                eprintln!("failed to read stdin: {error}");
-                return ExitCode::from(2);
-            }
-            return match select::run_jobs(&input) {
-                Ok(output) => {
-                    println!("{output}");
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    eprintln!("{error}");
-                    ExitCode::from(2)
-                }
-            };
-        }
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);

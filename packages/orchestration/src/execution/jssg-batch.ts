@@ -1,5 +1,5 @@
 /**
- * The JSSG batch loop of the in-process runtimes (`node`, `quickjs`): a
+ * The JSSG batch loop of the `quickjs` runtime: a
  * `JssgDispatch` that runs transforms in the same JS realm as the control
  * plane. Every rule of the batch lives in Rust, in one place
  * (`crates/jssg-batch`), reached through the engine:
@@ -13,8 +13,8 @@
  * - `parse` parses files from the content the host sent (snapshot
  *   semantics: no transform sees another's edits) and answers `null` for
  *   files the static selector does not match (`{ path, edits: [] }`), so a
- *   skipped file never reaches JavaScript; the `node` engine parses a chunk
- *   ahead on worker threads while the previous chunk transforms;
+ *   skipped file never reaches JavaScript (large batches go to the host's
+ *   transform pool instead, `host/quickjs/dispatch.ts`);
  * - `call` runs one transform as the only one in flight in the realm, with
  *   `write()` / `jssgTransform()` staged (never written) and contained to
  *   the target root, and the options the sandbox builds;

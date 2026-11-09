@@ -6,16 +6,16 @@
  * runtime-launch modules may import `node:*` or touch `process`;
  * `tests/portable.test.ts` enforces it with a static import scan.
  *
- * Two implementations are planned:
+ * Two implementations:
  *
+ * - QuickJS (`src/host/quickjs/host.ts`, the Rust binary hosting one
+ *   QuickJS context): the runtime. It installs itself with `setHost()` or by
+ *   defining `globalThis[HOST_GLOBAL]` before the workflow bundle is
+ *   evaluated. See `RUNTIMES.md` for exactly what it must provide.
  * - Node (`createNodeHost()` in `src/host/node-host.ts`): wraps `node:fs`,
- *   `node:path`, `node:child_process`, `node:os`, and `AsyncLocalStorage`.
- *   Installed automatically by the Node entry points (`src/index.ts`,
- *   `src/host/cli.ts`, `src/host/harness.ts`).
- * - QuickJS (a Rust binary hosting one QuickJS context): backed by Rust host
- *   modules. It installs itself with `setHost()` or by defining
- *   `globalThis[HOST_GLOBAL]` before the workflow bundle is evaluated. See
- *   `RUNTIMES.md` for exactly what it must provide.
+ *   `node:path`, `node:child_process`, `node:os`, and `AsyncLocalStorage`,
+ *   for the test harness (`src/host/harness.ts`) and Node consumers of the
+ *   package (`src/index.ts`).
  *
  * Every filesystem call is synchronous on purpose: selection, containment,
  * staging, and the commit are synchronous today, the single JS thread is the
@@ -179,8 +179,8 @@ export interface HostChild {
  * created while it runs (transitively); `get()` returns the binding of the
  * current execution, or `undefined` outside any `run`.
  *
- * Node: `AsyncLocalStorage`. QuickJS: see `RUNTIMES.md` (promise hooks;
- * `createFallbackAsyncContext()` in `core/async-context.ts` as a stopgap).
+ * Node: `AsyncLocalStorage`. QuickJS: `host/quickjs/async-context.ts`
+ * (continuations carry the frame through `then`).
  */
 export interface AsyncContextVariable<T> {
   get(): T | undefined;

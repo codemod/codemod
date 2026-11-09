@@ -1,16 +1,12 @@
 /**
  * An in-memory `Host` with no Node behind it: posix paths from
- * `createPosixPath`, a Map-backed filesystem, the fallback async context, and
+ * `createPosixPath`, a Map-backed filesystem, `AsyncLocalStorage`, and
  * no process spawning. Proves the portable JSSG path reaches the platform only
  * through the seam: a test can run selection, staging, and the commit against
  * it and never touch the real disk.
  */
-import {
-  createFallbackAsyncContext,
-  createPosixPath,
-  type Host,
-  type HostDirEntry,
-} from "../../src/portable.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createPosixPath, type Host, type HostDirEntry } from "../../src/portable.ts";
 
 type Node = { type: "file"; content: string } | { type: "dir" } | { type: "link"; to: string };
 
@@ -127,7 +123,13 @@ export function createMemoryHost(cwd = "/repo"): MemoryHost {
       pid: undefined,
       result: Promise.reject(fsError("ENOSYS", "the memory host cannot spawn")),
     }),
-    createAsyncContext: createFallbackAsyncContext,
+    createAsyncContext<T>() {
+      const storage = new AsyncLocalStorage<T>();
+      return {
+        get: () => storage.getStore(),
+        run: <R>(value: T, fn: () => R) => storage.run(value, fn),
+      };
+    },
     now: () => 0,
     setTimeout: (callback, ms) => setTimeout(callback, ms),
     clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),

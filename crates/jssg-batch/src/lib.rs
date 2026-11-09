@@ -1,4 +1,4 @@
-//! The JSSG batch rules every TypeScript orchestration runtime shares, in one
+//! The JSSG batch rules of the TypeScript orchestration runtime, in one
 //! place:
 //!
 //! - the batch's protocol data ([`ArtifactRef`], [`Selector`],
@@ -13,10 +13,9 @@
 //!   [`FileOutcome`] (`/`-separated, contained secondary paths and rename
 //!   targets).
 //!
-//! Users: the orchestration QuickJS host
-//! (`crates/orchestration-quickjs-host`, one context for the whole run) and
-//! the napi addon of the `node` runtime (`crates/jssg-napi`). Each binds the
-//! transform call itself; none re-implements these rules.
+//! User: the orchestration QuickJS host (`crates/orchestration-quickjs-host`:
+//! the run's context and each transform pool worker's). It binds the
+//! transform call itself and does not re-implement these rules.
 //!
 //! Binding-agnostic: no JavaScript engine types here. Turning a transform's
 //! JavaScript return value into a [`CodemodOutput`] is the binding's job, via
@@ -157,8 +156,8 @@ pub struct Batch<'a> {
 }
 
 /// The JSON form of a [`Batch`] without its files, for runners whose file
-/// contents stay on the JavaScript side (`jssgBegin` of the QuickJS host,
-/// `JssgBatch` of the napi addon); the paths travel separately.
+/// contents stay on the JavaScript side (`jssgBegin` of the QuickJS host);
+/// the paths travel separately.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BatchConfig {

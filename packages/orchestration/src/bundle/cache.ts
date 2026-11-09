@@ -1,9 +1,8 @@
 /**
- * The on-disk build cache shared by the Node side of every runtime:
+ * The on-disk build cache of the CLI launcher:
  *
- * - `modules/`: workflow modules rewritten by the build step (`loadWorkflow`),
- *   with their artifacts, so a warm run loads neither TypeScript nor esbuild;
- * - `quickjs/`: prebuilt QuickJS bundles (`host/quickjs-bundle.ts`);
+ * - `quickjs/`: prebuilt QuickJS bundles (`host/quickjs-bundle.ts`), so a
+ *   warm run loads neither TypeScript nor esbuild;
  * - `ts/` and `v8/`: type-stripped sources and Node's compile cache, written
  *   by `bin/register-ts.mjs` and `bin/codemod-workflow.mjs` (plain `.mjs`
  *   that runs before any TypeScript loads, so it repeats `cacheRoot` and

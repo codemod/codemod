@@ -10,7 +10,6 @@ license.workspace = true
 publish = false
 
 [dependencies]
-libc = "0.2"
 # ECMAScript regular expressions (non-unicode mode, UTF-16 code units), so
 # node-ignore's generated `RegExp` sources match exactly as they do in JS.
 regress = { version = "0.10", features = ["utf16"] }
