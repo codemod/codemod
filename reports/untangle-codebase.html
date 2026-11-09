@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Codemod untangle-codebase report</title>
+  <style>
+    :root {
+      --bg: #f7f5f0;
+      --ink: #1a1f1c;
+      --muted: #5a635c;
+      --line: #d8d2c4;
+      --card: #fffdf8;
+      --accent: #0f6b5c;
+      --accent-soft: #d8efe9;
+      --warn: #9a5b12;
+      --warn-soft: #f5e6cf;
+      --danger: #8b2e2e;
+      --danger-soft: #f3d9d9;
+      --ok: #2f6b34;
+      --ok-soft: #dcefdc;
+      --mono: "IBM Plex Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+      --sans: "IBM Plex Sans", "Source Sans 3", "Segoe UI", sans-serif;
+      --display: "Fraunces", "Iowan Old Style", Georgia, serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% -10%, #e8f3ef 0%, transparent 42%),
+        radial-gradient(circle at 100% 0%, #f1e7d5 0%, transparent 35%),
+        var(--bg);
+      font: 16px/1.55 var(--sans);
+    }
+
+    a { color: var(--accent); }
+    code, .mono { font-family: var(--mono); font-size: 0.9em; }
+
+    .wrap {
+      width: min(1120px, calc(100% - 2rem));
+      margin: 0 auto;
+      padding: 2.5rem 0 4rem;
+    }
+
+    header.hero {
+      padding: 1.25rem 0 2rem;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 2rem;
+    }
+    .eyebrow {
+      display: inline-block;
+      font: 600 0.78rem/1 var(--mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.85rem;
+    }
+    h1 {
+      font: 600 2.4rem/1.1 var(--display);
+      margin: 0 0 0.75rem;
+      letter-spacing: -0.02em;
+      max-width: 18ch;
+    }
+    .lede {
+      max-width: 62ch;
+      color: var(--muted);
+      margin: 0;
+      font-size: 1.05rem;
+    }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem 1.25rem;
+      margin-top: 1.25rem;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin: 1.75rem 0 0;
+    }
+    .stat {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.9rem 1rem;
+    }
+    .stat b {
+      display: block;
+      font: 600 1.55rem/1 var(--display);
+      margin-bottom: 0.25rem;
+    }
+    .stat span { color: var(--muted); font-size: 0.86rem; }
+
+    section { margin: 2.5rem 0; }
+    h2 {
+      font: 600 1.55rem/1.2 var(--display);
+      margin: 0 0 0.65rem;
+      letter-spacing: -0.01em;
+    }
+    h3 {
+      font: 600 1.1rem/1.3 var(--sans);
+      margin: 1.4rem 0 0.5rem;
+    }
+    p { margin: 0 0 0.9rem; }
+    .note {
+      background: var(--accent-soft);
+      border-left: 3px solid var(--accent);
+      padding: 0.85rem 1rem;
+      border-radius: 0 8px 8px 0;
+      color: #204840;
+    }
+
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin: 1rem 0 1.25rem;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: color-mix(in srgb, var(--bg) 88%, white);
+      backdrop-filter: blur(8px);
+      padding: 0.65rem 0;
+      border-bottom: 1px solid transparent;
+    }
+    .filters.is-stuck { border-bottom-color: var(--line); }
+    button.chip {
+      appearance: none;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--ink);
+      border-radius: 999px;
+      padding: 0.35rem 0.75rem;
+      font: 500 0.82rem/1 var(--sans);
+      cursor: pointer;
+    }
+    button.chip[aria-pressed="true"] {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: #fff;
+    }
+
+    .matrix {
+      display: grid;
+      grid-template-columns: 80px repeat(3, 1fr);
+      gap: 0.45rem;
+      margin: 1rem 0 0.5rem;
+    }
+    .matrix .head, .matrix .side {
+      font: 600 0.75rem/1 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      padding: 0.35rem;
+    }
+    .cell {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-height: 92px;
+      padding: 0.55rem 0.6rem;
+      font-size: 0.82rem;
+    }
+    .cell ul { margin: 0.35rem 0 0; padding-left: 1rem; }
+    .cell.priority-first { outline: 2px solid var(--accent); background: #f2faf7; }
+    .legend {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-top: 0.75rem;
+    }
+    .dot {
+      display: inline-block;
+      width: 0.65rem;
+      height: 0.65rem;
+      border-radius: 50%;
+      margin-right: 0.35rem;
+      vertical-align: -1px;
+    }
+    .dot.accent { background: var(--accent); }
+
+    .fix {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1.1rem 1.15rem 1rem;
+      margin: 0 0 1rem;
+    }
+    .fix-top {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 0.75rem;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 0.55rem;
+    }
+    .fix h3 { margin: 0; max-width: 48ch; }
+    .badges { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+    .badge {
+      font: 600 0.72rem/1 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-radius: 999px;
+      padding: 0.32rem 0.55rem;
+      border: 1px solid transparent;
+    }
+    .badge.impact-high { background: var(--danger-soft); color: var(--danger); }
+    .badge.impact-medium { background: var(--warn-soft); color: var(--warn); }
+    .badge.impact-low { background: var(--ok-soft); color: var(--ok); }
+    .badge.safety-high { background: var(--danger-soft); color: var(--danger); }
+    .badge.safety-medium { background: var(--warn-soft); color: var(--warn); }
+    .badge.safety-low { background: var(--ok-soft); color: var(--ok); }
+    .badge.prio {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: color-mix(in srgb, var(--accent) 25%, white);
+    }
+    .badge.area {
+      background: #ece8df;
+      color: #3d433e;
+    }
+    .fix p { color: var(--muted); }
+    .fix .why { color: var(--ink); }
+    .problems {
+      margin: 0.75rem 0 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 0.45rem;
+    }
+    .problems li {
+      border-top: 1px dashed var(--line);
+      padding-top: 0.55rem;
+      font-size: 0.92rem;
+    }
+    .problems .cat {
+      font: 600 0.72rem/1 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-right: 0.45rem;
+    }
+    .evidence {
+      color: var(--muted);
+      font-size: 0.86rem;
+      margin-top: 0.2rem;
+    }
+
+    table.findings {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    table.findings th, table.findings td {
+      text-align: left;
+      padding: 0.7rem 0.75rem;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    table.findings th {
+      font: 600 0.75rem/1 var(--mono);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      background: #f1eee6;
+    }
+    table.findings tr:last-child td { border-bottom: 0; }
+    table.findings tr.is-hidden { display: none; }
+
+    details.raw {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.75rem 1rem;
+      margin-top: 0.75rem;
+    }
+    details.raw summary {
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    footer {
+      margin-top: 3rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    @media (max-width: 860px) {
+      h1 { font-size: 1.9rem; max-width: none; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .matrix { grid-template-columns: 56px repeat(3, 1fr); }
+      .cell { min-height: 72px; font-size: 0.75rem; }
+      table.findings { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="hero">
+      <div class="eyebrow">Codemod / untangle-codebase</div>
+      <h1>Structural decision log</h1>
+      <p class="lede">
+        Analysis-only pass of the untangle-codebase skill against
+        <code>codemod/codemod</code>. No production code was changed. Fixes below
+        are first-principles redesigns ranked by estimated agent impact and
+        change-safety so you can prioritize what to land next.
+      </p>
+      <div class="meta">
+        <span>Generated: <strong>2026-11-08 · America/Los_Angeles</strong></span>
+        <span>Base: <code>main @ 0d66d565</code></span>
+        <span>Skill: <code>caldoai/untangle-codebase</code></span>
+        <span>Mode: report only · Comments/Tests options deferred</span>
+      </div>
+      <div class="stats" aria-label="Summary counts">
+        <div class="stat"><b>36</b><span>problems with evidence</span></div>
+        <div class="stat"><b>10</b><span>proposed structural fixes</span></div>
+        <div class="stat"><b>5</b><span>high-impact first moves</span></div>
+        <div class="stat"><b>0</b><span>code changes applied</span></div>
+      </div>
+    </header>
+
+    <section>
+      <h2>How to read this</h2>
+      <p>
+        The skill asks one question of the codebase: <em>should these pieces change
+        together?</em> Problems fall into three wrong answers plus special cases.
+      </p>
+      <ul>
+        <li><strong>Hidden link</strong> — pieces that must change together, but the code does not show it.</li>
+        <li><strong>Needless link</strong> — pieces tied together that change for different reasons.</li>
+        <li><strong>Surplus</strong> — pieces with no reason of their own to change (wrappers, dead, speculative).</li>
+        <li><strong>Special case</strong> — code for one situation instead of a design that accounts for it.</li>
+      </ul>
+      <p class="note">
+        <strong>Safety</strong> is risk of applying the proposed fix (behavior, schema,
+        cancellation, CI/JSONL). <strong>Impact</strong> is how much the fix would help
+        agents (read less, break less silently, debug faster). Prioritize high-impact
+        / low-or-medium-safety first; schedule high-safety work with a plan and tests.
+      </p>
+    </section>
+
+    <section>
+      <h2>Priority matrix</h2>
+      <p>
+        Cells are proposed fixes. The outlined column is the recommended starting
+        queue: high agent leverage without the riskiest engine/schema rewrites.
+      </p>
+      <div class="matrix" role="table" aria-label="Impact by safety matrix">
+        <div></div>
+        <div class="head">Safety low</div>
+        <div class="head">Safety medium</div>
+        <div class="head">Safety high</div>
+
+        <div class="side">Impact high</div>
+        <div class="cell priority-first">
+          Start here
+          <ul>
+            <li>F2 Capability &amp; language catalog</li>
+            <li>F5 Shared post-run presenter</li>
+          </ul>
+        </div>
+        <div class="cell priority-first">
+          Next wave
+          <ul>
+            <li>F1 Terminal ownership</li>
+            <li>F3 Typed matrix / cancel / preview</li>
+            <li>F4 Explicit EventBus + log writer</li>
+            <li>F7 Registry auth unification</li>
+          </ul>
+        </div>
+        <div class="cell">
+          Plan carefully
+          <ul>
+            <li>F6 Split Engine into typed ports</li>
+          </ul>
+        </div>
+
+        <div class="side">Impact med</div>
+        <div class="cell">
+          <ul>
+            <li>F9 Expression eval out of models</li>
+            <li>F10 Surplus cleanup</li>
+          </ul>
+        </div>
+        <div class="cell">
+          <ul>
+            <li>F8 Split harness_adapter</li>
+          </ul>
+        </div>
+        <div class="cell"><ul><li>—</li></ul></div>
+
+        <div class="side">Impact low</div>
+        <div class="cell"><ul><li>included in F10</li></ul></div>
+        <div class="cell"><ul><li>—</li></ul></div>
+        <div class="cell"><ul><li>—</li></ul></div>
+      </div>
+      <div class="legend">
+        <span><span class="dot accent"></span>Recommended first queue (high impact, not highest risk)</span>
+      </div>
+    </section>
+
+    <section id="fixes">
+      <h2>Proposed fixes</h2>
+      <p>
+        Each fix is written above the problems it solves, as in the skill’s decision
+        log. Rank is a suggested implementation order for agent leverage.
+      </p>
+
+      <article class="fix" data-area="cli-output" data-impact="high" data-safety="medium" data-prio="1">
+        <div class="fix-top">
+          <h3>F1 · Make terminal ownership a single typed mode</h3>
+          <div class="badges">
+            <span class="badge prio">Rank 1</span>
+            <span class="badge area">CLI / Core / Runners</span>
+            <span class="badge impact-high">Impact high</span>
+            <span class="badge safety-medium">Safety medium</span>
+          </div>
+        </div>
+        <p class="why">
+          Introduce one <code>RunPresentationMode { Text | Quiet | Tui | Jsonl }</code>
+          applied once when constructing the engine/runner. Non-CLI crates return
+          structured lines/events; CLI alone renders. Delete quiet dual-writes and
+          scattered <code>println!</code> policy.
+        </p>
+        <p>
+          <strong>Why this is the top pick:</strong> the repo already documents this rule,
+          but call sites still hand-apply quiet flags. Fixing it removes a whole class
+          of TUI/JSONL silent breaks agents keep reintroducing. Git shows
+          <code>run.rs</code> / <code>workflow/run.rs</code> / <code>jssg/run.rs</code>
+          as high-churn (54 / 34 / 46 commits since Aug 2025).
+        </p>
+        <p>
+          <strong>Safety notes:</strong> user-visible output and CI JSONL change shape.
+          Mitigate with golden CLI tests for text/quiet/jsonl and a TUI smoke path.
+          Do not change workflow semantics.
+        </p>
+        <ul class="problems">
+          <li>
+            <span class="cat">hidden-link</span>
+            Non-CLI crates write the terminal (<code>structured_log</code>,
+            <code>FileDiff::print</code>, <code>DirectRunner</code>, sandbox warnings,
+            state adapter <code>eprintln!</code>).
+            <div class="evidence">e.g. <code>crates/core/src/structured_log.rs:15-20</code>,
+              <code>crates/runners/src/direct_runner.rs:109-121</code></div>
+          </li>
+          <li>
+            <span class="cat">hidden-link</span>
+            Quiet/TUI is a multi-site call-order convention across
+            <code>run.rs</code>, <code>workflow/run.rs</code>, <code>tui/mod.rs</code>,
+            <code>workflow_runner.rs</code>, <code>create_engine</code>.
+            <div class="evidence"><code>crates/cli/src/commands/run.rs:371-373</code>,
+              <code>crates/cli/src/tui/mod.rs:137-141</code></div>
+          </li>
+          <li>
+            <span class="cat">hidden-link</span>
+            Dual <code>WorkflowRunConfig</code> clones; quiet applied to engine only,
+            pro-dry-run dual-written.
+            <div class="evidence"><code>crates/cli/src/engine.rs:286-298</code>,
+              <code>crates/cli/src/commands/run.rs:370-381</code></div>
+          </li>
+          <li>
+            <span class="cat">special-case</span>
+            <code>--format jsonl</code> still mixed with direct <code>println!</code>
+            summaries and “Workflow started” lines.
+            <div class="evidence"><code>crates/cli/src/workflow_runner.rs:73-94</code>,
+              <code>crates/cli/src/utils/metrics.rs:51-79</code></div>
+          </li>
+          <li>
+            <span class="cat">needless-link</span>
+            Presentation APIs live in core/runners (<code>FileDiff::print</code>,
+            <code>DirectRunner::with_quiet</code>).
+            <div class="evidence"><code>crates/core/src/diff.rs:81-89</code>,
+              <code>crates/core/src/engine.rs:2541-2543</code></div>
+          </li>
+          <li>
+            <span class="cat">hidden-link</span>
+            Session attach forces quiet + injects callbacks by mutation rather than
+            construction.
+            <div class="evidence"><code>crates/core/src/workflow_runtime.rs:555-563</code></div>
+          </li>
+        </ul>
+      </article>
+
+      <article class="fix" data-area="sandbox" data-impact="high" data-safety="low" data-prio="2">
+        <div class="fix-top">
+          <h3>F2 · One generated capability &amp; language catalog</h3>
+          <div class="badges">
+            <span class="badge prio">Rank 2</span>
+            <span class="badge area">Sandbox / Semantic / Types</span>
+            <span class="badge impact-high">Impact high</span>
+            <span class="badge safety-low">Safety low</span>
+          </div>
+        </div>
+        <p class="why">
+          Own module IDs, LLRT allowlists, publish externals, TS declarations,
+          extension→language maps, and dynamic language inventories in one catalog
+          that generates Rust + TypeScript. Install codemod runtime modules through
+          a single helper used by every engine.
+        </p>
+        <p>
+          <strong>Safety notes:</strong> mostly mechanical consolidation. Risk is
+          missing a publish external or WASM module id; mitigate by generating both
+          sides and adding a CI check that native/WASM/types inventories match.
+        </p>
+        <ul class="problems">
+          <li>
+            <span class="cat">hidden-link</span>
+            Capability/module lists hand-synced across
+            <code>llrt-capabilities</code>, engines, publish, and <code>jssg-types</code>.
+            <div class="evidence"><code>crates/llrt-capabilities/src/types.rs:26-48</code>,
+              <code>module_builder.rs:10-68</code></div>
+          </li>
+          <li>
+            <span class="cat">needless-link</span>
+            Identical <code>codemod:*</code> registration copied in five engine sites.
+            <div class="evidence"><code>execution_engine.rs:422-443</code>,
+              <code>in_memory_engine.rs:226-243</code>,
+              <code>selector_engine.rs:228-248</code></div>
+          </li>
+          <li>
+            <span class="cat">hidden-link</span>
+            Native vs WASM ast-grep module ids and APIs diverge; types claim native-only APIs.
+            <div class="evidence">native <code>"codemod:ast-grep"</code> vs WASM
+              <code>"ast-grep"</code>; <code>ast-grep.d.ts</code></div>
+          </li>
+          <li>
+            <span class="cat">hidden-link</span>
+            Extension→language maps disagree across factory, sandbox, CLI
+            (<code>jsx</code> resolves to jsx / javascript / tsx depending on call site).
+            <div class="evidence"><code>semantic-factory/src/lazy.rs:129-141</code>,
+              <code>ast_grep/utils.rs:85-90</code>,
+              <code>cli_tools.rs:280-306</code></div>
+          </li>
+          <li>
+            <span class="cat">special-case</span>
+            Dynamic language inventories triplicated (loader, WASM lang enum, jssg-types).
+            <div class="evidence"><code>tree-sitter-loader/src/lib.rs:76-110</code>,
+              <code>wasm_lang.rs:20-48</code></div>
+          </li>
+          <li>
+            <span class="cat">needless-link</span>
+            Parallel walker enums in factory and language-javascript with hand remap.
+            <div class="evidence"><code>semantic-factory/src/config.rs:32-41</code>,
+              <code>language-javascript/src/accurate.rs:32-37</code></div>
+          </li>
+        </ul>
+      </article>
+
+      <article class="fix" data-area="cli-output" data-impact="high" data-safety="medium" data-prio="3">
+        <div class="fix-top">
+          <h3>F3 · Typed matrix identity, cancel, and execution profile</h3>
+          <div class="badges">
+            <span class="badge prio">Rank 3</span>
+            <span class="badge area">Models / Core / Scheduler</span>
+            <span class="badge impact-high">Impact high</span>
+            <span class="badge safety-medium">Safety medium</span>
+          </div>
+        </div>
+        <p class="why">
+          Replace string conventions with types: <code>MatrixMeta</code> /
+          identity fields for hashing, <code>TaskStatus::Canceled</code>, and
+          <code>ExecutionProfile::Normal | Preview</code> instead of four pro-dry-run
+          flags. Share one fingerprint between recompile detection and task identity.
+        </p>
+        <p>
+          <strong>Safety notes:</strong> touches persisted task status and matrix
+          hashing. Needs schema migration awareness and resume/cancel regression tests.
+          Preview profile should preserve today’s dry-run semantics bit-for-bit first.
+        </p>
+        <ul class="problems">
+          <li>
+            <span class="cat">hidden-link</span>
+            <code>_meta_</code> / <code>_meta_files</code> string prefix shared by shard,
+            scheduler, and engine with no shared type.
+            <div class="evidence"><code>crates/core/src/shard.rs:16-28</code>,
+              <code>crates/scheduler/src/lib.rs:260-271</code>,
+              <code>engine.rs:557-573</code></div>
+          </li>
+          <li>
+            <span class="cat">hidden-link</span>
+            Recompile hash (unordered map + <code>to_string()</code>) differs from
+            scheduler identity hash (stable JSON, excludes meta).
+            <div class="evidence"><code>engine.rs:2089-2096</code>,
+              <code>scheduler/src/lib.rs:205-271</code></div>
+          </li>
+          <li>
+            <span class="cat">special-case</span>
+            Cancel encoded as <code>Failed</code> + exact string
+            <code>"Canceled by user"</code>.
+            <div class="evidence"><code>engine.rs:1508-1516</code>,
+              <code>1900</code>, <code>2496-2497</code></div>
+          </li>
+          <li>
+            <span class="cat">special-case</span>
+            Four independent pro-dry-run flags for one caller’s preview mode.
+            <div class="evidence"><code>crates/core/src/config.rs:166-173</code>,
+              <code>crates/cli/src/pro_dry_run.rs:46-49</code></div>
+          </li>
+        </ul>
+      </article>
+
+      <article class="fix" data-area="engine" data-impact="high" data-safety="medium" data-prio="4">
+        <div class="fix-top">
+          <h3>F4 · Pass an EventBus; one task-log writer</h3>
+          <div class="badges">
+            <span class="badge prio">Rank 4</span>
+            <span class="badge area">Core runtime</span>
+            <span class="badge impact-high">Impact high</span>
+            <span class="badge safety-medium">Safety medium</span>
+          </div>
+        </div>
+        <p class="why">
+          Delete the process-global workflow event sink map. Inject an
+          <code>EventBus</code> into Engine/services. Make
+          <code>TaskStateService</code> the only path that mutates task logs and
+          publishes log events.
+        </p>
+        <p>
+          <strong>Safety notes:</strong> nested runs and tests that relied on ambient
+          registration can miss events until wired. Mitigate by requiring the bus at
+          construction and failing closed in tests.
+        </p>
+        <ul class="problems">
+          <li>
+            <span class="cat">hidden-link</span>
+            Process-global <code>OnceLock</code> event registry keyed by run id.
+            <div class="evidence"><code>workflow_runtime.rs:149-168</code>,
+              <code>539-550</code></div>
+          </li>
+          <li>
+            <span class="cat">hidden-link</span>
+            Shell and JSSG idle paths mutate logs / publish events outside
+            <code>TaskStateService::append_task_log</code>.
+            <div class="evidence"><code>task_state_service.rs:35-46</code>,
+              <code>engine.rs:4098-4119</code>,
+              <code>jssg_execution_service.rs:524-537</code></div>
+          </li>
+        </ul>
+      </article>
+
+      <article class="fix" data-area="cli-output" data-impact="high" data-safety="low" data-prio="5">
+        <div class="fix-top">
+          <h3>F5 · Shared post-run presenter for run / workflow / jssg</h3>
+          <div class="badges">
+            <span class="badge prio">Rank 5</span>
+            <span class="badge area">CLI</span>
+            <span class="badge impact-high">Impact high</span>
+            <span class="badge safety-low">Safety low</span>
+          </div>
+        </div>
+        <p class="why">
+          Keep package-resolve and raw-jssg as front doors only. Share one post-run
+          presenter for metrics, report decision, <code>ExecutionReport</code>, and
+          report server launch. Rename/replace harness-only
+          <code>commands/output.rs</code> with a real CLI emit module.
+        </p>
+        <p>
+          <strong>Safety notes:</strong> mostly dedup. Watch jssg-specific summary
+          fields and report gating flags; snapshot the three command outputs before
+          and after.
+        </p>
+        <ul class="problems">
+          <li>
+            <span class="cat">hidden-link</span>
+            Three run handlers duplicate the metrics → report → serve/print sequence.
+            <div class="evidence"><code>run.rs:454-518</code>,
+              <code>workflow/run.rs:233-275</code>,
+              <code>jssg/run.rs:402-458</code></div>
+          </li>
+          <li>
+            <span class="cat">surplus</span>
+            <code>commands/output.rs</code> is not the CLI output path; five different
+            <code>OutputFormat</code> enums exist.
+            <div class="evidence"><code>crates/cli/src/commands/output.rs</code></div>
+          </li>
+        </ul>
+      </article>
+
+      <article class="fix" data-area="engine" data-impact="high" data-safety="high" data-prio="6">
+        <div class="fix-top">
+          <h3>F6 · Split Engine into typed runtime ports</h3>
+          <div class="badges">
+            <span class="badge prio">Rank 6</span>
+            <span class="badge area">Core</span>
+            <span class="badge impact-high">Impact high</span>
+            <span class="badge safety-high">Safety high</span>
+          </div>
+        </div>
+        <p class="why">
+          Carve <code>engine.rs</code> (~5248 LOC, 92 commits since Aug 2025) into
+          <code>WorkflowSchedulerLoop</code>, <code>StepRuntime</code>, and
+          <code>TaskLifecycle</code>, with one task executor that both the main loop
+          and resume/trigger paths use. Move real step bodies out of Engine
+          pass-throughs.
+        </p>
+        <p>
+          <strong>Safety notes:</strong> highest behavioral risk. Matrix recompilation,
+          resume, cancellation, and nested runs all live here. Do only after F1/F3/F4
+          reduce cross-cutting conventions, and land behind a large
+          <code>butterflow-core</code> test pass.
+        </p>
+        <ul class="problems">
+          <li>
+            <span class="cat">needless-link</span>
+            God module: schedule loop, task execution, JSSG/AI/codemod/shard/shell in one type.
+            <div class="evidence"><code>crates/core/src/engine.rs</code> (~5248 lines)</div>
+          </li>
+          <li>
+            <span class="cat">hidden-link</span>
+            Dual task execution paths: sync in main loop “to avoid race conditions with
+            matrix recompilation”, spawned threads on resume/trigger.
+            <div class="evidence"><code>engine.rs:2286-2300</code>,
+              <code>1754-1758</code>, <code>1854-1858</code></div>
+          </li>
+          <li>
+            <span class="cat">surplus</span>
+            <code>StepExecutor</code> is a thin dispatch that still calls back into Engine.
+            <div class="evidence"><code>step_executor.rs:55-80</code>,
+              <code>engine.rs:3087-3127</code></div>
+          </li>
+          <li>
+            <span class="cat">special-case</span>
+            Matrix recompile and condition evaluation swallow errors into skip/continue.
+            <div class="evidence"><code>engine.rs:2124-2132</code>,
+              <code>2507-2517</code></div>
+          </li>
+        </ul>
+      </article>
+
+      <article class="fix" data-area="registry" data-impact="high" data-safety="medium" data-prio="7">
+        <div class="fix-top">
+          <h3>F7 · One registry client and auth DTO</h3>
+          <div class="badges">
+            <span class="badge prio">Rank 7</span>
+            <span class="badge area">CLI / Core registry</span>
+            <span class="badge impact-high">Impact high</span>
+            <span class="badge safety-medium">Safety medium</span>
+          </div>
+        </div>
+        <p class="why">
+          Collapse parallel token types and move publish HTTP into the shared
+          <code>RegistryClient</code>. CLI keeps OIDC/storage UX only.
+        </p>
+        <p>
+          <strong>Safety notes:</strong> auth field stripping and publish multipart
+          must stay compatible with the hosted registry. Cover login/whoami/publish/
+          download with contract tests against recorded responses.
+        </p>
+        <ul class="problems">
+          <li>
+            <span class="cat">hidden-link</span>
+            Parallel auth types in CLI and core; publish reimplements multipart upload
+            outside <code>RegistryClient</code>.
+            <div class="evidence"><code>cli/src/auth/types.rs:4-11</code>,
+              <code>core/src/registry.rs:84-93</code>,
+              <code>publish.rs:495-561</code></div>
+          </li>
+        </ul>
+      </article>
+
+      <article class="fix" data-area="cli-ai" data-impact="medium" data-safety="medium" data-prio="8">
+        <div class="fix-top">
+          <h3>F8 · Split harness_adapter by concern</h3>
+          <div class="badges">
+            <span class="badge prio">Rank 8</span>
+            <span class="badge area">CLI AI / harness</span>
+            <span class="badge impact-medium">Impact medium</span>
+            <span class="badge safety-medium">Safety medium</span>
+          </div>
+        </div>
+        <p class="why">
+          Break the ~6852-line harness god module into per-harness adapters plus
+          shared lock/state. Keep CLI output enums out of adapter internals. Treat
+          lock sleep/retry as an explicit lock protocol, not a buried special case.
+        </p>
+        <p>
+          <strong>Safety notes:</strong> install/update paths are user-facing and
+          filesystem-touching. Split mechanically with characterization tests per
+          harness before behavior changes.
+        </p>
+        <ul class="problems">
+          <li>
+            <span class="cat">surplus</span>
+            Unrelated harness/MCP/update/state concerns share one volatile megafile.
+            <div class="evidence"><code>crates/cli/src/commands/harness_adapter.rs</code>
+              (~6852 lines)</div>
+          </li>
+          <li>
+            <span class="cat">special-case</span>
+            Lock retry via sleep with local constants; separate OutputFormat enum.
+            <div class="evidence">~lines 44-46, 111-127, 1994-2003</div>
+          </li>
+          <li>
+            <span class="cat">surplus</span>
+            <code>report_server.rs</code> piles HTTP, OIDC, feedback spawn, and idle
+            timeout into one module (~1513 lines).
+            <div class="evidence"><code>crates/cli/src/report_server.rs:1271-1333</code></div>
+          </li>
+        </ul>
+      </article>
+
+      <article class="fix" data-area="models" data-impact="medium" data-safety="low" data-prio="9">
+        <div class="fix-top">
+          <h3>F9 · Keep models pure; move expression evaluation</h3>
+          <div class="badges">
+            <span class="badge prio">Rank 9</span>
+            <span class="badge area">Models / Core</span>
+            <span class="badge impact-medium">Impact medium</span>
+            <span class="badge safety-low">Safety low</span>
+          </div>
+        </div>
+        <p class="why">
+          Leave AST/types in <code>butterflow-models</code>. Move evaluation and
+          <code>CODEMOD_TASK_*</code> env binding into a workflow-expr/core module with
+          an explicit context builder.
+        </p>
+        <p>
+          <strong>Safety notes:</strong> expression behavior must stay identical;
+          migrate with existing variable/engine tests. Low user-facing risk if
+          evaluation is moved without rewriting semantics.
+        </p>
+        <ul class="problems">
+          <li>
+            <span class="cat">needless-link</span>
+            ~1808 LOC expression engine lives in the data-contracts crate and couples
+            to process env conventions.
+            <div class="evidence"><code>crates/models/src/variable.rs</code>,
+              <code>git_ops.rs:22-52</code></div>
+          </li>
+        </ul>
+      </article>
+
+      <article class="fix" data-area="sandbox" data-impact="medium" data-safety="low" data-prio="10">
+        <div class="fix-top">
+          <h3>F10 · Delete surplus and make generation honest</h3>
+          <div class="badges">
+            <span class="badge prio">Rank 10</span>
+            <span class="badge area">Sandbox / Semantic / Packages</span>
+            <span class="badge impact-medium">Impact medium</span>
+            <span class="badge safety-low">Safety low</span>
+          </div>
+        </div>
+        <p class="why">
+          Remove dead speculative APIs and unused noop provider; point package exports
+          at real modules; ignore committed generated TS or fix headers to name the
+          real generator; force semantic fixtures through the factory.
+        </p>
+        <p>
+          <strong>Safety notes:</strong> low if limited to unused symbols and packaging
+          paths. Confirm no external consumers of <code>type_info</code> /
+          <code>NoopSemanticProvider</code> before deletion.
+        </p>
+        <ul class="problems">
+          <li>
+            <span class="cat">surplus</span>
+            <code>type_info</code> / <code>get_type</code> stubs with no types export.
+            <div class="evidence"><code>sg_node.rs:1184-1216</code>,
+              provider stubs in JS/Python</div>
+          </li>
+          <li>
+            <span class="cat">surplus</span>
+            <code>NoopSemanticProvider</code> unused outside its unit tests.
+            <div class="evidence"><code>language-core/src/noop.rs</code></div>
+          </li>
+          <li>
+            <span class="cat">needless-link</span>
+            One-line <code>node-exports.ts</code> / <code>web-exports.ts</code> re-exports.
+          </li>
+          <li>
+            <span class="cat">surplus</span>
+            Committed generated <code>js/type-declarations.ts</code> with wrong script
+            name in header; agents tempted to edit generated artifacts.
+          </li>
+          <li>
+            <span class="cat">needless-link</span>
+            Semantic fixtures construct Oxc/Ruff providers directly, bypassing factory.
+            <div class="evidence">sandbox semantic fixtures <code>mod.rs:93-118</code></div>
+          </li>
+          <li>
+            <span class="cat">hidden-link</span>
+            js-astgrep language matrix duplicated across templates +
+            <code>init.rs</code> match with silent JS fallback.
+            <div class="evidence"><code>init.rs:187-222</code>, <code>1008-1029</code></div>
+          </li>
+        </ul>
+      </article>
+    </section>
+
+    <section>
+      <h2>Recommended next steps</h2>
+      <ol>
+        <li>
+          Land <strong>F1 + F5</strong> together as “CLI presentation ownership”:
+          one mode, one post-run presenter, no non-CLI stdout. Highest ongoing churn.
+        </li>
+        <li>
+          Land <strong>F2</strong> as a generated catalog with a CI inventory check.
+          High leverage, comparatively safe.
+        </li>
+        <li>
+          Land <strong>F3 + F4</strong> before attempting the Engine split, so cancel /
+          matrix / events stop being ambient conventions.
+        </li>
+        <li>
+          Only then attempt <strong>F6</strong> Engine decomposition behind the full
+          core test suite.
+        </li>
+        <li>
+          Schedule <strong>F7–F10</strong> as opportunistic cleanups when touching those
+          areas.
+        </li>
+      </ol>
+      <p class="note">
+        Skill additions not run: <strong>Comments</strong> (remove comments that only
+        restate code) and <strong>Tests</strong> (remove tests that wouldn’t catch a
+        real bug; fix ones that fail without one). Say if you want a follow-up pass
+        for either, or if you want me to implement a specific fix from this list.
+      </p>
+    </section>
+
+    <section id="findings">
+      <h2>All problems</h2>
+      <div class="filters" id="filters" aria-label="Filter findings">
+        <button class="chip" data-filter="all" aria-pressed="true">All</button>
+        <button class="chip" data-filter="hidden-link" aria-pressed="false">Hidden links</button>
+        <button class="chip" data-filter="needless-link" aria-pressed="false">Needless links</button>
+        <button class="chip" data-filter="surplus" aria-pressed="false">Surplus</button>
+        <button class="chip" data-filter="special-case" aria-pressed="false">Special cases</button>
+        <button class="chip" data-filter="impact-high" aria-pressed="false">Impact high</button>
+        <button class="chip" data-filter="safety-high" aria-pressed="false">Safety high</button>
+      </div>
+      <table class="findings">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Category</th>
+            <th>Problem</th>
+            <th>Fix</th>
+            <th>Impact</th>
+            <th>Safety</th>
+          </tr>
+        </thead>
+        <tbody id="findings-body">
+          <!-- filled by script from data below for filterability -->
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Method &amp; limits</h2>
+      <ul>
+        <li>Read crate <code>AGENTS.md</code> maps and dependency roles.</li>
+        <li>Explored workflow engine, CLI/output, and sandbox/semantic areas in parallel.</li>
+        <li>Verified key evidence (engine cancel string, quiet dual paths, LOC/churn).</li>
+        <li>Did <em>not</em> execute the skill’s “fix everything” step — you asked for a prioritize-ready report.</li>
+        <li>Did not run Comments/Tests optional passes.</li>
+        <li>Churn sampled with <code>git log --since=2025-08-01</code> on hot files.</li>
+      </ul>
+      <details class="raw">
+        <summary>Hot-file churn since 2025-08-01 (commits touching file)</summary>
+        <p class="mono" style="margin-top:0.75rem">
+          engine.rs 92 · run.rs 54 · jssg/run.rs 46 · workflow/run.rs 34 ·
+          module_builder.rs 9 · direct_runner.rs 6 · lazy.rs 5 · workflow_runtime.rs 4
+        </p>
+      </details>
+    </section>
+
+    <footer>
+      Report path: <code>reports/untangle-codebase.html</code>.
+      Open locally in a browser. Analysis only — no production behavior changed.
+    </footer>
+  </div>
+
+  <script>
+    const FINDINGS = [
+      { id: "non-cli-stdout", cat: "hidden-link", problem: "Non-CLI crates write stdout/stderr", fix: "F1", impact: "high", safety: "high" },
+      { id: "quiet-call-order", cat: "hidden-link", problem: "Quiet/TUI ownership is multi-site call order", fix: "F1", impact: "high", safety: "high" },
+      { id: "dual-run-config", cat: "hidden-link", problem: "Dual WorkflowRunConfig clones with partial dual-writes", fix: "F1", impact: "medium", safety: "high" },
+      { id: "jsonl-println", cat: "special-case", problem: "--format jsonl still mixed with println summaries", fix: "F1", impact: "high", safety: "high" },
+      { id: "filediff-print", cat: "needless-link", problem: "FileDiff::print is presentation in core", fix: "F1", impact: "medium", safety: "high" },
+      { id: "direct-runner-quiet", cat: "needless-link", problem: "DirectRunner prints based on quiet bit", fix: "F1", impact: "high", safety: "high" },
+      { id: "session-attach-quiet", cat: "hidden-link", problem: "Session attach mutates quiet + callbacks", fix: "F1", impact: "high", safety: "medium" },
+      { id: "cap-sync", cat: "hidden-link", problem: "Capability/module lists hand-synced across crates", fix: "F2", impact: "high", safety: "high" },
+      { id: "mod-dup", cat: "needless-link", problem: "codemod:* registration copied in five engines", fix: "F2", impact: "high", safety: "low" },
+      { id: "native-wasm-ast", cat: "hidden-link", problem: "Native/WASM ast-grep module ids diverge", fix: "F2", impact: "high", safety: "medium" },
+      { id: "langdetect", cat: "hidden-link", problem: "Extension→language maps disagree by call site", fix: "F2", impact: "high", safety: "medium" },
+      { id: "dynlang", cat: "special-case", problem: "Dynamic language inventories triplicated", fix: "F2", impact: "high", safety: "medium" },
+      { id: "walker-dup", cat: "needless-link", problem: "Parallel walker enums factory ↔ javascript", fix: "F2", impact: "medium", safety: "low" },
+      { id: "matrix-meta", cat: "hidden-link", problem: "_meta_ prefix convention across shard/scheduler/engine", fix: "F3", impact: "high", safety: "medium" },
+      { id: "recompile-hash", cat: "hidden-link", problem: "Recompile fingerprint ≠ task identity hash", fix: "F3", impact: "high", safety: "medium" },
+      { id: "cancel-string", cat: "special-case", problem: "Cancel encoded as Failed + magic string", fix: "F3", impact: "high", safety: "high" },
+      { id: "pro-dry-run", cat: "special-case", problem: "Four flags for one preview caller", fix: "F3", impact: "medium", safety: "medium" },
+      { id: "global-events", cat: "hidden-link", problem: "Process-global workflow event registry", fix: "F4", impact: "high", safety: "medium" },
+      { id: "parallel-log-writers", cat: "hidden-link", problem: "Task logs mutated outside TaskStateService", fix: "F4", impact: "medium", safety: "medium" },
+      { id: "three-run-paths", cat: "hidden-link", problem: "run / workflow run / jssg share post-run by copy", fix: "F5", impact: "high", safety: "medium" },
+      { id: "output-rs-misnamed", cat: "surplus", problem: "commands/output.rs is not the CLI sink", fix: "F5", impact: "medium", safety: "medium" },
+      { id: "engine-god", cat: "needless-link", problem: "engine.rs owns schedule + every step kind", fix: "F6", impact: "high", safety: "high" },
+      { id: "dual-exec-paths", cat: "hidden-link", problem: "Sync vs spawned task execution by entrypoint", fix: "F6", impact: "high", safety: "high" },
+      { id: "step-executor-thin", cat: "surplus", problem: "StepExecutor is pass-through back into Engine", fix: "F6", impact: "medium", safety: "medium" },
+      { id: "swallowed-errors", cat: "special-case", problem: "Recompile/condition errors become skip/continue", fix: "F6", impact: "high", safety: "medium" },
+      { id: "registry-auth-split", cat: "hidden-link", problem: "Auth/publish split across CLI and RegistryClient", fix: "F7", impact: "high", safety: "medium" },
+      { id: "harness-god", cat: "surplus", problem: "harness_adapter.rs mega-module (~6852 LOC)", fix: "F8", impact: "high", safety: "medium" },
+      { id: "harness-lock-sleep", cat: "special-case", problem: "Harness lock retry via sleep special case", fix: "F8", impact: "medium", safety: "medium" },
+      { id: "report-server-pile", cat: "surplus", problem: "report_server mixes HTTP/OIDC/feedback/idle", fix: "F8", impact: "medium", safety: "low" },
+      { id: "expr-in-models", cat: "needless-link", problem: "Expression eval + env coupling in models crate", fix: "F9", impact: "medium", safety: "medium" },
+      { id: "typeinfo-dead", cat: "surplus", problem: "type_info / get_type speculative stubs", fix: "F10", impact: "low", safety: "low" },
+      { id: "noop-unused", cat: "surplus", problem: "NoopSemanticProvider unused outside unit tests", fix: "F10", impact: "low", safety: "low" },
+      { id: "shallow-exports", cat: "needless-link", problem: "One-line node/web export shims", fix: "F10", impact: "low", safety: "low" },
+      { id: "gen-artifacts", cat: "surplus", problem: "Committed generated TS with wrong generator header", fix: "F10", impact: "medium", safety: "low" },
+      { id: "factory-bypass", cat: "needless-link", problem: "Semantic fixtures bypass SemanticFactory", fix: "F10", impact: "medium", safety: "low" },
+      { id: "init-lang-matrix", cat: "hidden-link", problem: "js-astgrep language matrix duplicated + silent JS fallback", fix: "F10", impact: "medium", safety: "medium" }
+    ];
+
+    const tbody = document.getElementById("findings-body");
+    function badge(kind, value) {
+      return `<span class="badge ${kind}-${value}">${value}</span>`;
+    }
+    function render(filter) {
+      tbody.innerHTML = FINDINGS.map((f) => {
+        const show =
+          filter === "all" ||
+          f.cat === filter ||
+          (filter === "impact-high" && f.impact === "high") ||
+          (filter === "safety-high" && f.safety === "high");
+        return `<tr class="${show ? "" : "is-hidden"}" data-cat="${f.cat}">
+          <td class="mono">${f.id}</td>
+          <td>${f.cat}</td>
+          <td>${f.problem}</td>
+          <td class="mono">${f.fix}</td>
+          <td>${badge("impact", f.impact)}</td>
+          <td>${badge("safety", f.safety)}</td>
+        </tr>`;
+      }).join("");
+    }
+    render("all");
+
+    const filters = document.getElementById("filters");
+    filters.addEventListener("click", (e) => {
+      const btn = e.target.closest("button.chip");
+      if (!btn) return;
+      filters.querySelectorAll("button.chip").forEach((b) => b.setAttribute("aria-pressed", "false"));
+      btn.setAttribute("aria-pressed", "true");
+      render(btn.dataset.filter);
+    });
+
+    const sticky = document.getElementById("filters");
+    const onScroll = () => sticky.classList.toggle("is-stuck", sticky.getBoundingClientRect().top <= 0);
+    document.addEventListener("scroll", onScroll, { passive: true });
+  </script>
+</body>
+</html>
