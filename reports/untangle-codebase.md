@@ -1,147 +1,141 @@
 # Codemod untangle-codebase report
 
-Analysis-only pass of the [untangle-codebase](https://github.com/caldoai/skills/blob/main/skills/untangle-codebase/SKILL.md) skill against `codemod/codemod`. No production code was changed.
+Analysis-only pass of [untangle-codebase](https://github.com/caldoai/skills/blob/main/skills/untangle-codebase/SKILL.md) against `codemod/codemod`. No production code changed.
 
 | | |
 |---|---|
 | Generated | 2026-11-08 · America/Los_Angeles |
 | Base | `main @ 0d66d565` |
-| Mode | report only · Comments/Tests options deferred |
-| Interactive twin | [`untangle-codebase.html`](./untangle-codebase.html) (best on desktop; GitHub mobile shows HTML as source) |
+| Interactive twin | [`untangle-codebase.html`](./untangle-codebase.html) |
 
-**36** problems · **10** proposed fixes · **0** code changes applied
+**36** problems · **10** fixes · **0** code changes
 
-## How to read this
+## How to read a problem
 
-The skill asks: *should these pieces change together?*
+| Category | Meaning |
+|---|---|
+| **hidden-link** | Pieces that must change together, but the code doesn’t show it |
+| **needless-link** | Pieces tied together that change for different reasons |
+| **surplus** | No reason of its own to change (wrapper, dead, speculative) |
+| **special-case** | Exists for one situation instead of a design that accounts for it |
 
-- **Hidden link** — must change together, but the code does not show it
-- **Needless link** — tied together but change for different reasons
-- **Surplus** — no reason of their own to change
-- **Special case** — exists for one situation instead of a design that accounts for it
+**Pays off** = what fixing it buys: agents read/change less, fewer silent bugs, less bloat.
 
-**Safety** = risk of applying the proposed fix. **Impact** = how much it helps agents. Prefer high impact / low–medium safety first.
+**Safety** = risk of applying the fix. **Impact** = agent leverage of the parent fix.
 
 ## Priority matrix
 
 | | Safety low | Safety medium | Safety high |
 |---|---|---|---|
-| **Impact high** | **Start here:** F2, F5 | **Next wave:** F1, F3, F4, F7 | **Plan carefully:** F6 |
+| **Impact high** | **Start:** F2, F5 | **Next:** F1, F3, F4, F7 | **Plan:** F6 |
 | **Impact med** | F9, F10 | F8 | — |
-| **Impact low** | included in F10 | — | — |
-
-## Proposed fixes
-
-### F1 · Make terminal ownership a single typed mode
-**Rank 1** · CLI / Core / Runners · Impact **high** · Safety **medium**
-
-Introduce one `RunPresentationMode { Text | Quiet | Tui | Jsonl }` applied once when constructing the engine/runner. Non-CLI crates return structured lines/events; CLI alone renders.
-
-Solves: non-CLI stdout, quiet call-order convention, dual `WorkflowRunConfig` clones, JSONL/`println!` mix, `FileDiff::print` / `DirectRunner::with_quiet`, session attach mutating quiet.
-
-### F2 · One generated capability & language catalog
-**Rank 2** · Sandbox / Semantic / Types · Impact **high** · Safety **low**
-
-Own module IDs, LLRT allowlists, publish externals, TS declarations, and extension→language maps in one catalog that generates Rust + TypeScript. Single `install_codemod_modules` helper for every engine.
-
-### F3 · Typed matrix identity, cancel, and execution profile
-**Rank 3** · Models / Core / Scheduler · Impact **high** · Safety **medium**
-
-Replace string conventions with types (`MatrixMeta`, `TaskStatus::Canceled`, `ExecutionProfile`). Share one deterministic hashing **implementation**, but keep **separate inputs and metadata policies**: state-change fingerprints the workflow state that should trigger recompile; task identity fingerprints matrix items and continues to exclude `_meta_` fields (`test_meta_key_exclusion`) so shard identity does not churn when file metadata changes. Do not merge the two fingerprint semantics into one key.
-
-### F4 · Pass an EventBus; one task-log writer
-**Rank 4** · Core runtime · Impact **high** · Safety **medium**
-
-Delete the process-global workflow event sink map. Inject an `EventBus`. Make `TaskStateService` the only path that mutates task logs and publishes log events.
-
-### F5 · Shared post-run presenter for run / workflow / jssg
-**Rank 5** · CLI · Impact **high** · Safety **low**
-
-Keep package-resolve and raw-jssg as front doors only. Share one post-run presenter for metrics, report decision, and report server launch.
-
-### F6 · Split Engine into typed runtime ports
-**Rank 6** · Core · Impact **high** · Safety **high**
-
-Carve `engine.rs` (~5248 LOC) into scheduler loop, step runtime, and task lifecycle, with one task executor for main loop and resume/trigger. Do after F1/F3/F4.
-
-### F7 · One registry client and auth DTO
-**Rank 7** · CLI / Core registry · Impact **high** · Safety **medium**
-
-Collapse parallel token types; move publish HTTP into shared `RegistryClient`.
-
-### F8 · Split harness_adapter by concern
-**Rank 8** · CLI AI / harness · Impact **medium** · Safety **medium**
-
-Break the ~6852-line harness god module into per-harness adapters plus shared lock/state. Also thin out `report_server` concerns.
-
-### F9 · Keep models pure; move expression evaluation
-**Rank 9** · Models / Core · Impact **medium** · Safety **low**
-
-Leave AST/types in `butterflow-models`. Move evaluation and `CODEMOD_TASK_*` env binding into workflow-expr/core.
-
-### F10 · Delete surplus and make generation honest
-**Rank 10** · Sandbox / Semantic / Packages · Impact **medium** · Safety **low**
-
-Remove dead speculative APIs / unused noop provider; fix generated-artifact honesty; force semantic fixtures through the factory; data-drive the js-astgrep language matrix in `init`.
-
-## Recommended next steps
-
-1. Land **F1 + F5** together (CLI presentation ownership).
-2. Land **F2** with a CI inventory check.
-3. Land **F3 + F4** before the Engine split.
-4. Only then attempt **F6**.
-5. Schedule **F7–F10** opportunistically.
-
-Skill additions not run: **Comments**, **Tests**.
 
 ## All problems
 
-Impact/safety below are the **parent fix** ratings (same source as the cards/matrix).
+### F1 · Terminal ownership (impact high · safety medium)
 
-| ID | Category | Problem | Fix | Fix impact | Fix safety |
-|---|---|---|---|---|---|
-| non-cli-stdout | hidden-link | Non-CLI crates write stdout/stderr | F1 | high | medium |
-| quiet-call-order | hidden-link | Quiet/TUI ownership is multi-site call order | F1 | high | medium |
-| dual-run-config | hidden-link | Dual WorkflowRunConfig clones with partial dual-writes | F1 | high | medium |
-| jsonl-println | special-case | `--format jsonl` still mixed with println summaries | F1 | high | medium |
-| filediff-print | needless-link | FileDiff::print is presentation in core | F1 | high | medium |
-| direct-runner-quiet | needless-link | DirectRunner prints based on quiet bit | F1 | high | medium |
-| session-attach-quiet | hidden-link | Session attach mutates quiet + callbacks | F1 | high | medium |
-| cap-sync | hidden-link | Capability/module lists hand-synced across crates | F2 | high | low |
-| mod-dup | needless-link | codemod:* registration copied in five engines | F2 | high | low |
-| native-wasm-ast | hidden-link | Native/WASM ast-grep module ids diverge | F2 | high | low |
-| langdetect | hidden-link | Extension→language maps disagree by call site | F2 | high | low |
-| dynlang | special-case | Dynamic language inventories triplicated | F2 | high | low |
-| walker-dup | needless-link | Parallel walker enums factory ↔ javascript | F2 | high | low |
-| matrix-meta | hidden-link | `_meta_` prefix convention across shard/scheduler/engine | F3 | high | medium |
-| recompile-hash | hidden-link | Recompile hasher ≠ task-identity hasher (keep separate inputs) | F3 | high | medium |
-| cancel-string | special-case | Cancel encoded as Failed + magic string | F3 | high | medium |
-| pro-dry-run | special-case | Four flags for one preview caller | F3 | high | medium |
-| global-events | hidden-link | Process-global workflow event registry | F4 | high | medium |
-| parallel-log-writers | hidden-link | Task logs mutated outside TaskStateService | F4 | high | medium |
-| three-run-paths | hidden-link | run / workflow run / jssg share post-run by copy | F5 | high | low |
-| output-rs-misnamed | surplus | commands/output.rs is not the CLI sink | F5 | high | low |
-| engine-god | needless-link | engine.rs owns schedule + every step kind | F6 | high | high |
-| dual-exec-paths | hidden-link | Sync vs spawned task execution by entrypoint | F6 | high | high |
-| step-executor-thin | surplus | StepExecutor is pass-through back into Engine | F6 | high | high |
-| swallowed-errors | special-case | Recompile/condition errors become skip/continue | F6 | high | high |
-| registry-auth-split | hidden-link | Auth/publish split across CLI and RegistryClient | F7 | high | medium |
-| harness-god | surplus | harness_adapter.rs mega-module (~6852 LOC) | F8 | medium | medium |
-| harness-lock-sleep | special-case | Harness lock retry via sleep special case | F8 | medium | medium |
-| report-server-pile | surplus | report_server mixes HTTP/OIDC/feedback/idle | F8 | medium | medium |
-| expr-in-models | needless-link | Expression eval + env coupling in models crate | F9 | medium | low |
-| typeinfo-dead | surplus | type_info / get_type speculative stubs | F10 | medium | low |
-| noop-unused | surplus | NoopSemanticProvider unused outside unit tests | F10 | medium | low |
-| shallow-exports | needless-link | One-line node/web export shims | F10 | medium | low |
-| gen-artifacts | surplus | Committed generated TS with wrong generator header | F10 | medium | low |
-| factory-bypass | needless-link | Semantic fixtures bypass SemanticFactory | F10 | medium | low |
-| init-lang-matrix | hidden-link | js-astgrep language matrix duplicated + silent JS fallback | F10 | medium | low |
+| ID | Category | Problem | Pays off |
+|---|---|---|---|
+| `non-cli-stdout` | hidden-link | Core, runners, state, and sandbox print to the terminal even though only CLI should own user-facing output. | Fewer silent TUI/JSONL corruptions; agents stop reintroducing prints outside CLI. |
+| `quiet-call-order` | hidden-link | Quiet/TUI ownership is a ritual across `run.rs`, `workflow/run.rs`, `tui/mod.rs`, `workflow_runner`, and `create_engine`. | One typed mode; agents change presentation once instead of missing a site and leaking stdout. |
+| `dual-run-config` | hidden-link | `create_engine` returns a cloned `WorkflowRunConfig`; quiet hits the engine copy while some fields need dual-writes. | Fewer “I set the flag but nothing changed” bugs on run paths. |
+| `jsonl-println` | special-case | `--format jsonl` reaches the engine, but CLI still `println!`s summaries onto the same stream. | CI parsers can trust format flags. |
+| `filediff-print` | needless-link | `FileDiff::print` lives in core, so every dry-run path must know quiet/color/JSONL. | Core stays data-only; presentation changes don’t force engine edits. |
+| `direct-runner-quiet` | needless-link | `DirectRunner` prints based on a quiet bit instead of always returning captured lines. | Runners stop coupling to CLI TUI conventions. |
+| `session-attach-quiet` | hidden-link | `WorkflowSession::attach` mutates quiet + injects callbacks after construction. | Session vs CLI becomes an explicit mode, not call-order folklore. |
 
-## Method & limits
+**Fix:** one `RunPresentationMode`; non-CLI crates return events/lines; CLI alone renders.
 
-- Read crate `AGENTS.md` maps and dependency roles
-- Explored workflow engine, CLI/output, and sandbox/semantic areas in parallel
-- Verified key evidence (engine cancel string, quiet dual paths, LOC/churn)
-- Did **not** execute the skill’s “fix everything” step
-- Did not run Comments/Tests optional passes
-- Churn since 2025-08-01: `engine.rs` 92 · `run.rs` 54 · `jssg/run.rs` 46 · `workflow/run.rs` 34
+### F2 · Capability & language catalog (impact high · safety low)
+
+| ID | Category | Problem | Pays off |
+|---|---|---|---|
+| `cap-sync` | hidden-link | Adding a capability means hand-editing llrt-capabilities, engines, publish externals, and jssg-types with no compiler link. | One catalog entry instead of half-wired modules. |
+| `mod-dup` | needless-link | `codemod:*` registration is copy-pasted across five engine entry points. | Cuts boilerplate; new modules can’t be forgotten in one path. |
+| `native-wasm-ast` | hidden-link | Native uses `codemod:ast-grep`, WASM uses `ast-grep`; types claim native-only APIs on both. | Fewer “works locally, fails WASM” import bugs. |
+| `langdetect` | hidden-link | The same `.jsx` path maps to jsx, javascript, or tsx depending on factory vs sandbox vs CLI. | Predictable provider/parser choice. |
+| `dynlang` | special-case | Dynamic language inventories are hand-maintained in loader, WASM, and jssg-types. | Less inventory drift; adding a language is one generated change. |
+| `walker-dup` | needless-link | `WorkspaceWalker` enums exist in factory and language-javascript and must be remapped by hand. | Removes duplicate types with no benefit. |
+
+**Fix:** generate one capability/language catalog for Rust + TS; single module-install helper.
+
+### F3 · Typed matrix / cancel / preview (impact high · safety medium)
+
+| ID | Category | Problem | Pays off |
+|---|---|---|---|
+| `matrix-meta` | hidden-link | Shard/scheduler/engine share a `_meta_` string convention with no shared type. | Renames/filters become type-checked; shard identity harder to break silently. |
+| `recompile-hash` | hidden-link | State-change detection and task identity use incompatible hashers; nothing says their inputs must stay different. | Shared hasher + explicit policies; avoids “unify the hashes” bugs that recreate shards or miss recompiles. |
+| `cancel-string` | special-case | Cancel is `Failed` + the exact string `"Canceled by user"`. | Cancel is first-class; agents can’t typo a magic string. |
+| `pro-dry-run` | special-case | One preview caller is four independent engine flags in the schedule loop. | Preview lives in one profile; no hunting every `if` flag. |
+
+**Fix:** typed `MatrixMeta`, `TaskStatus::Canceled`, `ExecutionProfile`. Share a hasher **implementation**; keep separate state-change vs task-identity **inputs** (still exclude `_meta_` from identity).
+
+### F4 · EventBus + one log writer (impact high · safety medium)
+
+| ID | Category | Problem | Pays off |
+|---|---|---|---|
+| `global-events` | hidden-link | Events go through a process-global map keyed by run id; publishers assume someone else registered a sink. | Nested runs/tests stop losing or cross-talking events. |
+| `parallel-log-writers` | hidden-link | Shell and JSSG idle paths mutate `task.logs` / publish outside `TaskStateService::append_task_log`. | Log + event stay twin; fewer “saved but UI didn’t wake” bugs. |
+
+**Fix:** inject `EventBus`; only `TaskStateService` writes task logs/events.
+
+### F5 · Shared post-run presenter (impact high · safety low)
+
+| ID | Category | Problem | Pays off |
+|---|---|---|---|
+| `three-run-paths` | hidden-link | `run`, `workflow run`, and `jssg run` each copy metrics → report → serve/print. | Report/metrics change once; agents don’t update two of three paths. |
+| `output-rs-misnamed` | surplus | `commands/output.rs` only formats harness install errors; real output is scattered `println!`s. | Cuts a naming trap; agents find the real emit path. |
+
+**Fix:** one post-run presenter; real CLI emit module.
+
+### F6 · Split Engine (impact high · safety high)
+
+| ID | Category | Problem | Pays off |
+|---|---|---|---|
+| `engine-god` | needless-link | `engine.rs` (~5.2k LOC) owns scheduling, task lifecycle, and every step kind. | Agents change one concern without loading the whole runtime. |
+| `dual-exec-paths` | hidden-link | Main loop runs tasks sync “for matrix recompilation”; resume/trigger spawn threads. | One executor + explicit barrier; fewer race/recompile bugs. |
+| `step-executor-thin` | surplus | `StepExecutor` only forwards back into Engine — a hop without moving ownership. | Removes pass-through bloat when finding real step logic. |
+| `swallowed-errors` | special-case | Recompile `Err` is logged and continued; condition errors become “skip” via `unwrap_or_default`. | Failures surface as failures; “why didn’t it run?” has a real error. |
+
+**Fix:** split into scheduler loop / step runtime / task lifecycle. Do after F1/F3/F4.
+
+### F7 · Registry auth unification (impact high · safety medium)
+
+| ID | Category | Problem | Pays off |
+|---|---|---|---|
+| `registry-auth-split` | hidden-link | CLI and core have parallel auth types; publish reimplements multipart HTTP outside `RegistryClient`. | Auth/registry contract changes once; download and publish stay aligned. |
+
+### F8 · Split harness / report piles (impact medium · safety medium)
+
+| ID | Category | Problem | Pays off |
+|---|---|---|---|
+| `harness-god` | surplus | `harness_adapter.rs` (~6.8k LOC) mixes harnesses, MCP, updates, locks, skill install. | Change one harness without loading unrelated install/update code. |
+| `harness-lock-sleep` | special-case | Lock contention is a sleep/retry loop with local constants, not an explicit protocol. | Clearer concurrency; fewer “tweak the sleep” race patches. |
+| `report-server-pile` | surplus | `report_server.rs` piles HTTP, OIDC, feedback spawn, and idle timeout together. | Report UX changes don’t risk auth/feedback regressions. |
+
+### F9 · Move expression eval out of models (impact medium · safety low)
+
+| ID | Category | Problem | Pays off |
+|---|---|---|---|
+| `expr-in-models` | needless-link | Models crate owns ~1808 LOC of expression evaluation bound to `CODEMOD_TASK_*` env. | Schema stays separate from runtime eval; models isn’t a second engine. |
+
+### F10 · Surplus cleanup (impact medium · safety low)
+
+| ID | Category | Problem | Pays off |
+|---|---|---|---|
+| `typeinfo-dead` | surplus | `type_info` / `get_type` stubs exist but nothing implements them and types don’t export them. | Deletes speculative API agents keep “supporting” for no value. |
+| `noop-unused` | surplus | `NoopSemanticProvider` is unused outside its unit tests; factory returns `None` instead. | Removes a fake second routing story. |
+| `shallow-exports` | needless-link | `node-exports.ts` / `web-exports.ts` are one-line re-exports. | Less hop bloat on every API rename. |
+| `gen-artifacts` | surplus | Committed generated TS has the wrong generator name in its header. | Clear SoT; fewer wasted turns editing generated files. |
+| `factory-bypass` | needless-link | Semantic fixtures construct Oxc/Ruff providers directly; production uses `LazySemanticProvider`. | Factory routing regressions get caught by fixtures. |
+| `init-lang-matrix` | hidden-link | Adding a js-astgrep language needs templates + `init.rs` consts/match/fixtures; unknown langs silently become JS. | Data-driven table + hard error; no wrong-language fallback. |
+
+## Recommended order
+
+1. **F1 + F5** — CLI presentation ownership  
+2. **F2** — generated catalog + CI inventory check  
+3. **F3 + F4** — typed conventions + explicit events  
+4. **F6** — Engine split (highest risk; after the above)  
+5. **F7–F10** — opportunistic when touching those areas  
+
+Comments/Tests skill passes not run.

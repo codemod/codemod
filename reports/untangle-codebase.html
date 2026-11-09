@@ -260,11 +260,11 @@
       padding: 0;
       list-style: none;
       display: grid;
-      gap: 0.45rem;
+      gap: 0.55rem;
     }
     .problems li {
       border-top: 1px dashed var(--line);
-      padding-top: 0.55rem;
+      padding-top: 0.65rem;
       font-size: 0.92rem;
     }
     .problems .cat {
@@ -273,6 +273,20 @@
       letter-spacing: 0.05em;
       color: var(--muted);
       margin-right: 0.45rem;
+    }
+    .problems .problem {
+      display: block;
+      color: var(--ink);
+      margin: 0.2rem 0 0.25rem;
+    }
+    .problems .pays, .findings .pays {
+      color: var(--accent);
+      font-size: 0.88rem;
+    }
+    .problems .pays::before, td .pays::before {
+      content: "Pays off: ";
+      font-weight: 600;
+      color: var(--muted);
     }
     .evidence {
       color: var(--muted);
@@ -520,51 +534,7 @@
           Mitigate with golden CLI tests for text/quiet/jsonl and a TUI smoke path.
           Do not change workflow semantics.
         </p>
-        <ul class="problems">
-          <li>
-            <span class="cat">hidden-link</span>
-            Non-CLI crates write the terminal (<code>structured_log</code>,
-            <code>FileDiff::print</code>, <code>DirectRunner</code>, sandbox warnings,
-            state adapter <code>eprintln!</code>).
-            <div class="evidence">e.g. <code>crates/core/src/structured_log.rs:15-20</code>,
-              <code>crates/runners/src/direct_runner.rs:109-121</code></div>
-          </li>
-          <li>
-            <span class="cat">hidden-link</span>
-            Quiet/TUI is a multi-site call-order convention across
-            <code>run.rs</code>, <code>workflow/run.rs</code>, <code>tui/mod.rs</code>,
-            <code>workflow_runner.rs</code>, <code>create_engine</code>.
-            <div class="evidence"><code>crates/cli/src/commands/run.rs:371-373</code>,
-              <code>crates/cli/src/tui/mod.rs:137-141</code></div>
-          </li>
-          <li>
-            <span class="cat">hidden-link</span>
-            Dual <code>WorkflowRunConfig</code> clones; quiet applied to engine only,
-            pro-dry-run dual-written.
-            <div class="evidence"><code>crates/cli/src/engine.rs:286-298</code>,
-              <code>crates/cli/src/commands/run.rs:370-381</code></div>
-          </li>
-          <li>
-            <span class="cat">special-case</span>
-            <code>--format jsonl</code> still mixed with direct <code>println!</code>
-            summaries and “Workflow started” lines.
-            <div class="evidence"><code>crates/cli/src/workflow_runner.rs:73-94</code>,
-              <code>crates/cli/src/utils/metrics.rs:51-79</code></div>
-          </li>
-          <li>
-            <span class="cat">needless-link</span>
-            Presentation APIs live in core/runners (<code>FileDiff::print</code>,
-            <code>DirectRunner::with_quiet</code>).
-            <div class="evidence"><code>crates/core/src/diff.rs:81-89</code>,
-              <code>crates/core/src/engine.rs:2541-2543</code></div>
-          </li>
-          <li>
-            <span class="cat">hidden-link</span>
-            Session attach forces quiet + injects callbacks by mutation rather than
-            construction.
-            <div class="evidence"><code>crates/core/src/workflow_runtime.rs:555-563</code></div>
-          </li>
-        </ul>
+        <ul class="problems" data-fix="F1"></ul>
       </article>
 
       <article class="fix" data-area="sandbox" data-impact="high" data-safety="low" data-prio="2">
@@ -588,48 +558,7 @@
           missing a publish external or WASM module id; mitigate by generating both
           sides and adding a CI check that native/WASM/types inventories match.
         </p>
-        <ul class="problems">
-          <li>
-            <span class="cat">hidden-link</span>
-            Capability/module lists hand-synced across
-            <code>llrt-capabilities</code>, engines, publish, and <code>jssg-types</code>.
-            <div class="evidence"><code>crates/llrt-capabilities/src/types.rs:26-48</code>,
-              <code>module_builder.rs:10-68</code></div>
-          </li>
-          <li>
-            <span class="cat">needless-link</span>
-            Identical <code>codemod:*</code> registration copied in five engine sites.
-            <div class="evidence"><code>execution_engine.rs:422-443</code>,
-              <code>in_memory_engine.rs:226-243</code>,
-              <code>selector_engine.rs:228-248</code></div>
-          </li>
-          <li>
-            <span class="cat">hidden-link</span>
-            Native vs WASM ast-grep module ids and APIs diverge; types claim native-only APIs.
-            <div class="evidence">native <code>"codemod:ast-grep"</code> vs WASM
-              <code>"ast-grep"</code>; <code>ast-grep.d.ts</code></div>
-          </li>
-          <li>
-            <span class="cat">hidden-link</span>
-            Extension→language maps disagree across factory, sandbox, CLI
-            (<code>jsx</code> resolves to jsx / javascript / tsx depending on call site).
-            <div class="evidence"><code>semantic-factory/src/lazy.rs:129-141</code>,
-              <code>ast_grep/utils.rs:85-90</code>,
-              <code>cli_tools.rs:280-306</code></div>
-          </li>
-          <li>
-            <span class="cat">special-case</span>
-            Dynamic language inventories triplicated (loader, WASM lang enum, jssg-types).
-            <div class="evidence"><code>tree-sitter-loader/src/lib.rs:76-110</code>,
-              <code>wasm_lang.rs:20-48</code></div>
-          </li>
-          <li>
-            <span class="cat">needless-link</span>
-            Parallel walker enums in factory and language-javascript with hand remap.
-            <div class="evidence"><code>semantic-factory/src/config.rs:32-41</code>,
-              <code>language-javascript/src/accurate.rs:32-37</code></div>
-          </li>
-        </ul>
+        <ul class="problems" data-fix="F2"></ul>
       </article>
 
       <article class="fix" data-area="cli-output" data-impact="high" data-safety="medium" data-prio="3">
@@ -661,38 +590,7 @@
           Do not merge the two fingerprint <em>semantics</em> into one key — that can
           recreate shard tasks or suppress real state-change detection.
         </p>
-        <ul class="problems">
-          <li>
-            <span class="cat">hidden-link</span>
-            <code>_meta_</code> / <code>_meta_files</code> string prefix shared by shard,
-            scheduler, and engine with no shared type.
-            <div class="evidence"><code>crates/core/src/shard.rs:16-28</code>,
-              <code>crates/scheduler/src/lib.rs:260-271</code>,
-              <code>engine.rs:557-573</code></div>
-          </li>
-          <li>
-            <span class="cat">hidden-link</span>
-            Recompile detection and task identity use incompatible hashers (unordered
-            map + <code>to_string()</code> vs stable JSON excluding meta) with no shared
-            implementation — they must keep different inputs/policies, but should share
-            one deterministic hasher.
-            <div class="evidence"><code>engine.rs:2089-2096</code>,
-              <code>scheduler/src/lib.rs:205-271</code></div>
-          </li>
-          <li>
-            <span class="cat">special-case</span>
-            Cancel encoded as <code>Failed</code> + exact string
-            <code>"Canceled by user"</code>.
-            <div class="evidence"><code>engine.rs:1508-1516</code>,
-              <code>1900</code>, <code>2496-2497</code></div>
-          </li>
-          <li>
-            <span class="cat">special-case</span>
-            Four independent pro-dry-run flags for one caller’s preview mode.
-            <div class="evidence"><code>crates/core/src/config.rs:166-173</code>,
-              <code>crates/cli/src/pro_dry_run.rs:46-49</code></div>
-          </li>
-        </ul>
+        <ul class="problems" data-fix="F3"></ul>
       </article>
 
       <article class="fix" data-area="engine" data-impact="high" data-safety="medium" data-prio="4">
@@ -716,22 +614,7 @@
           registration can miss events until wired. Mitigate by requiring the bus at
           construction and failing closed in tests.
         </p>
-        <ul class="problems">
-          <li>
-            <span class="cat">hidden-link</span>
-            Process-global <code>OnceLock</code> event registry keyed by run id.
-            <div class="evidence"><code>workflow_runtime.rs:149-168</code>,
-              <code>539-550</code></div>
-          </li>
-          <li>
-            <span class="cat">hidden-link</span>
-            Shell and JSSG idle paths mutate logs / publish events outside
-            <code>TaskStateService::append_task_log</code>.
-            <div class="evidence"><code>task_state_service.rs:35-46</code>,
-              <code>engine.rs:4098-4119</code>,
-              <code>jssg_execution_service.rs:524-537</code></div>
-          </li>
-        </ul>
+        <ul class="problems" data-fix="F4"></ul>
       </article>
 
       <article class="fix" data-area="cli-output" data-impact="high" data-safety="low" data-prio="5">
@@ -755,21 +638,7 @@
           fields and report gating flags; snapshot the three command outputs before
           and after.
         </p>
-        <ul class="problems">
-          <li>
-            <span class="cat">hidden-link</span>
-            Three run handlers duplicate the metrics → report → serve/print sequence.
-            <div class="evidence"><code>run.rs:454-518</code>,
-              <code>workflow/run.rs:233-275</code>,
-              <code>jssg/run.rs:402-458</code></div>
-          </li>
-          <li>
-            <span class="cat">surplus</span>
-            <code>commands/output.rs</code> is not the CLI output path; five different
-            <code>OutputFormat</code> enums exist.
-            <div class="evidence"><code>crates/cli/src/commands/output.rs</code></div>
-          </li>
-        </ul>
+        <ul class="problems" data-fix="F5"></ul>
       </article>
 
       <article class="fix" data-area="engine" data-impact="high" data-safety="high" data-prio="6">
@@ -795,32 +664,7 @@
           reduce cross-cutting conventions, and land behind a large
           <code>butterflow-core</code> test pass.
         </p>
-        <ul class="problems">
-          <li>
-            <span class="cat">needless-link</span>
-            God module: schedule loop, task execution, JSSG/AI/codemod/shard/shell in one type.
-            <div class="evidence"><code>crates/core/src/engine.rs</code> (~5248 lines)</div>
-          </li>
-          <li>
-            <span class="cat">hidden-link</span>
-            Dual task execution paths: sync in main loop “to avoid race conditions with
-            matrix recompilation”, spawned threads on resume/trigger.
-            <div class="evidence"><code>engine.rs:2286-2300</code>,
-              <code>1754-1758</code>, <code>1854-1858</code></div>
-          </li>
-          <li>
-            <span class="cat">surplus</span>
-            <code>StepExecutor</code> is a thin dispatch that still calls back into Engine.
-            <div class="evidence"><code>step_executor.rs:55-80</code>,
-              <code>engine.rs:3087-3127</code></div>
-          </li>
-          <li>
-            <span class="cat">special-case</span>
-            Matrix recompile and condition evaluation swallow errors into skip/continue.
-            <div class="evidence"><code>engine.rs:2124-2132</code>,
-              <code>2507-2517</code></div>
-          </li>
-        </ul>
+        <ul class="problems" data-fix="F6"></ul>
       </article>
 
       <article class="fix" data-area="registry" data-impact="high" data-safety="medium" data-prio="7">
@@ -842,16 +686,7 @@
           must stay compatible with the hosted registry. Cover login/whoami/publish/
           download with contract tests against recorded responses.
         </p>
-        <ul class="problems">
-          <li>
-            <span class="cat">hidden-link</span>
-            Parallel auth types in CLI and core; publish reimplements multipart upload
-            outside <code>RegistryClient</code>.
-            <div class="evidence"><code>cli/src/auth/types.rs:4-11</code>,
-              <code>core/src/registry.rs:84-93</code>,
-              <code>publish.rs:495-561</code></div>
-          </li>
-        </ul>
+        <ul class="problems" data-fix="F7"></ul>
       </article>
 
       <article class="fix" data-area="cli-ai" data-impact="medium" data-safety="medium" data-prio="8">
@@ -874,25 +709,7 @@
           filesystem-touching. Split mechanically with characterization tests per
           harness before behavior changes.
         </p>
-        <ul class="problems">
-          <li>
-            <span class="cat">surplus</span>
-            Unrelated harness/MCP/update/state concerns share one volatile megafile.
-            <div class="evidence"><code>crates/cli/src/commands/harness_adapter.rs</code>
-              (~6852 lines)</div>
-          </li>
-          <li>
-            <span class="cat">special-case</span>
-            Lock retry via sleep with local constants; separate OutputFormat enum.
-            <div class="evidence">~lines 44-46, 111-127, 1994-2003</div>
-          </li>
-          <li>
-            <span class="cat">surplus</span>
-            <code>report_server.rs</code> piles HTTP, OIDC, feedback spawn, and idle
-            timeout into one module (~1513 lines).
-            <div class="evidence"><code>crates/cli/src/report_server.rs:1271-1333</code></div>
-          </li>
-        </ul>
+        <ul class="problems" data-fix="F8"></ul>
       </article>
 
       <article class="fix" data-area="models" data-impact="medium" data-safety="low" data-prio="9">
@@ -915,15 +732,7 @@
           migrate with existing variable/engine tests. Low user-facing risk if
           evaluation is moved without rewriting semantics.
         </p>
-        <ul class="problems">
-          <li>
-            <span class="cat">needless-link</span>
-            ~1808 LOC expression engine lives in the data-contracts crate and couples
-            to process env conventions.
-            <div class="evidence"><code>crates/models/src/variable.rs</code>,
-              <code>git_ops.rs:22-52</code></div>
-          </li>
-        </ul>
+        <ul class="problems" data-fix="F9"></ul>
       </article>
 
       <article class="fix" data-area="sandbox" data-impact="medium" data-safety="low" data-prio="10">
@@ -946,39 +755,7 @@
           paths. Confirm no external consumers of <code>type_info</code> /
           <code>NoopSemanticProvider</code> before deletion.
         </p>
-        <ul class="problems">
-          <li>
-            <span class="cat">surplus</span>
-            <code>type_info</code> / <code>get_type</code> stubs with no types export.
-            <div class="evidence"><code>sg_node.rs:1184-1216</code>,
-              provider stubs in JS/Python</div>
-          </li>
-          <li>
-            <span class="cat">surplus</span>
-            <code>NoopSemanticProvider</code> unused outside its unit tests.
-            <div class="evidence"><code>language-core/src/noop.rs</code></div>
-          </li>
-          <li>
-            <span class="cat">needless-link</span>
-            One-line <code>node-exports.ts</code> / <code>web-exports.ts</code> re-exports.
-          </li>
-          <li>
-            <span class="cat">surplus</span>
-            Committed generated <code>js/type-declarations.ts</code> with wrong script
-            name in header; agents tempted to edit generated artifacts.
-          </li>
-          <li>
-            <span class="cat">needless-link</span>
-            Semantic fixtures construct Oxc/Ruff providers directly, bypassing factory.
-            <div class="evidence">sandbox semantic fixtures <code>mod.rs:93-118</code></div>
-          </li>
-          <li>
-            <span class="cat">hidden-link</span>
-            js-astgrep language matrix duplicated across templates +
-            <code>init.rs</code> match with silent JS fallback.
-            <div class="evidence"><code>init.rs:187-222</code>, <code>1008-1029</code></div>
-          </li>
-        </ul>
+        <ul class="problems" data-fix="F10"></ul>
       </article>
     </section>
 
@@ -1017,9 +794,9 @@
     <section id="findings">
       <h2>All problems</h2>
       <p>
-        Impact and safety columns are the parent <strong>fix</strong> ratings
-        (same source as the cards and matrix). Category filters still use the
-        per-problem classification.
+        Each row is one concrete tangle: <strong>category</strong>, what is wrong,
+        and what fixing it buys (agents / bugs / bloat). Impact and safety are the
+        parent <strong>fix</strong> ratings (same source as the cards and matrix).
       </p>
       <div class="filters" id="filters" aria-label="Filter findings">
         <button class="chip" data-filter="all" aria-pressed="true">All</button>
@@ -1035,7 +812,7 @@
           <tr>
             <th>ID</th>
             <th>Category</th>
-            <th>Problem</th>
+            <th>Problem &amp; payoff</th>
             <th>Fix</th>
             <th>Fix impact</th>
             <th>Fix safety</th>
@@ -1075,7 +852,7 @@
   </div>
 
   <script>
-    // Single source of truth for fix-level impact/safety (cards, matrix, table, filters).
+    // Fix-level impact/safety — shared by cards, matrix, table, filters.
     const FIXES = {
       F1: { impact: "high", safety: "medium" },
       F2: { impact: "high", safety: "low" },
@@ -1089,43 +866,152 @@
       F10: { impact: "medium", safety: "low" }
     };
 
+    // Each finding: category, explicit problem, payoff, evidence, parent fix.
     const FINDINGS = [
-      { id: "non-cli-stdout", cat: "hidden-link", problem: "Non-CLI crates write stdout/stderr", fix: "F1" },
-      { id: "quiet-call-order", cat: "hidden-link", problem: "Quiet/TUI ownership is multi-site call order", fix: "F1" },
-      { id: "dual-run-config", cat: "hidden-link", problem: "Dual WorkflowRunConfig clones with partial dual-writes", fix: "F1" },
-      { id: "jsonl-println", cat: "special-case", problem: "--format jsonl still mixed with println summaries", fix: "F1" },
-      { id: "filediff-print", cat: "needless-link", problem: "FileDiff::print is presentation in core", fix: "F1" },
-      { id: "direct-runner-quiet", cat: "needless-link", problem: "DirectRunner prints based on quiet bit", fix: "F1" },
-      { id: "session-attach-quiet", cat: "hidden-link", problem: "Session attach mutates quiet + callbacks", fix: "F1" },
-      { id: "cap-sync", cat: "hidden-link", problem: "Capability/module lists hand-synced across crates", fix: "F2" },
-      { id: "mod-dup", cat: "needless-link", problem: "codemod:* registration copied in five engines", fix: "F2" },
-      { id: "native-wasm-ast", cat: "hidden-link", problem: "Native/WASM ast-grep module ids diverge", fix: "F2" },
-      { id: "langdetect", cat: "hidden-link", problem: "Extension→language maps disagree by call site", fix: "F2" },
-      { id: "dynlang", cat: "special-case", problem: "Dynamic language inventories triplicated", fix: "F2" },
-      { id: "walker-dup", cat: "needless-link", problem: "Parallel walker enums factory ↔ javascript", fix: "F2" },
-      { id: "matrix-meta", cat: "hidden-link", problem: "_meta_ prefix convention across shard/scheduler/engine", fix: "F3" },
-      { id: "recompile-hash", cat: "hidden-link", problem: "Recompile hasher ≠ task-identity hasher (keep separate inputs)", fix: "F3" },
-      { id: "cancel-string", cat: "special-case", problem: "Cancel encoded as Failed + magic string", fix: "F3" },
-      { id: "pro-dry-run", cat: "special-case", problem: "Four flags for one preview caller", fix: "F3" },
-      { id: "global-events", cat: "hidden-link", problem: "Process-global workflow event registry", fix: "F4" },
-      { id: "parallel-log-writers", cat: "hidden-link", problem: "Task logs mutated outside TaskStateService", fix: "F4" },
-      { id: "three-run-paths", cat: "hidden-link", problem: "run / workflow run / jssg share post-run by copy", fix: "F5" },
-      { id: "output-rs-misnamed", cat: "surplus", problem: "commands/output.rs is not the CLI sink", fix: "F5" },
-      { id: "engine-god", cat: "needless-link", problem: "engine.rs owns schedule + every step kind", fix: "F6" },
-      { id: "dual-exec-paths", cat: "hidden-link", problem: "Sync vs spawned task execution by entrypoint", fix: "F6" },
-      { id: "step-executor-thin", cat: "surplus", problem: "StepExecutor is pass-through back into Engine", fix: "F6" },
-      { id: "swallowed-errors", cat: "special-case", problem: "Recompile/condition errors become skip/continue", fix: "F6" },
-      { id: "registry-auth-split", cat: "hidden-link", problem: "Auth/publish split across CLI and RegistryClient", fix: "F7" },
-      { id: "harness-god", cat: "surplus", problem: "harness_adapter.rs mega-module (~6852 LOC)", fix: "F8" },
-      { id: "harness-lock-sleep", cat: "special-case", problem: "Harness lock retry via sleep special case", fix: "F8" },
-      { id: "report-server-pile", cat: "surplus", problem: "report_server mixes HTTP/OIDC/feedback/idle", fix: "F8" },
-      { id: "expr-in-models", cat: "needless-link", problem: "Expression eval + env coupling in models crate", fix: "F9" },
-      { id: "typeinfo-dead", cat: "surplus", problem: "type_info / get_type speculative stubs", fix: "F10" },
-      { id: "noop-unused", cat: "surplus", problem: "NoopSemanticProvider unused outside unit tests", fix: "F10" },
-      { id: "shallow-exports", cat: "needless-link", problem: "One-line node/web export shims", fix: "F10" },
-      { id: "gen-artifacts", cat: "surplus", problem: "Committed generated TS with wrong generator header", fix: "F10" },
-      { id: "factory-bypass", cat: "needless-link", problem: "Semantic fixtures bypass SemanticFactory", fix: "F10" },
-      { id: "init-lang-matrix", cat: "hidden-link", problem: "js-astgrep language matrix duplicated + silent JS fallback", fix: "F10" }
+      { id: "non-cli-stdout", cat: "hidden-link", fix: "F1",
+        problem: "Core, runners, state, and sandbox print to the terminal even though only CLI should own user-facing output.",
+        pays: "Fewer silent TUI/JSONL corruptions; agents stop reintroducing prints outside CLI.",
+        evidence: "structured_log.rs, DirectRunner, FileDiff::print, local_adapter, sandbox warns" },
+      { id: "quiet-call-order", cat: "hidden-link", fix: "F1",
+        problem: "Quiet/TUI ownership is a ritual: setQuiet in run.rs, workflow/run.rs, tui/mod.rs, workflow_runner, and create_engine must all agree.",
+        pays: "One typed mode means agents change presentation in one place instead of missing a site and leaking stdout.",
+        evidence: "run.rs:371-373, tui/mod.rs:137-141, workflow_runner.rs" },
+      { id: "dual-run-config", cat: "hidden-link", fix: "F1",
+        problem: "create_engine returns a cloned WorkflowRunConfig; quiet is applied to the engine copy while some fields must be dual-written.",
+        pays: "Removes a class of “I set the flag but behavior didn’t change” bugs agents hit when editing run paths.",
+        evidence: "cli/src/engine.rs:286-298, commands/run.rs:370-381" },
+      { id: "jsonl-println", cat: "special-case", fix: "F1",
+        problem: "--format jsonl reaches the engine, but CLI still println!s summaries and “Workflow started” onto the same stream.",
+        pays: "CI/automation parsers stop breaking; agents can trust format flags.",
+        evidence: "workflow_runner.rs:73-94, utils/metrics.rs:51-79" },
+      { id: "filediff-print", cat: "needless-link", fix: "F1",
+        problem: "FileDiff::print lives in core, so every dry-run path that wants diffs must know about quiet/color/JSONL itself.",
+        pays: "Core stays data-only; presentation changes don’t force engine edits.",
+        evidence: "core/src/diff.rs:81-89" },
+      { id: "direct-runner-quiet", cat: "needless-link", fix: "F1",
+        problem: "DirectRunner prints process output based on a quiet bit instead of always returning captured lines.",
+        pays: "Runners stop coupling to CLI TUI conventions; Docker/local output policy stays consistent.",
+        evidence: "direct_runner.rs:100-223, engine.rs:2541-2543" },
+      { id: "session-attach-quiet", cat: "hidden-link", fix: "F1",
+        problem: "WorkflowSession::attach mutates engine quiet + injects callbacks after construction.",
+        pays: "Session vs CLI behavior becomes an explicit mode, not call-order folklore agents must rediscover.",
+        evidence: "workflow_runtime.rs:555-563" },
+      { id: "cap-sync", cat: "hidden-link", fix: "F2",
+        problem: "Adding a runtime capability means hand-editing llrt-capabilities, engines, publish externals, and jssg-types with no compiler link.",
+        pays: "Agents add one catalog entry instead of missing a surface and shipping half-wired modules.",
+        evidence: "llrt-capabilities types + module_builder, publish.rs, jssg-types pull script" },
+      { id: "mod-dup", cat: "needless-link", fix: "F2",
+        problem: "codemod:* module registration is copy-pasted across five engine entry points.",
+        pays: "Cuts boilerplate; a new module can’t be forgotten in one engine path.",
+        evidence: "execution_engine / in_memory_engine / selector_engine registration sites" },
+      { id: "native-wasm-ast", cat: "hidden-link", fix: "F2",
+        problem: "Native installs “codemod:ast-grep” while WASM installs “ast-grep”; types claim native-only APIs on both.",
+        pays: "Agents stop writing imports that only work on one target; fewer “works locally, fails WASM” bugs.",
+        evidence: "execution_engine vs wasm_exports; ast-grep.d.ts" },
+      { id: "langdetect", cat: "hidden-link", fix: "F2",
+        problem: "The same .jsx path maps to jsx, javascript, or tsx depending on factory vs sandbox vs CLI.",
+        pays: "Semantic/parser choice becomes predictable; fewer wrong-provider bugs.",
+        evidence: "semantic-factory/lazy.rs, ast_grep/utils.rs, cli_tools.rs" },
+      { id: "dynlang", cat: "special-case", fix: "F2",
+        problem: "Dynamic language inventories are hand-maintained in tree-sitter-loader, WASM WasmLang, and jssg-types.",
+        pays: "Less inventory drift/bloat; adding a language is one generated change.",
+        evidence: "tree-sitter-loader, wasm_lang.rs, jssg-types langs" },
+      { id: "walker-dup", cat: "needless-link", fix: "F2",
+        problem: "WorkspaceWalker enums exist in both semantic-factory and language-javascript and must be remapped by hand.",
+        pays: "Removes duplicate types agents must keep aligned for no benefit.",
+        evidence: "semantic-factory/config.rs, language-javascript/accurate.rs" },
+      { id: "matrix-meta", cat: "hidden-link", fix: "F3",
+        problem: "Shard/scheduler/engine share a “_meta_” string convention with no shared type for matrix metadata.",
+        pays: "Renames and filters become type-checked; agents can’t silently break shard identity.",
+        evidence: "shard.rs, scheduler create_matrix_hash, engine auto_meta_files_include" },
+      { id: "recompile-hash", cat: "hidden-link", fix: "F3",
+        problem: "State-change detection and task identity use incompatible hashers; nothing documents that their inputs must stay different.",
+        pays: "Shared hasher + explicit policies cuts accidental “unify the hashes” bugs that recreate shards or miss recompiles.",
+        evidence: "engine.rs:2089-2096 vs scheduler identity hash; test_meta_key_exclusion" },
+      { id: "cancel-string", cat: "special-case", fix: "F3",
+        problem: "Cancel is TaskStatus::Failed plus the exact string “Canceled by user”.",
+        pays: "Cancel stops being a magic string agents can typo; resume/UI can treat cancel as first-class.",
+        evidence: "engine.rs is_task_canceled / mark_failed" },
+      { id: "pro-dry-run", cat: "special-case", fix: "F3",
+        problem: "One preview caller is expressed as four independent engine flags scattered through the schedule loop.",
+        pays: "Preview semantics live in one profile; agents don’t hunt every if-flag when changing dry-run.",
+        evidence: "config.rs pro-dry-run flags, cli/pro_dry_run.rs" },
+      { id: "global-events", cat: "hidden-link", fix: "F4",
+        problem: "Workflow events go through a process-global OnceLock map keyed by run id; publishers assume someone else registered a sink.",
+        pays: "Nested runs/tests stop losing or cross-talking events; wiring is visible to agents.",
+        evidence: "workflow_runtime publish_event / attach" },
+      { id: "parallel-log-writers", cat: "hidden-link", fix: "F4",
+        problem: "Shell and JSSG idle paths mutate task.logs and publish events outside TaskStateService::append_task_log.",
+        pays: "One writer means log+event stay twin; fewer “log saved but UI didn’t wake” bugs.",
+        evidence: "task_state_service.rs vs engine shell path vs jssg idle watchdog" },
+      { id: "three-run-paths", cat: "hidden-link", fix: "F5",
+        problem: "codemod run, workflow run, and jssg run each copy the metrics → report → serve/print ending.",
+        pays: "Report/metrics behavior changes once; agents stop updating two of three paths.",
+        evidence: "commands/run.rs, workflow/run.rs, jssg/run.rs post-run blocks" },
+      { id: "output-rs-misnamed", cat: "surplus", fix: "F5",
+        problem: "commands/output.rs only formats harness install errors, while real CLI output is scattered println!s and five OutputFormat enums.",
+        pays: "Cuts naming trap/bloat; agents find the real emit path instead of editing a dead-end module.",
+        evidence: "commands/output.rs vs scattered command println!" },
+      { id: "engine-god", cat: "needless-link", fix: "F6",
+        problem: "engine.rs (~5.2k LOC) owns scheduling, task lifecycle, and every step kind in one type.",
+        pays: "Agents read/change one concern without loading the whole runtime; fewer accidental cross-edits.",
+        evidence: "crates/core/src/engine.rs (92 commits since Aug 2025)" },
+      { id: "dual-exec-paths", cat: "hidden-link", fix: "F6",
+        problem: "The main loop runs tasks synchronously “for matrix recompilation,” while resume/trigger spawn threads — concurrency depends on entrypoint.",
+        pays: "One executor with an explicit barrier contract; fewer race/recompile bugs when agents touch scheduling.",
+        evidence: "engine.rs main loop vs resume_workflow / trigger_all" },
+      { id: "step-executor-thin", cat: "surplus", fix: "F6",
+        problem: "StepExecutor only forwards match arms back into Engine; the extraction added a hop without moving ownership.",
+        pays: "Removes pass-through bloat agents must chase when finding real step logic.",
+        evidence: "step_executor.rs → engine.execute_*" },
+      { id: "swallowed-errors", cat: "special-case", fix: "F6",
+        problem: "Matrix recompile Err is logged and continued; condition eval errors become “skip step” via unwrap_or_default.",
+        pays: "Failures surface as failures; agents debug “why didn’t it run?” against real errors, not silent skips.",
+        evidence: "engine.rs recompile Err path, evaluate_condition unwrap_or_default" },
+      { id: "registry-auth-split", cat: "hidden-link", fix: "F7",
+        problem: "CLI and core have parallel auth token types; publish reimplements multipart HTTP outside RegistryClient.",
+        pays: "Auth/registry contract changes once; agents can’t update download and forget publish.",
+        evidence: "cli/auth/types.rs vs core/registry.rs; publish.rs multipart" },
+      { id: "harness-god", cat: "surplus", fix: "F8",
+        problem: "harness_adapter.rs (~6.8k LOC) mixes harnesses, MCP, updates, locks, and skill install in one megafile.",
+        pays: "Less bloat in one file; agents change one harness without loading unrelated install/update code.",
+        evidence: "cli/src/commands/harness_adapter.rs" },
+      { id: "harness-lock-sleep", cat: "special-case", fix: "F8",
+        problem: "Harness lock contention is a sleep/retry loop with local constants, not an explicit lock protocol.",
+        pays: "Clearer concurrency semantics; fewer “tweak the sleep” patches that hide races.",
+        evidence: "harness_adapter lock retry ~1994-2003" },
+      { id: "report-server-pile", cat: "surplus", fix: "F8",
+        problem: "report_server.rs piles HTTP serving, OIDC login, feedback spawn, and idle timeout into one module.",
+        pays: "Report UX changes don’t risk auth/feedback regressions; less coupled bloat.",
+        evidence: "report_server.rs ~1271-1333" },
+      { id: "expr-in-models", cat: "needless-link", fix: "F9",
+        problem: "The models/data-contracts crate owns ~1808 LOC of expression evaluation bound to CODEMOD_TASK_* process env.",
+        pays: "Schema changes stay separate from runtime eval; agents don’t treat models as a second engine.",
+        evidence: "models/src/variable.rs, git_ops env context" },
+      { id: "typeinfo-dead", cat: "surplus", fix: "F10",
+        problem: "type_info / get_type stubs exist in native nodes and providers but nothing implements them and types don’t export them.",
+        pays: "Deletes speculative API surface agents keep “supporting” for no user value.",
+        evidence: "sg_node type_info; JS/Python provider stubs" },
+      { id: "noop-unused", cat: "surplus", fix: "F10",
+        problem: "NoopSemanticProvider is exported but unused outside its unit tests; factory returns None for those langs instead.",
+        pays: "Removes a fake second routing story; less dead code for agents to misread as intentional.",
+        evidence: "language-core/noop.rs vs factory None arms" },
+      { id: "shallow-exports", cat: "needless-link", fix: "F10",
+        problem: "node-exports.ts / web-exports.ts are one-line re-exports that force every API rename to touch two files.",
+        pays: "Less package hop bloat; export map points at real modules.",
+        evidence: "js/node-exports.ts, js/web-exports.ts" },
+      { id: "gen-artifacts", cat: "surplus", fix: "F10",
+        problem: "Committed generated type-declarations.ts has the wrong generator name in its header, so agents edit generated output or chase a missing script.",
+        pays: "Clear source of truth; fewer wasted agent turns on generated files.",
+        evidence: "js/type-declarations.ts header vs generate-type-declarations.ts" },
+      { id: "factory-bypass", cat: "needless-link", fix: "F10",
+        problem: "Semantic fixtures construct Oxc/Ruff providers directly while production goes through LazySemanticProvider.",
+        pays: "Factory routing regressions get caught by fixtures; agents can’t “fix tests, break product.”",
+        evidence: "sandbox semantic fixtures mod.rs" },
+      { id: "init-lang-matrix", cat: "hidden-link", fix: "F10",
+        problem: "Adding a js-astgrep language requires template scripts, init.rs include_str constants, match arms, and fixtures; unknown langs silently fall back to JS.",
+        pays: "Data-driven language table + hard error on unknown; agents can’t ship the wrong language by fallback.",
+        evidence: "templates/js-astgrep + init.rs match/fallback" }
     ];
 
     const tbody = document.getElementById("findings-body");
@@ -1134,6 +1020,9 @@
     }
     function ratingsFor(fixId) {
       return FIXES[fixId] || { impact: "medium", safety: "medium" };
+    }
+    function problemCell(f) {
+      return `<span class="problem">${f.problem}</span><div class="pays">${f.pays}</div><div class="evidence">${f.evidence}</div>`;
     }
     function render(filter) {
       tbody.innerHTML = FINDINGS.map((f) => {
@@ -1146,7 +1035,7 @@
         return `<tr class="${show ? "" : "is-hidden"}" data-cat="${f.cat}">
           <td class="mono">${f.id}</td>
           <td>${f.cat}</td>
-          <td>${f.problem}</td>
+          <td>${problemCell(f)}</td>
           <td class="mono">${f.fix}</td>
           <td>${badge("impact", impact)}</td>
           <td>${badge("safety", safety)}</td>
@@ -1154,6 +1043,19 @@
       }).join("");
     }
     render("all");
+
+    // Fill each fix card from the same FINDINGS source.
+    document.querySelectorAll("ul.problems[data-fix]").forEach((ul) => {
+      const fix = ul.dataset.fix;
+      ul.innerHTML = FINDINGS.filter((f) => f.fix === fix).map((f) => `
+        <li>
+          <span class="cat">${f.cat}</span>
+          <code class="mono">${f.id}</code>
+          <span class="problem">${f.problem}</span>
+          <div class="pays">${f.pays}</div>
+          <div class="evidence">${f.evidence}</div>
+        </li>`).join("");
+    });
 
     const filters = document.getElementById("filters");
     filters.addEventListener("click", (e) => {
