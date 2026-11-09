@@ -3,6 +3,7 @@ use super::types::{
     AutoSafeApplyResult, ComponentReconcileDecision, UpdatePolicyContext,
     MANAGED_UPDATE_POLICY_TRIGGER,
 };
+use crate::commands::ai::PreviousFiles;
 use crate::commands::harness_adapter::{
     Harness, InstallScope, InstalledSkill, ManagedStateWriteResult, OutputFormat,
 };
@@ -26,6 +27,8 @@ pub(in crate::commands::ai) struct InstallSkillsOutput {
     pub(in crate::commands::ai) notes: Vec<String>,
     pub(in crate::commands::ai) warnings: Vec<String>,
     pub(in crate::commands::ai) restart_hint: Option<String>,
+    pub(in crate::commands::ai) next_steps: Vec<String>,
+    pub(in crate::commands::ai) detected_by: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -88,6 +91,7 @@ pub(in crate::commands::ai) struct InstalledSkillOutput {
     pub(in crate::commands::ai) name: String,
     pub(in crate::commands::ai) path: String,
     pub(in crate::commands::ai) version: Option<String>,
+    pub(in crate::commands::ai) status: &'static str,
 }
 
 #[derive(Tabled)]
@@ -138,7 +142,9 @@ pub(in crate::commands::ai) struct BuildInstallOutputInput<'a> {
     pub(in crate::commands::ai) auto_safe_apply: Option<AutoSafeApplyResult>,
     pub(in crate::commands::ai) notes: Vec<String>,
     pub(in crate::commands::ai) warnings: Vec<String>,
-    pub(in crate::commands::ai) restart_hint: Option<String>,
+    pub(in crate::commands::ai) detected_by: Option<String>,
+    pub(in crate::commands::ai) previous_files: &'a PreviousFiles,
+    pub(in crate::commands::ai) next_steps: Vec<String>,
 }
 
 pub(in crate::commands::ai) fn build_install_output(
@@ -154,7 +160,9 @@ pub(in crate::commands::ai) fn build_install_output(
         auto_safe_apply,
         notes,
         warnings,
-        restart_hint,
+        detected_by,
+        previous_files,
+        next_steps,
     } = input;
 
     InstallSkillsOutput {
@@ -165,6 +173,7 @@ pub(in crate::commands::ai) fn build_install_output(
             .into_iter()
             .map(|skill| InstalledSkillOutput {
                 version: installed_component_version_for_output(&skill),
+                status: previous_files.status(&skill.path).as_str(),
                 path: format_output_path(&skill.path),
                 name: skill.name,
             })
@@ -180,7 +189,9 @@ pub(in crate::commands::ai) fn build_install_output(
         ),
         notes,
         warnings,
-        restart_hint,
+        restart_hint: next_steps.first().cloned(),
+        next_steps,
+        detected_by,
     }
 }
 
@@ -198,15 +209,17 @@ fn installed_component_version_for_output(skill: &InstalledSkill) -> Option<Stri
 fn codemod_mcp_configured_package_version(config_path: &Path) -> Option<String> {
     let content = fs::read_to_string(config_path).ok()?;
     let root: serde_json::Value = serde_json::from_str(&content).ok()?;
-    let package_arg = root
+    let version = root
         .get("mcpServers")
         .and_then(|servers| servers.get("codemod"))
         .and_then(|entry| entry.get("args"))
         .and_then(|args| args.as_array())
-        .and_then(|args| args.first())
-        .and_then(|value| value.as_str())?;
-
-    let version = package_arg.strip_prefix("codemod@")?.trim();
+        .and_then(|args| {
+            args.iter()
+                .filter_map(|value| value.as_str())
+                .find_map(|arg| arg.strip_prefix("codemod@"))
+        })?
+        .trim();
     if version.is_empty() {
         return None;
     }
@@ -236,58 +249,114 @@ pub(in crate::commands::ai) fn print_install_output(
 }
 
 pub(in crate::commands::ai) fn print_install_output_logs(output: &InstallSkillsOutput) {
-    println!();
+    print!("{}", render_install_output_logs(output));
+}
+
+pub(in crate::commands::ai) fn render_install_output_logs(output: &InstallSkillsOutput) -> String {
+    let mut lines = vec![String::new(), format!("  {}", install_summary_line(output))];
 
     if output.installed.is_empty() {
-        println!("  {} No skills were installed.", style("⚠").yellow());
-    } else {
-        for skill in &output.installed {
-            let label = humanize_skill_name(&skill.name);
-            let version_suffix = skill
-                .version
-                .as_deref()
-                .map(|v| format!("@{v}"))
-                .unwrap_or_default();
-            println!(
-                "  {} {} ({}{} → {})",
-                style("✓").green().bold(),
-                label,
-                skill.name,
-                version_suffix,
-                style(&skill.path).dim(),
-            );
-        }
+        lines.push(format!(
+            "  {} No skills were installed.",
+            style("⚠").yellow()
+        ));
+    }
+    for skill in &output.installed {
+        let version_suffix = skill
+            .version
+            .as_deref()
+            .map(|v| format!("@{v}"))
+            .unwrap_or_default();
+        lines.push(format!(
+            "  {} {} ({}{} → {})",
+            style("✓").green().bold(),
+            component_status_label(&skill.name, skill.status),
+            skill.name,
+            version_suffix,
+            style(&skill.path).dim(),
+        ));
     }
 
     for note in &output.notes {
         if let Some(line) = humanize_note(note) {
-            println!("  {} {line}", style("✓").green().bold());
+            lines.push(format!("  {} {line}", style("✓").green().bold()));
         }
     }
 
-    if let Some(restart_hint) = &output.restart_hint {
-        println!();
-        println!("  {} {}", style("→").cyan().bold(), restart_hint);
+    for warning in &output.warnings {
+        lines.push(format!(
+            "  {} {}",
+            style("⚠").yellow(),
+            humanize_warning(warning)
+        ));
     }
 
-    println!();
+    if !output.next_steps.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("  {}", style("Next:").bold()));
+        for (index, step) in output.next_steps.iter().enumerate() {
+            lines.push(format!("  {}. {step}", index + 1));
+        }
+    }
+
+    lines.push(String::new());
+    lines.join("\n") + "\n"
 }
 
-fn humanize_skill_name(name: &str) -> String {
-    match name {
-        "codemod" => "Installed Codemod skill".to_string(),
-        "codemod-mcp" => "Installed Codemod MCP".to_string(),
-        other => format!("Installed {other}"),
+fn install_summary_line(output: &InstallSkillsOutput) -> String {
+    let agent = <Harness as clap::ValueEnum>::from_str(&output.harness, true)
+        .map_or("your coding agent", |harness| harness.display_name());
+    let place = if output.scope == "user" {
+        "for all your projects"
+    } else {
+        "in this project"
+    };
+    let already_set_up = !output.installed.is_empty()
+        && output
+            .installed
+            .iter()
+            .all(|skill| skill.status == "unchanged")
+        && output
+            .notes
+            .iter()
+            .all(|note| humanize_note(note).is_none());
+    let detected = output
+        .detected_by
+        .as_deref()
+        .map(|reason| format!(" (detected: {reason})"))
+        .unwrap_or_default();
+    if already_set_up {
+        format!("Codemod is already set up for {agent} {place}; nothing changed{detected}.")
+    } else {
+        format!("Setting up Codemod for {agent} {place}{detected}.")
     }
+}
+
+fn component_status_label(name: &str, status: &str) -> String {
+    let component = match name {
+        "codemod" => "Codemod skill".to_string(),
+        "codemod-mcp" => "Codemod MCP".to_string(),
+        other => other.to_string(),
+    };
+    match status {
+        "unchanged" => format!("{component} up to date"),
+        "updated" => format!("Updated {component}"),
+        _ => format!("Installed {component}"),
+    }
+}
+
+fn humanize_warning(warning: &str) -> String {
+    if warning.starts_with("Remote update manifest lookup failed") {
+        return "Couldn't reach Codemod's update service, so the versions bundled with this CLI were installed.".to_string();
+    }
+    warning.to_string()
 }
 
 fn humanize_note(note: &str) -> Option<String> {
-    if note.starts_with("Installed codemod creation command in: ") {
-        let paths = note.trim_start_matches("Installed codemod creation command in: ");
-        return Some(format!(
-            "Installed /codemod command ({})",
-            style(paths).dim()
-        ));
+    for verb in ["Installed", "Updated"] {
+        if let Some(paths) = note.strip_prefix(&format!("{verb} codemod creation command in: ")) {
+            return Some(format!("{verb} /codemod command ({})", style(paths).dim()));
+        }
     }
     if note.starts_with("Updated discovery hints in: ") {
         let paths = note.trim_start_matches("Updated discovery hints in: ");
@@ -334,8 +403,12 @@ pub(in crate::commands::ai) fn print_install_output_table(output: &InstallSkills
         }
     }
 
-    if let Some(restart_hint) = &output.restart_hint {
-        println!("  {restart_hint}");
+    for warning in &output.warnings {
+        println!("  Warning: {}", humanize_warning(warning));
+    }
+
+    for step in &output.next_steps {
+        println!("  Next: {step}");
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::commands::harness_adapter::{
-    install_restart_hint, mcs_install_requires_force, persist_managed_install_state,
+    install_next_steps, mcs_install_requires_force, persist_managed_install_state,
     read_managed_install_state, resolve_adapter, resolve_install_scope,
     runtime_paths_for_execution, skill_discovery_guide_paths,
     upsert_mcs_command_entrypoints_with_runtime, upsert_periodic_update_trigger,
@@ -360,6 +360,11 @@ async fn handle_install_like_action(
     {
         warnings.push(warning);
     }
+    let previous_files = if command.update {
+        PreviousFiles::default()
+    } else {
+        PreviousFiles::capture(resolved_adapter.harness, install_inputs.scope)
+    };
     let (installed, managed_components) = if command.update {
         let mut managed_state =
             read_managed_install_state(resolved_adapter.harness, install_inputs.scope)
@@ -397,6 +402,7 @@ async fn handle_install_like_action(
                 &resolved_adapter,
                 &install_inputs,
                 command.format,
+                &previous_files,
                 &mut messages,
                 &mut warnings,
             )
@@ -406,6 +412,7 @@ async fn handle_install_like_action(
             &resolved_adapter,
             &install_inputs,
             command.format,
+            &previous_files,
             &mut messages,
             &mut warnings,
         )
@@ -445,12 +452,18 @@ async fn handle_install_like_action(
         messages.push(policy_runtime_message);
     }
 
-    let restart_hint = if command.update {
-        auto_safe_apply.result.as_ref().and_then(|result| {
-            (result.applied > 0).then(|| install_restart_hint(resolved_adapter.harness))
-        })
+    let show_next_steps = if command.update {
+        auto_safe_apply
+            .result
+            .as_ref()
+            .is_some_and(|result| result.applied > 0)
     } else {
-        Some(install_restart_hint(resolved_adapter.harness))
+        true
+    };
+    let next_steps = if show_next_steps {
+        install_next_steps(resolved_adapter.harness, install_inputs.scope)
+    } else {
+        Vec::new()
     };
     let output = build_install_output(BuildInstallOutputInput {
         harness: resolved_adapter.harness,
@@ -462,7 +475,9 @@ async fn handle_install_like_action(
         auto_safe_apply: auto_safe_apply.result,
         notes: messages,
         warnings,
-        restart_hint,
+        detected_by: resolved_adapter.detected_by.clone(),
+        previous_files: &previous_files,
+        next_steps,
     });
     print_install_output(&output, command.format)?;
     send_ai_install_event(
@@ -696,6 +711,7 @@ fn run_install_flow(
     resolved_adapter: &ResolvedAdapter,
     install_inputs: &InstallInputs,
     format: OutputFormat,
+    previous_files: &PreviousFiles,
     messages: &mut Vec<String>,
     warnings: &mut Vec<String>,
 ) -> (Vec<InstalledSkill>, Vec<ManagedComponentSnapshot>) {
@@ -742,9 +758,14 @@ fn run_install_flow(
             &runtime_paths,
         ) {
             Ok(paths) => {
-                if !paths.is_empty() {
+                let verb = match previous_files.combined_status(&paths) {
+                    FileChange::Installed => Some("Installed"),
+                    FileChange::Updated => Some("Updated"),
+                    FileChange::Unchanged => None,
+                };
+                if let Some(verb) = verb.filter(|_| !paths.is_empty()) {
                     messages.push(format!(
-                        "Installed codemod creation command in: {}",
+                        "{verb} codemod creation command in: {}",
                         paths
                             .iter()
                             .map(|path| format_output_path(path))
@@ -848,6 +869,75 @@ fn managed_component_kind_from_install_entry(entry: &InstalledSkill) -> ManagedC
     }
 }
 
+/// File contents from the previous install, so a reinstall can say what it
+/// actually changed instead of reporting everything as freshly installed.
+#[derive(Default)]
+pub(super) struct PreviousFiles(HashMap<PathBuf, Option<Vec<u8>>>);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FileChange {
+    Installed,
+    Updated,
+    Unchanged,
+}
+
+impl FileChange {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Installed => "installed",
+            Self::Updated => "updated",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
+impl PreviousFiles {
+    fn capture(harness: Harness, scope: InstallScope) -> Self {
+        let components = read_managed_install_state(harness, scope)
+            .ok()
+            .flatten()
+            .map(|state| state.components)
+            .unwrap_or_default();
+        Self::from_paths(components.iter().map(|component| component.path.clone()))
+    }
+
+    pub(super) fn from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self(
+            paths
+                .into_iter()
+                .map(|path| {
+                    let bytes = std::fs::read(&path).ok();
+                    (path, bytes)
+                })
+                .collect(),
+        )
+    }
+
+    pub(super) fn status(&self, path: &std::path::Path) -> FileChange {
+        match self.0.get(path) {
+            None | Some(None) => FileChange::Installed,
+            Some(Some(before)) if std::fs::read(path).ok().as_ref() == Some(before) => {
+                FileChange::Unchanged
+            }
+            Some(Some(_)) => FileChange::Updated,
+        }
+    }
+
+    fn combined_status(&self, paths: &[PathBuf]) -> FileChange {
+        let statuses = paths
+            .iter()
+            .map(|path| self.status(path))
+            .collect::<Vec<_>>();
+        if statuses.contains(&FileChange::Installed) {
+            FileChange::Installed
+        } else if statuses.contains(&FileChange::Updated) {
+            FileChange::Updated
+        } else {
+            FileChange::Unchanged
+        }
+    }
+}
+
 #[derive(Clone)]
 struct InstallInputs {
     harness: Harness,
@@ -860,15 +950,15 @@ struct InstallInputs {
     require_signed_manifest: Option<bool>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct HarnessPromptOption {
     harness: Harness,
-    label: &'static str,
+    label: String,
 }
 
 impl fmt::Display for HarnessPromptOption {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.label)
+        formatter.write_str(&self.label)
     }
 }
 
@@ -912,33 +1002,29 @@ fn resolve_install_inputs(
     let harness = if command.harness != Harness::Auto {
         command.harness
     } else {
-        let options = vec![
-            HarnessPromptOption {
-                harness: Harness::Claude,
-                label: "claude",
+        let detected = detected_harness_for_interactive_prompt();
+        let options = [
+            Harness::Claude,
+            Harness::Cursor,
+            Harness::Codex,
+            Harness::Opencode,
+            Harness::Goose,
+        ]
+        .into_iter()
+        .map(|harness| HarnessPromptOption {
+            harness,
+            label: if Some(harness) == detected {
+                format!("{} (detected)", harness.display_name())
+            } else {
+                harness.display_name().to_string()
             },
-            HarnessPromptOption {
-                harness: Harness::Goose,
-                label: "goose",
-            },
-            HarnessPromptOption {
-                harness: Harness::Opencode,
-                label: "opencode",
-            },
-            HarnessPromptOption {
-                harness: Harness::Cursor,
-                label: "cursor",
-            },
-            HarnessPromptOption {
-                harness: Harness::Codex,
-                label: "codex",
-            },
-        ];
-        let starting_cursor = detected_harness_for_interactive_prompt()
+        })
+        .collect::<Vec<_>>();
+        let starting_cursor = detected
             .and_then(|detected| options.iter().position(|option| option.harness == detected))
             .unwrap_or(0);
 
-        Select::new("Choose harness adapter:", options)
+        Select::new("Which coding agent do you use?", options)
             .with_starting_cursor(starting_cursor)
             .prompt()
             .map_err(|error| {
@@ -954,7 +1040,7 @@ fn resolve_install_inputs(
     } else {
         let (options, starting_cursor) = scope_prompt_options(harness);
 
-        Select::new("Choose install scope:", options)
+        Select::new("Set it up for:", options)
             .with_starting_cursor(starting_cursor)
             .prompt()
             .map_err(|error| {
@@ -1017,10 +1103,11 @@ fn user_skills_root_hint_for_harness(harness: Harness) -> &'static str {
 fn interactive_user_scope_label(harness: Harness) -> String {
     let label_harness = scope_label_harness(harness);
     match label_harness {
-        Harness::Goose => "user (goose: ~/.goose/skills + ~/.config/goose/config.yaml)".to_string(),
+        Harness::Goose => {
+            "All my projects (~/.goose/skills + ~/.config/goose/config.yaml)".to_string()
+        }
         _ => format!(
-            "user ({}: {})",
-            label_harness.as_str(),
+            "All my projects ({})",
             user_skills_root_hint_for_harness(label_harness)
         ),
     }
@@ -1050,7 +1137,7 @@ fn scope_prompt_options(harness: Harness) -> (Vec<ScopePromptOption>, usize) {
         vec![
             ScopePromptOption {
                 scope: InstallScope::Project,
-                label: "project (current workspace)".to_string(),
+                label: "This project (current folder)".to_string(),
             },
             ScopePromptOption {
                 scope: InstallScope::User,

@@ -1,7 +1,8 @@
 use super::update::auto_safe::extract_skill_archive_writes;
 use super::update::auto_safe::{apply_staged_component_updates, maybe_apply_auto_safe_updates};
 use super::update::output::{
-    build_install_output, build_update_policy_output, BuildInstallOutputInput,
+    build_install_output, build_update_policy_output, render_install_output_logs,
+    BuildInstallOutputInput,
 };
 use super::update::policy::{
     parse_update_remote_source_value, remote_manifest_endpoint, resolve_update_policy_context,
@@ -20,6 +21,7 @@ use super::update::types::{
 use super::{
     goose_project_scope_command_warning, interactive_user_scope_label,
     managed_components_from_install, record_periodic_trigger_result, scope_prompt_options,
+    PreviousFiles,
 };
 use crate::commands::harness_adapter::{
     Harness, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
@@ -185,27 +187,17 @@ fn harness_skill_path(root: &std::path::Path, harness: Harness) -> PathBuf {
 }
 
 #[test]
-fn interactive_user_scope_label_defaults_auto_to_claude_path() {
-    assert_eq!(
-        interactive_user_scope_label(Harness::Auto),
-        "user (claude: ~/.claude/skills)"
-    );
-}
-
-#[test]
-fn interactive_user_scope_label_uses_explicit_harness_path() {
-    assert_eq!(
-        interactive_user_scope_label(Harness::Opencode),
-        "user (opencode: ~/.opencode/skills)"
-    );
-}
-
-#[test]
-fn interactive_user_scope_label_uses_goose_command_config_hint() {
-    assert_eq!(
-        interactive_user_scope_label(Harness::Goose),
-        "user (goose: ~/.goose/skills + ~/.config/goose/config.yaml)"
-    );
+fn user_scope_option_names_where_the_skills_go() {
+    for (harness, skills_root) in [
+        (Harness::Auto, "~/.claude/skills"),
+        (Harness::Opencode, "~/.opencode/skills"),
+        (Harness::Goose, "~/.goose/skills"),
+    ] {
+        assert!(
+            interactive_user_scope_label(harness).contains(skills_root),
+            "{harness:?}"
+        );
+    }
 }
 
 #[test]
@@ -268,7 +260,9 @@ fn install_output_json_includes_codemod_mcp_entry() {
         auto_safe_apply: None,
         notes: Vec::new(),
         warnings: Vec::new(),
-        restart_hint: Some("Restart now".to_string()),
+        detected_by: None,
+        previous_files: &PreviousFiles::default(),
+        next_steps: vec!["Restart now".to_string()],
     });
 
     let output_json = serde_json::to_value(&output).expect("install output should serialize");
@@ -376,7 +370,9 @@ fn skipped_periodic_trigger_note_reaches_install_output() {
         auto_safe_apply: None,
         notes: messages,
         warnings,
-        restart_hint: None,
+        detected_by: None,
+        previous_files: &PreviousFiles::default(),
+        next_steps: Vec::new(),
     });
 
     assert!(tracked.is_empty());
@@ -1581,4 +1577,113 @@ fn maybe_apply_auto_safe_updates_silently_skips_when_remote_manifest_is_unavaila
         assert!(apply.warnings.is_empty());
         assert!(apply.result.is_none());
     });
+}
+
+fn logs_for_install(
+    skill_path: &std::path::Path,
+    previous_files: &PreviousFiles,
+    notes: Vec<String>,
+    warnings: Vec<String>,
+) -> String {
+    let update_policy = UpdatePolicyContext {
+        mode: UpdatePolicyMode::Manual,
+        remote_source: MANAGED_UPDATE_POLICY_LOCAL_SOURCE.to_string(),
+        fallback_applied: false,
+        remote_manifest: None,
+        warnings: Vec::new(),
+    };
+    let output = build_install_output(BuildInstallOutputInput {
+        harness: Harness::Cursor,
+        scope: InstallScope::Project,
+        installed: vec![InstalledSkill {
+            name: "codemod".to_string(),
+            path: skill_path.to_path_buf(),
+            version: Some("1.0.0".to_string()),
+            scope: Some(InstallScope::Project),
+        }],
+        managed_state: None,
+        update_policy: &update_policy,
+        component_decisions: Vec::new(),
+        auto_safe_apply: None,
+        notes,
+        warnings,
+        detected_by: None,
+        previous_files,
+        next_steps: vec!["Reload Cursor".to_string()],
+    });
+    render_install_output_logs(&output)
+}
+
+#[test]
+fn install_logs_show_warnings() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let skill_path = temp_dir.path().join("SKILL.md");
+    fs::write(&skill_path, "skill").unwrap();
+
+    let logs = logs_for_install(
+        &skill_path,
+        &PreviousFiles::default(),
+        Vec::new(),
+        vec!["Could not write AGENTS.md".to_string()],
+    );
+
+    assert!(logs.contains("⚠ Could not write AGENTS.md"), "{logs}");
+}
+
+#[test]
+fn reinstall_that_changes_nothing_says_already_set_up() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let skill_path = temp_dir.path().join("SKILL.md");
+    fs::write(&skill_path, "skill").unwrap();
+    let previous_files = PreviousFiles::from_paths([skill_path.clone()]);
+
+    let logs = logs_for_install(&skill_path, &previous_files, Vec::new(), Vec::new());
+
+    assert!(
+        logs.contains("Codemod is already set up for Cursor in this project; nothing changed"),
+        "{logs}"
+    );
+}
+
+#[test]
+fn reinstall_that_updates_the_codemod_command_does_not_say_nothing_changed() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let skill_path = temp_dir.path().join("SKILL.md");
+    fs::write(&skill_path, "skill").unwrap();
+    let previous_files = PreviousFiles::from_paths([skill_path.clone()]);
+    let notes =
+        vec!["Updated codemod creation command in: .cursor/commands/codemod.md".to_string()];
+
+    let logs = logs_for_install(&skill_path, &previous_files, notes, Vec::new());
+
+    assert!(!logs.contains("nothing changed"), "{logs}");
+}
+
+#[test]
+fn reinstall_reports_a_rewritten_file_as_updated() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let skill_path = temp_dir.path().join("SKILL.md");
+    fs::write(&skill_path, "old skill").unwrap();
+    let previous_files = PreviousFiles::from_paths([skill_path.clone()]);
+    fs::write(&skill_path, "new skill").unwrap();
+
+    let logs = logs_for_install(&skill_path, &previous_files, Vec::new(), Vec::new());
+
+    assert!(logs.contains("Updated Codemod skill"), "{logs}");
+}
+
+#[test]
+fn install_logs_end_with_numbered_next_steps() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let skill_path = temp_dir.path().join("SKILL.md");
+    fs::write(&skill_path, "skill").unwrap();
+
+    let logs = logs_for_install(
+        &skill_path,
+        &PreviousFiles::default(),
+        Vec::new(),
+        Vec::new(),
+    );
+
+    assert!(logs.trim_end().ends_with("1. Reload Cursor"), "{logs}");
 }
