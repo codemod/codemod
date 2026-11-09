@@ -1582,6 +1582,7 @@ fn maybe_apply_auto_safe_updates_silently_skips_when_remote_manifest_is_unavaila
 fn logs_for_install(
     skill_path: &std::path::Path,
     previous_files: &PreviousFiles,
+    notes: Vec<String>,
     warnings: Vec<String>,
 ) -> String {
     let update_policy = UpdatePolicyContext {
@@ -1604,7 +1605,7 @@ fn logs_for_install(
         update_policy: &update_policy,
         component_decisions: Vec::new(),
         auto_safe_apply: None,
-        notes: Vec::new(),
+        notes,
         warnings,
         detected_by: None,
         previous_files,
@@ -1622,6 +1623,7 @@ fn install_logs_show_warnings() {
     let logs = logs_for_install(
         &skill_path,
         &PreviousFiles::default(),
+        Vec::new(),
         vec!["Could not write AGENTS.md".to_string()],
     );
 
@@ -1635,12 +1637,26 @@ fn reinstall_that_changes_nothing_says_already_set_up() {
     fs::write(&skill_path, "skill").unwrap();
     let previous_files = PreviousFiles::from_paths([skill_path.clone()]);
 
-    let logs = logs_for_install(&skill_path, &previous_files, Vec::new());
+    let logs = logs_for_install(&skill_path, &previous_files, Vec::new(), Vec::new());
 
     assert!(
         logs.contains("Codemod is already set up for Cursor in this project; nothing changed"),
         "{logs}"
     );
+}
+
+#[test]
+fn reinstall_that_updates_the_codemod_command_does_not_say_nothing_changed() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let skill_path = temp_dir.path().join("SKILL.md");
+    fs::write(&skill_path, "skill").unwrap();
+    let previous_files = PreviousFiles::from_paths([skill_path.clone()]);
+    let notes =
+        vec!["Updated codemod creation command in: .cursor/commands/codemod.md".to_string()];
+
+    let logs = logs_for_install(&skill_path, &previous_files, notes, Vec::new());
+
+    assert!(!logs.contains("nothing changed"), "{logs}");
 }
 
 #[test]
@@ -1651,7 +1667,7 @@ fn reinstall_reports_a_rewritten_file_as_updated() {
     let previous_files = PreviousFiles::from_paths([skill_path.clone()]);
     fs::write(&skill_path, "new skill").unwrap();
 
-    let logs = logs_for_install(&skill_path, &previous_files, Vec::new());
+    let logs = logs_for_install(&skill_path, &previous_files, Vec::new(), Vec::new());
 
     assert!(logs.contains("Updated Codemod skill"), "{logs}");
 }
@@ -1662,7 +1678,12 @@ fn install_logs_end_with_numbered_next_steps() {
     let skill_path = temp_dir.path().join("SKILL.md");
     fs::write(&skill_path, "skill").unwrap();
 
-    let logs = logs_for_install(&skill_path, &PreviousFiles::default(), Vec::new());
+    let logs = logs_for_install(
+        &skill_path,
+        &PreviousFiles::default(),
+        Vec::new(),
+        Vec::new(),
+    );
 
     assert!(logs.trim_end().ends_with("1. Reload Cursor"), "{logs}");
 }

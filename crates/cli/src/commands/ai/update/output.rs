@@ -315,7 +315,11 @@ fn install_summary_line(output: &InstallSkillsOutput) -> String {
         && output
             .installed
             .iter()
-            .all(|skill| skill.status == "unchanged");
+            .all(|skill| skill.status == "unchanged")
+        && output
+            .notes
+            .iter()
+            .all(|note| humanize_note(note).is_none());
     let detected = output
         .detected_by
         .as_deref()
