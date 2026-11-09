@@ -110,6 +110,18 @@ impl Harness {
             Self::Antigravity => "antigravity",
         }
     }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Auto => "your coding agent",
+            Self::Claude => "Claude Code",
+            Self::Goose => "Goose",
+            Self::Opencode => "OpenCode",
+            Self::Cursor => "Cursor",
+            Self::Codex => "Codex",
+            Self::Antigravity => "Antigravity",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -414,6 +426,8 @@ pub struct ResolvedAdapter {
     pub adapter: Box<dyn HarnessAdapter>,
     pub harness: Harness,
     pub warnings: Vec<String>,
+    /// Why `--harness auto` picked this harness, for the install summary.
+    pub detected_by: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -597,21 +611,52 @@ impl HarnessAdapter for AntigravityHarnessAdapter {
 
 pub fn resolve_adapter(harness: Harness) -> AdapterResult<ResolvedAdapter> {
     let runtime_paths = RuntimePaths::current()?;
+    if harness == Harness::Auto {
+        if let Some(detected) = detect_harness_from_env(|name| std::env::var(name).ok()) {
+            let mut resolved = resolve_adapter_with_runtime(detected, &runtime_paths)?;
+            resolved.detected_by = Some(format!("running inside {}", detected.display_name()));
+            return Ok(resolved);
+        }
+    }
     resolve_adapter_with_runtime(harness, &runtime_paths)
+}
+
+/// Agents export these to the commands they run; the editor-terminal
+/// variable comes last so an agent running inside Cursor's terminal wins.
+const AGENT_ENV_MARKERS: &[(&str, Harness)] = &[
+    ("CLAUDECODE", Harness::Claude),
+    ("CODEX_THREAD_ID", Harness::Codex),
+    ("CODEX_SANDBOX", Harness::Codex),
+    ("CODEX_CI", Harness::Codex),
+    ("CURSOR_AGENT", Harness::Cursor),
+    ("OPENCODE_CLIENT", Harness::Opencode),
+    ("GOOSE_TERMINAL", Harness::Goose),
+    ("ANTIGRAVITY_AGENT", Harness::Antigravity),
+    ("CURSOR_TRACE_ID", Harness::Cursor),
+];
+
+pub(crate) fn detect_harness_from_env(lookup: impl Fn(&str) -> Option<String>) -> Option<Harness> {
+    AGENT_ENV_MARKERS.iter().find_map(|(name, harness)| {
+        lookup(name)
+            .filter(|value| !value.trim().is_empty())
+            .map(|_| *harness)
+    })
 }
 
 pub(crate) fn resolve_adapter_with_runtime(
     harness: Harness,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<ResolvedAdapter> {
-    let (resolved_harness, warnings) = match harness {
-        Harness::Auto => detect_auto_harness(&runtime_paths.cwd),
-        Harness::Claude => (Harness::Claude, Vec::new()),
-        Harness::Goose => (Harness::Goose, Vec::new()),
-        Harness::Opencode => (Harness::Opencode, Vec::new()),
-        Harness::Cursor => (Harness::Cursor, Vec::new()),
-        Harness::Codex => (Harness::Codex, Vec::new()),
-        Harness::Antigravity => (Harness::Antigravity, Vec::new()),
+    let (resolved_harness, warnings, detected_by) = match harness {
+        Harness::Auto => match detect_auto_harness_marker(&runtime_paths.cwd) {
+            Some((detected, marker)) => (detected, Vec::new(), Some(format!("found {marker}"))),
+            None => (
+                Harness::Claude,
+                vec![NO_AGENT_DETECTED_WARNING.to_string()],
+                None,
+            ),
+        },
+        explicit => (explicit, Vec::new(), None),
     };
 
     let adapter: Box<dyn HarnessAdapter> = match resolved_harness {
@@ -628,14 +673,17 @@ pub(crate) fn resolve_adapter_with_runtime(
         adapter,
         harness: resolved_harness,
         warnings,
+        detected_by,
     })
 }
 
-fn detect_auto_harness(cwd: &Path) -> (Harness, Vec<String>) {
+pub(crate) const NO_AGENT_DETECTED_WARNING: &str = "No coding agent detected here, so Codemod was set up for Claude Code. Using a different agent? Run `npx codemod ai --harness <cursor|codex|opencode|goose>`.";
+
+fn detect_auto_harness_marker(cwd: &Path) -> Option<(Harness, &'static str)> {
     // OpenCode projects are frequently configured with only a root-level
     // `opencode.json`/`opencode.jsonc` (no `.opencode` directory), so treat
     // those files as OpenCode markers too.
-    for (harness, markers) in [
+    [
         (Harness::Claude, &[".claude"][..]),
         (Harness::Goose, &[".goose"][..]),
         (
@@ -645,18 +693,19 @@ fn detect_auto_harness(cwd: &Path) -> (Harness, Vec<String>) {
         (Harness::Cursor, &[".cursor"][..]),
         (Harness::Codex, &[".codex"][..]),
         (Harness::Antigravity, &[".agents"][..]),
-    ] {
-        if markers.iter().any(|marker| cwd.join(marker).exists()) {
-            return (harness, Vec::new());
-        }
-    }
+    ]
+    .into_iter()
+    .find_map(|(harness, markers)| {
+        markers
+            .iter()
+            .find(|marker| cwd.join(marker).exists())
+            .map(|marker| (harness, *marker))
+    })
+}
 
-    (
-        Harness::Claude,
-        vec![
-            "No .claude, .goose, .opencode (or opencode.json), .cursor, .codex, or .agents found; defaulting to Claude harness. Pass --harness to choose a different harness.".to_string(),
-        ],
-    )
+#[cfg(test)]
+fn detect_auto_harness(cwd: &Path) -> Harness {
+    detect_auto_harness_marker(cwd).map_or(Harness::Claude, |(harness, _)| harness)
 }
 
 pub fn resolve_install_scope(project: bool, user: bool) -> AdapterResult<InstallScope> {
@@ -690,6 +739,35 @@ pub fn install_restart_hint(harness: Harness) -> String {
     }
 
     message
+}
+
+/// What to do after `codemod ai` finishes, specific to the harness and scope
+/// so the user can confirm Codemod is live and try it straight away.
+pub fn install_next_steps(harness: Harness, scope: InstallScope) -> Vec<String> {
+    let project = scope == InstallScope::Project;
+    let restart = match (harness, project) {
+        (Harness::Claude, true) => "Restart Claude Code in this folder and approve the `codemod` MCP server when it asks. Check it with `/mcp`.".to_string(),
+        (Harness::Claude, false) => "Restart Claude Code. Check that `codemod` is connected with `/mcp`.".to_string(),
+        (Harness::Cursor, _) => "Reload Cursor, then make sure `codemod` is turned on in Cursor Settings under MCP.".to_string(),
+        (Harness::Codex, true) => "Restart Codex in this folder and trust the folder when it asks; Codex ignores `.codex/config.toml` in untrusted folders. Check it with `codex mcp list`.".to_string(),
+        (Harness::Codex, false) => "Restart Codex. Check that `codemod` is listed with `codex mcp list`.".to_string(),
+        (Harness::Goose, _) => "Restart Goose and enable the Summon extension; Goose skills only appear once it is on.".to_string(),
+        (other, _) => format!("Restart {} so it picks up Codemod.", other.display_name()),
+    };
+    let has_command = match harness {
+        Harness::Claude | Harness::Cursor | Harness::Opencode => true,
+        Harness::Goose => !project,
+        _ => false,
+    };
+    let try_it = if has_command {
+        "Then try: `/codemod find deprecated APIs in this repo and migrate them`".to_string()
+    } else {
+        format!(
+            "Then ask {}: \"Use the codemod skill to find deprecated APIs in this repo and migrate them\"",
+            harness.display_name()
+        )
+    };
+    vec![restart, try_it]
 }
 
 pub(crate) fn upsert_skill_discovery_guides_with_command_status(
@@ -2802,10 +2880,13 @@ fn mcp_config_path_for_harness(
 ) -> AdapterResult<PathBuf> {
     match (harness, scope) {
         (Harness::Claude, InstallScope::Project) => Ok(runtime_paths.cwd.join(".mcp.json")),
+        // Claude Code reads user-scoped MCP servers from `~/.claude.json`
+        // (what `claude mcp add --scope user` writes); `~/.mcp.json` is only
+        // read as a project file when Claude runs in the home directory.
         (Harness::Claude, InstallScope::User) => runtime_paths
             .home_dir
             .as_ref()
-            .map(|home_dir| home_dir.join(".mcp.json"))
+            .map(|home_dir| home_dir.join(".claude.json"))
             .ok_or_else(|| {
                 HarnessAdapterError::InstallFailed(
                     "Could not determine home directory for --user install".to_string(),
@@ -6095,64 +6176,142 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
-    fn auto_detect_prefers_claude_if_both_roots_exist() {
-        let temp_dir = tempdir().unwrap();
-        fs::create_dir_all(temp_dir.path().join(".claude")).unwrap();
-        fs::create_dir_all(temp_dir.path().join(".goose")).unwrap();
-
-        let (harness, warnings) = detect_auto_harness(temp_dir.path());
-        assert_eq!(harness, Harness::Claude);
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn auto_detect_uses_goose_when_claude_root_is_absent() {
-        let temp_dir = tempdir().unwrap();
-        fs::create_dir_all(temp_dir.path().join(".goose")).unwrap();
-
-        let (harness, warnings) = detect_auto_harness(temp_dir.path());
-        assert_eq!(harness, Harness::Goose);
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn auto_detect_falls_back_to_claude_with_warning() {
-        let temp_dir = tempdir().unwrap();
-        let (harness, warnings) = detect_auto_harness(temp_dir.path());
-        assert_eq!(harness, Harness::Claude);
-        assert_eq!(warnings.len(), 1);
-    }
-
-    #[test]
-    fn auto_detect_uses_opencode_when_claude_and_goose_roots_are_absent() {
-        let temp_dir = tempdir().unwrap();
-        fs::create_dir_all(temp_dir.path().join(".opencode")).unwrap();
-
-        let (harness, warnings) = detect_auto_harness(temp_dir.path());
-        assert_eq!(harness, Harness::Opencode);
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn auto_detect_uses_opencode_when_only_opencode_config_file_exists() {
-        for config_file in ["opencode.json", "opencode.jsonc"] {
+    fn auto_detect_picks_the_agent_whose_folder_exists() {
+        for (marker, expected) in [
+            (".claude", Harness::Claude),
+            (".goose", Harness::Goose),
+            (".opencode", Harness::Opencode),
+            ("opencode.json", Harness::Opencode),
+            ("opencode.jsonc", Harness::Opencode),
+            (".cursor", Harness::Cursor),
+            (".codex", Harness::Codex),
+        ] {
             let temp_dir = tempdir().unwrap();
-            fs::write(temp_dir.path().join(config_file), "{}").unwrap();
-
-            let (harness, warnings) = detect_auto_harness(temp_dir.path());
-            assert_eq!(harness, Harness::Opencode, "marker: {config_file}");
-            assert!(warnings.is_empty());
+            if marker.ends_with(".json") || marker.ends_with(".jsonc") {
+                fs::write(temp_dir.path().join(marker), "{}").unwrap();
+            } else {
+                fs::create_dir_all(temp_dir.path().join(marker)).unwrap();
+            }
+            assert_eq!(detect_auto_harness(temp_dir.path()), expected, "{marker}");
         }
     }
 
     #[test]
-    fn auto_detect_uses_cursor_when_only_cursor_root_exists() {
+    fn auto_detect_prefers_claude_when_several_agent_folders_exist() {
         let temp_dir = tempdir().unwrap();
+        fs::create_dir_all(temp_dir.path().join(".claude")).unwrap();
         fs::create_dir_all(temp_dir.path().join(".cursor")).unwrap();
 
-        let (harness, warnings) = detect_auto_harness(temp_dir.path());
-        assert_eq!(harness, Harness::Cursor);
-        assert!(warnings.is_empty());
+        assert_eq!(detect_auto_harness(temp_dir.path()), Harness::Claude);
+    }
+
+    #[test]
+    fn auto_detect_without_any_signal_warns_and_names_the_harness_flag() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+
+        let resolved = resolve_adapter_with_runtime(Harness::Auto, &runtime_paths).unwrap();
+
+        assert_eq!(
+            resolved.warnings,
+            vec![NO_AGENT_DETECTED_WARNING.to_string()]
+        );
+    }
+
+    #[test]
+    fn auto_detect_says_which_folder_it_found() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        fs::create_dir_all(runtime_paths.cwd.join(".cursor")).unwrap();
+
+        let resolved = resolve_adapter_with_runtime(Harness::Auto, &runtime_paths).unwrap();
+
+        assert_eq!(resolved.detected_by.as_deref(), Some("found .cursor"));
+    }
+
+    #[test]
+    fn the_agent_running_the_install_is_detected_from_its_environment() {
+        for (variable, expected) in [
+            ("CLAUDECODE", Harness::Claude),
+            ("CODEX_THREAD_ID", Harness::Codex),
+            ("CURSOR_AGENT", Harness::Cursor),
+            ("CURSOR_TRACE_ID", Harness::Cursor),
+            ("OPENCODE_CLIENT", Harness::Opencode),
+            ("GOOSE_TERMINAL", Harness::Goose),
+        ] {
+            let detected = detect_harness_from_env(|name| (name == variable).then(|| "1".into()));
+            assert_eq!(detected, Some(expected), "{variable}");
+        }
+    }
+
+    #[test]
+    fn an_agent_running_in_cursors_terminal_is_not_mistaken_for_cursor() {
+        let detected = detect_harness_from_env(|name| {
+            matches!(name, "CLAUDECODE" | "CURSOR_TRACE_ID").then(|| "1".into())
+        });
+
+        assert_eq!(detected, Some(Harness::Claude));
+    }
+
+    #[test]
+    fn empty_agent_variables_are_ignored() {
+        assert_eq!(detect_harness_from_env(|_| Some(String::new())), None);
+    }
+
+    #[test]
+    fn codex_project_setup_tells_the_user_to_trust_the_folder() {
+        let steps = install_next_steps(Harness::Codex, InstallScope::Project);
+        assert!(steps[0].contains("trust the folder"), "{steps:?}");
+    }
+
+    #[test]
+    fn claude_project_setup_tells_the_user_to_approve_the_mcp_server() {
+        let steps = install_next_steps(Harness::Claude, InstallScope::Project);
+        assert!(
+            steps[0].contains("approve the `codemod` MCP server"),
+            "{steps:?}"
+        );
+    }
+
+    #[test]
+    fn first_prompt_uses_codemod_command_only_where_it_is_installed() {
+        for (harness, scope, uses_command) in [
+            (Harness::Claude, InstallScope::Project, true),
+            (Harness::Cursor, InstallScope::Project, true),
+            (Harness::Codex, InstallScope::Project, false),
+            (Harness::Goose, InstallScope::Project, false),
+            (Harness::Goose, InstallScope::User, true),
+        ] {
+            let steps = install_next_steps(harness, scope);
+            assert_eq!(
+                steps[1].contains("/codemod"),
+                uses_command,
+                "{harness:?} {scope:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn claude_user_install_registers_mcp_where_claude_code_reads_it() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let home_dir = runtime_paths.home_dir.clone().unwrap();
+        fs::write(
+            home_dir.join(".claude.json"),
+            r#"{"numStartups": 3, "mcpServers": {"github": {"command": "gh-mcp"}}}"#,
+        )
+        .unwrap();
+
+        install_mcp(Harness::Claude, InstallScope::User, false, &runtime_paths).unwrap();
+
+        let config: Value =
+            serde_json::from_str(&fs::read_to_string(home_dir.join(".claude.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            (
+                config["numStartups"].clone(),
+                config["mcpServers"]["github"].clone(),
+                config["mcpServers"]["codemod"].is_object(),
+            ),
+            (json!(3), json!({"command": "gh-mcp"}), true),
+        );
     }
 
     #[test]
@@ -7517,7 +7676,7 @@ codemod-skill-version: 0.1.0
 "#;
         fs::write(&config_path, original).unwrap();
 
-        let (harness, _warnings) = detect_auto_harness(&runtime_paths.cwd);
+        let harness = detect_auto_harness(&runtime_paths.cwd);
         assert_eq!(harness, Harness::Opencode);
 
         let request = InstallRequest {
