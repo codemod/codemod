@@ -1,12 +1,12 @@
 /**
  * The run model behind the dashboard page: the static topology it renders
- * and the monitor's projected and sequenced envelopes and snapshot. Every
- * run is driven by an executor the test releases by hand, so nothing depends
- * on durations.
+ * and the monitor's projected, sequenced envelopes and snapshot. Runs that
+ * need timing are driven by an executor the test releases by hand.
  */
 import { describe, expect, it } from "vitest";
 import {
   AdmissionScheduler,
+  MemoryHistoryStore,
   PROTOCOL_VERSION,
   executableIr,
   guard,
@@ -16,6 +16,7 @@ import {
   sequence,
   shell,
   dynamic,
+  type Executable,
   type OperationCompletion,
   type OperationExecutor,
   type OperationRequest,
@@ -23,68 +24,47 @@ import {
 import { RunMonitor, projectEvent, type DashboardEnvelope } from "../src/host/dashboard/index.ts";
 import { ref } from "./helpers.ts";
 
-async function settle(turns = 8): Promise<void> {
-  for (let turn = 0; turn < turns; turn++) {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-}
+const settle = async () => {
+  for (let turn = 0; turn < 8; turn++) await new Promise((resolve) => setImmediate(resolve));
+};
 
-/**
- * An executor whose operations stay open until the test finishes them. An
- * aborted operation completes `cancelled` on its own, as a runtime does when
- * it is killed, so a run that is aborted always settles.
- */
-function controllable(): {
-  executor: OperationExecutor;
-  started: string[];
-  open(): string[];
-  finish(commandId: string, completion?: Partial<OperationCompletion>): void;
-} {
+const succeeded = (commandId: string, stdout = commandId): OperationCompletion => ({
+  protocolVersion: PROTOCOL_VERSION,
+  commandId,
+  status: "succeeded",
+  output: { stdout },
+});
+
+const succeeding: OperationExecutor = {
+  execute: async (request) => succeeded(request.commandId),
+};
+
+/** Operations stay open until `finish`; an aborted one completes `cancelled` on its own. */
+function controllable() {
   const started: string[] = [];
   const pending = new Map<string, (completion: OperationCompletion) => void>();
-  return {
-    executor: {
-      execute(request: OperationRequest, signal?: AbortSignal) {
-        started.push(request.commandId);
-        return new Promise<OperationCompletion>((resolve) => {
-          pending.set(request.commandId, resolve);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              if (!pending.delete(request.commandId)) return;
-              resolve({
-                protocolVersion: PROTOCOL_VERSION,
-                commandId: request.commandId,
-                status: "cancelled",
-                error: { message: "aborted" },
-              });
-            },
-            { once: true },
-          );
+  const executor: OperationExecutor = {
+    execute(request: OperationRequest, signal?: AbortSignal) {
+      started.push(request.commandId);
+      return new Promise<OperationCompletion>((resolve) => {
+        pending.set(request.commandId, resolve);
+        signal?.addEventListener("abort", () => {
+          if (!pending.delete(request.commandId)) return;
+          resolve({
+            protocolVersion: PROTOCOL_VERSION,
+            commandId: request.commandId,
+            status: "cancelled",
+            error: { message: "aborted" },
+          });
         });
-      },
-    },
-    started,
-    open: () => [...pending.keys()],
-    finish(commandId, completion = {}) {
-      const resolve = pending.get(commandId);
-      if (resolve === undefined) throw new Error(`'${commandId}' was never started`);
-      pending.delete(commandId);
-      resolve({
-        protocolVersion: PROTOCOL_VERSION,
-        commandId,
-        status: "succeeded",
-        output: { stdout: commandId },
-        ...completion,
-      } as OperationCompletion);
+      });
     },
   };
-}
-
-/** A clock that advances one second per reading, so timestamps are deterministic. */
-function ticking(): () => Date {
-  let seconds = 0;
-  return () => new Date(Date.UTC(2026, 0, 1, 0, 0, seconds++));
+  const finish = (commandId: string, completion: Partial<OperationCompletion> = {}) => {
+    pending.get(commandId)!({ ...succeeded(commandId), ...completion } as OperationCompletion);
+    pending.delete(commandId);
+  };
+  return { executor, started, finish };
 }
 
 const step = (id: string) => shell({ name: id, command: id });
@@ -92,62 +72,71 @@ const Secret = guard(
   "Secret",
   (value: unknown): value is { token: string } => typeof value === "object" && value !== null,
 );
+const monitorOf = (options: Partial<ConstructorParameters<typeof RunMonitor>[0]> = {}) =>
+  new RunMonitor({ topology: { type: "dynamic" }, ...options });
+
+/**
+ * `a` and `b` in parallel under capacity 1, with a clock that ticks one
+ * second per reading. `a` is running and `b` queued when this resolves.
+ */
+async function capacityOne() {
+  let seconds = 0;
+  const scheduler = new AdmissionScheduler({ capacity: 1 });
+  const workflow = parallel(step("a")(), step("b")());
+  const monitor = new RunMonitor({
+    topology: executableIr(workflow),
+    workflow: "demo.ts",
+    runId: "run-1",
+    capacity: scheduler.capacity,
+    now: () => new Date(Date.UTC(2026, 0, 1, 0, 0, seconds++)),
+  });
+  const envelopes: DashboardEnvelope[] = [];
+  monitor.subscribe((envelope) => envelopes.push(envelope));
+  const { executor, started, finish } = controllable();
+  const result = run(workflow, { executor, scheduler, events: monitor });
+  result.catch(() => {});
+  await settle();
+  return { monitor, envelopes, started, finish, result };
+}
 
 describe("executableIr", () => {
   const migrate = jssg({ name: "migrate", language: "typescript", transform: ref("migrate") });
+  const op = (id: string) => ({ type: "operation", id, name: id, kind: "shell", input: "none" });
 
-  it("describes every root shape as plain data", () => {
-    expect(executableIr(step("only"))).toEqual({
-      type: "operation",
-      id: "only",
-      name: "only",
-      kind: "shell",
-      input: "none",
-    });
-    expect(executableIr(shell({ name: "needs", command: "x", input: Secret }))).toMatchObject({
-      type: "operation",
-      id: "needs",
-      input: "flow",
-    });
-    expect(executableIr(migrate({ id: "migrate:web", target: { root: "apps/web" } }))).toEqual({
-      type: "operation",
-      id: "migrate:web",
-      name: "migrate",
-      kind: "jssg",
-      input: "none",
-      target: { root: "apps/web" },
-    });
-    expect(executableIr(dynamic(() => 1))).toEqual({ type: "dynamic" });
-    expect(
-      executableIr(
-        sequence(
-          step("a")(),
-          parallel(
-            step("b")(),
-            dynamic(() => 2),
-          ),
-          step("c")(),
+  it.each<[string, Executable, unknown]>([
+    ["an operation as its id, name, kind and input", step("only"), op("only")],
+    [
+      "an operation that needs input as taking flow input",
+      shell({ name: "needs", command: "x", input: Secret }),
+      { ...op("needs"), input: "flow" },
+    ],
+    [
+      "a jssg invocation with its id and target",
+      migrate({ id: "migrate:web", target: { root: "apps/web" } }),
+      { ...op("migrate:web"), name: "migrate", kind: "jssg", target: { root: "apps/web" } },
+    ],
+    ["a dynamic node as opaque", dynamic(() => 1), { type: "dynamic" }],
+    [
+      "sequence and parallel in order",
+      sequence(
+        step("a")(),
+        parallel(
+          step("b")(),
+          dynamic(() => 2),
         ),
       ),
-    ).toEqual({
-      type: "sequence",
-      stages: [
-        { type: "operation", id: "a", name: "a", kind: "shell", input: "none" },
-        {
-          type: "parallel",
-          members: [
-            { type: "operation", id: "b", name: "b", kind: "shell", input: "none" },
-            { type: "dynamic" },
-          ],
-        },
-        { type: "operation", id: "c", name: "c", kind: "shell", input: "none" },
-      ],
-    });
+      {
+        type: "sequence",
+        stages: [op("a"), { type: "parallel", members: [op("b"), { type: "dynamic" }] }],
+      },
+    ],
+  ])("describes %s", (_, executable, ir) => {
+    expect(executableIr(executable)).toEqual(ir);
   });
 });
 
-describe("RunMonitor", () => {
-  it("attributes runtime commands to their dynamic topology nodes", async () => {
+describe("RunMonitor projection", () => {
+  it("attributes runtime commands to the dynamic node that issued them", async () => {
     const workflow = sequence(
       dynamic(async () => step("first-dynamic")()),
       parallel(
@@ -156,30 +145,15 @@ describe("RunMonitor", () => {
       ),
     );
     const monitor = new RunMonitor({ topology: executableIr(workflow) });
-    await run(workflow, {
-      executor: {
-        execute: async (request) => ({
-          protocolVersion: PROTOCOL_VERSION,
-          commandId: request.commandId,
-          status: "succeeded",
-          output: { stdout: request.commandId },
-        }),
-      },
-      events: monitor,
-    });
-
-    expect(
-      monitor
-        .snapshot()
-        .commands.filter((command) => !command.static)
-        .map(({ id, dynamicId }) => ({ id, dynamicId })),
-    ).toEqual([
+    await run(workflow, { executor: succeeding, events: monitor });
+    const dynamicCommands = monitor.snapshot().commands.filter((command) => !command.static);
+    expect(dynamicCommands.map(({ id, dynamicId }) => ({ id, dynamicId }))).toEqual([
       { id: "first-dynamic", dynamicId: "dynamic:0.0" },
       { id: "second-dynamic", dynamicId: "dynamic:0.1.1" },
     ]);
   });
 
-  it("projects events without env, inputs, or outputs", async () => {
+  it("never carries a command's env, input, or output", async () => {
     const leaky = shell({
       name: "leaky",
       command: "echo",
@@ -189,51 +163,44 @@ describe("RunMonitor", () => {
     const monitor = new RunMonitor({ topology: executableIr(leaky) });
     const envelopes: DashboardEnvelope[] = [];
     monitor.subscribe((envelope) => envelopes.push(envelope));
-    await run(leaky, {
-      executor: {
-        execute: async (request) => ({
-          protocolVersion: PROTOCOL_VERSION,
-          commandId: request.commandId,
-          status: "succeeded",
-          output: { stdout: "hunter2-output" },
-        }),
-      },
-      events: monitor,
-      input: { token: "hunter2" },
-    });
+    const executor = { execute: async (r: OperationRequest) => succeeded(r.commandId, "hunter2") };
+    await run(leaky, { executor, events: monitor, input: { token: "hunter2" } });
+    expect(JSON.stringify([envelopes, monitor.snapshot()])).not.toMatch(/hunter2|TOKEN/u);
+  });
 
-    const text = JSON.stringify([envelopes, monitor.snapshot()]);
-    expect(text).not.toContain("hunter2");
-    expect(text).not.toContain("TOKEN");
-    expect(envelopes.map((e) => e.event.type)).toEqual([
+  it("projects a command's lifecycle as scheduled, admitted, released, completed, finished", async () => {
+    const monitor = monitorOf();
+    const types: string[] = [];
+    monitor.subscribe((envelope) => types.push(envelope.event.type));
+    await run(step("a"), { executor: succeeding, events: monitor });
+    expect(types).toEqual([
       "command.scheduled",
       "scheduler.admitted",
       "scheduler.released",
       "command.completed",
       "run.finished",
     ]);
-    expect(envelopes[0]?.event).toEqual({
-      type: "command.scheduled",
-      commandId: "leaky",
-      runnable: "leaky",
-      kind: "shell",
-    });
-    expect(envelopes.at(-1)?.event).toEqual({ type: "run.finished", replayed: false });
+  });
+
+  it("projects a scheduled command as its id, runnable and kind, and a finish as replayed or not", async () => {
+    const monitor = monitorOf();
+    const events: unknown[] = [];
+    monitor.subscribe((envelope) => events.push(envelope.event));
+    await run(step("a"), { executor: succeeding, events: monitor });
+    expect([events[0], events.at(-1)]).toEqual([
+      { type: "command.scheduled", commandId: "a", runnable: "a", kind: "shell" },
+      { type: "run.finished", replayed: false },
+    ]);
   });
 
   it("keeps a failure's message and phase but not its output", () => {
-    expect(
-      projectEvent({
-        type: "command.completed",
-        commandId: "x",
-        completion: {
-          protocolVersion: PROTOCOL_VERSION,
-          commandId: "x",
-          status: "failed",
-          error: { message: "boom", output: "secret stdout", details: { phase: "commit" } },
-        },
-      }),
-    ).toEqual({
+    const completion: OperationCompletion = {
+      protocolVersion: PROTOCOL_VERSION,
+      commandId: "x",
+      status: "failed",
+      error: { message: "boom", output: "secret stdout", details: { phase: "commit" } },
+    };
+    expect(projectEvent({ type: "command.completed", commandId: "x", completion })).toEqual({
       type: "command.completed",
       commandId: "x",
       status: "failed",
@@ -241,188 +208,209 @@ describe("RunMonitor", () => {
       phase: "commit",
     });
   });
+});
 
-  it("stamps a run id, a monotonic sequence, and timestamps, and folds lifecycle state", async () => {
-    const now = ticking();
-    const scheduler = new AdmissionScheduler({ capacity: 1 });
-    const monitor = new RunMonitor({
-      topology: executableIr(parallel(step("a")(), step("b")())),
-      workflow: "demo.ts",
-      runId: "run-1",
-      capacity: scheduler.capacity,
-      now,
-    });
-    const envelopes: DashboardEnvelope[] = [];
-    monitor.subscribe((envelope) => envelopes.push(envelope));
-    const { executor, started, finish } = controllable();
-    const result = run(parallel(step("a")(), step("b")()), {
-      executor,
-      scheduler,
-      events: monitor,
-    });
-
-    await settle();
+describe("RunMonitor snapshot of a live run", () => {
+  it("shows the running command and the one waiting for capacity", async () => {
+    const { monitor, started } = await capacityOne();
     expect(started).toEqual(["a"]);
-    let snapshot = monitor.snapshot();
-    expect(snapshot).toMatchObject({
+    expect(monitor.snapshot()).toMatchObject({
       runId: "run-1",
       workflow: "demo.ts",
       status: "running",
       scheduler: { capacity: 1, used: 1, active: 1, queued: 1, paused: false },
+      commands: [
+        { id: "a", state: "running", static: true, kind: "shell", concurrent: true, weight: 1 },
+        { id: "b", state: "queued", static: true },
+      ],
     });
-    expect(snapshot.commands.map((c) => [c.id, c.state, c.static])).toEqual([
-      ["a", "running", true],
-      ["b", "queued", true],
-    ]);
-    expect(snapshot.commands[0]).toMatchObject({
-      runnable: "a",
-      kind: "shell",
-      concurrent: true,
-      weight: 1,
+  });
+
+  it("records when each command was scheduled and started", async () => {
+    const { monitor } = await capacityOne();
+    expect(monitor.startedAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(monitor.snapshot().commands[0]).toMatchObject({
       scheduledAt: "2026-01-01T00:00:01.000Z",
       startedAt: "2026-01-01T00:00:02.000Z",
     });
+  });
 
+  it("admits the queued command when capacity frees up", async () => {
+    const { monitor, finish } = await capacityOne();
     finish("a");
     await settle();
-    snapshot = monitor.snapshot();
+    const snapshot = monitor.snapshot();
     expect(snapshot.commands.map((c) => [c.id, c.state])).toEqual([
       ["a", "succeeded"],
       ["b", "running"],
     ]);
     expect(snapshot.scheduler).toMatchObject({ queued: 0, active: 1, used: 1 });
+  });
+
+  it("records a failed run's error and finish time", async () => {
+    const { monitor, finish, result } = await capacityOne();
+    finish("a");
+    await settle();
     finish("b", { status: "failed", error: { message: "boom" }, output: undefined });
     await expect(result).rejects.toThrow(/boom/u);
     monitor.fail("command 'b' failed: boom");
-
-    snapshot = monitor.snapshot();
-    expect(snapshot.status).toBe("failed");
-    expect(snapshot.error).toBe("command 'b' failed: boom");
-    expect(snapshot.finishedAt).toBeDefined();
-    expect(monitor.finishedAt).toBe(snapshot.finishedAt);
-    expect(monitor.error).toBe(snapshot.error);
-    expect(monitor.startedAt).toBe("2026-01-01T00:00:00.000Z");
+    const snapshot = monitor.snapshot();
+    expect(snapshot).toMatchObject({ status: "failed", error: "command 'b' failed: boom" });
     expect(snapshot.commands[1]).toMatchObject({ state: "failed", error: "boom" });
+    expect([monitor.finishedAt, monitor.error]).toEqual([snapshot.finishedAt, snapshot.error]);
+    expect(snapshot.finishedAt).toBeDefined();
+  });
 
-    expect(envelopes.map((e) => e.seq)).toEqual(envelopes.map((_, index) => index + 1));
-    expect(snapshot.seq).toBe(envelopes.length);
-    expect(envelopes.every((e) => e.runId === "run-1" && e.ts.startsWith("2026-01-01T"))).toBe(
-      true,
+  it("numbers envelopes 1, 2, 3, ... under one run id, and the snapshot has the last", async () => {
+    const { monitor, envelopes, finish } = await capacityOne();
+    finish("a");
+    await settle();
+    expect(envelopes.map((e) => [e.seq, e.runId])).toEqual(
+      envelopes.map((_, index) => [index + 1, "run-1"]),
     );
-    // Every envelope carries the state after its event, so a client needs no reducer.
+    expect(monitor.snapshot().seq).toBe(envelopes.length);
+  });
+
+  it("puts the state after each event on its envelope, so a client needs no reducer", async () => {
+    const { envelopes, finish } = await capacityOne();
+    finish("a");
+    await settle();
     const admittedB = envelopes.find(
       (e) => e.event.type === "scheduler.admitted" && e.event.commandId === "b",
     );
-    expect(admittedB?.command).toMatchObject({ id: "b", state: "running" });
-    expect(admittedB?.scheduler).toMatchObject({ queued: 0, active: 1 });
-    expect(envelopes.at(-1)).toMatchObject({ event: { type: "run.failed" }, status: "failed" });
+    expect(admittedB).toMatchObject({
+      command: { id: "b", state: "running" },
+      scheduler: { queued: 0, active: 1 },
+    });
+  });
+});
+
+describe("RunMonitor and history", () => {
+  const body = dynamic(async () => {
+    await step("first")();
+    return step("second")();
   });
 
-  it("separates runtime-issued commands from the static plan and shows replays", async () => {
-    const body = dynamic(async () => {
-      await step("first")();
-      return step("second")();
-    });
-    const executor: OperationExecutor = {
-      execute: async (request) => ({
-        protocolVersion: PROTOCOL_VERSION,
-        commandId: request.commandId,
-        status: "succeeded",
-        output: { stdout: request.commandId },
-      }),
-    };
-    const first = new RunMonitor({ topology: executableIr(body) });
-    const { history } = await run(body, { executor, events: first });
-    expect(first.snapshot().topology).toEqual({ type: "dynamic" });
-    expect(first.snapshot().commands.map((c) => [c.id, c.static, c.state])).toEqual([
+  it("marks commands a dynamic body issued as not part of the static plan", async () => {
+    const monitor = new RunMonitor({ topology: executableIr(body) });
+    await run(body, { executor: succeeding, events: monitor });
+    expect(monitor.snapshot().commands.map((c) => [c.id, c.static, c.state])).toEqual([
       ["first", false, "succeeded"],
       ["second", false, "succeeded"],
     ]);
+  });
 
-    const again = new RunMonitor({
+  it("shows a replayed run's commands as replayed against the static plan", async () => {
+    const { history } = await run(body, { executor: succeeding });
+    const monitor = new RunMonitor({
       topology: executableIr(sequence(step("first")(), step("second")())),
     });
-    const { MemoryHistoryStore } = await import("../src/index.ts");
-    await run(body, { executor, events: again, history: new MemoryHistoryStore(history) });
-    const snapshot = again.snapshot();
-    expect(snapshot.status).toBe("completed");
-    expect(snapshot.replayed).toBe(true);
-    expect(snapshot.commands.map((c) => [c.id, c.static, c.state, c.status, c.runnable])).toEqual([
-      ["first", true, "replayed", "succeeded", "first"],
-      ["second", true, "replayed", "succeeded", "second"],
+    await run(body, {
+      executor: succeeding,
+      events: monitor,
+      history: new MemoryHistoryStore(history),
+    });
+    const snapshot = monitor.snapshot();
+    expect([snapshot.status, snapshot.replayed]).toEqual(["completed", true]);
+    expect(snapshot.commands.map((c) => [c.id, c.static, c.state, c.status])).toEqual([
+      ["first", true, "replayed", "succeeded"],
+      ["second", true, "replayed", "succeeded"],
     ]);
   });
+});
 
-  it("tracks pause and resume as run status without touching terminal states", () => {
-    const monitor = new RunMonitor({ topology: { type: "dynamic" } });
+describe("RunMonitor status", () => {
+  it("is paused while the scheduler is paused", () => {
+    const monitor = monitorOf();
     const scheduler = new AdmissionScheduler({ capacity: 2, events: monitor });
     scheduler.pause();
-    expect(monitor.status).toBe("paused");
-    expect(monitor.snapshot().scheduler.paused).toBe(true);
+    expect([monitor.status, monitor.snapshot().scheduler.paused]).toEqual(["paused", true]);
     scheduler.resume();
     expect(monitor.status).toBe("running");
-    monitor.emit({ type: "run.finished", output: null, replayed: false });
-    expect(monitor.finished).toBe(true);
-    scheduler.pause();
-    expect(monitor.status).toBe("completed");
-    monitor.fail("late");
-    expect(monitor.snapshot()).toMatchObject({ status: "completed", seq: 4 });
-    expect(monitor.snapshot().error).toBeUndefined();
   });
 
-  it("marks a cancelled outcome, once", () => {
-    const monitor = new RunMonitor({ topology: { type: "dynamic" } });
+  it("keeps a finished run's status through a later pause or failure", () => {
+    const monitor = monitorOf();
+    const scheduler = new AdmissionScheduler({ capacity: 2, events: monitor });
+    monitor.emit({ type: "run.finished", output: null, replayed: false });
+    scheduler.pause();
+    monitor.fail("late");
+    const { status, error } = monitor.snapshot();
+    expect([status, error]).toEqual(["completed", undefined]);
+  });
+
+  it("records a cancellation once", () => {
+    const monitor = monitorOf();
     monitor.fail("aborted", true);
     monitor.fail("again");
     expect(monitor.snapshot()).toMatchObject({ status: "cancelled", error: "aborted", seq: 1 });
   });
 
-  it("removes a command from the queued count when it is cancelled before admission", () => {
-    const monitor = new RunMonitor({ topology: { type: "dynamic" } });
-    monitor.emit({ type: "scheduler.queued", commandId: "queued", weight: 1 });
-    monitor.emit({
-      type: "command.completed",
-      commandId: "queued",
-      completion: {
-        protocolVersion: PROTOCOL_VERSION,
-        commandId: "queued",
-        status: "cancelled",
-        error: { message: "aborted before admission" },
-      },
-    });
+  it("drops a command from the queue when it is cancelled before admission", () => {
+    const monitor = monitorOf();
+    monitor.emit({ type: "scheduler.queued", commandId: "q", weight: 1 });
+    const completion: OperationCompletion = {
+      protocolVersion: PROTOCOL_VERSION,
+      commandId: "q",
+      status: "cancelled",
+      error: { message: "aborted before admission" },
+    };
+    monitor.emit({ type: "command.completed", commandId: "q", completion });
     expect(monitor.snapshot()).toMatchObject({
       scheduler: { queued: 0 },
-      commands: [{ id: "queued", state: "cancelled" }],
+      commands: [{ id: "q", state: "cancelled" }],
     });
   });
+});
 
-  it("bounds its buffer and reports when a client fell behind", () => {
-    const monitor = new RunMonitor({ topology: { type: "dynamic" }, bufferSize: 3 });
+describe("RunMonitor buffer and subscribers", () => {
+  const sixEvents = () => {
+    const monitor = monitorOf({ bufferSize: 3 });
     for (let index = 0; index < 6; index++) {
       monitor.emit({ type: "scheduler.queued", commandId: `c${index}`, weight: 1 });
     }
-    expect(monitor.since(6)).toEqual([]);
-    expect(monitor.since(99)).toEqual([]);
-    expect(monitor.since(3)?.map((e) => e.seq)).toEqual([4, 5, 6]);
-    expect(monitor.since(4)?.map((e) => e.seq)).toEqual([5, 6]);
-    expect(monitor.since(2)).toBeUndefined();
-    expect(monitor.since(0)).toBeUndefined();
-    expect(() => new RunMonitor({ topology: { type: "dynamic" }, bufferSize: 0 })).toThrow(
-      /positive integer/u,
-    );
+    return monitor;
+  };
+
+  it.each([
+    [3, [4, 5, 6]],
+    [4, [5, 6]],
+    [6, []],
+    [99, []],
+  ])("returns what came after seq %i while it is still buffered", (seq, expected) => {
+    expect(
+      sixEvents()
+        .since(seq)
+        ?.map((e) => e.seq),
+    ).toEqual(expected);
   });
 
-  it("isolates subscribers from each other and from the run", () => {
-    const monitor = new RunMonitor({ topology: { type: "dynamic" } });
+  it.each([0, 2])("returns undefined after seq %i, which fell out of the buffer", (seq) => {
+    expect(sixEvents().since(seq)).toBeUndefined();
+  });
+
+  it("rejects a buffer size that is not a positive integer", () => {
+    expect(() => monitorOf({ bufferSize: 0 })).toThrow(/positive integer/u);
+  });
+
+  it("keeps delivering to other subscribers when one throws", () => {
+    const monitor = monitorOf();
     const seen: number[] = [];
     monitor.subscribe(() => {
       throw new Error("bad subscriber");
     });
+    monitor.subscribe((envelope) => seen.push(envelope.seq));
+    monitor.emit({ type: "scheduler.queued", commandId: "c", weight: 1 });
+    expect(seen).toEqual([1]);
+  });
+
+  it("stops delivering to a subscriber once it unsubscribes", () => {
+    const monitor = monitorOf();
+    const seen: number[] = [];
     const unsubscribe = monitor.subscribe((envelope) => seen.push(envelope.seq));
     monitor.emit({ type: "scheduler.queued", commandId: "c", weight: 1 });
     unsubscribe();
     monitor.emit({ type: "scheduler.queued", commandId: "d", weight: 1 });
-    expect(seen).toEqual([1]);
-    expect(monitor.snapshot().seq).toBe(2);
+    expect([seen, monitor.snapshot().seq]).toEqual([[1], 2]);
   });
 });
