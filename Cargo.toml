@@ -5,6 +5,7 @@ members = [
     "crates/cli",
     "crates/runners",
     "crates/orchestration-agent",
+    "crates/orchestration-build",
     "crates/orchestration-quickjs-host",
     "crates/orchestration-walker",
     "crates/state",
