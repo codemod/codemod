@@ -92,6 +92,8 @@ npx codemod ai [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|
 
 Interactive prompts are enabled by default in TTY sessions. Use `--no-interactive` to skip prompts and use flags/defaults directly.
 
+With `--harness auto` (the default), install first checks whether it is running inside a coding agent (Claude Code, Codex, Cursor, OpenCode, Goose or Antigravity) and sets up that agent. Otherwise it looks for an agent folder or config file in the project, such as `.claude`, `.cursor`, `.codex` or `opencode.json`, and prefers Claude Code when it finds several. If it finds neither, it sets up Claude Code and warns, so pass `--harness` to choose another agent. The output says which agent was set up and why, marks files that a re-run left unchanged as up to date, and ends with numbered next steps for that agent, such as approving the MCP server in Claude Code or trusting the folder in Codex.
+
 Along with skill files, install writes or updates a Codemod MCP server entry. Project installs (`--project`) write a portable launcher pinned to the CLI version that ran the install, so the config can be committed and used on other machines and checkouts:
 
 ```json
@@ -115,7 +117,7 @@ Prerequisites for project installs:
 For Opencode, install writes `opencode.json` using the Opencode-specific `mcp` schema instead of `mcpServers`.
 
 MCP config paths by harness and scope:
-- `claude`: `./.mcp.json` (project), `~/.mcp.json` (user)
+- `claude`: `./.mcp.json` (project), `~/.claude.json` (user, the same file `claude mcp add -s user` writes; other keys in it are kept)
 - `goose`: `./.goose/mcp.json` (project), `~/.config/goose/mcp.json` (user)
 - `opencode`: `./opencode.json` (project), `~/.config/opencode/opencode.json` (user)
 - `cursor`: `./.cursor/mcp.json` (project), `~/.cursor/mcp.json` (user)
