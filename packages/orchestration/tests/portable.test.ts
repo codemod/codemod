@@ -28,11 +28,8 @@ const NODE_ONLY = [
 ];
 const isNodeOnly = (file: string) => NODE_ONLY.some((pattern) => pattern.test(rel(file)));
 
-/**
- * Pure-JavaScript packages the portable closure may bundle. The TypeSafe SDK
- * imports nothing and takes an injected `fetch` (`host/quickjs/fetch.ts`).
- */
-const PORTABLE_PACKAGES = new Set(["ignore", "@typesafe-ai/sdk"]);
+/** Pure-JavaScript packages the portable closure may bundle. */
+const PORTABLE_PACKAGES = new Set(["ignore"]);
 
 /** Globals a QuickJS host does not provide (the host seam replaces them). */
 const NODE_GLOBALS: [RegExp, string][] = [

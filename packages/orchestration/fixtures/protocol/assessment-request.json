@@ -23,11 +23,12 @@
         "criteria": ["Not started", "Partial", "Complete"]
       },
       "touchesTests": {
-        "type": "noul",
+        "type": "yesno",
         "instructions": "Does the diff modify test files?",
-        "criteria": { "true": "At least one test file changed", "false": "No test files changed" }
+        "criteria": { "yes": "At least one test file changed", "no": "No test files changed" }
       }
     },
+    "provider": "systemone",
     "model": "jev-latest"
   }
 }

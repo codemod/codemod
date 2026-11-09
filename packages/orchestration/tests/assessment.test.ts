@@ -1,144 +1,94 @@
 /**
- * Contract tests for the file-oriented `assessment()` and its TypeSafe SDK
- * adapter. No test reaches the network: executor tests inject either a fake
- * `AssessmentClient` that throws real SDK error instances, or the real
- * `TypeSafeClient` over a test-only transport. The live check is
- * `assessment.live.test.ts`.
+ * Specs for `assessment()` and the decision-provider adapters. No test reaches
+ * the network: requests go to a scripted `fetch`. The live check per provider
+ * is `assessment.live.test.ts`.
  */
-import { readFileSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import {
-  APIConnectionError,
-  APITimeoutError,
-  APIUserAbortError,
-  RateLimitError,
-  TypeSafeClient,
-  type RequestOptions,
-  type SystemOneRequest,
-  type TypeSafeClientConfig,
-} from "@typesafe-ai/sdk";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHarness } from "../src/host/harness.ts";
 import {
   MemoryHistoryStore,
-  OperationError,
+  NondeterminismError,
   assessment,
   canonicalJson,
   dynamic,
   executeAssessment,
   executeAssessmentOperation,
-  getAssessmentAsk,
+  getHost,
   guard,
-  isOperation,
   isOperationCompletion,
   isOperationRequest,
-  isRunnable,
   parallel,
   run,
   sequence,
-  shell,
-  type AssessmentAskContext,
-  type AssessmentClient,
-  type AssessmentClientFactory,
   type AssessmentExecutorOptions,
-  type AssessmentFileResult,
   type AssessmentOperation,
   type AssessmentQuestions,
+  type AssessmentState,
+  type DecisionFetch,
   type Json,
   type OperationRequest,
 } from "../src/index.ts";
 
-// --- Fixture directory helpers ---
+// --- helpers ---------------------------------------------------------------
 
-let fixtureCount = 0;
+const dirs: string[] = [];
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
-/** What a runtime's executor does with `assessment` operations. */
-function assessmentExecutor(options: { cwd: string; assessment: AssessmentExecutorOptions }) {
-  return {
-    execute: (request: OperationRequest, signal?: AbortSignal) =>
-      executeAssessmentOperation(options.assessment, options.cwd, request, signal),
-  };
-}
-
-function createFixture(files: Record<string, string>): string {
-  fixtureCount++;
-  const dir = join(tmpdir(), `assessment-test-${process.pid}-${fixtureCount}`);
-  rmSync(dir, { recursive: true, force: true });
-  mkdirSync(dir, { recursive: true });
+function repo(files: Record<string, string | Buffer>): string {
+  const dir = mkdtempSync(join(tmpdir(), "assessment-"));
+  dirs.push(dir);
   for (const [path, content] of Object.entries(files)) {
-    const full = join(dir, path);
-    mkdirSync(join(full, ".."), { recursive: true });
-    writeFileSync(full, content, "utf8");
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), content);
   }
   return dir;
 }
 
-function cleanFixture(dir: string): void {
-  try {
-    rmSync(dir, { recursive: true, force: true });
-  } catch {
-    // Best effort cleanup
-  }
+interface Sent {
+  url: string;
+  headers: Record<string, string>;
+  body: { [key: string]: Json };
 }
+type Reply = { status?: number; headers?: Record<string, string>; body: unknown } | Error;
 
-// --- SDK helpers ---
-
-const SDK_RETRY = new TypeSafeClient({ apiKey: "unused", logLevel: "off" }).retry;
-
-function fakeClient(
-  respond: () => unknown = () => ({}),
-  overrides: Partial<AssessmentClient> = {},
-) {
-  const configs: TypeSafeClientConfig[] = [];
-  const calls: { request: SystemOneRequest; options?: RequestOptions }[] = [];
-  const createClient: AssessmentClientFactory = (config) => {
-    configs.push(config);
+/** A scripted decision API: `respond` sees each request and returns its reply. */
+function api(respond: (sent: Sent, index: number) => Reply | Promise<Reply>) {
+  const sent: Sent[] = [];
+  const fetch: DecisionFetch = async (url, init) => {
+    const request = { url, headers: init.headers, body: JSON.parse(init.body) };
+    sent.push(request);
+    const reply = await respond(request, sent.length - 1);
+    if (reply instanceof Error) throw reply;
+    const headers = new Map(Object.entries(reply.headers ?? {}));
+    const text = typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body);
     return {
-      baseURL: "https://api.typesafe.ai",
-      retry: SDK_RETRY,
-      systemOne: async (request, options) => {
-        calls.push({ request, options });
-        return respond();
-      },
-      ...overrides,
+      status: reply.status ?? 200,
+      headers: { get: (n) => headers.get(n) ?? null },
+      text: async () => text,
     };
   };
-  return { configs, calls, createClient };
+  return { sent, fetch };
 }
-
-function useEnv(values: Record<string, string> = {}) {
-  for (const name of ["API_KEY", "BASE_URL", "DEFAULT_MODEL", "LOG_LEVEL"]) {
-    vi.stubEnv(`TYPESAFE_${name}`, values[`TYPESAFE_${name}`] ?? "");
-  }
-}
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
-
-// --- Shared questions and helpers ---
 
 const reviewQuestions = {
   risk: {
     type: "choice" as const,
     instructions: "How risky is this file?",
-    criteria: {
-      low: "Mechanical, behavior-preserving",
-      medium: null,
-      high: "Could change runtime behavior",
-    },
+    criteria: { low: "Mechanical", medium: null, high: "Could change behavior" },
   },
-  hasTests: {
-    type: "noul" as const,
-    instructions: "Does this file contain tests?",
-  },
-};
+  hasTests: { type: "yesno" as const, instructions: "Does this file contain tests?" },
+} satisfies AssessmentQuestions;
 
-/** Make a valid API response for reviewQuestions */
-function makeReviewResponse(choice: "low" | "medium" | "high" = "low") {
-  return {
+/** A System One reply to `reviewQuestions`. */
+const systemOneReply = (choice = "low") => ({
+  body: {
     model: "jev-1.13.0",
     answers: {
       risk: {
@@ -150,1250 +100,793 @@ function makeReviewResponse(choice: "low" | "medium" | "high" = "low") {
       hasTests: { type: "noul", noul: 0.03 },
     },
     usage: { input_tokens: 312, output_tokens: 48 },
-  };
-}
+  },
+});
 
-/** Normalized output (camelCase usage, no extra fields) */
-function makeReviewOutput(choice: "low" | "medium" | "high" = "low") {
-  return {
-    model: "jev-1.13.0",
-    answers: {
-      risk: {
-        type: "choice",
-        choice,
-        probabilities: { low: 0.86, medium: 0.1, high: 0.04 },
-        confidence: 0.81,
-      },
-      hasTests: { type: "noul", noul: 0.03 },
+/** The recorded result for `systemOneReply`. */
+const reviewResult = (choice = "low") => ({
+  provider: "systemone",
+  model: "jev-1.13.0",
+  calibrated: true,
+  answers: {
+    risk: {
+      type: "choice",
+      choice,
+      probabilities: { low: 0.86, medium: 0.1, high: 0.04 },
+      confidence: 0.81,
     },
-    usage: { inputTokens: 312, outputTokens: 48 },
+    hasTests: { type: "yesno", yes: 0.03 },
+  },
+  usage: { inputTokens: 312, outputTokens: 48 },
+});
+
+const review = assessment({ name: "review", include: ["**/*.ts"], ask: () => reviewQuestions });
+
+const batch = (...files: string[]) =>
+  files.map((file) => ({ file, questions: reviewQuestions, assessment: reviewResult() })) as Json;
+
+const KEY = { DECISION_API_KEY: "test-key" };
+
+/** What a runtime's executor does with `assessment` operations. */
+function executor(cwd: string, options: AssessmentExecutorOptions) {
+  return {
+    execute: (request: OperationRequest, signal?: AbortSignal) =>
+      executeAssessmentOperation(
+        { env: KEY, retry: { initialDelayMs: 0 }, ...options },
+        cwd,
+        request,
+        signal,
+      ),
   };
 }
 
-/** Build the batch output format the executor produces. */
-function makeBatchResult(
-  files: { path: string; choice?: "low" | "medium" | "high" }[],
-  questions: AssessmentQuestions = reviewQuestions,
-): Json {
-  return files.map((f) => ({
-    file: f.path,
+const files = async (dir: string, step = review, options: AssessmentExecutorOptions = {}) => {
+  const { fetch } = api(() => systemOneReply());
+  const { output } = await run(step, { executor: executor(dir, { fetch, ...options }) });
+  return output.map((result) => result.file);
+};
+
+/** One single-file operation, as the batch executor builds per file. */
+const single = (questions: AssessmentQuestions, provider: "systemone" | "openai" = "systemone") =>
+  ({
+    kind: "assessment",
+    state: { file: { path: "a.ts", content: "code" } },
     questions,
-    assessment: makeReviewOutput(f.choice ?? "low"),
-  })) as unknown as Json;
-}
+    provider,
+    model: provider === "systemone" ? "jev-latest" : "gpt-6-luna",
+  }) satisfies AssessmentOperation;
 
-// ==========================================================================
-// Definition validation
-// ==========================================================================
+const ask = (
+  operation: AssessmentOperation,
+  fetch: DecisionFetch,
+  options: AssessmentExecutorOptions = {},
+  signal?: AbortSignal,
+) =>
+  executeAssessment(
+    { env: KEY, fetch, retry: { initialDelayMs: 0 }, ...options },
+    "review",
+    operation,
+    signal,
+  );
 
-describe("assessment definition validation", () => {
-  it("requires a non-empty name", () => {
-    expect(() =>
-      assessment({ name: " ", include: ["**/*.ts"], ask: () => reviewQuestions }),
-    ).toThrow("assessment name must not be empty");
+// --- defining an assessment ------------------------------------------------
+
+describe("defining an assessment", () => {
+  it.each<[string, object, string]>([
+    ["a blank name", { name: " " }, "assessment name must not be empty"],
+    ["ask that is not a function", { ask: "no" }, "ask must be a function"],
+    ["a blank pinned model", { model: "" }, "model must not be empty"],
+    ["no include patterns", { include: [] }, "include must be a non-empty list"],
+    ["a blank include pattern", { include: [""] }, "include patterns must be non-empty strings"],
+    ["an empty exclude list", { exclude: [] }, "exclude must be a non-empty list"],
+    ["a blank exclude pattern", { exclude: [""] }, "exclude patterns must be non-empty strings"],
+  ])("rejects %s", (_, override, message) => {
+    const options = { name: "a", include: ["**/*.ts"], ask: () => reviewQuestions, ...override };
+    expect(() => assessment(options as never)).toThrow(message);
   });
 
-  it("requires ask to be a function", () => {
-    expect(() =>
-      assessment({ name: "a", include: ["**/*.ts"], ask: "not a function" } as never),
-    ).toThrow("ask must be a function");
-  });
+  const recorded = [{ file: "a.ts", assessment: reviewResult() }];
 
-  it("requires a non-empty model when specified", () => {
-    expect(() =>
-      assessment({
-        name: "a",
-        include: ["**/*.ts"],
-        ask: () => reviewQuestions,
-        model: "",
-      }),
-    ).toThrow("model must not be empty");
-  });
-
-  it("requires include to be a non-empty list", () => {
-    expect(() => assessment({ name: "a", include: [], ask: () => reviewQuestions })).toThrow(
-      "include must be a non-empty list",
-    );
-    expect(() => assessment({ name: "a", include: [""], ask: () => reviewQuestions })).toThrow(
-      "include patterns must be non-empty strings",
-    );
-  });
-
-  it("validates exclude when specified", () => {
-    expect(() =>
-      assessment({ name: "a", include: ["**/*.ts"], exclude: [], ask: () => reviewQuestions }),
-    ).toThrow("exclude must be a non-empty list");
-    expect(() =>
-      assessment({
-        name: "a",
-        include: ["**/*.ts"],
-        exclude: [""],
-        ask: () => reviewQuestions,
-      }),
-    ).toThrow("exclude patterns must be non-empty strings");
-  });
-
-  it("creates a valid assessment with proper options", () => {
-    const a = assessment({
-      name: "review",
-      include: ["src/**/*.ts"],
-      exclude: ["**/*.test.ts"],
-      ask: () => reviewQuestions,
-      model: "jev-latest",
-    });
-    expect(a.kind).toBe("assessment");
-    expect(a.name).toBe("review");
-    expect(a.include).toEqual(["src/**/*.ts"]);
-    expect(a.exclude).toEqual(["**/*.test.ts"]);
-    expect(typeof a.ask).toBe("function");
+  it.each<[string, () => unknown, unknown]>([
+    ["the root", () => review, recorded],
+    ["a step in sequence()", () => sequence(review()), recorded],
+    ["a branch of parallel()", () => parallel(review()), [recorded]],
+    ["awaited inside dynamic()", () => dynamic(async () => await review()), recorded],
+  ])("runs as %s", async (_, root, expected) => {
+    const h = createHarness({ results: { review: batch("a.ts") } });
+    const { output } = await h.run(root() as typeof review);
+    expect(output).toEqual(expected);
   });
 });
 
-// ==========================================================================
-// First-class Runnable
-// ==========================================================================
+// --- the recorded operation ------------------------------------------------
 
-describe("assessment is a first-class Runnable", () => {
-  const a = assessment({
+describe("the recorded operation", () => {
+  const Input = guard("Input", (v): v is { threshold: number } => typeof v === "object");
+  const withInput = assessment({
     name: "review",
-    include: ["**/*.ts"],
+    include: ["src/**"],
+    exclude: ["**/*.test.ts"],
+    input: Input,
     ask: () => reviewQuestions,
   });
 
-  it("satisfies isRunnable", () => {
-    expect(isRunnable(a)).toBe(true);
-  });
-
-  it("has toOperation and decode", () => {
-    expect(typeof a.toOperation).toBe("function");
-    expect(typeof a.decode).toBe("function");
-  });
-
-  it("creates a Command when called", () => {
-    createHarness({ fallback: () => makeBatchResult([]) });
-    // Calling assessment returns a Command (thenable)
-    // We can't easily check `isCommand` without importing the internal check,
-    // but we can verify the callable returns a thenable.
-    const result = a();
-    expect(typeof result.then).toBe("function");
-  });
-
-  it("can be the root of run() without a dynamic wrapper", async () => {
-    const h = createHarness({
-      fallback: () => makeBatchResult([{ path: "a.ts" }]),
+  it("holds the selection, the input, the provider and the model, and nothing of ask", () => {
+    expect(JSON.parse(canonicalJson(withInput.toOperation({ threshold: 0.5 })))).toEqual({
+      kind: "assessment",
+      state: { include: ["src/**"], exclude: ["**/*.test.ts"], input: { threshold: 0.5 } },
+      questions: { __batch: { type: "yesno", instructions: "file-oriented batch assessment" } },
+      provider: "systemone",
+      model: "jev-latest",
     });
-    const result = await h.run(a);
-    expect(result.output).toHaveLength(1);
-    expect(result.output[0]!.file).toBe("a.ts");
   });
 
-  it("can be composed in sequence()", async () => {
-    const inspect = shell({ name: "inspect", command: "echo ok" });
-    const a = assessment({
-      name: "review",
-      include: ["**/*.ts"],
-      ask: () => reviewQuestions,
-    });
-    // sequence(inspect, a) — inspect's output flows to a, but assessment
-    // ignores it (no input schema). This just proves it composes.
-    const h = createHarness({
-      results: {
-        inspect: "ok",
-        review: makeBatchResult([{ path: "x.ts" }]),
-      },
-    });
-    const s = sequence(inspect(), a());
-    const result = await h.run(s);
-    expect(result.output).toHaveLength(1);
+  it.each<[string, Record<string, string>, string | undefined, object]>([
+    [
+      "DECISION_PROVIDER and its default model",
+      { DECISION_PROVIDER: "openai" },
+      undefined,
+      { provider: "openai", model: "gpt-6-luna" },
+    ],
+    ["DECISION_MODEL", { DECISION_MODEL: "jev-1.13.0" }, undefined, { model: "jev-1.13.0" }],
+    [
+      "TYPESAFE_DEFAULT_MODEL for System One",
+      { TYPESAFE_DEFAULT_MODEL: "jev-2" },
+      undefined,
+      { model: "jev-2" },
+    ],
+    [
+      "a pinned model over DECISION_MODEL",
+      { DECISION_MODEL: "jev-1.13.0" },
+      "jev-pinned",
+      { model: "jev-pinned" },
+    ],
+  ])("takes %s", (_, env, model, expected) => {
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+    const step = assessment({ name: "r", include: ["*"], ask: () => reviewQuestions, model });
+    expect(step.toOperation(undefined)).toMatchObject(expected);
   });
 
-  it("can be composed in parallel()", async () => {
-    const a1 = assessment({ name: "check-a", include: ["a/**"], ask: () => reviewQuestions });
-    const a2 = assessment({ name: "check-b", include: ["b/**"], ask: () => reviewQuestions });
-    const h = createHarness({
-      results: {
-        "check-a": makeBatchResult([{ path: "a/x.ts" }]),
-        "check-b": makeBatchResult([{ path: "b/y.ts" }]),
-      },
-    });
-    const p = parallel(a1(), a2());
-    const result = await h.run(p);
-    expect(result.output).toHaveLength(2);
-    expect(result.output[0]).toHaveLength(1);
-    expect(result.output[1]).toHaveLength(1);
+  it("rejects an unknown DECISION_PROVIDER", () => {
+    vi.stubEnv("DECISION_PROVIDER", "other");
+    expect(() => review.toOperation(undefined)).toThrow("DECISION_PROVIDER 'other' is not one of");
+  });
+
+  it("replays as changed when the configured model changes", async () => {
+    const h = createHarness({ results: { review: batch("a.ts") } });
+    await h.run(review);
+    vi.stubEnv("DECISION_MODEL", "jev-2");
+    await expect(h.reload().run(review)).rejects.toThrow(NondeterminismError);
   });
 });
 
-// ==========================================================================
-// toOperation and replay identity
-// ==========================================================================
+// --- decoding a recorded result --------------------------------------------
 
-describe("assessment toOperation", () => {
-  it("encodes include/exclude in state and uses sentinel questions", () => {
-    const a = assessment({
-      name: "review",
-      include: ["src/**/*.ts"],
-      exclude: ["**/*.test.ts"],
-      ask: () => reviewQuestions,
-      model: "jev-latest",
-    });
-    const op = a.toOperation(undefined as void);
-    expect(op.kind).toBe("assessment");
-    expect(isOperation(op)).toBe(true);
-    // State carries batch identity
-    const state = op.state as Record<string, unknown>;
-    expect(state.include).toEqual(["src/**/*.ts"]);
-    expect(state.exclude).toEqual(["**/*.test.ts"]);
-    // Questions are a sentinel, not the real per-file questions
-    expect(op.questions).toEqual({
-      __batch: { type: "noul", instructions: "file-oriented batch assessment" },
-    });
-    expect(op.model).toBe("jev-latest");
+describe("decoding a recorded result", () => {
+  const operation = review.toOperation(undefined);
+
+  it.each([null, undefined, []])("reads %j as no files", async (output) => {
+    expect(await review.decode(output as Json, operation)).toEqual([]);
   });
 
-  it("includes input in state when present", () => {
-    interface Config {
-      threshold: number;
-    }
-    const Config = guard(
-      "Config",
-      (v): v is Config => typeof v === "object" && v !== null && "threshold" in v,
-    );
-    const a = assessment({
-      name: "review",
-      include: ["**/*.ts"],
-      input: Config,
-      ask: () => reviewQuestions,
-    });
-    const op = a.toOperation({ threshold: 0.5 });
-    const state = op.state as Record<string, unknown>;
-    expect(state.input).toEqual({ threshold: 0.5 });
-    expect(state.include).toEqual(["**/*.ts"]);
-  });
-
-  it("ask resolver is stored in a WeakMap, invisible to serialization", () => {
-    const a = assessment({
-      name: "review",
-      include: ["**/*.ts"],
-      ask: () => reviewQuestions,
-    });
-    const op = a.toOperation(undefined as void);
-    // No __ask property on the operation at all (WeakMap, not property).
-    expect(Object.keys(op)).not.toContain("__ask");
-    expect(Object.getOwnPropertyNames(op)).not.toContain("__ask");
-    expect(Object.getOwnPropertySymbols(op)).toHaveLength(0);
-    // But the resolver is reachable through the typed accessor.
-    expect(getAssessmentAsk(op)).toBe(a.ask);
-    // canonicalJson / JSON.stringify see no trace.
-    const canonical = canonicalJson(op);
-    expect(canonical).not.toContain("__ask");
-    expect(canonical).not.toContain("ask");
-    expect(JSON.stringify(op)).not.toContain("__ask");
-  });
-
-  it("produces the same canonical identity for identical definitions", () => {
-    const a = assessment({
-      name: "review",
-      include: ["**/*.ts"],
-      exclude: ["test/**"],
-      ask: () => reviewQuestions,
-      model: "jev-latest",
-    });
-    const op1 = a.toOperation(undefined as void);
-    const op2 = a.toOperation(undefined as void);
-    expect(canonicalJson(op1)).toBe(canonicalJson(op2));
-  });
-});
-
-// ==========================================================================
-// decode validation
-// ==========================================================================
-
-describe("assessment decode", () => {
-  const a = assessment({
-    name: "review",
-    include: ["**/*.ts"],
-    ask: () => reviewQuestions,
-  });
-  const op = a.toOperation(undefined as void);
-
-  it("decodes a valid batch result", async () => {
-    const output = makeBatchResult([
-      { path: "src/app.ts" },
-      { path: "src/utils.ts", choice: "high" },
-    ]);
-    const result = await a.decode(output, op);
-    expect(result).toHaveLength(2);
-    expect(result[0]!.file).toBe("src/app.ts");
-    expect(result[0]!.assessment.answers.risk.choice).toBe("low");
-    expect(result[1]!.file).toBe("src/utils.ts");
-    expect(result[1]!.assessment.answers.risk.choice).toBe("high");
-    // Questions are NOT in the returned result
-    expect(result[0]).not.toHaveProperty("questions");
-  });
-
-  it("decodes empty array", async () => {
-    const result = await a.decode([] as unknown as Json, op);
-    expect(result).toEqual([]);
-  });
-
-  it("decodes null/undefined as empty", async () => {
-    expect(await a.decode(null, op)).toEqual([]);
-    expect(await a.decode(undefined, op)).toEqual([]);
-  });
-
-  it("rejects non-array output", async () => {
-    await expect(a.decode("bad" as unknown as Json, op)).rejects.toThrow("expected an array");
-  });
-
-  it("rejects entry with missing file", async () => {
-    const bad = [{ questions: reviewQuestions, assessment: makeReviewOutput() }];
-    await expect(a.decode(bad as unknown as Json, op)).rejects.toThrow("string 'file' field");
-  });
-
-  it("rejects entry with invalid questions", async () => {
-    const bad = [{ file: "a.ts", questions: {}, assessment: makeReviewOutput() }];
-    await expect(a.decode(bad as unknown as Json, op)).rejects.toThrow("invalid questions");
-  });
-
-  it("rejects entry where assessment does not match questions", async () => {
-    const bad = [
-      {
-        file: "a.ts",
-        questions: reviewQuestions,
-        assessment: { model: "jev-1.13.0", answers: {}, usage: {} },
-      },
-    ];
-    await expect(a.decode(bad as unknown as Json, op)).rejects.toThrow(
+  it.each<[string, unknown, string | RegExp]>([
+    ["a non-array output", "bad", "expected an array"],
+    [
+      "an entry without a file",
+      [{ questions: reviewQuestions, assessment: reviewResult() }],
+      "string 'file' field",
+    ],
+    [
+      "an entry with invalid questions",
+      [{ file: "a.ts", questions: {}, assessment: reviewResult() }],
+      "invalid questions",
+    ],
+    [
+      "answers that miss a question",
+      [
+        {
+          file: "a.ts",
+          questions: reviewQuestions,
+          assessment: { ...reviewResult(), answers: {} },
+        },
+      ],
       /answers must contain exactly/,
-    );
+    ],
+    [
+      "a result without the provider",
+      [
+        {
+          file: "a.ts",
+          questions: reviewQuestions,
+          assessment: { ...reviewResult(), provider: undefined },
+        },
+      ],
+      "provider must be a non-empty string",
+    ],
+  ])("rejects %s", async (_, output, message) => {
+    await expect(review.decode(output as Json, operation)).rejects.toThrow(message);
+  });
+
+  it("accepts a refusal in place of any answer", async () => {
+    const refused = {
+      ...reviewResult(),
+      answers: { ...reviewResult().answers, risk: { type: "refused" } },
+    };
+    const output = [{ file: "a.ts", questions: reviewQuestions, assessment: refused }] as Json;
+    expect(await review.decode(output, operation)).toEqual([{ file: "a.ts", assessment: refused }]);
   });
 });
 
-// ==========================================================================
-// Workflow integration via harness
-// ==========================================================================
+// --- selecting and reading files -------------------------------------------
 
-describe("assessment workflow integration (harness)", () => {
-  it("succeeds with scripted batch results", async () => {
-    const a = assessment({
-      name: "review",
-      include: ["src/**/*.ts"],
-      ask: () => reviewQuestions,
+describe("selecting and reading files", () => {
+  it("selects by include and exclude from the target root, in walker order", async () => {
+    const dir = repo({
+      "z.ts": "",
+      "m/b.ts": "",
+      "a.ts": "",
+      "a.test.ts": "",
+      "test/e.ts": "",
+      "r.md": "",
     });
-    const h = createHarness({
-      results: {
-        review: makeBatchResult([
-          { path: "src/app.ts", choice: "low" },
-          { path: "src/utils.ts", choice: "high" },
-        ]),
-      },
-    });
-    const result = await h.run(a);
-    expect(result.output).toHaveLength(2);
-    expect(result.output[0]!.file).toBe("src/app.ts");
-    expect(result.output[0]!.assessment.answers.risk.choice).toBe("low");
-    expect(result.output[1]!.file).toBe("src/utils.ts");
-    expect(result.output[1]!.assessment.answers.risk.choice).toBe("high");
-  });
-
-  it("returns empty array when no files match", async () => {
-    const a = assessment({
-      name: "review",
-      include: ["**/*.xyz"],
-      ask: () => reviewQuestions,
-    });
-    const h = createHarness({ results: { review: [] as unknown as Json } });
-    const result = await h.run(a);
-    expect(result.output).toEqual([]);
-  });
-
-  it("passes workflow input to the operation", async () => {
-    interface ReviewInput {
-      migration: string;
-    }
-    const ReviewInput = guard(
-      "ReviewInput",
-      (v): v is ReviewInput => typeof v === "object" && v !== null && "migration" in v,
-    );
-
-    const a = assessment({
-      name: "review",
-      include: ["src/**/*.ts"],
-      input: ReviewInput,
-      ask: () => reviewQuestions,
-    });
-
-    const h = createHarness({
-      results: {
-        review: makeBatchResult([{ path: "src/app.ts" }]),
-      },
-    });
-
-    const result = await h.run(a, { input: { migration: "v2" } });
-    expect(result.output).toHaveLength(1);
-    // Verify the operation state contains the input
-    const command = result.commands[0]!;
-    const op = command.operation as AssessmentOperation;
-    const state = op.state as Record<string, unknown>;
-    expect(state.input).toEqual({ migration: "v2" });
-  });
-
-  it("uses assessment name as command id", async () => {
-    const a = assessment({
-      name: "review",
-      include: ["**/*.ts"],
-      ask: () => reviewQuestions,
-    });
-    const h = createHarness({ fallback: () => makeBatchResult([{ path: "a.ts" }]) });
-    await h.run(a);
-    expect(h.executed[0]!.commandId).toBe("review");
-  });
-
-  it("preserves per-file validation with different questions per file", async () => {
-    const a = assessment({
-      name: "classify",
-      include: ["**/*.ts"],
-      ask: ({ file }: AssessmentAskContext<void>) => {
-        const criteria: Record<string, null> =
-          file.path === "a.ts" ? { source: null, test: null } : { config: null, util: null };
-        return {
-          type: {
-            type: "choice" as const,
-            instructions: "classify",
-            criteria,
-          },
-        };
-      },
-    });
-
-    // Batch result with different questions per file
-    const h = createHarness({
-      results: {
-        classify: [
-          {
-            file: "a.ts",
-            questions: {
-              type: {
-                type: "choice",
-                instructions: "classify",
-                criteria: { source: null, test: null },
-              },
-            },
-            assessment: {
-              model: "jev-1.13.0",
-              answers: {
-                type: {
-                  type: "choice",
-                  choice: "source",
-                  probabilities: { source: 0.9, test: 0.1 },
-                  confidence: 0.85,
-                },
-              },
-              usage: { inputTokens: 10, outputTokens: 5 },
-            },
-          },
-          {
-            file: "b.ts",
-            questions: {
-              type: {
-                type: "choice",
-                instructions: "classify",
-                criteria: { config: null, util: null },
-              },
-            },
-            assessment: {
-              model: "jev-1.13.0",
-              answers: {
-                type: {
-                  type: "choice",
-                  choice: "config",
-                  probabilities: { config: 0.8, util: 0.2 },
-                  confidence: 0.7,
-                },
-              },
-              usage: { inputTokens: 10, outputTokens: 5 },
-            },
-          },
-        ] as unknown as Json,
-      },
-    });
-
-    const result = await h.run(a);
-    expect(result.output).toHaveLength(2);
-    const aResult = result.output.find((r: AssessmentFileResult) => r.file === "a.ts")!;
-    const bResult = result.output.find((r: AssessmentFileResult) => r.file === "b.ts")!;
-    expect((aResult.assessment.answers.type as { choice: string }).choice).toBe("source");
-    expect((bResult.assessment.answers.type as { choice: string }).choice).toBe("config");
-  });
-
-  it("works inside a dynamic body (await assessSources())", async () => {
-    const a = assessment({
-      name: "review",
-      include: ["src/**/*.ts"],
-      ask: () => reviewQuestions,
-    });
-    const h = createHarness({
-      results: {
-        review: makeBatchResult([{ path: "src/app.ts" }]),
-      },
-    });
-    // Use dynamic to prove the await-inside-dynamic pattern still works
-    const result = await h.run(
-      dynamic(async () => {
-        const results = await a();
-        return results;
-      }),
-    );
-    expect(result.output).toHaveLength(1);
-  });
-});
-
-// ==========================================================================
-// Replay — zero I/O
-// ==========================================================================
-
-describe("assessment replay", () => {
-  it("replays without calling the executor", async () => {
-    const a = assessment({
-      name: "review",
-      include: ["src/**/*.ts"],
-      ask: () => reviewQuestions,
-    });
-
-    const h = createHarness({
-      results: {
-        review: makeBatchResult([{ path: "src/app.ts" }]),
-      },
-    });
-
-    // First run — executes
-    const first = await h.run(a);
-    expect(first.output).toHaveLength(1);
-    expect(h.executed).toHaveLength(1);
-
-    // Replay — no executor calls
-    const replay = h.reload({
-      fallback: () => {
-        throw new Error("should not execute on replay");
-      },
-    });
-    const second = await replay.run(a);
-    expect(second.replayed).toBe(true);
-    expect(second.output).toHaveLength(1);
-    expect(second.output[0]!.file).toBe(first.output[0]!.file);
-    expect(second.output[0]!.assessment).toEqual(first.output[0]!.assessment);
-  });
-
-  it("replays with zero I/O after files are deleted (focused replay test)", async () => {
-    // This test proves the critical replay requirement: after a first run that
-    // reads files and calls the SDK, the replay succeeds with IDENTICAL output
-    // and ZERO file selection, ZERO file reading, and ZERO SDK calls — even
-    // when the original files no longer exist on disk.
-    const dir = createFixture({ "src/app.ts": "const x = 1;" });
-
-    const { calls, createClient } = fakeClient(() => makeReviewResponse());
-    const store = new MemoryHistoryStore();
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({
-      name: "review",
-      include: ["src/**/*.ts"],
-      ask: () => reviewQuestions,
-    });
-
-    // First run — reads files and calls SDK through executor
-    const first = await run(a, { executor, history: store });
-    expect(first.output).toHaveLength(1);
-    expect(first.output[0]!.file).toBe("src/app.ts");
-    expect(calls).toHaveLength(1);
-
-    // Delete all files — directory no longer exists
-    rmSync(dir, { recursive: true, force: true });
-
-    // Replay with a fresh executor — should succeed with zero I/O
-    const replayCalls: unknown[] = [];
-    const { createClient: replayClient } = fakeClient(() => {
-      replayCalls.push("sdk-call");
-      throw new Error("should not call SDK on replay");
-    });
-    const replayExecutor = assessmentExecutor({
-      cwd: dir, // directory no longer exists!
-      assessment: { apiKey: "test-key", createClient: replayClient },
-    });
-
-    const second = await run(a, { executor: replayExecutor, history: store });
-    expect(second.replayed).toBe(true);
-    expect(second.output).toHaveLength(1);
-    expect(second.output[0]!.file).toBe(first.output[0]!.file);
-    expect(second.output[0]!.assessment).toEqual(first.output[0]!.assessment);
-    expect(replayCalls).toHaveLength(0);
-  });
-
-  it("replays with changed files — recorded result is returned, not new data", async () => {
-    const dir = createFixture({ "src/app.ts": "original content" });
-
-    const { createClient } = fakeClient(() => makeReviewResponse("low"));
-    const store = new MemoryHistoryStore();
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({
-      name: "review",
-      include: ["src/**/*.ts"],
-      ask: () => reviewQuestions,
-    });
-
-    const first = await run(a, { executor, history: store });
-    expect(first.output[0]!.assessment.answers.risk.choice).toBe("low");
-
-    // Change the file content
-    writeFileSync(join(dir, "src/app.ts"), "completely different content", "utf8");
-
-    // Replay — still returns the original "low" result
-    const { createClient: replayClient } = fakeClient(() => makeReviewResponse("high"));
-    const replayExecutor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient: replayClient },
-    });
-    const second = await run(a, { executor: replayExecutor, history: store });
-    expect(second.replayed).toBe(true);
-    expect(second.output[0]!.assessment.answers.risk.choice).toBe("low"); // original, not "high"
-
-    cleanFixture(dir);
-  });
-});
-
-// ==========================================================================
-// Execution layer — file selection, reading, target root
-// ==========================================================================
-
-describe("assessment execution layer (file assessment)", () => {
-  it("selects files from target root (cwd), not process.cwd()", async () => {
-    const dir = createFixture({
-      "src/app.ts": "const x = 1;",
-      "src/utils.ts": "export const y = 2;",
-      "src/config.json": '{ "key": "value" }',
-    });
-
-    const { calls, createClient } = fakeClient(() => makeReviewResponse());
-    const executor = assessmentExecutor({
-      cwd: dir, // NOT process.cwd()
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({
-      name: "review",
-      include: ["src/**/*.ts"],
-      ask: () => reviewQuestions,
-    });
-
-    const result = await run(a, { executor });
-    expect(result.output).toHaveLength(2);
-    expect(result.output.map((r) => r.file).sort()).toEqual(["src/app.ts", "src/utils.ts"]);
-    // Verify file content was read from the target directory
-    expect(calls).toHaveLength(2);
-    for (const call of calls) {
-      const state = call.request.state as { file: { path: string; content: string } };
-      expect(state.file.path).toBeDefined();
-      expect(state.file.content).toBeDefined();
-    }
-
-    cleanFixture(dir);
-  });
-
-  it("respects exclude patterns", async () => {
-    const dir = createFixture({
-      "src/app.ts": "code",
-      "src/app.test.ts": "test",
-      "test/e2e.ts": "e2e",
-    });
-
-    const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({
+    const step = assessment({
       name: "review",
       include: ["**/*.ts"],
       exclude: ["test/**", "**/*.test.ts"],
       ask: () => reviewQuestions,
     });
-
-    const result = await run(a, { executor });
-    expect(result.output).toHaveLength(1);
-    expect(result.output[0]!.file).toBe("src/app.ts");
-
-    cleanFixture(dir);
-  });
-
-  it("returns empty array when no files match", async () => {
-    const dir = createFixture({ "readme.md": "hello" });
-
-    const { calls, createClient } = fakeClient(() => makeReviewResponse());
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({
-      name: "review",
-      include: ["**/*.ts"],
-      ask: () => reviewQuestions,
-    });
-
-    const result = await run(a, { executor });
-    expect(result.output).toEqual([]);
-    expect(calls).toHaveLength(0);
-
-    cleanFixture(dir);
+    expect(await files(dir, step)).toEqual(["a.ts", "m/b.ts", "z.ts"]);
   });
 
   it("skips symlinks", async () => {
-    const dir = createFixture({ "real.ts": "const x = 1;" });
-    try {
-      symlinkSync(join(dir, "real.ts"), join(dir, "link.ts"));
-    } catch {
-      cleanFixture(dir);
-      return; // Skip on platforms that don't support symlinks
-    }
-
-    const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({
-      name: "review",
-      include: ["**/*.ts"],
-      ask: () => reviewQuestions,
-    });
-
-    const result = await run(a, { executor });
-    expect(result.output).toHaveLength(1);
-    expect(result.output[0]!.file).toBe("real.ts");
-
-    cleanFixture(dir);
+    const dir = repo({ "real.ts": "" });
+    symlinkSync(join(dir, "real.ts"), join(dir, "link.ts"));
+    expect(await files(dir)).toEqual(["real.ts"]);
   });
 
-  it("preserves deterministic file order", async () => {
-    const dir = createFixture({
-      "z.ts": "z",
-      "a.ts": "a",
-      "m/b.ts": "b",
-    });
-
-    const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({
-      name: "review",
-      include: ["**/*.ts"],
-      ask: () => reviewQuestions,
-    });
-
-    const result = await run(a, { executor });
-    // Component-wise sorted
-    expect(result.output.map((r) => r.file)).toEqual(["a.ts", "m/b.ts", "z.ts"]);
-
-    cleanFixture(dir);
+  it("asks nothing and returns no results when no file matches", async () => {
+    const { sent, fetch } = api(() => systemOneReply());
+    await run(review, { executor: executor(repo({ "r.md": "" }), { fetch }) });
+    expect(sent).toEqual([]);
   });
 
-  it("passes file content and input to ask, embedding resolved questions", async () => {
-    const dir = createFixture({
-      "src/component.tsx": "import React from 'react';",
-      "src/utils.ts": "export function helper() {}",
+  it("sends each file's path and content, and the workflow input, as the state", async () => {
+    const step = assessment({
+      name: "review",
+      include: ["*.ts"],
+      input: guard("I", (v): v is { m: string } => typeof v === "object"),
+      ask: () => reviewQuestions,
     });
+    const { sent, fetch } = api(() => systemOneReply());
+    await run(step, {
+      executor: executor(repo({ "a.ts": "code" }), { fetch }),
+      input: { m: "v2" },
+    });
+    expect(sent[0]!.body.state).toEqual({
+      file: { path: "a.ts", content: "code" },
+      input: { m: "v2" },
+    });
+  });
 
-    const { calls, createClient } = fakeClient(() => {
-      // Respond with the right answer based on the questions sent
-      const questions = calls[calls.length - 1]?.request.questions;
-      const options = Object.keys(
-        (questions as Record<string, { criteria: object }>)?.category?.criteria ?? {},
-      );
-      return {
-        model: "jev-1.13.0",
-        answers: {
-          category: {
-            type: "choice",
-            choice: options[0],
-            probabilities: Object.fromEntries(options.map((o, i) => [o, i === 0 ? 0.9 : 0.1])),
-            confidence: 0.85,
-          },
+  it("asks the questions ask returns for each file", async () => {
+    const step = assessment({
+      name: "review",
+      include: ["*"],
+      ask: ({ file }) => ({
+        kind: { type: "yesno" as const, instructions: `is ${file.path} a test?` },
+      }),
+    });
+    const { sent, fetch } = api(() => ({
+      body: { model: "m", answers: { kind: { type: "noul", noul: 0.5 } } },
+    }));
+    await run(step, { executor: executor(repo({ "a.ts": "", "b.ts": "" }), { fetch }) });
+    expect(
+      sent.map((s) => (s.body.questions as { kind: { instructions: string } }).kind.instructions),
+    ).toEqual(["is a.ts a test?", "is b.ts a test?"]);
+  });
+
+  it("fails, naming the file, when ask returns invalid questions", async () => {
+    const step = assessment({ name: "review", include: ["*"], ask: () => ({}) });
+    const { fetch } = api(() => systemOneReply());
+    await expect(
+      run(step, { executor: executor(repo({ "a.ts": "" }), { fetch }) }),
+    ).rejects.toThrow("questions for 'a.ts': questions must contain at least one question");
+  });
+
+  it("fails, naming the file, when a file is not valid UTF-8", async () => {
+    const dir = repo({ "good.ts": "", "bad.ts": Buffer.from([0x80, 0x81]) });
+    await expect(files(dir)).rejects.toThrow("file 'bad.ts' is not valid UTF-8");
+  });
+
+  it("fails, naming the file, when a file cannot be read", async () => {
+    const dir = repo({ "a.ts": "" });
+    vi.spyOn(getHost().fs, "readText").mockImplementation(() => {
+      throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+    });
+    await expect(files(dir)).rejects.toThrow("reading 'a.ts' failed: permission denied");
+  });
+
+  it("skips a file that vanished after selection", async () => {
+    const dir = repo({ "a.ts": "", "b.ts": "" });
+    const readText = getHost().fs.readText;
+    vi.spyOn(getHost().fs, "readText").mockImplementation((file, options) => {
+      if (file.endsWith("a.ts")) throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      return readText(file, options);
+    });
+    expect(await files(dir)).toEqual(["b.ts"]);
+  });
+});
+
+// --- replay ----------------------------------------------------------------
+
+describe("replay", () => {
+  it("returns the recorded results without selecting, reading or asking", async () => {
+    const dir = repo({ "a.ts": "" });
+    const history = new MemoryHistoryStore();
+    const first = await run(review, {
+      executor: executor(
+        dir,
+        api(() => systemOneReply()),
+      ),
+      history,
+    });
+    rmSync(dir, { recursive: true });
+    const never = api(() => new Error("replay must not ask"));
+    const second = await run(review, { executor: executor(dir, never), history });
+    expect(second.output).toEqual(first.output);
+  });
+});
+
+// --- concurrency and failure -----------------------------------------------
+
+describe("asking many files", () => {
+  const many = (count: number) =>
+    repo(
+      Object.fromEntries(
+        Array.from({ length: count }, (_, i) => [`f${String(i).padStart(2, "0")}.ts`, ""]),
+      ),
+    );
+
+  async function peak(dir: string, options: AssessmentExecutorOptions = {}) {
+    let active = 0;
+    let max = 0;
+    const { fetch } = api(async () => {
+      max = Math.max(max, ++active);
+      await new Promise((r) => setTimeout(r, 10));
+      active--;
+      return systemOneReply();
+    });
+    await run(review, { executor: executor(dir, { fetch, ...options }) });
+    return max;
+  }
+
+  it("asks at most fileConcurrency files at once", async () => {
+    expect(await peak(many(8), { fileConcurrency: 2 })).toBe(2);
+  });
+
+  it("asks at most 4 files at once by default", async () => {
+    expect(await peak(many(12))).toBe(4);
+  });
+
+  it("returns results in selector order whatever order the answers arrive in", async () => {
+    const { fetch } = api(async (_, index) => {
+      if (index % 2 === 0) await new Promise((r) => setTimeout(r, 20));
+      return systemOneReply();
+    });
+    const { output } = await run(review, {
+      executor: executor(many(4), { fetch, fileConcurrency: 2 }),
+    });
+    expect(output.map((r) => r.file)).toEqual(["f00.ts", "f01.ts", "f02.ts", "f03.ts"]);
+  });
+
+  it("fails the step with the first file's failure", async () => {
+    const { fetch } = api((_, index) =>
+      index === 0 ? new Error("network down") : systemOneReply(),
+    );
+    await expect(
+      run(review, { executor: executor(many(3), { fetch, retry: { maxRetries: 0 } }) }),
+    ).rejects.toThrow("decision request failed: network down");
+  });
+
+  it("starts no further file after a failure", async () => {
+    const { sent, fetch } = api(() => ({ status: 400, body: {} }));
+    await run(review, { executor: executor(many(6), { fetch, fileConcurrency: 1 }) }).catch(
+      () => {},
+    );
+    expect(sent).toHaveLength(1);
+  });
+
+  it("stops when the run is aborted", async () => {
+    const controller = new AbortController();
+    const { fetch } = api((_, index) => {
+      if (index === 1) controller.abort();
+      return systemOneReply();
+    });
+    const running = run(review, {
+      executor: executor(many(5), { fetch, fileConcurrency: 1 }),
+      signal: controller.signal,
+    });
+    await expect(running).rejects.toThrow();
+  });
+});
+
+// --- the System One adapter ------------------------------------------------
+
+describe("the System One adapter", () => {
+  const yesNo = {
+    ok: { type: "yesno" as const, instructions: "ok?", criteria: { yes: "fine", no: "broken" } },
+  };
+  const yesNoReply = { body: { model: "jev-1", answers: { ok: { type: "noul", noul: 0.9 } } } };
+
+  it("posts state, questions and model to /v1/systemone with a bearer key", async () => {
+    const { sent, fetch } = api(() => systemOneReply());
+    await ask(single(reviewQuestions), fetch);
+    expect(sent[0]).toEqual({
+      url: "https://api.typesafe.ai/v1/systemone",
+      headers: {
+        authorization: "Bearer test-key",
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: {
+        state: { file: { path: "a.ts", content: "code" } },
+        questions: {
+          ...reviewQuestions,
+          hasTests: { type: "noul", instructions: "Does this file contain tests?" },
         },
-        usage: { input_tokens: 10, output_tokens: 5 },
-      };
-    });
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({
-      name: "classify",
-      include: ["src/**"],
-      ask: ({ file }) => {
-        const isReact = file.content.includes("React");
-        return {
-          category: {
-            type: "choice" as const,
-            instructions: "Classify this file",
-            criteria: (isReact
-              ? { component: "A React component", hook: "A React hook" }
-              : { utility: "A utility module", service: "A service" }) as Record<string, string>,
-          },
-        };
+        model: "jev-latest",
       },
     });
-
-    const result = await run(a, { executor });
-    expect(result.output).toHaveLength(2);
-    const tsx = result.output.find((r: AssessmentFileResult) => r.file === "src/component.tsx")!;
-    const ts = result.output.find((r: AssessmentFileResult) => r.file === "src/utils.ts")!;
-    expect((tsx.assessment.answers.category as { choice: string }).choice).toBe("component");
-    expect((ts.assessment.answers.category as { choice: string }).choice).toBe("utility");
-
-    cleanFixture(dir);
   });
 
-  it("uses single command id for single file, path-suffixed for multiple", async () => {
-    // Single file
-    const dir1 = createFixture({ "only.ts": "code" });
-    const { calls: calls1, createClient: c1 } = fakeClient(() => makeReviewResponse());
-    const e1 = assessmentExecutor({
-      cwd: dir1,
-      assessment: { apiKey: "test-key", createClient: c1 },
+  it("sends a yes/no question as noul with true and false criteria", async () => {
+    const { sent, fetch } = api(() => yesNoReply);
+    await ask(single(yesNo), fetch);
+    expect(sent[0]!.body.questions).toEqual({
+      ok: { type: "noul", instructions: "ok?", criteria: { true: "fine", false: "broken" } },
     });
-    const a = assessment({ name: "review", include: ["**/*.ts"], ask: () => reviewQuestions });
-    await run(a, { executor: e1 });
-    // Per-file SDK call uses the assessment name as commandId
-    expect(calls1[0]!.request.model).toBe(undefined); // no model pinned
-    cleanFixture(dir1);
-
-    // Multiple files
-    const dir2 = createFixture({ "a.ts": "a", "b.ts": "b" });
-    const { calls: calls2, createClient: c2 } = fakeClient(() => makeReviewResponse());
-    const e2 = assessmentExecutor({
-      cwd: dir2,
-      assessment: { apiKey: "test-key", createClient: c2 },
-    });
-    await run(a, { executor: e2 });
-    expect(calls2).toHaveLength(2);
-    cleanFixture(dir2);
-  });
-});
-
-// ==========================================================================
-// Cancellation
-// ==========================================================================
-
-describe("assessment cancellation", () => {
-  it("cancels sibling files on first failure", async () => {
-    const dir = createFixture({
-      "a.ts": "a",
-      "b.ts": "b",
-      "c.ts": "c",
-    });
-    let callCount = 0;
-
-    const { createClient } = fakeClient(() => {
-      callCount++;
-      if (callCount === 1) {
-        // First file fails
-        throw new APIConnectionError("network down");
-      }
-      return makeReviewResponse();
-    });
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({ name: "review", include: ["**/*.ts"], ask: () => reviewQuestions });
-    const error = await run(a, { executor }).catch((e: unknown) => e);
-    // The operation should fail with an OperationError
-    expect(error).toBeInstanceOf(OperationError);
-    expect((error as OperationError).message).toMatch(/network down/);
-
-    cleanFixture(dir);
   });
 
-  it("cancels on abort signal", async () => {
-    const dir = createFixture({
-      "a.ts": "a",
-      "b.ts": "b",
-      "c.ts": "c",
-      "d.ts": "d",
-      "e.ts": "e",
+  it("returns the answers in this package's shapes, with provider, model and calibration", async () => {
+    const { fetch } = api(() => systemOneReply());
+    expect(await ask(single(reviewQuestions), fetch)).toMatchObject({
+      status: "succeeded",
+      output: reviewResult(),
     });
-    const controller = new AbortController();
-    let callCount = 0;
+  });
 
-    const { createClient } = fakeClient(async () => {
-      callCount++;
-      if (callCount >= 2) {
-        controller.abort();
-      }
-      return makeReviewResponse();
+  it("drops answer fields the API adds later", async () => {
+    const { fetch } = api(() => ({
+      body: { model: "m", answers: { ok: { type: "noul", noul: 0.9, extra: 1 } } },
+    }));
+    expect(await ask(single(yesNo), fetch)).toMatchObject({
+      output: { answers: { ok: { type: "yesno", yes: 0.9 } } },
     });
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
+  });
 
-    const a = assessment({ name: "review", include: ["**/*.ts"], ask: () => reviewQuestions });
-    const error = await run(a, { executor, signal: controller.signal }).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(Error);
+  it("reaches Microsoft Decision on Foundry with a configured path and api-key header", async () => {
+    const env = {
+      DECISION_BASE_URL: "https://x.services.ai.azure.com/",
+      DECISION_PATH: "providers/microsoft/v1/systemone",
+      DECISION_AUTH_HEADER: "api-key",
+      DECISION_API_KEY: "azure",
+    };
+    const { sent, fetch } = api(() => yesNoReply);
+    await ask(single(yesNo), fetch, { env });
+    expect([sent[0]!.url, sent[0]!.headers["api-key"], sent[0]!.headers.authorization]).toEqual([
+      "https://x.services.ai.azure.com/providers/microsoft/v1/systemone",
+      "azure",
+      undefined,
+    ]);
+  });
 
-    cleanFixture(dir);
+  it("falls back to TYPESAFE_API_KEY and TYPESAFE_BASE_URL", async () => {
+    const env = { TYPESAFE_API_KEY: "legacy", TYPESAFE_BASE_URL: "http://127.0.0.1:9" };
+    const { sent, fetch } = api(() => yesNoReply);
+    await ask(single(yesNo), fetch, { env });
+    expect([sent[0]!.url, sent[0]!.headers.authorization]).toEqual([
+      "http://127.0.0.1:9/v1/systemone",
+      "Bearer legacy",
+    ]);
   });
 });
 
-// ==========================================================================
-// executeAssessment (SDK adapter) — unchanged single-file tests
-// ==========================================================================
+// --- the OpenAI adapter ----------------------------------------------------
 
-describe("executeAssessment (SDK adapter) is unchanged", () => {
-  const operation: AssessmentOperation = {
-    kind: "assessment",
-    state: { file: { path: "test.ts", content: "code" } },
-    questions: reviewQuestions,
-    model: "jev-latest",
+describe("the OpenAI decisions adapter", () => {
+  const questions = {
+    ok: { type: "yesno" as const, instructions: "ok?", criteria: { yes: "fine" } },
+    risk: {
+      type: "choice" as const,
+      instructions: { ask: "risk?" },
+      criteria: { low: null, high: "breaks" },
+    },
+    size: { type: "score" as const, instructions: "size?", criteria: ["small", { big: true }] },
+  } satisfies AssessmentQuestions;
+  const reply = {
+    body: {
+      model: "gpt-6-luna-2026",
+      answers: [
+        { type: "predicate", name: "ok", probability: 0.7 },
+        {
+          type: "choice",
+          name: "risk",
+          choice: "high",
+          probabilities: [
+            { value: "low", probability: 0.2 },
+            { value: "high", probability: 0.8 },
+          ],
+          confidence: 0.6,
+        },
+        {
+          type: "score",
+          name: "size",
+          score: 0.4,
+          probabilities: [
+            { value: 0, label: "0", probability: 0.6 },
+            { value: 1, label: "1", probability: 0.4 },
+          ],
+          confidence: 0.5,
+        },
+      ],
+      usage: { input_tokens: 40, input_tokens_details: { cached_tokens: 0 } },
+    },
   };
+  const env = { DECISION_PROVIDER: "openai", OPENAI_API_KEY: "sk-test" };
 
-  const execute = (options: AssessmentExecutorOptions, signal?: AbortSignal) =>
-    executeAssessment({ apiKey: "test-key", ...options }, "review", operation, signal);
-
-  it("succeeds with a valid response", async () => {
-    const { createClient } = fakeClient(() => makeReviewResponse());
-    const completion = await execute({ createClient });
-    expect(completion.status).toBe("succeeded");
-    expect(isOperationCompletion(completion)).toBe(true);
+  it("posts the questions as a named array to /v1/decisions with OPENAI_API_KEY", async () => {
+    const { sent, fetch } = api(() => reply);
+    await ask(single(questions, "openai"), fetch, { env });
+    expect(sent[0]).toMatchObject({
+      url: "https://api.openai.com/v1/decisions",
+      headers: { authorization: "Bearer sk-test" },
+      body: {
+        model: "gpt-6-luna",
+        questions: [
+          { type: "predicate", name: "ok", instructions: "ok?\n\nAnswer yes when: fine" },
+          {
+            type: "choice",
+            name: "risk",
+            instructions: '{"ask":"risk?"}',
+            choices: [
+              { value: "low", description: "low" },
+              { value: "high", description: "breaks" },
+            ],
+          },
+          {
+            type: "score",
+            name: "size",
+            instructions: "size?",
+            levels: [
+              { label: "0", description: "small" },
+              { label: "1", description: '{"big":true}' },
+            ],
+          },
+        ],
+      },
+    });
   });
 
-  it("returns cancelled on pre-abort", async () => {
-    const { createClient } = fakeClient();
-    const completion = await execute({ createClient }, AbortSignal.abort());
-    expect(completion.status).toBe("cancelled");
-  });
-
-  it.each<[string, AssessmentExecutorOptions, RegExp]>([
-    ["an overflowing timeout", { timeoutMs: 2 ** 31 }, /timeoutMs must be at most/],
+  it.each<[string, AssessmentState, unknown]>([
+    ["text state as the input string", "a diff", "a diff"],
     [
-      "maxRetries above the cap",
-      { retry: { maxRetries: 11 } },
-      /retry.maxRetries must be at most 10/,
+      "JSON state as an input_json message",
+      { a: 1 },
+      [{ role: "user", content: [{ type: "input_json", data: { a: 1 } }] }],
     ],
-  ])("returns a config failure for %s", async (_label, options, message) => {
-    useEnv({});
-    const { createClient } = fakeClient();
-    const completion = await execute({ ...options, createClient });
-    expect(completion.error?.message).toMatch(message);
+  ])("sends %s", async (_, state, input) => {
+    const { sent, fetch } = api(() => reply);
+    await ask({ ...single(questions, "openai"), state }, fetch, { env });
+    expect(sent[0]!.body.input).toEqual(input);
   });
 
-  it("returns a failure when the response has no model (e.g. missing API key)", async () => {
-    useEnv({});
-    const { createClient } = fakeClient();
-    const completion = await execute({ apiKey: undefined, createClient });
-    expect(completion.status).toBe("failed");
-    expect(completion.error?.message).toMatch(/invalid assessment/);
-  });
-
-  it("maps APITimeoutError to a timed-out failure", async () => {
-    useEnv({});
-    const { createClient } = fakeClient(() => {
-      throw new APITimeoutError(5000);
+  it("maps the answers back by name, with the legend from the question", async () => {
+    const { fetch } = api(() => reply);
+    expect((await ask(single(questions, "openai"), fetch, { env })).output).toEqual({
+      provider: "openai",
+      model: "gpt-6-luna-2026",
+      calibrated: true,
+      answers: {
+        ok: { type: "yesno", yes: 0.7 },
+        risk: {
+          type: "choice",
+          choice: "high",
+          probabilities: { low: 0.2, high: 0.8 },
+          confidence: 0.6,
+        },
+        size: {
+          type: "score",
+          score: 0.4,
+          legend: { 0: "small", 1: { big: true } },
+          probabilities: { 0: 0.6, 1: 0.4 },
+          confidence: 0.5,
+        },
+      },
+      usage: { inputTokens: 40 },
     });
-    const completion = await execute({ createClient });
-    expect(completion.status).toBe("failed");
-    expect(completion.error?.message).toMatch(/timed out/);
-    expect((completion.error?.details as Record<string, unknown>)?.timedOut).toBe(true);
   });
 
-  it("maps APIConnectionError to a connection failure", async () => {
-    useEnv({});
-    const { createClient } = fakeClient(() => {
-      throw new APIConnectionError("ECONNREFUSED");
+  it("returns a refusal as a refused answer", async () => {
+    const { fetch } = api(() => ({ body: { answers: [{ type: "refusal", name: "ok" }] } }));
+    expect(
+      (await ask(single({ ok: questions.ok }, "openai"), fetch, { env })).output,
+    ).toMatchObject({ answers: { ok: { type: "refused" } } });
+  });
+
+  it.each<[string, AssessmentQuestions, string]>([
+    [
+      "more than 10 score levels",
+      { s: { type: "score", instructions: "s", criteria: Array(11).fill(null) } },
+      "question 's': openai decisions take at most 10 score levels",
+    ],
+    [
+      "more than 400 questions",
+      Object.fromEntries(
+        Array.from({ length: 401 }, (_, i) => [`q${i}`, { type: "yesno", instructions: "?" }]),
+      ),
+      "openai decisions take at most 400 questions per request",
+    ],
+  ])("refuses %s before sending", async (_, many, message) => {
+    const { fetch } = api(() => reply);
+    expect((await ask(single(many, "openai"), fetch, { env })).error).toEqual({
+      message,
+      details: { phase: "request" },
     });
-    const completion = await execute({ createClient });
-    expect(completion.status).toBe("failed");
-    expect(completion.error?.message).toMatch(/failed/);
   });
 
-  it("maps RateLimitError with retryAfterMs", async () => {
-    useEnv({});
-    const { createClient } = fakeClient(() => {
-      throw new RateLimitError(
-        429,
-        { error: "too fast" },
-        new Headers({ "retry-after-ms": "1500" }),
-        "rate limited",
+  it("fails when an answer repeats a question name", async () => {
+    const { fetch } = api(() => ({
+      body: { answers: [reply.body.answers[0], reply.body.answers[0]] },
+    }));
+    expect((await ask(single({ ok: questions.ok }, "openai"), fetch, { env })).error?.message).toBe(
+      "decision API returned an invalid assessment: answers repeat 'ok'",
+    );
+  });
+});
+
+// --- configuration and transport failures ----------------------------------
+
+describe("assessment failures", () => {
+  const yesNo = { ok: { type: "yesno" as const, instructions: "ok?" } };
+  const ok = { body: { model: "m", answers: { ok: { type: "noul", noul: 1 } } } };
+  const failure = async (
+    reply: () => Reply | Promise<Reply>,
+    options: AssessmentExecutorOptions = {},
+  ) =>
+    (
+      await ask(single(yesNo), api(reply).fetch, {
+        retry: { maxRetries: 0, initialDelayMs: 0 },
+        ...options,
+      })
+    ).error;
+
+  it.each<[string, AssessmentExecutorOptions, string]>([
+    ["no API key", { env: {} }, "no API key for the systemone decision API: set DECISION_API_KEY"],
+    [
+      "a base URL that is not http(s)",
+      { env: { ...KEY, DECISION_BASE_URL: "ftp://x" } },
+      "decision base URL 'ftp://x' is not http(s)",
+    ],
+    [
+      "a base URL with a query",
+      { env: { ...KEY, DECISION_BASE_URL: "https://x/?a=1" } },
+      "decision base URL 'https://x/?a=1' must not carry a query, fragment, or user",
+    ],
+    [
+      "a timeout too large for a timer",
+      { timeoutMs: 2 ** 31 },
+      "timeoutMs must be between 1 and 2147483647",
+    ],
+    [
+      "more retries than the cap",
+      { retry: { maxRetries: 11 } },
+      "retry.maxRetries must be at most 10",
+    ],
+  ])("fails as config with %s", async (_, options, message) => {
+    expect(await failure(() => ok, options)).toEqual({ message, details: { phase: "config" } });
+  });
+
+  it("fails an HTTP error with its status, request id and body", async () => {
+    const reply = { status: 400, headers: { "x-request-id": "req-1" }, body: { error: "bad" } };
+    expect(await failure(() => reply)).toEqual({
+      message: "decision API responded 400",
+      details: {
+        phase: "http",
+        status: 400,
+        retryable: false,
+        requestId: "req-1",
+        body: { error: "bad" },
+      },
+    });
+  });
+
+  it("reports the server's retry-after-ms on a rate limit", async () => {
+    const reply = { status: 429, headers: { "retry-after-ms": "1500" }, body: "" };
+    expect((await failure(() => reply))?.details).toMatchObject({
+      retryable: true,
+      retryAfterMs: 1500,
+    });
+  });
+
+  it.each<[string, Reply]>([
+    ["429", { status: 429, body: "" }],
+    ["503", { status: 503, body: "" }],
+    ["a connection error", new Error("reset")],
+  ])("retries %s up to maxRetries", async (_, reply) => {
+    const { sent, fetch } = api(() => reply);
+    await ask(single(yesNo), fetch, { retry: { maxRetries: 2, initialDelayMs: 0 } });
+    expect(sent).toHaveLength(3);
+  });
+
+  it("succeeds when a retry is answered", async () => {
+    const { fetch } = api((_, index) => (index === 0 ? { status: 500, body: "" } : ok));
+    expect((await ask(single(yesNo), fetch)).status).toBe("succeeded");
+  });
+
+  it("fails a request that outlives timeoutMs as timed out", async () => {
+    const hang = (_: string, init: { signal: AbortSignal }) =>
+      new Promise<never>((_, reject) =>
+        init.signal.addEventListener("abort", () => reject(new Error("aborted"))),
       );
+    const completion = await ask(single(yesNo), hang as unknown as DecisionFetch, {
+      timeoutMs: 5,
+      retry: { maxRetries: 0 },
     });
-    const completion = await execute({ createClient });
-    expect(completion.status).toBe("failed");
-    expect((completion.error?.details as Record<string, unknown>)?.retryAfterMs).toBe(1500);
+    expect(completion.error).toEqual({
+      message: "decision request timed out after 5ms",
+      details: { phase: "request", timedOut: true, retryable: true },
+    });
   });
 
-  it("maps abort signal to cancelled", async () => {
-    const { createClient } = fakeClient(() => {
-      throw new APIUserAbortError();
+  it("fails a connection error in the request phase", async () => {
+    expect(await failure(() => new Error("ECONNREFUSED"))).toEqual({
+      message: "decision request failed: ECONNREFUSED",
+      details: { phase: "request", retryable: true },
     });
-    const completion = await execute({ createClient });
-    expect(completion.status).toBe("cancelled");
   });
 
-  it("rejects invalid base URLs", async () => {
-    useEnv({});
-    const { createClient } = fakeClient(() => makeReviewResponse(), {
-      baseURL: "ftp://example.com",
+  it("fails a 2xx body that is not JSON in the response phase", async () => {
+    expect(await failure(() => ({ body: "<html>" }))).toEqual({
+      message: "decision API returned a body that is not JSON",
+      details: { phase: "response", status: 200 },
     });
-    const completion = await execute({ createClient });
-    expect(completion.status).toBe("failed");
-    expect(completion.error?.message).toMatch(/base URL/i);
-  });
-});
-
-// ==========================================================================
-// Bounded concurrency
-// ==========================================================================
-
-describe("assessment bounded concurrency", () => {
-  it("limits concurrent SDK calls to fileConcurrency", async () => {
-    // Create 8 files but set fileConcurrency to 2.
-    const files: Record<string, string> = {};
-    for (let i = 0; i < 8; i++) files[`f${i}.ts`] = `file ${i}`;
-    const dir = createFixture(files);
-
-    let active = 0;
-    let maxActive = 0;
-
-    const { createClient } = fakeClient(async () => {
-      active++;
-      maxActive = Math.max(maxActive, active);
-      // Simulate SDK latency so workers overlap.
-      await new Promise((r) => setTimeout(r, 10));
-      active--;
-      return makeReviewResponse();
-    });
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient, fileConcurrency: 2 },
-    });
-
-    const a = assessment({ name: "review", include: ["**/*.ts"], ask: () => reviewQuestions });
-    const result = await run(a, { executor });
-    expect(result.output).toHaveLength(8);
-    // The bound must be respected: at most 2 concurrent calls.
-    expect(maxActive).toBeLessThanOrEqual(2);
-    // At least some concurrency happened (not purely sequential).
-    expect(maxActive).toBeGreaterThanOrEqual(1);
-
-    cleanFixture(dir);
   });
 
-  it("defaults to DEFAULT_ASSESSMENT_FILE_CONCURRENCY (4)", async () => {
-    // Create 12 files with no explicit fileConcurrency.
-    const files: Record<string, string> = {};
-    for (let i = 0; i < 12; i++) files[`f${i}.ts`] = `file ${i}`;
-    const dir = createFixture(files);
-
-    let active = 0;
-    let maxActive = 0;
-
-    const { createClient } = fakeClient(async () => {
-      active++;
-      maxActive = Math.max(maxActive, active);
-      await new Promise((r) => setTimeout(r, 10));
-      active--;
-      return makeReviewResponse();
+  it("fails answers that do not match the questions in the response phase", async () => {
+    expect(await failure(() => ({ body: { model: "m", answers: {} } }))).toEqual({
+      message:
+        "decision API returned an invalid assessment: answers must contain exactly the questions 'ok'",
+      details: { phase: "response" },
     });
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({ name: "review", include: ["**/*.ts"], ask: () => reviewQuestions });
-    const result = await run(a, { executor });
-    expect(result.output).toHaveLength(12);
-    // Default concurrency is 4.
-    expect(maxActive).toBeLessThanOrEqual(4);
-
-    cleanFixture(dir);
   });
 
-  it("queued work does not start after first failure", async () => {
-    // 6 files, concurrency 1 — purely sequential, so after file 0 fails
-    // files 1–5 should never start an SDK call.
-    const files: Record<string, string> = {};
-    for (let i = 0; i < 6; i++) files[`f${String(i).padStart(2, "0")}.ts`] = `file ${i}`;
-    const dir = createFixture(files);
-
-    let sdkCallCount = 0;
-
-    const { createClient } = fakeClient(() => {
-      sdkCallCount++;
-      if (sdkCallCount === 1) {
-        throw new APIConnectionError("network down");
-      }
-      return makeReviewResponse();
-    });
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient, fileConcurrency: 1 },
-    });
-
-    const a = assessment({ name: "review", include: ["**/*.ts"], ask: () => reviewQuestions });
-    const error = await run(a, { executor }).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(OperationError);
-    // Only 1 SDK call should have been made — the one that failed.
-    expect(sdkCallCount).toBe(1);
-
-    cleanFixture(dir);
+  it("is cancelled when aborted before it starts", async () => {
+    expect((await ask(single(yesNo), api(() => ok).fetch, {}, AbortSignal.abort())).status).toBe(
+      "cancelled",
+    );
   });
 
-  it("preserves selector order regardless of completion order", async () => {
-    // 4 files, concurrency 2. File "b.ts" takes longer than "a.ts".
-    const dir = createFixture({
-      "a.ts": "a",
-      "b.ts": "b",
-      "c.ts": "c",
-      "d.ts": "d",
+  it("is cancelled when aborted during the request", async () => {
+    const controller = new AbortController();
+    const { fetch } = api(() => {
+      controller.abort();
+      return new Error("aborted");
     });
-
-    let callIndex = 0;
-    const { createClient } = fakeClient(async () => {
-      const myIndex = callIndex++;
-      // Odd-indexed calls take longer.
-      if (myIndex % 2 === 1) await new Promise((r) => setTimeout(r, 20));
-      return makeReviewResponse();
-    });
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient, fileConcurrency: 2 },
-    });
-
-    const a = assessment({ name: "review", include: ["**/*.ts"], ask: () => reviewQuestions });
-    const result = await run(a, { executor });
-    // Output must be in selector order (alphabetical), not completion order.
-    expect(result.output.map((r) => r.file)).toEqual(["a.ts", "b.ts", "c.ts", "d.ts"]);
-
-    cleanFixture(dir);
+    expect((await ask(single(yesNo), fetch, {}, controller.signal)).status).toBe("cancelled");
   });
 });
 
-// ==========================================================================
-// Strict UTF-8 and read errors
-// ==========================================================================
-
-describe("assessment strict UTF-8 and read errors", () => {
-  it("fails deterministically on invalid UTF-8", async () => {
-    const dir = createFixture({ "good.ts": "const x = 1;" });
-    // Write a file with invalid UTF-8 bytes.
-    writeFileSync(join(dir, "bad.ts"), Buffer.from([0x80, 0x81, 0x82]), "binary" as BufferEncoding);
-
-    const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({ name: "review", include: ["**/*.ts"], ask: () => reviewQuestions });
-    const error = await run(a, { executor }).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(OperationError);
-    expect((error as OperationError).message).toMatch(/bad\.ts/);
-    expect((error as OperationError).message).toMatch(/UTF-8/i);
-
-    cleanFixture(dir);
-  });
-
-  it("fails deterministically on read errors (not ENOENT)", async () => {
-    const dir = createFixture({});
-    // Create a directory named "trap.ts" — reading it as a file will fail.
-    mkdirSync(join(dir, "trap.ts"), { recursive: true });
-    // Also create a real file so selectFiles finds something.
-    writeFileSync(join(dir, "ok.ts"), "ok", "utf8");
-
-    const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({ name: "review", include: ["**/*.ts"], ask: () => reviewQuestions });
-    // selectFiles may or may not include "trap.ts" (directories are typically
-    // not selected by the walker). If it does include it, reading fails.
-    // Either way, we test the error path explicitly via executeFileAssessment.
-    // Let's test directly with the executor to ensure the read error propagates.
-    const result = await run(a, { executor }).catch((e: unknown) => e);
-    // If "trap.ts" was not selected (walker skips directories), this succeeds.
-    // If it was selected, it should fail with a read error.
-    if (result instanceof OperationError) {
-      expect(result.message).toMatch(/trap\.ts/);
-    }
-
-    cleanFixture(dir);
-  });
-
-  it("skips ENOENT (file vanished between selection and read)", async () => {
-    // selectFiles runs synchronously then we delete the file before SDK calls
-    // would start. This requires testing at a lower level since we can't
-    // control timing between select and read in the integrated path.
-    // Instead, verify that a fixture with only one file returns empty when
-    // that file is deleted after selection — but since both happen in one
-    // synchronous call, we test the skip-on-ENOENT semantics through the
-    // existing replay test (files deleted, replay succeeds).
-    // This test just documents the contract.
-    const dir = createFixture({ "a.ts": "content" });
-
-    const { createClient } = fakeClient(() => makeReviewResponse());
-    const executor = assessmentExecutor({
-      cwd: dir,
-      assessment: { apiKey: "test-key", createClient },
-    });
-
-    const a = assessment({ name: "review", include: ["**/*.ts"], ask: () => reviewQuestions });
-    const result = await run(a, { executor });
-    expect(result.output).toHaveLength(1);
-    expect(result.output[0]!.file).toBe("a.ts");
-
-    cleanFixture(dir);
-  });
-});
-
-// ==========================================================================
-// Protocol fixtures
-// ==========================================================================
+// --- protocol fixtures -----------------------------------------------------
 
 describe("protocol fixtures", () => {
-  it("assessment-request.json is valid", () => {
-    const fixture = JSON.parse(
-      readFileSync(
-        join(import.meta.dirname, "../fixtures/protocol/assessment-request.json"),
-        "utf8",
-      ),
-    );
-    expect(isOperationRequest(fixture)).toBe(true);
+  const fixture = (name: string) =>
+    JSON.parse(readFileSync(join(import.meta.dirname, "../fixtures/protocol", name), "utf8"));
+
+  it("accept the assessment request", () => {
+    expect(isOperationRequest(fixture("assessment-request.json"))).toBe(true);
   });
 
-  it("assessment-completion.json is valid", () => {
-    const fixture = JSON.parse(
-      readFileSync(
-        join(import.meta.dirname, "../fixtures/protocol/assessment-completion.json"),
-        "utf8",
-      ),
-    );
-    expect(isOperationCompletion(fixture)).toBe(true);
+  it("accept the assessment completion", () => {
+    expect(isOperationCompletion(fixture("assessment-completion.json"))).toBe(true);
   });
 });

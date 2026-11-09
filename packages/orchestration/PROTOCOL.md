@@ -16,8 +16,8 @@ jssg        executeJssgCommand (jssg.ts) -> shared batch loop           in-proce
 agent       executeAgent (agent.ts) -> Host.spawn codemod-agent         one runner process per operation
               -> codemod_ai::execute::execute_ai_step (builtin)
               -> `claude` / `codex` CLI process (claude-code, codex)
-assessment  executeAssessmentOperation (assessment.ts)                  in-process, TypeSafe SDK
-              -> @typesafe-ai/sdk TypeSafeClient.systemOne()
+assessment  executeAssessmentOperation (assessment.ts)                  in-process, one HTTP request per file, up to fileConcurrency at once
+              -> decision/{systemone,openai}.ts -> decision/transport.ts
 ```
 
 Until 2026-11-08 a third runtime, `bridge`, ran `shell`, `jssg`, and `agent`
@@ -158,11 +158,12 @@ interface AssessmentOperation {
   state: string | Json[] | { [key: string]: Json };
   questions: {
     [id: string]:
-      | { type: "noul"; instructions: Json; criteria?: { true?: Json; false?: Json } }
+      | { type: "yesno"; instructions: Json; criteria?: { yes?: Json; no?: Json } }
       | { type: "choice"; instructions: Json; criteria: { [option: string]: Json } }
       | { type: "score"; instructions: Json; criteria: Json[] };
   };
-  model?: string;
+  provider: "systemone" | "openai"; // resolved from the environment when the command is created
+  model: string; // likewise; a pinned model option wins
 }
 
 interface OperationCompletion {
@@ -171,7 +172,8 @@ interface OperationCompletion {
   status: "succeeded" | "failed" | "cancelled" | "unknown";
   // shell: { stdout }; jssg: the per-file structured outputs in file order
   // (a batch dispatch returns { files: FileOutcome[] }); agent: { text };
-  // assessment: { model, answers, usage: { inputTokens, outputTokens } }
+  // assessment: { provider, model, calibrated, answers, usage: { inputTokens?, outputTokens? } },
+  // where any answer may be { type: "refused" }
   output?: Json;
   error?: { message: string; exitCode?: number; output?: string; details?: Json };
 }
@@ -223,12 +225,15 @@ failure), or answer ranges.
 - **`agent`**: one `codemod-agent` process per operation. See "The agent
   runner".
 - **`assessment`**: `executeAssessmentOperation(options, cwd, request,
-  signal)` in the control plane's process through the TypeSafe SDK
-  (`@typesafe-ai/sdk`). File-oriented assessments read their files through
-  the `Host`. The QuickJS context has no global `fetch`; the SDK gets an adapter
-  (`src/host/quickjs/fetch.ts`) over the host function `httpRequest`
-  (`crates/orchestration-quickjs-host/src/http.rs`), which only reaches the
-  TypeSafe API root (see "Security model"). An assessment cannot change the
+  signal)` in the control plane's process: one request per file to the
+  decision API the environment names (`src/core/decision.ts`), through the
+  recorded `provider`'s adapter (`src/execution/decision/`) and this package's
+  transport (timeout, retries, abort). Keys and endpoints come from the
+  executor's environment, never from the operation. File-oriented assessments
+  read their files through the `Host`. The QuickJS context has no global
+  `fetch`; the executor gets an adapter (`src/host/quickjs/fetch.ts`) over the
+  host function `httpRequest` (`crates/orchestration-quickjs-host/src/http.rs`),
+  which only reaches the decision API root (see "Security model"). An assessment cannot change the
   repository: failures are `failed`, aborts `cancelled`, never `unknown`.
 
 ### A jssg batch
@@ -381,9 +386,11 @@ What else a transform can reach:
   `codemod:runtime`, the curated `fs` limited to the target root, LLRT's safe
   modules), no LLM module, no `child_process`, and no Node. The context has
   no global `fetch`; its only network primitive, `httpRequest`, reaches only
-  the TypeSafe API root (`TYPESAFE_BASE_URL`, default
-  `https://api.typesafe.ai`: same scheme, host, and port, a path under the
-  root's path, redirects not followed), so workflow and transform code get no
+  the decision API root, resolved as `src/core/decision.ts` resolves it
+  (`DECISION_BASE_URL`, else `TYPESAFE_BASE_URL` for `systemone`, else the
+  provider's default, `https://api.typesafe.ai` or `https://api.openai.com`:
+  same scheme, host, and port, a path under the root's path, redirects not
+  followed), so workflow and transform code get no
   general network access.
 
 A transform that writes through a filesystem module is outside the batch
@@ -395,7 +402,7 @@ The agent runner (a trusted-local prototype, not a sandbox):
   allowlist of `src/execution/agent-env.ts` (process basics, proxy and CA
   variables, `CLAUDE_CONFIG_DIR`/`CODEX_HOME`, and for `builtin` only the
   `LLM_*` settings) plus the runtime's explicit `env`. No host credentials
-  (`TYPESAFE_API_KEY`, cloud, CI, registry tokens) unless passed explicitly.
+  (decision API keys, cloud, CI, registry tokens) unless passed explicitly.
   External backends get no `LLM_*` or provider variables, and an explicit
   credential-looking variable is refused for them as a `config` failure.
 - The key: `LLM_API_KEY` never appears in the runner's launch environment

@@ -1,10 +1,9 @@
 /**
  * The assessment contract: explicit state evaluated against named, typed
- * questions by a System One model, returning probabilities and confidence.
- * Shapes follow the TypeSafe System One HTTP API
- * (https://docs.typesafe.ai/api): questions are sent verbatim, answers are
- * kept as the API returns them, and token usage is carried in the protocol's
- * camelCase. Jev is the default model family; the contract is not tied to it.
+ * questions (yes/no, choice, score) by a decision model, returning
+ * probabilities and confidence. The shapes are this package's own; a
+ * provider adapter (`execution/decision/`) translates them to its API and
+ * back, and the environment picks the provider and model (`decision.ts`).
  *
  * An assessment is read-only: it has no repository access and no tools, and it
  * decides nothing. Workflow code reads the probabilities and owns routing.
@@ -18,10 +17,10 @@ export type AssessmentEntry = string | { [key: string]: Json } | Json[];
 export type AssessmentState = AssessmentEntry;
 
 /** Yes/no. The answer is the probability of yes. */
-export interface NoulQuestion {
-  type: "noul";
+export interface YesNoQuestion {
+  type: "yesno";
   instructions: AssessmentEntry;
-  criteria?: { true?: AssessmentEntry | null; false?: AssessmentEntry | null };
+  criteria?: { yes?: AssessmentEntry | null; no?: AssessmentEntry | null };
 }
 
 /** One option from a set; keys are the options, values optional rubric text. */
@@ -38,15 +37,15 @@ export interface ScoreQuestion {
   criteria: readonly (AssessmentEntry | null)[];
 }
 
-export type AssessmentQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;
+export type AssessmentQuestion = YesNoQuestion | ChoiceQuestion | ScoreQuestion;
 
 /** Question ids are chosen by the author; answers come back under the same ids. */
 export type AssessmentQuestions = { [id: string]: AssessmentQuestion };
 
-export interface NoulAnswer {
-  type: "noul";
-  /** Probability of yes, 0 to 1. Noul answers carry no separate confidence. */
-  noul: number;
+export interface YesNoAnswer {
+  type: "yesno";
+  /** Probability of yes, 0 to 1. Yes/no answers carry no separate confidence. */
+  yes: number;
 }
 
 export interface ChoiceAnswer<Option extends string = string> {
@@ -67,15 +66,22 @@ export interface ScoreAnswer {
   confidence: number;
 }
 
-export type AssessmentAnswer = NoulAnswer | ChoiceAnswer | ScoreAnswer;
+/** The model declined to answer this question. */
+export interface RefusedAnswer {
+  type: "refused";
+}
 
-export type AnswerFor<Q> = Q extends { type: "choice"; criteria: infer C }
-  ? ChoiceAnswer<Extract<keyof C, string>>
-  : Q extends { type: "score" }
-    ? ScoreAnswer
-    : Q extends { type: "noul" }
-      ? NoulAnswer
-      : never;
+export type AssessmentAnswer = YesNoAnswer | ChoiceAnswer | ScoreAnswer | RefusedAnswer;
+
+export type AnswerFor<Q> =
+  | RefusedAnswer
+  | (Q extends { type: "choice"; criteria: infer C }
+      ? ChoiceAnswer<Extract<keyof C, string>>
+      : Q extends { type: "score" }
+        ? ScoreAnswer
+        : Q extends { type: "yesno" }
+          ? YesNoAnswer
+          : never);
 
 /** Token counts, each present only when the API reported it. */
 export interface AssessmentUsage {
@@ -85,8 +91,12 @@ export interface AssessmentUsage {
 
 /** A succeeded assessment completion's `output`. */
 export interface AssessmentResult<Q extends AssessmentQuestions = AssessmentQuestions> {
-  /** The versioned model that answered, e.g. `jev-1.13.0` for `jev-latest`. */
+  /** The provider adapter that asked (`DECISION_PROVIDER`). */
+  provider: string;
+  /** The model that answered, as the provider names it (e.g. `jev-1.13.0` for `jev-latest`). */
   model: string;
+  /** Whether `confidence` and the probabilities are calibrated probabilities. */
+  calibrated: boolean;
   answers: { [K in keyof Q]: AnswerFor<Q[K]> };
   usage: AssessmentUsage;
 }
@@ -178,7 +188,7 @@ export const RESERVED_KEYS: readonly string[] = ["__proto__", "constructor", "pr
  */
 export const NUMERIC_TOLERANCE = 1e-6;
 
-const QUESTION_TYPES = ["noul", "choice", "score"];
+const QUESTION_TYPES = ["yesno", "choice", "score"];
 
 /**
  * Why a question is malformed, or `undefined` when it is valid. The same rules
@@ -190,14 +200,14 @@ export function questionProblem(question: unknown): string | undefined {
     return "instructions must be non-empty text, a JSON object, or a JSON array";
   }
   if (!QUESTION_TYPES.includes(question.type as string)) {
-    return "type must be 'choice', 'score', or 'noul'";
+    return "type must be 'yesno', 'choice', or 'score'";
   }
   if (!onlyKeys(question, ["type", "instructions", "criteria"])) return "has unknown fields";
   const { type, criteria } = question;
-  if (type === "noul") {
+  if (type === "yesno") {
     if (criteria === undefined) return undefined;
-    if (!isRecord(criteria) || !onlyKeys(criteria, ["true", "false"])) {
-      return "noul criteria may only describe 'true' and 'false'";
+    if (!isRecord(criteria) || !onlyKeys(criteria, ["yes", "no"])) {
+      return "yesno criteria may only describe 'yes' and 'no'";
     }
   } else if (type === "choice") {
     if (!isRecord(criteria)) return "choice criteria must map options to descriptions";
@@ -250,17 +260,21 @@ function sameKeys(value: Record<string, unknown>, expected: readonly string[]): 
 
 /** The fields each answer type carries; normalization keeps exactly these. */
 export const ANSWER_FIELDS = {
-  noul: ["type", "noul"],
+  yesno: ["type", "yes"],
+  refused: ["type"],
   choice: ["type", "choice", "probabilities", "confidence"],
   score: ["type", "score", "legend", "probabilities", "confidence"],
 } as const;
 
 function answerProblem(question: AssessmentQuestion, answer: unknown): string | undefined {
   if (!isRecord(answer)) return "must be an object";
-  if (answer.type !== question.type) return `must have type '${question.type}'`;
+  if (answer.type === "refused") {
+    return onlyKeys(answer, ANSWER_FIELDS.refused) ? undefined : "has unknown fields";
+  }
+  if (answer.type !== question.type) return `must have type '${question.type}' or 'refused'`;
   if (!onlyKeys(answer, ANSWER_FIELDS[question.type])) return "has unknown fields";
-  if (question.type === "noul") {
-    return isProbability(answer.noul) ? undefined : "noul must be a probability";
+  if (question.type === "yesno") {
+    return isProbability(answer.yes) ? undefined : "yes must be a probability";
   }
   let keys: string[];
   if (question.type === "choice") {
@@ -287,21 +301,28 @@ function answerProblem(question: AssessmentQuestion, answer: unknown): string | 
   return isProbability(answer.confidence) ? undefined : "confidence must be between 0 and 1";
 }
 
+const RESULT_FIELDS = ["provider", "model", "calibrated", "answers", "usage"];
+
 /**
  * Why an assessment output does not answer `questions`, or `undefined` when
- * it does: exactly one answer per question id, of the question's type, within
- * the question's options or levels, plus the answering model and token usage.
+ * it does: exactly one answer per question id, of the question's type (or a
+ * refusal), within the question's options or levels, plus the provider, the
+ * answering model, the calibration flag and token usage.
  */
 export function assessmentResultProblem(
   questions: AssessmentQuestions,
   output: unknown,
 ): string | undefined {
-  if (!isRecord(output) || !onlyKeys(output, ["model", "answers", "usage"])) {
-    return "output must be { model, answers, usage }";
+  if (!isRecord(output) || !sameKeys(output, RESULT_FIELDS)) {
+    return "output must be { provider, model, calibrated, answers, usage }";
+  }
+  if (typeof output.provider !== "string" || output.provider.trim() === "") {
+    return "provider must be a non-empty string";
   }
   if (typeof output.model !== "string" || output.model.trim() === "") {
     return "model must be a non-empty string";
   }
+  if (typeof output.calibrated !== "boolean") return "calibrated must be a boolean";
   const usage = output.usage;
   if (
     !isRecord(usage) ||

@@ -13,12 +13,11 @@ import { renameCalls, verifyNoLegacy, wrapOptions } from "./lib/steps.ts";
 export default dynamic(async () => {
   const results = await assessSources();
 
-  // Aggregate: if any file is manual or low-confidence, go manual for all
-  const anyManual = results.some(
-    (r) =>
-      r.assessment.answers.route.choice === "manual" ||
-      r.assessment.answers.route.confidence < 0.75,
-  );
+  // Aggregate: if the model refused, or any file is manual or low-confidence, go manual for all
+  const anyManual = results.some(({ assessment: { answers } }) => {
+    const route = answers.route;
+    return route.type === "refused" || route.choice === "manual" || route.confidence < 0.75;
+  });
 
   if (anyManual) {
     return {
@@ -33,7 +32,9 @@ export default dynamic(async () => {
   }
 
   // Route based on the majority recommendation
-  const codemodFiles = results.filter((r) => r.assessment.answers.route.choice === "codemod");
+  const codemodFiles = results.filter(({ assessment: { answers } }) => {
+    return answers.route.type === "choice" && answers.route.choice === "codemod";
+  });
   const useCodemod = codemodFiles.length >= results.length / 2;
 
   if (useCodemod) {

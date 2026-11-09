@@ -12,6 +12,7 @@ import {
   type AssessmentQuestions,
   type AssessmentState,
 } from "./assessment.ts";
+import { DECISION_PROVIDERS, type DecisionProvider } from "./decision.ts";
 import type { Json } from "./json.ts";
 import { isSafeRelativePath } from "./paths.ts";
 
@@ -192,16 +193,19 @@ export interface AgentOperation {
 }
 
 /**
- * A read-only System One assessment (`core/assessment.ts`): explicit `state`
- * and named typed questions, no repository access, no tools. `model` pins a
- * model; without it the executor's default answers (`jev-latest` unless
- * configured). A succeeded completion's output is an `AssessmentResult`.
+ * A read-only assessment (`core/assessment.ts`): explicit `state` and named
+ * typed questions, no repository access, no tools. `provider` and `model` are
+ * resolved from the environment when the command is created (`core/decision.ts`,
+ * or the step's pinned model), so history records which model answered and a
+ * change replays as changed. Endpoint and key stay in the executor's
+ * environment. A succeeded completion's output is an `AssessmentResult`.
  */
 export interface AssessmentOperation {
   kind: "assessment";
   state: AssessmentState;
   questions: AssessmentQuestions;
-  model?: string;
+  provider: DecisionProvider;
+  model: string;
 }
 
 export type Operation = ShellOperation | JssgOperation | AgentOperation | AssessmentOperation;
@@ -275,7 +279,7 @@ export type OperationCompletion =
       status: "succeeded";
       /**
        * Shell `{ stdout }`; jssg the per-file structured outputs in file order;
-       * agent `{ text }`; assessment `{ model, answers, usage }`.
+       * agent `{ text }`; assessment `{ provider, model, calibrated, answers, usage }`.
        */
       output: Json;
       error?: never;
@@ -341,7 +345,7 @@ const OPERATION_FIELDS = {
     "onFileError",
   ],
   agent: ["kind", "prompt", "input", "backend", "responseFormat"],
-  assessment: ["kind", "state", "questions", "model"],
+  assessment: ["kind", "state", "questions", "provider", "model"],
 } as const satisfies Record<Operation["kind"], readonly string[]>;
 
 /**
@@ -555,7 +559,8 @@ export function isOperation(value: unknown): value is Operation {
         hasOnlyKeys(value, OPERATION_FIELDS.assessment) &&
         isAssessmentEntry(value.state) &&
         isAssessmentQuestions(value.questions) &&
-        (value.model === undefined || isNonBlank(value.model))
+        (DECISION_PROVIDERS as readonly unknown[]).includes(value.provider) &&
+        isNonBlank(value.model)
       );
     default:
       return false;

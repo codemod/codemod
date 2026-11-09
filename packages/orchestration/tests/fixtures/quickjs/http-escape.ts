@@ -1,5 +1,5 @@
 // Workflow code reaching for the host's network primitive directly: the
-// host must refuse any URL outside the TypeSafe API root. Output: the error
+// host must refuse any URL outside the decision API root. Output: the error
 // code, or "reached" if the request went out.
 import { dynamic } from "../../../src/index.ts";
 

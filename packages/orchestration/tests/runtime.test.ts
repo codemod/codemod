@@ -160,7 +160,7 @@ describe("the capability contract", () => {
   const judge = assessment({
     name: "judge",
     include: ["**/*.ts"],
-    ask: () => ({ ok: { type: "noul" as const, instructions: "ok?" } }),
+    ask: () => ({ ok: { type: "yesno" as const, instructions: "ok?" } }),
   });
   const semantic = jssg({
     name: "semantic",

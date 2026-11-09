@@ -23,6 +23,8 @@ import {
   type AssessmentResult,
 } from "../core/assessment.ts";
 import type { AssessmentFile } from "../core/assessment.ts";
+import { decisionModel } from "../core/decision.ts";
+import { getHost } from "../core/host.ts";
 import { cloneJson, type Json } from "../core/json.ts";
 import { isSafeRelativePath } from "../core/paths.ts";
 import {
@@ -438,13 +440,14 @@ export interface AssessmentOptions<I, Q extends AssessmentQuestions> {
    * options can be dynamic per file. Returns questions only — the model state
    * is assembled automatically from `{ file: { path, content }, input? }`.
    *
-   * The resolved questions drive per-file SDK calls and output validation.
+   * The resolved questions drive per-file decision requests and output validation.
    * They are validated when the executor runs each file.
    */
   ask: (context: AssessmentAskContext<I>) => Q;
   /**
-   * Pin a model or alias (e.g. `jev-1.13.0`). Omitted, the executor's default
-   * answers: `TYPESAFE_DEFAULT_MODEL`, else `jev-latest`.
+   * Pin a model or alias of the configured provider (e.g. `jev-1.13.0`).
+   * Omitted, `DECISION_MODEL` answers, else the provider's default
+   * (`core/decision.ts`).
    */
   model?: string;
 }
@@ -482,19 +485,19 @@ export interface AssessmentRunnable<
  * is a valid `AssessmentOperation` on the wire.
  */
 const BATCH_SENTINEL: AssessmentQuestions = {
-  __batch: { type: "noul", instructions: "file-oriented batch assessment" },
+  __batch: { type: "yesno", instructions: "file-oriented batch assessment" },
 };
 
 /**
- * File-oriented read-only System One assessment. Selects files using
- * JSSG-style include/exclude globs, reads each file's content, and runs one
- * TypeSafe assessment per file. File selection, reading, and SDK calls happen
+ * File-oriented read-only assessment. Selects files using JSSG-style
+ * include/exclude globs, reads each file's content, and asks the configured
+ * decision model once per file. File selection, reading, and model calls happen
  * entirely in the execution layer (using the `--target` root), never in the
  * authoring layer.
  *
  * Assessment is a proper `Runnable`: it can be a workflow root, compose in
  * `sequence()`/`parallel()`, and its single command replays from history with
- * zero file I/O or SDK calls.
+ * zero file I/O or decision requests.
  *
  * Each file's model state is automatically assembled as
  * `{ file: { path, content }, input? }`. The `ask` function receives the
@@ -556,12 +559,15 @@ export function assessment<I = void, Q extends AssessmentQuestions = AssessmentQ
       if (exclude !== undefined) state.exclude = cloneJson(exclude) as Json;
       if (input !== undefined) state.input = cloneJson(input) as Json;
 
+      // Provider and model go into history, so a change replays as changed.
+      const decision = decisionModel(getHost().env());
       const operation: AssessmentOperation = {
         kind: "assessment",
         state,
         questions: cloneJson(BATCH_SENTINEL),
+        provider: decision.provider,
+        model: options.model ?? decision.model,
       };
-      if (options.model !== undefined) operation.model = options.model;
 
       // Attach the per-file question resolver via the module-scoped WeakMap in
       // core/assessment.ts. The WeakMap is invisible to every serialization path

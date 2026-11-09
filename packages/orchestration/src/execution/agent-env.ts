@@ -3,7 +3,7 @@
  * commands chosen by a model, so the host environment is not inherited: only
  * what a process needs to start, reach the network, and configure the agent,
  * plus variables the runtime passed explicitly (its `env` setting).
- * Everything else (TypeSafe keys, cloud and CI credentials, tokens) stays out.
+ * Everything else (decision API keys, cloud and CI credentials, tokens) stays out.
  *
  * `LLM_API_KEY` is allowlisted only so it can be found: `agentLaunch` moves
  * it out of the launch environment and onto the runner's stdin

@@ -1,13 +1,14 @@
 //! `httpRequest`: the one network primitive of the QuickJS host, for the
-//! `assessment` operation (the TypeSafe SDK runs in the bundle with a `fetch`
-//! built on it, `src/host/quickjs/fetch.ts`).
+//! `assessment` operation (the decision transport runs in the bundle with a
+//! `fetch` built on it, `src/host/quickjs/fetch.ts`).
 //!
 //! It is deliberately not a general `fetch`: workflow and transform code
 //! share this context, and the runtime is the sandboxed one. A request is
-//! allowed only to the TypeSafe API root the run was started with
-//! (`TYPESAFE_BASE_URL`, default `https://api.typesafe.ai`): same scheme,
-//! host, and port, and a path under the root's path. Redirects are not
-//! followed, so they cannot leave it either.
+//! allowed only under the decision API root the run was started with, resolved
+//! as `src/core/decision.ts` resolves it: `DECISION_BASE_URL`, else (for the
+//! `systemone` provider) `TYPESAFE_BASE_URL`, else the provider's default.
+//! Same scheme, host, and port, and a path under the root's path. Redirects
+//! are not followed, so they cannot leave it either.
 //!
 //! The request runs on a helper thread (reqwest's blocking client); the
 //! promise settles on the JS thread through the tokio driver, like `spawn`.
@@ -22,22 +23,35 @@ use rquickjs::{Ctx, Function, Object, Promise};
 
 use crate::native::throw;
 
-pub const BASE_URL_ENV: &str = "TYPESAFE_BASE_URL";
-pub const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
-/// Largest response body accepted (the SDK reads it whole).
+pub const PROVIDER_ENV: &str = "DECISION_PROVIDER";
+pub const BASE_URL_ENV: &str = "DECISION_BASE_URL";
+/// Read for the `systemone` provider when `DECISION_BASE_URL` is unset.
+pub const LEGACY_BASE_URL_ENV: &str = "TYPESAFE_BASE_URL";
+/// Largest response body accepted (the decision transport reads it whole).
 const MAX_BODY_BYTES: u64 = 16 * 1024 * 1024;
 
-/// The allowed API root: `TYPESAFE_BASE_URL` (blank means unset, as in the SDK) or the default.
+/// The allowed API root for the configured provider. Blank values count as unset.
 pub fn allowed_base(env: &HashMap<String, String>) -> Result<Url, String> {
-    let raw = env
-        .get(BASE_URL_ENV)
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_BASE_URL);
-    let url =
-        Url::parse(raw).map_err(|error| format!("{BASE_URL_ENV} '{raw}' is invalid: {error}"))?;
+    let setting = |name: &str| {
+        env.get(name)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+    };
+    let raw = match setting(PROVIDER_ENV).unwrap_or("systemone") {
+        "systemone" => setting(BASE_URL_ENV)
+            .or_else(|| setting(LEGACY_BASE_URL_ENV))
+            .unwrap_or("https://api.typesafe.ai"),
+        "openai" => setting(BASE_URL_ENV).unwrap_or("https://api.openai.com"),
+        other => {
+            return Err(format!(
+                "{PROVIDER_ENV} '{other}' is not one of systemone, openai"
+            ))
+        }
+    };
+    let url = Url::parse(raw)
+        .map_err(|error| format!("decision base URL '{raw}' is invalid: {error}"))?;
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(format!("{BASE_URL_ENV} '{raw}' is not an http(s) URL"));
+        return Err(format!("decision base URL '{raw}' is not an http(s) URL"));
     }
     Ok(url)
 }
@@ -139,7 +153,7 @@ pub fn install<'js>(
                     return Err(throw(
                         &ctx,
                         Some("EACCES"),
-                        &format!("request to '{raw}' refused: the QuickJS host only reaches the TypeSafe API at '{base}' ({BASE_URL_ENV})"),
+                        &format!("request to '{raw}' refused: the QuickJS host only reaches the decision API at '{base}' ({BASE_URL_ENV})"),
                     ));
                 }
                 let timeout = Duration::from_millis(
@@ -227,20 +241,33 @@ mod tests {
     }
 
     #[test]
-    fn base_comes_from_the_environment() {
-        let mut env = HashMap::new();
+    fn base_follows_the_configured_provider() {
+        let base = |pairs: &[(&str, &str)]| {
+            let env = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            allowed_base(&env).map(|url| url.to_string())
+        };
+        let typesafe = "https://api.typesafe.ai/".to_string();
+        assert_eq!(base(&[]), Ok(typesafe.clone()));
+        assert_eq!(base(&[(BASE_URL_ENV, "  ")]), Ok(typesafe));
         assert_eq!(
-            allowed_base(&env).unwrap().as_str(),
-            "https://api.typesafe.ai/"
+            base(&[(LEGACY_BASE_URL_ENV, "http://127.0.0.1:9/x")]),
+            Ok("http://127.0.0.1:9/x".to_string())
         );
-        env.insert(BASE_URL_ENV.to_string(), "  ".to_string());
         assert_eq!(
-            allowed_base(&env).unwrap().as_str(),
-            "https://api.typesafe.ai/"
+            base(&[
+                (BASE_URL_ENV, "http://a/"),
+                (LEGACY_BASE_URL_ENV, "http://b/")
+            ]),
+            Ok("http://a/".to_string())
         );
-        env.insert(BASE_URL_ENV.to_string(), "http://127.0.0.1:9/x".to_string());
-        assert_eq!(allowed_base(&env).unwrap().as_str(), "http://127.0.0.1:9/x");
-        env.insert(BASE_URL_ENV.to_string(), "ftp://h/".to_string());
-        assert!(allowed_base(&env).is_err());
+        assert_eq!(
+            base(&[(PROVIDER_ENV, "openai"), (LEGACY_BASE_URL_ENV, "http://b/")]),
+            Ok("https://api.openai.com/".to_string())
+        );
+        assert!(base(&[(PROVIDER_ENV, "other")]).is_err());
+        assert!(base(&[(BASE_URL_ENV, "ftp://h/")]).is_err());
     }
 }

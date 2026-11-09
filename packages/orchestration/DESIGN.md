@@ -62,9 +62,10 @@ The prototype defines all four operation shapes, and the `quickjs` runtime
 executes all of them: `shell()` in-process with `DirectRunner` semantics, inline JSSG
 transforms that a build step has bundled in-process over the shared Rust batch
 rules, `agent()` in a `codemod-agent` runner process on the built-in agent or
-an external CLI, and `assessment()` as file-oriented per-file calls to the TypeSafe System One API through TypeSafe's
-official JavaScript SDK (`@typesafe-ai/sdk`), which owns authentication,
-transport, and retries.
+an external CLI, and `assessment()` as file-oriented per-file calls to the
+decision API the environment names (TypeSafe's System One API by default, or
+OpenAI's Decisions API) through this package's own provider adapters and
+transport, which own encoding, timeouts, and retries.
 
 ### Single JSSG leaf
 
@@ -451,7 +452,7 @@ Many AI steps in current packages exist only to decide what happens next: is
 this package already migrated, is this diff safe to apply, which follow-up
 fits. A generative agent is the wrong tool for that decision. `assessment()`
 is file-oriented: it selects files using JSSG-style include/exclude globs,
-reads each file, and asks a System One model (TypeSafe's Jev by default)
+reads each file, and asks a decision model (TypeSafe's Jev by default)
 named, typed questions about each file individually. One assessment per file,
 bounded concurrency, deterministic file order.
 
@@ -473,7 +474,7 @@ const assessSources = assessment({
       instructions: `What should happen with ${file.path}?`,
       criteria: { autofix: "Mechanical and safe", review: "Needs a human", ignore: null },
     },
-    breaking: { type: "noul" as const, instructions: "Could fixing this file change public behavior?" },
+    breaking: { type: "yesno" as const, instructions: "Could fixing this file change public behavior?" },
   }),
 });
 
@@ -484,10 +485,10 @@ export default assessSources;
 export const routed = dynamic(async () => {
   // Array<{ file: string; assessment: AssessmentResult<Q> }>
   const results = await assessSources();
-  const safe = results.filter(
-    (r) => r.assessment.answers.action.choice === "autofix"
-      && r.assessment.answers.action.confidence > 0.8
-      && r.assessment.answers.breaking.noul < 0.2,
+  // Any answer may be { type: "refused" }; narrowing on type excludes it.
+  const safe = results.filter(({ assessment: { answers: { action, breaking } } }) =>
+    action.type === "choice" && action.choice === "autofix" && action.confidence > 0.8
+      && breaking.type === "yesno" && breaking.yes < 0.2,
   );
   if (safe.length > 0) return fixIssues({ input: safe.map((r) => r.file) });
   return writeGuide();
@@ -496,17 +497,22 @@ export const routed = dynamic(async () => {
 
 The assessment is read-only: no tools, nothing but the matched file contents.
 The include/exclude globs are the explicit privacy boundary. It returns every
-answer's probabilities and confidence, the model that answered, and token
-usage, per file, and it decides nothing. The thresholds and the routing stay
-in workflow code, where they are replayed and reviewed like any other branch.
+answer's probabilities and confidence (or a refusal), the provider and model
+that answered, whether the provider documents its probabilities as calibrated,
+and token usage, per file, and it decides nothing. The thresholds and the
+routing stay in workflow code, where they are replayed and reviewed like any
+other branch.
 
 Repository-level assessment is intentionally not supported. To assess a
 summary (build output, CI log, aggregated metrics), have a preceding step
 materialize a single summary file and assess that file.
 
-The questions follow TypeSafe's primitives (`choice`, `score`, `noul`)
-directly; Jev is the default model, not part of the contract, and a command
-may pin another.
+The questions (`choice`, `score`, `yesno`) are this package's own shapes,
+modeled on TypeSafe's System One primitives; a provider adapter translates
+them. Which provider and model answer is environment configuration
+(`DECISION_PROVIDER`, `DECISION_MODEL`), not part of the workflow, and a step
+may pin a model. Both are recorded in the command, so changing either replays
+the step as changed.
 
 ## Ownership
 
@@ -544,7 +550,7 @@ TypeScript workflow -> replay gate -> the bundle's executor (quickjs)
     shell -> executeShell over Host.spawn (DirectRunner semantics)
     jssg -> executeJssgCommand (artifact, select, read) -> in-process batch (crates/jssg-batch) -> (validate, stage, commit)
     agent -> codemod-agent runner process (request on stdin, completion on stdout)
-    assessment -> TypeSafe SDK in-process
+    assessment -> decision provider adapter + HTTP transport in-process
 ```
 
 The workflow and its transforms are split because they will run in
@@ -658,10 +664,10 @@ Included:
   environment, the key and the request on stdin and the completion on a stdout
   the agent's tools cannot reach, and best-effort process-tree cleanup on
   cancellation
-- read-only `assessment` calls to the TypeSafe System One API in-process
-  through the official `@typesafe-ai/sdk` client (in `quickjs`, over a host
-  `fetch` limited to the TypeSafe API root),
-  with answers validated against the questions
+- read-only `assessment` calls to the configured decision API (System One or
+  OpenAI's Decisions API) in-process through this package's adapters and
+  transport (in `quickjs`, over a host `fetch` limited to the decision API
+  root), with answers validated against the questions
 - inline JSSG transforms split into bundled artifacts at build time and run
   in-process over the shared Rust batch rules, one batch per command, with a static
   selector prefilter and workspace semantic analysis

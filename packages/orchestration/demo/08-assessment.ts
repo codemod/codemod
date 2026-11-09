@@ -1,6 +1,7 @@
 /**
  * File-oriented read-only assessment. Each TypeScript source file is
- * assessed individually by a System One model. The assessment receives the
+ * assessed individually by the decision model the environment names
+ * (`DECISION_PROVIDER`, `DECISION_MODEL`). The assessment receives the
  * file's path and content automatically — no JSSG shuttle step is needed.
  *
  * The `ask` function receives `{ file, input }` per file and defines
@@ -29,11 +30,11 @@ export const assessSources = assessment({
       criteria: ["Low", "Moderate", "High", "Manual review required"],
     },
     safeToAutomate: {
-      type: "noul" as const,
+      type: "yesno" as const,
       instructions: "Is there enough evidence to automate this file's migration?",
       criteria: {
-        true: "The migration can be attempted and verified automatically",
-        false: "A person should inspect the file before any write",
+        yes: "The migration can be attempted and verified automatically",
+        no: "A person should inspect the file before any write",
       },
     },
   }),

@@ -94,7 +94,13 @@ describe("operation weights", () => {
     ["agent", { kind: "agent", prompt: "x", backend: { kind: "builtin", tools: [] } }, 1],
     [
       "assessment",
-      { kind: "assessment", state: "s", questions: { ok: { type: "noul", instructions: "ok?" } } },
+      {
+        kind: "assessment",
+        state: "s",
+        questions: { ok: { type: "yesno", instructions: "ok?" } },
+        provider: "systemone",
+        model: "jev-latest",
+      },
       1,
     ],
     ["jssg without semantics", fileJssg.toOperation(undefined), DEFAULT_WEIGHTS.jssg],

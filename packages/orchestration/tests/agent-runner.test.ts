@@ -91,7 +91,7 @@ describe("agent steps through the codemod-agent runner", () => {
       LC_ALL: "C",
       LLM_API_KEY: "llm-key",
       LLM_MODEL: "gpt-4o",
-      TYPESAFE_API_KEY: "typesafe-key",
+      DECISION_API_KEY: "decision-key",
       AWS_SECRET_ACCESS_KEY: "aws",
       GITHUB_TOKEN: "gh",
     };
@@ -104,7 +104,7 @@ describe("agent steps through the codemod-agent runner", () => {
     // The key reaches the runner on stdin, never in its launch environment.
     expect(env).not.toHaveProperty("LLM_API_KEY");
     expect(secrets).toEqual({ LLM_API_KEY: "llm-key" });
-    for (const secret of ["TYPESAFE_API_KEY", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN"]) {
+    for (const secret of ["DECISION_API_KEY", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN"]) {
       expect(env).not.toHaveProperty(secret);
     }
     // Without a key there is no secrets line and no marker.

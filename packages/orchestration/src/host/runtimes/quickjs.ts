@@ -5,8 +5,8 @@
  * the workflow bundle (`host/quickjs-bundle.ts`, cached by the content of
  * every input file) and runs the host binary on it. `agent` steps run the
  * `codemod-agent` runner through the host's `spawn` (`CODEMOD_AGENT_BIN`,
- * resolved here); `assessment` reaches the TypeSafe API through the host's
- * `httpRequest` only.
+ * resolved here); `assessment` reaches the configured decision API through the
+ * host's `httpRequest` only.
  *
  * The binary: `CODEMOD_QUICKJS_HOST_BIN`, else the newer of the monorepo's
  * `target/{release,debug}/orchestration-quickjs-host` (honouring

@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildFile, scheduledCommands, type History } from "../src/index.ts";
 import { buildQuickjsBundle } from "../src/host/quickjs-bundle.ts";
 
@@ -274,7 +274,11 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
 
   it("runs agent steps through codemod-agent with the allowlisted environment", async () => {
     const run = runOn("static-agent.ts", undefined, {
-      env: { CODEMOD_AGENT_BIN: fakeAgent, LLM_API_KEY: "llm-key", TYPESAFE_API_KEY: "ts-key" },
+      env: {
+        CODEMOD_AGENT_BIN: fakeAgent,
+        LLM_API_KEY: "llm-key",
+        DECISION_API_KEY: "decision-key",
+      },
     });
     expect(run.ok, run.ok ? "" : run.error).toBe(true);
     expect(run.files["ran.marker"]).toBe("");
@@ -287,7 +291,7 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
     expect(echo.secrets).toEqual({ LLM_API_KEY: "llm-key" });
     expect(echo.env).toMatchObject({ CODEMOD_AGENT_SECRETS: "stdin" });
     expect(echo.env).not.toHaveProperty("LLM_API_KEY");
-    expect(echo.env).not.toHaveProperty("TYPESAFE_API_KEY");
+    expect(echo.env).not.toHaveProperty("DECISION_API_KEY");
 
     const missing = runOn("static-agent.ts", undefined, {
       env: { CODEMOD_AGENT_BIN: join(scratch, "no-such-agent") },
@@ -339,59 +343,99 @@ describe.runIf(enabled)("quickjs runtime: control plane inside QuickJS", () => {
     expect(pids.filter(alive)).toEqual([]);
   });
 
-  it("runs assessment through the host's httpRequest, only to the TypeSafe API root", async () => {
-    const log = join(scratch, "typesafe-requests.jsonl");
-    writeFileSync(log, "");
-    const stub = spawn(
-      process.execPath,
-      [join(import.meta.dirname, "fixtures/typesafe-stub.mjs"), log],
-      {
-        stdio: ["ignore", "pipe", "inherit"],
-      },
-    );
-    try {
-      const port = await new Promise<number>((resolvePort, reject) => {
+  describe("assessment through the host's httpRequest", () => {
+    let log: string;
+    let stub: ReturnType<typeof spawn>;
+    let port: number;
+    const requests = () =>
+      readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .filter((line) => line !== "")
+        .map(
+          (line) => JSON.parse(line) as { path: string; authorization?: string; apiKey?: string },
+        );
+    const judged = (provider: string, model: string, usage: object) =>
+      ["a.ts", "b.ts", "c.ts", "sub/d.old.ts"].map((file) => ({
+        file,
+        assessment: {
+          provider,
+          model,
+          calibrated: true,
+          answers: { risky: { type: "yesno", yes: 0.25 } },
+          usage,
+        },
+      }));
+
+    beforeAll(async () => {
+      log = join(scratch, "decision-requests.jsonl");
+      stub = spawn(
+        process.execPath,
+        [join(import.meta.dirname, "fixtures/decision-stub.mjs"), log],
+        {
+          stdio: ["ignore", "pipe", "inherit"],
+        },
+      );
+      port = await new Promise<number>((resolvePort, reject) => {
         stub.stdout!.setEncoding("utf8");
         stub.stdout!.once("data", (line: string) => resolvePort(Number(line.trim())));
         stub.once("error", reject);
       });
-      const env = { TYPESAFE_API_KEY: "test-key", TYPESAFE_BASE_URL: `http://127.0.0.1:${port}` };
-      const expected = ["a.ts", "b.ts", "c.ts", "sub/d.old.ts"].map((file) => ({
-        file,
-        assessment: {
-          model: "stub-1",
-          answers: { risky: { type: "noul", noul: 0.25 } },
-          usage: { inputTokens: 3, outputTokens: 1 },
-        },
-      }));
-      const quickjs = runOn("assessment.ts", undefined, { env });
-      expect(quickjs).toMatchObject({ ok: true });
-      expect(quickjs.ok && quickjs.output).toEqual(expected);
-      const requests = readFileSync(log, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as { path: string; authorization: string });
-      expect(requests).toHaveLength(4);
-      expect(new Set(requests.map((request) => request.path))).toEqual(new Set(["/v1/systemone"]));
-      expect(requests.every((request) => request.authorization === "Bearer test-key")).toBe(true);
-      // Workflow code calling the primitive directly: only the API root.
-      writeFileSync(log, "");
-      const scoped = { ...env, TYPESAFE_BASE_URL: `http://127.0.0.1:${port}/v1` };
-      for (const [url, code] of [
-        [`http://127.0.0.1:${port}/other`, "EACCES"],
-        [`http://localhost:${port}/v1/systemone`, "EACCES"],
-        [`https://example.com/v1/systemone`, "EACCES"],
-        [`http://127.0.0.1:${port}/v1/models`, "reached"],
-      ] as const) {
-        expect(runOn("http-escape.ts", url, { env: scoped })).toMatchObject({
-          ok: true,
-          output: code,
-        });
-      }
-      expect(readFileSync(log, "utf8").trim().split("\n")).toHaveLength(1);
-    } finally {
+    });
+    beforeEach(() => writeFileSync(log, ""));
+    afterAll(() => {
       stub.kill();
-    }
+    });
+
+    it("asks System One per file, configured by the legacy TYPESAFE_* variables", () => {
+      const env = { TYPESAFE_API_KEY: "test-key", TYPESAFE_BASE_URL: `http://127.0.0.1:${port}` };
+      const run = runOn("assessment.ts", undefined, { env });
+      expect(run.ok && run.output).toEqual(
+        judged("systemone", "stub-1", { inputTokens: 3, outputTokens: 1 }),
+      );
+      expect(requests().map((r) => [r.path, r.authorization])).toEqual(
+        Array(4).fill(["/v1/systemone", "Bearer test-key"]),
+      );
+    });
+
+    it("asks OpenAI decisions per file when DECISION_PROVIDER is openai", () => {
+      const env = {
+        DECISION_PROVIDER: "openai",
+        DECISION_BASE_URL: `http://127.0.0.1:${port}`,
+        DECISION_API_KEY: "openai-key",
+      };
+      const run = runOn("assessment.ts", undefined, { env });
+      expect(run.ok && run.output).toEqual(judged("openai", "stub-luna", { inputTokens: 5 }));
+      expect(requests().map((r) => [r.path, r.authorization])).toEqual(
+        Array(4).fill(["/v1/decisions", "Bearer openai-key"]),
+      );
+    });
+
+    it("sends the raw key in the configured header on the configured path", () => {
+      const env = {
+        DECISION_BASE_URL: `http://127.0.0.1:${port}/foundry`,
+        DECISION_PATH: "/providers/microsoft/v1/systemone",
+        DECISION_AUTH_HEADER: "api-key",
+        DECISION_API_KEY: "azure-key",
+      };
+      expect(runOn("assessment.ts", undefined, { env })).toMatchObject({ ok: true });
+      expect(requests().map((r) => [r.path, r.apiKey, r.authorization])).toEqual(
+        Array(4).fill(["/foundry/providers/microsoft/v1/systemone", "azure-key", undefined]),
+      );
+    });
+
+    it.each([
+      ["another path", (p: number) => `http://127.0.0.1:${p}/other`, "EACCES"],
+      ["another host", (p: number) => `http://localhost:${p}/v1/systemone`, "EACCES"],
+      ["another origin", () => "https://example.com/v1/systemone", "EACCES"],
+      ["a path under the root", (p: number) => `http://127.0.0.1:${p}/v1/models`, "reached"],
+    ])("lets workflow code reach only the configured API root: %s", (_, url, expected) => {
+      const env = { DECISION_BASE_URL: `http://127.0.0.1:${port}/v1` };
+      expect(runOn("http-escape.ts", url(port), { env })).toMatchObject({
+        ok: true,
+        output: expected,
+      });
+    });
   });
 
   it("SIGTERM aborts the run and kills the running shell's process group", async () => {

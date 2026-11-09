@@ -428,7 +428,9 @@ describe("protocol validation of targets", () => {
     const assessment = {
       kind: "assessment",
       state: "s",
-      questions: { ok: { type: "noul", instructions: "ok?" } },
+      questions: { ok: { type: "yesno", instructions: "ok?" } },
+      provider: "systemone",
+      model: "jev-latest",
     };
     expect(isOperation(assessment)).toBe(true);
     expect(isOperation({ ...assessment, target: web })).toBe(false);

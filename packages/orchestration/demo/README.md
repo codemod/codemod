@@ -13,7 +13,7 @@ and must move to `newApi({ name })`. Each file is a complete workflow that
 | `05-composed.ts` | shell, parallel analyses, migration, parallel verification, as one static plan                |
 | `06-dynamic.ts`  | a `dynamic` step that branches on shell output and awaits a static group                      |
 | `07-input.ts`    | a root that requires input, supplied with `--input <json>`                                    |
-| `08-assessment.ts` | file-oriented read-only TypeSafe assessment (one question set per file)                   |
+| `08-assessment.ts` | file-oriented read-only assessment (one question set per file)                            |
 | `09-agent.ts`      | a restricted Claude Code agent followed by deterministic verification                    |
 | `10-assisted.ts`   | assessment-driven routing to codemod, agent, or manual review                             |
 
@@ -26,10 +26,12 @@ step.
 
 ## Setup
 
-Node 24 and a Rust toolchain. Workflows 01-07 need no network access or installs
-beyond the monorepo's existing `node_modules`. Workflow 08 requires
-`TYPESAFE_API_KEY`, workflow 09 requires an authenticated local Claude Code
-CLI, and workflow 10 requires both.
+Node 24 and a Rust toolchain. Workflows 01-07 need no network access or
+installs beyond the monorepo's existing `node_modules`. Workflow 08 requires a
+decision API key (`DECISION_API_KEY`, or `TYPESAFE_API_KEY` for the default
+`systemone` provider; see the package README for `DECISION_PROVIDER` and the
+other settings), workflow 09 requires an authenticated local Claude Code CLI,
+and workflow 10 requires both.
 
 ```sh
 # from the repository root, once:
@@ -243,23 +245,25 @@ usage: codemod-workflow [run] <workflow.ts> [--runtime <quickjs>] [--target <dir
 ## `08-assessment.ts`: file-oriented assessment
 
 This workflow defines a file-oriented assessment that selects TypeScript
-sources, reads each one, and asks a System One model three typed questions per
-file. The model receives each file's path and content automatically — the
-`ask` function returns QUESTIONS ONLY. The include/exclude globs are the
-privacy boundary: only matched files are sent to the model.
+sources, reads each one, and asks the configured decision model three typed
+questions per file. The model receives each file's path and content
+automatically — the `ask` function returns QUESTIONS ONLY. The include/exclude
+globs are the privacy boundary: only matched files are sent to the model.
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-TYPESAFE_API_KEY=... node bin/codemod-workflow.mjs demo/08-assessment.ts --target /tmp/codemod-demo
+DECISION_API_KEY=... node bin/codemod-workflow.mjs demo/08-assessment.ts --target /tmp/codemod-demo
 ```
 
 Assessment is a first-class Runnable — it can be the root directly (no
 `dynamic()` wrapper needed), and composes naturally in `sequence()` and
-`parallel()`. The result is an ordered `Array<{ file, assessment }>`, one entry
-per matched file. Each assessment contains the model version, usage, and typed
-answers for `route`, `risk`, and `safeToAutomate`, including probabilities and
-confidence. It is evidence for later workflow code, not a command to mutate
-files.
+`parallel()`. The result is an ordered `Array<{ file, assessment }>`, one
+entry per matched file. Each assessment contains the provider, the model
+version, whether its probabilities are calibrated, usage, and typed answers
+for `route`, `risk`, and `safeToAutomate` (`yesno`, answered as the
+probability `yes`), including probabilities and confidence, or `{ type:
+"refused" }` for a question the model declined. It is evidence for later
+workflow code, not a command to mutate files.
 
 ## `09-agent.ts`: agent work, deterministic verification
 
@@ -290,14 +294,15 @@ can explicitly omit the shell tool.
 
 This dynamic workflow combines both primitives. `assessment()` selects and
 evaluates each source file individually, returning typed per-file
-probabilities. Ordinary TypeScript applies the routing policy: if any file is
-low-confidence or manual, the whole batch stops for review; otherwise the
-workflow chooses the deterministic two-stage codemod or the agent. Both
-automatic paths finish with deterministic verification.
+probabilities. Ordinary TypeScript applies the routing policy: if the model
+refused the route question for any file, or any file is low-confidence or
+manual, the whole batch stops for review; otherwise the workflow chooses the
+deterministic two-stage codemod or the agent. Both automatic paths finish with
+deterministic verification.
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-TYPESAFE_API_KEY=... node bin/codemod-workflow.mjs demo/10-assisted.ts --target /tmp/codemod-demo
+DECISION_API_KEY=... node bin/codemod-workflow.mjs demo/10-assisted.ts --target /tmp/codemod-demo
 ```
 
 The exact route is intentionally not hard-coded: the assessment result and its
@@ -314,7 +319,7 @@ its artifacts are bundled and run in one QuickJS context hosted by
 `orchestration-quickjs-host`, each artifact evaluated once per run. The batch
 rules (hash check, path containment, the static selector, semantic analysis,
 result conversion) are Rust code, `crates/jssg-batch`, and nothing is written until every
-transform of a command succeeded. Assessment steps call TypeSafe in-process;
+transform of a command succeeded. Assessment steps call the configured decision API in-process;
 agent steps run in a `codemod-agent` runner process. A transform may use its
 parameters, globals, and imported bindings, but not a `const` or `function`
 declared in the workflow file: the artifact is built separately and nothing is

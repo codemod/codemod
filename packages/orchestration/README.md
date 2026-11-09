@@ -12,7 +12,8 @@ over the host's `spawn` with the semantics of
 runner process on the built-in Butterflow agent (`codemod-ai`) or, when the
 step asks for it, the installed Claude Code or Codex CLI. `assessment` is
 file-oriented: it selects files using JSSG-style include/exclude globs, reads
-each file, and asks a System One model (TypeSafe Jev by default) typed
+each file, and asks the decision model the environment names (TypeSafe Jev
+over the System One API by default, or OpenAI's Decisions API) typed
 questions about each file individually, in-process, with bounded concurrency
 and no repository access beyond the matched files. JSSG transforms are written
 inline next to the workflow, split off into standalone bundles at build time,
@@ -36,6 +37,7 @@ packages/orchestration/
     host.ts              Host seam (fs, path, os, env, spawn, async context, clock) + install
     protocol.ts          versioned JSON OperationRequest / OperationCompletion (v8)
     assessment.ts        assessment questions, answers, and their validation
+    decision.ts          decision provider, model, endpoint, and key, from the environment only
     json.ts              Json type and canonical JSON (command identity)
     paths.ts             safe-relative-path rules and root containment (realpath)
     history.ts           HistoryStore seam + MemoryHistoryStore
@@ -56,7 +58,8 @@ packages/orchestration/
   src/execution/         how one OperationRequest becomes an OperationCompletion
     operation-executor.ts OperationExecutor seam
     shell.ts             executeShell: in-process shell over Host.spawn (DirectRunner semantics)
-    assessment.ts        executeAssessmentOperation: TypeSafe SDK systemOne() calls over the Host fs
+    assessment.ts        executeAssessmentOperation: one decision API request per file over the Host fs
+    decision/            provider adapters (systemone.ts, openai.ts) and the HTTP transport (transport.ts)
     agent.ts             executeAgent: one codemod-agent runner process per agent operation
     agent-env.ts         agentLaunch: the runner's allowlisted environment and stdin key channel
     scheduler.ts         AdmissionScheduler: weighted, bounded admission at the executor
@@ -363,14 +366,15 @@ A transform that writes through a filesystem module (the curated `fs` in
 ```ts
 import { agent, assessment, dynamic } from "@codemod.com/orchestration";
 
-// File-oriented assessment. Each matched file is assessed individually by a
-// System One model. The model receives the file's path, content, and optional
-// validated input as state automatically — `ask` defines QUESTIONS ONLY.
+// File-oriented assessment. Each matched file is assessed individually by the
+// decision model the environment names. The model receives the file's path,
+// content, and optional validated input as state automatically — `ask` defines
+// QUESTIONS ONLY.
 const assessSources = assessment({
   name: "assess-sources",
   include: ["src/**/*.ts"],
   exclude: ["**/*.d.ts", "**/*.generated.ts"],
-  // model: "jev-1.13.0", // optional pin; default TYPESAFE_DEFAULT_MODEL, else jev-latest
+  // model: "jev-1.13.0", // optional pin; default DECISION_MODEL, else the provider's default
   ask: ({ file }) => ({
     route: {
       type: "choice" as const,
@@ -387,11 +391,11 @@ const assessSources = assessment({
       criteria: ["Low", "Moderate", "High", "Manual review required"],
     },
     safeToAutomate: {
-      type: "noul" as const,
+      type: "yesno" as const,
       instructions: "Is there enough evidence to automate this file's migration?",
       criteria: {
-        true: "The migration can be attempted and verified automatically",
-        false: "A person should inspect the file before any write",
+        yes: "The migration can be attempted and verified automatically",
+        no: "A person should inspect the file before any write",
       },
     },
   }),
@@ -411,36 +415,42 @@ export default dynamic(async () => {
   const results = await assessSources();
 
   // Routing policy is workflow code: the assessment only reports probabilities.
-  const anyManual = results.some(
-    (r) => r.assessment.answers.route.choice === "manual"
-      || r.assessment.answers.route.confidence < 0.75,
-  );
+  // Any answer may be { type: "refused" }, so narrow on its type first.
+  const anyManual = results.some(({ assessment: { answers } }) => {
+    const route = answers.route;
+    return route.type === "refused" || route.choice === "manual" || route.confidence < 0.75;
+  });
   if (!anyManual) {
     await finish({ input: change });
   }
   return {
     files: results.length,
     manual: anyManual,
-    routes: results.map((r) => ({ file: r.file, route: r.assessment.answers.route.choice })),
+    routes: results.map(({ file, assessment: { answers: { route } } }) => ({
+      file,
+      route: route.type === "choice" ? route.choice : "refused",
+    })),
   };
 });
 ```
 
 `assessment({ name, include, exclude?, ask, input?, model? })` is a
-file-oriented, read-only System One judgment. It selects files using
-JSSG-style include/exclude globs, reads each file's content, and runs one
-TypeSafe assessment per file with bounded concurrency through the scheduler.
-It follows the TypeSafe System One API (<https://docs.typesafe.ai/api>) and
-calls it through TypeSafe's official JavaScript SDK:
+file-oriented, read-only judgment by a decision model. It selects files using
+JSSG-style include/exclude globs, reads each file's content, and asks the
+configured decision model once per file with bounded concurrency. The
+questions and answers are this package's own shapes (`src/core/assessment.ts`);
+a provider adapter translates them to the provider's API, and the environment
+picks the provider and model:
 
 - **File selection.** `include` (required, non-empty) and `exclude` (optional)
-  are glob patterns relative to `process.cwd()`. They use the same JSSG-style
+  are glob patterns relative to the `--target` root. They use the same JSSG-style
   walker (`src/execution/files.ts`) with gitignore semantics: hidden files
   visited, symlinks skipped and never followed, `.ignore`/`.gitignore`/
   `.git/info/exclude` and global git excludes honored, include/exclude globs
   taking precedence over ignore files. Order is deterministic component-wise
-  byte order. Each selected file is read as UTF-8; files that vanished or
-  cannot be read are silently skipped.
+  byte order. Each selected file is read as strict UTF-8; a file that vanished
+  after selection is skipped, and invalid UTF-8 or another read error fails
+  the command.
 - **`ask`** is a function that receives `{ file, input }` per file (where
   `file` is `{ path, content }` and `input` is the validated workflow input)
   and returns QUESTIONS ONLY. It may produce dynamic criteria per file (e.g.
@@ -451,91 +461,124 @@ calls it through TypeSafe's official JavaScript SDK:
   are sent to the model. Assessment is read-only and tool-free.
 - **Result** is an ordered `Array<{ file: string; assessment: AssessmentResult<Q> }>`,
   preserving the deterministic selector order regardless of completion order.
-  Each file's `assessment` contains `{ model, answers, usage }`, typed from the
-  questions. Each file's response is validated against the exact questions
-  resolved for that file.
-- **Concurrency** is bounded by the scheduler (weight 1 per file, same as any
-  assessment command). Files are issued concurrently through `runtime.issue()`
-  and results are collected with `Promise.allSettled`.
+  Each file's `assessment` contains `{ provider, model, calibrated, answers,
+  usage }`, typed from the questions. Each file's response is validated
+  against the exact questions resolved for that file.
+- **Concurrency.** The assessment command holds one scheduler permit for
+  the whole batch; inside it, up to `fileConcurrency` files (default 4,
+  clamped to 1–32) are requested at a time.
 - **Command IDs.** A single-file result uses the assessment name as the command
   id. Multi-file results use `${name}:${file.path}` per file.
 - **Replay** uses the recorded operation and result without rereading files.
-  The command records `state`, `questions`, and pinned `model` as content, so
-  changing any of them replays as `changed`.
+  The command records `state`, `questions`, `provider`, and `model` as content.
+  `provider` and `model` are resolved from the environment when the command is
+  created (a pinned `model` option wins), so changing any of them, including
+  `DECISION_PROVIDER` or `DECISION_MODEL`, replays as `changed`.
 - **Repository-level assessment is intentionally not supported.** To assess a
   summary (build output, CI log, aggregated metrics), have a preceding shell
   or dynamic step materialize a single summary file and assess that file.
 - `questions` are named. `choice` picks one of the `criteria` keys (at least
   two; values are descriptions or `null`); `score` rates against ordered
-  `criteria` levels (at least two); `noul` is a yes/no question with optional
-  `criteria: { true, false }`. Instructions and descriptions may be text or
+  `criteria` levels (at least two); `yesno` is a yes/no question with optional
+  `criteria: { yes, no }`. Instructions and descriptions may be text or
   JSON. Malformed questions throw when `toOperation` is called (i.e. when the
   command is issued), since questions may depend on runtime input. Question
   ids and choice options may not be `__proto__`, `constructor`, or
   `prototype`.
-- The per-file result is `{ model, answers, usage }`, typed from the questions:
-  a choice answer has `choice` (one of the declared options), `probabilities`
-  per option, and `confidence`; a score answer has `score` (may fall between
-  levels), `legend`, `probabilities` per level, and `confidence`; a noul
-  answer has `noul`, the probability of yes. `model` is the versioned model
-  that answered (e.g. `jev-1.13.0` for `jev-latest`) and `usage` is
+- The per-file result is `{ provider, model, calibrated, answers, usage }`,
+  typed from the questions: a choice answer has `choice` (one of the declared
+  options), `probabilities` per option, and `confidence`; a score answer has
+  `score` (may fall between levels), `legend`, `probabilities` per level, and
+  `confidence`; a yesno answer has `yes`, the probability of yes. Any answer
+  may instead be `{ type: "refused" }` when the model declined, so workflow
+  code narrows on `answer.type` (see `demo/10-assisted.ts`). `provider` is
+  the adapter that asked, `model` is the versioned model that answered (e.g.
+  `jev-1.13.0` for `jev-latest`), `calibrated` says whether the provider
+  documents its probabilities and confidence as calibrated, and `usage` is
   `{ inputTokens?, outputTokens? }`, each count present only when the API
   reported it. Answers are validated against the concrete resolved questions
   both when the API responds and when a result is decoded (replay included);
   scores, probabilities, and confidence may exceed their range by
   floating-point noise (at most `1e-6`) and are kept unmodified.
 - It decides nothing. Thresholds, fallbacks, and routing are workflow code.
-- The runtime runs it in-process through the official TypeSafe JavaScript
-  SDK, `@typesafe-ai/sdk` (0.6.x): one `TypeSafeClient.systemOne()` call per
-  command (`executeAssessmentOperation` in `src/execution/assessment.ts`,
-  portable, reading files through the `Host`). The SDK owns authentication,
-  the `TYPESAFE_API_KEY` (required), `TYPESAFE_BASE_URL` (default
-  `https://api.typesafe.ai`), and `TYPESAFE_DEFAULT_MODEL` (default
-  `jev-latest`) fallbacks, request encoding, HTTP transport, and response
-  decoding. In `quickjs` there is no global `fetch`: the SDK gets an adapter (`src/host/quickjs/fetch.ts`)
-  over the host function `httpRequest`, which only allows URLs under the
-  TypeSafe API root (`TYPESAFE_BASE_URL`: same scheme, host, and port, a path
-  under the root's path, no redirects followed), so workflow and transform
-  code get no general network access. (Called from Node, the SDK uses the
-  global `fetch` unless `AssessmentExecutorOptions.fetch` is given.) Explicit
-  settings win over the environment: `AssessmentExecutorOptions` (`{ apiKey,
-  baseURL, defaultModel, timeoutMs, retry }`, the first argument of
-  `executeAssessmentOperation`). SDK logging is turned off
-  (`logLevel: "off"`, regardless of `TYPESAFE_LOG_LEVEL`), so assessments
+- The runtime runs it in-process: one JSON `POST` per file to the decision API
+  (`executeAssessmentOperation` in `src/execution/assessment.ts`, portable,
+  reading files through the `Host`), encoded and decoded by the provider's
+  adapter in `src/execution/decision/`. Configuration is environment-only
+  (`src/core/decision.ts`, resolved by `decisionModel` and `decisionSettings`);
+  workflow code never names an endpoint or a key. `DECISION_PROVIDER` is
+  `systemone` (default) or `openai`; `DECISION_BASE_URL`, `DECISION_PATH`,
+  and `DECISION_MODEL` default per provider; `DECISION_API_KEY` is the key;
+  `DECISION_AUTH_HEADER` is `authorization` (default, sends `Bearer <key>`)
+  or another header that carries the raw key, such as `api-key`. `systemone`
+  still reads `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL`, and
+  `TYPESAFE_API_KEY` when the `DECISION_*` value is unset, and `openai` reads
+  `OPENAI_API_KEY`. Blank values count as unset. An unknown
+  `DECISION_PROVIDER` throws when the command is created.
+- `systemone` (`decision/systemone.ts`) speaks TypeSafe's System One API
+  (`POST /v1/systemone`, <https://docs.typesafe.ai/api>; default root
+  `https://api.typesafe.ai`, model `jev-latest`): TypeSafe's Jev, Liquid AI
+  d1, open servers that speak it, and Microsoft Decision on Azure AI Foundry
+  (`DECISION_PATH=/providers/microsoft/v1/systemone`,
+  `DECISION_AUTH_HEADER=api-key`, the deployment name as `DECISION_MODEL`).
+  On that wire a yes/no question is `noul` with `{ true, false }` criteria;
+  the adapter translates. `openai` (`decision/openai.ts`) speaks OpenAI's
+  Decisions API (`POST /v1/decisions`; default root `https://api.openai.com`,
+  model `gpt-6-luna`): questions go as an array of `{ name, type, instructions }`
+  with type `predicate`, `choice`, or `score`, choice options as `choices`
+  (`{ value, description }`), score levels as `levels` (`{ label, description }`,
+  2 to 10), at most 400 questions per request. It takes text only, so JSON
+  instructions are stringified and yes/no criteria are appended to the
+  instructions; JSON state is sent as an `input_json` user message and text
+  state as the `input` string. A refusal becomes `{ type: "refused" }`, and
+  usage reports input tokens only. Both adapters report `calibrated: true`.
+  For Microsoft Decision that follows System One's contract; Microsoft's docs
+  describe its probabilities as useful for relative ordering and thresholds
+  and do not claim calibration.
+- In `quickjs` there is no global `fetch`: the executor gets an adapter
+  (`src/host/quickjs/fetch.ts`) over the host function `httpRequest`, which
+  only allows URLs under the decision API root, resolved as `decision.ts`
+  resolves it (`DECISION_BASE_URL`, else `TYPESAFE_BASE_URL` for `systemone`,
+  else the provider's default; same scheme, host, and port, a path under the
+  root's path, no redirects followed), so workflow and transform code get no
+  general network access. (Called from Node, the executor uses the global
+  `fetch` unless `AssessmentExecutorOptions.fetch` is given.)
+  `AssessmentExecutorOptions` (`{ env, fetch, timeoutMs, retry,
+  fileConcurrency }`, all optional, the first argument of
+  `executeAssessmentOperation`) carries no key or endpoint: `env` (default the
+  host environment) is where the `DECISION_*` settings are read. Assessments
   never write to the terminal.
-- Retries and timeouts are the SDK's; nothing in this package retries an
-  assessment, so there is one retry layer. With the SDK's default
-  `RetryPolicy` that is up to 2 retries for HTTP 408, 429, and 500-599,
-  connection failures, and attempt timeouts, with exponential backoff (500 ms
-  to 5 s, 25% jitter) or the server's `retry-after-ms` / `Retry-After` when it
-  is at most 60 s. `retry` passes SDK `RetryPolicy` overrides through
-  (`{ maxRetries: 0 }` disables retries). `timeoutMs` (default 30 s) is the
-  SDK's per-attempt timeout; the SDK has no total budget, so the worst case is
-  `(maxRetries + 1) * timeoutMs` plus backoff waits. The run's `AbortSignal`
-  is handed to the SDK, which cancels the in-flight attempt and any backoff
-  wait. The evaluation is read-only, so repeating it is safe.
-- Executor options are checked before any request: an explicit `undefined`
-  or blank string means "use the SDK fallback". This package adds only what
-  the SDK leaves unbounded: `timeoutMs` at most Node's timer limit (about 24.8
-  days), `retry.maxRetries` at most `MAX_ASSESSMENT_RETRIES` (10), and an
-  effective base URL (option, environment, or default) that is an absolute
-  `http(s)` URL without query or fragment. The SDK validates everything else
-  (positive timeout, retry settings) and refuses a missing API key when the
-  client is built. Any of these is a `failed` completion with
-  `phase: "config"` and no request, never a thrown error.
-- Failures are `failed` with `error.details`, mapped from the SDK's error
-  classes (not from messages): `phase` is `config` (the checks above),
-  `request` (`APIConnectionError`;
-  `APITimeoutError` adds `timedOut: true`), `http` (`APIError`, with `status`,
-  the SDK's `requestId` and parsed `body` when present, and `retryAfterMs` for
-  a 429 that sent one), `response` (a 2xx body, JSON or not, that does not
-  answer the questions: the SDK returns the body without checking it, so it is
-  normalized and validated here), or `internal` (anything else). For
-  `request` and `http`, `retryable` says whether the SDK's retry policy covers
-  that error, meaning its retries were exhausted; the SDK does not report how
-  many attempts it made. An abort (`APIUserAbortError` or the run's signal) is
-  `cancelled`. Nothing is ever `unknown`: an assessment cannot have changed
-  the repository.
+- Retries and timeouts are the transport's (`src/execution/decision/transport.ts`,
+  the policy the TypeSafe SDK used before it was dropped); nothing else
+  retries an assessment, so there is one retry layer. By default that is up
+  to 2 retries for HTTP 408, 409, 429, and 500-599, connection failures, and
+  attempt timeouts, with exponential backoff (500 ms to 5 s, 25% jitter) or
+  the server's `retry-after-ms` / `Retry-After` when it is at most 60 s.
+  `retry` overrides parts of the `RetryPolicy` (`{ maxRetries,
+  initialDelayMs, maxDelayMs, jitter }`; `{ maxRetries: 0 }` disables
+  retries). `timeoutMs` (default 30 s) is the per-attempt timeout; there is
+  no total budget, so the worst case is `(maxRetries + 1) * timeoutMs` plus
+  backoff waits. The run's `AbortSignal` cancels the in-flight attempt and
+  any backoff wait. The evaluation is read-only, so repeating it is safe.
+- Settings are checked before any request: `timeoutMs` between 1 and Node's
+  timer limit (about 24.8 days), `retry.maxRetries` at most
+  `MAX_ASSESSMENT_RETRIES` (10), an effective base URL that is an absolute
+  `http(s)` URL without query, fragment, or user, an API key, and a `fetch`.
+  Any of these is a `failed` completion with `phase: "config"` and no
+  request, never a thrown error.
+- Failures are `failed` with `error.details`, whose `phase` is `config` (the
+  checks above), `request` (a connection error, or a timeout with
+  `timedOut: true`, both `retryable`; or questions the provider cannot take,
+  such as more than 10 score levels for `openai`), `http` (a non-2xx
+  response, with `status`, `retryable`, `requestId` from `x-request-id` or
+  `apim-request-id`, `retryAfterMs` when the server sent a usable one, and the
+  parsed `body`, cut to 2,000 characters as text when longer), `response` (a
+  2xx body that is not JSON or does not answer the questions: it is decoded
+  and validated here), or `internal` (anything else). For `request` and
+  `http`, `retryable: true` means the retries were exhausted. File-oriented
+  assessments add `select` (file selection failed), and `utf8` and `read`
+  (with the `file`). An abort is `cancelled`. Nothing is ever `unknown`: an
+  assessment cannot have changed the repository.
 
 `agent({ name, prompt, input?, output?, backend? })` hands a task to an agent
 loop chosen by `backend`, a discriminated union that is recorded in the command
@@ -668,8 +711,9 @@ Security model of `agent` (a trusted-local prototype, not a sandbox):
   for `builtin` only `LLM_PROVIDER`, `LLM_MODEL`, `LLM_BASE_URL`) plus the
   runtime's explicit `env`, which wins (names compared case-insensitively on
   Windows). External backends get no `LLM_*` or provider variables and no
-  stdin secret. `TYPESAFE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-  cloud, CI, and registry credentials stay out unless passed explicitly.
+  stdin secret. Decision API keys (`DECISION_API_KEY`, `TYPESAFE_API_KEY`),
+  `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, cloud, CI, and registry credentials
+  stay out unless passed explicitly.
 - The API key: the launcher (`agentLaunch`) never puts `LLM_API_KEY` in the
   runner's launch environment, so `ps eww` or `/proc/<pid>/environ` of the
   runner does not show it. It sends the request line and then
@@ -934,7 +978,7 @@ The model is a weighted semaphore with a strict FIFO queue:
 | operation | weight | why |
 | --- | --- | --- |
 | `shell`, `agent` | 1 | one child process |
-| `assessment` | 1 | one HTTP request, no local work |
+| `assessment` | 1 | HTTP requests only (up to `fileConcurrency` at once), no local work |
 | `jssg` (no semantics or `"file"`) | 2 | parsing and transforming plus the whole selected file set in memory |
 | `jssg` with `"workspace"` semantics | 4 | the batch is also parsed and indexed as one workspace |
 
@@ -1024,7 +1068,7 @@ move to Rust one at a time without changing workflow source. `shell` runs
 in-process over `Host.spawn`, local `jssg` has the TypeScript orchestrator
 around the shared Rust batch rules (`crates/jssg-batch`), `agent` has a
 process adapter over the `codemod-agent` runner (`codemod-ai` or an external
-CLI), and `assessment` has an in-process HTTP adapter over the TypeSafe SDK;
+CLI), and `assessment` has in-process HTTP adapters per decision provider;
 the executor is the QuickJS bundle's; the
 harness can script any operation in unit tests (for `shell` and `agent` a
 non-string value becomes JSON `stdout` / `text`).
@@ -1058,9 +1102,10 @@ runs report them as skipped and make no request, even when credentials are
 set; opting in without the required credentials fails instead of skipping.
 
 ```
-# assessment() against TypeSafe (TYPESAFE_BASE_URL and TYPESAFE_DEFAULT_MODEL optional)
-TYPESAFE_API_KEY=... pnpm --filter @codemod.com/orchestration test:live:assessment
-#   = CODEMOD_LIVE_ASSESSMENT=1 vitest run tests/assessment.live.test.ts
+# assessment() eval against each named provider (other DECISION_* settings optional;
+# with both providers, set TYPESAFE_API_KEY and OPENAI_API_KEY instead of one DECISION_API_KEY)
+CODEMOD_LIVE_ASSESSMENT=systemone,openai DECISION_API_KEY=... pnpm --filter @codemod.com/orchestration test:live:assessment
+#   = vitest run tests/assessment.live.test.ts
 
 # builtin agent() through the real agent runner (LLM_PROVIDER, LLM_MODEL, LLM_BASE_URL, CODEMOD_AGENT_BIN optional)
 LLM_API_KEY=... pnpm --filter @codemod.com/orchestration test:live:agent:builtin
@@ -1075,8 +1120,8 @@ pnpm --filter @codemod.com/orchestration test:live:agent:codex
 #   = pnpm build:agent && CODEMOD_LIVE_AGENT_CODEX=1 vitest run tests/agent.codex.live.test.ts
 ```
 
-The live assessment test calls the TypeSafe SDK from Node, whose global
-`fetch` ignores `HTTPS_PROXY`; behind a proxy add `NODE_USE_ENV_PROXY=1`
+The live assessment test calls the decision APIs with Node's global `fetch`,
+which ignores `HTTPS_PROXY`; behind a proxy add `NODE_USE_ENV_PROXY=1`
 (Node 24) to the assessment command.
 
 The full `codemod` CLI is never built or used by this package.

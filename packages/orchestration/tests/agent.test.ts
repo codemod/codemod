@@ -469,7 +469,7 @@ describe("agent failures and plumbing", () => {
       llm_model: "gpt-4o",
       ANTHROPIC_API_KEY: "anthropic",
       OPENAI_API_KEY: "openai",
-      TYPESAFE_API_KEY: "typesafe",
+      DECISION_API_KEY: "decision",
     };
     for (const backend of ["claude-code", "codex"] as const) {
       expect(agentLaunch(host, {}, "linux", backend)).toEqual({
@@ -502,7 +502,7 @@ describe("agent failures and plumbing", () => {
       https_proxy: "http://proxy:8080",
       LLM_API_KEY: "llm-key",
       LLM_MODEL: "gpt-4o",
-      TYPESAFE_API_KEY: "typesafe-key",
+      DECISION_API_KEY: "decision-key",
       AWS_SECRET_ACCESS_KEY: "aws",
       GITHUB_TOKEN: "gh",
       NPM_TOKEN: "npm",

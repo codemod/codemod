@@ -3,7 +3,9 @@
   "commandId": "review-diff",
   "status": "succeeded",
   "output": {
+    "provider": "systemone",
     "model": "jev-1.13.0",
+    "calibrated": true,
     "answers": {
       "risk": {
         "type": "choice",
@@ -18,7 +20,7 @@
         "probabilities": { "0": 0.02, "1": 0.06, "2": 0.92 },
         "confidence": 0.87
       },
-      "touchesTests": { "type": "noul", "noul": 0.03 }
+      "touchesTests": { "type": "yesno", "yes": 0.03 }
     },
     "usage": { "inputTokens": 312, "outputTokens": 48 }
   }

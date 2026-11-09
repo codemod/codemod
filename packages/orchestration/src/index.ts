@@ -16,11 +16,10 @@ export {
   executeAssessmentOperation,
   executeFileAssessment,
 } from "./execution/assessment.ts";
-export type {
-  AssessmentClient,
-  AssessmentClientFactory,
-  AssessmentExecutorOptions,
-} from "./execution/assessment.ts";
+export type { AssessmentExecutorOptions } from "./execution/assessment.ts";
+export { decisionModel, decisionSettings } from "./core/decision.ts";
+export type { DecisionSettings } from "./core/decision.ts";
+export type { DecisionFetch, RetryPolicy } from "./execution/decision/transport.ts";
 export {
   AGENT_ENV_ALLOWLIST,
   AGENT_ENV_PREFIXES,

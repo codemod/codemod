@@ -19,7 +19,7 @@ createHarness({ runtime: "quickjs" })                  // tests: Node, scripted 
 
 | Runtime | Control plane | File selection + reads | `jssg` | `shell` | `assessment` | `agent` | Semantic analysis |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `quickjs` | QuickJS (Rust binary) | native (host primitives, `orchestration-walker`) | in-process in the same context | Rust host spawn | TypeSafe SDK, `fetch` over `httpRequest` (TypeSafe API root only) | `codemod-agent` runner via the host's spawn | yes (batch provider, `jssgIndex`) |
+| `quickjs` | QuickJS (Rust binary) | native (host primitives, `orchestration-walker`) | in-process in the same context | Rust host spawn | decision adapters, `fetch` over `httpRequest` (decision API root only) | `codemod-agent` runner via the host's spawn | yes (batch provider, `jssgIndex`) |
 
 `quickjs` executes every operation kind and applies the JSSG batch rules of
 `crates/jssg-batch` (planning, containment, semantic provider, workspace index, selector
@@ -39,7 +39,7 @@ the only other processes are `codemod-agent` runners, one per `agent` step.
 | `src/execution/operation-executor.ts` | `OperationExecutor` (moved out of `executor.ts`) |
 | `src/execution/jssg.ts` | portable `executeJssgCommand({ ..., dispatch, host })` |
 | `src/execution/shell.ts` | portable `executeShell` with DirectRunner semantics |
-| `src/execution/assessment.ts` | portable `executeAssessmentOperation(options, cwd, request, signal)` over the TypeSafe SDK and the `Host` fs |
+| `src/execution/assessment.ts`, `src/execution/decision/` | portable `executeAssessmentOperation(options, cwd, request, signal)` over the provider adapters, the HTTP transport, and the `Host` fs; settings from `src/core/decision.ts` |
 | `src/execution/agent.ts`, `src/execution/agent-env.ts` | portable `executeAgent`: one `codemod-agent` process per step through `Host.spawn`, allowlisted environment (`agentLaunch`), key on stdin |
 | `src/host/runtimes/agent-bin.ts` | `defaultAgentPath`: `CODEMOD_AGENT_BIN`, else the newer of `target/{release,debug}/codemod-agent` |
 | `crates/orchestration-agent` | the `codemod-agent` binary: one `agent` operation, request on stdin, completion on stdout (`PROTOCOL.md`) |
@@ -56,7 +56,7 @@ the only other processes are `codemod-agent` runners, one per `agent` step.
 | `src/portable.ts` | `@codemod.com/orchestration/portable`: the Node-free API |
 | `tests/portable.test.ts` | static import scan of everything reachable from `portable.ts` and `host/quickjs/entry.ts` |
 | `src/host/quickjs-bundle.ts` | Node: `buildQuickjsBundle`, `cachedQuickjsBundle` (esbuild) |
-| `src/host/quickjs/{entry,host,dispatch,async-context,native,fetch}.ts` | runs inside QuickJS: bundle entry, `Host`, the in-context `JssgBatchEngine`, async context, the Rust primitives' types, the TypeSafe SDK's `fetch` over `httpRequest` |
+| `src/host/quickjs/{entry,host,dispatch,async-context,native,fetch}.ts` | runs inside QuickJS: bundle entry, `Host`, the in-context `JssgBatchEngine`, async context, the Rust primitives' types, the assessment `fetch` over `httpRequest` |
 | `crates/orchestration-quickjs-host` | the Rust binary: one runtime + one context, Rust primitives, JSSG per-file calls, the transform pool (`src/pool.rs`), `httpRequest` (`src/http.rs`) |
 | `crates/codemod-sandbox/src/sandbox/engine/embedded.rs` | JSSG in an embedder-owned context: built-in modules, userdata, `begin_call`/`end_call`/`transform_output` |
 
@@ -76,7 +76,7 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
                    options) (artifact module, evaluated once per run) / jssgCallEnd ->
                    jssgFinish (Rust, BatchPlan::finish) -> select/stage/commit unchanged
           shell -> executeShell over Host.spawn (Rust: own process group, merged pipe, tree kill on abort)
-          assessment -> executeAssessmentOperation (TypeSafe SDK, fetch over httpRequest)
+          assessment -> executeAssessmentOperation (decision adapter, fetch over httpRequest)
           agent -> executeAgent -> Host.spawn codemod-agent (stdin request + key, stdout completion)
 ```
 
@@ -96,8 +96,9 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
   the run; files serially. A batch of 64 files or more runs in chunks on the host's
   transform pool (`src/pool.rs`): `CODEMOD_JSSG_WORKERS` threads, else the core count
   capped at 4, each with its own QuickJS context, so there module-level state is per worker.
-- **Assessment:** the TypeSafe SDK in the bundle, with a `fetch` over the host's
-  `httpRequest`, which reaches only the TypeSafe API root (`TYPESAFE_BASE_URL`).
+- **Assessment:** the decision adapters and transport in the bundle, with a `fetch` over the
+  host's `httpRequest`, which reaches only the decision API root (`DECISION_BASE_URL`, else
+  `TYPESAFE_BASE_URL` for `systemone`, else the provider's default; see `src/core/decision.ts`).
 - **Semantic analysis:** the batch's provider (`BatchPlan`), workspace index built by
   `jssgIndex` before the first transform.
 - **Agent:** one `codemod-agent` runner process per step (`crates/orchestration-agent`,
@@ -405,8 +406,8 @@ from Rust primitives, and the async context uses then-propagation, not promise h
    (`tests/portable.test.ts` enforces this for everything reachable from `portable.ts`).
 3. The bundle: built by Node with esbuild from an entry that imports
    `@codemod.com/orchestration/portable` (alias `@codemod.com/orchestration` to it), the
-   workflow module, and the transform artifacts; the only bundled npm dependencies are
-   `ignore` (pure JS, CommonJS) and `@typesafe-ai/sdk` (pure JS, takes an injected `fetch`). `languages.json` is a JSON import.
+   workflow module, and the transform artifacts; the only bundled npm dependency is
+   `ignore` (pure JS, CommonJS). `languages.json` is a JSON import.
 4. An entry that calls `run(workflow, { executor, runtime: QUICKJS_RUNTIME, input })`, where
    `executor` routes `jssg` to `executeJssgCommand({ dispatch })` (dispatch evaluates each
    artifact module once per run, cached by hash, and runs transforms serially per file against

@@ -181,9 +181,6 @@ importers:
       '@codemod.com/jssg-types':
         specifier: workspace:*
         version: link:../jssg-types
-      '@typesafe-ai/sdk':
-        specifier: ^0.6.0
-        version: 0.6.0
       esbuild:
         specifier: ^0.27.2
         version: 0.27.2
@@ -1333,10 +1330,6 @@ packages:
 
   '@types/react@19.2.14':
     resolution: {integrity: sha512-ilcTH/UniCkMdtexkoCN0bI7pMcJDvmQFPvuPvmEaYA/NSfFTAgdUSLAoVjaRJm7+6PvcM+q1zYOwS4wTYMF9w==}
-
-  '@typesafe-ai/sdk@0.6.0':
-    resolution: {integrity: sha512-IddX+Q0XM+VagOUZFeP7wZjaO4SHMdvnh2zEBdrZZnXedWI3BNK1lKhMx3ayrkFWvVLbVcUHJy6AVZlY+e6Jaw==}
-    engines: {node: '>=20'}
 
   '@ungap/structured-clone@1.2.0':
     resolution: {integrity: sha512-zuVdFrMJiuCDQUMCzQaD6KL28MjnqqN8XnAqiEq9PNm/hCPTSGfrXCOfwj1ow4LFb/tNymJPwsNbVePc1xFqrQ==}
@@ -3574,8 +3567,6 @@ snapshots:
   '@types/react@19.2.14':
     dependencies:
       csstype: 3.2.3
-
-  '@typesafe-ai/sdk@0.6.0': {}
 
   '@ungap/structured-clone@1.2.0': {}
 

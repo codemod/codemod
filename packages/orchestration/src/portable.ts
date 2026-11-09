@@ -118,11 +118,14 @@ export type {
   AssessmentUsage,
   ChoiceAnswer,
   ChoiceQuestion,
-  NoulAnswer,
-  NoulQuestion,
+  RefusedAnswer,
   ScoreAnswer,
   ScoreQuestion,
+  YesNoAnswer,
+  YesNoQuestion,
 } from "./core/assessment.ts";
+export { DECISION_PROVIDERS } from "./core/decision.ts";
+export type { DecisionProvider } from "./core/decision.ts";
 export { canonicalJson } from "./core/json.ts";
 export type { Json } from "./core/json.ts";
 export {

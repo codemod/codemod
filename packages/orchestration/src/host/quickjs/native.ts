@@ -71,8 +71,8 @@ export interface QuickjsNative {
   yieldNow(): Promise<void>;
 
   /**
-   * One HTTP request, only to the TypeSafe API root (`TYPESAFE_BASE_URL`,
-   * default `https://api.typesafe.ai`); anything else throws `EACCES`.
+   * One HTTP request, only under the decision API root the environment names
+   * (`DECISION_BASE_URL`, `core/decision.ts`); anything else throws `EACCES`.
    * Redirects are not followed. The body is buffered. A transport failure
    * rejects with `code: "ECONNECTION"`.
    */

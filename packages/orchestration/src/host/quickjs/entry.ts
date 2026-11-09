@@ -140,7 +140,7 @@ export async function runBundled(
     ]),
   );
   const executor = new QuickjsExecutor(request.target, artifacts, createQuickjsDispatch(native), {
-    fetch: createQuickjsFetch(native) as unknown as AssessmentExecutorOptions["fetch"],
+    fetch: createQuickjsFetch(native),
   });
   let store: MemoryHistoryStore | undefined;
   const result: {

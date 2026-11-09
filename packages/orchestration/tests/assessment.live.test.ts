@@ -1,65 +1,40 @@
 /**
- * Live `assessment()` against the TypeSafe System One API through the
- * official SDK (`@typesafe-ai/sdk`, default client construction). Opt-in
- * only: ordinary test runs skip it and make no request.
+ * Eval: live `assessment()` against real decision APIs. Opt-in only; ordinary
+ * runs and PR CI skip it and make no request. Name the providers to ask:
  *
- *   CODEMOD_LIVE_ASSESSMENT=1 TYPESAFE_API_KEY=... \
+ *   CODEMOD_LIVE_ASSESSMENT=systemone,openai \
+ *     DECISION_API_KEY=... (or TYPESAFE_API_KEY / OPENAI_API_KEY) \
  *     pnpm --filter @codemod.com/orchestration test:live:assessment
  *
- * Optional: TYPESAFE_BASE_URL (default https://api.typesafe.ai) and
- * TYPESAFE_DEFAULT_MODEL (default jev-latest). Opting in without
- * TYPESAFE_API_KEY fails instead of skipping.
+ * Each provider reads the usual `DECISION_*` settings (`src/core/decision.ts`).
+ * A named provider without a key fails instead of skipping.
  */
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  DECISION_PROVIDERS,
   MemoryHistoryStore,
-  executeAssessmentOperation,
   assessment,
-  dynamic,
+  decisionSettings,
+  executeAssessmentOperation,
   run,
-  type AssessmentExecutorOptions,
-  type AssessmentFileResult,
+  type DecisionProvider,
   type OperationRequest,
 } from "../src/index.ts";
 
-/** What the `node` runtime's executor does with `assessment` operations. */
-const assessmentExecutor = (cwd: string, options: AssessmentExecutorOptions = {}) => ({
-  execute: (request: OperationRequest, signal?: AbortSignal) =>
-    executeAssessmentOperation(options, cwd, request, signal),
-});
+const providers = (process.env.CODEMOD_LIVE_ASSESSMENT ?? "")
+  .split(",")
+  .map((name) => name.trim())
+  .filter((name): name is DecisionProvider =>
+    (DECISION_PROVIDERS as readonly string[]).includes(name),
+  );
 
-const optedIn = process.env.CODEMOD_LIVE_ASSESSMENT === "1";
-
-describe.skipIf(!optedIn)("assessment() against the live TypeSafe API", () => {
-  let fixtureDir: string;
-
-  beforeAll(() => {
-    if (!process.env.TYPESAFE_API_KEY?.trim()) {
-      throw new Error("CODEMOD_LIVE_ASSESSMENT=1 requires TYPESAFE_API_KEY");
-    }
-    // Create a small fixture with one file to minimize API calls
-    fixtureDir = join(tmpdir(), `assessment-live-${process.pid}`);
-    rmSync(fixtureDir, { recursive: true, force: true });
-    mkdirSync(fixtureDir, { recursive: true });
-    writeFileSync(
-      join(fixtureDir, "build-output.txt"),
-      "src/app.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.",
-      "utf8",
-    );
-  });
-
-  afterAll(() => {
-    try {
-      rmSync(fixtureDir, { recursive: true, force: true });
-    } catch {
-      // best effort
-    }
-  });
-
-  const buildQuestions = {
+const buildReport = assessment({
+  name: "build-report",
+  include: ["*.txt"],
+  ask: () => ({
     outcome: {
       type: "choice" as const,
       instructions: "Did this build succeed or fail?",
@@ -71,49 +46,59 @@ describe.skipIf(!optedIn)("assessment() against the live TypeSafe API", () => {
       criteria: ["None", "A small, local fix", "Substantial changes"],
     },
     typeError: {
-      type: "noul" as const,
+      type: "yesno" as const,
       instructions: "Does the output report a TypeScript type error?",
     },
-  };
-
-  const buildReport = assessment({
-    name: "build-report",
-    include: ["*.txt"],
-    ask: () => buildQuestions,
-  });
-
-  it("returns typed per-file answers, the answering model, and usage through run()", async () => {
-    const executor = assessmentExecutor(fixtureDir);
-    const store = new MemoryHistoryStore();
-    const workflow = dynamic(() => buildReport());
-    const { output } = await run(workflow, { executor, history: store });
-
-    expect(output).toHaveLength(1);
-    const result: AssessmentFileResult<typeof buildQuestions> = output[0]!;
-
-    expect(result.file).toBe("build-output.txt");
-    expect(result.assessment.model.trim()).not.toBe("");
-    expect(result.assessment.usage.inputTokens).toBeGreaterThan(0);
-    expect(result.assessment.answers.outcome.choice).toBe("failed");
-    expect(Object.keys(result.assessment.answers.outcome.probabilities).sort()).toEqual([
-      "failed",
-      "succeeded",
-    ]);
-    expect(result.assessment.answers.outcome.confidence).toBeGreaterThanOrEqual(0);
-    expect(result.assessment.answers.severity.score).toBeGreaterThanOrEqual(0);
-    expect(result.assessment.answers.severity.score).toBeLessThanOrEqual(2);
-    expect(result.assessment.answers.typeError.noul).toBeGreaterThan(0.5);
-
-    // Recorded, so a replay answers without another request.
-    const replay = await run(workflow, {
-      executor: assessmentExecutor(fixtureDir, {
-        apiKey: "not-used",
-        createClient: () => {
-          throw new Error("replay must not build a client");
-        },
-      }),
-      history: store,
-    });
-    expect(replay.output).toEqual(output);
-  }, 60_000);
+  }),
 });
+
+// With no provider named, one skipped case keeps the file from reporting "no tests".
+const cases = providers.length > 0 ? providers : (["systemone"] as const);
+
+describe.skipIf(providers.length === 0).each(cases)(
+  "[eval] assessment() against the live %s API",
+  (provider) => {
+    const env = { ...process.env, DECISION_PROVIDER: provider };
+    const executor = (cwd: string) => ({
+      execute: (request: OperationRequest, signal?: AbortSignal) =>
+        executeAssessmentOperation({ env }, cwd, request, signal),
+    });
+    let dir: string;
+    let previous: string | undefined;
+
+    beforeAll(() => {
+      if (decisionSettings(env).apiKey === undefined) {
+        throw new Error(`CODEMOD_LIVE_ASSESSMENT=${provider} needs an API key`);
+      }
+      previous = process.env.DECISION_PROVIDER;
+      process.env.DECISION_PROVIDER = provider;
+      dir = mkdtempSync(join(tmpdir(), "assessment-live-"));
+      writeFileSync(
+        join(dir, "build-output.txt"),
+        "src/app.ts(3,7): error TS2322: Type 'string' is not assignable to type 'number'.",
+      );
+    });
+
+    afterAll(() => {
+      if (previous === undefined) delete process.env.DECISION_PROVIDER;
+      else process.env.DECISION_PROVIDER = previous;
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("answers every question for the file, and replays without asking again", async () => {
+      const store = new MemoryHistoryStore();
+      const { output } = await run(buildReport, { executor: executor(dir), history: store });
+      const answers = output[0]!.assessment.answers;
+      expect({
+        provider: output[0]!.assessment.provider,
+        outcome: answers.outcome.type === "choice" && answers.outcome.choice,
+        typeError: answers.typeError.type === "yesno" && answers.typeError.yes > 0.5,
+        severity: answers.severity.type,
+      }).toEqual({ provider, outcome: "failed", typeError: true, severity: "score" });
+
+      rmSync(join(dir, "build-output.txt"));
+      const replay = await run(buildReport, { executor: executor(dir), history: store });
+      expect(replay.output).toEqual(output);
+    }, 60_000);
+  },
+);
