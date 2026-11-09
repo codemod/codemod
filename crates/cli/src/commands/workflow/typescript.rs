@@ -1,15 +1,17 @@
 //! `codemod workflow run -w workflow.ts`: TypeScript workflows on the
 //! orchestration engine. The workflow graph is bundled with the portable
-//! runtime (`orchestration-build`, cached by the content of every input
-//! file) and run in one QuickJS context by `orchestration-quickjs-host`, in
-//! this process. SIGINT, SIGTERM and SIGHUP abort the run (the host cancels
+//! runtime built into this binary (`orchestration-build`, cached by the
+//! content of every input file) and run in one QuickJS context by
+//! `orchestration-quickjs-host`, in this process. SIGINT, SIGTERM and SIGHUP abort the run (the host cancels
 //! the operation in flight). The final output is printed as JSON on stdout;
 //! workflow console output goes to stderr.
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
-use orchestration_build::{cached_quickjs_bundle, default_bundle_cache, Runtime};
+use orchestration_build::{
+    cached_quickjs_bundle, default_bundle_cache, default_runtime_cache, Runtime,
+};
 use orchestration_quickjs_host::{run, HostOptions};
 
 /// Set when the runner was not found next to this binary.
@@ -32,21 +34,21 @@ pub struct Options<'a> {
     pub history: Option<&'a Path>,
 }
 
-/// The portable runtime's sources. `CODEMOD_ORCHESTRATION_SRC`, else this
-/// checkout's `packages/orchestration/src`.
+/// The portable runtime built into this binary, or the sources at
+/// `CODEMOD_ORCHESTRATION_SRC` when developing the runtime itself.
 fn runtime() -> Result<Runtime> {
-    let src = std::env::var_os("CODEMOD_ORCHESTRATION_SRC")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/orchestration/src")
-        });
-    let src = src.canonicalize().with_context(|| {
-        format!(
-            "the orchestration runtime sources are missing at {}; set CODEMOD_ORCHESTRATION_SRC",
-            src.display()
-        )
-    })?;
-    Ok(Runtime { src })
+    if let Some(src) = std::env::var_os("CODEMOD_ORCHESTRATION_SRC") {
+        let src = PathBuf::from(src);
+        let src = src.canonicalize().with_context(|| {
+            format!(
+                "CODEMOD_ORCHESTRATION_SRC does not exist: {}",
+                src.display()
+            )
+        })?;
+        return Ok(Runtime { src });
+    }
+    let cache = default_runtime_cache().map_err(anyhow::Error::msg)?;
+    Runtime::embedded(&cache).context("failed to write the orchestration runtime")
 }
 
 /// `codemod-agent`, which `agent` steps spawn, is installed next to this binary.

@@ -8,14 +8,19 @@
 //!   orchestration runtime, async lowered, with the artifact table in front.
 //! - [`cached_quickjs_bundle`] reuses a bundle until an input file or this
 //!   builder changes.
+//! - [`Runtime::embedded`] is the runtime built into this crate.
 mod bundle;
 mod cache;
+mod runtime;
 mod split;
 
 use std::{fmt, path::PathBuf};
 
 pub use bundle::{build_quickjs_bundle, QuickjsBundle, Runtime};
-pub use cache::{cached_quickjs_bundle, default_bundle_cache, private_directory, CachedBundle};
+pub use cache::{
+    cached_quickjs_bundle, default_bundle_cache, default_runtime_cache, private_directory,
+    CachedBundle,
+};
 pub use split::{build_file, build_module, BuiltModule, JssgArtifact};
 
 /// A workflow outside the supported subset, or a bundling failure.

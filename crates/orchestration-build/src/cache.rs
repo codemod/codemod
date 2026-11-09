@@ -53,14 +53,24 @@ fn builder() -> &'static str {
 /// `<tmpdir>/codemod-workflow-cache-<uid>`. Fails when that directory is not
 /// private to this user.
 pub fn default_bundle_cache() -> Result<PathBuf, String> {
+    default_cache("quickjs")
+}
+
+/// Where [`crate::Runtime::embedded`] writes the runtime's sources.
+pub fn default_runtime_cache() -> Result<PathBuf, String> {
+    default_cache("runtime")
+}
+
+/// `<root>/<name>`, root `$CODEMOD_WORKFLOW_CACHE` or a per-user temp directory.
+fn default_cache(name: &str) -> Result<PathBuf, String> {
     let root = match std::env::var_os("CODEMOD_WORKFLOW_CACHE") {
         Some(root) if !root.is_empty() => PathBuf::from(root),
         _ => std::env::temp_dir().join(format!("codemod-workflow-cache-{}", uid())),
     };
-    private_directory("quickjs", &root).ok_or_else(|| {
+    private_directory(name, &root).ok_or_else(|| {
         format!(
             "the workflow cache {} is not a directory private to this user; fix its owner and permissions or set CODEMOD_WORKFLOW_CACHE",
-            root.join("quickjs").display()
+            root.join(name).display()
         )
     })
 }
