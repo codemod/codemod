@@ -8,10 +8,11 @@ import {
   returns,
   secondaryAt,
   selected,
+  skipping,
   throwing,
 } from "./transforms.ts";
 
-const steps = { encoding, multi, renameInto, returns, secondaryAt, selected, throwing };
+const steps = { encoding, multi, renameInto, returns, secondaryAt, selected, skipping, throwing };
 
 interface Case {
   step: keyof typeof steps;

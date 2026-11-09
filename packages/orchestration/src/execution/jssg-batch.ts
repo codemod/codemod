@@ -80,9 +80,25 @@ export interface JssgBatch<Root = unknown, Ran = unknown> {
   call(index: number, root: Root, transform: TransformFunction): Promise<Ran>;
   /** The file's `FileOutcome`; throws `JSSG failed for '<path>': ...`. */
   finish(index: number, root: Root, ran: Ran): FileOutcome;
+  /**
+   * Parse and transform files `start ..< start + contents.length` on another
+   * thread, one result per file in order. Present when the engine runs
+   * transforms on a worker pool of `parallelism` threads; the loop then
+   * hands it every chunk at once and the pool runs them side by side.
+   */
+  transformRange?(
+    start: number,
+    contents: string[],
+    artifact: TransformArtifact,
+  ): Promise<RangeResult[]>;
+  /** Worker threads behind `transformRange`. */
+  readonly parallelism?: number;
   /** Release the batch. */
   close(): void;
 }
+
+/** One file of a `transformRange`: its outcome, or the `JSSG failed for '<path>': ...` message. */
+export type RangeResult = { outcome: FileOutcome } | { error: string };
 
 /** What a runtime provides to run JSSG batches in-process. */
 export interface JssgBatchEngine<Root = unknown, Ran = unknown> {
@@ -149,14 +165,24 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
       return failed((error as Error).message ?? String(error));
     }
     const artifact: TransformArtifact = { ...operation.transform, source: source ?? "" };
+    const skipFailures = (operation.onFileError ?? "skip") === "skip";
+    const outcomes: FileOutcome[] = [];
+    const failures: { path: string; error: string }[] = [];
+    /** Record a failed file; false when the policy fails the command instead. */
+    const fileFailed = (path: string, error: string): boolean => {
+      if (!skipFailures) return false;
+      failures.push({ path, error });
+      outcomes.push({ path, edits: [] });
+      return true;
+    };
+    const succeeded = (): OperationCompletion => ({
+      protocolVersion: PROTOCOL_VERSION,
+      commandId: request.commandId,
+      status: "succeeded",
+      output: { files: outcomes, failures } as unknown as Json,
+    });
     let pending: Promise<unknown[]> | undefined;
     try {
-      const parse = (start: number) =>
-        batch.parse(
-          start,
-          files.slice(start, start + chunkSize).map((file) => file.content),
-        );
-      const outcomes: FileOutcome[] = [];
       // Benchmark timings (`core/timings.ts`; no-ops when off), as
       // back-to-back laps of the loop: waiting for a chunk is `parse` (the
       // parse itself on this thread, or blocked on worker threads, whose CPU
@@ -174,6 +200,37 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
         }
         mark = lap(Phase.setup, mark);
       }
+      const transformRange = batch.transformRange?.bind(batch);
+      if (transformRange !== undefined) {
+        // Small chunks keep every worker busy until the end of the batch.
+        const size = Math.max(
+          1,
+          Math.min(chunkSize, Math.ceil(files.length / ((batch.parallelism ?? 1) * 4))),
+        );
+        const ranges: Promise<RangeResult[]>[] = [];
+        for (let start = 0; start < files.length; start += size) {
+          const contents = files.slice(start, start + size).map((file) => file.content);
+          ranges.push(transformRange(start, contents, artifact));
+        }
+        for (const range of ranges) range.catch(() => {});
+        for (const range of ranges) {
+          const results = await range;
+          if (signal?.aborted) return failed("cancelled");
+          for (const result of results) {
+            if ("outcome" in result) outcomes.push(result.outcome);
+            else if (!fileFailed(files[outcomes.length]!.path, result.error)) {
+              return failed(result.error);
+            }
+          }
+        }
+        lap(Phase.transform, mark);
+        return succeeded();
+      }
+      const parse = (start: number) =>
+        batch.parse(
+          start,
+          files.slice(start, start + chunkSize).map((file) => file.content),
+        );
       pending = files.length > 0 ? parse(0) : undefined;
       for (let start = 0; pending !== undefined; start += chunkSize) {
         const roots = await pending;
@@ -188,30 +245,39 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
             outcomes.push({ path: file.path, edits: [] });
             continue;
           }
-          let ran: unknown;
+          // A module that does not load fails every file alike, so it fails the command.
+          let transform: unknown;
           try {
-            const transform = await load(artifact, batch.module);
-            mark = lap(Phase.setup, mark);
+            transform = await load(artifact, batch.module);
             if (typeof transform !== "function") {
               throw new Error(
                 `jssg codemod modules must export a function. ${typeof transform} found.`,
               );
             }
-            ran = await batch.call(index, root, transform as TransformFunction);
           } catch (error) {
             return failed(`JSSG failed for '${file.path}': ${engine.describeError(error)}`);
           }
-          mark = lap(Phase.transform, mark);
-          outcomes.push(batch.finish(index, root, ran));
-          mark = lap(Phase.convert, mark);
+          mark = lap(Phase.setup, mark);
+          let outcome: FileOutcome;
+          try {
+            let ran: unknown;
+            try {
+              ran = await batch.call(index, root, transform as TransformFunction);
+            } catch (error) {
+              throw new Error(`JSSG failed for '${file.path}': ${engine.describeError(error)}`);
+            }
+            mark = lap(Phase.transform, mark);
+            outcome = batch.finish(index, root, ran);
+            mark = lap(Phase.convert, mark);
+          } catch (error) {
+            const message = (error as Error).message ?? String(error);
+            if (!fileFailed(file.path, message)) return failed(message);
+            continue;
+          }
+          outcomes.push(outcome);
         }
       }
-      return {
-        protocolVersion: PROTOCOL_VERSION,
-        commandId: request.commandId,
-        status: "succeeded",
-        output: { files: outcomes as unknown as Json },
-      };
+      return succeeded();
     } catch (error) {
       return failed((error as Error).message ?? String(error));
     } finally {

@@ -15,7 +15,9 @@
  *   call, the per-context staging of `write()`/`jssgTransform()` and the
  *   transform options;
  * - `jssgFinish(batch, index, root, result)`: the shared result
- *   conversion, as `FileOutcome` JSON.
+ *   conversion, as `FileOutcome` JSON;
+ * - `jssgTransformRange(...)`: batches of `POOL_MIN_FILES` or more run in
+ *   chunks on the host's transform pool, one QuickJS context per thread.
  *
  * Transform modules are evaluated once per run, cached by artifact hash;
  * module-level state is therefore shared by every file and command of the
@@ -28,12 +30,18 @@ import type { FileOutcome } from "../../core/protocol.ts";
 import {
   createJssgBatchDispatch,
   type JssgBatchEngine,
+  type RangeResult,
   type TransformFunction,
 } from "../../execution/jssg-batch.ts";
 import type { JssgDispatch } from "../../execution/jssg.ts";
 import type { QuickjsNative } from "./native.ts";
 
 /** `Name: message` plus the stack (QuickJS's `stack` holds only the frames). */
+/** Batches at least this large run on the transform pool; smaller ones stay in this context. */
+const POOL_MIN_FILES = 64;
+
+const specifierOf = (hash: string, module: string) => `jssg-artifact:${hash}/${module}`;
+
 const describe = (error: unknown) => {
   if (!(error instanceof Error)) return String(error);
   const head = `${error.name}: ${error.message}`;
@@ -71,11 +79,26 @@ export function createQuickjsDispatch(native: QuickjsNative): JssgDispatch {
   const engine: JssgBatchEngine<unknown, unknown> = {
     open(config, paths) {
       const { id, module, indexesWorkspace } = native.jssgBegin(JSON.stringify(config), paths);
+      const workers = paths.length >= POOL_MIN_FILES ? native.jssgPoolSize() : 1;
       const end = (index: number) => {
         native.jssgCallEnd(id, index);
         release();
       };
       return {
+        ...(workers > 1 && {
+          parallelism: workers,
+          transformRange: (start: number, contents: string[], artifact) =>
+            native
+              .jssgTransformRange(
+                id,
+                specifierOf(artifact.hash, module),
+                artifact.source,
+                start,
+                paths.slice(start, start + contents.length),
+                contents,
+              )
+              .then((text) => (JSON.parse(text) as { results: RangeResult[] }).results),
+        }),
         module,
         indexesWorkspace,
         index: (start, contents) =>
@@ -119,7 +142,7 @@ export function createQuickjsDispatch(native: QuickjsNative): JssgDispatch {
       };
     },
     load(artifact, module) {
-      const specifier = `jssg-artifact:${artifact.hash}/${module}`;
+      const specifier = specifierOf(artifact.hash, module);
       native.registerModule(specifier, artifact.source);
       return (import(specifier) as Promise<{ default?: unknown }>).then(
         (namespace) => namespace.default,

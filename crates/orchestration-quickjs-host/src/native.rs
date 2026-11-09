@@ -14,6 +14,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::thread::JoinHandle;
@@ -38,9 +39,21 @@ pub struct HostState {
     /// Live children by spawn id: their process id (= process group id).
     pub children: RefCell<HashMap<u32, u32>>,
     pub next_id: Cell<u32>,
+    /// Repository root, as each transform pool worker's target directory.
+    pub target: PathBuf,
+    /// The transform pool, started by the first `jssgTransformRange`.
+    pub pool: RefCell<Option<Rc<crate::pool::Pool>>>,
 }
 
 impl HostState {
+    pub fn pool(&self) -> Rc<crate::pool::Pool> {
+        Rc::clone(
+            self.pool
+                .borrow_mut()
+                .get_or_insert_with(|| Rc::new(crate::pool::Pool::new(self.target.clone()))),
+        )
+    }
+
     pub fn next_id(&self) -> u32 {
         let id = self.next_id.get() + 1;
         self.next_id.set(id);
@@ -56,7 +69,7 @@ pub fn throw<'js>(ctx: &Ctx<'js>, code: Option<&str>, message: &str) -> rquickjs
     }
 }
 
-fn error_value<'js>(
+pub(crate) fn error_value<'js>(
     ctx: &Ctx<'js>,
     code: Option<&str>,
     message: &str,

@@ -106,6 +106,21 @@ export interface QuickjsNative {
   /** The awaited transform result as `FileOutcome` JSON (`undefined`: no edits, no output). Throws `JSSG failed for '<path>': ...`. */
   jssgFinish(batch: number, index: number, root: unknown, result: unknown): string | undefined;
   jssgEnd(batch: number): void;
+  /** Threads of the transform pool (`CODEMOD_JSSG_WORKERS`, else the cores capped at 4). */
+  jssgPoolSize(): number;
+  /**
+   * Parse, transform, and convert files `start ..< start + contents.length`
+   * on the transform pool: JSON `{ results: RangeResult[] }`. Rejects when the
+   * chunk cannot run (the module does not load, a file does not parse).
+   */
+  jssgTransformRange(
+    batch: number,
+    specifier: string,
+    source: string,
+    start: number,
+    paths: string[],
+    contents: string[],
+  ): Promise<string>;
 }
 
 /** The host's primitives, or an error naming what is missing. */

@@ -17,6 +17,10 @@
     "./loader": {
       "types": "./loader.d.ts",
       "default": "./loader.js"
+    },
+    "./pool": {
+      "types": "./pool.d.ts",
+      "default": "./pool.js"
     }
   },
   "scripts": {

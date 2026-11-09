@@ -22,10 +22,15 @@
 //!   `FileOutcome` JSON of the shared rules (`undefined` when it
 //!   has no edits and no output)
 //!   (`embedded::transform_output` then [`BatchPlan::finish`]);
-//! - `jssgEnd(batch)`.
+//! - `jssgEnd(batch)`;
+//! - `jssgPoolSize()` / `jssgTransformRange(batch, specifier, source, start,
+//!   paths, contents)`: whole chunks parsed, transformed, and converted on
+//!   the transform pool ([`crate::pool`]), each worker with its own context,
+//!   as JSON (`{ outcome } | { error }` per file).
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use bench_timings::Phase;
 use codemod_sandbox::sandbox::engine::embedded::{
@@ -33,12 +38,13 @@ use codemod_sandbox::sandbox::engine::embedded::{
 };
 use codemod_sandbox::sandbox::engine::FileChange;
 use jssg_batch::{BatchConfig, BatchPlan, Containment};
-use rquickjs::{Ctx, Function, Object, Value};
+use rquickjs::{Ctx, Function, Object, Promise, Value};
 
-use crate::native::{throw, HostState};
+use crate::native::{error_value, throw, HostState};
+use crate::pool::{self, Job};
 
 pub struct OpenBatch {
-    plan: BatchPlan,
+    plan: Arc<BatchPlan>,
     /// What each finished transform call staged, until `jssgFinish`.
     staged: HashMap<u32, Vec<FileChange>>,
 }
@@ -89,7 +95,7 @@ pub fn install<'js>(
                     state.batches.borrow_mut().insert(
                         id,
                         OpenBatch {
-                            plan,
+                            plan: Arc::new(plan),
                             staged: HashMap::new(),
                         },
                     );
@@ -194,25 +200,56 @@ pub fn install<'js>(
                 move |ctx: Ctx<'js>, id: u32, index: u32, root: Value<'js>, result: Value<'js>| {
                     // Benchmark timings: the JS loop times this call as `convert`.
                     let text = with_batch(&ctx, &state, id, |batch| {
-                        let core = core_root(&root).ok_or_else(|| {
-                            throw(&ctx, None, &format!("file {index} has no SgRoot"))
-                        })?;
                         let staged = batch.staged.remove(&index).unwrap_or_default();
-                        let output = transform_output(&ctx, &core, result, staged)
-                            .map_err(|error| error.to_string());
-                        let outcome = batch
-                            .plan
-                            .finish(index as usize, output)
-                            .map_err(|error| throw(&ctx, None, &error))?;
-                        // No edits, no output: `undefined` (the loop builds `{ path, edits: [] }`).
-                        if outcome.edits.is_empty() && outcome.output.is_none() {
-                            return Ok(None);
-                        }
-                        serde_json::to_string(&outcome)
-                            .map(Some)
-                            .map_err(|error| throw(&ctx, None, &error.to_string()))
+                        finish_text(&ctx, &batch.plan, index, &root, result, staged)
+                            .map_err(|error| throw(&ctx, None, &error))
                     })?;
                     Ok::<_, rquickjs::Error>(text)
+                },
+            )?,
+        )?;
+    }
+    native.set("jssgPoolSize", Function::new(ctx.clone(), pool::size)?)?;
+    {
+        let state = Rc::clone(&state);
+        native.set(
+            "jssgTransformRange",
+            Function::new(
+                ctx.clone(),
+                move |ctx: Ctx<'js>,
+                      id: u32,
+                      specifier: String,
+                      source: String,
+                      start: u32,
+                      paths: Vec<String>,
+                      contents: Vec<String>|
+                      -> rquickjs::Result<Promise<'js>> {
+                    let plan = with_batch(&ctx, &state, id, |batch| Ok(Arc::clone(&batch.plan)))?;
+                    let (reply, replied) = tokio::sync::oneshot::channel();
+                    state.pool().run(Job {
+                        plan,
+                        specifier,
+                        source,
+                        start: start as usize,
+                        paths,
+                        contents,
+                        reply,
+                    });
+                    let (promise, resolve, reject) = Promise::new(&ctx)?;
+                    let ctx2 = ctx.clone();
+                    ctx.spawn(async move {
+                        let settled = match replied.await {
+                            Ok(Ok(text)) => resolve.call::<_, ()>((text,)),
+                            Ok(Err(message)) => error_value(&ctx2, None, &message)
+                                .and_then(|error| reject.call::<_, ()>((error,))),
+                            Err(_) => error_value(&ctx2, None, "a JSSG transform worker stopped")
+                                .and_then(|error| reject.call::<_, ()>((error,))),
+                        };
+                        if settled.is_err() {
+                            let _ = ctx2.catch();
+                        }
+                    });
+                    Ok(promise)
                 },
             )?,
         )?;
@@ -224,4 +261,26 @@ pub fn install<'js>(
         })?,
     )?;
     Ok(())
+}
+
+/// The awaited `result` of file `index`'s transform on `root`, with what the
+/// call staged, as `FileOutcome` JSON (`None`: no edits and no output; the
+/// caller builds `{ path, edits: [] }`); the error names the file.
+pub(crate) fn finish_text<'js>(
+    ctx: &Ctx<'js>,
+    plan: &BatchPlan,
+    index: u32,
+    root: &Value<'js>,
+    result: Value<'js>,
+    staged: Vec<FileChange>,
+) -> Result<Option<String>, String> {
+    let core = core_root(root).ok_or_else(|| format!("file {index} has no SgRoot"))?;
+    let output = transform_output(ctx, &core, result, staged).map_err(|error| error.to_string());
+    let outcome = plan.finish(index as usize, output)?;
+    if outcome.edits.is_empty() && outcome.output.is_none() {
+        return Ok(None);
+    }
+    serde_json::to_string(&outcome)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }

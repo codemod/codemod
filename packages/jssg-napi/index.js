@@ -58,6 +58,10 @@ export async function runTransform(targetDir, params, call) {
     release = resolve;
   });
   await previous;
+  // Node runs the finalizers of collected addon objects (nodes, roots and
+  // their trees) only on a macrotask; a batch loop that awaits nothing but
+  // microtasks would hold every tree of the batch until it ends.
+  await new Promise((resolve) => setImmediate(resolve));
   const native = loadBinding();
   native.engineBegin(targetDir);
   current = { targetDir, params };

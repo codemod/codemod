@@ -94,6 +94,7 @@ export const guarded = jssg({
 export const failSecond = jssg({
   name: "fail-second",
   language: "typescript",
+  onFileError: "fail",
   async transform(root) {
     if (root.relativeFilename().endsWith("b.ts")) throw new Error("second file exploded");
     return migrateText(root.root().text());
@@ -125,6 +126,7 @@ export const rename = jssg({
 export const escape = jssg({
   name: "escape",
   language: "typescript",
+  onFileError: "fail",
   transform(root) {
     root.rename("../escaped.ts");
     return root.root().text();

@@ -36,6 +36,7 @@ pub mod http;
 pub mod jssg;
 pub mod modules;
 pub mod native;
+pub mod pool;
 pub mod select;
 mod utf8;
 
@@ -109,6 +110,8 @@ async fn run_async(options: HostOptions, started: Instant) -> Result<HostOutcome
             batches: RefCell::default(),
             children: RefCell::default(),
             next_id: Default::default(),
+            target: target.clone(),
+            pool: RefCell::default(),
         });
         native::install(&ctx, state).map_err(|error| format!("failed to install host: {error}"))?;
         bench_timings::stop(Phase::Boot, boot);

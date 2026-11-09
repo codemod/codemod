@@ -8,8 +8,9 @@
  * - artifacts are evaluated as ES modules in this process
  *   (`@codemod.com/jssg-napi/loader`: in-memory module hooks,
  *   `codemod:ast-grep` resolved to the addon-backed module);
- * - transform calls are serialized process-wide with staged writes
- *   (`runTransform`).
+ * - transform calls are serialized per thread with staged writes
+ *   (`runTransform`); batches of `POOL_MIN_FILES` or more run on a pool of
+ *   worker threads (`@codemod.com/jssg-napi/pool`, `CODEMOD_JSSG_WORKERS`).
  */
 import {
   loadBinding,
@@ -18,9 +19,15 @@ import {
   type StagedChanges,
 } from "@codemod.com/jssg-napi";
 import { importArtifact } from "@codemod.com/jssg-napi/loader";
+import { createTransformPool, type TransformPool } from "@codemod.com/jssg-napi/pool";
 import type { FileOutcome } from "../../core/protocol.ts";
 import { addTimingsSource, timingsEnabled, type PhaseTotals } from "../../core/timings.ts";
-import { describeError, type JssgBatchEngine } from "../../execution/jssg-batch.ts";
+import {
+  describeError,
+  type JssgBatchEngine,
+  type RangeResult,
+  type TransformArtifact,
+} from "../../execution/jssg-batch.ts";
 
 import type { Host } from "../../core/host.ts";
 
@@ -46,6 +53,10 @@ export function createNapiSelectHost(base: Host): Host {
 
 let engines = 0;
 let timingsSourceAdded = false;
+let pool: TransformPool | undefined;
+
+/** Batches at least this large run on the transform pool; smaller ones stay on this thread. */
+const POOL_MIN_FILES = 64;
 
 /** One engine per run: each artifact is evaluated once per engine. */
 export function createNapiJssgEngine(): JssgBatchEngine<
@@ -66,7 +77,24 @@ export function createNapiJssgEngine(): JssgBatchEngine<
       const { targetRoot, params } = batch;
       // The options Rust builds, once per batch; every file gets its own copy.
       const options = batch.options();
+      pool ??= createTransformPool();
+      const shared = pool.size > 1 && paths.length >= POOL_MIN_FILES ? batch.share() : undefined;
+      const workers = pool;
       return {
+        ...(shared === undefined
+          ? {}
+          : {
+              parallelism: workers.size,
+              transformRange: (start: number, contents: string[], artifact: TransformArtifact) =>
+                workers.run({
+                  batchId: shared,
+                  runId,
+                  artifact,
+                  start,
+                  paths: paths.slice(start, start + contents.length),
+                  contents,
+                }) as Promise<RangeResult[]>,
+            }),
         module: batch.module,
         indexesWorkspace: batch.indexesWorkspace,
         index: (start, contents) => batch.index(start, contents),
@@ -80,7 +108,9 @@ export function createNapiJssgEngine(): JssgBatchEngine<
             path: paths[index]!,
             edits: [],
           },
-        close: () => {},
+        close: () => {
+          if (shared !== undefined) native.JssgBatch.unshare(shared);
+        },
       };
     },
     load: (artifact) => importArtifact(artifact, runId),

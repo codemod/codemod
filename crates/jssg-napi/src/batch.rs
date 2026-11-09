@@ -18,7 +18,9 @@
 //! `extract_transform_output` / `JsValue::from_js`; every rule after that is
 //! shared Rust.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use codemod_sandbox::sandbox::engine::{
     classify_transform_result, missing_output_error, output_json_error, CodemodOutput,
@@ -45,6 +47,11 @@ pub struct JssgBatch {
     plan: Arc<BatchPlan>,
 }
 
+/// Plans published with `share()`, so the worker threads of a transform
+/// pool run the same batch (and its workspace index) without planning it again.
+static SHARED: LazyLock<Mutex<HashMap<u32, Arc<BatchPlan>>>> = LazyLock::new(Default::default);
+static NEXT_SHARED: AtomicU32 = AtomicU32::new(1);
+
 #[napi]
 impl JssgBatch {
     /// Plan a batch from its JSON config (`jssg_batch::BatchConfig`) and the
@@ -64,6 +71,36 @@ impl JssgBatch {
         Ok(Self {
             plan: Arc::new(plan),
         })
+    }
+
+    /// Publish this batch to the other threads of this process; `attach(id)`
+    /// opens it there until `unshare(id)`.
+    #[napi]
+    pub fn share(&self) -> u32 {
+        let id = NEXT_SHARED.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut shared) = SHARED.lock() {
+            shared.insert(id, Arc::clone(&self.plan));
+        }
+        id
+    }
+
+    /// The batch another thread published with `share()`.
+    #[napi(factory)]
+    pub fn attach(id: u32) -> Result<Self> {
+        let plan = SHARED
+            .lock()
+            .ok()
+            .and_then(|shared| shared.get(&id).cloned())
+            .ok_or_else(|| Error::from_reason(format!("no shared JSSG batch {id}")))?;
+        Ok(Self { plan })
+    }
+
+    /// Stop publishing batch `id` (attached copies keep working).
+    #[napi]
+    pub fn unshare(id: u32) {
+        if let Ok(mut shared) = SHARED.lock() {
+            shared.remove(&id);
+        }
     }
 
     /// Virtual module name of the artifact (`<name>.jssg.js`).
@@ -275,10 +312,11 @@ impl Task for ParseChunk {
         Ok(roots)
     }
 
-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
+    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
         Ok(output
             .into_iter()
-            .map(|root| root.map(SgRoot::from_core))
+            .zip(&self.contents)
+            .map(|(root, content)| root.map(|root| SgRoot::tracked(&env, root, content.len())))
             .collect())
     }
 }

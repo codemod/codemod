@@ -42,6 +42,7 @@ import {
   type JssgOperation,
   type Operation,
   type Selector,
+  type JssgFileErrorPolicy,
   type SemanticAnalysis,
   type Target,
 } from "../core/protocol.ts";
@@ -161,6 +162,8 @@ export interface JssgOptions<L extends string, I, O> extends DataOptions<I, O> {
   include?: string[];
   exclude?: string[];
   semanticAnalysis?: SemanticAnalysis;
+  /** A file whose transform throws: `skip` it and report it (default), or `fail` the step with nothing written. */
+  onFileError?: JssgFileErrorPolicy;
   /**
    * Optional static prefilter: files without a match never reach the
    * sandbox. Plain ast-grep rule data; unlike a legacy `getSelector()` it is
@@ -217,6 +220,7 @@ export function jssg<L extends string, I = void, O = unknown>(
         operation.semanticAnalysis = options.semanticAnalysis;
       }
       if (selector !== undefined) operation.selector = selector;
+      if (options.onFileError !== undefined) operation.onFileError = options.onFileError;
       if (target !== undefined) operation.target = target;
       if (input !== undefined) operation.input = input as Json;
       return operation;

@@ -59,6 +59,8 @@ interface Setup {
   files: Record<string, string>;
   /** Directory symlinks inside the repository pointing at a fresh directory outside it. */
   outsideLinks?: string[];
+  /** Transform pool threads (`CODEMOD_JSSG_WORKERS`); default 1. */
+  workers?: number;
 }
 
 interface Outcome {
@@ -67,6 +69,8 @@ interface Outcome {
   initial: Record<string, string>;
   output?: unknown;
   error?: string;
+  /** The files a successful run skipped, as it reported them. */
+  skipped?: string[];
   tree: Record<string, string>;
   outside: Record<string, string>;
 }
@@ -124,6 +128,7 @@ function runOn(runtime: Runtime, setup: Setup, input: unknown): Outcome {
         ...process.env,
         CODEMOD_QUICKJS_HOST_BIN: host,
         CODEMOD_WORKFLOW_CACHE: join(scratch, "cache"),
+        CODEMOD_JSSG_WORKERS: String(setup.workers ?? 1),
       },
     },
   );
@@ -133,8 +138,12 @@ function runOn(runtime: Runtime, setup: Setup, input: unknown): Outcome {
     tree: tree(repo),
     outside: tree(outside),
   };
-  if (outcome.ok) outcome.output = JSON.parse(result.stdout) as unknown;
-  else outcome.error = normalize(result.stderr, repo);
+  if (outcome.ok) {
+    outcome.output = JSON.parse(result.stdout) as unknown;
+    outcome.skipped = normalize(result.stderr, repo)
+      .split("\n")
+      .filter((line) => line.includes("skipped"));
+  } else outcome.error = normalize(result.stderr, repo);
   return outcome;
 }
 
@@ -227,6 +236,28 @@ describe.skipIf(!enabled)("JSSG parity: node, quickjs", () => {
 
   it("a thrown error fails the command and writes nothing", () => {
     parity({ files: TWO }, { step: "throwing" }, { error: "JSSG failed for 'b.ts'", thrown: true });
+  });
+
+  it("a file whose transform throws is skipped and reported; the others are written", () => {
+    const outcomes = parity({ files: TWO }, { step: "skipping" }, { ok: true });
+    expect(outcomes.node.tree).toEqual({ "a.ts": "newApi(1);\n", "b.ts": TWO["b.ts"] });
+    expect(outcomes.node.skipped).toEqual([
+      "jssg 'skipping': skipped JSSG failed for 'b.ts': Error: b.ts is not allowed",
+    ]);
+  });
+
+  it("a batch on the transform pool writes, outputs, and skips as one thread does", () => {
+    const files = Object.fromEntries(
+      Array.from({ length: 80 }, (_, n) => [
+        `f${String(n).padStart(2, "0")}${n % 9 === 0 ? "b" : ""}.ts`,
+        n % 3 === 0 ? `plain(${n});\n` : `oldApi(${n});\n`,
+      ]),
+    );
+    for (const step of ["selected", "skipping"]) {
+      const serial = parity({ files }, { step }, { ok: true });
+      const pooled = parity({ files, workers: 3 }, { step }, { ok: true });
+      expect(pooled.node).toEqual(serial.node);
+    }
   });
 
   it("the static selector skips files before the transform runs", () => {

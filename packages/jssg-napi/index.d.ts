@@ -27,6 +27,8 @@ export interface JssgBatch {
   index(start: number, contents: string[]): Promise<void>;
   /** Roots of files `start ..< start + contents.length`, parsed off-thread; `null` where the selector skips. */
   parse(start: number, contents: string[]): Promise<(NativeRoot | null)[]>;
+  /** Publish this batch to the other threads of this process; `JssgBatch.attach(id)` opens it there. */
+  share(): number;
   /** A fresh transform `options` object. */
   options(): {
     params: Record<string, unknown>;
@@ -53,7 +55,13 @@ export interface Binding {
   SgRoot: abstract new () => NativeRoot;
   SgNode: abstract new () => object;
   /** `config`: JSON of `jssg_batch::BatchConfig`; `paths`: root-relative file paths. */
-  JssgBatch: new (config: string, paths: string[]) => JssgBatch;
+  JssgBatch: {
+    new (config: string, paths: string[]): JssgBatch;
+    /** The batch another thread published with `share()`. */
+    attach(id: number): JssgBatch;
+    /** Stop publishing batch `id`. */
+    unshare(id: number): void;
+  };
   parse(language: string, source: string): NativeRoot;
   parseAsync(language: string, source: string): NativeRoot;
   parseFile(language: string, path: string): NativeRoot;

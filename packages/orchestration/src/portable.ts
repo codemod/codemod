@@ -162,6 +162,7 @@ export type {
   Edit,
   ShellOperation,
   FileOutcome,
+  JssgFileErrorPolicy,
   JssgOperation,
   Operation,
   OperationCompletion,

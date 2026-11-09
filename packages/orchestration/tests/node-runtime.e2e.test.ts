@@ -137,10 +137,13 @@ type Spec = Omit<JssgOperation, "kind" | "transform" | "language"> & {
 /** Run one JSSG command on the node runtime's dispatch against a copy of `files`. */
 async function both(spec: Spec, files: Record<string, string>): Promise<{ node: Arm }> {
   const { transform, language = "typescript", ...rest } = spec;
+  // Failures here check each error's message, so a failing file fails the
+  // command; the default skip policy is covered by `jssg-parity.e2e.test.ts`.
   const operation: JssgOperation = {
     kind: "jssg",
     transform: artifactRef(transform),
     language,
+    onFileError: "fail",
     ...rest,
   };
   const repo = makeRepo(files);

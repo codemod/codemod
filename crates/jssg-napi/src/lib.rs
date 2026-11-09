@@ -184,24 +184,26 @@ pub fn engine_parse_with_path(
 // ---------------------------------------------------------------------------
 
 #[napi]
-pub fn parse(lang: String, src: String) -> Result<SgRoot> {
+pub fn parse(env: Env, lang: String, src: String) -> Result<SgRoot> {
+    let len = src.len();
     CoreRoot::parse(&lang, src, None, None)
-        .map(SgRoot::from_core)
+        .map(|core| SgRoot::tracked(&env, core, len))
         .map_err(|e| Error::from_reason(format!("Failed to parse: {e}")))
 }
 
 /// Synchronous, like the QuickJS facade (natively there is nothing to await).
 #[napi(js_name = "parseAsync")]
-pub fn parse_async(lang: String, src: String) -> Result<SgRoot> {
-    parse(lang, src)
+pub fn parse_async(env: Env, lang: String, src: String) -> Result<SgRoot> {
+    parse(env, lang, src)
 }
 
 #[napi(js_name = "parseFile")]
-pub fn parse_file(lang: String, file_path: String) -> Result<SgRoot> {
+pub fn parse_file(env: Env, lang: String, file_path: String) -> Result<SgRoot> {
     let content = std::fs::read_to_string(&file_path)
         .map_err(|e| Error::from_reason(format!("Failed to read file: {e}")))?;
+    let len = content.len();
     CoreRoot::parse(&lang, content, Some(file_path), None)
-        .map(SgRoot::from_core)
+        .map(|core| SgRoot::tracked(&env, core, len))
         .map_err(|e| Error::from_reason(format!("Failed to parse: {e}")))
 }
 
@@ -273,14 +275,40 @@ pub struct FileReferences {
 // SgRoot
 // ---------------------------------------------------------------------------
 
-#[napi]
+#[napi(custom_finalize)]
 pub struct SgRoot {
     core: CoreRoot,
+    /// Bytes reported to V8 as external memory (`Env::adjust_external_memory`).
+    external: i64,
 }
+
+/// Roughly what a parsed tree costs per source byte. V8 cannot see the tree,
+/// so without this a batch's dead roots pile up until the heap itself fills.
+const TREE_BYTES_PER_SOURCE_BYTE: i64 = 32;
 
 impl SgRoot {
     fn from_core(core: CoreRoot) -> Self {
-        SgRoot { core }
+        SgRoot { core, external: 0 }
+    }
+
+    /// A root whose tree V8 accounts for, so garbage collection keeps pace with parsing.
+    pub(crate) fn tracked(env: &Env, core: CoreRoot, source_len: usize) -> Self {
+        let external = (source_len as i64).saturating_mul(TREE_BYTES_PER_SOURCE_BYTE);
+        let external = if env.adjust_external_memory(external).is_ok() {
+            external
+        } else {
+            0
+        };
+        SgRoot { core, external }
+    }
+}
+
+impl ObjectFinalize for SgRoot {
+    fn finalize(self, env: Env) -> Result<()> {
+        if self.external != 0 {
+            env.adjust_external_memory(-self.external)?;
+        }
+        Ok(())
     }
 }
 
@@ -626,10 +654,14 @@ impl SgNode {
         Ok(request
             .definition(DefinitionOptions { resolve_external })
             .map_err(|e| core_error(&env, e))?
-            .map(|def| Definition {
-                node: SgNode::from_core(def.node),
-                root: SgRoot::from_core(def.root),
-                kind: def.kind.to_string(),
+            .map(|def| {
+                // The definition's file is parsed for this lookup: account for its tree too.
+                let source_len = def.root.root_text().len();
+                Definition {
+                    node: SgNode::from_core(def.node),
+                    root: SgRoot::tracked(&env, def.root, source_len),
+                    kind: def.kind.to_string(),
+                }
             }))
     }
 
@@ -646,7 +678,10 @@ impl SgNode {
             .into_iter()
             .map(|file| {
                 file.map(|file| FileReferences {
-                    root: SgRoot::from_core(file.root),
+                    root: {
+                        let source_len = file.root.root_text().len();
+                        SgRoot::tracked(&env, file.root, source_len)
+                    },
                     nodes: file
                         .nodes
                         .into_iter()

@@ -83,7 +83,16 @@ export interface JssgOperation {
   selector?: Selector;
   target?: Target;
   input?: Json;
+  /** What a file whose transform throws or returns an invalid result does to the command (default `skip`). */
+  onFileError?: JssgFileErrorPolicy;
 }
+
+/**
+ * `skip`: the file is left unchanged and reported, the other files still
+ * commit (the YAML engine's behaviour). `fail`: the command fails and
+ * nothing is written.
+ */
+export type JssgFileErrorPolicy = "skip" | "fail";
 
 /**
  * The built-in agent's tools, by their `codemod-ai` names (the YAML `ai` step
@@ -329,6 +338,7 @@ const OPERATION_FIELDS = {
     "selector",
     "target",
     "input",
+    "onFileError",
   ],
   agent: ["kind", "prompt", "input", "backend", "responseFormat"],
   assessment: ["kind", "state", "questions", "model"],
@@ -527,7 +537,10 @@ export function isOperation(value: unknown): value is Operation {
         (value.semanticAnalysis === undefined || isSemanticAnalysis(value.semanticAnalysis)) &&
         (value.selector === undefined || isSelector(value.selector)) &&
         (value.target === undefined || isTarget(value.target)) &&
-        (value.input === undefined || isJson(value.input))
+        (value.input === undefined || isJson(value.input)) &&
+        (value.onFileError === undefined ||
+          value.onFileError === "skip" ||
+          value.onFileError === "fail")
       );
     case "agent":
       return (

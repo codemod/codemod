@@ -27,6 +27,7 @@ type AstGrep = typeof import("codemod:ast-grep") & {
 export const returns = jssg({
   name: "returns",
   language: "typescript",
+  onFileError: "fail",
   transform(root, options): string | null {
     const text = root.root().text();
     const results: Record<string, () => unknown> = {
@@ -88,6 +89,7 @@ export const multi = jssg({
 export const renameInto = jssg({
   name: "rename-into",
   language: "typescript",
+  onFileError: "fail",
   transform(root, options) {
     const name = root.filename().split(/[\\/]/u).pop()!;
     root.rename(`${options.targetDir}/${String(options.params.input)}/${name}`);
@@ -99,6 +101,7 @@ export const renameInto = jssg({
 export const secondaryAt = jssg({
   name: "secondary-at",
   language: "typescript",
+  onFileError: "fail",
   async transform(_root, options) {
     const { jssgTransform } = await import("codemod:ast-grep");
     await jssgTransform(
@@ -110,11 +113,20 @@ export const secondaryAt = jssg({
   },
 });
 
-/**
- * Throws on `b.ts` (after `a.ts` succeeded), a plain `Error`.
- */
+/** Throws on `b.ts` (after `a.ts` succeeded), a plain `Error`, failing the command. */
 export const throwing = jssg({
   name: "throwing",
+  language: "typescript",
+  onFileError: "fail",
+  transform(root) {
+    if (root.relativeFilename().endsWith("b.ts")) throw new Error("b.ts is not allowed");
+    return migrateText(root.root().text());
+  },
+});
+
+/** Throws for files named `*b.ts` under the default policy: they are skipped and reported. */
+export const skipping = jssg({
+  name: "skipping",
   language: "typescript",
   transform(root) {
     if (root.relativeFilename().endsWith("b.ts")) throw new Error("b.ts is not allowed");

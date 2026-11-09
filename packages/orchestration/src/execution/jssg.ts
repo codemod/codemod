@@ -41,7 +41,9 @@ import {
  * Runs one transform batch: `request.context` carries `targetRoot`, the
  * selected `files` with their content, and the artifact `source`. It must
  * never write to the repository and never throw; a successful completion's
- * `output` is `{ files: FileOutcome[] }` in request order. `signal` aborts.
+ * `output` is `{ files: FileOutcome[], failures? }` in request order, where
+ * `failures` lists the files the `skip` policy left unchanged (each also in
+ * `files`, with no edits). `signal` aborts.
  */
 export type JssgDispatch = (
   request: OperationRequest,
@@ -150,6 +152,7 @@ export async function executeJssgCommand(
     });
   }
   const outcomes = isRecord(completion.output) ? completion.output.files : undefined;
+  const failures = isRecord(completion.output) ? completion.output.failures : undefined;
   if (
     !isFileOutcomes(outcomes) ||
     outcomes.length !== files.length ||
@@ -158,6 +161,15 @@ export async function executeJssgCommand(
     return fail("failed", "the batch runner returned an invalid batch result", {
       phase: "transform",
     });
+  }
+
+  // Skipped files are reported the way the YAML engine reports them: one line each, on stderr.
+  if (Array.isArray(failures)) {
+    for (const failure of failures) {
+      if (isRecord(failure) && typeof failure.error === "string") {
+        console.error(`jssg '${operation.transform.name}': skipped ${failure.error}`);
+      }
+    }
   }
 
   let staged: Staged;
