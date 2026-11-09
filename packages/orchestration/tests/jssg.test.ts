@@ -1,24 +1,22 @@
 /**
- * The TypeScript JSSG orchestrator (`executeJssgCommand`) against a scripted
- * batch dispatch: selection, the batch request with the artifact source,
- * validation of returned edits, conflict rules, transactional commit,
- * failure classification, and cancellation. No Rust is involved; the real
- * batch runners are exercised by the runtimes' e2e tests.
+ * `executeJssgCommand` against a scripted batch dispatch. No Rust is involved;
+ * the real batch runners are exercised by the runtimes' e2e tests.
  */
 import {
   chmodSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { dirname, join, sep } from "node:path";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { executeJssgCommand, type JssgDispatch } from "../src/execution/jssg.ts";
 import {
   PROTOCOL_VERSION,
@@ -38,21 +36,29 @@ const write = (relative: string, content: string) => {
   writeFileSync(path, content);
 };
 const read = (relative: string) => readFileSync(join(repo, relative), "utf8");
-const snapshot = () =>
+/** Every file in the repository, by repository-relative path. */
+const tree = () =>
   Object.fromEntries(
-    ["a.ts", "b.ts", "c.js", "d.md", "same.ts", "b.moved.ts"]
-      .filter((f) => existsSync(join(repo, f)))
-      .map((f) => [f, read(f)]),
+    readdirSync(repo, { recursive: true, encoding: "utf8" })
+      .filter((f) => statSync(join(repo, f)).isFile())
+      .sort()
+      .map((f) => [f.split(sep).join("/"), read(f)]),
   );
+const untouched = { "a.ts": "a\n", "b.ts": "b\n", "c.js": "c\n", "d.md": "d\n" };
 
-beforeEach(() => {
+const createRepo = () => {
   repo = realpathSync.native(mkdtempSync(join(tmpdir(), "codemod-jssg-")));
-  write("a.ts", "a\n");
-  write("b.ts", "b\n");
-  write("c.js", "c\n");
-  write("d.md", "d\n");
-});
-afterEach(() => rmSync(repo, { recursive: true, force: true }));
+  for (const [path, content] of Object.entries(untouched)) write(path, content);
+};
+const outsideDirs: string[] = [];
+const outsideDir = () => {
+  const dir = mkdtempSync(join(tmpdir(), "codemod-outside-"));
+  outsideDirs.push(dir);
+  return dir;
+};
+const removeDirs = () => {
+  for (const dir of [repo, ...outsideDirs.splice(0)]) rmSync(dir, { recursive: true, force: true });
+};
 
 const operation = (extra: Partial<JssgOperation> = {}): JssgOperation => ({
   kind: "jssg",
@@ -61,12 +67,35 @@ const operation = (extra: Partial<JssgOperation> = {}): JssgOperation => ({
   ...extra,
 });
 
+type Edits = FileOutcome["edits"];
+const edit = (path: string, content: string, renameTo?: string) =>
+  renameTo === undefined ? { path, content } : { path, content, renameTo };
+
+/** Scripted edits per mode for one file; `secondary` is the path a.ts also writes. */
+const modes: Record<string, (path: string, content: string, secondary?: string) => Edits> = {
+  escape: (path, content) => [edit(path, content, "../escaped.ts")],
+  "escape-symlink": (path, content) => [edit(path, content, "linkdir/out.ts")],
+  "escape-absolute": () => [edit("/etc/passwd", "pwned")],
+  conflict: (path, content) => [edit(path, content, "same.ts")],
+  rename: (path, content) => [edit(path, content, path.replace(/\.ts$/u, ".moved.ts"))],
+  "rename-twice": (path, content) =>
+    path === "a.ts"
+      ? [edit(path, content), edit("b.ts", "b\n", "x.ts")]
+      : [edit(path, content, "y.ts")],
+  "write-renamed": (path, content) =>
+    path === "a.ts"
+      ? [edit(path, content), edit("b.ts", "b\n", "b.renamed.ts")]
+      : [edit(path, `${content}// b\n`)],
+  secondary: (path, content, secondary) => [
+    edit(path, `${content}// primary ${path}\n`),
+    ...(path === "a.ts" ? [edit(secondary!, "// secondary\n")] : []),
+  ],
+};
+
 /**
- * A scripted batch runner. Default: every file gets `// fake\n` appended and
- * outputs `{ path, context, input }` (the request context without files).
- * Modes: fail, hang (answers only once aborted), escape, escape-symlink,
- * escape-absolute, conflict, rename, rename-twice, write-renamed, secondary
- * (a.ts also edits `secondary`).
+ * A scripted batch runner. `fail` fails the batch and `hang` answers only once
+ * aborted; `modes` script edits; any other mode appends `// fake\n` to every
+ * file and outputs `{ path, context, input }` (the request context without files).
  */
 function scriptedDispatch(mode: string, secondary?: string): JssgDispatch {
   return async (request, signal) => {
@@ -80,266 +109,226 @@ function scriptedDispatch(mode: string, secondary?: string): JssgDispatch {
       return reply({ status: "failed", error: { message: "scripted transform failure" } });
     }
     if (mode === "hang") {
-      await new Promise<void>((resolve) =>
-        signal?.addEventListener("abort", () => resolve(), { once: true }),
-      );
+      await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
       return reply({ status: "cancelled", error: { message: "aborted" } });
     }
     const { files = [], ...context } = request.context ?? {};
-    const edit = (path: string, content: string, renameTo?: string) =>
-      renameTo === undefined ? { path, content } : { path, content, renameTo };
-    const outcome = ({ path, content }: { path: string; content: string }): FileOutcome => {
-      switch (mode) {
-        case "escape":
-          return { path, edits: [edit(path, content, "../escaped.ts")] };
-        case "escape-symlink":
-          return { path, edits: [edit(path, content, "linkdir/out.ts")] };
-        case "escape-absolute":
-          return { path, edits: [edit("/etc/passwd", "pwned")] };
-        case "conflict":
-          return { path, edits: [edit(path, content, "same.ts")] };
-        case "rename":
-          return { path, edits: [edit(path, content, path.replace(/\.ts$/u, ".moved.ts"))] };
-        case "rename-twice":
-          return {
-            path,
-            edits:
-              path === "a.ts"
-                ? [edit(path, content), edit("b.ts", "b\n", "x.ts")]
-                : [edit(path, content, "y.ts")],
-          };
-        case "write-renamed":
-          return {
-            path,
-            edits:
-              path === "a.ts"
-                ? [edit(path, content), edit("b.ts", "b\n", "b.moved.ts")]
-                : [edit(path, `${content}// b\n`)],
-          };
-        case "secondary":
-          return {
-            path,
-            edits: [
-              edit(path, `${content}// primary ${path}\n`),
-              ...(path === "a.ts" ? [edit(secondary!, "// secondary\n")] : []),
-            ],
-          };
-        default:
-          return {
-            path,
-            edits: [edit(path, `${content}// fake\n`)],
-            output: {
+    const input = (request.operation as JssgOperation).input ?? null;
+    const outcomes = files.map(
+      ({ path, content }): FileOutcome =>
+        mode in modes
+          ? { path, edits: modes[mode]!(path, content, secondary) }
+          : {
               path,
-              context: context as Json,
-              input: (request.operation as JssgOperation).input ?? null,
+              edits: [edit(path, `${content}// fake\n`)],
+              output: { path, context: context as Json, input },
             },
-          };
-      }
-    };
-    return reply({ status: "succeeded", output: { files: files.map(outcome) as unknown as Json } });
+    );
+    return reply({ status: "succeeded", output: { files: outcomes as unknown as Json } });
   };
 }
 
+/** `abort` fires the signal once the scripted dispatch has started (a hanging one is listening). */
 function run(
   op: JssgOperation,
-  options: { mode?: string; signal?: AbortSignal; secondary?: string } = {},
+  options: { mode?: string; secondary?: string; abort?: boolean } = {},
 ) {
   let dispatched = 0;
+  const controller = new AbortController();
   const dispatch = scriptedDispatch(options.mode ?? "echo", options.secondary);
   return executeJssgCommand({
     cwd: repo,
     artifacts: new Map([[built.hash, built]]),
     commandId: "migrate",
     operation: op,
-    signal: options.signal,
+    signal: controller.signal,
     dispatch: (request, signal) => {
       dispatched += 1;
-      return dispatch(request, signal);
+      const completion = dispatch(request, signal);
+      if (options.abort) controller.abort();
+      return completion;
     },
     globalExcludes: null,
   }).then((completion) => ({ completion, dispatched }));
 }
 
-describe("executeJssgCommand", () => {
-  it("selects by language, sends one batch with the root, source, and input, commits, and collects outputs", async () => {
-    const { completion, dispatched } = await run(
-      operation({ semanticAnalysis: "workspace", input: { n: 1 } }),
-    );
+/** A failed completion, by the phase it failed in and its message. */
+const failure = (phase: string, message = /./) =>
+  expect.objectContaining({
+    status: "failed",
+    error: { message: expect.stringMatching(message), details: { phase } },
+  });
+const paths = (completion: OperationCompletion) =>
+  (completion.output as { path: string }[]).map((o) => o.path);
 
-    expect(completion.status).toBe("succeeded");
-    expect(completion.output).toEqual(
-      ["a.ts", "b.ts", "c.js"].map((path) => ({
-        path,
-        context: { targetRoot: repo, artifact: { source: built.source } },
-        input: { n: 1 },
-      })),
-    );
-    expect(snapshot()).toEqual({
+describe("a successful batch", () => {
+  let result: Awaited<ReturnType<typeof run>>;
+  let after: Record<string, string>;
+  beforeAll(async () => {
+    createRepo();
+    result = await run(operation({ semanticAnalysis: "workspace", input: { n: 1 } }));
+    after = tree();
+  });
+  afterAll(removeDirs);
+
+  it("sends every selected file in one batch", () => {
+    expect(result.dispatched).toBe(1);
+  });
+
+  it("selects the files of the operation's language family", () => {
+    expect(paths(result.completion)).toEqual(["a.ts", "b.ts", "c.js"]);
+  });
+
+  it("sends the target root, the artifact source, and the input with the batch", () => {
+    expect((result.completion.output as Json[])[0]).toEqual({
+      path: "a.ts",
+      context: { targetRoot: repo, artifact: { source: built.source } },
+      input: { n: 1 },
+    });
+  });
+
+  it("commits the edits of selected files and leaves the others untouched", () => {
+    expect(after).toEqual({
       "a.ts": "a\n// fake\n",
       "b.ts": "b\n// fake\n",
       "c.js": "c\n// fake\n",
       "d.md": "d\n",
     });
-    expect(dispatched).toBe(1);
   });
+});
 
-  it("intersects definition globs (repository-relative) with the invocation target", async () => {
+describe("executeJssgCommand", () => {
+  beforeEach(createRepo);
+  afterEach(removeDirs);
+
+  const intersected = () => {
     write("app/src/x.ts", "x\n");
     write("app/src/y.generated.ts", "y\n");
     write("app/other/z.ts", "z\n");
-    const { completion } = await run(
+    return run(
       operation({
         include: ["app/**/*.ts"],
         target: { root: "app", include: ["src/**"], exclude: ["**/*.generated.ts"] },
       }),
     );
-    expect(completion.status).toBe("succeeded");
-    expect((completion.output as { path: string }[]).map((o) => o.path)).toEqual(["src/x.ts"]);
-    expect(read("app/src/x.ts")).toBe("x\n// fake\n");
-    expect(read("app/src/y.generated.ts")).toBe("y\n");
-    expect(read("app/other/z.ts")).toBe("z\n");
-    expect(read("a.ts")).toBe("a\n");
+  };
+
+  it("selects files matching both the repository-relative definition globs and the target's globs", async () => {
+    const { completion } = await intersected();
+    expect(paths(completion)).toEqual(["src/x.ts"]);
   });
 
-  it.each<[string, { mode: string; include?: string[]; existing?: string }, string, RegExp]>([
-    // (description, fake mode and selection, expected phase, expected message)
-    ["the batch fails", { mode: "fail" }, "transform", /scripted transform failure/],
-    ["an edit renames outside the root", { mode: "escape" }, "transform", /invalid batch result/],
+  it("commits edits relative to the target root", async () => {
+    await intersected();
+    expect(read("app/src/x.ts")).toBe("x\n// fake\n");
+  });
+
+  const failsUnchanged = async (mode: string, phase: string, message: RegExp) => {
+    // `rename` maps b.ts onto this existing file; no other mode touches it.
+    write("b.moved.ts", "existing\n");
+    const before = tree();
+    const { completion } = await run(operation({ include: ["a.ts", "b.ts"] }), { mode });
+    expect([completion, tree()]).toEqual([failure(phase, message), before]);
+  };
+
+  it.each([
+    ["the batch fails", "fail", /scripted transform failure/],
+    ["an edit renames outside the root", "escape", /invalid batch result/],
+    ["an edit targets an absolute path", "escape-absolute", /invalid batch result/],
+  ])("fails in the transform phase, changing nothing, when %s", (_name, mode, message) =>
+    failsUnchanged(mode, "transform", message),
+  );
+
+  it.each([
     [
-      "an edit targets an absolute path",
-      { mode: "escape-absolute" },
-      "transform",
-      /invalid batch result/,
-    ],
-    [
-      "two edits rename onto one destination",
-      { mode: "conflict" },
-      "stage",
+      "two edits rename onto one path",
+      "conflict",
       /'same.ts' is written by both 'a.ts' and 'b.ts'/,
     ],
+    ["one source is renamed twice", "rename-twice", /'b.ts' is renamed by both 'a.ts' and 'b.ts'/],
     [
-      "one source is renamed twice",
-      { mode: "rename-twice", include: ["a.ts", "b.ts"] },
-      "stage",
-      /'b.ts' is renamed by both 'a.ts' and 'b.ts'/,
+      "a renamed-away path is written",
+      "write-renamed",
+      /renamed away by 'a.ts' and written by 'b.ts'/,
     ],
-    [
-      "an edit writes a path another edit renames away",
-      { mode: "write-renamed", include: ["a.ts", "b.ts"] },
-      "stage",
-      /'b.ts' is renamed away by 'a.ts' and written by 'b.ts'/,
-    ],
-    [
-      "a rename lands on an existing file",
-      { mode: "rename", include: ["a.ts", "b.ts"], existing: "b.moved.ts" },
-      "stage",
-      /'b.ts' renames onto 'b.moved.ts', which already exists/,
-    ],
-  ])("changes nothing when %s", async (_name, { mode, include, existing }, phase, message) => {
-    if (existing) write(existing, "existing\n");
-    const before = snapshot();
-    const { completion } = await run(operation({ include }), { mode });
-    expect(completion.status).toBe("failed");
-    expect(completion.error?.message).toMatch(message);
-    expect(completion.error?.details).toEqual({ phase });
-    expect(snapshot()).toEqual(before);
-    expect(existsSync(join(repo, "same.ts"))).toBe(false);
-  });
+    ["a rename lands on an existing file", "rename", /'b.ts' renames onto 'b.moved.ts', which/],
+  ])("fails in the stage phase, changing nothing, when %s", (_name, mode, message) =>
+    failsUnchanged(mode, "stage", message),
+  );
 
   it.skipIf(process.platform === "win32")(
     "rejects an edit that escapes through a symlink before writing",
     async () => {
-      const outside = mkdtempSync(join(tmpdir(), "codemod-outside-"));
-      try {
-        mkdirSync(join(outside, "dir"));
-        symlinkSync(join(outside, "dir"), join(repo, "linkdir"));
-        const before = snapshot();
-        const { completion } = await run(operation(), { mode: "escape-symlink" });
-        expect(completion.status).toBe("failed");
-        expect(completion.error?.details).toEqual({ phase: "stage" });
-        expect(completion.error?.message).toMatch(/escapes the target root/);
-        expect(existsSync(join(outside, "dir", "out.ts"))).toBe(false);
-        expect(snapshot()).toEqual(before);
-      } finally {
-        rmSync(outside, { recursive: true, force: true });
-      }
+      const outside = outsideDir();
+      mkdirSync(join(outside, "dir"));
+      symlinkSync(join(outside, "dir"), join(repo, "linkdir"));
+      const before = tree();
+      const { completion } = await run(operation(), { mode: "escape-symlink" });
+      expect([completion, readdirSync(outside, { recursive: true }), tree()]).toEqual([
+        failure("stage", /escapes the target root/),
+        ["dir"],
+        before,
+      ]);
     },
   );
 
-  it("commits renames and secondary edits: destinations written, sources removed afterwards", async () => {
-    const renamed = await run(operation({ include: ["**/*.ts"] }), { mode: "rename" });
-    expect(renamed.completion.status).toBe("succeeded");
-    expect(read("a.moved.ts")).toBe("a\n");
-    expect(read("b.moved.ts")).toBe("b\n");
-    expect(existsSync(join(repo, "a.ts"))).toBe(false);
-    expect(existsSync(join(repo, "b.ts"))).toBe(false);
-    expect(read("c.js")).toBe("c\n");
-
-    write("a.ts", "a\n");
-    const secondary = await run(operation({ include: ["a.ts"] }), {
-      mode: "secondary",
-      secondary: "new/dir/n.ts",
-    });
-    expect(secondary.completion.status).toBe("succeeded");
-    expect(read("a.ts")).toBe("a\n// primary a.ts\n");
-    expect(read("new/dir/n.ts")).toBe("// secondary\n");
+  it("renames a file: writes the destination and removes the source", async () => {
+    await run(operation({ include: ["**/*.ts"] }), { mode: "rename" });
+    const { "a.ts": a, "b.ts": b, ...rest } = untouched;
+    expect(tree()).toEqual({ ...rest, "a.moved.ts": a, "b.moved.ts": b });
   });
 
-  it("skips files that vanished or are not UTF-8", async () => {
+  it("writes a secondary edit to a new path, creating its directories", async () => {
+    await run(operation({ include: ["a.ts"] }), { mode: "secondary", secondary: "new/dir/n.ts" });
+    expect(tree()).toEqual({
+      ...untouched,
+      "a.ts": "a\n// primary a.ts\n",
+      "new/dir/n.ts": "// secondary\n",
+    });
+  });
+
+  it("skips a file that is not UTF-8", async () => {
     writeFileSync(join(repo, "b.ts"), Buffer.from([0xff, 0xfe, 0x62]));
     const { completion } = await run(operation({ include: ["**/*.ts"] }));
-    expect(completion.status).toBe("succeeded");
-    expect((completion.output as { path: string }[]).map((o) => o.path)).toEqual(["a.ts"]);
+    expect(paths(completion)).toEqual(["a.ts"]);
+  });
+
+  it("fails in the select phase when the target root does not exist", async () => {
+    const { completion } = await run(operation({ target: { root: "nope" } }));
+    expect(completion).toEqual(failure("select"));
   });
 
   it.skipIf(process.platform === "win32")(
-    "reports unresolvable or escaping target roots as select failures",
+    "fails in the select phase, without dispatching, when the target root escapes through a symlink",
     async () => {
-      const missing = await run(operation({ target: { root: "nope" } }));
-      expect(missing.completion.status).toBe("failed");
-      expect(missing.completion.error?.details).toEqual({ phase: "select" });
-      const outside = mkdtempSync(join(tmpdir(), "codemod-outside-"));
-      try {
-        writeFileSync(join(outside, "secret.ts"), "secret\n");
-        symlinkSync(outside, join(repo, "link"));
-        const { completion } = await run(operation({ target: { root: "link" } }));
-        expect(completion.status).toBe("failed");
-        expect(completion.error?.message).toMatch(/escapes the target root/);
-        expect(readFileSync(join(outside, "secret.ts"), "utf8")).toBe("secret\n");
-      } finally {
-        rmSync(outside, { recursive: true, force: true });
-      }
+      const outside = outsideDir();
+      writeFileSync(join(outside, "secret.ts"), "secret\n");
+      symlinkSync(outside, join(repo, "link"));
+      const { completion, dispatched } = await run(operation({ target: { root: "link" } }));
+      expect([completion, dispatched]).toEqual([failure("select", /escapes the target root/), 0]);
     },
   );
 
-  it("cancels before commit and leaves files untouched", async () => {
-    const before = snapshot();
-    const controller = new AbortController();
-    setTimeout(() => controller.abort(), 200);
-    const { completion } = await run(operation(), {
-      mode: "hang",
-      signal: controller.signal,
-    });
-    expect(completion.status).toBe("cancelled");
-    expect(completion.error?.details).toEqual({ phase: "transform" });
-    expect(snapshot()).toEqual(before);
+  it("reports cancelled in the transform phase and changes nothing when aborted mid-batch", async () => {
+    const { completion } = await run(operation(), { mode: "hang", abort: true });
+    expect([completion.status, completion.error?.details, tree()]).toEqual([
+      "cancelled",
+      { phase: "transform" },
+      untouched,
+    ]);
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-    "reports unknown with structured details when the commit fails part-way",
+    "reports unknown with what was applied and what remains when the commit fails part-way",
     async () => {
       write("ro/e.ts", "e\n");
       chmodSync(join(repo, "ro/e.ts"), 0o444);
       const { completion } = await run(operation({ include: ["**/*.ts"] }));
-      expect(completion.status).toBe("unknown");
-      expect(completion.error?.details).toEqual({
-        phase: "commit",
-        applied: ["a.ts", "b.ts"],
-        failed: "ro/e.ts",
-        remaining: ["ro/e.ts"],
-      });
-      expect(read("a.ts")).toBe("a\n// fake\n");
-      expect(read("ro/e.ts")).toBe("e\n");
+      expect([completion.status, completion.error?.details, tree()]).toEqual([
+        "unknown",
+        { phase: "commit", applied: ["a.ts", "b.ts"], failed: "ro/e.ts", remaining: ["ro/e.ts"] },
+        { ...untouched, "a.ts": "a\n// fake\n", "b.ts": "b\n// fake\n", "ro/e.ts": "e\n" },
+      ]);
     },
   );
 });

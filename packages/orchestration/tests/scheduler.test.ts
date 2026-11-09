@@ -20,6 +20,7 @@ import {
   sequence,
   weightOf,
   dynamic,
+  type Executable,
   type Operation,
   type OperationCompletion,
   type OperationExecutor,
@@ -36,49 +37,53 @@ async function settle(turns = 8): Promise<void> {
   }
 }
 
-/**
- * An executor that records what actually reached it and never finishes on its
- * own: the test decides when each command completes.
- */
-function controllable(): {
-  executor: OperationExecutor;
-  started: string[];
-  finish(commandId: string, completion?: Partial<OperationCompletion>): void;
-  throwOnLaunch: Set<string>;
-} {
+/** Records what reached it; each command stays open until the test calls `finish`. */
+function controllable(unlaunchable: string[] = []) {
   const started: string[] = [];
   const pending = new Map<string, (completion: OperationCompletion) => void>();
-  const throwOnLaunch = new Set<string>();
   const executor: OperationExecutor = {
     execute(request: OperationRequest) {
       started.push(request.commandId);
-      if (throwOnLaunch.has(request.commandId)) {
+      if (unlaunchable.includes(request.commandId)) {
         return Promise.reject(new Error(`could not launch ${request.commandId}`));
       }
       return new Promise<OperationCompletion>((resolve) => pending.set(request.commandId, resolve));
     },
   };
-  return {
-    executor,
-    started,
-    throwOnLaunch,
-    finish(commandId, completion = {}) {
-      const resolve = pending.get(commandId);
-      if (resolve === undefined) throw new Error(`'${commandId}' was never started`);
-      pending.delete(commandId);
-      resolve({
-        protocolVersion: PROTOCOL_VERSION,
-        commandId,
-        status: "succeeded",
-        output: { stdout: commandId },
-        ...completion,
-      } as OperationCompletion);
-    },
+  const finish = (commandId: string, completion: Partial<OperationCompletion> = {}) => {
+    const resolve = pending.get(commandId);
+    if (resolve === undefined) throw new Error(`'${commandId}' was never started`);
+    pending.delete(commandId);
+    resolve({
+      protocolVersion: PROTOCOL_VERSION,
+      commandId,
+      status: "succeeded",
+      output: { stdout: commandId },
+      ...completion,
+    } as OperationCompletion);
   };
+  return { executor, started, finish };
+}
+type Control = ReturnType<typeof controllable>;
+
+/** Finishes `count` commands one at a time, in the order they started. */
+async function drain(
+  { started, finish }: Control,
+  count: number,
+  completions: Record<string, Partial<OperationCompletion>> = {},
+): Promise<void> {
+  for (let index = 0; index < count; index++) {
+    await settle();
+    finish(started[index]!, completions[started[index]!]);
+  }
 }
 
+const cancelled = { status: "cancelled", error: { message: "killed" }, output: undefined } as const;
 const step = (id: string) => shell({ name: id, command: id });
 const steps = (count: number) => Array.from({ length: count }, (_, index) => step(`s${index}`));
+const ids = (count: number) => steps(count).map((runnable) => runnable.name);
+const group = (count: number) =>
+  dynamic(() => parallel(steps(count).map((runnable) => runnable())));
 
 const fileJssg = jssg({ name: "file-pass", language: "typescript", transform: ref("file-pass") });
 const workspaceJssg = jssg({
@@ -88,12 +93,36 @@ const workspaceJssg = jssg({
   semanticAnalysis: "workspace",
 });
 
+/** Runs `body` under a fresh scheduler and a controllable executor, settled once. */
+async function start(
+  body: Executable,
+  capacity: number,
+  options: { signal?: AbortSignal; history?: MemoryHistoryStore; paused?: boolean } = {},
+) {
+  const events: RunEvent[] = [];
+  const sink = { emit: (event: RunEvent) => events.push(event) };
+  const scheduler = new AdmissionScheduler({ capacity, events: sink });
+  const { paused, ...runOptions } = options;
+  if (paused) scheduler.pause();
+  const control = controllable();
+  const result = run(body, { ...runOptions, executor: control.executor, scheduler, events: sink });
+  const outcome = result.then(
+    (value) => value,
+    (error: unknown) => error,
+  );
+  await settle();
+  return { ...control, control, scheduler, events, result, outcome };
+}
+const eventsOf = <T extends RunEvent["type"]>(events: RunEvent[], type: T) =>
+  events.filter((event): event is Extract<RunEvent, { type: T }> => event.type === type);
+
 describe("operation weights", () => {
-  it.each<[string, Operation, number]>([
-    ["shell", { kind: "shell", command: "x" }, 1],
-    ["agent", { kind: "agent", prompt: "x", backend: { kind: "builtin", tools: [] } }, 1],
+  it.each<[string, number, Operation]>([
+    ["shell", 1, { kind: "shell", command: "x" }],
+    ["agent", 1, { kind: "agent", prompt: "x", backend: { kind: "builtin", tools: [] } }],
     [
       "assessment",
+      1,
       {
         kind: "assessment",
         state: "s",
@@ -101,21 +130,20 @@ describe("operation weights", () => {
         provider: "systemone",
         model: "jev-latest",
       },
-      1,
     ],
-    ["jssg without semantics", fileJssg.toOperation(undefined), DEFAULT_WEIGHTS.jssg],
+    ["jssg without semantics", 2, fileJssg.toOperation(undefined)],
     [
       "jssg with file semantics",
+      2,
       { ...fileJssg.toOperation(undefined), semanticAnalysis: "file" },
-      DEFAULT_WEIGHTS.jssg,
     ],
-    ["jssg with workspace semantics", workspaceJssg.toOperation(undefined), 4],
+    ["jssg with workspace semantics", 4, workspaceJssg.toOperation(undefined)],
     [
       "jssg with a workspace root",
-      { ...fileJssg.toOperation(undefined), semanticAnalysis: { mode: "workspace", root: "src" } },
       4,
+      { ...fileJssg.toOperation(undefined), semanticAnalysis: { mode: "workspace", root: "src" } },
     ],
-  ])("charges %s %i units", (_label, operation, expected) => {
+  ])("charges %s a weight of %i", (_label, expected, operation) => {
     expect(weightOf(operation)).toBe(expected);
   });
 });
@@ -125,453 +153,404 @@ describe("default capacity", () => {
     availableParallelism: () => cpus,
     totalmem: () => gibibytes * 1024 * 1024 * 1024,
   });
+  const capacityWith = (override: string) =>
+    defaultCapacity(DEFAULT_WEIGHTS, host(16, 64), { [CAPACITY_ENV]: override });
 
-  it.each<[string, SchedulerHost, number]>([
+  it.each<[string, number, SchedulerHost]>([
     // Plenty of memory: the CPU count decides.
-    ["a large host", host(16, 64), 16],
-    ["a laptop", host(10, 32), 10],
+    ["a large host", 16, host(16, 64)],
+    ["a laptop", 10, host(10, 32)],
     // A heavy operation is clamped to this capacity and can still run alone.
-    ["a tiny host", host(1, 8), 1],
-    ["a three-core host", host(3, 8), 3],
+    ["a tiny host", 1, host(1, 8)],
+    ["a three-core host", 3, host(3, 8)],
     // 2 GiB budget / 512 MiB per workspace pass = 4 passes = 16 units, so memory does not bind.
-    ["a small-memory host", host(8, 4), 8],
+    ["a small-memory host", 8, host(8, 4)],
     // 0.5 GiB budget = 1 pass = 4 units, below the CPU count.
-    ["a memory-starved host", host(8, 1), 4],
-  ])("on %s admits %i units", (_label, hostFacts, expected) => {
+    ["a memory-starved host", 4, host(8, 1)],
+  ])("on %s admits %i units", (_label, expected, hostFacts) => {
     expect(defaultCapacity(DEFAULT_WEIGHTS, hostFacts, {})).toBe(expected);
   });
 
-  it("honors the operator override and rejects nonsense", () => {
-    const hostFacts = host(16, 64);
-    expect(defaultCapacity(DEFAULT_WEIGHTS, hostFacts, { [CAPACITY_ENV]: "3" })).toBe(3);
-    expect(defaultCapacity(DEFAULT_WEIGHTS, hostFacts, { [CAPACITY_ENV]: "  " })).toBe(16);
-    for (const bad of ["0", "-2", "1.5", "many"]) {
-      expect(() => defaultCapacity(DEFAULT_WEIGHTS, hostFacts, { [CAPACITY_ENV]: bad })).toThrow(
-        /must be a positive integer/u,
-      );
-    }
+  it("takes the operator override over the host facts", () => {
+    expect(capacityWith("3")).toBe(3);
   });
 
-  it("rejects a capacity that cannot admit anything", () => {
+  it("ignores a blank operator override", () => {
+    expect(capacityWith("  ")).toBe(16);
+  });
+
+  it.each(["0", "-2", "1.5", "many"])("rejects an operator override of %j", (bad) => {
+    expect(() => capacityWith(bad)).toThrow(/must be a positive integer/u);
+  });
+
+  it("rejects a scheduler capacity of 0", () => {
     expect(() => new AdmissionScheduler({ capacity: 0 })).toThrow(/positive integer/u);
   });
 });
 
 describe("bounded admission", () => {
-  it("never exceeds capacity however many members a group declares", async () => {
-    const members = steps(40).map((runnable) => runnable());
-    const scheduler = new AdmissionScheduler({ capacity: 5 });
-    const { executor, started, finish } = controllable();
-    const result = run(
-      dynamic(() => parallel(members)),
-      { executor, scheduler },
-    );
+  it("admits a group's members up to capacity and queues the rest", async () => {
+    const { started, scheduler } = await start(group(40), 5);
+    expect({ started, ...scheduler.stats() }).toMatchObject({
+      started: ids(5),
+      used: 5,
+      active: 5,
+      queued: 35,
+    });
+  });
 
+  it("admits the next member in declaration order when one finishes", async () => {
+    const { started, finish } = await start(group(40), 5);
+    finish("s2");
     await settle();
-    expect(started).toEqual(["s0", "s1", "s2", "s3", "s4"]);
-    expect(scheduler.stats()).toMatchObject({ capacity: 5, used: 5, active: 5, queued: 35 });
+    expect(started).toEqual(ids(6));
+  });
 
-    // Each release admits exactly one more, in declaration order.
-    for (const id of started.slice()) finish(id);
-    await settle();
-    expect(started.slice(5)).toEqual(["s5", "s6", "s7", "s8", "s9"]);
-
-    for (let index = 5; index < 40; index++) {
-      finish(`s${index}`);
-      await settle(2);
-    }
-    const { output } = await result;
-    expect((output as { stdout: string }[]).map((o) => o.stdout)).toEqual(
-      members.map((member) => member.runnable.name),
-    );
+  it("never exceeds capacity over a whole run", async () => {
+    const { control, scheduler, result } = await start(group(40), 5);
+    await drain(control, 40);
+    await result;
     expect(scheduler.stats()).toMatchObject({ used: 0, active: 0, queued: 0, peakActive: 5 });
   });
 
-  it("charges a workspace JSSG pass more than ordinary work", async () => {
-    // Capacity 5 fits one workspace pass (4) plus one shell (1), but never two
-    // workspace passes, where 40 ordinary execs would have fit five at a time.
-    const scheduler = new AdmissionScheduler({ capacity: 5 });
-    const { executor, started, finish } = controllable();
-    const group = parallel(
-      workspaceJssg({ id: "w0" }),
-      workspaceJssg({ id: "w1" }),
-      step("e0")(),
-      fileJssg({ id: "f0" }),
-    );
-    const result = run(
-      dynamic(() => group),
-      { executor, scheduler },
-    );
+  describe("with a workspace JSSG pass", () => {
+    // Capacity 5 fits one workspace pass (4) plus one shell (1), never two passes.
+    const heavy = () =>
+      start(
+        dynamic(() =>
+          parallel(
+            workspaceJssg({ id: "w0" }),
+            workspaceJssg({ id: "w1" }),
+            step("e0")(),
+            fileJssg({ id: "f0" }),
+          ),
+        ),
+        5,
+      );
 
-    await settle();
-    // w1 needs 4 of the 5 units; only 1 is free, and strict FIFO keeps e0 and
-    // f0 behind it rather than letting them overtake a heavy command.
-    expect(started).toEqual(["w0"]);
-    expect(scheduler.stats()).toMatchObject({ used: 4, active: 1, queued: 3 });
+    it("keeps lighter work queued behind a pass that does not fit yet", async () => {
+      const { started, scheduler } = await heavy();
+      expect({ started, ...scheduler.stats() }).toMatchObject({
+        started: ["w0"],
+        used: 4,
+        queued: 3,
+      });
+    });
 
-    finish("w0");
-    await settle();
-    // The second workspace pass takes 4 of 5 units; only the shell fits beside it.
-    expect(started).toEqual(["w0", "w1", "e0"]);
-    expect(scheduler.stats()).toMatchObject({ used: 5, active: 2, queued: 1 });
+    it("admits a shell beside a pass in the capacity left over", async () => {
+      const { started, finish, scheduler } = await heavy();
+      finish("w0");
+      await settle();
+      expect({ started, ...scheduler.stats() }).toMatchObject({
+        started: ["w0", "w1", "e0"],
+        used: 5,
+      });
+    });
 
-    finish("w1");
-    await settle();
-    expect(started).toEqual(["w0", "w1", "e0", "f0"]);
-    expect(scheduler.stats()).toMatchObject({ used: 3, active: 2, queued: 0 });
-
-    finish("e0");
-    finish("f0", { output: [] });
-    await expect(result).resolves.toBeDefined();
-    expect(scheduler.stats()).toMatchObject({ used: 0, active: 0, peakUsed: 5, peakActive: 2 });
+    it("charges the passes their weight over the whole run", async () => {
+      const { control, scheduler, result } = await heavy();
+      await drain(control, 4, { f0: { output: [] } });
+      await result;
+      expect(scheduler.stats()).toMatchObject({ used: 0, peakUsed: 5, peakActive: 2 });
+    });
   });
 
-  it("returns outputs in declaration order when completion order is reversed", async () => {
-    const scheduler = new AdmissionScheduler({ capacity: 3 });
-    const { executor, started, finish } = controllable();
-    const result = run(
-      dynamic(() => parallel(steps(3).map((runnable) => runnable()))),
-      { executor, scheduler },
-    );
+  describe("when members finish in reverse order", () => {
+    const reversed = async () => {
+      const { finish, result } = await start(group(3), 3);
+      for (const id of ["s2", "s1", "s0"]) finish(id, { output: { stdout: `done ${id}` } });
+      return result;
+    };
 
-    await settle();
-    expect(started).toEqual(["s0", "s1", "s2"]);
-    for (const id of ["s2", "s1", "s0"]) finish(id, { output: { stdout: `done ${id}` } });
+    it("returns outputs in declaration order", async () => {
+      const { output } = await reversed();
+      expect((output as { stdout: string }[]).map((o) => o.stdout)).toEqual([
+        "done s0",
+        "done s1",
+        "done s2",
+      ]);
+    });
 
-    const { output, history } = await result;
-    expect((output as { stdout: string }[]).map((o) => o.stdout)).toEqual([
-      "done s0",
-      "done s1",
-      "done s2",
-    ]);
-    // Commands are still recorded in declaration order, so replay is unaffected.
-    const scheduled = history.events.filter((event) => event.type === "scheduled");
-    expect(scheduled.map((event) => (event.type === "scheduled" ? event.command.id : ""))).toEqual([
-      "s0",
-      "s1",
-      "s2",
-    ]);
+    it("records commands in declaration order, so replay is unaffected", async () => {
+      const { history } = await reversed();
+      const scheduled = history.events.flatMap((event) =>
+        event.type === "scheduled" ? [event.command.id] : [],
+      );
+      expect(scheduled).toEqual(ids(3));
+    });
   });
 
-  it("does not reach the executor before a queued command is admitted", async () => {
-    const scheduler = new AdmissionScheduler({ capacity: 1 });
-    const events: RunEvent[] = [];
-    const { executor, started, finish } = controllable();
-    const result = run(
-      dynamic(() => parallel(steps(3).map((runnable) => runnable()))),
-      {
-        executor,
-        scheduler,
-        events: { emit: (event) => events.push(event) },
-      },
-    );
+  it("reports commands waiting for capacity as queued without starting them", async () => {
+    const { started, events } = await start(group(3), 1);
+    const queued = eventsOf(events, "scheduler.queued").map((event) => event.commandId);
+    expect([started, queued]).toEqual([["s0"], ["s1", "s2"]]);
+  });
 
-    await settle();
-    expect(started).toEqual(["s0"]);
-    expect(events.filter((e) => e.type === "scheduler.queued").map((e) => e.commandId)).toEqual([
-      "s1",
-      "s2",
-    ]);
-    // The queued commands are recorded in history but have touched no executor.
-    expect(events.filter((e) => e.type === "command.scheduled")).toHaveLength(3);
+  it("records every member as scheduled while it waits for capacity", async () => {
+    const { events } = await start(group(3), 1);
+    expect(eventsOf(events, "command.scheduled")).toHaveLength(3);
+  });
 
-    finish("s0");
-    await settle();
-    expect(started).toEqual(["s0", "s1"]);
-    finish("s1");
-    await settle();
-    finish("s2");
-    await expect(result).resolves.toBeDefined();
-    expect(events.filter((e) => e.type === "scheduler.admitted")).toHaveLength(3);
+  it("reports each command as admitted once", async () => {
+    const { control, events, result } = await start(group(3), 1);
+    await drain(control, 3);
+    await result;
+    expect(eventsOf(events, "scheduler.admitted")).toHaveLength(3);
   });
 });
 
 describe("cancellation", () => {
-  it("refuses a queued command without starting it and keeps killing admitted ones", async () => {
+  /** `s0` admitted and `s1` queued under capacity 1, then the run is aborted. */
+  const abortedWhileQueued = async () => {
     const controller = new AbortController();
-    const scheduler = new AdmissionScheduler({ capacity: 1 });
-    const { executor, started, finish } = controllable();
     const history = new MemoryHistoryStore();
-    const result = run(
-      dynamic(() => parallel(steps(2).map((runnable) => runnable()))),
-      {
-        executor,
-        scheduler,
-        history,
-        signal: controller.signal,
-      },
-    );
-    const caught = result.catch((error: unknown) => error);
-
-    await settle();
-    expect(started).toEqual(["s0"]);
+    const started = await start(group(2), 1, { signal: controller.signal, history });
     controller.abort();
     await settle();
-    // s1 was refused while queued: no executor call.
-    expect(started).toEqual(["s0"]);
-    expect(scheduler.stats()).toMatchObject({ queued: 0, active: 1 });
+    return { ...started, history };
+  };
 
-    // The admitted command still runs to whatever its executor reports.
-    finish("s0", { status: "cancelled", error: { message: "killed" }, output: undefined });
-    const error = await caught;
-    expect(error).toBeInstanceOf(OperationError);
+  it("refuses a queued command on abort without starting it", async () => {
+    const { started, scheduler } = await abortedWhileQueued();
+    expect({ started, ...scheduler.stats() }).toMatchObject({ started: ["s0"], queued: 0 });
+  });
 
-    const recorded = (await history.load()).events;
-    expect(recorded.map((event) => event.type)).toEqual([
-      "scheduled",
-      "scheduled",
-      "completed",
-      "completed",
+  it("leaves an admitted command running until its executor reports", async () => {
+    const { scheduler } = await abortedWhileQueued();
+    expect(scheduler.stats().active).toBe(1);
+  });
+
+  it("fails the aborted run with an OperationError", async () => {
+    const { finish, outcome } = await abortedWhileQueued();
+    finish("s0", cancelled);
+    expect(await outcome).toBeInstanceOf(OperationError);
+  });
+
+  it("records the refused command as cancelled while queued", async () => {
+    const { finish, outcome, history } = await abortedWhileQueued();
+    finish("s0", cancelled);
+    await outcome;
+    const completed = (await history.load()).events.flatMap((event) =>
+      event.type === "completed"
+        ? [[event.commandId, event.completion.status, event.completion.error?.message]]
+        : [],
+    );
+    expect(completed).toEqual([
+      ["s1", "cancelled", "cancelled while queued for execution capacity"],
+      ["s0", "cancelled", "killed"],
     ]);
-    const s1 = recorded.find((event) => event.type === "completed" && event.commandId === "s1");
-    expect(s1).toMatchObject({
-      completion: {
-        status: "cancelled",
-        error: { message: "cancelled while queued for execution capacity" },
-      },
-    });
+  });
+
+  it("holds no capacity once the aborted run settles", async () => {
+    const { finish, outcome, scheduler } = await abortedWhileQueued();
+    finish("s0", cancelled);
+    await outcome;
     expect(scheduler.stats()).toMatchObject({ used: 0, active: 0, queued: 0 });
   });
 
-  it("refuses admission outright when the signal already aborted", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const scheduler = new AdmissionScheduler({ capacity: 4 });
-    const { executor, started } = controllable();
-    await expect(
-      run(
-        dynamic(() => step("only")()),
-        { executor, scheduler, signal: controller.signal },
-      ),
-    ).rejects.toBeInstanceOf(OperationError);
-    expect(started).toEqual([]);
-    expect(scheduler.stats()).toMatchObject({ used: 0, active: 0, peakActive: 0 });
+  describe("when the signal already aborted", () => {
+    const alreadyAborted = () => start(step("only")(), 4, { signal: AbortSignal.abort() });
+
+    it("fails the run with an OperationError", async () => {
+      const { outcome } = await alreadyAborted();
+      expect(await outcome).toBeInstanceOf(OperationError);
+    });
+
+    it("admits and starts nothing", async () => {
+      const { started, scheduler } = await alreadyAborted();
+      expect({ started, ...scheduler.stats() }).toMatchObject({ started: [], peakActive: 0 });
+    });
   });
 });
 
 describe("pause and resume", () => {
-  it("holds every admission while paused and admits in declaration order on resume", async () => {
-    const events: RunEvent[] = [];
-    const sink = { emit: (event: RunEvent) => events.push(event) };
-    const scheduler = new AdmissionScheduler({ capacity: 3, events: sink });
-    const { executor, started, finish } = controllable();
-    scheduler.pause();
-    const result = run(
-      dynamic(() => parallel(steps(3).map((runnable) => runnable()))),
-      { executor, scheduler, events: sink },
-    );
-
-    await settle();
-    // Capacity is free, but nothing is admitted: the commands are queued.
-    expect(started).toEqual([]);
-    expect(scheduler.stats()).toMatchObject({ paused: true, queued: 3, active: 0, used: 0 });
-    expect(events.filter((e) => e.type === "scheduler.queued")).toHaveLength(3);
-    expect(events.find((e) => e.type === "scheduler.paused")).toEqual({
-      type: "scheduler.paused",
-      queued: 0,
-      active: 0,
-    });
-
-    scheduler.resume();
-    await settle();
-    expect(started).toEqual(["s0", "s1", "s2"]);
-    expect(events.find((e) => e.type === "scheduler.resumed")).toEqual({
-      type: "scheduler.resumed",
+  it("admits nothing while paused, even with capacity free", async () => {
+    const { started, scheduler } = await start(group(3), 3, { paused: true });
+    expect({ started, ...scheduler.stats() }).toMatchObject({
+      started: [],
+      paused: true,
       queued: 3,
-      active: 0,
+      used: 0,
     });
-    expect(scheduler.stats()).toMatchObject({ paused: false, queued: 0, active: 3 });
-    for (const id of ["s0", "s1", "s2"]) finish(id);
-    await expect(result).resolves.toBeDefined();
   });
 
-  it("lets admitted operations finish without admitting the next one", async () => {
-    const scheduler = new AdmissionScheduler({ capacity: 1 });
-    const { executor, started, finish } = controllable();
-    const result = run(
-      dynamic(() => parallel(steps(2).map((runnable) => runnable()))),
-      { executor, scheduler },
-    );
-
+  it("admits the held commands in declaration order on resume", async () => {
+    const { started, scheduler } = await start(group(3), 3, { paused: true });
+    scheduler.resume();
     await settle();
-    expect(started).toEqual(["s0"]);
+    expect({ started, ...scheduler.stats() }).toMatchObject({
+      started: ids(3),
+      paused: false,
+      queued: 0,
+    });
+  });
+
+  it("reports the queue and active counts when it pauses and resumes", async () => {
+    const { scheduler, events } = await start(group(3), 3, { paused: true });
+    scheduler.resume();
+    expect([
+      events.find((e) => e.type === "scheduler.paused"),
+      events.find((e) => e.type === "scheduler.resumed"),
+    ]).toEqual([
+      { type: "scheduler.paused", queued: 0, active: 0 },
+      { type: "scheduler.resumed", queued: 3, active: 0 },
+    ]);
+  });
+
+  it("returns a finished command's permit without admitting the next one", async () => {
+    const { started, finish, scheduler } = await start(group(2), 1);
     scheduler.pause();
     finish("s0");
     await settle();
-    // s0 completed and returned its permit, but s1 stays queued.
-    expect(started).toEqual(["s0"]);
-    expect(scheduler.stats()).toMatchObject({ paused: true, used: 0, active: 0, queued: 1 });
-
-    scheduler.resume();
-    await settle();
-    expect(started).toEqual(["s0", "s1"]);
-    finish("s1");
-    await expect(result).resolves.toBeDefined();
+    expect({ started, ...scheduler.stats() }).toMatchObject({
+      started: ["s0"],
+      used: 0,
+      active: 0,
+      queued: 1,
+    });
   });
 
-  it("is idempotent and still refuses a queued command that is aborted while paused", async () => {
+  it("reports only actual changes between paused and running", () => {
     const events: RunEvent[] = [];
-    const sink = { emit: (event: RunEvent) => events.push(event) };
+    const scheduler = new AdmissionScheduler({
+      capacity: 1,
+      events: { emit: (e) => events.push(e) },
+    });
+    scheduler.pause();
+    scheduler.pause();
+    scheduler.resume();
+    scheduler.resume();
+    scheduler.pause();
+    expect(events.map((event) => event.type)).toEqual([
+      "scheduler.paused",
+      "scheduler.resumed",
+      "scheduler.paused",
+    ]);
+  });
+
+  it("still refuses a queued command that is aborted while paused", async () => {
     const controller = new AbortController();
-    const scheduler = new AdmissionScheduler({ capacity: 1, events: sink });
-    const { executor, started, finish } = controllable();
-    const result = run(
-      dynamic(() => parallel(steps(2).map((runnable) => runnable()))),
-      { executor, scheduler, signal: controller.signal, events: sink },
-    );
-    const caught = result.catch((error: unknown) => error);
-
-    await settle();
+    const { started, scheduler } = await start(group(2), 1, { signal: controller.signal });
     scheduler.pause();
-    scheduler.pause();
-    scheduler.resume();
-    scheduler.resume();
-    scheduler.pause();
-    expect(events.filter((e) => e.type === "scheduler.paused")).toHaveLength(2);
-    expect(events.filter((e) => e.type === "scheduler.resumed")).toHaveLength(1);
-
     controller.abort();
     await settle();
-    expect(started).toEqual(["s0"]);
-    expect(scheduler.stats()).toMatchObject({ paused: true, queued: 0, active: 1 });
-    finish("s0", { status: "cancelled", error: { message: "killed" }, output: undefined });
-    expect(await caught).toBeInstanceOf(OperationError);
-    expect(scheduler.stats()).toMatchObject({ used: 0, active: 0, queued: 0 });
+    expect({ started, ...scheduler.stats() }).toMatchObject({
+      started: ["s0"],
+      paused: true,
+      queued: 0,
+      active: 1,
+    });
   });
 });
 
 describe("permits", () => {
-  it.each<[string, Partial<{ fail: boolean; abort: boolean; launchError: boolean }>]>([
-    ["success", {}],
-    ["an operation failure", { fail: true }],
-    ["cancellation", { abort: true }],
-    ["an executor launch failure", { launchError: true }],
-  ])("are released after %s", async (_label, mode) => {
-    const scheduler = new AdmissionScheduler({ capacity: 2 });
-    const { executor, throwOnLaunch, finish } = controllable();
-    const controller = new AbortController();
-    if (mode.launchError) throwOnLaunch.add("only");
-    const result = run(
-      dynamic(() => step("only")()),
-      {
-        executor,
-        scheduler,
-        signal: controller.signal,
+  it.each<[string, (finish: Control["finish"], abort: () => void) => void]>([
+    ["success", (finish) => finish("only")],
+    [
+      "an operation failure",
+      (finish) =>
+        finish("only", { status: "failed", error: { message: "boom" }, output: undefined }),
+    ],
+    [
+      "cancellation",
+      (finish, abort) => {
+        abort();
+        finish("only", cancelled);
       },
-    );
-    const settled = result.catch((error: unknown) => error);
+    ],
+  ])("are released after %s", async (_label, end) => {
+    const controller = new AbortController();
+    const { finish, outcome, scheduler } = await start(step("only")(), 2, {
+      signal: controller.signal,
+    });
+    end(finish, () => controller.abort());
+    await outcome;
+    expect(scheduler.stats()).toMatchObject({ used: 0, active: 0, queued: 0, peakActive: 1 });
+  });
 
-    await settle();
-    if (mode.abort) {
-      controller.abort();
-      finish("only", { status: "cancelled", error: { message: "killed" }, output: undefined });
-    } else if (mode.fail) {
-      finish("only", { status: "failed", error: { message: "boom" }, output: undefined });
-    } else if (!mode.launchError) {
-      finish("only");
-    }
-    await settled;
-
+  it("are released after an executor launch failure", async () => {
+    const scheduler = new AdmissionScheduler({ capacity: 2 });
+    const { executor } = controllable(["only"]);
+    await run(step("only")(), { executor, scheduler }).catch(() => {});
     expect(scheduler.stats()).toMatchObject({ used: 0, active: 0, queued: 0, peakActive: 1 });
   });
 });
 
 describe("replay", () => {
-  it("consumes no capacity and never reaches the executor", async () => {
-    const members = steps(4).map((runnable) => runnable());
+  const replayUnderCapacityOne = async () => {
+    const body = group(4);
     const first = createHarness({ fallback: (request) => `ran ${request.commandId}` });
-    const body = dynamic(() => parallel(members));
     const recorded = await first.run(body);
-
     const scheduler = new AdmissionScheduler({ capacity: 1 });
     const replay = createHarness({
       history: first.serialize(),
       fallback: () => failed("must not execute"),
       scheduler,
     });
-    const second = await replay.run(body);
+    return { recorded, replay, replayed: await replay.run(body), scheduler };
+  };
 
-    expect(second.replayed).toBe(true);
-    expect(second.output).toEqual(recorded.output);
-    expect(replay.executed).toHaveLength(0);
-    // Capacity 1 would have serialized four members; none of them needed it.
+  it("replays a recorded group without reaching the executor", async () => {
+    const { recorded, replay, replayed } = await replayUnderCapacityOne();
+    expect([replayed.replayed, replayed.output, replay.executed]).toEqual([
+      true,
+      recorded.output,
+      [],
+    ]);
+  });
+
+  it("consumes no capacity while replaying", async () => {
+    const { scheduler } = await replayUnderCapacityOne();
     expect(scheduler.stats()).toMatchObject({ peakActive: 0, peakUsed: 0, used: 0 });
   });
 });
 
 describe("group shapes", () => {
-  it("bounds dynamically built and repeated groups through one run scheduler", async () => {
-    const scheduler = new AdmissionScheduler({ capacity: 2 });
-    const { executor, started, finish } = controllable();
-    const early = steps(3);
+  it("bounds two groups awaited at once, one built inside the body, by the one run scheduler", async () => {
     const late = steps(3).map((runnable, index) => runnable({ id: `late${index}` }));
-    // Two groups awaited at once: the second is built from an array inside the body.
-    const body = dynamic(async () => {
-      const [a, b] = await Promise.all([
-        parallel(early.map((runnable, index) => runnable({ id: `early${index}` }))),
+    const body = dynamic(() =>
+      Promise.all([
+        parallel(steps(3).map((runnable, index) => runnable({ id: `early${index}` }))),
         parallel(late),
-      ]);
-      return [a, b];
+      ]),
+    );
+    const { control, started, scheduler, result } = await start(body, 2);
+    await drain(control, 6);
+    await result;
+    expect({ started: started.length, ...scheduler.stats() }).toMatchObject({
+      started: 6,
+      peakActive: 2,
+      used: 0,
     });
-    const result = run(body, { executor, scheduler });
-
-    await settle();
-    expect(started).toHaveLength(2);
-    for (let admitted = 0; admitted < 6; admitted++) {
-      finish(started[admitted]!);
-      await settle(2);
-    }
-    await expect(result).resolves.toBeDefined();
-    expect(started).toHaveLength(6);
-    expect(scheduler.stats()).toMatchObject({ peakActive: 2, used: 0, active: 0, queued: 0 });
   });
 
-  it("runs a sequence's parallel stages under the same bound and keeps order", async () => {
+  it("runs a sequence's parallel stage under the bound, before the next stage", async () => {
     const scheduler = new AdmissionScheduler({ capacity: 2 });
-    const harness = createHarness({
-      fallback: (request) => `ran ${request.commandId}`,
-      scheduler,
-    });
-    const fixed = sequence(parallel(steps(3).map((runnable) => runnable())), step("last")());
-    const result = await harness.run(fixed);
-    expect(result.commands.map((command) => command.id)).toEqual(["s0", "s1", "s2", "last"]);
-    expect(scheduler.stats()).toMatchObject({ peakActive: 2, used: 0, queued: 0 });
+    const harness = createHarness({ fallback: (request) => `ran ${request.commandId}`, scheduler });
+    const result = await harness.run(
+      sequence(parallel(steps(3).map((runnable) => runnable())), step("last")()),
+    );
+    expect([result.commands.map((command) => command.id), scheduler.stats().peakActive]).toEqual([
+      [...ids(3), "last"],
+      2,
+    ]);
   });
 
   it("does not change a sequential workflow at capacity 1", async () => {
     const scheduler = new AdmissionScheduler({ capacity: 1 });
-    const first = step("first");
-    const second = step("second");
-    const harness = createHarness({
-      fallback: (request) => `ran ${request.commandId}`,
-      scheduler,
-    });
+    const [first, second] = [step("first"), step("second")];
+    const harness = createHarness({ fallback: (request) => `ran ${request.commandId}`, scheduler });
     const result = await harness.run(
       dynamic(async () => [(await first()).stdout, (await second()).stdout]),
     );
-    expect(result.output).toEqual(["ran first", "ran second"]);
-    expect(scheduler.stats()).toMatchObject({ peakActive: 1, used: 0 });
+    expect([result.output, scheduler.stats().peakActive]).toEqual([["ran first", "ran second"], 1]);
   });
 
-  it("keeps two runs independent of each other", async () => {
-    const a = new AdmissionScheduler({ capacity: 1 });
-    const b = new AdmissionScheduler({ capacity: 3 });
-    const left = controllable();
-    const right = controllable();
-    const body = dynamic(() => parallel(steps(3).map((runnable) => runnable())));
-    const first = run(body, { executor: left.executor, scheduler: a });
-    const second = run(body, { executor: right.executor, scheduler: b });
-
-    await settle();
-    expect(a.stats()).toMatchObject({ active: 1, queued: 2 });
-    expect(b.stats()).toMatchObject({ active: 3, queued: 0 });
-
-    for (const control of [left, right]) {
-      for (let index = 0; index < 3; index++) {
-        control.finish(control.started[index]!);
-        await settle(2);
-      }
-    }
-    await expect(Promise.all([first, second])).resolves.toBeDefined();
+  it("bounds two concurrent runs by their own schedulers", async () => {
+    const [narrow, wide] = await Promise.all([start(group(3), 1), start(group(3), 3)]);
+    expect([narrow.scheduler.stats(), wide.scheduler.stats()]).toMatchObject([
+      { active: 1, queued: 2 },
+      { active: 3, queued: 0 },
+    ]);
   });
 });

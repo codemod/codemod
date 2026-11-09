@@ -1,12 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { createHarness, failed } from "../src/host/harness.ts";
+import { beforeAll, describe, expect, it } from "vitest";
+import { createHarness, failed, type Harness, type HarnessRun } from "../src/host/harness.ts";
 import {
   DuplicateCommandIdError,
-  InvocationError,
-  NondeterminismError,
-  TargetValidationError,
   agent,
   canonicalJson,
   shell,
@@ -23,17 +20,11 @@ import { ref } from "./helpers.ts";
 
 const web: Target = { root: "apps/web", include: ["src/**"], exclude: ["**/generated/**"] };
 
-const renameApi = jssg({
-  name: "rename-api",
-  transform: ref("rename-api"),
-  language: "typescript",
-});
-const updateImports = jssg({
-  name: "update-imports",
-  transform: ref("update-imports"),
-  language: "typescript",
-});
+const transform = (name: string) => jssg({ name, transform: ref(name), language: "typescript" });
+const renameApi = transform("rename-api");
+const updateImports = transform("update-imports");
 const format = shell({ name: "format", command: "npm run format" });
+const summarize = agent({ name: "summarize", prompt: "summarize" });
 
 const Project = guard(
   "Project",
@@ -46,22 +37,35 @@ const migrate = jssg({
   input: Project,
 });
 
+const replaying = (h: Harness) => h.reload({ fallback: () => failed("must not execute") });
+
+/** Matches a thrown error by its class name, its message, and any other fields. */
+const error = (name: string, message = /./, fields: object = {}) =>
+  expect.objectContaining({ name, message: expect.stringMatching(message), ...fields });
+const migrateOperation = (path: string) => ({
+  kind: "jssg",
+  transform: ref("migrate"),
+  language: "typescript",
+  target: { root: path },
+  input: { path },
+});
+
 describe("target normalization", () => {
-  it("normalizes the root and keeps patterns as written", () => {
-    expect(normalizeTarget({ root: "./apps/web/" }, "t")).toEqual({ root: "apps/web" });
-    expect(normalizeTarget({ root: "apps//web/./src" }, "t")).toEqual({ root: "apps/web/src" });
-    expect(normalizeTarget({ root: "." }, "t")).toEqual({ root: "." });
-    expect(normalizeTarget({ root: "apps/.." }, "t")).toEqual({ root: "." });
-    expect(normalizeTarget({ root: "packages\\client" }, "t")).toEqual({
-      root: "packages/client",
-    });
-    expect(normalizeTarget(web, "t")).toEqual(web);
-    expect(normalizeTarget({ include: ["**/*.ts"] }, "t")).toEqual({ include: ["**/*.ts"] });
-    // `..` inside a name is not an escape.
-    expect(normalizeTarget({ root: "apps/a..b", include: ["foo..bar/**"] }, "t")).toEqual({
-      root: "apps/a..b",
-      include: ["foo..bar/**"],
-    });
+  it.each<[string, Target, Target]>([
+    ["strips a leading ./ and a trailing slash", { root: "./apps/web/" }, { root: "apps/web" }],
+    ["collapses // and /./ in the root", { root: "apps//web/./src" }, { root: "apps/web/src" }],
+    ["keeps . as the repository root", { root: "." }, { root: "." }],
+    ["resolves .. that stays inside the repository", { root: "apps/.." }, { root: "." }],
+    ["converts backslashes in the root", { root: "packages\\client" }, { root: "packages/client" }],
+    ["keeps include and exclude patterns as written", web, web],
+    ["accepts a target without a root", { include: ["**/*.ts"] }, { include: ["**/*.ts"] }],
+    [
+      "treats .. inside a name as part of the name",
+      { root: "apps/a..b", include: ["foo..bar/**"] },
+      { root: "apps/a..b", include: ["foo..bar/**"] },
+    ],
+  ])("%s", (_label, target, expected) => {
+    expect(normalizeTarget(target, "t")).toEqual(expected);
   });
 
   it.each([
@@ -80,30 +84,39 @@ describe("target normalization", () => {
     ["an absolute pattern", { include: ["/src/**"] }, /must stay relative to the target root/],
     ["an escaping pattern", { exclude: ["../**"] }, /must stay relative to the target root/],
   ])("rejects %s", (_label, value, message) => {
-    expect(() => normalizeTarget(value, "jssg 'x'")).toThrow(TargetValidationError);
-    expect(() => normalizeTarget(value, "jssg 'x'")).toThrow(message);
-    expect(() => normalizeTarget(value, "jssg 'x'")).toThrow(/^invalid target for jssg 'x': /);
+    expect(() => normalizeTarget(value, "jssg 'x'")).toThrow(
+      error("TargetValidationError", message),
+    );
+  });
+
+  it("names the invocation before the reason", () => {
+    expect(() => normalizeTarget({}, "jssg 'x'")).toThrow(/^invalid target for jssg 'x': /);
   });
 });
 
 describe("JSSG invocation targets", () => {
-  it("binds a normalized target on the command and puts it on the wire operation", () => {
-    const targeted = renameApi({ target: { root: "./apps/web/", include: ["src/**"] } });
-    expect(targeted.type).toBe("command");
-    expect(targeted.id).toBe("rename-api");
-    expect(targeted.runnable).toBe(renameApi);
-    expect(targeted.target).toEqual({ root: "apps/web", include: ["src/**"] });
-    const operation = renameApi.toOperation(undefined, targeted.target);
-    expect(operation).toEqual({
+  it("binds the normalized target to the command", () => {
+    const { type, id, runnable, target } = renameApi({
+      target: { root: "./apps/web/", include: ["src/**"] },
+    });
+    expect({ type, id, runnable, target }).toEqual({
+      type: "command",
+      id: "rename-api",
+      runnable: renameApi,
+      target: { root: "apps/web", include: ["src/**"] },
+    });
+  });
+
+  it("puts the target on the wire operation", () => {
+    expect(renameApi.toOperation(undefined, { root: "apps/web" })).toEqual({
       kind: "jssg",
       transform: ref("rename-api"),
       language: "typescript",
-      target: { root: "apps/web", include: ["src/**"] },
+      target: { root: "apps/web" },
     });
-    expect(isOperation(operation)).toBe(true);
   });
 
-  it("matches the shared jssg-target-request fixture", async () => {
+  it("sends the request in the shared jssg-target-request fixture", async () => {
     const fixtureRunnable = jssg({
       name: "rename-api",
       transform: {
@@ -115,161 +128,155 @@ describe("JSSG invocation targets", () => {
       exclude: ["**/*.d.ts"],
     });
     const h = createHarness({ fallback: () => ({}) });
-    const result = await h.run(dynamic(() => fixtureRunnable({ target: web })));
+    await h.run(dynamic(() => fixtureRunnable({ target: web })));
     const fixture = readFileSync(
       join(import.meta.dirname, "..", "fixtures", "protocol", "jssg-target-request.json"),
       "utf8",
     );
     expect(canonicalJson(h.executed[0])).toBe(canonicalJson(JSON.parse(fixture)));
-    expect(result.commands[0]?.operation).toEqual(JSON.parse(fixture).operation);
   });
 
-  it("leaves the definition untargeted and does not mutate it", () => {
+  it("leaves the definition and its later invocations untargeted", () => {
     renameApi({ target: web });
-    expect(renameApi).not.toHaveProperty("target");
-    expect(renameApi.toOperation()).toEqual({
-      kind: "jssg",
-      transform: ref("rename-api"),
-      language: "typescript",
-    });
-    expect(renameApi()).not.toHaveProperty("target");
+    expect([
+      "target" in renameApi,
+      "target" in renameApi.toOperation(),
+      "target" in renameApi(),
+    ]).toEqual([false, false, false]);
   });
 
-  it("keeps the input alongside the target for typed invocations", async () => {
-    const h = createHarness({ fallback: () => ({}) });
-    const result = await h.run(
+  it("keeps the input alongside the target on typed invocations", async () => {
+    const result = await createHarness({ fallback: () => ({}) }).run(
       dynamic(() => migrate({ target: { root: "packages/a" }, input: { path: "packages/a" } })),
     );
-    expect(result.commands[0]?.operation).toEqual({
-      kind: "jssg",
-      transform: ref("migrate"),
-      language: "typescript",
-      target: { root: "packages/a" },
+    expect(result.commands[0]).toMatchObject({
+      operation: migrateOperation("packages/a"),
       input: { path: "packages/a" },
     });
-    expect(result.commands[0]?.input).toEqual({ path: "packages/a" });
   });
 
-  it("rejects invalid targets and unknown fields when the command is created", () => {
-    expect(() => renameApi({ target: { root: "/abs" } })).toThrow(TargetValidationError);
-    expect(() => renameApi({ target: {} })).toThrow(/invalid target for jssg 'rename-api'/);
-    // @ts-expect-error a target must be an object
-    expect(() => renameApi({ target: "apps/web" })).toThrow(/target must be an object/);
-    // @ts-expect-error unknown invocation field
-    expect(() => renameApi({ target: web, files: ["a"] })).toThrow(InvocationError);
-    // @ts-expect-error unknown invocation field
-    expect(() => renameApi({ target: web, files: ["a"] })).toThrow(
-      /invalid invocation of jssg 'rename-api': unknown invocation field 'files'/,
-    );
-    // @ts-expect-error not an object
-    expect(() => renameApi("apps/web")).toThrow(/invocation options must be an object/);
-    // @ts-expect-error id must be a string
-    expect(() => renameApi({ id: 3 })).toThrow(/id must be a non-empty string/);
-  });
-
-  it("is not available on shell or agent invocations", () => {
-    const summarize = agent({ name: "summarize", prompt: "summarize" });
-    // @ts-expect-error shell invocations never take a target
-    expect(() => format({ target: web })).toThrow(TargetValidationError);
-    // @ts-expect-error shell invocations never take a target
-    expect(() => format({ target: web })).toThrow(
-      /invalid target for shell 'format': shell does not accept a target; only JSSG invocations select files/,
-    );
-    // @ts-expect-error agent invocations never take a target
-    expect(() => summarize({ target: web })).toThrow(TargetValidationError);
-    expect(format.toOperation()).not.toHaveProperty("target");
-    expect(summarize.toOperation()).not.toHaveProperty("target");
+  it.each<[string, () => unknown, unknown]>([
+    [
+      "an invalid target",
+      () => renameApi({ target: { root: "/abs" } }),
+      error("TargetValidationError", /^invalid target for jssg 'rename-api': .*must be relative/),
+    ],
+    [
+      "an empty target",
+      () => renameApi({ target: {} }),
+      error("TargetValidationError", /^invalid target for jssg 'rename-api'/),
+    ],
+    [
+      "a target that is not an object",
+      // @ts-expect-error a target must be an object
+      () => renameApi({ target: "apps/web" }),
+      error("TargetValidationError", /target must be an object/),
+    ],
+    [
+      "an unknown invocation field",
+      // @ts-expect-error unknown invocation field
+      () => renameApi({ target: web, files: ["a"] }),
+      error(
+        "InvocationError",
+        /^invalid invocation of jssg 'rename-api': unknown invocation field 'files'/,
+      ),
+    ],
+    [
+      "options that are not an object",
+      // @ts-expect-error not an object
+      () => renameApi("apps/web"),
+      error("InvocationError", /invocation options must be an object/),
+    ],
+    [
+      "an id that is not a string",
+      // @ts-expect-error id must be a string
+      () => renameApi({ id: 3 }),
+      error("InvocationError", /id must be a non-empty string/),
+    ],
+    [
+      "a target on a shell invocation",
+      // @ts-expect-error shell invocations never take a target
+      () => format({ target: web }),
+      error(
+        "TargetValidationError",
+        /^invalid target for shell 'format': shell does not accept a target; only JSSG invocations select files/,
+      ),
+    ],
+    [
+      "a target on an agent invocation",
+      // @ts-expect-error agent invocations never take a target
+      () => summarize({ target: web }),
+      error("TargetValidationError"),
+    ],
+  ])("rejects %s when the command is created", (_label, invoke, expected) => {
+    expect(invoke).toThrow(expected as Error);
   });
 });
 
 describe("targeted JSSG in static composition", () => {
-  it("carries the target into sequence IR, history, and the executor request", async () => {
-    const fixed = sequence(renameApi({ target: web }), updateImports({ target: web }), format());
-    expect(fixed.ir.root.stages).toEqual([
-      {
-        type: "operation",
-        id: "rename-api",
-        name: "rename-api",
-        kind: "jssg",
-        input: "none",
-        target: web,
-      },
-      {
-        type: "operation",
-        id: "update-imports",
-        name: "update-imports",
-        kind: "jssg",
-        input: "none",
-        target: web,
-      },
-      {
-        type: "operation",
-        id: "format",
-        name: "format",
-        kind: "shell",
-        input: "none",
-      },
-    ]);
+  const fixed = sequence(renameApi({ target: web }), updateImports({ target: web }), format());
+  const h = createHarness({
+    results: { "rename-api": { changed: 3 }, "update-imports": { changed: 1 }, format: "" },
+  });
+  beforeAll(async () => {
+    await h.run(fixed);
+  });
 
-    const h = createHarness({
-      results: { "rename-api": { changed: 3 }, "update-imports": { changed: 1 }, format: "" },
-    });
-    const result = await h.run(fixed);
-    expect(result.output).toEqual({ stdout: "" });
-    expect(result.commands.map((c) => c.operation)).toEqual([
+  it("carries each stage's target into the sequence IR", () => {
+    expect(
+      fixed.ir.root.stages.map((stage) => (stage.type === "operation" ? stage.target : null)),
+    ).toEqual([web, web, undefined]);
+  });
+
+  it("sends each stage's target in its executor request", () => {
+    expect(h.executed.map((request) => request.operation)).toEqual([
       { kind: "jssg", transform: ref("rename-api"), language: "typescript", target: web },
       { kind: "jssg", transform: ref("update-imports"), language: "typescript", target: web },
       { kind: "shell", command: "npm run format" },
     ]);
-    expect(h.executed[0]?.operation).toEqual({
-      kind: "jssg",
-      transform: ref("rename-api"),
-      language: "typescript",
-      target: web,
-    });
-
-    const replay = await h.reload({ fallback: () => failed("must not execute") }).run(fixed);
-    expect(replay.replayed).toBe(true);
-    expect(replay.output).toEqual({ stdout: "" });
   });
 
-  it("accepts targeted members in a parallel group", async () => {
-    const transformA = jssg({
-      name: "transform-a",
-      transform: ref("transform-a"),
-      language: "typescript",
-    });
-    const transformB = jssg({
-      name: "transform-b",
-      transform: ref("transform-b"),
-      language: "typescript",
-    });
-    const group = parallel(transformA({ target: web }), transformB({ target: web }));
+  it("replays a targeted sequence from history without executing", async () => {
+    const replay = await replaying(h).run(fixed);
+    expect([replay.replayed, replay.output]).toEqual([true, { stdout: "" }]);
+  });
+
+  const group = parallel(
+    transform("transform-a")({ target: web }),
+    transform("transform-b")({ target: web }),
+  );
+
+  it("carries each parallel member's target into the IR", () => {
     expect(
       group.ir.root.members.map((member) =>
         member.type === "operation" ? member.target : undefined,
       ),
     ).toEqual([web, web]);
-
-    const h = createHarness({ fallback: () => ({ ok: true }) });
-    const result = await h.run(group);
-    expect(result.commands.map((c) => c.id)).toEqual(["transform-a", "transform-b"]);
-    expect(result.commands.every((c) => c.operation.kind === "jssg" && c.operation.target)).toBe(
-      true,
-    );
   });
 
-  it("targets one definition twice when invocations carry distinct ids", () => {
+  it("sends each parallel member its target", async () => {
+    const result = await createHarness({ fallback: () => ({ ok: true }) }).run(group);
+    expect(
+      result.commands.map((c) => [c.id, c.operation.kind === "jssg" && c.operation.target]),
+    ).toEqual([
+      ["transform-a", web],
+      ["transform-b", web],
+    ]);
+  });
+
+  it("rejects targeting one definition twice without distinct ids", () => {
     expect(() =>
       sequence(renameApi({ target: { root: "packages/client" } }), renameApi({ target: web })),
     ).toThrow(DuplicateCommandIdError);
+  });
 
-    const fixed = sequence(
+  it("targets one definition twice under distinct ids", () => {
+    const twice = sequence(
       renameApi({ target: { root: "packages/client" }, id: "rename-api:client" }),
       renameApi({ target: web, id: "rename-api:web" }),
     );
     expect(
-      fixed.ir.root.stages.map((stage) =>
+      twice.ir.root.stages.map((stage) =>
         stage.type === "operation" ? [stage.id, stage.target] : [],
       ),
     ).toEqual([
@@ -280,169 +287,137 @@ describe("targeted JSSG in static composition", () => {
 });
 
 describe("targets in dynamic workflows and replay", () => {
-  const perPackage = (root: string) =>
+  const perPackage = (b: string) =>
     dynamic(async () => {
-      const packages = [
-        { name: "a", path: "packages/a" },
-        { name: "b", path: root },
-      ];
       const outputs = [];
-      for (const pkg of packages) {
+      for (const [name, path] of [
+        ["a", "packages/a"],
+        ["b", b],
+      ] as const) {
         outputs.push(
-          await migrate({
-            input: { path: pkg.path },
-            target: { root: pkg.path },
-            id: `migrate:${pkg.name}`,
-          }),
+          await migrate({ input: { path }, target: { root: path }, id: `migrate:${name}` }),
         );
       }
       return outputs;
     });
 
-  it("records the target per explicit id and replays it", async () => {
-    const h = createHarness({ fallback: (request) => ({ id: request.commandId }) });
-    const first = await h.run(perPackage("packages/b"));
+  const h = createHarness({ fallback: (request) => ({ id: request.commandId }) });
+  let first: HarnessRun<unknown>;
+  beforeAll(async () => {
+    first = await h.run(perPackage("packages/b"));
+  });
+
+  it("records each invocation's target and input under its explicit id", () => {
     expect(first.commands.map((c) => [c.id, c.operation])).toEqual([
-      [
-        "migrate:a",
-        {
-          kind: "jssg",
-          transform: ref("migrate"),
-          language: "typescript",
-          target: { root: "packages/a" },
-          input: { path: "packages/a" },
-        },
-      ],
-      [
-        "migrate:b",
-        {
-          kind: "jssg",
-          transform: ref("migrate"),
-          language: "typescript",
-          target: { root: "packages/b" },
-          input: { path: "packages/b" },
-        },
-      ],
+      ["migrate:a", migrateOperation("packages/a")],
+      ["migrate:b", migrateOperation("packages/b")],
     ]);
-
-    const second = await h
-      .reload({ fallback: () => failed("must not execute") })
-      .run(perPackage("packages/b"));
-    expect(second.replayed).toBe(true);
-    expect(second.output).toEqual(first.output);
   });
 
-  it("treats a different target under the same id as a changed command", async () => {
-    const h = createHarness({ fallback: () => ({}) });
-    await h.run(perPackage("packages/b"));
-
-    const replay = h.reload({ fallback: () => failed("must not execute") });
-    const error = await replay.run(perPackage("packages/b-renamed")).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(NondeterminismError);
-    expect((error as NondeterminismError).kind).toBe("changed");
-    expect((error as NondeterminismError).detail).toMatchObject({
-      position: 1,
-      actualId: "migrate:b",
-    });
-    expect(replay.executed).toHaveLength(0);
+  it("replays recorded targets without executing", async () => {
+    const second = await replaying(h).run(perPackage("packages/b"));
+    expect([second.replayed, second.output]).toEqual([true, first.output]);
   });
 
-  it("treats adding a target to a previously untargeted command as a change", async () => {
-    const h = createHarness({ fallback: () => ({}) });
-    await h.run(dynamic(() => renameApi()));
-
-    const replay = h.reload({ fallback: () => failed("must not execute") });
-    const error = await replay
-      .run(dynamic(() => renameApi({ target: web })))
-      .catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(NondeterminismError);
-    expect((error as NondeterminismError).kind).toBe("changed");
+  it("fails replay as changed, executing nothing, when an id gets a different target", async () => {
+    const replay = replaying(h);
+    const thrown = await replay.run(perPackage("packages/b-renamed")).catch((e: unknown) => e);
+    expect([thrown, replay.executed]).toEqual([
+      error("NondeterminismError", /./, {
+        kind: "changed",
+        detail: expect.objectContaining({ position: 1, actualId: "migrate:b" }),
+      }),
+      [],
+    ]);
   });
 
-  it("produces identical commands for equivalent target spellings", async () => {
-    const h = createHarness({ fallback: () => ({}) });
-    await h.run(dynamic(() => renameApi({ target: { root: "apps/web" } })));
-    const replay = await h
-      .reload({ fallback: () => failed("must not execute") })
-      .run(dynamic(() => renameApi({ target: { root: "./apps/web/" } })));
+  it("fails replay as changed when a target is added to an untargeted command", async () => {
+    const untargeted = createHarness({ fallback: () => ({}) });
+    await untargeted.run(dynamic(() => renameApi()));
+    await expect(
+      replaying(untargeted).run(dynamic(() => renameApi({ target: web }))),
+    ).rejects.toThrow(error("NondeterminismError", /./, { kind: "changed" }));
+  });
+
+  it("replays equivalent target spellings as the same command", async () => {
+    const spelled = createHarness({ fallback: () => ({}) });
+    await spelled.run(dynamic(() => renameApi({ target: { root: "apps/web" } })));
+    const replay = await replaying(spelled).run(
+      dynamic(() => renameApi({ target: { root: "./apps/web/" } })),
+    );
     expect(replay.replayed).toBe(true);
   });
 });
 
-describe("protocol validation of targets", () => {
-  it("validates intrinsic JSSG applicability and semantic configuration", () => {
-    const base = { kind: "jssg", transform: ref("x"), language: "typescript" };
-    expect(
-      isOperation({
-        ...base,
+describe("protocol validation of operations", () => {
+  const jssgOp = { kind: "jssg", transform: ref("x"), language: "typescript" };
+  const shellOp = { kind: "shell", command: "x" };
+  const agentOp = { kind: "agent", prompt: "p", backend: { kind: "builtin", tools: [] } };
+  const assessmentOp = {
+    kind: "assessment",
+    state: "s",
+    questions: { ok: { type: "yesno", instructions: "ok?" } },
+    provider: "systemone",
+    model: "jev-latest",
+  };
+
+  it.each<[string, object]>([
+    [
+      "jssg include, exclude, and workspace semantic analysis",
+      {
+        ...jssgOp,
         include: ["**/*.ts"],
         exclude: ["**/*.d.ts"],
         semanticAnalysis: { mode: "workspace", root: "src" },
-      }),
-    ).toBe(true);
-    expect(isOperation({ ...base, include: "**/*.ts" })).toBe(false);
-    expect(isOperation({ ...base, include: [] })).toBe(false);
-    expect(isOperation({ ...base, exclude: [""] })).toBe(false);
-    expect(isOperation({ ...base, semanticAnalysis: "repository" })).toBe(false);
-    expect(isOperation({ ...base, semanticAnalysis: { mode: "file", root: "src" } })).toBe(false);
-    expect(isOperation({ ...base, semanticAnalysis: { mode: "workspace", threads: 4 } })).toBe(
-      false,
-    );
+      },
+    ],
+    ["a jssg target with a root", { ...jssgOp, target: { root: "a" } }],
+    [
+      "a jssg target with include and exclude",
+      { ...jssgOp, target: { include: ["a"], exclude: ["b"] } },
+    ],
+    ["an empty jssg target", { ...jssgOp, target: {} }],
+    ["a shell operation", shellOp],
+    ["an agent operation", agentOp],
+    ["an assessment operation", assessmentOp],
+  ])("accepts %s", (_label, operation) => {
+    expect(isOperation(operation)).toBe(true);
   });
 
-  it("accepts well-formed and rejects malformed jssg targets on the wire", () => {
-    const base = { kind: "jssg", transform: ref("x"), language: "typescript" };
-    expect(isOperation({ ...base, target: { root: "a" } })).toBe(true);
-    expect(isOperation({ ...base, target: { include: ["a"], exclude: ["b"] } })).toBe(true);
-    expect(isOperation({ ...base, target: {} })).toBe(true);
-    expect(isOperation({ ...base, target: "apps/web" })).toBe(false);
-    expect(isOperation({ ...base, target: { root: 1 } })).toBe(false);
-    expect(isOperation({ ...base, target: { include: "src/**" } })).toBe(false);
-    expect(isOperation({ ...base, target: { exclude: [null] } })).toBe(false);
-    expect(isOperation({ ...base, target: { root: "a", files: ["a.ts"] } })).toBe(false);
+  it.each<[string, object]>([
+    ["a jssg include that is not a list", { ...jssgOp, include: "**/*.ts" }],
+    ["an empty jssg include list", { ...jssgOp, include: [] }],
+    ["a blank jssg exclude pattern", { ...jssgOp, exclude: [""] }],
+    ["semantic analysis given as a string", { ...jssgOp, semanticAnalysis: "repository" }],
+    [
+      "file-mode semantic analysis with a root",
+      { ...jssgOp, semanticAnalysis: { mode: "file", root: "src" } },
+    ],
+    [
+      "an unknown semantic analysis field",
+      { ...jssgOp, semanticAnalysis: { mode: "workspace", threads: 4 } },
+    ],
+    ["a jssg target that is a string", { ...jssgOp, target: "apps/web" }],
+    ["a jssg target root that is not a string", { ...jssgOp, target: { root: 1 } }],
+    ["a jssg target include that is not a list", { ...jssgOp, target: { include: "src/**" } }],
+    ["a null jssg target exclude pattern", { ...jssgOp, target: { exclude: [null] } }],
+    ["an unknown jssg target field", { ...jssgOp, target: { root: "a", files: ["a.ts"] } }],
+    ["a package field on a shell operation", { ...shellOp, package: "p" }],
+    [
+      "package and command fields on a jssg operation",
+      { kind: "jssg", package: "p", command: "x" },
+    ],
+    ["an env field on an agent operation", { ...agentOp, env: {} }],
+    ["an unknown operation kind", { kind: "ai", prompt: "p" }],
+  ])("rejects %s", (_label, operation) => {
+    expect(isOperation(operation)).toBe(false);
   });
 
-  it("rejects a target on shell, agent, and assessment operations instead of ignoring it", () => {
-    expect(isOperation({ kind: "shell", command: "x" })).toBe(true);
-    expect(isOperation({ kind: "shell", command: "x", target: web })).toBe(false);
-    expect(isOperation({ kind: "shell", command: "x", target: {} })).toBe(false);
-    expect(
-      isOperation({ kind: "agent", prompt: "p", backend: { kind: "builtin", tools: [] } }),
-    ).toBe(true);
-    expect(
-      isOperation({
-        kind: "agent",
-        prompt: "p",
-        backend: { kind: "builtin", tools: [] },
-        target: web,
-      }),
-    ).toBe(false);
-    expect(
-      isOperation({
-        kind: "agent",
-        prompt: "p",
-        backend: { kind: "builtin", tools: [] },
-        target: {},
-      }),
-    ).toBe(false);
-    const assessment = {
-      kind: "assessment",
-      state: "s",
-      questions: { ok: { type: "yesno", instructions: "ok?" } },
-      provider: "systemone",
-      model: "jev-latest",
-    };
-    expect(isOperation(assessment)).toBe(true);
-    expect(isOperation({ ...assessment, target: web })).toBe(false);
-    expect(isOperation({ ...assessment, target: {} })).toBe(false);
-  });
-
-  it("rejects fields that belong to another operation kind", () => {
-    expect(isOperation({ kind: "shell", command: "x", package: "p" })).toBe(false);
-    expect(isOperation({ kind: "jssg", package: "p", command: "x" })).toBe(false);
-    expect(
-      isOperation({ kind: "agent", prompt: "p", backend: { kind: "builtin", tools: [] }, env: {} }),
-    ).toBe(false);
-    expect(isOperation({ kind: "ai", prompt: "p" })).toBe(false);
+  it.each<[string, object]>([
+    ["a shell", shellOp],
+    ["an agent", agentOp],
+    ["an assessment", assessmentOp],
+  ])("rejects a target, even an empty one, on %s operation", (_kind, operation) => {
+    expect([web, {}].some((target) => isOperation({ ...operation, target }))).toBe(false);
   });
 });
