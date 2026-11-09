@@ -1,14 +1,17 @@
 //! `codemod workflow run -w workflow.ts`: the orchestration engine end to
 //! end, from the TypeScript workflow to the edited target, in one process.
-//! The agent and decision API stand-ins are Node scripts.
+//! The agent stand-in is a Node script; the decision API stub runs in the
+//! test process.
 
 mod support;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, Output};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -301,6 +304,21 @@ fn commands_issued_after_awaits_in_parallel_bodies_are_concurrent() {
     assert_eq!(concurrent, ["a1", "a2", "b1", "b2", "c1"]);
 }
 
+#[test]
+fn the_async_context_matches_async_local_storage_across_awaits_groups_and_generators() {
+    let scratch = Scratch::with(&initial());
+    let seen = output(&scratch.run(&quickjs("async-context.ts"), &[]));
+    // What Node's AsyncLocalStorage observes on the same scenario.
+    let als = json!({
+        "top": "-", "A0": "A", "A1": "A", "B0": "B", "C0": "C", "B1": "B", "C1": "C",
+        "B2": "B", "Binner": "B.inner", "B3": "B", "A2": "A", "Dthen": "D", "A3": "A",
+        "E1": "E", "A4": "A", "F1": "F", "F2": "F", "F3": "F", "Acatch": "A",
+        "Afinally": "A", "Athen": "A", "Hawait": "H", "Hresolve": "H", "HfromThen": "H",
+        "HfromAsync": "H", "Hall": "H", "Hexecutor": "H", "end": "-",
+    });
+    assert_eq!(seen, als);
+}
+
 fn semantic() -> (Value, BTreeMap<String, String>) {
     let scratch = Scratch::with(&files(&[
         (
@@ -500,34 +518,33 @@ fn sigint_cancels_a_running_jssg_batch_promptly_and_writes_nothing() {
     );
 }
 
+/// Each request's path and lowercase headers.
+type Requests = Mutex<Vec<(String, BTreeMap<String, String>)>>;
+
 /// A decision API stub: answers System One and OpenAI-shaped requests and
-/// logs each request as a JSON line.
+/// records each request's path and headers.
 struct DecisionStub {
-    process: Child,
     port: u16,
-    log: PathBuf,
+    requests: Arc<Requests>,
     scratch: Scratch,
 }
 
 impl DecisionStub {
     fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&requests);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let log = Arc::clone(&log);
+                std::thread::spawn(move || serve(stream, &log));
+            }
+        });
         let scratch = Scratch::with(&initial());
-        let log = scratch.path("requests.jsonl");
-        fs::write(&log, "").unwrap();
-        let mut process = Command::new("node")
-            .arg(fixture("decision-stub.mjs"))
-            .arg(&log)
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("node runs the decision API stub");
-        let mut line = String::new();
-        BufReader::new(process.stdout.as_mut().unwrap())
-            .read_line(&mut line)
-            .unwrap();
         Self {
-            process,
-            port: line.trim().parse().unwrap(),
-            log,
+            port,
+            requests,
             scratch,
         }
     }
@@ -544,26 +561,68 @@ impl DecisionStub {
         output(&command.output().unwrap())
     }
 
-    /// The path and the `field` header of every request.
-    fn requests(&self, field: &str) -> Vec<(String, Value)> {
-        fs::read_to_string(&self.log)
-            .unwrap()
-            .lines()
-            .map(|line| {
-                let request: Value = serde_json::from_str(line).unwrap();
-                (
-                    request["path"].as_str().unwrap().to_owned(),
-                    request[field].clone(),
-                )
-            })
+    /// The path and the `header` of every request.
+    fn requests(&self, header: &str) -> Vec<(String, Value)> {
+        let requests = self.requests.lock().unwrap();
+        let value = |headers: &BTreeMap<String, String>| json!(headers.get(header));
+        requests
+            .iter()
+            .map(|(path, headers)| (path.clone(), value(headers)))
             .collect()
     }
 }
 
-impl Drop for DecisionStub {
-    fn drop(&mut self) {
-        let _ = self.process.kill();
-        let _ = self.process.wait();
+/// Answers one request on `stream`, which then closes.
+fn serve(stream: TcpStream, log: &Requests) {
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    let path = line.split(' ').nth(1).unwrap().to_owned();
+    let mut headers = BTreeMap::new();
+    while let Some((name, value)) = {
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        line.trim_end().split_once(": ")
+    } {
+        headers.insert(name.to_ascii_lowercase(), value.to_owned());
+    }
+    let length = headers
+        .get("content-length")
+        .map_or(0, |n| n.parse().unwrap());
+    let mut body = vec![0; length];
+    reader.read_exact(&mut body).unwrap();
+    let questions = serde_json::from_slice::<Value>(&body).unwrap_or_default()["questions"].take();
+    let answer = answer(&path, &questions);
+    log.lock().unwrap().push((path, headers));
+    let (status, body) = match answer {
+        Some(answer) => ("200 OK", answer),
+        None => (
+            "404 Not Found",
+            json!({ "error": { "message": "not found" } }),
+        ),
+    };
+    let body = body.to_string();
+    let head = format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+    (&stream)
+        .write_all(format!("{head}{body}").as_bytes())
+        .unwrap();
+}
+
+/// A yes/no probability of 0.25 for every question, in the provider's shape.
+fn answer(path: &str, questions: &Value) -> Option<Value> {
+    if path.ends_with("/systemone") {
+        let answers: serde_json::Map<String, Value> = (questions.as_object()?.keys())
+            .map(|id| (id.clone(), json!({ "type": "noul", "noul": 0.25 })))
+            .collect();
+        let usage = json!({ "input_tokens": 3, "output_tokens": 1 });
+        Some(json!({ "model": "stub-1", "answers": answers, "usage": usage }))
+    } else if path.ends_with("/decisions") {
+        let answers: Vec<Value> = (questions.as_array()?.iter())
+            .map(|q| json!({ "type": "predicate", "name": q["name"], "probability": 0.25 }))
+            .collect();
+        Some(json!({ "model": "stub-luna", "answers": answers, "usage": { "input_tokens": 5 } }))
+    } else {
+        None
     }
 }
 
@@ -652,7 +711,7 @@ fn the_raw_key_goes_in_the_configured_header_on_the_configured_path() {
         ],
     );
     assert_eq!(
-        stub.requests("apiKey"),
+        stub.requests("api-key"),
         vec![
             (
                 "/foundry/providers/microsoft/v1/systemone".to_owned(),

@@ -1,10 +1,9 @@
 /**
- * Async-context propagation scenario shared by the Node reference
- * (`AsyncLocalStorage`) and the QuickJS implementation
- * (`src/host/quickjs/async-context.ts`, run lowered in a separate realm):
- * both must observe the same value at every labelled point. Labels are
- * compared as a map, not in order (lowered async takes a different number of
- * microtask ticks, so interleaving may differ).
+ * Async-context propagation scenario for the QuickJS implementation
+ * (`src/host/quickjs/async-context.ts`, run by `async-context.ts`): every
+ * labelled point must observe what Node's `AsyncLocalStorage` observes
+ * (`crates/cli/tests/typescript_workflow.rs`). Labels are compared as a map,
+ * not in order (lowered async takes a different number of microtask ticks).
  */
 import type { AsyncContextVariable } from "../../../src/core/host.ts";
 

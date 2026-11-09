@@ -1,8 +1,8 @@
 /**
  * The portable batch loop (`createJssgBatchDispatch`) against a scripted
- * engine: what a failing file does under each `onFileError` policy, and that
- * a pool engine (`transformRange`) answers exactly as the serial loop. The
- * real engines run in the runtimes' e2e tests.
+ * engine: a pool engine (`transformRange`) answers exactly as the serial
+ * loop. What a failing file does under each `onFileError` policy is in the
+ * cargo `jssg_parity` specs, on the real engine.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -58,14 +58,9 @@ function engine(pool: boolean): JssgBatchEngine<string, string> {
 
 const files = ["a", "boom", "c"].map((content, index) => ({ path: `${index}.ts`, content }));
 
-function run(options: { pool?: boolean; onFileError?: JssgOperation["onFileError"] } = {}) {
-  const operation: JssgOperation = {
-    kind: "jssg",
-    transform: ref("t"),
-    language: "typescript",
-    ...(options.onFileError === undefined ? {} : { onFileError: options.onFileError }),
-  };
-  return createJssgBatchDispatch({ engine: engine(options.pool ?? false) })({
+function run(pool: boolean) {
+  const operation: JssgOperation = { kind: "jssg", transform: ref("t"), language: "typescript" };
+  return createJssgBatchDispatch({ engine: engine(pool) })({
     protocolVersion: PROTOCOL_VERSION,
     commandId: "t",
     operation,
@@ -83,18 +78,7 @@ const skipped = {
 };
 
 describe("createJssgBatchDispatch", () => {
-  it("skips a file whose transform throws, reports it, and keeps the other files", async () => {
-    expect(await run()).toMatchObject({ status: "succeeded", output: skipped });
-  });
-
-  it("fails the command on a throwing file when onFileError is 'fail'", async () => {
-    expect(await run({ onFileError: "fail" })).toMatchObject({
-      status: "failed",
-      error: { message: "JSSG failed for '1.ts': Error: boom" },
-    });
-  });
-
   it("a pool engine answers with the same outcomes and failures as the serial loop", async () => {
-    expect(await run({ pool: true })).toMatchObject({ status: "succeeded", output: skipped });
+    expect(await run(true)).toMatchObject({ status: "succeeded", output: skipped });
   });
 });

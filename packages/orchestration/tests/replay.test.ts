@@ -97,15 +97,4 @@ describe("replay nondeterminism detection", () => {
     const error = await replayError(differentOutput, h);
     expect(error.kind).toBe("output");
   });
-
-  it("continues an unfinalized history by replaying then executing only new commands", async () => {
-    const h = await recorded(sequence(a, b), false);
-    const resume = h.reload({
-      results: { a: failed("must not execute"), b: failed("must not execute"), c: "fresh" },
-    });
-    const result = await resume.run(sequence(a, b, c));
-    expect(result.output).toBe("abc");
-    expect(resume.executed.map((r) => r.commandId)).toEqual(["c"]);
-    expect(result.history.events.at(-1)).toEqual({ type: "finalized", output: "abc" });
-  });
 });

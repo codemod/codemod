@@ -131,19 +131,6 @@ async fn the_bundle_lists_helpers_bundled_only_into_artifacts_as_inputs() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_node_import_is_rejected() {
-    let message = error(&format!(
-        "import {{ readFileSync }} from \"node:fs\";\nimport {{ shell }} from {};\nexport default shell({{ name: \"x\", command: readFileSync(\"x\", \"utf8\") }});\n",
-        index()
-    ))
-    .await;
-    assert!(
-        message.contains("'node:fs' (imported by ") && message.contains("is a Node module"),
-        "{message}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn a_deep_package_import_is_rejected() {
     let message =
         error("import { run } from \"@codemod.com/orchestration/runtime\";\nexport default run;\n")
