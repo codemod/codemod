@@ -16,6 +16,8 @@ butterflow-core = { workspace = true }
 butterflow-state = { workspace = true }
 butterflow-runners = { workspace = true }
 codemod-sandbox = { workspace = true }
+orchestration-build = { path = "../orchestration-build" }
+orchestration-quickjs-host = { path = "../orchestration-quickjs-host" }
 bench-timings = { workspace = true }
 codemod-telemetry = { workspace = true }
 codemod-mcp = { workspace = true }

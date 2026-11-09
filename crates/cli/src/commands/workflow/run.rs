@@ -17,6 +17,9 @@ use codemod_telemetry::send_event::BaseEvent;
 use std::sync::atomic::Ordering;
 
 use crate::commands::run_telemetry::nested_codemod_run_observer;
+use crate::commands::workflow::typescript::{
+    is_typescript_workflow, run_typescript_workflow, Options as TypescriptOptions,
+};
 use crate::commands::TelemetrySenderExt;
 use crate::engine::{create_engine, create_registry_client};
 use crate::pro_dry_run::{
@@ -86,6 +89,15 @@ pub struct Command {
     /// Name of the workflow to run when codemod.yaml defines multiple workflows
     #[arg(long = "workflow-name", value_name = "NAME")]
     workflow_name: Option<String>,
+
+    /// Root input of a TypeScript workflow, as JSON
+    #[arg(long, value_name = "JSON")]
+    input: Option<String>,
+
+    /// History file of a TypeScript workflow: resumed from when it exists,
+    /// written after the run
+    #[arg(long, value_name = "FILE")]
+    history: Option<PathBuf>,
 }
 
 fn should_auto_launch_workflow_tui(
@@ -110,6 +122,18 @@ fn apply_workflow_run_mode_to_config(
 
 /// Run a workflow
 pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
+    if is_typescript_workflow(&args.workflow) {
+        return run_typescript_workflow(TypescriptOptions {
+            workflow: &args.workflow,
+            target: args.target_path.as_deref(),
+            input: args.input.as_deref(),
+            history: args.history.as_deref(),
+        })
+        .await;
+    }
+    if args.input.is_some() || args.history.is_some() {
+        anyhow::bail!("--input and --history apply to TypeScript workflows (.ts, .mts) only");
+    }
     if args.no_color {
         console::set_colors_enabled(false);
     }
