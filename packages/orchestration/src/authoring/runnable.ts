@@ -174,7 +174,7 @@ export interface JssgOptions<L extends string, I, O> extends DataOptions<I, O> {
   selector?: JssgSelector<JssgTypes<L>>;
   /**
    * The one transform, with the documented `(root, options)` contract. The
-   * build step (`bundle/build.ts`) replaces it with an `ArtifactRef` before the
+   * build step (`crates/orchestration-build`) replaces it with an `ArtifactRef` before the
    * module runs; a function reaching this call means the module was not
    * built, which is refused.
    */
@@ -244,7 +244,7 @@ function assertJssgOptions(options: {
   const where = `jssg '${options.name}'`;
   if (typeof options.transform === "function") {
     throw new Error(
-      `${where}: inline transform was not extracted; run the workflow with codemod-workflow so the build step can bundle it`,
+      `${where}: inline transform was not extracted; run the workflow with codemod workflow run -w so the build step can bundle it`,
     );
   }
   if (!isArtifactRef(options.transform)) {

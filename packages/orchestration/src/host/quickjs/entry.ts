@@ -1,6 +1,6 @@
 /**
- * The entry of a `quickjs` workflow bundle (`codemod-workflow build
- * --runtime=quickjs`, `host/quickjs-bundle.ts`), evaluated once by the Rust
+ * The entry of a `quickjs` workflow bundle (built by
+ * `crates/orchestration-build` for `codemod workflow run -w`), evaluated once by the Rust
  * host (`crates/orchestration-quickjs-host`) in its single QuickJS context.
  *
  * Evaluating this module installs, before any workflow code runs: the
@@ -19,7 +19,7 @@ import {
   isExecutable,
   type Executable,
 } from "../../authoring/composition.ts";
-import type { JssgArtifact } from "../../bundle/build.ts";
+import type { JssgArtifact } from "../../core/artifacts.ts";
 import { HOST_GLOBAL, setHost } from "../../core/host.ts";
 import { MemoryHistoryStore } from "../../core/history.ts";
 import type { Json } from "../../core/json.ts";

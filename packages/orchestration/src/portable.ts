@@ -45,7 +45,7 @@ export type {
   JssgTransformResult,
   JssgTypes,
 } from "./authoring/transform.ts";
-export type { ArtifactStore, BuiltModule, JssgArtifact } from "./bundle/build.ts";
+export type { ArtifactStore, JssgArtifact } from "./core/artifacts.ts";
 export { isCommand } from "./authoring/command.ts";
 export type { Command, Invocation, JssgInvocation } from "./authoring/command.ts";
 export { NoActiveRunError } from "./authoring/context.ts";

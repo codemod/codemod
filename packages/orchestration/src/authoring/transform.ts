@@ -1,6 +1,6 @@
 /**
  * Author-facing typing of an inline JSSG transform. Type-only: the runtime
- * never sees a transform function (see `bundle/build.ts`), so nothing here executes.
+ * never sees a transform function (see `crates/orchestration-build`), so nothing here executes.
  *
  * `language` selects the ast-grep node types the transform sees, exactly as
  * `import type TSX from "codemod:ast-grep/langs/tsx"` does in a standalone

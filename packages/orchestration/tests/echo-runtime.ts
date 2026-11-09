@@ -7,7 +7,7 @@
  * files). Every answer waits `delayMs` first, honouring the abort signal, so
  * a test can cancel a command in flight.
  */
-import type { ArtifactStore } from "../src/bundle/build.ts";
+import type { ArtifactStore } from "../src/core/artifacts.ts";
 import { executeJssgCommand, type JssgDispatch } from "../src/execution/jssg.ts";
 import {
   PROTOCOL_VERSION,

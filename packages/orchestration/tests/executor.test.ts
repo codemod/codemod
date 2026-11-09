@@ -1,14 +1,12 @@
 /**
  * Artifact identity through the runtime: a JSSG command records the transform
  * as `{ name, hash }`, the executor supplies the source in the request
- * context only, and a history replays on any checkout. Also the local CLI's
- * argument parsing.
+ * context only, and a history replays on any checkout.
  */
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ABORT_SIGNALS, parseArgs, USAGE } from "../src/host/cli.ts";
 import {
   MemoryHistoryStore,
   OperationError,
@@ -44,7 +42,7 @@ describe("safe relative paths", () => {
 describe("jssg definitions", () => {
   it("refuse an unbuilt inline transform and malformed references", () => {
     expect(() => jssg({ name: "inline", language: "typescript", transform: () => null })).toThrow(
-      /jssg 'inline': inline transform was not extracted; run the workflow with codemod-workflow/u,
+      /jssg 'inline': inline transform was not extracted; run the workflow with codemod workflow run -w/u,
     );
     for (const transform of [
       { name: "x", hash: "abc" },
@@ -175,64 +173,10 @@ describe("artifacts through an executor", () => {
     expect((error as OperationError).status).toBe("failed");
     expect((error as OperationError).detail).toEqual({
       message: expect.stringMatching(
-        /no built artifact for jssg 'migrate' \(hash [0-9a-f]{12}\); run the workflow with codemod-workflow/u,
+        /no built artifact for jssg 'migrate' \(hash [0-9a-f]{12}\); run the workflow with codemod workflow run -w/u,
       ),
       details: { phase: "artifact" },
     });
     expect(store.toJSON().events.map((e) => e.type)).toEqual(["scheduled", "completed"]);
-  });
-});
-
-describe("codemod-workflow argument parsing", () => {
-  it("aborts the run on SIGINT, SIGTERM, and SIGHUP", () => {
-    expect([...ABORT_SIGNALS].sort()).toEqual(["SIGHUP", "SIGINT", "SIGTERM"]);
-  });
-
-  it("resolves every path and defaults the target", () => {
-    const options = parseArgs(["fixtures/jssg/dynamic.ts"]);
-    expect(options.workflow).toBe(resolve("fixtures/jssg/dynamic.ts"));
-    expect(options.target).toBe(process.cwd());
-    expect(parseArgs(["wf.ts", "--target", "repo"])).toEqual({
-      workflow: resolve("wf.ts"),
-      target: resolve("repo"),
-    });
-    expect(options).not.toHaveProperty("input");
-  });
-
-  it("parses --input as strict JSON and keeps an explicit null apart from no input", () => {
-    expect(parseArgs(["wf.ts", "--input", '{"replacement":"newApi"}']).input).toEqual({
-      replacement: "newApi",
-    });
-    expect(parseArgs(["wf.ts", "--input", "null"])).toHaveProperty("input", null);
-    expect(parseArgs(["wf.ts", "--input", "0"])).toHaveProperty("input", 0);
-    expect(parseArgs(["wf.ts", "--input", '"text"'])).toHaveProperty("input", "text");
-    expect(parseArgs(["wf.ts", "--input", "[1, 2]"]).input).toEqual([1, 2]);
-    expect(parseArgs(["wf.ts", "--target", "repo"])).not.toHaveProperty("input");
-    for (const malformed of ["", "{replacement: newApi}", "{'a': 1}", '{"a": 1,}', "undefined"]) {
-      expect(() => parseArgs(["wf.ts", "--input", malformed]), malformed).toThrow(
-        /--input must be valid JSON/u,
-      );
-    }
-    expect(() => parseArgs(["wf.ts", "--input"])).toThrow(/missing value for --input/u);
-  });
-
-  it("accepts flags before the workflow (`run --runtime=quickjs <workflow.ts>`)", () => {
-    expect(parseArgs(["run", "--runtime=quickjs", "wf.ts", "--target", "repo"])).toMatchObject({
-      workflow: resolve("wf.ts"),
-      target: resolve("repo"),
-      runtime: "quickjs",
-    });
-    expect(() => parseArgs(["wf.ts", "other.ts"])).toThrow(/unexpected argument: other\.ts/u);
-  });
-
-  it("rejects missing workflow, unknown or removed options, and dangling values", () => {
-    expect(() => parseArgs([])).toThrow(USAGE);
-    expect(() => parseArgs(["--target", "x"])).toThrow(USAGE);
-    expect(() => parseArgs(["wf.ts", "--nope", "x"])).toThrow(/unknown option: --nope/u);
-    for (const removed of ["--script-root", "--bridge"]) {
-      expect(() => parseArgs(["wf.ts", removed, "x"])).toThrow(`unknown option: ${removed}`);
-    }
-    expect(() => parseArgs(["wf.ts", "--target"])).toThrow(/missing value for --target/u);
-    expect(USAGE).toContain("[--input <json>]");
   });
 });

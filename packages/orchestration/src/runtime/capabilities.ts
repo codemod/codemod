@@ -26,7 +26,7 @@ import {
   type OperationRequest,
 } from "../core/protocol.ts";
 
-/** The runtimes `codemod-workflow run --runtime` knows by name. */
+/** The built-in runtimes, by name. */
 export const RUNTIME_NAMES = ["quickjs"] as const;
 export type BuiltinRuntimeName = (typeof RUNTIME_NAMES)[number];
 export const DEFAULT_RUNTIME: BuiltinRuntimeName = "quickjs";

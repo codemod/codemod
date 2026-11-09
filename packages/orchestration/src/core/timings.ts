@@ -1,10 +1,9 @@
 /**
  * Benchmark phase timings: the TypeScript half of `crates/bench-timings`
  * (same phase names, same schema; see `benchmarks/runtimes/README.md`,
- * "Timings"). Off unless a host turns it on (`configureTimings`): the Node
- * CLI does when `CODEMOD_TIMINGS_FILE` is set (`host/timings-file.ts`), the
- * QuickJS bundle when the Rust host was built with its `timings` feature
- * and the variable is set.
+ * "Timings"). Off unless a host turns it on (`configureTimings`): the
+ * QuickJS bundle does when the Rust host was built with its `timings`
+ * feature and `CODEMOD_TIMINGS_FILE` is set; the host writes the file.
  *
  * Off, `now()` and `lap()` return 0 and record nothing (one load of a
  * module-level boolean; V8 inlines them). On, spans add to `Float64Array`
@@ -62,11 +61,9 @@ export type PhaseTotals = Partial<Record<PhaseName, PhaseTotal>>;
 
 let ON = false;
 let clock: () => number = () => 0;
-let arm: string | undefined;
 const wall = new Float64Array(PHASE_NAMES.length);
 const count = new Float64Array(PHASE_NAMES.length);
 const cpu = new Float64Array(PHASE_NAMES.length);
-const children: number[] = [];
 
 /**
  * Turn timings on or off for this realm. `clock` returns monotonic
@@ -103,24 +100,6 @@ export function add(phase: PhaseId, ns: number, spans = 1, cpuNs = 0): void {
   cpu[phase]! += cpuNs;
 }
 
-/** The arm name the top-level file reports (`ts-<runtime>`). */
-export function setTimingsArm(name: string): void {
-  arm = name;
-}
-
-export function timingsArm(): string | undefined {
-  return arm;
-}
-
-/** A child process that writes its own timings file (`<path>.<pid>.json`). */
-export function registerTimingsChild(pid: number | undefined): void {
-  if (ON && pid !== undefined) children.push(pid);
-}
-
-export function timingsChildren(): readonly number[] {
-  return children;
-}
-
 /**
  * Every phase so far: this realm's spans plus each source's, summed (they
  * are disjoint wall time on the one JS thread, or CPU time of workers).
@@ -148,6 +127,4 @@ export function resetTimings(): void {
   wall.fill(0);
   count.fill(0);
   cpu.fill(0);
-  children.length = 0;
-  arm = undefined;
 }

@@ -48,7 +48,7 @@ export type SemanticAnalysis = "file" | "workspace" | { mode: "file" | "workspac
 
 /**
  * Build-time identity of one transform artifact: the definition's `name` and
- * the lowercase hex SHA-256 of the bundled source (`bundle/build.ts`). It carries no
+ * the lowercase hex SHA-256 of the bundled source (`crates/orchestration-build`). It carries no
  * path, so the command identity recorded in history is the same on every
  * checkout; the source itself travels in `RequestContext.artifact`.
  */

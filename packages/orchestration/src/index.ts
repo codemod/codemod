@@ -1,13 +1,12 @@
 /**
  * `@codemod.com/orchestration` on Node: the portable API (`portable.ts`),
- * with the Node host installed, plus the Node-only pieces (the build step,
- * the runtime registry and the `quickjs` provider) and the agent and
- * assessment executors.
+ * with the Node host installed, plus the agent and assessment executors.
+ * Workflows run through `codemod workflow run -w`, whose bundles map this
+ * import to `portable.ts`.
  */
 import "./host/node-host.ts";
 
 export * from "./portable.ts";
-export { BuildError, buildFile, buildModule } from "./bundle/build.ts";
 export {
   DEFAULT_ASSESSMENT_FILE_CONCURRENCY,
   DEFAULT_ASSESSMENT_TIMEOUT_MS,
@@ -37,21 +36,4 @@ export {
   executeAgent,
 } from "./execution/agent.ts";
 export type { AgentExecutionOptions } from "./execution/agent.ts";
-export { defaultAgentPath } from "./host/runtimes/agent-bin.ts";
 export { NODE_HOST, createNodeHost, nodeHost } from "./host/node-host.ts";
-export {
-  RuntimeRegistry,
-  RuntimeUnavailableError,
-  UnknownRuntimeError,
-  assertAvailable,
-  defaultRuntimes,
-  prepareLaunch,
-  runWorkflow,
-} from "./host/runtimes/registry.ts";
-export type { PreparedLaunch, RunWorkflowOptions } from "./host/runtimes/registry.ts";
-export type {
-  LaunchRequest,
-  RuntimeAvailability,
-  RuntimeProvider,
-  RuntimeSettings,
-} from "./host/runtimes/types.ts";

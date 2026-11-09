@@ -23,32 +23,24 @@
       "default": "./src/portable.ts"
     }
   },
-  "bin": {
-    "codemod-workflow": "./bin/codemod-workflow.mjs"
-  },
   "scripts": {
     "test": "vitest run",
     "build:agent": "cargo build -p orchestration-agent",
-    "build:quickjs": "cargo build -p orchestration-quickjs-host",
-    "test:e2e": "pnpm build:quickjs && CODEMOD_QUICKJS_E2E=1 vitest run tests/quickjs.e2e.test.ts tests/jssg-parity.e2e.test.ts",
-    "test:e2e:timings": "cargo build -p orchestration-quickjs-host --features orchestration-quickjs-host/timings && CODEMOD_TIMINGS_E2E=1 vitest run tests/timings.e2e.test.ts",
-    "test:e2e:quickjs": "pnpm build:quickjs && CODEMOD_QUICKJS_E2E=1 vitest run tests/quickjs.e2e.test.ts",
     "test:live:agent:builtin": "pnpm build:agent && CODEMOD_LIVE_AGENT_BUILTIN=1 vitest run tests/agent.builtin.live.test.ts",
     "test:live:agent:claude-code": "pnpm build:agent && CODEMOD_LIVE_AGENT_CLAUDE_CODE=1 vitest run tests/agent.claude-code.live.test.ts",
     "test:live:agent:codex": "pnpm build:agent && CODEMOD_LIVE_AGENT_CODEX=1 vitest run tests/agent.codex.live.test.ts",
     "test:live:assessment": "vitest run tests/assessment.live.test.ts",
-    "workflow": "node bin/codemod-workflow.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@codemod.com/jssg-types": "workspace:*",
-    "esbuild": "^0.27.2",
-    "ignore": "^5.3.1",
-    "typescript": "catalog:"
+    "ignore": "^5.3.1"
   },
   "devDependencies": {
     "@codemod.com/tsconfig": "workspace:*",
     "@types/node": "*",
+    "esbuild": "^0.27.2",
+    "typescript": "catalog:",
     "vitest": "^1.6.0"
   }
 }

@@ -3,17 +3,13 @@ name = "orchestration-quickjs-host"
 version.workspace = true
 edition = "2021"
 authors.workspace = true
-description = "Runs a prebuilt TypeScript orchestration workflow bundle (control plane, workflow, and every JSSG transform) in one QuickJS context"
+description = "Runs a TypeScript orchestration workflow bundle (control plane, workflow, and every JSSG transform) in one QuickJS context; the host of `codemod workflow run -w`"
 documentation.workspace = true
 repository.workspace = true
 license.workspace = true
 # `std::io::pipe` (stdout and stderr of a shell child share one pipe).
 rust-version = "1.87"
 publish = false
-
-[[bin]]
-name = "orchestration-quickjs-host"
-path = "src/main.rs"
 
 [dependencies]
 # Shared JSSG batch planning and FileOutcome conversion (`BatchPlan`).
@@ -33,8 +29,8 @@ bench-timings = { workspace = true }
 
 [features]
 default = []
-# Benchmark timings (CODEMOD_TIMINGS_FILE): one `quickjs-host` file per run,
-# with the bundle's JS-side phases merged in.
+# Benchmark timings (CODEMOD_TIMINGS_FILE): the bundle's JS-side phases,
+# merged into the CLI's file by `record_js_timings`.
 timings = ["bench-timings/timings", "orchestration-walker/timings"]
 
 [dev-dependencies]

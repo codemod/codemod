@@ -4,9 +4,8 @@
 //! settled by a future the context drives. Errors are `Error`s carrying a
 //! POSIX `code` string (`ENOENT`, `EILSEQ`, ...), as `core/host.ts` requires.
 //!
-//! `print` is the workflow's console. This binary is a terminal entry point
-//! (like `codemod-workflow`), so console output goes to stderr and stdout
-//! stays the JSON result.
+//! `print` is the workflow's console. The CLI is a terminal entry point, so
+//! console output goes to stderr and stdout stays the JSON result.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;

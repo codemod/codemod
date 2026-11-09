@@ -1,12 +1,8 @@
 /**
- * Benchmark timings: the portable accumulators (`core/timings.ts`) and the
- * Node CLI's child-process accounting (`host/timings-file.ts`). The files
- * the arms write end to end are checked by `benchmarks/runtimes`
- * (`overhead.sh`, `rounds.sh`) and `tests/timings.e2e.test.ts`.
+ * Benchmark timings: the portable accumulators (`core/timings.ts`). The
+ * files the arms write end to end are checked by `benchmarks/runtimes`
+ * (`overhead.sh`, `rounds.sh`) and `crates/cli/tests/typescript_timings.rs`.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   PHASE_NAMES,
@@ -15,15 +11,10 @@ import {
   configureTimings,
   lap,
   now,
-  registerTimingsChild,
   resetTimings,
-  setTimingsArm,
-  timingsArm,
-  timingsChildren,
   timingsEnabled,
   timingsSnapshot,
 } from "../src/core/timings.ts";
-import { TIMINGS_FILE_ENV, timeChildProcess } from "../src/host/timings-file.ts";
 
 /** A clock the test advances by hand. */
 function fakeClock(start = 1_000) {
@@ -64,9 +55,7 @@ describe("core/timings", () => {
     expect(now()).toBe(0);
     expect(lap(Phase.parse, 0)).toBe(0);
     add(Phase.transform, 5);
-    registerTimingsChild(42);
     expect(timingsSnapshot()).toEqual({});
-    expect(timingsChildren()).toEqual([]);
   });
 
   it("needs a clock to turn on", () => {
@@ -96,64 +85,5 @@ describe("core/timings", () => {
     configureTimings({ enabled: true, clock: () => 0 });
     add(Phase.parse, 10.4, 1, 30.6);
     expect(timingsSnapshot()).toEqual({ parse: { ns: 10, count: 1, cpu_ns: 31 } });
-  });
-
-  it("keeps the arm and children until reset", () => {
-    configureTimings({ enabled: true, clock: () => 0 });
-    setTimingsArm("ts-node");
-    registerTimingsChild(7);
-    registerTimingsChild(undefined);
-    expect(timingsArm()).toBe("ts-node");
-    expect(timingsChildren()).toEqual([7]);
-    resetTimings();
-    expect(timingsArm()).toBeUndefined();
-    expect(timingsChildren()).toEqual([]);
-  });
-});
-
-describe("host/timings-file timeChildProcess", () => {
-  const saved = process.env[TIMINGS_FILE_ENV];
-  let dir: string | undefined;
-  afterEach(() => {
-    if (saved === undefined) delete process.env[TIMINGS_FILE_ENV];
-    else process.env[TIMINGS_FILE_ENV] = saved;
-    if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
-    dir = undefined;
-  });
-
-  it("does nothing when off", () => {
-    const timed = timeChildProcess();
-    expect(timed.env).toEqual({});
-    timed.exited(123);
-    expect(timingsChildren()).toEqual([]);
-  });
-
-  it("charges spawn-to-close minus the child's wall to setup and registers the child", () => {
-    dir = mkdtempSync(join(tmpdir(), "codemod-timings-"));
-    const path = join(dir, "run.timings.json");
-    process.env[TIMINGS_FILE_ENV] = path;
-    const clock = fakeClock();
-    configureTimings({ enabled: true, clock: clock.read });
-
-    const timed = timeChildProcess();
-    expect(Number(timed.env.BENCH_T0_NS)).toBeGreaterThan(0);
-    clock.advance(1_000);
-    writeFileSync(`${path}.4242.json`, JSON.stringify({ schema: 1, wall_ns: 700 }));
-    timed.exited(4242);
-
-    expect(timingsChildren()).toEqual([4242]);
-    expect(timingsSnapshot()).toEqual({ setup: { ns: 300, count: 1 } });
-  });
-
-  it("charges the whole span when the child wrote no file", () => {
-    dir = mkdtempSync(join(tmpdir(), "codemod-timings-"));
-    process.env[TIMINGS_FILE_ENV] = join(dir, "run.timings.json");
-    const clock = fakeClock();
-    configureTimings({ enabled: true, clock: clock.read });
-
-    const timed = timeChildProcess();
-    clock.advance(500);
-    timed.exited(99);
-    expect(timingsSnapshot()).toEqual({ setup: { ns: 500, count: 1 } });
   });
 });

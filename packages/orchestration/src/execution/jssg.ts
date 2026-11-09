@@ -19,7 +19,7 @@
  * remaining paths. Every filesystem and path operation goes through the
  * `Host` (`core/host.ts`), so this module runs unchanged outside Node.
  */
-import type { ArtifactStore } from "../bundle/build.ts";
+import type { ArtifactStore } from "../core/artifacts.ts";
 import { comparePaths, readSelectedSources, selectFiles } from "./files.ts";
 import { getHost, type Host } from "../core/host.ts";
 import type { Json } from "../core/json.ts";
@@ -87,7 +87,7 @@ export async function executeJssgCommand(
   if (artifact === undefined) {
     return fail(
       "failed",
-      `no built artifact for jssg '${operation.transform.name}' (hash ${operation.transform.hash.slice(0, 12)}); run the workflow with codemod-workflow, which bundles its artifacts`,
+      `no built artifact for jssg '${operation.transform.name}' (hash ${operation.transform.hash.slice(0, 12)}); run the workflow with codemod workflow run -w, which bundles its artifacts`,
       { phase: "artifact" },
     );
   }

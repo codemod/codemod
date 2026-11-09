@@ -38,7 +38,7 @@ it("matches AsyncLocalStorage across awaits, Promise.all, nesting, finally, and 
     format: "iife",
     platform: "neutral",
     target: "es2022",
-    // The same lowering as host/quickjs-bundle.ts.
+    // The lowering crates/orchestration-build applies.
     supported: { "async-await": false, "async-generator": false, "for-await": false },
     logLevel: "silent",
   });

@@ -10,10 +10,9 @@
  * capability). A hook-based variable could not see an `await` resume.
  *
  * What works instead, exactly: the bundle is built with async functions and
- * async generators lowered to generators (`build: supported: { "async-await":
- * false, ... }` in `host/quickjs-bundle.ts`), so every continuation in the
- * bundle is registered through `Promise.prototype.then` (esbuild's `__async`
- * helper does `Promise.resolve(x).then(fulfilled, rejected)`; `Promise.all`,
+ * async generators lowered to generators (`crates/orchestration-build`), so
+ * every continuation in the bundle is registered through
+ * `Promise.prototype.then` (the `__async` helper does `Promise.resolve(x).then(fulfilled, rejected)`; `Promise.all`,
  * `finally`, and thenable adoption invoke `then` too). `then` is patched once
  * per realm to capture the current frame at registration and restore it
  * around the callback: the same "context at the time the continuation was

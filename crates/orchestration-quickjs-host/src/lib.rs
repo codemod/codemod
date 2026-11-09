@@ -1,6 +1,6 @@
 //! The `quickjs` orchestration runtime's host: ONE QuickJS runtime and ONE
-//! context run a whole prebuilt workflow bundle (`codemod-workflow build
-//! --runtime=quickjs`): the portable TypeScript control plane (run, replay,
+//! context run a whole workflow bundle (built by `crates/orchestration-build`
+//! for `codemod workflow run -w`): the portable TypeScript control plane (run, replay,
 //! history, scheduling), the workflow body, and every JSSG transform.
 //!
 //! The host provides, before the bundle is evaluated:
