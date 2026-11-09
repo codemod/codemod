@@ -95,4 +95,8 @@ default = []
 docker = ["butterflow-models/docker", "butterflow-runners/docker"]
 podman = ["butterflow-models/podman", "butterflow-runners/podman"]
 # Benchmark phase timings for `codemod workflow run` (CODEMOD_TIMINGS_FILE).
-timings = ["bench-timings/timings", "butterflow-core/timings"]
+timings = [
+    "bench-timings/timings",
+    "butterflow-core/timings",
+    "orchestration-quickjs-host/timings",
+]

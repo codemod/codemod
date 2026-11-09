@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use orchestration_quickjs_host::{run, HostOptions};
+use orchestration_quickjs_host::{record_js_timings, run, HostOptions};
 
 const USAGE: &str = "usage: orchestration-quickjs-host run <bundle.mjs> [--target <directory>] [--input <json>] [--history <file>] [--json]";
 
@@ -37,27 +37,6 @@ fn main() -> ExitCode {
 fn exit(code: i32) -> ! {
     bench_timings::finish();
     std::process::exit(code);
-}
-
-/// The bundle's JS-side phases (`result.timings`, the schema's `phases`
-/// shape) into this thread's accumulators: the JS thread is this one.
-fn merge_js_timings(timings: &serde_json::Value) {
-    let Some(phases) = timings.as_object() else {
-        return;
-    };
-    for (name, phase) in phases {
-        let Some(phase_id) = bench_timings::Phase::from_name(name) else {
-            continue;
-        };
-        let field = |key: &str| {
-            phase
-                .get(key)
-                .and_then(|value| value.as_f64())
-                .unwrap_or(0.0)
-        };
-        bench_timings::add(phase_id, field("ns") as u64, field("count") as u64);
-        bench_timings::add_cpu(phase_id, field("cpu_ns") as u64);
-    }
 }
 
 fn run_main(started: Instant) -> ExitCode {
@@ -137,9 +116,7 @@ fn run_main(started: Instant) -> ExitCode {
             eprintln!("failed to write history {}: {error}", path.display());
         }
     }
-    if let Some(timings) = result.get("timings") {
-        merge_js_timings(timings);
-    }
+    record_js_timings(&result);
     let ok = result.get("ok").and_then(|ok| ok.as_bool()) == Some(true);
     if json {
         // Machine form for `codemod-workflow run --runtime=quickjs`: `{ ok, output | error }`.

@@ -65,6 +65,30 @@ pub struct HostOutcome {
     pub result: serde_json::Value,
 }
 
+/// Benchmark timings: the bundle's JS-side phases (`result.timings`, the
+/// schema's `phases` shape) into the calling thread's accumulators.
+pub fn record_js_timings(result: &serde_json::Value) {
+    let Some(phases) = result
+        .get("timings")
+        .and_then(|timings| timings.as_object())
+    else {
+        return;
+    };
+    for (name, phase) in phases {
+        let Some(phase_id) = bench_timings::Phase::from_name(name) else {
+            continue;
+        };
+        let field = |key: &str| {
+            phase
+                .get(key)
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0)
+        };
+        bench_timings::add(phase_id, field("ns") as u64, field("count") as u64);
+        bench_timings::add_cpu(phase_id, field("cpu_ns") as u64);
+    }
+}
+
 /// Run the bundle to completion on a current-thread tokio runtime.
 pub fn run(options: HostOptions, started: Instant) -> Result<HostOutcome, String> {
     let runtime = tokio::runtime::Builder::new_current_thread()

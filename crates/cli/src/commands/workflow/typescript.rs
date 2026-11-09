@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
 use orchestration_build::{
     cached_quickjs_bundle, default_bundle_cache, default_runtime_cache, Runtime,
 };
-use orchestration_quickjs_host::{run, HostOptions};
+use orchestration_quickjs_host::{record_js_timings, run, HostOptions};
 
 /// Set when the runner was not found next to this binary.
 const AGENT_BIN_ENV: &str = "CODEMOD_AGENT_BIN";
@@ -62,6 +62,7 @@ fn agent_binary() -> Option<PathBuf> {
 
 pub async fn run_typescript_workflow(options: Options<'_>) -> Result<()> {
     let started = Instant::now();
+    bench_timings::set_arm("ts-quickjs");
     let workflow = Path::new(options.workflow)
         .canonicalize()
         .with_context(|| format!("workflow does not exist: {}", options.workflow))?;
@@ -109,6 +110,7 @@ pub async fn run_typescript_workflow(options: Options<'_>) -> Result<()> {
         .context("the workflow host stopped unexpectedly")?
         .map_err(anyhow::Error::msg)?;
     let result = outcome.result;
+    record_js_timings(&result);
 
     if let (Some(path), Some(history)) = (options.history, result.get("history")) {
         std::fs::write(path, history.to_string())
