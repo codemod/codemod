@@ -24,6 +24,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 mod cli_tools;
+mod setup_health;
 mod update;
 
 use update::auto_safe::maybe_apply_auto_safe_updates;
@@ -39,8 +40,8 @@ use update::types::{UpdatePolicyMode, MANAGED_UPDATE_POLICY_LOCAL_SOURCE};
 #[derive(Args, Debug)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 #[command(
-    about = "Install Codemod AI integrations, or run update/list subcommands",
-    after_help = "Run `codemod ai` without a subcommand to install Codemod integrations."
+    about = "Set up Codemod for your coding agent, check the setup, or remove it",
+    after_help = "Start here:\n  npx codemod ai                Set up Codemod (skill, MCP server, /codemod) for the agent in this project\n  npx codemod ai doctor         Check that the setup works and how to fix it if not\n  npx codemod ai uninstall      Remove Codemod from the agent again\n\nThe other subcommands are the tools the Codemod skill and MCP server use."
 )]
 pub struct Command {
     #[command(subcommand)]
@@ -54,6 +55,14 @@ pub struct Command {
 
 #[derive(Subcommand, Debug)]
 enum AiAction {
+    /// Update Codemod's setup to the latest skill and MCP config (sets it up if missing)
+    Update(UpdateCommand),
+    /// Check that Codemod is set up and that your agent can reach it
+    Doctor(setup_health::DoctorCommand),
+    /// Remove Codemod's skill, MCP server, /codemod command and update hook
+    Uninstall(setup_health::UninstallCommand),
+    /// List installed codemod skills for a harness
+    List(ListCommand),
     /// Dump AST nodes for source code from stdin or a file
     DumpAst(cli_tools::DumpAstCommand),
     /// Print tree-sitter node types for a language
@@ -70,26 +79,22 @@ enum AiAction {
     Resources(cli_tools::ResourcesCommand),
     /// Read one MCP-equivalent resource by URI or name
     Resource(cli_tools::ResourceCommand),
-    /// Reconcile/apply managed updates; falls back to install when not installed yet
-    Update(UpdateCommand),
-    /// List installed codemod skills for a harness
-    List(ListCommand),
     /// Submit short anonymous platform feedback after recording consent
     Feedback(FeedbackCommand),
 }
 
 #[derive(Args, Debug)]
 struct InstallCommand {
-    /// Target harness adapter
+    /// Coding agent to set up
     #[arg(long, value_enum, default_value_t = Harness::Auto)]
     harness: Harness,
     /// Disable interactive install wizard prompts
     #[arg(long)]
     no_interactive: bool,
-    /// Install into current repo workspace
+    /// Set up for this project (the default for most agents)
     #[arg(long, conflicts_with = "user")]
     project: bool,
-    /// Install into user-level skills path
+    /// Set up for all your projects
     #[arg(long, conflicts_with = "project")]
     user: bool,
     /// Overwrite existing skill files
@@ -222,6 +227,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         Some(AiAction::Resources(command)) => cli_tools::handle_resources(command),
         Some(AiAction::Resource(command)) => cli_tools::handle_resource(command).await,
         Some(AiAction::Feedback(command)) => handle_feedback_command(command).await,
+        Some(AiAction::Doctor(command)) => setup_health::handle_doctor(command).await,
+        Some(AiAction::Uninstall(command)) => setup_health::handle_uninstall(command).await,
         Some(AiAction::List(command)) => {
             let resolved_adapter = resolve_adapter(command.harness).unwrap_or_else(|error| {
                 exit_adapter_error(error, command.format);
@@ -271,6 +278,8 @@ fn send_ai_feedback_event(args: &Command) {
         Some(AiAction::Resources(_)) => ("resources", "codemod.ai.resources"),
         Some(AiAction::Resource(_)) => ("resource", "codemod.ai.resource"),
         Some(AiAction::List(_)) => ("list", "codemod.ai.list"),
+        Some(AiAction::Doctor(_)) => ("doctor", "codemod.ai.doctor"),
+        Some(AiAction::Uninstall(_)) => ("uninstall", "codemod.ai.uninstall"),
         Some(AiAction::Feedback(_)) => ("feedback", "codemod.ai.feedback"),
     };
 

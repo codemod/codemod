@@ -96,7 +96,7 @@ enum Commands {
     /// Manage package cache
     Cache(commands::cache::Command),
 
-    /// Install and manage Codemod AI integrations
+    /// Set up Codemod for your coding agent, check the setup, or remove it
     Ai(commands::ai::Command),
 
     /// Start MCP (Model Context Protocol) server

@@ -209,6 +209,40 @@ npx codemod ai list [--harness <claude|goose|opencode|cursor|codex|auto>] [--for
 
 Use this command to inspect which Codemod-managed skills are already installed for a given harness before running `codemod ai` again or troubleshooting harness setup.
 
+**`ai doctor`**
+
+Check that Codemod is set up for your coding agent and that the agent can reach it.
+
+```bash
+npx codemod ai doctor [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|--user] [--skip-mcp-start] [--format <logs|table|json|yaml>]
+```
+
+For each agent Codemod is set up for in this project (and for all your projects), `ai doctor` checks the skill and its version, the `/codemod` command, the MCP server entry, that the MCP launcher (`npx` or `codemod`) is on your `PATH`, and that the MCP server starts and lists its tools. It also checks what the agent itself needs before it loads a project MCP server: Claude Code's approval of the `codemod` server, and Codex's trust of the project folder. Each problem comes with a `Fix:` line to run. It exits with code 1 when something fails, and `--skip-mcp-start` leaves out starting the MCP server.
+
+```text
+  Codemod for Claude Code in this project
+  ✓ Skill: codemod 1.2.0 (.claude/skills/codemod/SKILL.md)
+  ✓ /codemod command: .claude/commands/codemod.md
+  ✓ MCP config: npx -y codemod@1.18.6 mcp (.mcp.json)
+  ✓ MCP launcher: npx (/usr/local/bin/npx)
+  ✓ MCP server: started and answered with 18 tools in 0.7s
+  ⚠ Claude Code approval: Claude Code hasn't approved the codemod MCP server for this project yet.
+    Fix: Run `claude` here and approve `codemod` when it asks. Check it with `/mcp`.
+  ✓ Discovery hints: CLAUDE.md
+
+  Works, with 1 thing to check.
+```
+
+**`ai uninstall`**
+
+Remove what `codemod ai` set up for one coding agent.
+
+```bash
+npx codemod ai uninstall [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|--user] [--dry-run] [--yes] [--format <logs|table|json|yaml>]
+```
+
+`ai uninstall` removes the Codemod skill, the `/codemod` command, the `codemod` MCP server entry, the Codemod section in `AGENTS.md`, `CLAUDE.md` or `.goosehints`, the periodic update hook and the install record. It edits shared files rather than deleting them, so your other MCP servers, hooks and settings stay. It keeps anything you edited, and anything another agent set up in the same place still uses, and says why. It asks before removing anything; use `--dry-run` to see the list without changing files, and `--yes` to remove without a prompt (required when there's no terminal to ask in). With `--harness auto` it picks the one agent Codemod is set up for, and asks you to choose with `--harness` when there are several.
+
 **`ai dump-ast`**
 
 Dump AST nodes for a source file or stdin using the same parser surface exposed through Codemod MCP.
