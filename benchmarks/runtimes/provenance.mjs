@@ -43,7 +43,6 @@ const firstLine = (s) => (s === null ? null : s.split("\n")[0]);
 const env = process.env;
 const binaries = [
   ["codemod", env.CODEMOD_BIN],
-  ["orchestration-quickjs-host", env.CODEMOD_QUICKJS_HOST_BIN],
   ["bench-exec", join(import.meta.dirname, "bin/bench-exec")],
 ]
   .filter(([, path]) => path)

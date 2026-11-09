@@ -27,7 +27,7 @@ transform in every arm. On vite v8.3.6 the result is 331 modified files
 | Arm | Definition | Command |
 | --- | --- | --- |
 | `yaml` | `yaml/workflow.yaml` (two `js-ast-grep` steps) | release `codemod workflow run --no-interactive --disable-analytics` |
-| `ts-quickjs` | `ts/workflow.ts` (`sequence()` of two `jssg()` steps) | `node packages/orchestration/bin/codemod-workflow.mjs run --runtime=quickjs` |
+| `ts-quickjs` | `ts/workflow.ts` (`sequence()` of two `jssg()` steps) | release `codemod workflow run -w --disable-analytics` |
 
 Each arm uses its default (natural) parallelism. The harness prints it but
 never sets it:
@@ -35,8 +35,8 @@ never sets it:
 - `yaml`: steps run one after another. Each step walks and transforms files on
   `min(available_parallelism, 12)` threads (no `max_threads`), with a fresh
   QuickJS runtime per file.
-- `ts-quickjs`: Node builds the bundle, or reuses it from its content-hash
-  cache, then spawns `orchestration-quickjs-host`. One QuickJS context runs
+- `ts-quickjs`: the CLI builds the bundle (oxc and rolldown), or reuses it
+  from its content-hash cache, then runs it in process. One QuickJS context runs
   the control plane and the workflow. A JSSG command of 64 files or more
   runs on the host's transform pool (`CODEMOD_JSSG_WORKERS` threads, default
   `min(available_parallelism, 4)`, one QuickJS context each); a smaller one
@@ -44,7 +44,7 @@ never sets it:
   primitives (`crates/orchestration-walker`, worker threads); batch rules
   are `crates/jssg-batch`.
 
-An arm whose binary (the host for `ts-quickjs`) is not built is skipped with
+An arm whose binary (`codemod` for both) is not built is skipped with
 a message, unless it is in `BENCH_REQUIRE_ARMS` (default
 `yaml ts-quickjs`), which fails instead. Every arm is probed first by
 running it on a two-file scratch repository and checking the exact expected
@@ -97,14 +97,11 @@ resets and cleans it with git.
 # once: JS deps, the report UI the CLI embeds, and release binaries
 pnpm install
 pnpm --filter codemod-report-ui build          # crates/cli embeds report-ui/dist/index.html
-cargo build --release -p codemod -p orchestration-quickjs-host \
-  --features codemod/timings,orchestration-quickjs-host/timings
+cargo build --release -p codemod --features codemod/timings
 brew install hyperfine                          # or: cargo install hyperfine
 # The `timings` feature only compiles the phase timers in; they stay off
 # unless CODEMOD_TIMINGS_FILE is set (overhead.sh measures both costs). Drop
 # the --features flags for plain builds; the arms then write no timings.
-# lib.sh pins the release quickjs host (CODEMOD_QUICKJS_HOST_BIN) instead of
-# letting the runtime pick the newer debug build.
 
 benchmarks/runtimes/setup.sh                    # clone to $HOME/.cache/codemod-bench/vite
 benchmarks/runtimes/verify.sh                   # correctness gate only
@@ -125,7 +122,7 @@ Knobs (environment): `BENCH_REPO` (checkout path; `setup.sh` also takes it as
 its argument), `BENCH_RUNS` (default 5), `BENCH_WARMUP` (default 1),
 `BENCH_ARMS` (default `yaml ts-quickjs`), `BENCH_REQUIRE_ARMS` (default
 `yaml ts-quickjs`, which fail instead of being skipped), `CARGO_TARGET_DIR` /
-`CODEMOD_BIN` / `CODEMOD_QUICKJS_HOST_BIN`, `BENCH_CMD_<ARM>`, `BENCH_TIMEOUT` (seconds; kills any
+`CODEMOD_BIN`, `BENCH_CMD_<ARM>`, `BENCH_TIMEOUT` (seconds; kills any
 single arm run that exceeds it, so a hang fails instead of stalling the
 session), and `BENCH_HOME`. `BENCH_HOME` runs
 every arm with `HOME` set to a scratch directory, which isolates the engine's

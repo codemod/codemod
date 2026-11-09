@@ -16,7 +16,6 @@
 #                        the gate or the benchmark instead of stalling it
 #   BENCH_EXPECT_SHA     commit the checkout must be at (default: the pinned vite commit;
 #                        sizes.sh sets it for its scaled repositories)
-#   CODEMOD_QUICKJS_HOST_BIN  release quickjs host (default: <cargo target>/release/...)
 #
 # Every arm is launched through bin/bench-exec (compiled from bench-exec.c on
 # first use), which sets BENCH_T0_NS and execs the arm in the same process.
@@ -38,13 +37,8 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 case "$TARGET_DIR" in /*) ;; *) TARGET_DIR="$ROOT/$TARGET_DIR" ;; esac
 if [ -d "$TARGET_DIR" ]; then TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"; fi
 CODEMOD_BIN="${CODEMOD_BIN:-$TARGET_DIR/release/codemod}"
-WORKFLOW_CLI="$ROOT/packages/orchestration/bin/codemod-workflow.mjs"
 YAML_WORKFLOW="$BENCH_DIR/yaml/workflow.yaml"
 TS_WORKFLOW="$BENCH_DIR/ts/workflow.ts"
-# Pin the release host explicitly (the runtime would otherwise pick the newer
-# of release/debug).
-CODEMOD_QUICKJS_HOST_BIN="${CODEMOD_QUICKJS_HOST_BIN:-$TARGET_DIR/release/orchestration-quickjs-host}"
-export CODEMOD_QUICKJS_HOST_BIN
 # Read by provenance.mjs.
 export CODEMOD_BIN VITE_TAG VITE_SHA
 
@@ -110,8 +104,7 @@ ensure_bench_exec() {
 # Release binary an arm needs, for preflight and provenance.
 arm_binary() {
   case "$1" in
-    yaml) printf '%s' "$CODEMOD_BIN" ;;
-    ts-quickjs) printf '%s' "$CODEMOD_QUICKJS_HOST_BIN" ;;
+    yaml | ts-quickjs) printf '%s' "$CODEMOD_BIN" ;;
   esac
 }
 
@@ -227,8 +220,8 @@ arm_command_unbounded() {
         "$(q "$CODEMOD_BIN")" "$(q "$YAML_WORKFLOW")" "$(q "$repo")"
       ;;
     ts-quickjs)
-      printf 'node %s run --runtime=quickjs %s --target %s' \
-        "$(q "$WORKFLOW_CLI")" "$(q "$TS_WORKFLOW")" "$(q "$repo")"
+      printf '%s workflow run -w %s --target %s --disable-analytics' \
+        "$(q "$CODEMOD_BIN")" "$(q "$TS_WORKFLOW")" "$(q "$repo")"
       ;;
     *) die "unknown arm: $arm" ;;
   esac
@@ -244,7 +237,7 @@ arm_concurrency() {
         "$cpus" "$((cpus < 12 ? cpus : 12))"
       ;;
     ts-quickjs)
-      printf 'one Rust process (launched by Node, which reuses the cached bundle); the workflow in one QuickJS context; a JSSG command of 64+ files on a transform pool of min(available_parallelism=%s, 4) = %s worker threads (CODEMOD_JSSG_WORKERS), one QuickJS context each; smaller commands serially on the JS thread (native walk/reads on worker threads)' \
+      printf 'one Rust process (reusing the cached bundle); the workflow in one QuickJS context; a JSSG command of 64+ files on a transform pool of min(available_parallelism=%s, 4) = %s worker threads (CODEMOD_JSSG_WORKERS), one QuickJS context each; smaller commands serially on the JS thread (native walk/reads on worker threads)' \
         "$cpus" "$((cpus < 4 ? cpus : 4))"
       ;;
   esac

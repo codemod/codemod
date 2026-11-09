@@ -14,7 +14,7 @@
 # default one, both with CODEMOD_TIMINGS_FILE unset: the cost of compiling
 # the instrumentation in, rather than of turning it on.
 #
-#   cargo build --release --target-dir /tmp/off -p codemod -p orchestration-quickjs-host
+#   cargo build --release --target-dir /tmp/off -p codemod
 #   BENCH_OVERHEAD_BASELINE=/tmp/off ./overhead.sh
 #
 # Output: results/overhead/<stamp>/raw/<i>-<arm>-{off,on}.json (+ .timings.json
@@ -36,7 +36,7 @@ MODE=env
 if [ -n "$BASELINE" ]; then
   MODE=build
   BASELINE="$(cd "$BASELINE" && pwd)"
-  for bin in codemod orchestration-quickjs-host; do
+  for bin in codemod; do
     [ -x "$BASELINE/release/$bin" ] || die "baseline build lacks $BASELINE/release/$bin"
   done
 fi
@@ -50,16 +50,6 @@ arm_for() {
     CODEMOD_BIN="$BASELINE/release/codemod" arm_command "$2"
   else
     arm_command "$2"
-  fi
-}
-# run_env <mode> <cmd...>: the environment the mode's binaries need.
-run_env() {
-  local mode="$1"
-  shift
-  if [ "$MODE" = build ] && [ "$mode" = off ]; then
-    CODEMOD_QUICKJS_HOST_BIN="$BASELINE/release/orchestration-quickjs-host" "$@"
-  else
-    "$@"
   fi
 }
 
@@ -79,7 +69,7 @@ trap 'reset_repo "$REPO"' EXIT
 for arm in $AVAILABLE_ARMS; do
   for mode in off on; do
     bash "$OUT/prepare.sh"
-    run_env "$mode" env -u CODEMOD_TIMINGS_FILE bash -c "$(arm_for "$mode" "$arm")" \
+    env -u CODEMOD_TIMINGS_FILE bash -c "$(arm_for "$mode" "$arm")" \
       >"$OUT/logs/warmup-$arm-$mode.log" 2>&1 ||
       die "warmup of $arm ($mode) failed (log: $OUT/logs/warmup-$arm-$mode.log)"
   done
@@ -91,7 +81,7 @@ for i in $(seq 1 "$RUNS"); do
       base="$OUT/raw/$i-$arm-$mode"
       timings=""
       [ "$MODE" = env ] && [ "$mode" = "on" ] && timings="$base.timings.json"
-      run_env "$mode" bench_once "$base.json" "$arm" "bash $(q "$OUT/prepare.sh") $(q "$timings")" \
+      bench_once "$base.json" "$arm" "bash $(q "$OUT/prepare.sh") $(q "$timings")" \
         "$timings" "$(arm_for "$mode" "$arm")"
     done
   done
