@@ -148,28 +148,53 @@
     }
 
     .matrix {
-      display: grid;
-      grid-template-columns: 80px repeat(3, 1fr);
-      gap: 0.45rem;
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0.45rem;
       margin: 1rem 0 0.5rem;
+      table-layout: fixed;
     }
-    .matrix .head, .matrix .side {
+    .matrix th, .matrix td {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.55rem 0.6rem;
+      font-size: 0.82rem;
+      vertical-align: top;
+      text-align: left;
+    }
+    .matrix th {
       font: 600 0.75rem/1 var(--mono);
       text-transform: uppercase;
       letter-spacing: 0.06em;
       color: var(--muted);
-      padding: 0.35rem;
+      background: #f1eee6;
     }
-    .cell {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      min-height: 92px;
-      padding: 0.55rem 0.6rem;
-      font-size: 0.82rem;
+    .matrix th.side {
+      width: 5.5rem;
+      background: transparent;
+      border-color: transparent;
+      color: var(--muted);
     }
-    .cell ul { margin: 0.35rem 0 0; padding-left: 1rem; }
-    .cell.priority-first { outline: 2px solid var(--accent); background: #f2faf7; }
+    .matrix td ul { margin: 0.35rem 0 0; padding-left: 1rem; }
+    .matrix td.priority-first { outline: 2px solid var(--accent); background: #f2faf7; }
+    .matrix caption {
+      caption-side: top;
+      text-align: left;
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 0.35rem;
+    }
+    .mobile-hint {
+      display: none;
+      background: var(--warn-soft);
+      border: 1px solid color-mix(in srgb, var(--warn) 30%, white);
+      color: #6a3d0a;
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      margin: 1rem 0 0;
+      font-size: 0.92rem;
+    }
     .legend {
       display: flex;
       gap: 1rem;
@@ -301,11 +326,42 @@
     }
 
     @media (max-width: 860px) {
-      h1 { font-size: 1.9rem; max-width: none; }
+      .wrap { width: min(100%, calc(100% - 1.25rem)); padding: 1.25rem 0 3rem; }
+      h1 { font-size: 1.75rem; max-width: none; }
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .matrix { grid-template-columns: 56px repeat(3, 1fr); }
-      .cell { min-height: 72px; font-size: 0.75rem; }
-      table.findings { display: block; overflow-x: auto; }
+      .mobile-hint { display: block; }
+      .matrix, .matrix thead, .matrix tbody, .matrix th, .matrix td, .matrix tr {
+        display: block;
+        width: 100%;
+      }
+      .matrix { border-spacing: 0; }
+      .matrix thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+      .matrix tr { margin: 0 0 0.85rem; }
+      .matrix th.side {
+        width: auto;
+        border: 0;
+        padding: 0.25rem 0.1rem 0.45rem;
+        font-size: 0.8rem;
+      }
+      .matrix td {
+        margin: 0 0 0.45rem;
+        min-height: 0;
+      }
+      .matrix td::before {
+        display: block;
+        font: 600 0.72rem/1 var(--mono);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin-bottom: 0.35rem;
+      }
+      .matrix td[data-safety="low"]::before { content: "Safety low"; }
+      .matrix td[data-safety="medium"]::before { content: "Safety medium"; }
+      .matrix td[data-safety="high"]::before { content: "Safety high"; }
+      table.findings { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+      .fix-top { flex-direction: column; align-items: flex-start; }
+      .filters { gap: 0.4rem; }
+      button.chip { min-height: 2rem; padding: 0.45rem 0.8rem; }
     }
   </style>
 </head>
@@ -326,6 +382,11 @@
         <span>Skill: <code>caldoai/untangle-codebase</code></span>
         <span>Mode: report only · Comments/Tests options deferred</span>
       </div>
+      <p class="mobile-hint">
+        GitHub’s mobile file viewer shows HTML as source, not a rendered page.
+        For phones, open the Markdown twin:
+        <a href="./untangle-codebase.md"><code>reports/untangle-codebase.md</code></a>.
+      </p>
       <div class="stats" aria-label="Summary counts">
         <div class="stat"><b>36</b><span>problems with evidence</span></div>
         <div class="stat"><b>10</b><span>proposed structural fixes</span></div>
@@ -360,55 +421,65 @@
         Cells are proposed fixes. The outlined column is the recommended starting
         queue: high agent leverage without the riskiest engine/schema rewrites.
       </p>
-      <div class="matrix" role="table" aria-label="Impact by safety matrix">
-        <div></div>
-        <div class="head">Safety low</div>
-        <div class="head">Safety medium</div>
-        <div class="head">Safety high</div>
-
-        <div class="side">Impact high</div>
-        <div class="cell priority-first">
-          Start here
-          <ul>
-            <li>F2 Capability &amp; language catalog</li>
-            <li>F5 Shared post-run presenter</li>
-          </ul>
-        </div>
-        <div class="cell priority-first">
-          Next wave
-          <ul>
-            <li>F1 Terminal ownership</li>
-            <li>F3 Typed matrix / cancel / preview</li>
-            <li>F4 Explicit EventBus + log writer</li>
-            <li>F7 Registry auth unification</li>
-          </ul>
-        </div>
-        <div class="cell">
-          Plan carefully
-          <ul>
-            <li>F6 Split Engine into typed ports</li>
-          </ul>
-        </div>
-
-        <div class="side">Impact med</div>
-        <div class="cell">
-          <ul>
-            <li>F9 Expression eval out of models</li>
-            <li>F10 Surplus cleanup</li>
-          </ul>
-        </div>
-        <div class="cell">
-          <ul>
-            <li>F8 Split harness_adapter</li>
-          </ul>
-        </div>
-        <div class="cell"><ul><li>—</li></ul></div>
-
-        <div class="side">Impact low</div>
-        <div class="cell"><ul><li>included in F10</li></ul></div>
-        <div class="cell"><ul><li>—</li></ul></div>
-        <div class="cell"><ul><li>—</li></ul></div>
-      </div>
+      <table class="matrix">
+        <caption>Impact by safety — proposed fixes</caption>
+        <thead>
+          <tr>
+            <th scope="col" class="side"></th>
+            <th scope="col">Safety low</th>
+            <th scope="col">Safety medium</th>
+            <th scope="col">Safety high</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row" class="side">Impact high</th>
+            <td class="priority-first" data-safety="low">
+              Start here
+              <ul>
+                <li>F2 Capability &amp; language catalog</li>
+                <li>F5 Shared post-run presenter</li>
+              </ul>
+            </td>
+            <td class="priority-first" data-safety="medium">
+              Next wave
+              <ul>
+                <li>F1 Terminal ownership</li>
+                <li>F3 Typed matrix / cancel / preview</li>
+                <li>F4 Explicit EventBus + log writer</li>
+                <li>F7 Registry auth unification</li>
+              </ul>
+            </td>
+            <td data-safety="high">
+              Plan carefully
+              <ul>
+                <li>F6 Split Engine into typed ports</li>
+              </ul>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row" class="side">Impact med</th>
+            <td data-safety="low">
+              <ul>
+                <li>F9 Expression eval out of models</li>
+                <li>F10 Surplus cleanup</li>
+              </ul>
+            </td>
+            <td data-safety="medium">
+              <ul>
+                <li>F8 Split harness_adapter</li>
+              </ul>
+            </td>
+            <td data-safety="high"><ul><li>—</li></ul></td>
+          </tr>
+          <tr>
+            <th scope="row" class="side">Impact low</th>
+            <td data-safety="low"><ul><li>included in F10</li></ul></td>
+            <td data-safety="medium"><ul><li>—</li></ul></td>
+            <td data-safety="high"><ul><li>—</li></ul></td>
+          </tr>
+        </tbody>
+      </table>
       <div class="legend">
         <span><span class="dot accent"></span>Recommended first queue (high impact, not highest risk)</span>
       </div>
@@ -575,12 +646,20 @@
           Replace string conventions with types: <code>MatrixMeta</code> /
           identity fields for hashing, <code>TaskStatus::Canceled</code>, and
           <code>ExecutionProfile::Normal | Preview</code> instead of four pro-dry-run
-          flags. Share one fingerprint between recompile detection and task identity.
+          flags. Share one deterministic hashing <em>implementation</em> across
+          recompile detection and task identity, but keep separate inputs and
+          metadata policies: state-change fingerprints the workflow state that
+          should trigger recompile; task identity fingerprints matrix items and
+          continues to exclude <code>_meta_</code> fields (see
+          <code>test_meta_key_exclusion</code>) so shard identity does not churn
+          when file metadata changes.
         </p>
         <p>
           <strong>Safety notes:</strong> touches persisted task status and matrix
           hashing. Needs schema migration awareness and resume/cancel regression tests.
           Preview profile should preserve today’s dry-run semantics bit-for-bit first.
+          Do not merge the two fingerprint <em>semantics</em> into one key — that can
+          recreate shard tasks or suppress real state-change detection.
         </p>
         <ul class="problems">
           <li>
@@ -593,8 +672,10 @@
           </li>
           <li>
             <span class="cat">hidden-link</span>
-            Recompile hash (unordered map + <code>to_string()</code>) differs from
-            scheduler identity hash (stable JSON, excludes meta).
+            Recompile detection and task identity use incompatible hashers (unordered
+            map + <code>to_string()</code> vs stable JSON excluding meta) with no shared
+            implementation — they must keep different inputs/policies, but should share
+            one deterministic hasher.
             <div class="evidence"><code>engine.rs:2089-2096</code>,
               <code>scheduler/src/lib.rs:205-271</code></div>
           </li>
@@ -935,14 +1016,19 @@
 
     <section id="findings">
       <h2>All problems</h2>
+      <p>
+        Impact and safety columns are the parent <strong>fix</strong> ratings
+        (same source as the cards and matrix). Category filters still use the
+        per-problem classification.
+      </p>
       <div class="filters" id="filters" aria-label="Filter findings">
         <button class="chip" data-filter="all" aria-pressed="true">All</button>
         <button class="chip" data-filter="hidden-link" aria-pressed="false">Hidden links</button>
         <button class="chip" data-filter="needless-link" aria-pressed="false">Needless links</button>
         <button class="chip" data-filter="surplus" aria-pressed="false">Surplus</button>
         <button class="chip" data-filter="special-case" aria-pressed="false">Special cases</button>
-        <button class="chip" data-filter="impact-high" aria-pressed="false">Impact high</button>
-        <button class="chip" data-filter="safety-high" aria-pressed="false">Safety high</button>
+        <button class="chip" data-filter="impact-high" aria-pressed="false">Fix impact high</button>
+        <button class="chip" data-filter="safety-high" aria-pressed="false">Fix safety high</button>
       </div>
       <table class="findings">
         <thead>
@@ -951,12 +1037,12 @@
             <th>Category</th>
             <th>Problem</th>
             <th>Fix</th>
-            <th>Impact</th>
-            <th>Safety</th>
+            <th>Fix impact</th>
+            <th>Fix safety</th>
           </tr>
         </thead>
         <tbody id="findings-body">
-          <!-- filled by script from data below for filterability -->
+          <!-- filled by script from shared FIXES + FINDINGS data -->
         </tbody>
       </table>
     </section>
@@ -981,69 +1067,89 @@
     </section>
 
     <footer>
-      Report path: <code>reports/untangle-codebase.html</code>.
-      Open locally in a browser. Analysis only — no production behavior changed.
+      Interactive HTML: <code>reports/untangle-codebase.html</code>
+      (open locally, or via an HTML preview service).
+      Mobile / GitHub-readable twin: <a href="./untangle-codebase.md"><code>reports/untangle-codebase.md</code></a>.
+      Analysis only — no production behavior changed.
     </footer>
   </div>
 
   <script>
+    // Single source of truth for fix-level impact/safety (cards, matrix, table, filters).
+    const FIXES = {
+      F1: { impact: "high", safety: "medium" },
+      F2: { impact: "high", safety: "low" },
+      F3: { impact: "high", safety: "medium" },
+      F4: { impact: "high", safety: "medium" },
+      F5: { impact: "high", safety: "low" },
+      F6: { impact: "high", safety: "high" },
+      F7: { impact: "high", safety: "medium" },
+      F8: { impact: "medium", safety: "medium" },
+      F9: { impact: "medium", safety: "low" },
+      F10: { impact: "medium", safety: "low" }
+    };
+
     const FINDINGS = [
-      { id: "non-cli-stdout", cat: "hidden-link", problem: "Non-CLI crates write stdout/stderr", fix: "F1", impact: "high", safety: "high" },
-      { id: "quiet-call-order", cat: "hidden-link", problem: "Quiet/TUI ownership is multi-site call order", fix: "F1", impact: "high", safety: "high" },
-      { id: "dual-run-config", cat: "hidden-link", problem: "Dual WorkflowRunConfig clones with partial dual-writes", fix: "F1", impact: "medium", safety: "high" },
-      { id: "jsonl-println", cat: "special-case", problem: "--format jsonl still mixed with println summaries", fix: "F1", impact: "high", safety: "high" },
-      { id: "filediff-print", cat: "needless-link", problem: "FileDiff::print is presentation in core", fix: "F1", impact: "medium", safety: "high" },
-      { id: "direct-runner-quiet", cat: "needless-link", problem: "DirectRunner prints based on quiet bit", fix: "F1", impact: "high", safety: "high" },
-      { id: "session-attach-quiet", cat: "hidden-link", problem: "Session attach mutates quiet + callbacks", fix: "F1", impact: "high", safety: "medium" },
-      { id: "cap-sync", cat: "hidden-link", problem: "Capability/module lists hand-synced across crates", fix: "F2", impact: "high", safety: "high" },
-      { id: "mod-dup", cat: "needless-link", problem: "codemod:* registration copied in five engines", fix: "F2", impact: "high", safety: "low" },
-      { id: "native-wasm-ast", cat: "hidden-link", problem: "Native/WASM ast-grep module ids diverge", fix: "F2", impact: "high", safety: "medium" },
-      { id: "langdetect", cat: "hidden-link", problem: "Extension→language maps disagree by call site", fix: "F2", impact: "high", safety: "medium" },
-      { id: "dynlang", cat: "special-case", problem: "Dynamic language inventories triplicated", fix: "F2", impact: "high", safety: "medium" },
-      { id: "walker-dup", cat: "needless-link", problem: "Parallel walker enums factory ↔ javascript", fix: "F2", impact: "medium", safety: "low" },
-      { id: "matrix-meta", cat: "hidden-link", problem: "_meta_ prefix convention across shard/scheduler/engine", fix: "F3", impact: "high", safety: "medium" },
-      { id: "recompile-hash", cat: "hidden-link", problem: "Recompile fingerprint ≠ task identity hash", fix: "F3", impact: "high", safety: "medium" },
-      { id: "cancel-string", cat: "special-case", problem: "Cancel encoded as Failed + magic string", fix: "F3", impact: "high", safety: "high" },
-      { id: "pro-dry-run", cat: "special-case", problem: "Four flags for one preview caller", fix: "F3", impact: "medium", safety: "medium" },
-      { id: "global-events", cat: "hidden-link", problem: "Process-global workflow event registry", fix: "F4", impact: "high", safety: "medium" },
-      { id: "parallel-log-writers", cat: "hidden-link", problem: "Task logs mutated outside TaskStateService", fix: "F4", impact: "medium", safety: "medium" },
-      { id: "three-run-paths", cat: "hidden-link", problem: "run / workflow run / jssg share post-run by copy", fix: "F5", impact: "high", safety: "medium" },
-      { id: "output-rs-misnamed", cat: "surplus", problem: "commands/output.rs is not the CLI sink", fix: "F5", impact: "medium", safety: "medium" },
-      { id: "engine-god", cat: "needless-link", problem: "engine.rs owns schedule + every step kind", fix: "F6", impact: "high", safety: "high" },
-      { id: "dual-exec-paths", cat: "hidden-link", problem: "Sync vs spawned task execution by entrypoint", fix: "F6", impact: "high", safety: "high" },
-      { id: "step-executor-thin", cat: "surplus", problem: "StepExecutor is pass-through back into Engine", fix: "F6", impact: "medium", safety: "medium" },
-      { id: "swallowed-errors", cat: "special-case", problem: "Recompile/condition errors become skip/continue", fix: "F6", impact: "high", safety: "medium" },
-      { id: "registry-auth-split", cat: "hidden-link", problem: "Auth/publish split across CLI and RegistryClient", fix: "F7", impact: "high", safety: "medium" },
-      { id: "harness-god", cat: "surplus", problem: "harness_adapter.rs mega-module (~6852 LOC)", fix: "F8", impact: "high", safety: "medium" },
-      { id: "harness-lock-sleep", cat: "special-case", problem: "Harness lock retry via sleep special case", fix: "F8", impact: "medium", safety: "medium" },
-      { id: "report-server-pile", cat: "surplus", problem: "report_server mixes HTTP/OIDC/feedback/idle", fix: "F8", impact: "medium", safety: "low" },
-      { id: "expr-in-models", cat: "needless-link", problem: "Expression eval + env coupling in models crate", fix: "F9", impact: "medium", safety: "medium" },
-      { id: "typeinfo-dead", cat: "surplus", problem: "type_info / get_type speculative stubs", fix: "F10", impact: "low", safety: "low" },
-      { id: "noop-unused", cat: "surplus", problem: "NoopSemanticProvider unused outside unit tests", fix: "F10", impact: "low", safety: "low" },
-      { id: "shallow-exports", cat: "needless-link", problem: "One-line node/web export shims", fix: "F10", impact: "low", safety: "low" },
-      { id: "gen-artifacts", cat: "surplus", problem: "Committed generated TS with wrong generator header", fix: "F10", impact: "medium", safety: "low" },
-      { id: "factory-bypass", cat: "needless-link", problem: "Semantic fixtures bypass SemanticFactory", fix: "F10", impact: "medium", safety: "low" },
-      { id: "init-lang-matrix", cat: "hidden-link", problem: "js-astgrep language matrix duplicated + silent JS fallback", fix: "F10", impact: "medium", safety: "medium" }
+      { id: "non-cli-stdout", cat: "hidden-link", problem: "Non-CLI crates write stdout/stderr", fix: "F1" },
+      { id: "quiet-call-order", cat: "hidden-link", problem: "Quiet/TUI ownership is multi-site call order", fix: "F1" },
+      { id: "dual-run-config", cat: "hidden-link", problem: "Dual WorkflowRunConfig clones with partial dual-writes", fix: "F1" },
+      { id: "jsonl-println", cat: "special-case", problem: "--format jsonl still mixed with println summaries", fix: "F1" },
+      { id: "filediff-print", cat: "needless-link", problem: "FileDiff::print is presentation in core", fix: "F1" },
+      { id: "direct-runner-quiet", cat: "needless-link", problem: "DirectRunner prints based on quiet bit", fix: "F1" },
+      { id: "session-attach-quiet", cat: "hidden-link", problem: "Session attach mutates quiet + callbacks", fix: "F1" },
+      { id: "cap-sync", cat: "hidden-link", problem: "Capability/module lists hand-synced across crates", fix: "F2" },
+      { id: "mod-dup", cat: "needless-link", problem: "codemod:* registration copied in five engines", fix: "F2" },
+      { id: "native-wasm-ast", cat: "hidden-link", problem: "Native/WASM ast-grep module ids diverge", fix: "F2" },
+      { id: "langdetect", cat: "hidden-link", problem: "Extension→language maps disagree by call site", fix: "F2" },
+      { id: "dynlang", cat: "special-case", problem: "Dynamic language inventories triplicated", fix: "F2" },
+      { id: "walker-dup", cat: "needless-link", problem: "Parallel walker enums factory ↔ javascript", fix: "F2" },
+      { id: "matrix-meta", cat: "hidden-link", problem: "_meta_ prefix convention across shard/scheduler/engine", fix: "F3" },
+      { id: "recompile-hash", cat: "hidden-link", problem: "Recompile hasher ≠ task-identity hasher (keep separate inputs)", fix: "F3" },
+      { id: "cancel-string", cat: "special-case", problem: "Cancel encoded as Failed + magic string", fix: "F3" },
+      { id: "pro-dry-run", cat: "special-case", problem: "Four flags for one preview caller", fix: "F3" },
+      { id: "global-events", cat: "hidden-link", problem: "Process-global workflow event registry", fix: "F4" },
+      { id: "parallel-log-writers", cat: "hidden-link", problem: "Task logs mutated outside TaskStateService", fix: "F4" },
+      { id: "three-run-paths", cat: "hidden-link", problem: "run / workflow run / jssg share post-run by copy", fix: "F5" },
+      { id: "output-rs-misnamed", cat: "surplus", problem: "commands/output.rs is not the CLI sink", fix: "F5" },
+      { id: "engine-god", cat: "needless-link", problem: "engine.rs owns schedule + every step kind", fix: "F6" },
+      { id: "dual-exec-paths", cat: "hidden-link", problem: "Sync vs spawned task execution by entrypoint", fix: "F6" },
+      { id: "step-executor-thin", cat: "surplus", problem: "StepExecutor is pass-through back into Engine", fix: "F6" },
+      { id: "swallowed-errors", cat: "special-case", problem: "Recompile/condition errors become skip/continue", fix: "F6" },
+      { id: "registry-auth-split", cat: "hidden-link", problem: "Auth/publish split across CLI and RegistryClient", fix: "F7" },
+      { id: "harness-god", cat: "surplus", problem: "harness_adapter.rs mega-module (~6852 LOC)", fix: "F8" },
+      { id: "harness-lock-sleep", cat: "special-case", problem: "Harness lock retry via sleep special case", fix: "F8" },
+      { id: "report-server-pile", cat: "surplus", problem: "report_server mixes HTTP/OIDC/feedback/idle", fix: "F8" },
+      { id: "expr-in-models", cat: "needless-link", problem: "Expression eval + env coupling in models crate", fix: "F9" },
+      { id: "typeinfo-dead", cat: "surplus", problem: "type_info / get_type speculative stubs", fix: "F10" },
+      { id: "noop-unused", cat: "surplus", problem: "NoopSemanticProvider unused outside unit tests", fix: "F10" },
+      { id: "shallow-exports", cat: "needless-link", problem: "One-line node/web export shims", fix: "F10" },
+      { id: "gen-artifacts", cat: "surplus", problem: "Committed generated TS with wrong generator header", fix: "F10" },
+      { id: "factory-bypass", cat: "needless-link", problem: "Semantic fixtures bypass SemanticFactory", fix: "F10" },
+      { id: "init-lang-matrix", cat: "hidden-link", problem: "js-astgrep language matrix duplicated + silent JS fallback", fix: "F10" }
     ];
 
     const tbody = document.getElementById("findings-body");
     function badge(kind, value) {
       return `<span class="badge ${kind}-${value}">${value}</span>`;
     }
+    function ratingsFor(fixId) {
+      return FIXES[fixId] || { impact: "medium", safety: "medium" };
+    }
     function render(filter) {
       tbody.innerHTML = FINDINGS.map((f) => {
+        const { impact, safety } = ratingsFor(f.fix);
         const show =
           filter === "all" ||
           f.cat === filter ||
-          (filter === "impact-high" && f.impact === "high") ||
-          (filter === "safety-high" && f.safety === "high");
+          (filter === "impact-high" && impact === "high") ||
+          (filter === "safety-high" && safety === "high");
         return `<tr class="${show ? "" : "is-hidden"}" data-cat="${f.cat}">
           <td class="mono">${f.id}</td>
           <td>${f.cat}</td>
           <td>${f.problem}</td>
           <td class="mono">${f.fix}</td>
-          <td>${badge("impact", f.impact)}</td>
-          <td>${badge("safety", f.safety)}</td>
+          <td>${badge("impact", impact)}</td>
+          <td>${badge("safety", safety)}</td>
         </tr>`;
       }).join("");
     }
