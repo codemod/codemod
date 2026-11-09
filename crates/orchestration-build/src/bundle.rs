@@ -16,11 +16,16 @@ use std::{
 
 use arcstr::ArcStr;
 use oxc::{
-    allocator::Allocator,
+    allocator::{Allocator, TakeIn},
+    ast::{
+        ast::{ForOfStatement, Statement},
+        AstBuilder,
+    },
+    ast_visit::{walk_mut, VisitMut},
     codegen::Codegen,
     parser::Parser,
     semantic::SemanticBuilder,
-    span::SourceType,
+    span::{GetSpan, SourceType},
     transformer::{HelperLoaderMode, TransformOptions, Transformer},
 };
 use rolldown::{Bundler, BundlerOptions, InputItem, OutputFormat, Platform, ResolveOptions};
@@ -405,6 +410,7 @@ fn lower_async(code: &str, id: &str, module_type: &ModuleType) -> Result<String,
         return Err(error.message.to_string());
     }
     let mut program = parsed.program;
+    BlockForAwaitBodies(AstBuilder::new(&allocator)).visit_program(&mut program);
     let scoping = SemanticBuilder::new()
         .build(&program)
         .semantic
@@ -419,6 +425,20 @@ fn lower_async(code: &str, id: &str, module_type: &ModuleType) -> Result<String,
         return Err(error.message.to_string());
     }
     Ok(Codegen::new().build(&program).code)
+}
+
+/// oxc 0.96 lowers `for await (x of xs) body;` to a loop that never runs
+/// `body` unless it is a block, so every `for await` gets one first.
+struct BlockForAwaitBodies<'a>(AstBuilder<'a>);
+
+impl<'a> VisitMut<'a> for BlockForAwaitBodies<'a> {
+    fn visit_for_of_statement(&mut self, it: &mut ForOfStatement<'a>) {
+        if it.r#await && !matches!(it.body, Statement::BlockStatement(_)) {
+            let body = it.body.take_in(self.0);
+            it.body = self.0.statement_block(body.span(), self.0.vec1(body));
+        }
+        walk_mut::walk_for_of_statement(self, it);
+    }
 }
 
 /// A module id that names a file (not a virtual module such as rolldown's
