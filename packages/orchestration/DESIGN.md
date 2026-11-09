@@ -10,6 +10,10 @@
 > sections below that describe execution have been updated minimally; the proposal itself
 > is unchanged.
 
+> 2026-11-09: the Node launcher was removed. `codemod workflow run -w <workflow.ts>` in the
+> Rust CLI builds the workflow (`crates/orchestration-build`) and runs it on the QuickJS host
+> in-process, so Node is not needed to run a workflow.
+
 ## Problem
 
 Most Codemod workflows are small, but every package uses the same YAML graph,
@@ -521,9 +525,6 @@ and the parts that need rapid iteration:
 
 - runnable definitions and schema-based typing
 - workflow and static-composition authoring, including the inline transform
-- the build step that splits a workflow module into the trusted workflow and
-  one bundled artifact per transform (TypeScript parser for extraction,
-  esbuild for bundling, SHA-256 for identity)
 - serializable static topology with opaque workflow boundaries
 - the test harness
 - prototype replay and in-memory history
@@ -543,6 +544,12 @@ the target root, and return the edits and outputs as plain data. They never
 read author files, never enumerate the repository, and never write repository
 files on this path. They do not implement planning, replay, or persistence,
 and build without the full Codemod CLI.
+
+The build step that splits a workflow module into the trusted workflow and one
+bundled artifact per transform is Rust as well since 2026-11-09
+(`crates/orchestration-build`: oxc for extraction, rolldown for bundling,
+SHA-256 for identity), run by `codemod workflow run -w`; its rules are
+unchanged.
 
 ```text
 workflow.ts -> build step -> workflow module + transform artifacts
@@ -679,13 +686,14 @@ Included:
 - weighted, host-derived bounded admission of parallel operations at the
   execution boundary, with operator/test capacity overrides and no
   author-facing concurrency knob
-- an experimental trusted-local TypeScript workflow CLI
+- an experimental trusted-local runner for TypeScript workflows,
+  `codemod workflow run -w` in the Rust CLI
 - the page and run model of a local run dashboard: live command status, the
   static topology with dynamic stages left opaque, an operator admission
   pause/resume at the scheduler seam, restart and re-run, and the last runs of
   the process for read-only viewing; the server that hosted it behind the
-  CLI's `--dashboard` was removed with the `node` runtime, so `--dashboard` is
-  not available for now and returns with the Rust `codemod` CLI
+  Node CLI's `--dashboard` was removed with the `node` runtime, so a dashboard
+  is not available for now
 
 Not included:
 

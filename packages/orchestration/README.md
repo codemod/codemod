@@ -5,7 +5,8 @@ plain async TypeScript; calling a runnable creates a command, awaiting it inside
 a workflow issues it, and every issued command is recorded in an append-only
 history and replayed from that history on later runs. A workflow runs in the
 `quickjs` runtime (`RUNTIMES.md`): the whole bundled workflow in one QuickJS
-context hosted by a Rust binary, no Node at run time. It executes every
+context hosted inside the Rust `codemod` CLI (`codemod workflow run -w`), no
+Node at run time. It executes every
 operation kind. `shell` runs in-process
 over the host's `spawn` with the semantics of
 `butterflow_runners::DirectRunner`, and `agent` runs in a `codemod-agent`
@@ -31,7 +32,7 @@ packages/orchestration/
   DESIGN.md              problem statement, proposal, scope, and migration path
   PROTOCOL.md            the operation protocol, JSSG batch, agent runner, security model, transactions
   RUNTIMES.md            the quickjs runtime, the Host seam, async context, registry
-  src/index.ts           Node API: portable.ts + Node host + build, quickjs provider, agent runner path, registry
+  src/index.ts           Node API: portable.ts + Node host + the assessment and agent executors
   src/portable.ts        Node-free API (`./portable` export) for non-Node hosts such as QuickJS
   src/core/              plain data contracts shared by every layer
     host.ts              Host seam (fs, path, os, env, spawn, async context, clock) + install
@@ -53,8 +54,6 @@ packages/orchestration/
     target.ts            validation and normalization of a JSSG invocation Target
     schema.ts            minimal Standard Schema surface and guard(...)
     transform.ts         author-facing transform/selector types per language (type-only)
-  src/bundle/            splits inline JSSG transforms out of workflow modules
-    build.ts             build step: extract inline transforms, bundle, rewrite (buildFile, buildModule)
   src/execution/         how one OperationRequest becomes an OperationCompletion
     operation-executor.ts OperationExecutor seam
     shell.ts             executeShell: in-process shell over Host.spawn (DirectRunner semantics)
@@ -74,20 +73,19 @@ packages/orchestration/
     capabilities.ts      runtime descriptors (quickjs) and capability checks
   src/host/              entry points that assemble a run (Node only)
     node-host.ts         the Node Host (harness, Node consumers); importing it installs it
-    runtimes/            one RuntimeProvider per runtime (quickjs) + registry/runWorkflow
-    quickjs-bundle.ts    builds and caches the QuickJS bundle (esbuild, bundle/build.ts)
     quickjs/             the bundle entry and Host inside the QuickJS host (incl. fetch.ts)
-    cli.ts               experimental local runner behind bin/codemod-workflow.mjs
     harness.ts           test harness with scripted completions (`./harness` export)
     dashboard/           the run dashboard's page and run model (`./dashboard` export); no server for now
       monitor.ts         RunMonitor: one run's projected, sequenced envelopes + snapshot
       ui.html            the page, dependency-free
   fixtures/protocol      shared JSON fixtures checked by TS and Rust tests
   fixtures/walker        file-walker contract checked by TS and Rust (engine walker) tests
-  tests/                 unit tests (fast; fake agent runner) + *.e2e.test.ts + *.live.test.ts (opt-in)
-  bin/                   codemod-workflow.mjs and its node_modules type-stripping hook
+  tests/                 unit tests (fast; fake agent runner) + *.live.test.ts (opt-in)
+crates/cli/src/commands/workflow/typescript.rs  `codemod workflow run -w workflow.ts`
+crates/cli/tests/        end-to-end specs: typescript_workflow.rs, jssg_parity.rs, typescript_timings.rs
+crates/orchestration-build/        the build step: jssg() split (oxc), bundles (rolldown), cache, embedded runtime
 crates/jssg-batch/       the JSSG batch rules the QuickJS host calls (BatchPlan)
-crates/orchestration-quickjs-host/ the quickjs runtime's Rust host binary (incl. the transform pool)
+crates/orchestration-quickjs-host/ the quickjs runtime's Rust host library, run in-process by the CLI (incl. the transform pool)
 crates/orchestration-walker/       native file selection and reads for the QuickJS host
 crates/orchestration-agent/        `codemod-agent`: one agent operation over stdin/stdout
 ```
@@ -98,10 +96,9 @@ the folders on its row (`tests/layers.test.ts` enforces this):
 ```
 core       (nothing)
 authoring  core
-bundle     core
-execution  core, bundle
-runtime    core, authoring, bundle, execution
-host       core, authoring, bundle, execution, runtime
+execution  core
+runtime    core, authoring, execution
+host       core, authoring, execution, runtime
 ```
 
 `authoring` and `execution` never import each other: commands meet executors
@@ -248,14 +245,14 @@ The workflow and its transforms are authored together but never run
 together. The workflow body runs in the control plane and each transform is
 evaluated from its own bundled artifact; nothing is serialized with `Function.prototype.toString()` and no
 closure crosses the boundary. Instead, a build step splits the module before
-it runs (`src/bundle/build.ts`):
+it runs (`crates/orchestration-build`, `src/split.rs`):
 
-1. The module is parsed with the TypeScript compiler. Every
+1. The module is parsed with oxc. Every
    `jssg({ ... })` call (an object literal with a string-literal `name` and a
    `transform` that is a method, a function or arrow expression, or an
    imported binding) is located by position.
 2. For each transform, a virtual entry `export default <transform>` plus
-   the import declarations it references is bundled with esbuild into one
+   the import declarations it references is bundled with rolldown into one
    self-contained ES module: helpers imported from other modules (and their
    imports, including packages) are inlined; `codemod:*` modules and
    built-ins that the runtime provides stay as imports; types are erased.
@@ -281,19 +278,19 @@ failing at run time:
 
 A transform function that reaches `jssg()` at runtime means the module was
 loaded without the build step; the call throws with that explanation.
-The QuickJS bundler (`host/quickjs-bundle.ts`, used by the CLI) applies the
-split to every module in the workflow's graph that calls `jssg(`, including
-definitions in imported files and packages under `node_modules`, and carries
-the artifacts it collected in the bundle. `buildModule(source, file)` and
-`buildFile(file)` do the split without importing anything. Artifacts are
+The workflow bundler (`crates/orchestration-build/src/bundle.rs`, used by
+`codemod workflow run -w`) applies the split to every module in the workflow's
+graph that calls `jssg(`, including definitions in imported files and packages
+under `node_modules`, and carries the artifacts it collected in the bundle.
+`build_module(source, file)` and `build_file(file)` do the split without
+running anything. Artifacts are
 executor-side data (the bundle holds them for `quickjs`); a JSSG command whose
 artifact the executor does not hold fails in phase `artifact` before anything
 runs.
 
-`esbuild` is the one dependency added for this: it is the bundler the
-monorepo already resolves (through Vite), and it bundles TypeScript and
-package imports without configuration. `typescript`, already a development dependency, provides the
-parser; it moved to `dependencies` so the installed package can build.
+The build step is Rust (oxc parses and rewrites, rolldown bundles) compiled
+into the `codemod` binary, so building a workflow needs neither Node nor an
+npm build dependency.
 
 ### The static selector
 
@@ -618,13 +615,12 @@ agent({ name: "fix", prompt, backend: { kind: "codex", sandbox: "workspace-write
   line of JSON on stdin and the completion comes back as JSON on stdout (see
   `PROTOCOL.md`). Validated input is appended to the prompt as JSON; the
   prompt goes to external CLIs on stdin, never in argv.
-- The runner is found through `CODEMOD_AGENT_BIN`, else the newer of the
-  monorepo's `target/{release,debug}/codemod-agent` (honouring
-  `CARGO_TARGET_DIR`); build it with `pnpm build:agent`
-  (`cargo build -p orchestration-agent`). It is checked only when an agent
-  step runs: a missing runner is `failed` with `phase: "config"`. For
-  `quickjs` the Node launcher resolves it and passes it to the host in
-  `CODEMOD_AGENT_BIN`.
+- The runner is found through `CODEMOD_AGENT_BIN`; when it is unset,
+  `codemod workflow run -w` sets it to the `codemod-agent` next to its own
+  binary, if there is one. Build it with `pnpm build:agent`
+  (`cargo build -p orchestration-agent`), which puts it next to a `codemod`
+  built in the same target directory. It is checked only when an agent step
+  runs: a missing runner is `failed` with `phase: "config"`.
 - The result is `{ text }` for every backend: the builtin agent's final
   response, Claude Code's `result`, or Codex's last message. Progress and
   event streams are not kept. With an `output` schema the operation carries
@@ -763,8 +759,9 @@ Security model of `agent` (a trusted-local prototype, not a sandbox):
   daemonized, or a sandbox that hides the process list (only the group is
   reached then), can leave processes behind.
 - Host lifetime: runners are detached, so they do not receive the terminal's
-  signals. `codemod-workflow` turns SIGINT, SIGTERM, and SIGHUP into an abort,
-  and any normal exit of the Node host process kills runners still running.
+  signals. `codemod workflow run -w` turns SIGINT, SIGTERM, and SIGHUP into an
+  abort; on the Node host, any normal exit of the process kills runners still
+  running.
   Programs that embed `run()` with `executeAgent` must do the same: abort the
   run's `signal` on SIGINT, SIGTERM, and SIGHUP (or exit normally). If the
   host is killed with SIGKILL or crashes, nothing runs and runners and their
@@ -775,70 +772,65 @@ Security model of `agent` (a trusted-local prototype, not a sandbox):
 
 ## Running
 
-For the trusted local prototype, run a TypeScript workflow with the
-experimental `codemod-workflow` bin (Node 24):
+For the trusted local prototype, run a TypeScript workflow with the Rust
+`codemod` CLI:
 
 ```sh
-pnpm --filter @codemod.com/orchestration build:quickjs   # the QuickJS host binary
-pnpm --filter @codemod.com/orchestration build:agent     # only for agent() steps
-pnpm --filter @codemod.com/orchestration workflow ./path/to/workflow.ts --target ./repository
-# or, once the package is installed in another project:
-npx codemod-workflow ./workflow.ts --target ./repository
+cargo build -p codemod                    # the CLI; the runtime is built into it
+cargo build -p orchestration-agent        # only for agent() steps: codemod-agent, next to codemod
+target/debug/codemod workflow run -w ./path/to/workflow.ts --target ./repository
 ```
 
 ```text
-codemod-workflow [run] <workflow.ts> [--runtime quickjs] [--target <directory>] [--input <json>]
-codemod-workflow build <workflow.ts> --runtime quickjs -o <bundle.mjs>
+codemod workflow run -w <workflow.ts|.mts> [--target <directory>] [--input <json>] [--history <file>]
 ```
 
-- `--runtime` (default and only value `quickjs`, `RUNTIMES.md`) runs the
-  bundled workflow in one QuickJS context hosted by `orchestration-quickjs-host`
-  (`cargo build -p orchestration-quickjs-host`), with no Node at run time. It
-  executes every operation kind and JSSG semantic analysis. If the binary is
-  missing the run fails before anything loads, and the error says how to
-  build it.
+- A `.ts` or `.mts` workflow runs on the `quickjs` runtime (`RUNTIMES.md`): the
+  bundled workflow in one QuickJS context hosted by
+  `crates/orchestration-quickjs-host` inside the `codemod` process, with no
+  Node at run time. It executes every operation kind and JSSG semantic
+  analysis. The other `codemod workflow run` flags belong to YAML workflows and
+  do not apply.
 - `--target` (default: current directory) is where `shell` and `agent` run
   and the root JSSG targets are resolved beneath.
-- `CODEMOD_AGENT_BIN` (default: the newer of the monorepo's
-  `target/{release,debug}/codemod-agent`) locates the agent runner; it is
-  checked only when an `agent` step runs.
+- `CODEMOD_AGENT_BIN` (default: the `codemod-agent` next to the `codemod`
+  binary) locates the agent runner; it is checked only when an `agent` step
+  runs.
 - `--input <json>` supplies the root input when the workflow declares one.
-- `--dashboard` is not available for now (see Dashboard); it returns with the
-  Rust `codemod` CLI.
+- `--history <file>` resumes from the file when it exists and writes the
+  run's history back to it.
+- `--dashboard` is not available for now (see Dashboard).
 
 The command prints the workflow's final value as JSON on stdout and errors on
-stderr with exit code 1; it is the only place that writes to the terminal.
+stderr with exit code 1; workflow and transform console output also goes to
+stderr.
 `SIGINT`/`SIGTERM`/`SIGHUP` abort the run: child process trees (`shell`, agent
 runners) are killed and the command in flight is recorded as `cancelled` with nothing written (an `agent`
-already running is recorded as `unknown`, since it may have edited files). The bin runs in
-one Node process (Node >= 22.15; the repository requires 24): `bin/register-ts.mjs`
-installs synchronous `node:module` hooks that strip types in transform mode (what
-`--experimental-transform-types` does) from every `.ts` file, `node_modules` included,
-then the CLI builds the workflow's QuickJS bundle and spawns the host binary on it, so
-it works both from this checkout and from a workspace or package installation of
-`@codemod.com/orchestration`. The workflow module and the sources it imports are
-expected to be ESM. This is a trusted-local runner: it makes no claim about untrusted
+already running is recorded as `unknown`, since it may have edited files).
+`@codemod.com/orchestration` imports in a workflow resolve to `src/portable.ts` of the
+runtime embedded in the binary (this package's `src` and the npm `ignore` package, copied
+in when `codemod` is built); `CODEMOD_ORCHESTRATION_SRC=<path to src>` uses other sources
+instead, for developing the runtime. A `node:*` import fails the build. The workflow
+module and the sources it imports are expected to be ESM. This is a trusted-local runner: it makes no claim about untrusted
 registry packages.
 
 Startup is cached on disk under `$CODEMOD_WORKFLOW_CACHE` (default
 `<tmpdir>/codemod-workflow-cache-<uid>`; a directory that is not private to the user
-is not used): `ts/` type-stripped sources and `v8/` Node's compile cache (the CLI
-launcher), and `quickjs/` bundles (so a warm run loads neither TypeScript nor esbuild).
-Entries are keyed by content and checked against every
-file that went into them, so editing the workflow, a module it imports, or a helper a
-transform bundles rebuilds; a resolution change that edits none of those files (a new
-file shadowing an import, an edited `package.json` `exports` or `tsconfig.json`) is
-not detected, so delete the directory. `NODE_DISABLE_COMPILE_CACHE=1` turns off the
-compile cache.
+is not used): `quickjs/` bundles (so a warm run builds nothing) and `runtime/` the
+embedded runtime's sources, written once per content hash. Entries are keyed by content
+and checked against every file that went into them, so editing the workflow, a module it
+imports, or a helper a transform bundles rebuilds; a resolution change that edits none of
+those files (a new file shadowing an import, an edited `package.json` `exports` or
+`tsconfig.json`) is not detected, so delete the directory.
 
 Remaining work before Solid Migration Assistant can move onto this package:
 
 - add the package to that repository and author its workflow with inline
   transforms and structured outputs; helpers it shares between transforms
   must be imported modules, not top-level declarations of the workflow file;
-- ship the QuickJS host and the `codemod-agent` runner with the package or as
-  `codemod` subcommands; today they must be built from this monorepo (or
-  pointed at with `CODEMOD_QUICKJS_HOST_BIN` / `CODEMOD_AGENT_BIN`);
+- ship a `codemod` release that includes the TypeScript runtime, and the
+  `codemod-agent` runner next to it; today both must be built from this
+  monorepo (or the runner pointed at with `CODEMOD_AGENT_BIN`);
 - decide the cross-file edit policy Solid needs: today every transform sees
   the pre-command snapshot and two edits of one file in one command fail the
   command instead of chaining or merging;
@@ -853,27 +845,12 @@ Remaining work before Solid Migration Assistant can move onto this package:
 Prototype limitation of the build step: transform errors report positions in
 the bundled artifact (named `<name>.jssg.js`), not the workflow source.
 
-The programmatic API is `runWorkflow` for a whole run, or `run()` with an
-`OperationExecutor` of your own for control over history and settings (the test
-harness, `createHarness`, runs workflows that way in Node with scripted
-executors):
-
-```ts
-import { runWorkflow } from "@codemod.com/orchestration";
-
-const controller = new AbortController();
-
-// What the CLI does: resolve the runtime, check it is available, build or
-// reuse the bundle, run it on the QuickJS host.
-const output = await runWorkflow("./workflow.ts", {
-  target: repoDir,
-  signal: controller.signal,
-});
-```
-
-`runWorkflow` takes no history. The QuickJS host resumes from a history file
-and writes the run's history back with
-`orchestration-quickjs-host run <bundle.mjs> --history <file>` (`RUNTIMES.md`).
+The programmatic API is `run()` with an `OperationExecutor` of your own for
+control over history and settings (the test harness, `createHarness`, runs
+workflows that way in Node with scripted executors). There is no Node API that
+runs a whole workflow on the QuickJS host any more: that is
+`codemod workflow run -w`, which resumes from and writes back a history file
+with `--history <file>` (`RUNTIMES.md`).
 
 ## Dashboard
 
@@ -1083,18 +1060,20 @@ non-string value becomes JSON `stdout` / `text`).
 pnpm install
 pnpm --filter @codemod.com/orchestration test          # fast TS tests (fake agent runner, echo runtime)
 pnpm --filter @codemod.com/orchestration typecheck
-pnpm --filter @codemod.com/orchestration test:e2e      # builds the QuickJS host, then
-                                                       # the quickjs and jssg-parity e2e tests
 pnpm --filter @codemod.com/orchestration build:agent   # = cargo build -p orchestration-agent
+cargo test --release -p codemod --test typescript_workflow --test jssg_parity   # end to end
+cargo test --release -p codemod --features timings --test typescript_timings  # benchmark timings
+cargo test -p orchestration-build                      # the jssg() split, bundles, cache
 cargo test -p jssg-batch                               # batch rules, walker and language contracts
 cargo test -p orchestration-agent                      # agent protocol fixtures, binary, external CLIs
 ```
 
-`test:e2e` runs `CODEMOD_QUICKJS_E2E=1 vitest run tests/quickjs.e2e.test.ts
-tests/jssg-parity.e2e.test.ts`. `jssg-parity` runs JSSG edge cases on
-`quickjs` and compares the encoding case byte for byte with the YAML engine
-when a `codemod` binary is found; the YAML engine is the external reference
-for the benchmark transforms through `benchmarks/runtimes/verify.sh`.
+The vitest suite covers the portable runtime. The end-to-end specs run
+`codemod workflow run -w` on the fixtures in `tests/fixtures`:
+`typescript_workflow.rs` the whole engine, `jssg_parity.rs` JSSG edge cases on
+`quickjs`, with the encoding case compared byte for byte with the YAML engine;
+the YAML engine is the external reference for the benchmark transforms through
+`benchmarks/runtimes/verify.sh`.
 
 Live tests call real services, cost money or subscription quota, and are
 opt-in, one flag per backend. Each live agent test uses a temporary git
@@ -1127,4 +1106,5 @@ The live assessment test calls the decision APIs with Node's global `fetch`,
 which ignores `HTTPS_PROXY`; behind a proxy add `NODE_USE_ENV_PROXY=1`
 (Node 24) to the assessment command.
 
-The full `codemod` CLI is never built or used by this package.
+The vitest suite never builds or uses the `codemod` CLI; the cargo specs above
+do.

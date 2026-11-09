@@ -6,10 +6,9 @@ import { expect, it } from "vitest";
 const ALLOWED: Record<string, readonly string[]> = {
   core: [],
   authoring: ["core"],
-  bundle: ["core"],
-  execution: ["core", "bundle"],
-  runtime: ["core", "authoring", "bundle", "execution"],
-  host: ["core", "authoring", "bundle", "execution", "runtime"],
+  execution: ["core"],
+  runtime: ["core", "authoring", "execution"],
+  host: ["core", "authoring", "execution", "runtime"],
 };
 
 const src = resolve(import.meta.dirname, "../src");

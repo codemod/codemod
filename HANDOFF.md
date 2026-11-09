@@ -49,32 +49,31 @@ Invariants kept: snapshot semantics, all-or-nothing commit, path containment che
 |---|---|
 | `crates/codemod-sandbox/src/ast_grep/sg_core.rs` | binding-agnostic AST core; `sg_node.rs` is now a thin rquickjs facade; API snapshot test in `tests/integration/sg_api/` |
 | `crates/jssg-batch` | one copy of the bridge's batch rules (BatchPlan, classify_transform_result, containment); used by the quickjs host |
-| `crates/orchestration-quickjs-host` | binary `orchestration-quickjs-host run <bundle> --target <dir> [--json] [--history <file>] [--timings]`; Rust-backed Host; transform pool (`src/pool.rs`, batches of 64+ files, `CODEMOD_JSSG_WORKERS` else min(cores, 4)); SIGINT/SIGTERM abort |
+| `crates/orchestration-quickjs-host` | library (no binary) that the CLI calls in-process (`run(HostOptions { bundle, target, input, history })`); Rust-backed Host; transform pool (`src/pool.rs`, batches of 64+ files, `CODEMOD_JSSG_WORKERS` else min(cores, 4)); SIGINT/SIGTERM/SIGHUP abort |
+| `crates/orchestration-build` | build step: `jssg()` split with oxc, workflow and artifact bundles with rolldown (async lowered for the async context), cached by content under `$CODEMOD_WORKFLOW_CACHE` (default `<tmp>/codemod-workflow-cache-<uid>`, private 0700); embeds the portable runtime (`packages/orchestration/src` + npm `ignore`) at build time, `CODEMOD_ORCHESTRATION_SRC` overrides it |
+| `crates/cli/src/commands/workflow/typescript.rs` | `codemod workflow run -w <workflow.ts> [--target <dir>] [--input <json>] [--history <file>]`; prints the output as JSON on stdout; e2e specs in `crates/cli/tests/{typescript_workflow,jssg_parity,typescript_timings}.rs` |
 | `packages/orchestration/src/core/{host,posix}.ts` | Host interface, pure-TS path |
 | `packages/orchestration/src/portable.ts` | Node-free entry (guarded by `tests/portable.test.ts`) |
-| `packages/orchestration/src/host/runtimes/{types,registry,quickjs}.ts` | launch-only runtime provider + registry; capabilities in `src/runtime/capabilities.ts` |
-| `packages/orchestration/src/host/quickjs-bundle.ts`, `src/host/quickjs/` | bundle builder (`codemod-workflow build --runtime=quickjs -o`); bundle entry, Host, async context, in-context dispatch |
+| `packages/orchestration/src/host/quickjs/` | bundle entry, Host, async context, in-context dispatch; capabilities in `src/runtime/capabilities.ts` |
 | `packages/orchestration/src/host/{node-host,harness}.ts` | Node Host and the test harness (`createHarness`, scripted executors) |
-| `packages/orchestration/bin/{codemod-workflow,register-ts}.mjs` | single Node process, in-process type stripping, on-disk cache (`CODEMOD_WORKFLOW_CACHE`) |
 | `packages/orchestration/RUNTIMES.md` | runtime design doc (read this first) |
 | `benchmarks/runtimes/` | harness: setup.sh (pinned vite), verify.sh (identical-diff gate), run.sh, lib.sh, README.md with results |
 
 ## 4. Build / run / test
 ```bash
 pnpm install
-cargo build --release -p orchestration-quickjs-host -p codemod
+cargo build --release -p codemod -p orchestration-agent   # pnpm install first: the build embeds the runtime and npm `ignore`
 
-# run a workflow
-node packages/orchestration/bin/codemod-workflow.mjs run <workflow.ts> --target <repo>   # --runtime=quickjs is the default and only value
-node packages/orchestration/bin/codemod-workflow.mjs build <workflow.ts> --runtime=quickjs -o bundle.mjs
-target/release/orchestration-quickjs-host run bundle.mjs --target <repo> --timings
+# run a workflow (no Node needed)
+target/release/codemod workflow run -w <workflow.ts> --target <repo> [--input <json>] [--history <file>]
 
 # tests
 pnpm --filter @codemod.com/orchestration typecheck
-CODEMOD_REQUIRE_RUNTIMES=1 pnpm --filter @codemod.com/orchestration test   # requires the quickjs host built
-pnpm --filter @codemod.com/orchestration test:e2e                           # builds the quickjs host; quickjs + jssg-parity suites
-cargo test -p codemod-sandbox -p jssg-batch -p orchestration-quickjs-host -p orchestration-walker -p orchestration-agent -p codemod
-cargo clippy -p codemod-sandbox -p jssg-batch -p orchestration-quickjs-host -p orchestration-walker -p orchestration-agent --tests --no-deps -- -D warnings
+pnpm --filter @codemod.com/orchestration test                               # portable runtime (vitest)
+cargo test --release -p codemod --test typescript_workflow --test jssg_parity   # end to end, JSSG parity
+cargo test --release -p codemod --features timings --test typescript_timings    # timings
+cargo test -p codemod-sandbox -p jssg-batch -p orchestration-build -p orchestration-quickjs-host -p orchestration-walker -p orchestration-agent -p codemod
+cargo clippy -p codemod-sandbox -p jssg-batch -p orchestration-build -p orchestration-quickjs-host -p orchestration-walker -p orchestration-agent --tests --no-deps -- -D warnings
 pnpm lint && pnpm format
 
 # benchmark
@@ -196,9 +195,7 @@ Commits: `bf7bf8b` interleaved rounds harness with bench-exec launcher, prefligh
 - Not confirmed (subagent interrupted before reporting): the end-to-end R=3 run on probe+vite and the analysis test run. Run `node --test benchmarks/runtimes/tests/` and `bash benchmarks/runtimes/sizes.sh` first when resuming.
 
 ## 9. Open issues
-- No resume from `codemod-workflow run` (only the quickjs host binary has `--history`).
 - On-disk build cache misses import-resolution-only changes (package.json `exports`, tsconfig, shadowing files): delete `CODEMOD_WORKFLOW_CACHE` to rebuild.
-- Cache-root logic duplicated in `bin/register-ts.mjs` and `src/bundle/cache.ts` (kept in sync by hand).
 - `--dashboard` is not available: its server was removed with the `node` runtime; the page (`src/host/dashboard/ui.html`) and run model (`monitor.ts`) stay, and the server returns with the Rust `codemod` CLI.
 - One early ~1 h quickjs hang never reproduced (140-run stress clean); SIGINT-ignored bug found and fixed instead.
 - Subagent-driven work: three Claude Code sessions stalled silently once each (phases A and F); detect via no file activity + no processes, resume by continuing the session.
@@ -263,3 +260,5 @@ Open items:
 - Still open from Phase G: yaml `plan` superlinear; quickjs parses on the JS thread.
 
 After Phase H, the `node` runtime was removed: `crates/jssg-napi`, `packages/jssg-napi`, `src/host/runtimes/{node,node-executor,node-jssg}.ts`, `crates/orchestration-walker/src/errors.rs`, `src/core/async-context.ts` (`createFallbackAsyncContext`), the `--dashboard` server (`src/host/dashboard/{server,api,session}.ts`), and `tests/{node-runtime.e2e,files-native}.test.ts`. `RUNTIME_NAMES = ["quickjs"]`, the default; the provider contract is launch-only (`availability`, `launch`); `loadWorkflow` and the `modules/` cache are gone (the build step serves the quickjs bundler; the cache holds `quickjs/`, `ts/`, `v8/`). `jssg-parity.e2e` now runs quickjs-only edge cases plus a byte comparison with the YAML engine for encodings.
+
+2026-11-09: the Node launcher (`bin/codemod-workflow.mjs`, `register-ts.mjs`, `src/host/cli.ts`, `src/host/runtimes/*`, `src/host/quickjs-bundle.ts`, `src/bundle/*`) and the `orchestration-quickjs-host` binary were removed in favour of `codemod workflow run -w` (sections 3 and 4).

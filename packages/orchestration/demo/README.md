@@ -2,7 +2,7 @@
 
 Ten small workflows over one story: a project calls a deprecated `oldApi(name)`
 and must move to `newApi({ name })`. Each file is a complete workflow that
-`codemod-workflow` runs against a copy of `fixture/`.
+`codemod workflow run -w` runs against a copy of `fixture/`.
 
 | file          | shows                                                                                         |
 | ------------- | --------------------------------------------------------------------------------------------- |
@@ -26,8 +26,9 @@ step.
 
 ## Setup
 
-Node 24 and a Rust toolchain. Workflows 01-07 need no network access or
-installs beyond the monorepo's existing `node_modules`. Workflow 08 requires a
+A Rust toolchain and the monorepo's `node_modules` (building `codemod` embeds
+the portable runtime and its `ignore` dependency); Node is not needed to run a
+workflow. Workflows 01-07 need no network access. Workflow 08 requires a
 decision API key (`DECISION_API_KEY`, or `TYPESAFE_API_KEY` for the default
 `systemone` provider; see the package README for `DECISION_PROVIDER` and the
 other settings), workflow 09 requires an authenticated local Claude Code CLI,
@@ -35,17 +36,18 @@ and workflow 10 requires both.
 
 ```sh
 # from the repository root, once:
-cargo build -p orchestration-quickjs-host      # the QuickJS host every workflow runs in
+cargo build -p codemod                         # the CLI; it runs every workflow in-process
 cargo build -p orchestration-agent             # only for the agent demos (09, 10): the codemod-agent runner
+export PATH="$PWD/target/debug:$PATH"
 
 cd packages/orchestration
 ```
 
-Every workflow runs on the `quickjs` runtime (the default and only one): the
-bundled workflow in one QuickJS context hosted by a Rust binary. For example:
+Every workflow runs on the `quickjs` runtime: the bundled workflow in one
+QuickJS context hosted inside the `codemod` process. For example:
 
 ```sh
-node bin/codemod-workflow.mjs demo/02-jssg.ts --target /tmp/codemod-demo
+codemod workflow run -w demo/02-jssg.ts --target /tmp/codemod-demo
 ```
 
 The target is a copy of the fixture outside the repository. It cannot live
@@ -58,9 +60,9 @@ Every command below starts from a fresh copy; run this before each workflow
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
 ```
 
-`node bin/codemod-workflow.mjs` is the CLI. `pnpm --filter @codemod.com/orchestration workflow`
-is the same thing. It prints the workflow's final value as JSON; errors go to
-stderr with exit code 1. To see what a run changed:
+`codemod workflow run -w` prints the workflow's final value as JSON on stdout;
+workflow console output and errors go to stderr, errors with exit code 1. To see
+what a run changed:
 
 ```sh
 diff -ru demo/fixture /tmp/codemod-demo
@@ -70,7 +72,7 @@ diff -ru demo/fixture /tmp/codemod-demo
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-node bin/codemod-workflow.mjs demo/01-shell.ts --target /tmp/codemod-demo
+codemod workflow run -w demo/01-shell.ts --target /tmp/codemod-demo
 ```
 
 ```json
@@ -86,7 +88,7 @@ in the target directory.
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-node bin/codemod-workflow.mjs demo/02-jssg.ts --target /tmp/codemod-demo
+codemod workflow run -w demo/02-jssg.ts --target /tmp/codemod-demo
 ```
 
 ```json
@@ -104,7 +106,7 @@ One entry per selected file, in file order. `legacy.generated.ts` and
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-node bin/codemod-workflow.mjs demo/03-sequence.ts --target /tmp/codemod-demo
+codemod workflow run -w demo/03-sequence.ts --target /tmp/codemod-demo
 ```
 
 ```json
@@ -128,7 +130,7 @@ The migration is idempotent. Running it again without a reset prints
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-node bin/codemod-workflow.mjs demo/04-parallel.ts --target /tmp/codemod-demo
+codemod workflow run -w demo/04-parallel.ts --target /tmp/codemod-demo
 ```
 
 ```json
@@ -149,7 +151,7 @@ bare argument: three read-only analyses, one tuple in declaration order.
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-node bin/codemod-workflow.mjs demo/05-composed.ts --target /tmp/codemod-demo
+codemod workflow run -w demo/05-composed.ts --target /tmp/codemod-demo
 ```
 
 ```json
@@ -168,7 +170,7 @@ and `parallel(...)` build it before anything runs.
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-node bin/codemod-workflow.mjs demo/06-dynamic.ts --target /tmp/codemod-demo
+codemod workflow run -w demo/06-dynamic.ts --target /tmp/codemod-demo
 ```
 
 ```json
@@ -207,7 +209,7 @@ The first stage declares an `input` schema, so the workflow needs a value.
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-node bin/codemod-workflow.mjs demo/07-input.ts --target /tmp/codemod-demo --input '{"replacement":"newApi"}'
+codemod workflow run -w demo/07-input.ts --target /tmp/codemod-demo --input '{"replacement":"newApi"}'
 ```
 
 ```json
@@ -217,7 +219,7 @@ node bin/codemod-workflow.mjs demo/07-input.ts --target /tmp/codemod-demo --inpu
 }
 ```
 
-Without `--input` the CLI refuses to start (exit code 1):
+Without `--input` the run fails before anything starts (exit code 1):
 
 ```text
 workflow requires an input value; pass --input <json>
@@ -233,13 +235,11 @@ input of 'migrate-to': expected Config
 `--input` is strict JSON:
 
 ```sh
-node bin/codemod-workflow.mjs demo/07-input.ts --target /tmp/codemod-demo --input '{replacement: newApi}'
+codemod workflow run -w demo/07-input.ts --target /tmp/codemod-demo --input '{replacement: newApi}'
 ```
 
 ```text
---input must be valid JSON (Expected property name or '}' in JSON at position 1 (line 1 column 2)); got: {replacement: newApi}
-usage: codemod-workflow [run] <workflow.ts> [--runtime <quickjs>] [--target <directory>] [--input <json>]
-       codemod-workflow build <workflow.ts> --runtime quickjs -o <bundle.mjs>
+--input must be valid JSON (key must be a string at line 1 column 2); got: {replacement: newApi}
 ```
 
 ## `08-assessment.ts`: file-oriented assessment
@@ -252,7 +252,7 @@ globs are the privacy boundary: only matched files are sent to the model.
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-DECISION_API_KEY=... node bin/codemod-workflow.mjs demo/08-assessment.ts --target /tmp/codemod-demo
+DECISION_API_KEY=... codemod workflow run -w demo/08-assessment.ts --target /tmp/codemod-demo
 ```
 
 Assessment is a first-class Runnable — it can be the root directly (no
@@ -274,7 +274,7 @@ the agent's final message.
 ```sh
 claude auth status
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-node bin/codemod-workflow.mjs demo/09-agent.ts --target /tmp/codemod-demo
+codemod workflow run -w demo/09-agent.ts --target /tmp/codemod-demo
 ```
 
 ```json
@@ -282,8 +282,8 @@ node bin/codemod-workflow.mjs demo/09-agent.ts --target /tmp/codemod-demo
 ```
 
 The agent runs in a `codemod-agent` runner process started in the target
-directory (`cargo build -p orchestration-agent`, or point `CODEMOD_AGENT_BIN`
-at the binary); without it the step fails with a `config` error before
+directory (`cargo build -p orchestration-agent` puts it next to `codemod`, or
+point `CODEMOD_AGENT_BIN` at the binary); without it the step fails with a `config` error before
 anything starts.
 
 The backend can be changed to `builtin` or `codex` in the workflow. Each
@@ -302,7 +302,7 @@ deterministic verification.
 
 ```sh
 rm -rf /tmp/codemod-demo && cp -R demo/fixture /tmp/codemod-demo
-DECISION_API_KEY=... node bin/codemod-workflow.mjs demo/10-assisted.ts --target /tmp/codemod-demo
+DECISION_API_KEY=... codemod workflow run -w demo/10-assisted.ts --target /tmp/codemod-demo
 ```
 
 The exact route is intentionally not hard-coded: the assessment result and its
@@ -311,12 +311,12 @@ unchanged.
 
 ## How the transforms run
 
-`codemod-workflow` loads a workflow through a build step that finds every
-`jssg({ ... })` call in the module graph, bundles its `transform` (with the
+`codemod workflow run -w` loads a workflow through a build step
+(`crates/orchestration-build`) that finds every `jssg({ ... })` call in the module graph, bundles its `transform` (with the
 helpers it imports, here `lib/ast.ts`) into a standalone artifact, and
 replaces the function with the artifact's `{ name, hash }`. The workflow and
 its artifacts are bundled and run in one QuickJS context hosted by
-`orchestration-quickjs-host`, each artifact evaluated once per run. The batch
+`orchestration-quickjs-host` inside the `codemod` process, each artifact evaluated once per run. The batch
 rules (hash check, path containment, the static selector, semantic analysis,
 result conversion) are Rust code, `crates/jssg-batch`, and nothing is written until every
 transform of a command succeeded. Assessment steps call the configured decision API in-process;

@@ -39,7 +39,8 @@ removed after it.
   planning, containment, workspace index, selector skip, parse, result
   conversion) and the serde mirror of the batch's protocol data (`ArtifactRef`,
   `Selector`, `SemanticAnalysis`, `BatchFile`, `Edit`, `FileOutcome`). Used by
-  the QuickJS host (`crates/orchestration-quickjs-host`), in the bundle's
+  the QuickJS host (`crates/orchestration-quickjs-host`, run in-process by
+  `codemod workflow run -w`), in the bundle's
   context and in each transform pool worker. `tests/contracts.rs` is the engine
   side of `fixtures/walker/cases.json` and of `src/execution/languages.json`.
 - `crates/orchestration-agent`: the `codemod-agent` binary (below).
@@ -282,7 +283,8 @@ host's transform pool (`CODEMOD_JSSG_WORKERS` threads, else the core count
 capped at 4), each thread with its own context and its own evaluation of the
 artifact, so there that state is per worker.
 
-The artifact is self-contained (esbuild inlined every helper), so there is no
+The artifact is self-contained (rolldown inlined every helper at build time,
+`crates/orchestration-build`), so there is no
 module resolver, no tsconfig discovery, and no transpiler on this path: the
 only imports left in an artifact are `codemod:*` modules and built-ins. A
 legacy `getSelector` export in an artifact is ignored; Butterflow,
@@ -307,10 +309,9 @@ servers, the `claude` and `codex` CLIs) run in the process working directory
 and inherit its environment; neither the control plane's directory nor its
 environment is the right one to hand them.
 
-- Location: `CODEMOD_AGENT_BIN`, else the newer of the monorepo's
-  `target/{release,debug}/codemod-agent` (honouring `CARGO_TARGET_DIR`;
-  `src/host/runtimes/agent-bin.ts`). For `quickjs` the Node launcher resolves
-  it and passes it to the host in `CODEMOD_AGENT_BIN`. The path is checked
+- Location: `CODEMOD_AGENT_BIN`; when it is unset, `codemod workflow run -w`
+  sets it to the `codemod-agent` next to its own binary, if there is one
+  (`crates/cli/src/commands/workflow/typescript.rs`). The path is checked
   only when an agent step runs; a missing runner is `failed` with
   `phase: "config"` and a message naming `cargo build -p orchestration-agent`.
 - Launch (`executeAgent`, portable): `Host.spawn` in the target root, no

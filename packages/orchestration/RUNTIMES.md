@@ -1,33 +1,31 @@
 # Runtimes and the host seam
 
-> Status: prototype. One runtime, `quickjs` (the default and only one; needs the host binary,
-> `cargo build -p orchestration-quickjs-host`; see "The quickjs runtime"). If the binary is
-> missing the run fails before anything loads, and the error says how to build it. `agent`
-> steps also need the `codemod-agent` runner (`cargo build -p orchestration-agent`), checked
-> only when one runs. The `bridge` runtime (one Rust process per command,
-> `crates/execution-bridge`) was removed on 2026-11-08, and the `node` runtime (the workflow
-> in one Node process, transforms over a napi addon, `crates/jssg-napi`) after it.
+> Status: prototype. One runtime, `quickjs` (the default and only one), run by
+> `codemod workflow run -w` in the `codemod` process: the QuickJS host is a library crate,
+> `crates/orchestration-quickjs-host`; see "The quickjs runtime". `agent` steps also need the
+> `codemod-agent` runner (`cargo build -p orchestration-agent`), checked only when one runs.
+> The `bridge` runtime (one Rust process per command, `crates/execution-bridge`) was removed on
+> 2026-11-08, and the `node` runtime (the workflow in one Node process, transforms over a napi
+> addon, `crates/jssg-napi`) after it. On 2026-11-09 the Node launcher
+> (`bin/codemod-workflow.mjs`) and the separate host binary were removed as well.
 
 ```text
-codemod-workflow [run] <workflow.ts> [--runtime quickjs] [--target <directory>] [--input <json>]
-codemod-workflow build <workflow.ts> --runtime quickjs -o <bundle.mjs>
-orchestration-quickjs-host run <bundle.mjs> --target <dir> [--input <json>] [--history <file>] [--timings]
-runWorkflow(path, { runtime })                         // programmatic, Node
+codemod workflow run -w <workflow.ts|.mts> [--target <dir>] [--input <json>] [--history <file>]
 run(executable, { executor, runtime: QUICKJS_RUNTIME }) // any host, incl. QuickJS
 createHarness({ runtime: "quickjs" })                  // tests: Node, scripted executors
 ```
 
 | Runtime | Control plane | File selection + reads | `jssg` | `shell` | `assessment` | `agent` | Semantic analysis |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `quickjs` | QuickJS (Rust binary) | native (host primitives, `orchestration-walker`) | in-process in the same context | Rust host spawn | decision adapters, `fetch` over `httpRequest` (decision API root only) | `codemod-agent` runner via the host's spawn | yes (batch provider, `jssgIndex`) |
+| `quickjs` | QuickJS (in the `codemod` process) | native (host primitives, `orchestration-walker`) | in-process in the same context | Rust host spawn | decision adapters, `fetch` over `httpRequest` (decision API root only) | `codemod-agent` runner via the host's spawn | yes (batch provider, `jssgIndex`) |
 
 `quickjs` executes every operation kind and applies the JSSG batch rules of
 `crates/jssg-batch` (planning, containment, semantic provider, workspace index, selector
-skip, result conversion) to verbatim sources ("Source encoding"). The CLI launcher
-(`bin/codemod-workflow.mjs`) is one Node process: it strips TypeScript in-process
-(`bin/register-ts.mjs`, cached on disk), builds or reuses the workflow bundle (TypeScript and
-esbuild load only on a cache miss), then spawns the host binary. Besides `shell` commands,
-the only other processes are `codemod-agent` runners, one per `agent` step.
+skip, result conversion) to verbatim sources ("Source encoding"). `codemod workflow run -w`
+is one Rust process: it builds or reuses the workflow bundle (`crates/orchestration-build`,
+cached by content), then runs it on the QuickJS host in-process. Node is not involved.
+Besides `shell` commands, the only other processes are `codemod-agent` runners, one per
+`agent` step.
 
 ## Files
 
@@ -41,32 +39,27 @@ the only other processes are `codemod-agent` runners, one per `agent` step.
 | `src/execution/shell.ts` | portable `executeShell` with DirectRunner semantics |
 | `src/execution/assessment.ts`, `src/execution/decision/` | portable `executeAssessmentOperation(options, cwd, request, signal)` over the provider adapters, the HTTP transport, and the `Host` fs; settings from `src/core/decision.ts` |
 | `src/execution/agent.ts`, `src/execution/agent-env.ts` | portable `executeAgent`: one `codemod-agent` process per step through `Host.spawn`, allowlisted environment (`agentLaunch`), key on stdin |
-| `src/host/runtimes/agent-bin.ts` | `defaultAgentPath`: `CODEMOD_AGENT_BIN`, else the newer of `target/{release,debug}/codemod-agent` |
+| `crates/cli/src/commands/workflow/typescript.rs` | `codemod workflow run -w`: builds or reuses the bundle, runs it on the host in-process, prints the output as JSON; sets `CODEMOD_AGENT_BIN` to the `codemod-agent` next to the binary when unset |
 | `crates/orchestration-agent` | the `codemod-agent` binary: one `agent` operation, request on stdin, completion on stdout (`PROTOCOL.md`) |
 | `src/execution/jssg-batch.ts` | the portable JSSG batch loop, over a `JssgBatchEngine` (see "JSSG batches in-process") |
 | `crates/jssg-batch` | the JSSG batch rules: `BatchPlan` (planning, containment, selector skip, parse, result conversion) |
 | `src/runtime/capabilities.ts` | runtime descriptors, `CapabilityExecutor`, `assertRuntimeSupports` |
-| `src/host/runtimes/types.ts` | `RuntimeProvider` contract |
-| `src/host/runtimes/quickjs.ts` | the `quickjs` provider (`launch`) |
 | `src/host/harness.ts` | `createHarness`: runs workflows in Node with scripted executors, for tests |
 | `crates/orchestration-walker` | native `walk()` of `execution/files.ts` + batched source reads (`Host.selectFiles`, `Host.fs.readSources`) |
-| `bin/codemod-workflow.mjs`, `bin/register-ts.mjs` | the CLI launcher: one Node process, in-process type stripping with an on-disk cache |
-| `src/bundle/cache.ts` | the on-disk startup cache (`$CODEMOD_WORKFLOW_CACHE`) |
-| `src/host/runtimes/registry.ts` | `RuntimeRegistry`, `defaultRuntimes`, `runWorkflow`, `prepareLaunch` |
+| `crates/orchestration-build` | the build step: the `jssg()` split (oxc, `src/split.rs`), rolldown bundles (`src/bundle.rs`), the content-keyed cache (`src/cache.rs`, `$CODEMOD_WORKFLOW_CACHE`), the runtime sources embedded at build time (`build.rs`, `src/runtime.rs`; `CODEMOD_ORCHESTRATION_SRC` overrides them) |
 | `src/portable.ts` | `@codemod.com/orchestration/portable`: the Node-free API |
 | `tests/portable.test.ts` | static import scan of everything reachable from `portable.ts` and `host/quickjs/entry.ts` |
-| `src/host/quickjs-bundle.ts` | Node: `buildQuickjsBundle`, `cachedQuickjsBundle` (esbuild) |
 | `src/host/quickjs/{entry,host,dispatch,async-context,native,fetch}.ts` | runs inside QuickJS: bundle entry, `Host`, the in-context `JssgBatchEngine`, async context, the Rust primitives' types, the assessment `fetch` over `httpRequest` |
-| `crates/orchestration-quickjs-host` | the Rust binary: one runtime + one context, Rust primitives, JSSG per-file calls, the transform pool (`src/pool.rs`), `httpRequest` (`src/http.rs`) |
+| `crates/orchestration-quickjs-host` | the host library the CLI calls in-process: one runtime + one context, Rust primitives, JSSG per-file calls, the transform pool (`src/pool.rs`), `httpRequest` (`src/http.rs`) |
 | `crates/codemod-sandbox/src/sandbox/engine/embedded.rs` | JSSG in an embedder-owned context: built-in modules, userdata, `begin_call`/`end_call`/`transform_output` |
 
 ## The quickjs runtime
 
 ```text
-codemod-workflow run --runtime=quickjs wf.ts --target R
-  Node: cachedQuickjsBundle(wf.ts)   (esbuild + TypeScript only on a miss; a hit hashes the
-                                      inputs and the bundle, nothing else; see README "Startup")
-  spawn orchestration-quickjs-host run <bundle> --target R --json
+codemod workflow run -w wf.ts --target R
+  Rust: cached_quickjs_bundle(wf.ts)   (oxc + rolldown only on a miss; a hit hashes the
+                                        inputs and the bundle, nothing else; see README "Startup")
+  orchestration_quickjs_host::run(bundle, target R), in the same process
     Rust: AsyncRuntime + ONE AsyncContext; transform built-ins (codemod:ast-grep over sg_core, ...)
           + LLRT globals; globalThis.__codemodQuickjsNative (fs, env, clock, spawn, jssg*)
     JS:   bundle entry installs Host + async context; run(workflow, { executor, runtime: QUICKJS_RUNTIME })
@@ -80,8 +73,8 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
           agent -> executeAgent -> Host.spawn codemod-agent (stdin request + key, stdout completion)
 ```
 
-- **Bundle** (`codemod-workflow build wf.ts --runtime=quickjs -o b.mjs`): the entry, the
-  portable closure, the workflow graph rewritten by the build step (`bundle/build.ts`: each
+- **Bundle** (`crates/orchestration-build`, written to the cache): the entry, the
+  portable closure, the workflow graph rewritten by the build step (`src/split.rs`: each
   inline transform becomes an `ArtifactRef`, so command identities and history are the
   transforms' content hashes), and every artifact's
   source verbatim, keyed by hash. `@codemod.com/orchestration` (and the package's
@@ -103,12 +96,12 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
   `jssgIndex` before the first transform.
 - **Agent:** one `codemod-agent` runner process per step (`crates/orchestration-agent`,
   `execution/agent.ts`) through the host's `spawn`: allowlisted environment, the key on
-  stdin, the completion on stdout; `CODEMOD_AGENT_BIN` (the Node launcher resolves the
-  default). Cancelling kills the runner's process tree, including children that left its
+  stdin, the completion on stdout; `CODEMOD_AGENT_BIN`, which the CLI sets to the
+  `codemod-agent` next to its own binary when unset. Cancelling kills the runner's process tree, including children that left its
   process group.
-- **History/resume:** `orchestration-quickjs-host run b.mjs --history h.json` resumes from
-  `h.json` and writes the run's history back, success or not.
-- **Cancellation:** SIGINT/SIGTERM/SIGHUP to the host abort the run (a child's process group
+- **History/resume:** `codemod workflow run -w wf.ts --history h.json` resumes from
+  `h.json` when it exists and writes the run's history back, success or not.
+- **Cancellation:** SIGINT/SIGTERM/SIGHUP to the `codemod` process abort the run (a child's process group
   is killed, and descendants that left it: the group is stopped, one `ps` snapshot finds them,
   they are killed, then the group, as Node's `killProcessTree` does). A spinning transform cannot be interrupted (one JS thread). The signal
   watcher is a future on the host's event loop, and rquickjs drains every pending promise
@@ -117,9 +110,11 @@ codemod-workflow run --runtime=quickjs wf.ts --target R
   that lets the driver read signals, child output, and timers) before each 64-file chunk.
   A SIGINT mid-batch therefore cancels the command within one chunk with nothing written
   (before, it was only seen after the batch, and a jssg-only run finished normally).
-  `tests/quickjs.e2e.test.ts` ("SIGINT cancels a running JSSG batch") pins it.
-- **Console:** workflow and transform `console.*` go to the host's stderr; stdout is the result.
-- **Timings:** `--timings` or `CODEMOD_QUICKJS_TIMINGS=1` prints a `timings: {...}` line.
+  `crates/cli/tests/typescript_workflow.rs`
+  (`sigint_cancels_a_running_jssg_batch_promptly_and_writes_nothing`) pins it.
+- **Console:** workflow and transform `console.*` go to stderr; stdout is the result.
+- **Timings:** a `codemod` built with the `timings` feature writes the run's phases, the
+  bundle's JS-side phases included, to `CODEMOD_TIMINGS_FILE`.
 - **File selection is native.** The host implements the optional `Host.selectFiles` and
   `Host.fs.readSources` (see "Native file selection"), so the walk and the reads of a JSSG
   command run in Rust instead of the interpreter. `CODEMOD_NATIVE_SELECT=0` turns both off
@@ -159,12 +154,11 @@ compile is dropped whole); a path is ignored when any parent directory is, even 
 TypeScript walker sees. Errors carry the host's own `fs` messages (`EACCES: ..., scandir
 '<dir>'`) and the `ignore` package's (`path should be a \`path.relative()\`d string, ...`).
 
-`tests/quickjs.e2e.test.ts` checks it differentially: the same workflows run on an awkward
-tree of nested ignore files with and without `CODEMOD_NATIVE_SELECT=0` (the TypeScript walk
-inside QuickJS) and must give the same result. (`tests/files-native.test.ts`, a broader
-differential test over the Node host with a seeded random sweep of ignore files, was deleted
-with the `node` runtime. `orchestration-quickjs-host select` still runs the native selection
-on a JSON job list.)
+`crates/cli/tests/typescript_workflow.rs` (`native_file_selection_matches_the_interpreted_walker`)
+checks it differentially: the same workflows run on an awkward tree of nested ignore files
+with and without `CODEMOD_NATIVE_SELECT=0` (the TypeScript walk inside QuickJS) and must give
+the same result. (`tests/files-native.test.ts`, a broader differential test over the Node host
+with a seeded random sweep of ignore files, was deleted with the `node` runtime.)
 
 ## Source encoding
 
@@ -186,10 +180,10 @@ of a BOM file, identical in `yaml` and `quickjs`:
 
 Before this was pinned, the Node host stripped the BOM (`TextDecoder`'s default), so the
 Node-hosted runtimes of the time differed from the engine and from `quickjs` in those last
-three cases. `tests/jssg-parity.e2e.test.ts` ("BOM, CRLF, and no trailing newline") runs BOM,
-CRLF, and no-final-newline files through `quickjs` and, when a `codemod` binary is found
-(`CODEMOD_BIN`, `target/{release,debug}/codemod`), through the workflow engine, and requires
-identical written bytes.
+three cases. `crates/cli/tests/jssg_parity.rs` (`the_yaml_engine_writes_the_same_bytes` and
+the two encoding tests before it) runs BOM, CRLF, and no-final-newline files through
+`quickjs` and through the workflow engine, both in the `codemod` binary under test, and
+requires identical written bytes.
 
 ## Inventory: what used Node, and where it went
 
@@ -212,10 +206,11 @@ no Node API directly; they now reach none transitively.
 
 Node-only, stays Node-only (`NODE_ONLY` in `tests/portable.test.ts`):
 
-- `bundle/build.ts`: esbuild + TypeScript + `node:module` hooks; runs ahead of time.
-- `execution/process-tree.ts`, `execution/child-timings.ts`: process groups and tree kill
-  behind the Node host's `spawn`, and child timings.
-- `host/**`: CLI argument parsing, the dashboard run model, harness, runtime providers, Node host.
+- `execution/process-tree.ts`: process groups and tree kill behind the Node host's `spawn`.
+- `host/**`: the dashboard run model, harness, Node host.
+
+The build step is no longer TypeScript: `crates/orchestration-build` (oxc and rolldown) runs
+inside the `codemod` binary.
 
 ## The `Host` interface (`src/core/host.ts`)
 
@@ -282,13 +277,15 @@ variable.
   only around thenable-resolution jobs, not around ordinary reaction jobs
   (`promise_reaction_job` calls no hook), and `await` registers its continuation without a
   derived promise. Instead the quickjs bundle is built with async functions, async generators,
-  and `for await` lowered to generators (esbuild `supported`), so every continuation in the
+  and `for await` lowered to generators (oxc's async-to-generator transforms in
+  `crates/orchestration-build/src/bundle.rs`), so every continuation in the
   bundle goes through `Promise.prototype.then`, which the entry patches once to capture the
   current frame at registration and restore it around the callback: V8's
   `AsyncLocalStorage` rule. `tests/quickjs-async-context.test.ts` checks it against
   `AsyncLocalStorage` (nesting, `Promise.all`, `finally`, a promise resolved outside the
-  run, async generators); `tests/quickjs.e2e.test.ts` checks that `dynamic()` inside
-  `parallel()` marks every command `concurrent`, as `AsyncLocalStorage` does. Transform artifacts
+  run, async generators); `crates/cli/tests/typescript_workflow.rs`
+  (`commands_issued_after_awaits_in_parallel_bodies_are_concurrent`) checks that `dynamic()`
+  inside `parallel()` marks every command `concurrent`, as `AsyncLocalStorage` does. Transform artifacts
   are not lowered; they never read the run context.
 - Rejected: explicit context passing to authors (breaks the authoring API) and QuickJS promise
   hooks (incomplete on the vendored engine, see above).
@@ -309,7 +306,7 @@ interface RuntimeDescriptor { name: string; capabilities: RuntimeCapabilities }
 ```
 
 The built-in runtime supports everything, so the contract only refuses for a registered
-runtime that declares less (`tests/runtime.test.ts` uses such a `limited` runtime):
+runtime that declares less (`tests/capabilities.test.ts` uses such a `limited` runtime):
 
 - Statically, before anything runs, every operation node of the static IR is checked
   (`assertRuntimeSupports`): `UnsupportedInRuntimeError` such as
@@ -320,21 +317,10 @@ runtime that declares less (`tests/runtime.test.ts` uses such a `limited` runtim
   `failed` with `details: { phase: "config", runtime, unsupported, repositoryMayBeModified: false }`;
   the awaited command rejects with `OperationError`.
 
-Node-side provider (`src/host/runtimes/types.ts`), one file per runtime, listed in
-`registry.ts`. The contract is launch-only:
-
-```ts
-interface RuntimeProvider extends RuntimeDescriptor {
-  description: string;
-  availability(settings: RuntimeSettings): { available: true } | { available: false; reason: string };
-  launch(request: { workflow; target; input?; signal?; settings; notify? }): Promise<unknown>; // out-of-process
-}
-```
-
-`runWorkflow`/the CLI: resolve the name (`unknown runtime 'x'; expected one of: ...`), check
-the workflow and target exist, check `availability` (its `reason` is the whole error; the CLI
-exits 1), then `launch` the file. `quickjs`'s `launch` builds or reuses the cached bundle,
-spawns the host binary, and parses its `--json` result. Adding a runtime needs no CLI change.
+There is no Node-side provider or registry any more: `codemod workflow run -w` is the one
+launcher, and it runs `quickjs`. It checks that the workflow and target exist and that
+`--input` is JSON, builds or reuses the cached bundle, and runs it in-process (`src/host/runtimes/`,
+with its `RuntimeProvider` contract and `runWorkflow`, was removed with the Node launcher).
 
 ## JSSG batches in-process
 
@@ -369,7 +355,7 @@ The loop owns only chunking, the workspace index pass, cancellation between file
 each artifact once per run (cached by hash, lazily: only when a file reaches a transform), and
 turning failures into a `failed` completion. The bindings only read the transform's
 JavaScript return value into plain data (`ReturnedContent` + output JSON).
-`tests/jssg-parity.e2e.test.ts` runs edge cases (results of every type, structured outputs,
+`crates/cli/tests/jssg_parity.rs` runs edge cases (results of every type, structured outputs,
 throws, per-file skips, the transform pool, the selector skip, multiple and staged edits,
 renames and writes escaping the root, also through a symlink) through `quickjs` and pins the
 outputs, trees, and errors. The YAML engine is the external reference for the encoding case
@@ -404,7 +390,7 @@ from Rust primitives, and the async context uses then-propagation, not promise h
    `removeEventListener` (QuickJS has none; provide a small polyfill). No `process`,
    `Buffer`, `TextDecoder`, timers-as-globals, or `require` are needed
    (`tests/portable.test.ts` enforces this for everything reachable from `portable.ts`).
-3. The bundle: built by Node with esbuild from an entry that imports
+3. The bundle: built by `crates/orchestration-build` (rolldown) from an entry that imports
    `@codemod.com/orchestration/portable` (alias `@codemod.com/orchestration` to it), the
    workflow module, and the transform artifacts; the only bundled npm dependency is
    `ignore` (pure JS, CommonJS). `languages.json` is a JSON import.
