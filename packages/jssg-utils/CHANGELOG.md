@@ -1,5 +1,17 @@
 # @jssg/utils
 
+## 0.0.11
+
+### Patch Changes
+
+- 484da52: Fix JavaScript import helpers so namespace imports stay visible, aliases can be targeted, nested `require()` calls are not insertion points, and type-only bindings are distinct from values. `removeImport` / `updateImport` always return a flat `Edit[]`. Type-only namespace defaults promote like type-only defaults. Destructured dynamic `{ default: alias }` can be removed by alias.
+
+## 0.0.10
+
+### Patch Changes
+
+- b0a81ce: add updateImport utility function
+
 ## 0.0.9
 
 ### Patch Changes

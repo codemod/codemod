@@ -27,6 +27,11 @@ const codemod: Codemod<JSOrTS> = async (root) => {
     return node.replace(`const ${varName} = ${value}`);
   });
 
+  // Returning null tells the engine nothing changed, so the file is left untouched.
+  if (edits.length === 0) {
+    return null;
+  }
+
   const newSource = rootNode.commitEdits(edits);
   return newSource;
 };

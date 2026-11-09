@@ -194,27 +194,28 @@ checksum = "d92bec98840b8f03a5ff5413de5293bfcd8bf96467cf5452609f939ec6f5de16"
 
 [[package]]
 name = "ast-grep-config"
-version = "0.39.7"
+version = "0.45.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "482b9052ee2dd55471941b1fb16a24dd24c314027013e917d99bc5255b8d8e18"
+checksum = "b59f3f00667ab0b586d900b4d23b13d89f631317a85edd783376e2d87a3761ad"
 dependencies = [
  "ast-grep-core",
- "bit-set",
+ "bit-set 0.11.1",
  "globset",
  "regex",
  "schemars",
  "serde",
+ "serde_regex",
  "serde_yaml",
  "thiserror 2.0.16",
 ]
 
 [[package]]
 name = "ast-grep-core"
-version = "0.39.7"
+version = "0.45.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40f24659740c75eb037e94f0f4dd0f72f3e60e874eeb12e00f14d16eb9a68a29"
+checksum = "442c9ecc111490ac358901dea6baf854baab8b298b982126d4391ba283389d9d"
 dependencies = [
- "bit-set",
+ "bit-set 0.11.1",
  "regex",
  "thiserror 2.0.16",
  "tree-sitter",
@@ -222,13 +223,13 @@ dependencies = [
 
 [[package]]
 name = "ast-grep-dynamic"
-version = "0.39.7"
+version = "0.45.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f9f4ca501155a8f22b8b6d0a59381ce1f57e0228ce6d23d1719611d2c368450"
+checksum = "534693dfbf89b2f7a8e5a1bd61f5c8caef2c1144fe3262d5450db604b88c96f5"
 dependencies = [
  "ast-grep-core",
  "ignore",
- "libloading 0.8.8",
+ "libloading 0.9.0",
  "serde",
  "target-triple",
  "thiserror 2.0.16",
@@ -237,9 +238,9 @@ dependencies = [
 
 [[package]]
 name = "ast-grep-language"
-version = "0.39.7"
+version = "0.45.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f11c1b15a9d7ffd7926f1e05caaab715ea266a0e90f4d2608180c6a6a1024a0"
+checksum = "fbb80a4bf9c4b4fb290e1085e69e6f726d70d30210e0b59b9e0fd5b5d6d7931c"
 dependencies = [
  "ast-grep-core",
  "ignore",
@@ -250,6 +251,7 @@ dependencies = [
  "tree-sitter-c-sharp",
  "tree-sitter-cpp",
  "tree-sitter-css",
+ "tree-sitter-dart",
  "tree-sitter-elixir",
  "tree-sitter-go",
  "tree-sitter-haskell",
@@ -257,9 +259,10 @@ dependencies = [
  "tree-sitter-html",
  "tree-sitter-java",
  "tree-sitter-javascript",
- "tree-sitter-json 0.23.0",
+ "tree-sitter-json",
  "tree-sitter-kotlin-sg",
  "tree-sitter-lua",
+ "tree-sitter-md",
  "tree-sitter-nix",
  "tree-sitter-php",
  "tree-sitter-python",
@@ -481,7 +484,7 @@ checksum = "55248b47b0caf0546f7988906588779981c43bb1bc9d0c44087278f80cdb44ba"
 
 [[package]]
 name = "bench-timings"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "libc",
  "serde_json",
@@ -554,7 +557,7 @@ dependencies = [
  "quote",
  "regex",
  "rustc-hash",
- "shlex",
+ "shlex 1.3.0",
  "syn 2.0.119",
 ]
 
@@ -564,7 +567,16 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
 dependencies = [
- "bit-vec",
+ "bit-vec 0.8.0",
+]
+
+[[package]]
+name = "bit-set"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56d87354e4229f54a44f7bf2435906a4656dba36026ab6eaca629a2c436a691c"
+dependencies = [
+ "bit-vec 0.10.1",
 ]
 
 [[package]]
@@ -572,6 +584,16 @@ name = "bit-vec"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
+
+[[package]]
+name = "bit-vec"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5727b15fa97d4f4fee0a3b7c3d550ed0269f54329207b86388de918604e31269"
+dependencies = [
+ "borsh",
+ "serde",
+]
 
 [[package]]
 name = "bitflags"
@@ -638,6 +660,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5"
 dependencies = [
  "objc2",
+]
+
+[[package]]
+name = "borsh"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "553c5d846a6ba5150c65e3b1b8ec073bcf1abc20f9b7220de384a4443ea4e20a"
+dependencies = [
+ "borsh-derive",
+ "bytes",
+ "cfg_aliases 0.2.1",
+]
+
+[[package]]
+name = "borsh-derive"
+version = "1.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12cdfe656708a01f89b451a7d36466e6fe6c414de0aa18fc54f864f6f9ca9f56"
+dependencies = [
+ "once_cell",
+ "proc-macro-crate 3.4.0",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -713,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-core"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "anyhow",
  "ast-grep-config",
@@ -741,6 +787,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.23",
  "semantic-factory",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -757,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-models"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "chrono",
  "codemod-llrt-capabilities",
@@ -775,7 +822,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-runners"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "async-trait",
  "butterflow-models",
@@ -789,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-scheduler"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "butterflow-models",
  "chrono",
@@ -806,7 +853,7 @@ dependencies = [
 
 [[package]]
 name = "butterflow-state"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "async-trait",
  "butterflow-models",
@@ -913,14 +960,14 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.37"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65193589c6404eb80b450d618eaf9a2cafaaafd57ecce47370519ef674a7bd44"
+checksum = "4ff2a8126fff0f8c839080d619675a585e61720bb12d2baceae45769fd66f155"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
  "libc",
- "shlex",
+ "shlex 2.0.1",
 ]
 
 [[package]]
@@ -1063,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "codemod"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1094,6 +1141,7 @@ dependencies = [
  "hyper-rustls 0.24.2",
  "indicatif",
  "inquire",
+ "jsonc-parser",
  "language-core",
  "libc",
  "libtest-mimic",
@@ -1112,6 +1160,7 @@ dependencies = [
  "rolldown",
  "rustls 0.21.12",
  "semantic-factory",
+ "semver",
  "serde",
  "serde_json",
  "serde_json_canonicalizer",
@@ -1136,7 +1185,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-ai"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "ignore",
  "jsonpath-rust",
@@ -1165,7 +1214,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-llrt-capabilities"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "llrt_modules",
  "serde",
@@ -1174,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-mcp"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "anyhow",
  "ast-grep-core",
@@ -1197,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "codemod-sandbox"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "ast-grep-config",
  "ast-grep-core",
@@ -1249,11 +1298,14 @@ dependencies = [
 
 [[package]]
 name = "codemod-telemetry"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "async-trait",
  "chrono",
+ "futures",
+ "log",
  "posthog-rs",
+ "reqwest 0.12.23",
  "serde",
  "serde_json",
  "thiserror 2.0.16",
@@ -2199,7 +2251,7 @@ version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf04c5ec15464ace8355a7b440a33aece288993475556d461154d7a62ad9947c"
 dependencies = [
- "bit-set",
+ "bit-set 0.8.0",
  "regex-automata",
  "regex-syntax",
 ]
@@ -2279,9 +2331,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.1"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fd99930f64d146689264c637b5af2f0233a933bef0d8570e2526bf9e083192d"
+checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "fixedbitset"
@@ -3465,7 +3517,7 @@ dependencies = [
 
 [[package]]
 name = "jssg-batch"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "ast-grep-config",
  "ast-grep-core",
@@ -3481,7 +3533,7 @@ dependencies = [
 
 [[package]]
 name = "jssg-napi"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "ast-grep-config",
  "ast-grep-core",
@@ -3540,7 +3592,7 @@ dependencies = [
 
 [[package]]
 name = "language-core"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "serde",
  "tempfile",
@@ -3550,7 +3602,7 @@ dependencies = [
 
 [[package]]
 name = "language-javascript"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "ignore",
  "language-core",
@@ -3567,7 +3619,7 @@ dependencies = [
 
 [[package]]
 name = "language-python"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "anyhow",
  "language-core",
@@ -4852,7 +4904,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orchestration-agent"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "codemod-ai",
  "libc",
@@ -4864,7 +4916,7 @@ dependencies = [
 
 [[package]]
 name = "orchestration-quickjs-host"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "bench-timings",
  "codemod-sandbox",
@@ -4882,7 +4934,7 @@ dependencies = [
 
 [[package]]
 name = "orchestration-walker"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "bench-timings",
  "libc",
@@ -6643,9 +6695,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.11.2"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23d7fd106d8c02486a8d64e778353d1cffe08ce79ac2e82f540c86d0facf6912"
+checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -6655,9 +6707,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.10"
+version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b9458fa0bfeeac22b5ca447c63aaf45f28439a709ccd244698632f9aa6394d6"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -6666,9 +6718,9 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.8.6"
+version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "caf4aa5b0f434c91fe5c7f1ecb6a5ece2130b02ad2a590589dda5146df959001"
+checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "regress"
@@ -8039,7 +8091,7 @@ checksum = "16c2f82143577edb4921b71ede051dac62ca3c16084e918bf7b40c96ae10eb33"
 
 [[package]]
 name = "semantic-factory"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "language-core",
  "language-javascript",
@@ -8152,6 +8204,16 @@ dependencies = [
  "itoa",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "serde_regex"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bafc8d0c5330cecff10f16b459b479fd9acaa5b4acd7167301414e21b0057012"
+dependencies = [
+ "regex",
+ "serde",
 ]
 
 [[package]]
@@ -8299,6 +8361,12 @@ name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
+
+[[package]]
+name = "shlex"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "signal-hook"
@@ -9663,9 +9731,9 @@ dependencies = [
 
 [[package]]
 name = "target-triple"
-version = "0.1.4"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ac9aa371f599d22256307c24a9d748c041e548cbf599f35d890f9d365361790"
+checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
 
 [[package]]
 name = "tempfile"
@@ -9734,7 +9802,7 @@ dependencies = [
 
 [[package]]
 name = "testing-utils"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "anyhow",
  "codemod-llrt-capabilities",
@@ -9749,7 +9817,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-go",
  "tree-sitter-javascript",
- "tree-sitter-json 0.24.8",
+ "tree-sitter-json",
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
@@ -10201,9 +10269,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.25.9"
+version = "0.26.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccd2a058a86cfece0bf96f7cce1021efef9c8ed0e892ab74639173e5ed7a34fa"
+checksum = "17ebdd3a5a7e28a1890b876fdbd0c3c0fe0a6336cffaa104f11b9f720c9daa29"
 dependencies = [
  "cc",
  "regex",
@@ -10258,6 +10326,16 @@ name = "tree-sitter-css"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5cbc5e18f29a2c6d6435891f42569525cf95435a3e01c2f1947abcde178686f"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-dart"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "325dd1e24ee9ee21111e9c43680ae7d6010aaa9f282b048a99b9c7163c1cf553"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10335,16 +10413,6 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-json"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86a5d6b3ea17e06e7a34aabeadd68f5866c0d0f9359155d432095f8b751865e4"
-dependencies = [
- "cc",
- "tree-sitter-language",
-]
-
-[[package]]
-name = "tree-sitter-json"
 version = "0.24.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d727acca406c0020cffc6cf35516764f36c8e3dc4408e5ebe2cb35a947ec471"
@@ -10355,9 +10423,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-kotlin-sg"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0e175b7530765d1e36ad234a7acaa8b2a3316153f239d724376c7ee5e8d8e98"
+checksum = "c06ec43ae3c12165d4ac08afe4e1f5fc6757ffe274fa7bd5af9007ef11ba4319"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10371,21 +10439,32 @@ checksum = "c4013970217383f67b18aef68f6fb2e8d409bc5755227092d32efb0422ba24b8"
 
 [[package]]
 name = "tree-sitter-loader"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "ast-grep-dynamic",
  "dirs",
  "log",
  "object 0.32.2",
  "reqwest 0.12.23",
+ "tempfile",
  "thiserror 2.0.16",
 ]
 
 [[package]]
 name = "tree-sitter-lua"
-version = "0.2.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cdb9adf0965fec58e7660cbb3a059dbb12ebeec9459e6dcbae3db004739641e"
+checksum = "8daaf5f4235188a58603c39760d5fa5d4b920d36a299c934adddae757f32a10c"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-md"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ed661bfe3c264961425f77cd89ad2998bf5d629e71ce8bab1e5d7e940d6246e"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -10443,9 +10522,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-scala"
-version = "0.24.0"
+version = "0.26.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7516aeb3d1f40ede8e3045b163e86993b3434514dd06c34c0b75e782d9a0b251"
+checksum = "cf3d726ede1e8272fd16c91c6718089e06b04f9243a47026d792debc8831ec34"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -11962,7 +12041,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "1.13.18"
+version = "1.18.6"
 dependencies = [
  "anyhow",
  "butterflow-models",

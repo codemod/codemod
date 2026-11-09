@@ -9,7 +9,9 @@ use crate::pro_dry_run::{
 use crate::progress_bar::download_progress_bar;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{default_workflow_path, select_workflow_path};
-use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+use crate::utils::resolve_capabilities::{
+    prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
+};
 use crate::workflow_runner::{run_workflow, workflow_has_manual_steps};
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
@@ -293,6 +295,9 @@ pub async fn handler(
     } else {
         butterflow_core::utils::find_dry_run_only_codemod_dependency(
             &workflow_definition,
+            // `create_engine` runs the workflow with its file's directory as
+            // the bundle path, so local sources resolve from there.
+            workflow_path.parent(),
             &registry_client,
         )
         .await
@@ -322,6 +327,19 @@ pub async fn handler(
         codemod_config,
         None,
     );
+
+    let mut cli_granted = std::collections::HashSet::new();
+    if args.allow_fs {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::Fs);
+    }
+    if args.allow_fetch {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::Fetch);
+    }
+    if args.allow_child_process {
+        cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::ChildProcess);
+    }
+    let capabilities =
+        prompt_capabilities(capabilities, &cli_granted, args.no_interactive, dry_run);
 
     // Always collect diffs so report output remains available for interactive flows.
     let diff_collector = Some(Arc::new(Mutex::new(Vec::<FileDiff>::new())));

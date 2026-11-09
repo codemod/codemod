@@ -443,9 +443,21 @@ impl CoreRoot {
         &self.inner.semantic
     }
 
-    /// Text of the root node (JS `SgRoot.source()`).
+    /// The full document text, leading whitespace and a BOM included (JS
+    /// `SgRoot.source()`). tree-sitter starts the root node at its first
+    /// token, so the root node's own text drops that padding (CDMD-5018).
     pub fn root_text(&self) -> String {
-        self.inner.grep.root().text().to_string()
+        self.document_source().into_owned()
+    }
+
+    #[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
+    fn document_source(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.inner.grep.source())
+    }
+
+    #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
+    fn document_source(&self) -> Cow<'_, str> {
+        Cow::Owned(self.inner.grep.root().get_doc().source_text())
     }
 
     /// The full source the document was parsed from.
@@ -834,15 +846,23 @@ impl CoreNode {
     }
 
     /// Apply `edits` to this node's text (`SgNode.commitEdits()`): edits are
-    /// sorted by start, overlapping edits are skipped.
+    /// sorted by start, overlapping edits are skipped. On the root node they
+    /// apply to the whole document, so leading blank lines, whitespace, and a
+    /// BOM outside the root node's range are kept byte for byte (CDMD-5018).
     pub fn commit_edits(&self, edits: &[Edit]) -> String {
+        let (old_content, offset) = if self.node.parent().is_none() {
+            (self.root.document_source(), 0)
+        } else {
+            (self.node.text(), self.node.range().start)
+        };
+        if edits.is_empty() {
+            return old_content.into_owned();
+        }
+
         let mut sorted_edits: Vec<&Edit> = edits.iter().collect();
         sorted_edits.sort_by_key(|edit| edit.start_pos);
 
-        let mut new_content = String::new();
-        let old_content = self.node.text();
-
-        let offset = self.node.range().start;
+        let mut new_content = String::with_capacity(old_content.len());
         let mut start = 0;
 
         for edit in sorted_edits {

@@ -40,9 +40,9 @@ pub(crate) fn find_in_ancestors<P: AsRef<Path>>(
         }
 
         // Move to parent directory
-        match current.parent() {
-            Some(parent) => current = parent,
-            None => return None, // Reached the root
+        {
+            let parent = current.parent()?;
+            current = parent
         }
     }
 }

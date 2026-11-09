@@ -33,6 +33,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_json_canonicalizer = { workspace = true }
 serde_yaml = { workspace = true }
+semver = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
@@ -78,6 +79,7 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 futures = { workspace = true }
 toml_edit = "0.22"
+jsonc-parser = { version = "0.26", features = ["cst", "serde"] }
 arboard = "3.4"
 
 [target.'cfg(unix)'.dependencies]

@@ -1,0 +1,326 @@
+---
+title: "Java"
+description: "Import, type, scope, and anonymous-class helpers for Java JSSG codemods."
+---
+
+Use these helpers to prove which type a simple name refers to, clean up imports, resolve the declaration visible at a use, replace type names without touching fully qualified names, and read anonymous class methods.
+
+```typescript
+import {
+  cleanupImports,
+  collectImports,
+  createImportCleanupEdits,
+  getImportPath,
+  hasConflictingSimpleImport,
+  isTypeImported,
+  parseImportDeclaration,
+  referencesIdentifier,
+  simpleName,
+} from "@jssg/utils/java/imports";
+import {
+  findDirectChild,
+  findEnclosingNode,
+  findTypeNode,
+  findVisibleDeclarationBeforeUsage,
+} from "@jssg/utils/java/scope";
+import {
+  baseTypeName,
+  isKnownType,
+  isTypeShadowed,
+  replaceBaseTypeName,
+  replaceTypeIdentifierSafely,
+} from "@jssg/utils/java/types";
+import {
+  getMethodInvocationParts,
+  getReceiverIdentifier,
+} from "@jssg/utils/java/method-invocations";
+import {
+  getAnonymousClassMethod,
+  getAnonymousClassMethods,
+  getMethodBodyContent,
+  getSingleParameterName,
+  renameIdentifiersInNode,
+} from "@jssg/utils/java/anonymous-classes";
+```
+
+## `collectImports`
+
+Collect Java imports from a program node and return the exact names and wildcard packages separately.
+
+**Returns**
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `imported` | `Set<string>` | Fully qualified names from exact imports, such as `com.example.Widget` |
+| `wildcardImportedPackages` | `Set<string>` | Package names from wildcard imports, without the trailing `.*` |
+
+**Example**
+
+```typescript
+const imports = collectImports(rootNode);
+imports.imported.has("com.example.Widget");
+imports.wildcardImportedPackages.has("com.example");
+```
+
+## `isTypeImported`
+
+Return whether `fullyQualifiedName` is present as an exact import, or its package is covered by a wildcard import.
+
+**Parameters**
+
+<ParamField body="imports" type="ImportState" required>
+  The value returned by `collectImports`.
+</ParamField>
+
+<ParamField body="options" type="object" required>
+  - `simpleName` — simple type name, such as `Widget`.
+  - `fullyQualifiedName` — name to match, such as `com.example.Widget`. The check uses this name and its package. `simpleName` is part of the options object and is not compared on its own.
+</ParamField>
+
+**Example**
+
+```typescript
+const imported = isTypeImported(imports, {
+  simpleName: "Widget",
+  fullyQualifiedName: "com.example.Widget",
+});
+```
+
+## `hasConflictingSimpleImport`
+
+Return whether an exact import already binds `simpleName` to a fully qualified name other than `expectedFullyQualifiedName`. Wildcard imports are not treated as conflicts.
+
+**Parameters**
+
+<ParamField body="imports" type="ImportState" required>
+  The value returned by `collectImports`.
+</ParamField>
+
+<ParamField body="options" type="object" required>
+  - `simpleName` — simple type name to check.
+  - `expectedFullyQualifiedName` — the fully qualified name that should own that simple name.
+</ParamField>
+
+**Example**
+
+```typescript
+const conflict = hasConflictingSimpleImport(imports, {
+  simpleName: "Widget",
+  expectedFullyQualifiedName: "com.example.Widget",
+});
+```
+
+## `createImportCleanupEdits`
+
+Build edits that drop unreferenced imports and add imports whose simple name is used. Returns an empty array when the source already has the right imports. Apply the edits with `rootNode.commitEdits`. A name counts as used only when it appears as its own identifier, so `com.other.Widget` does not count as a use of `Widget`.
+
+**Parameters**
+
+<ParamField body="options" type="ImportCleanupOptions" required>
+  - `removeIfUnreferenced` — fully qualified names to drop when that simple name is unused.
+  - `addIfReferenced` — fully qualified names to insert when that simple name is used and the import is missing.
+</ParamField>
+
+**Returns**
+
+`Edit[]`
+
+**Example**
+
+```typescript
+const edits = createImportCleanupEdits(rootNode, {
+  removeIfUnreferenced: ["com.example.OldWidget"],
+  addIfReferenced: ["com.example.Widget"],
+});
+```
+
+## `cleanupImports`
+
+Run the same cleanup as `createImportCleanupEdits` on source text and return the rewritten source. Returns the original source when nothing changes.
+
+**Parameters**
+
+<ParamField body="source" type="string" required>
+  Java source to rewrite.
+</ParamField>
+
+<ParamField body="options" type="ImportCleanupOptions" required>
+  Same fields as `createImportCleanupEdits`.
+</ParamField>
+
+**Example**
+
+```typescript
+const next = cleanupImports(source, {
+  removeIfUnreferenced: ["com.example.OldWidget"],
+  addIfReferenced: ["com.example.Widget"],
+});
+```
+
+## `simpleName`
+
+Return the text after the last `.` in a fully qualified name. `com.example.Widget` returns `Widget`. A name with no `.` is returned unchanged.
+
+## `getImportPath`
+
+Return the imported name from a Java `import_declaration` node. A wildcard import keeps the `.*` suffix, so `import com.example.*;` yields `com.example.*`. Returns `null` when the declaration has no scoped name.
+
+## `parseImportDeclaration`
+
+Return the imported name from a single `import ...;` declaration, or `null` when the text is not one. `import com.example.Widget;` returns `com.example.Widget`. A wildcard keeps the `.*` suffix.
+
+## `referencesIdentifier`
+
+Return whether `name` appears as its own identifier or type identifier under `rootNode`. Names inside import declarations are ignored. A name that is only part of a fully qualified type, such as `Widget` in `com.other.Widget`, is ignored.
+
+## `findVisibleDeclarationBeforeUsage`
+
+Find the parameter, local, or field named `name` that is visible at `usageNode`. A local or parameter declared before the use wins over a field of the same name. Returns `null` when nothing visible matches.
+
+**Parameters**
+
+<ParamField body="options" type="object" required>
+  - `usageNode` — the node where the name is used.
+  - `name` — the identifier to resolve.
+</ParamField>
+
+**Returns**
+
+`DeclarationInfo | null`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `kind` | `"parameter" \| "local" \| "field"` | Which declaration is visible |
+| `name` | `string` | The declaration name |
+| `typeText` | `string \| null` | Declared type text, when the declaration has one |
+| `node` | `SgNode` | The declaration node |
+
+**Example**
+
+```typescript
+const declaration = findVisibleDeclarationBeforeUsage({
+  usageNode,
+  name: "future",
+});
+```
+
+## `findEnclosingNode`
+
+Return the nearest ancestor of `node` whose tree-sitter kind is `kind`, or `null` when none matches.
+
+## `findDirectChild`
+
+Return the child of `parent` that contains `descendant`, or `null` when `descendant` is not under `parent`.
+
+**Example**
+
+```typescript
+const statement = findDirectChild(block, usageNode);
+```
+
+## `findTypeNode`
+
+Return the named child of `node` that holds its type, or `null` when there is none. Matches generic types, type identifiers, scoped types, and primitive types such as `int`, `boolean`, and `void`.
+
+## `replaceTypeIdentifierSafely`
+
+Return an edit that replaces a type name, or `null` when the node should stay as it is. Import declarations are left alone. A name that is only one part of a fully qualified type is left alone. Generic arguments on the replaced type are kept, so `ListenableFuture<String>` can become `CompletableFuture<String>`.
+
+**Example**
+
+```typescript
+const edit = replaceTypeIdentifierSafely(typeNode, "CompletableFuture");
+```
+
+## `baseTypeName`
+
+Return a type name with its generic arguments removed. `List<String>` returns `List`. A name with no `<` is returned trimmed.
+
+## `replaceBaseTypeName`
+
+Return `typeText` with its base name replaced and its generic arguments kept. `List<String>` replaced with `Set` returns `Set<String>`.
+
+## `isTypeShadowed`
+
+Return whether `simpleName` is already bound to a different type. A conflicting exact import counts. A class in the same file with that simple name also counts.
+
+**Parameters**
+
+<ParamField body="options" type="object" required>
+  - `simpleName` — simple type name to check.
+  - `expectedFullyQualifiedName` — the fully qualified name that should own that simple name.
+</ParamField>
+
+## `isKnownType`
+
+Return whether `typeText` refers to `fullyQualifiedName`. An exact fully qualified `typeText` matches. A simple name matches when that type is imported, no conflicting import exists, and no class in the file shadows the name.
+
+**Example**
+
+```typescript
+const known = isKnownType(rootNode, "Widget", "com.example.Widget");
+```
+
+## `getMethodInvocationParts`
+
+Split a method invocation into its receiver, name, and arguments. Returns `null` when `invocation` is not a `method_invocation` node.
+
+**Returns**
+
+`MethodInvocationParts | null`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `receiver` | `SgNode \| null` | The object the method is called on |
+| `methodName` | `string \| null` | The method name text |
+| `nameNode` | `SgNode \| null` | The method name node |
+| `args` | `SgNode[]` | Argument nodes |
+
+**Example**
+
+```typescript
+const parts = getMethodInvocationParts(invocation);
+```
+
+## `getReceiverIdentifier`
+
+Return the identifier text for a receiver. For a field access, return the field name. Returns `null` when `receiver` is `null` or has no identifier.
+
+## `getAnonymousClassMethod`
+
+Return the method named `methodName` inside an anonymous class creation, or `null` when the node is not an `object_creation_expression` or that method is missing.
+
+## `getAnonymousClassMethods`
+
+Return a map from each requested method name to its method node. Returns `null` if any requested method is missing.
+
+**Example**
+
+```typescript
+const methods = getAnonymousClassMethods(classCreation, ["onSuccess", "onFailure"]);
+const onSuccess = methods?.get("onSuccess");
+```
+
+## `getSingleParameterName`
+
+Return the parameter name when a method has exactly one parameter, or `null` when it has any other number of parameters.
+
+## `getMethodBodyContent`
+
+Return the text inside a method body, without the surrounding braces. Returns `null` when the method has no block.
+
+**Parameters**
+
+<ParamField body="rename" type="{ from: string; to: string }" optional>
+  When set, identifiers equal to `from` are renamed to `to` in the body before the text is returned.
+</ParamField>
+
+**Example**
+
+```typescript
+const body = getMethodBodyContent(method, { from: "value", to: "valueResult" });
+```
+
+## `renameIdentifiersInNode`
+
+Rename identifiers equal to `from` inside `node` and return the rewritten text. Returns the original text when no identifier matches.

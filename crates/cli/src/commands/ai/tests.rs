@@ -19,11 +19,11 @@ use super::update::types::{
 };
 use super::{
     goose_project_scope_command_warning, interactive_user_scope_label,
-    managed_components_from_install, scope_prompt_options,
+    managed_components_from_install, record_periodic_trigger_result, scope_prompt_options,
 };
 use crate::commands::harness_adapter::{
     Harness, InstallScope, InstalledSkill, ManagedComponentKind, ManagedComponentSnapshot,
-    ManagedStateWriteResult,
+    ManagedStateWriteResult, PeriodicUpdateTriggerUpsertResult,
 };
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
@@ -342,6 +342,52 @@ fn install_output_json_includes_codemod_mcp_entry() {
         codemod_mcp.get("version").and_then(Value::as_str),
         Some("latest")
     );
+}
+
+#[test]
+fn skipped_periodic_trigger_note_reaches_install_output() {
+    let update_policy = UpdatePolicyContext {
+        mode: UpdatePolicyMode::Manual,
+        remote_source: MANAGED_UPDATE_POLICY_LOCAL_SOURCE.to_string(),
+        fallback_applied: false,
+        remote_manifest: None,
+        warnings: Vec::new(),
+    };
+    let skipped_note = "Skipped Codex periodic update notify".to_string();
+    let mut messages = Vec::new();
+    let mut warnings = Vec::new();
+    let tracked = record_periodic_trigger_result(
+        Ok::<_, String>(PeriodicUpdateTriggerUpsertResult {
+            tracked_paths: Vec::new(),
+            updated_paths: Vec::new(),
+            notes: vec![skipped_note.clone()],
+        }),
+        &mut messages,
+        &mut warnings,
+    );
+
+    let output = build_install_output(BuildInstallOutputInput {
+        harness: Harness::Codex,
+        scope: InstallScope::Project,
+        installed: Vec::new(),
+        managed_state: None,
+        update_policy: &update_policy,
+        component_decisions: Vec::new(),
+        auto_safe_apply: None,
+        notes: messages,
+        warnings,
+        restart_hint: None,
+    });
+
+    assert!(tracked.is_empty());
+    let output_json = serde_json::to_value(&output).expect("install output should serialize");
+    let notes = output_json
+        .get("notes")
+        .and_then(Value::as_array)
+        .expect("notes should be an array");
+    assert!(notes
+        .iter()
+        .any(|note| note.as_str() == Some(skipped_note.as_str())));
 }
 
 #[test]

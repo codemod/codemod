@@ -75,7 +75,9 @@ class NodeSandbox implements Sandbox {
     );
 
     const sandboxFactory = factory();
-    const { exports } = await WebAssembly.instantiate(wasmBytes, {
+    const {
+      instance: { exports },
+    } = await WebAssembly.instantiate(wasmBytes, {
       "./codemod-sandbox_bg.js": sandboxFactory,
       wasi_snapshot_preview1: wasiInstance.wasiImport,
     });

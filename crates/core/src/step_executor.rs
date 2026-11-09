@@ -220,7 +220,6 @@ impl<'a> StepExecutor<'a> {
                             request.node,
                             request.task,
                             request.params,
-                            request.state,
                             request.bundle_path,
                             request.dependency_chain,
                             request.capabilities,

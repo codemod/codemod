@@ -144,8 +144,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         cli_granted.insert(codemod_llrt_capabilities::types::LlrtSupportedModules::ChildProcess);
     }
 
-    let capabilities = prompt_capabilities(capabilities, &cli_granted, args.no_interactive);
-
     let target_path = normalize_target_path(
         args.target_path
             .clone()
@@ -162,10 +160,13 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         workflow_file_path.display()
     ))?;
     let registry_client = create_registry_client(None)?;
-    let dry_run_only_dependency =
-        utils::find_dry_run_only_codemod_dependency(&workflow_definition, &registry_client)
-            .await
-            .context("Failed to inspect bundled codemods")?;
+    let dry_run_only_dependency = utils::find_dry_run_only_codemod_dependency(
+        &workflow_definition,
+        Some(workflow_dir),
+        &registry_client,
+    )
+    .await
+    .context("Failed to inspect bundled codemods")?;
     if let Some(source) = dry_run_only_dependency.as_deref() {
         if !args.dry_run {
             notify_pro_dry_run_required(
@@ -176,6 +177,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     }
     let pro_dry_run_required = dry_run_only_dependency.is_some();
     let dry_run = args.dry_run || pro_dry_run_required;
+    let capabilities =
+        prompt_capabilities(capabilities, &cli_granted, args.no_interactive, dry_run);
     let auto_launch_tui =
         should_auto_launch_workflow_tui(args.no_interactive, dry_run, &workflow_definition);
 

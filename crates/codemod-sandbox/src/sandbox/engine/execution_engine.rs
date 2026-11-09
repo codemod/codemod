@@ -417,10 +417,12 @@ where
                     fs_capability_enabled = true;
                 }
                 LlrtSupportedModules::Fs => {}
-                LlrtSupportedModules::ChildProcess if !options.dry_run => {
+                // Unlike unrestricted fs, child_process is controlled by an
+                // explicit capability grant. Dry-run must not silently revoke
+                // a permission the caller already approved.
+                LlrtSupportedModules::ChildProcess => {
                     module_builder.enable_child_process();
                 }
-                LlrtSupportedModules::ChildProcess => {}
                 _ => {}
             }
         }
@@ -748,7 +750,7 @@ where
     output
 }
 
-fn map_transform_execution_error(
+pub(super) fn map_transform_execution_error(
     runtime_hooks_context: &RuntimeHooksContext,
     error: impl std::fmt::Display,
 ) -> ExecutionError {
@@ -1509,6 +1511,45 @@ export default function transform(root, options) {
             fs::read_to_string(&sibling_path).expect("root.write target should remain on disk"),
             "export const sibling = 1;"
         );
+    }
+
+    #[tokio::test]
+    async fn test_dry_run_enables_explicitly_granted_child_process_capability() {
+        let codemod_content = r#"
+import { spawn } from "child_process";
+
+export default function transform() {
+  return spawn ? null : null;
+}
+        "#
+        .trim();
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "const value = true;",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: Some([LlrtSupportedModules::ChildProcess].into_iter().collect()),
+            semantic_provider: None,
+            metrics_context: None,
+            llm_request_handler: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: true,
+            stage_writes: false,
+            target_directory: temp_dir.path(),
+        };
+
+        execute_codemod_with_quickjs(options)
+            .await
+            .expect("an explicitly granted capability should remain enabled in dry-run mode");
     }
 
     #[tokio::test]
@@ -2378,5 +2419,183 @@ export default function transform(root) {
             message.contains("boom") && message.contains("migrate.jssg.js"),
             "{message}"
         );
+    }
+
+    /// Fixtures whose leading bytes (blank lines, whitespace, BOM) sit outside the tree-sitter
+    /// root node range, plus CRLF line endings. See CDMD-5018.
+    const LEADING_PADDING_FIXTURES: &[(&str, &str)] = &[
+        ("leading_blank_line", "\nexport const x = 1;\n"),
+        (
+            "leading_blank_lines_and_comment",
+            "\n\n// comment\nexport const y = 2;\n",
+        ),
+        ("leading_whitespace", "  \t\n   export const x = 1;\n"),
+        ("bom", "\u{feff}export const x = 1;\n"),
+        (
+            "bom_and_leading_blank_lines",
+            "\u{feff}\n\nexport const x = 1;\n",
+        ),
+        (
+            "crlf_and_leading_blank_lines",
+            "\r\n\r\nexport const x = 1;\r\nexport const y = 2;\r\n",
+        ),
+        (
+            "bom_crlf_and_leading_blank_lines",
+            "\u{feff}\r\n\r\n// comment\r\nexport const x = 1;\r\n",
+        ),
+        ("whitespace_only", "\n\n\n"),
+        ("empty", ""),
+    ];
+
+    /// The `codemod init` TypeScript starter: rewrites `var` to `const` and always returns
+    /// `commitEdits(edits)`, even when nothing matched.
+    const VAR_TO_CONST_CODEMOD: &str = r#"
+export default function transform(root) {
+  const rootNode = root.root();
+  const nodes = rootNode.findAll({ rule: { pattern: "var $VAR = $VALUE" } });
+  const edits = nodes.map((node) => {
+    const varName = node.getMatch("VAR")?.text();
+    const value = node.getMatch("VALUE")?.text();
+    return node.replace(`const ${varName} = ${value}`);
+  });
+  return rootNode.commitEdits(edits);
+}
+"#;
+
+    async fn run_codemod_on(
+        codemod: &str,
+        language: CodemodLang,
+        content: &str,
+    ) -> ExecutionResult {
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language,
+            file_path: Path::new("test.ts"),
+            content,
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            llm_request_handler: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            stage_writes: false,
+            target_directory: Path::new("."),
+        };
+        execute_codemod_with_quickjs(options)
+            .await
+            .expect("codemod should execute")
+            .primary
+    }
+
+    fn ts_lang() -> CodemodLang {
+        CodemodLang::Static(SupportLang::TypeScript)
+    }
+
+    #[tokio::test]
+    async fn test_no_match_commit_edits_leaves_file_unmodified() {
+        for (name, content) in LEADING_PADDING_FIXTURES {
+            match run_codemod_on(VAR_TO_CONST_CODEMOD, ts_lang(), content).await {
+                ExecutionResult::Unmodified => {}
+                ExecutionResult::Modified(modified) => panic!(
+                    "{name}: a codemod with zero edits must not change any bytes; \
+                     input {content:?}, output {:?}",
+                    modified.content
+                ),
+                other => panic!("{name}: expected Unmodified, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_commit_empty_edits_and_source_return_exact_bytes() {
+        let codemod = r#"
+export default function transform(root) {
+  const committed = root.root().commitEdits([]);
+  if (committed !== root.source()) {
+    throw new Error(`commitEdits([]) ${JSON.stringify(committed)} != source() ${JSON.stringify(root.source())}`);
+  }
+  return committed;
+}
+"#;
+        for (name, content) in LEADING_PADDING_FIXTURES {
+            match run_codemod_on(codemod, ts_lang(), content).await {
+                ExecutionResult::Unmodified => {}
+                other => panic!("{name}: expected Unmodified for {content:?}, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_root_commit_edits_preserves_leading_padding_with_real_edits() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "leading_blank_lines",
+                "\n\n// comment\nvar a = 1;\n",
+                "\n\n// comment\nvar renamed = 1;\n",
+            ),
+            (
+                "bom",
+                "\u{feff}var a = 1;\nexport const y = 2;\n",
+                "\u{feff}var renamed = 1;\nexport const y = 2;\n",
+            ),
+            (
+                "bom_crlf_and_leading_blank_lines",
+                "\u{feff}\r\n\r\nvar a = 1;\r\nexport const y = a;\r\n",
+                "\u{feff}\r\n\r\nvar renamed = 1;\r\nexport const y = renamed;\r\n",
+            ),
+            (
+                "leading_whitespace",
+                "  \t\n   var a = 1;\n",
+                "  \t\n   var renamed = 1;\n",
+            ),
+        ];
+        // Rename identifier `a` to `renamed`, leaving every other byte alone.
+        let codemod = r#"
+export default function transform(root) {
+  const rootNode = root.root();
+  const edits = rootNode
+    .findAll({ rule: { kind: "identifier", regex: "^a$" } })
+    .map((node) => node.replace("renamed"));
+  return rootNode.commitEdits(edits);
+}
+"#;
+        for (name, input, expected) in cases {
+            match run_codemod_on(codemod, ts_lang(), input).await {
+                ExecutionResult::Modified(modified) => assert_eq!(
+                    modified.content, *expected,
+                    "{name}: only the matched `var` should change"
+                ),
+                other => panic!("{name}: expected Modified, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_non_root_commit_edits_stays_relative_to_node() {
+        let codemod = r#"
+export default function transform(root) {
+  const fn = root.root().find({ rule: { kind: "statement_block" } });
+  const edits = fn
+    .findAll({ rule: { kind: "identifier", regex: "^a$" } })
+    .map((node) => node.replace("renamed"));
+  return fn.commitEdits(edits);
+}
+"#;
+        let input = "\n\nfunction f() {\n  var a = 1;\n}\n";
+        match run_codemod_on(codemod, ts_lang(), input).await {
+            ExecutionResult::Modified(modified) => {
+                assert_eq!(modified.content, "{\n  var renamed = 1;\n}")
+            }
+            other => panic!("expected Modified, got {other:?}"),
+        }
     }
 }

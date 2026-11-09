@@ -12,3 +12,6 @@ dirs = { workspace = true }
 object = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

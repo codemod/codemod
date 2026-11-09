@@ -4,11 +4,27 @@ const { EventEmitter } = require("node:events");
 
 const {
   CODEMOD_BOOTSTRAPPED_ENV,
+  detectPackageName,
   latestBootstrapArgs,
   npmExecutable,
   shouldBootstrapLatestNoCommand,
   run,
 } = require("../codemod");
+
+test("detectPackageName selects the Linux package for the current libc", () => {
+  assert.equal(
+    detectPackageName({ platform: "linux", arch: "x64", libcFamily: "glibc" }),
+    "@codemod.com/cli-linux-x64-gnu",
+  );
+  assert.equal(
+    detectPackageName({ platform: "linux", arch: "x64", libcFamily: "musl" }),
+    "@codemod.com/cli-linux-x64-musl",
+  );
+  assert.equal(
+    detectPackageName({ platform: "linux", arch: "arm64", libcFamily: "musl" }),
+    "@codemod.com/cli-linux-arm64-musl",
+  );
+});
 
 test("shouldBootstrapLatestNoCommand only bootstraps bare invocation", () => {
   assert.equal(shouldBootstrapLatestNoCommand([], {}), true);

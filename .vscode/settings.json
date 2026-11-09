@@ -16,14 +16,5 @@
   "[rust]": {
     "editor.defaultFormatter": "rust-lang.rust-analyzer"
   },
-  "oxc.fmt.experimental": true,
-  "workbench.colorCustomizations": {
-    "titleBar.foreground": "#d6ff62",
-    "titleBar.activeForeground": "#d6ff62",
-    "titleBar.inactiveForeground": "#d6ff62",
-    "titleBar.border": "#d6ff62",
-    "statusBar.background": "#d6ff62",
-    "statusBar.foreground": "#0B151E",
-    "statusBar.border": "#0B151E"
-  }
+  "oxc.fmt.experimental": true
 }

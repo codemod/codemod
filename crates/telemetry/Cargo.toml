@@ -13,7 +13,10 @@ build = "build.rs"
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+futures.workspace = true
+log.workspace = true
 posthog-rs = { version = "0.21", default-features = false, features = ["async-client"] }
+reqwest.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

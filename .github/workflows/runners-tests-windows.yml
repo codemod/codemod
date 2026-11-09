@@ -1,0 +1,47 @@
+name: Runner tests (Windows)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/runners/**"
+      - "crates/models/**"
+      - "crates/llrt-capabilities/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/runners-tests-windows.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/runners/**"
+      - "crates/models/**"
+      - "crates/llrt-capabilities/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/runners-tests-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runners-tests-windows:
+    name: Runner tests (windows-2022)
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run runner tests
+        run: cargo test --locked -p butterflow-runners

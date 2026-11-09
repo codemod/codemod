@@ -285,8 +285,15 @@ impl Content for Wrapper {
     }
 }
 
-fn char_offset_to_byte_offset(text: &str, char_offset: usize) -> usize {
-    text.chars().take(char_offset).map(|c| c.len_utf8()).sum()
+fn utf16_offset_to_byte_offset(text: &str, offset: usize) -> usize {
+    let mut utf16_offset = 0;
+    for (byte_offset, character) in text.char_indices() {
+        if utf16_offset >= offset {
+            return byte_offset;
+        }
+        utf16_offset += character.len_utf16();
+    }
+    text.len()
 }
 
 fn pos_for_byte_offset(input: &[u8], offset: usize) -> Point {
@@ -359,16 +366,17 @@ impl WasmDoc {
 }
 
 #[derive(Clone)]
-pub struct Node(pub SyntaxNode);
-impl<'a> SgNode<'a> for Node {
+pub struct Node<'a>(pub SyntaxNode, &'a [u8]);
+impl<'a> SgNode<'a> for Node<'a> {
     fn parent(&self) -> Option<Self> {
-        self.0.parent().map(Node)
+        self.0.parent().map(|node| Node(node, self.1))
     }
     fn ancestors(&self, _root: Self) -> impl Iterator<Item = Self> {
         let mut parent = self.0.parent();
+        let source = self.1;
         std::iter::from_fn(move || {
             let inner = parent.clone()?;
-            let ret = Some(Node(inner.clone()));
+            let ret = Some(Node(inner.clone(), source));
             parent = inner.parent();
             ret
         })
@@ -377,7 +385,7 @@ impl<'a> SgNode<'a> for Node {
     //   TsPre::new(self)
     // }
     fn child(&self, nth: usize) -> Option<Self> {
-        self.0.child(nth as u32).map(Node)
+        self.0.child(nth as u32).map(|node| Node(node, self.1))
     }
     fn children(&self) -> impl ExactSizeIterator<Item = Self> {
         self.0
@@ -385,16 +393,18 @@ impl<'a> SgNode<'a> for Node {
             .to_vec()
             .into_iter()
             .map(|n| n.unchecked_into::<SyntaxNode>())
-            .map(Node)
+            .map(|node| Node(node, self.1))
     }
     fn child_by_field_id(&self, field_id: u16) -> Option<Self> {
-        self.0.child_for_field_id(field_id).map(Node)
+        self.0
+            .child_for_field_id(field_id)
+            .map(|node| Node(node, self.1))
     }
     fn next(&self) -> Option<Self> {
-        self.0.next_sibling().map(Node)
+        self.0.next_sibling().map(|node| Node(node, self.1))
     }
     fn prev(&self) -> Option<Self> {
-        self.0.previous_sibling().map(Node)
+        self.0.previous_sibling().map(|node| Node(node, self.1))
     }
     // fn next_all(&self) -> impl Iterator<Item = Self> { }
     // fn prev_all(&self) -> impl Iterator<Item = Self> {}
@@ -419,13 +429,13 @@ impl<'a> SgNode<'a> for Node {
         self.0.id() as usize
     }
     fn range(&self) -> std::ops::Range<usize> {
-        // WASM tree-sitter returns character indices, convert to byte indices
+        // Web tree-sitter indices count UTF-16 code units in the complete document.
         let start_char_idx = self.0.start_index() as usize;
         let end_char_idx = self.0.end_index() as usize;
 
-        let root_text = self.get_root_text();
-        let start_byte = char_offset_to_byte_offset(&root_text, start_char_idx);
-        let end_byte = char_offset_to_byte_offset(&root_text, end_char_idx);
+        let source = self.full_source();
+        let start_byte = utf16_offset_to_byte_offset(&source, start_char_idx);
+        let end_byte = utf16_offset_to_byte_offset(&source, end_char_idx);
 
         start_byte..end_byte
     }
@@ -433,8 +443,7 @@ impl<'a> SgNode<'a> for Node {
         let start = self.0.start_position();
         let char_offset = self.0.start_index() as usize;
 
-        let root_text = self.get_root_text();
-        let byte_offset = char_offset_to_byte_offset(&root_text, char_offset);
+        let byte_offset = utf16_offset_to_byte_offset(&self.full_source(), char_offset);
 
         Position::new(start.row() as usize, start.column() as usize, byte_offset)
     }
@@ -442,8 +451,7 @@ impl<'a> SgNode<'a> for Node {
         let end = self.0.end_position();
         let char_offset = self.0.end_index() as usize;
 
-        let root_text = self.get_root_text();
-        let byte_offset = char_offset_to_byte_offset(&root_text, char_offset);
+        let byte_offset = utf16_offset_to_byte_offset(&self.full_source(), char_offset);
 
         Position::new(end.row() as usize, end.column() as usize, byte_offset)
     }
@@ -456,13 +464,16 @@ impl<'a> SgNode<'a> for Node {
     }
 
     fn field(&self, name: &str) -> Option<Self> {
-        self.0.child_for_field_name(name).map(Node)
+        self.0
+            .child_for_field_name(name)
+            .map(|node| Node(node, self.1))
     }
     fn field_children(&self, field_id: Option<u16>) -> impl Iterator<Item = Self> {
         let cursor = self.0.walk();
         cursor.goto_first_child();
         // if field_id is not found, iteration is done
         let mut done = field_id.is_none();
+        let source = self.1;
 
         std::iter::from_fn(move || {
             if done {
@@ -477,28 +488,28 @@ impl<'a> SgNode<'a> for Node {
             if !cursor.goto_next_sibling() {
                 done = true;
             }
-            Some(Node(ret))
+            Some(Node(ret, source))
         })
     }
 }
 
-// This is a horrible idea! But it does the job for WASM for now!
-// We don't need WASM to be perfect
-// That said, we should fix this in the future!
-impl Node {
-    fn get_root_text(&self) -> String {
-        let mut current = self.0.clone();
-        while let Some(parent) = current.parent() {
-            current = parent;
-        }
-        current.text().into()
+impl<'a> Node<'a> {
+    fn full_source(&self) -> Cow<'a, str> {
+        String::from_utf8_lossy(self.1)
+    }
+}
+
+impl WasmDoc {
+    /// Full document source, including leading whitespace that the root node range excludes.
+    pub(crate) fn source_text(&self) -> String {
+        String::from_utf8_lossy(&self.source.inner).into_owned()
     }
 }
 
 impl Doc for WasmDoc {
     type Lang = WasmLang;
     type Source = Wrapper;
-    type Node<'a> = Node;
+    type Node<'a> = Node<'a>;
     fn get_lang(&self) -> &Self::Lang {
         &self.lang
     }
@@ -506,7 +517,7 @@ impl Doc for WasmDoc {
         &self.source
     }
     fn root_node(&self) -> Self::Node<'_> {
-        Node(self.tree.root_node())
+        Node(self.tree.root_node(), &self.source.inner)
     }
     fn do_edit(&mut self, edit: &ast_grep_core::source::Edit<Self::Source>) -> Result<(), String> {
         let edit = self.source.accept_edit(edit);

@@ -332,13 +332,13 @@ describe.skipIf(!enabled)("JSSG parity: node, quickjs", () => {
     expect(seen("edit.ts").root.start).toMatchObject({ index: 0, column: 0 });
     expect(seen("bom-crlf-edit.ts")).toMatchObject({ crlf: true, root: { start: { index: 3 } } });
     expect(seen("double-bom-edit.ts").root.start).toMatchObject({ index: 6 });
-    // Written bytes: line endings and a missing final newline are kept; an
-    // edited BOM file is the transform's text (no BOM, as the engine writes
-    // it); `null` leaves a file alone; `rename()` keeps the BOM; returning
-    // `root().text()` of a BOM file is a change (it differs from the file).
+    // Written bytes: line endings, a missing final newline, and a BOM are
+    // kept through `commitEdits` on the root (CDMD-5018); `null` leaves a
+    // file alone; `rename()` keeps the BOM; returning `root().text()` of a
+    // BOM file is a change (it differs from the file).
     expect(tree["crlf-edit.ts"]).toMatch(/^newApi\(1\);\r\nnewApi\(2\);\r\n\/\* seen /u);
     expect(tree["notrail-edit.ts"]).toMatch(/^newApi\(1\);\/\* seen /u);
-    expect(tree["bom-edit.ts"]).toMatch(/^newApi\(1\);\n\/\* seen /u);
+    expect(tree["bom-edit.ts"]).toMatch(/^\uFEFFnewApi\(1\);\n\/\* seen /u);
     expect(tree["bom-null.ts"]).toBe(`${BOM}keep();\n`);
     expect(tree["bom-renamed.ts"]).toBe(`${BOM}keep();\n`);
     expect(tree["crlf-renamed.ts"]).toBe("keep();\r\n");

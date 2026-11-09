@@ -1,0 +1,33 @@
+{
+  "name": "@codemod.com/cli-linux-arm64-musl",
+  "version": "0.0.0",
+  "description": "Codemod platform for semantic code transformations - Linux arm64 musl binary",
+  "keywords": [
+    "ast",
+    "codemod",
+    "migration",
+    "refactoring",
+    "transformation"
+  ],
+  "repository": "https://github.com/codemod/codemod",
+  "license": "Apache-2.0",
+  "files": [
+    "codemod"
+  ],
+  "engines": {
+    "node": ">= 10"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "libc": [
+    "musl"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

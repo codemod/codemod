@@ -27,11 +27,11 @@ This repo houses the **Codemod CLI** and its underlying **workflow engine** – 
 
 ## Key Features
 
-- [**Codemod CLI**](https://docs.codemod.com/cli) – Run, test, and publish codemods from your terminal or CI.
-- [**Workflows**](https://docs.codemod.com/workflows/quickstart) – Orchestrate multi-step migrations with YAML configuration, matrix strategies, and manual approval gates.
-- [**JSSG**](https://docs.codemod.com/jssg/intro) – JavaScript ast-grep: write powerful AST transformations in TypeScript with pattern matching and semantic analysis.
+- [**Codemod CLI**](https://docs.codemod.com/community/cli) – Run, test, and publish codemods from your terminal or CI.
+- [**Workflows**](https://docs.codemod.com/community/workflows) – Orchestrate multi-step migrations with YAML configuration, matrix strategies, and manual approval gates.
+- [**JSSG**](https://docs.codemod.com/community/jssg) – JavaScript ast-grep: write powerful AST transformations in TypeScript with pattern matching and semantic analysis.
 - [**Codemod Registry**](https://go.codemod.com/registry) – Share or discover community codemods via `npx codemod publish` or `npx codemod search`.
-- [**Codemod MCP**](https://docs.codemod.com/model-context-protocol) – AI tools for code analysis, AST manipulation, and codemod creation in AI-powered IDEs.
+- [**Codemod MCP**](https://docs.codemod.com/community/model-context-protocol) – AI tools for code analysis, AST manipulation, and codemod creation in AI-powered IDEs.
 
 ## Getting Started
 
@@ -54,7 +54,7 @@ npx codemod @codemod/my-codemod
 
 In an interactive terminal, bare `npx codemod` opens a launcher for creating a package or running one from the registry. In non-interactive contexts, it prints next steps and exits with status `1`.
 
-See the full [CLI reference](https://docs.codemod.com/cli) for every command and option.
+See the full [CLI reference](https://docs.codemod.com/community/cli) for every command and option.
 
 ## Codemod Platform
 
@@ -75,9 +75,9 @@ Help improve the CLI, workflow engine, and JSSG runtime. See the [contributing g
 
 Create codemods for framework upgrades, security patches, or common refactoring patterns. Published codemods help the entire community migrate faster.
 
-- [**Workflows quickstart**](https://docs.codemod.com/workflows/quickstart) – Scaffold your first codemod package
-- [**JSSG guide**](https://docs.codemod.com/jssg/intro) – Write AST transformations in JS/TS
-- [**Publishing**](https://docs.codemod.com/publishing) – Share your contributions to Codemod Registry
+- [**Workflows quickstart**](https://docs.codemod.com/community/workflows) – Scaffold your first codemod package
+- [**JSSG guide**](https://docs.codemod.com/community/jssg) – Write AST transformations in JS/TS
+- [**Publishing**](https://docs.codemod.com/community/publishing) – Share your contributions to Codemod Registry
 
 Looking for ideas? Spark a discussion in our [Slack community](https://go.codemod.com/community) or browse [Codemod Registry](https://go.codemod.com/registry) for codemods that could use improvements.
 

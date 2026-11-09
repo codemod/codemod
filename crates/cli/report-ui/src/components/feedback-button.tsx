@@ -42,6 +42,13 @@ type FeedbackStreamEvent =
 
 const ACTIVITY_PLACEHOLDER = "Agent activity will appear here while the draft is prepared.";
 const MAX_FEEDBACK_MESSAGE_LEN = 2500;
+const MAX_ERROR_MESSAGE_LEN = 300;
+
+function truncateError(message: string): string {
+  return message.length > MAX_ERROR_MESSAGE_LEN
+    ? `${message.slice(0, MAX_ERROR_MESSAGE_LEN)}…`
+    : message;
+}
 const SUPPORTED_AGENT_ORDER = ["claude-code", "codex", "opencode", "goose"];
 
 function getSupportedAgents(agents: AgentOption[] | undefined): AgentOption[] {
@@ -134,7 +141,7 @@ export function FeedbackButton() {
       setPreferredAgent((current) => resolvePreferredAgentCanonical(current, data));
       setState("idle");
     } catch (e: any) {
-      setErrorMsg(e.message || "Failed to load feedback status");
+      setErrorMsg(truncateError(e.message || "Failed to load feedback status"));
       setState("error");
     }
   }
@@ -169,7 +176,7 @@ export function FeedbackButton() {
       setState("submitted");
       setMode("choice");
     } catch (e: any) {
-      setErrorMsg(e.message || "Failed to submit feedback");
+      setErrorMsg(truncateError(e.message || "Failed to submit feedback"));
       setState("error");
     }
   }
@@ -194,7 +201,7 @@ export function FeedbackButton() {
 
       await readFeedbackStream(resp.body);
     } catch (e: any) {
-      setErrorMsg(e.message || "Failed to draft feedback");
+      setErrorMsg(truncateError(e.message || "Failed to draft feedback"));
       setState("error");
     }
   }
@@ -332,7 +339,7 @@ export function FeedbackButton() {
             ) : (
               <div className="space-y-4">
                 {errorMsg && (
-                  <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  <p className="max-h-32 overflow-y-auto rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs break-words whitespace-pre-wrap text-destructive">
                     {errorMsg}
                   </p>
                 )}
@@ -429,7 +436,7 @@ export function FeedbackButton() {
           ) : (
             <div className="space-y-4">
               {errorMsg && (
-                <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                <p className="max-h-32 overflow-y-auto rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs break-words whitespace-pre-wrap text-destructive">
                   {errorMsg}
                 </p>
               )}

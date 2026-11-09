@@ -5,6 +5,66 @@ icon: 'scroll'
 mode: "center"
 ---
 
+<Update label="September 2026">
+## Highlights
+
+- **Platform MCP**: Connect Claude, Cursor, and other MCP clients to your Codemod data at `https://app.codemod.com/api/v1/mcp`. Sign in with OAuth and approve only the scopes you want. Assistants can work with Insights dashboards, repositories, indexed code, Grep, the registry, campaigns, organizations, and automations. They can also return direct browser links to dashboards, campaigns, registry packages, and automations. Tools run with your permissions. Creating a campaign or indexing a repository requires your approval; dashboard changes ask for confirmation when your client supports it. See [Platform MCP](/enterprise/codemod-mcp).
+
+- **Smart Insights queries**: Describe a code characteristic in plain language and count matching files across your repositories. Smart queries support configurable probability thresholds, match rules, grouping by repository, directory, language, and other dimensions, plus reusable prompts with string template variables. You can also use Smart queries in Automations' **Scan Codebase** step. See [Smart queries](/enterprise/insights/smart-queries).
+
+## Improvements and fixes
+
+- **Grep and connected repositories**: Search indexed private and organization repositories with clearer setup guidance, organization switching, progress updates, pagination, and language filters. Repository selection and search-failure messages are more reliable, and all signed-in users can access Grep. The **Repositories** page in Settings adds sorting and configurable columns so you can find the repositories available for indexing and search. See [Grep](/enterprise/grep).
+
+- **Insights usability and reporting**: Smart query prompts are easier to edit and read. Table preview limits are more consistent, and partial-analysis warnings no longer mistake matching-file counts for analysis coverage.
+
+- **Registry browsing and AI discovery**: Registry pages improve image loading and prefetch package details for smoother navigation. Public package metadata and links are also available through `/llms.txt` and `/ai-catalog.json`, giving AI tools a machine-readable starting point for discovering codemods.
+
+- **App navigation and feedback**: A simpler sidebar and more prominent Grep navigation make search easier to reach. Paginated entity lists make better use of the available screen space, and you can send product feedback without leaving the app.
+
+- **JSSG authoring and execution**: The new `updateImport` helper in `@jssg/utils/javascript/imports` renames named import specifiers in place while preserving aliases and avoiding duplicates. Selector discovery now uses the same runtime as JSSG execution, reducing unnecessary broad file scans. Timeouts and cancellation also stop runs more reliably while they wait on workflow state or asynchronous operations.
+</Update>
+
+<Update label="August 2026">
+- **Private repository Grep**: Codemod Grep now searches encrypted snapshots of private and organization repositories you have granted access to. Index repositories, filter by language and path, browse grouped results with syntax highlighting, and hand off a completed search into an Insights dashboard. [Learn more →](/enterprise/grep)
+
+- **Share frozen Insights snapshots**: Insights dashboards can be shared as read-only snapshot links with public or organization access, optional expiry (up to three months), and independent revocation. Recipients see cached widget results without starting new computation or exposing query configuration.
+
+- **Insights authoring and tables**:
+  - Add-widget modal and query builder received a clearer overhaul, with better widget-card error handling
+  - Table widgets support resizable columns and a header indicator when some queries return partial errors
+  - Package publishers can update Insights dashboard templates from a live dashboard, including multi-child bundle templates
+
+- **Registry release channels and Builder Git source**:
+  - Packages now use `latest` and `codemod-builder` dist-tags so stable discovery stays separate from Builder preview versions
+  - `codemod publish --tag` supports SemVer prereleases and release-channel selection
+  - Builder can push generated packages to a GitHub repo (direct push for empty repos, otherwise a PR), install a stable publish workflow, and keep connected source in sync through Git PRs
+  - Registry owners can preview Builder builds, and list/package navigation is much snappier
+
+- **CLI capability prompts and report polish**: Interactive runs can approve elevated JSSG capabilities at runtime (including dry-run), local execution reports gained richer UI components, and Wish chat recovers more reliably when a stream disconnects.
+
+- **Theme and onboarding polish**: Theme selection lives in the user menu, GitHub App setup during organization creation shows clearer permissions and verification steps, and registry hero copy/layout were simplified.
+</Update>
+
+<Update label="July 2026">
+- **Registry Insights dashboard templates**: Publishing a package with JSSG steps now attaches a ready-to-use Insights dashboard template. Starting Insights from a registry package loads that template with your repository preselected. You can also save a live dashboard back as the package template, and Wish can apply preset widgets when generating templates. [Learn more →](/enterprise/insights#dashboard-templates)
+
+- **Migration recommendations from repository radars**: Organizations can discover migration opportunities without knowing which repos are affected first. Scheduled radar scans surface draft recommendations above the Insights list that authorized users can preview and promote into normal dashboards.
+
+- **Campaign creation is faster**: Creating a campaign uses clearer modals and loading states, with a simpler flow from package selection through repository targeting and launch.
+
+- **Registry and Studio clarity**:
+  - Registry package CTAs consolidate around **View Impact on Repo** so discovery leads straight into Insights
+  - Codemod Studio promotes Wish from the top banner
+  - Editors warn before you leave pages with unsaved changes
+  - Pull request lists sort by date and collapse closed PRs
+
+- **CLI report and nested-run improvements**:
+  - Local execution reports add a **Registry** action alongside Share and Feedback
+  - Nested JSSG/codemod capabilities and dry-run sandbox writes behave more reliably
+  - Nested codemod LLM usage is metered, and JSSG runtime events emit clearer structured logs
+</Update>
+
 <Update label="June 2026">
 - **Global Chat follow-ups are smoother**: Global Chat now offers concise next-action choices after codemod generation, so you can continue into an Insights dashboard, migration campaign, or another follow-up without being routed through registry pages. Client-side tool output handling is also more reliable, especially when a conversation triggers navigation, code execution, or multiple tool results in sequence.
 
@@ -118,7 +178,7 @@ mode: "center"
 
 - **JSSG improvements**:
   - Workspace-wide semantic analysis now works in `jssg test`, including cross-file resolution
-  - Directory snapshot testing now supports created and deleted files, not just modified ones ([Learn more ->](/jssg/testing#directory-snapshot-fixtures))
+  - Directory snapshot testing now supports created and deleted files, not just modified ones ([Learn more ->](/community/jssg/testing#directory-snapshot-fixtures))
   - Renamed files are handled more reliably during execution and test runs
 
 - **Registry & campaign UX**:
@@ -213,7 +273,7 @@ mode: "center"
 </Update>
 
 <Update label="November 2025">
-- **Semantic analysis for codemods**: JS/TS and Python now support workspace-wide definitions and references, enabling cross-file aware codemods powered by semantic providers. ([Learn more ->](/jssg/semantic-analysis))
+- **Semantic analysis for codemods**: JS/TS and Python now support workspace-wide definitions and references, enabling cross-file aware codemods powered by semantic providers. ([Learn more ->](/community/jssg/semantic-analysis))
 - **Campaign creation streamlined**: The campaign creation UI is now cleaner, and when launching from “apply to repository,” the associated codemod is pre-selected to accelerate setup.
 - **Login flow improved**: Enhanced loading and error handling, plus stronger OIDC authentication via JWT.
 - **Insights & dashboards**:
@@ -352,7 +412,7 @@ mode: "center"
 	2. **Add and Customize Widgets**: Create new widgets using ast-grep YAML rules, and Codemod will automatically scan your codebase and track how various code patterns change over time.
 	3. **Track Code Changes**: With your dashboard(s) configured, you'll have a comprehensive overview of your codebase's posture, enabling you to make more informed decisions.
 
-    [Learn more about Codemod Insights →](/platform/insights)
+    [Learn more about Codemod Insights →](/enterprise/insights)
 
 </Update>
 

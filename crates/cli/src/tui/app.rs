@@ -261,7 +261,7 @@ impl TuiState {
         }
 
         let mut entries = run.params.iter().collect::<Vec<_>>();
-        entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+        entries.sort_by_key(|(left_key, _)| *left_key);
 
         let params = entries
             .into_iter()
@@ -971,7 +971,6 @@ impl TuiState {
                 task_id,
                 processed_files,
                 total_files,
-                current_file: _,
                 ..
             } => {
                 self.task_progress.insert(

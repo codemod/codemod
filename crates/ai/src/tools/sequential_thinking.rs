@@ -191,11 +191,11 @@ impl ThinkingTool {
         let revises_thought: Option<i32> = call
             .get_parameter("revises_thought")
             .ok()
-            .and_then(|v: i32| if v > 0 { Some(v) } else { None });
+            .filter(|&v| v > 0);
         let branch_from_thought: Option<i32> = call
             .get_parameter("branch_from_thought")
             .ok()
-            .and_then(|v: i32| if v > 0 { Some(v) } else { None });
+            .filter(|&v| v > 0);
         let branch_id: Option<String> = call.get_parameter("branch_id").ok();
         let needs_more_thoughts: Option<bool> = call.get_parameter("needs_more_thoughts").ok();
 

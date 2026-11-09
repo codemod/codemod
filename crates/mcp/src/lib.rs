@@ -22,47 +22,109 @@ const PUBLIC_DOCS_TIMEOUT_SECS: u64 = 10;
 const PUBLIC_DOCS_INITIAL_WAIT_MILLIS: u64 = 1000;
 
 const LOCAL_DOCS_README: &str = include_str!(concat!(env!("OUT_DIR"), "/docs/README.md"));
-const LOCAL_CLI_DOC: &str = include_str!(concat!(env!("OUT_DIR"), "/docs/cli.mdx"));
-const LOCAL_MODEL_CONTEXT_PROTOCOL_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/model-context-protocol.mdx"));
-const LOCAL_OSS_DOC: &str = include_str!(concat!(env!("OUT_DIR"), "/docs/oss.mdx"));
-const LOCAL_OSS_QUICKSTART_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/oss-quickstart.mdx"));
-const LOCAL_PACKAGE_STRUCTURE_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/package-structure.mdx"));
-const LOCAL_WORKFLOW_REFERENCE_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/workflows/reference.mdx"));
+const LOCAL_CLI_DOC: &str = include_str!(concat!(env!("OUT_DIR"), "/docs/community/cli.mdx"));
+const LOCAL_MODEL_CONTEXT_PROTOCOL_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/model-context-protocol.mdx"
+));
+const LOCAL_OSS_DOC: &str = include_str!(concat!(env!("OUT_DIR"), "/docs/community/oss.mdx"));
+const LOCAL_OSS_QUICKSTART_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/oss-quickstart.mdx"
+));
+const LOCAL_PACKAGE_STRUCTURE_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/package-structure.mdx"
+));
+const LOCAL_WORKFLOW_REFERENCE_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/workflows/reference.mdx"
+));
 const LOCAL_WORKFLOW_INTRODUCTION_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/workflows/introduction.mdx"));
-const LOCAL_SHARDING_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/workflows/sharding.mdx"));
-const LOCAL_JSSG_INTRO_DOC: &str = include_str!(concat!(env!("OUT_DIR"), "/docs/jssg/intro.mdx"));
-const LOCAL_JSSG_REFERENCE_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/jssg/reference.mdx"));
-const LOCAL_JSSG_SECURITY_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/jssg/security.mdx"));
-const LOCAL_JSSG_ADVANCED_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/jssg/advanced.mdx"));
+    include_str!(concat!(env!("OUT_DIR"), "/docs/community/workflows.mdx"));
+const LOCAL_SHARDING_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/workflows/sharding.mdx"
+));
+const LOCAL_JSSG_INTRO_DOC: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/docs/community/jssg.mdx"));
+const LOCAL_JSSG_REFERENCE_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/reference.mdx"
+));
+const LOCAL_JSSG_SECURITY_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/security.mdx"
+));
+const LOCAL_JSSG_ADVANCED_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/advanced.mdx"
+));
+const LOCAL_JSSG_ADVANCED_TRANSFORMS_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/advanced/transforms.mdx"
+));
+const LOCAL_JSSG_ADVANCED_WORKFLOW_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/advanced/workflow.mdx"
+));
+const LOCAL_JSSG_ADVANCED_MULTI_FILE_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/advanced/multi-file.mdx"
+));
+const LOCAL_JSSG_ADVANCED_PERFORMANCE_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/advanced/performance.mdx"
+));
 const LOCAL_JSSG_TESTING_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/jssg/testing.mdx"));
+    include_str!(concat!(env!("OUT_DIR"), "/docs/community/jssg/testing.mdx"));
 const LOCAL_JSSG_METRICS_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/jssg/metrics.mdx"));
-const LOCAL_JSSG_UTILS_DOC: &str = include_str!(concat!(env!("OUT_DIR"), "/docs/jssg/utils.mdx"));
-const LOCAL_JSSG_SEMANTIC_ANALYSIS_DOC: &str =
-    include_str!(concat!(env!("OUT_DIR"), "/docs/jssg/semantic-analysis.mdx"));
+    include_str!(concat!(env!("OUT_DIR"), "/docs/community/jssg/metrics.mdx"));
+const LOCAL_JSSG_UTILS_DOC: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/docs/community/jssg/utils.mdx"));
+const LOCAL_JSSG_UTILS_JAVASCRIPT_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/utils/javascript.mdx"
+));
+const LOCAL_JSSG_UTILS_JAVA_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/utils/java.mdx"
+));
+const LOCAL_JSSG_UTILS_XML_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/utils/xml.mdx"
+));
+const LOCAL_JSSG_SEMANTIC_ANALYSIS_DOC: &str = include_str!(concat!(
+    env!("OUT_DIR"),
+    "/docs/community/jssg/semantic-analysis.mdx"
+));
 
-const CLI_DOC_URL: &str = "https://docs.codemod.com/cli.md";
-const OSS_QUICKSTART_DOC_URL: &str = "https://docs.codemod.com/oss-quickstart.md";
-const PACKAGE_STRUCTURE_DOC_URL: &str = "https://docs.codemod.com/package-structure.md";
-const WORKFLOW_REFERENCE_DOC_URL: &str = "https://docs.codemod.com/workflows/reference.md";
-const SHARDING_DOC_URL: &str = "https://docs.codemod.com/workflows/sharding.md";
-const JSSG_QUICKSTART_DOC_URL: &str = "https://docs.codemod.com/jssg/quickstart.md";
-const JSSG_REFERENCE_DOC_URL: &str = "https://docs.codemod.com/jssg/reference.md";
-const JSSG_ADVANCED_DOC_URL: &str = "https://docs.codemod.com/jssg/advanced.md";
-const JSSG_TESTING_DOC_URL: &str = "https://docs.codemod.com/jssg/testing.md";
-const JSSG_METRICS_DOC_URL: &str = "https://docs.codemod.com/jssg/metrics.md";
-const JSSG_UTILS_DOC_URL: &str = "https://docs.codemod.com/jssg/utils.md";
-const JSSG_SEMANTIC_ANALYSIS_DOC_URL: &str = "https://docs.codemod.com/jssg/semantic-analysis.md";
+const CLI_DOC_URL: &str = "https://docs.codemod.com/community/cli.md";
+const OSS_QUICKSTART_DOC_URL: &str = "https://docs.codemod.com/community/oss-quickstart.md";
+const PACKAGE_STRUCTURE_DOC_URL: &str = "https://docs.codemod.com/community/package-structure.md";
+const WORKFLOW_REFERENCE_DOC_URL: &str =
+    "https://docs.codemod.com/community/workflows/reference.md";
+const SHARDING_DOC_URL: &str = "https://docs.codemod.com/community/workflows/sharding.md";
+const JSSG_QUICKSTART_DOC_URL: &str = "https://docs.codemod.com/community/jssg.md";
+const JSSG_REFERENCE_DOC_URL: &str = "https://docs.codemod.com/community/jssg/reference.md";
+const JSSG_ADVANCED_DOC_URL: &str = "https://docs.codemod.com/community/jssg/advanced.md";
+const JSSG_ADVANCED_TRANSFORMS_DOC_URL: &str =
+    "https://docs.codemod.com/community/jssg/advanced/transforms.md";
+const JSSG_ADVANCED_WORKFLOW_DOC_URL: &str =
+    "https://docs.codemod.com/community/jssg/advanced/workflow.md";
+const JSSG_ADVANCED_MULTI_FILE_DOC_URL: &str =
+    "https://docs.codemod.com/community/jssg/advanced/multi-file.md";
+const JSSG_ADVANCED_PERFORMANCE_DOC_URL: &str =
+    "https://docs.codemod.com/community/jssg/advanced/performance.md";
+const JSSG_TESTING_DOC_URL: &str = "https://docs.codemod.com/community/jssg/testing.md";
+const JSSG_METRICS_DOC_URL: &str = "https://docs.codemod.com/community/jssg/metrics.md";
+const JSSG_UTILS_DOC_URL: &str = "https://docs.codemod.com/community/jssg/utils.md";
+const JSSG_UTILS_JAVASCRIPT_DOC_URL: &str =
+    "https://docs.codemod.com/community/jssg/utils/javascript.md";
+const JSSG_UTILS_JAVA_DOC_URL: &str = "https://docs.codemod.com/community/jssg/utils/java.md";
+const JSSG_UTILS_XML_DOC_URL: &str = "https://docs.codemod.com/community/jssg/utils/xml.md";
+const JSSG_SEMANTIC_ANALYSIS_DOC_URL: &str =
+    "https://docs.codemod.com/community/jssg/semantic-analysis.md";
 
 static PUBLIC_DOCS_CLIENT: OnceLock<Option<reqwest::Client>> = OnceLock::new();
 static JSSG_DOCS_BUNDLE: OnceCell<String> = OnceCell::const_new();
@@ -300,7 +362,7 @@ fn resource_infos() -> &'static [CliResourceInfo] {
         CliResourceInfo {
             uri: "jssg-gotchas://instructions",
             name: "jssg-gotchas",
-            description: Some("Highest-priority JSSG gotchas for codemod authoring"),
+            description: Some("Highest-priority JSSG gotchas for codemod authoring, including performant codemods"),
             mime_type: "text/markdown",
         },
         CliResourceInfo {
@@ -630,6 +692,21 @@ fn build_local_docs_bundle(title: &str, sources: &[LocalDocSource]) -> String {
     )
 }
 
+fn jssg_public_doc_urls() -> &'static [&'static str] {
+    &[
+        JSSG_QUICKSTART_DOC_URL,
+        JSSG_REFERENCE_DOC_URL,
+        JSSG_ADVANCED_DOC_URL,
+        JSSG_ADVANCED_TRANSFORMS_DOC_URL,
+        JSSG_ADVANCED_WORKFLOW_DOC_URL,
+        JSSG_ADVANCED_MULTI_FILE_DOC_URL,
+        JSSG_ADVANCED_PERFORMANCE_DOC_URL,
+        JSSG_TESTING_DOC_URL,
+        JSSG_METRICS_DOC_URL,
+        JSSG_SEMANTIC_ANALYSIS_DOC_URL,
+    ]
+}
+
 fn local_jssg_docs_bundle() -> &'static str {
     LOCAL_JSSG_DOCS_BUNDLE
         .get_or_init(|| {
@@ -637,27 +714,43 @@ fn local_jssg_docs_bundle() -> &'static str {
                 "Canonical JSSG Documentation",
                 &[
                     LocalDocSource {
-                        path: "docs/jssg/intro.mdx",
+                        path: "docs/community/jssg.mdx",
                         content: LOCAL_JSSG_INTRO_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/reference.mdx",
+                        path: "docs/community/jssg/reference.mdx",
                         content: LOCAL_JSSG_REFERENCE_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/advanced.mdx",
+                        path: "docs/community/jssg/advanced.mdx",
                         content: LOCAL_JSSG_ADVANCED_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/testing.mdx",
+                        path: "docs/community/jssg/advanced/transforms.mdx",
+                        content: LOCAL_JSSG_ADVANCED_TRANSFORMS_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/workflow.mdx",
+                        content: LOCAL_JSSG_ADVANCED_WORKFLOW_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/multi-file.mdx",
+                        content: LOCAL_JSSG_ADVANCED_MULTI_FILE_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/performance.mdx",
+                        content: LOCAL_JSSG_ADVANCED_PERFORMANCE_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/testing.mdx",
                         content: LOCAL_JSSG_TESTING_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/metrics.mdx",
+                        path: "docs/community/jssg/metrics.mdx",
                         content: LOCAL_JSSG_METRICS_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/semantic-analysis.mdx",
+                        path: "docs/community/jssg/semantic-analysis.mdx",
                         content: LOCAL_JSSG_SEMANTIC_ANALYSIS_DOC,
                     },
                 ],
@@ -673,23 +766,43 @@ fn local_jssg_gotchas_docs_bundle() -> &'static str {
                 "Canonical JSSG Gotchas Documentation",
                 &[
                     LocalDocSource {
-                        path: "docs/jssg/intro.mdx",
+                        path: "docs/community/jssg.mdx",
                         content: LOCAL_JSSG_INTRO_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/reference.mdx",
+                        path: "docs/community/jssg/reference.mdx",
                         content: LOCAL_JSSG_REFERENCE_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/advanced.mdx",
+                        path: "docs/community/jssg/advanced.mdx",
                         content: LOCAL_JSSG_ADVANCED_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/testing.mdx",
+                        path: "docs/community/jssg/advanced/transforms.mdx",
+                        content: LOCAL_JSSG_ADVANCED_TRANSFORMS_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/workflow.mdx",
+                        content: LOCAL_JSSG_ADVANCED_WORKFLOW_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/multi-file.mdx",
+                        content: LOCAL_JSSG_ADVANCED_MULTI_FILE_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/performance.mdx",
+                        content: LOCAL_JSSG_ADVANCED_PERFORMANCE_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/testing.mdx",
                         content: LOCAL_JSSG_TESTING_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/security.mdx",
+                        path: "docs/community/jssg/metrics.mdx",
+                        content: LOCAL_JSSG_METRICS_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/security.mdx",
                         content: LOCAL_JSSG_SECURITY_DOC,
                     },
                 ],
@@ -705,16 +818,24 @@ fn local_ast_grep_gotchas_docs_bundle() -> &'static str {
                 "Canonical ast-grep Usage Documentation",
                 &[
                     LocalDocSource {
-                        path: "docs/jssg/intro.mdx",
+                        path: "docs/community/jssg.mdx",
                         content: LOCAL_JSSG_INTRO_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/reference.mdx",
+                        path: "docs/community/jssg/reference.mdx",
                         content: LOCAL_JSSG_REFERENCE_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/advanced.mdx",
+                        path: "docs/community/jssg/advanced.mdx",
                         content: LOCAL_JSSG_ADVANCED_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/transforms.mdx",
+                        content: LOCAL_JSSG_ADVANCED_TRANSFORMS_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/performance.mdx",
+                        content: LOCAL_JSSG_ADVANCED_PERFORMANCE_DOC,
                     },
                 ],
             )
@@ -727,10 +848,24 @@ fn local_jssg_utils_docs_bundle() -> &'static str {
         .get_or_init(|| {
             build_local_docs_bundle(
                 "Canonical JSSG Utilities Documentation",
-                &[LocalDocSource {
-                    path: "docs/jssg/utils.mdx",
-                    content: LOCAL_JSSG_UTILS_DOC,
-                }],
+                &[
+                    LocalDocSource {
+                        path: "docs/community/jssg/utils.mdx",
+                        content: LOCAL_JSSG_UTILS_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/utils/javascript.mdx",
+                        content: LOCAL_JSSG_UTILS_JAVASCRIPT_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/utils/java.mdx",
+                        content: LOCAL_JSSG_UTILS_JAVA_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/utils/xml.mdx",
+                        content: LOCAL_JSSG_UTILS_XML_DOC,
+                    },
+                ],
             )
         })
         .as_str()
@@ -743,16 +878,32 @@ fn local_jssg_runtime_capabilities_docs_bundle() -> &'static str {
                 "Canonical JSSG Runtime Capabilities Documentation",
                 &[
                     LocalDocSource {
-                        path: "docs/jssg/reference.mdx",
+                        path: "docs/community/jssg/reference.mdx",
                         content: LOCAL_JSSG_REFERENCE_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/security.mdx",
+                        path: "docs/community/jssg/security.mdx",
                         content: LOCAL_JSSG_SECURITY_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/advanced.mdx",
+                        path: "docs/community/jssg/advanced.mdx",
                         content: LOCAL_JSSG_ADVANCED_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/transforms.mdx",
+                        content: LOCAL_JSSG_ADVANCED_TRANSFORMS_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/workflow.mdx",
+                        content: LOCAL_JSSG_ADVANCED_WORKFLOW_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/multi-file.mdx",
+                        content: LOCAL_JSSG_ADVANCED_MULTI_FILE_DOC,
+                    },
+                    LocalDocSource {
+                        path: "docs/community/jssg/advanced/performance.mdx",
+                        content: LOCAL_JSSG_ADVANCED_PERFORMANCE_DOC,
                     },
                 ],
             )
@@ -767,15 +918,15 @@ fn local_codemod_cli_docs_bundle() -> &'static str {
                 "Canonical Codemod CLI and Workflow Documentation",
                 &[
                     LocalDocSource {
-                        path: "docs/cli.mdx",
+                        path: "docs/community/cli.mdx",
                         content: LOCAL_CLI_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/package-structure.mdx",
+                        path: "docs/community/package-structure.mdx",
                         content: LOCAL_PACKAGE_STRUCTURE_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/workflows/reference.mdx",
+                        path: "docs/community/workflows/reference.mdx",
                         content: LOCAL_WORKFLOW_REFERENCE_DOC,
                     },
                 ],
@@ -790,7 +941,7 @@ fn local_sharding_docs_bundle() -> &'static str {
             build_local_docs_bundle(
                 "Canonical Sharding Documentation",
                 &[LocalDocSource {
-                    path: "docs/workflows/sharding.mdx",
+                    path: "docs/community/workflows/sharding.mdx",
                     content: LOCAL_SHARDING_DOC,
                 }],
             )
@@ -805,15 +956,15 @@ fn local_codemod_troubleshooting_docs_bundle() -> &'static str {
                 "Canonical Codemod Troubleshooting Documentation",
                 &[
                     LocalDocSource {
-                        path: "docs/model-context-protocol.mdx",
+                        path: "docs/community/model-context-protocol.mdx",
                         content: LOCAL_MODEL_CONTEXT_PROTOCOL_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/cli.mdx",
+                        path: "docs/community/cli.mdx",
                         content: LOCAL_CLI_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/oss-quickstart.mdx",
+                        path: "docs/community/oss-quickstart.mdx",
                         content: LOCAL_OSS_QUICKSTART_DOC,
                     },
                 ],
@@ -829,23 +980,23 @@ fn local_codemod_creation_docs_bundle() -> &'static str {
                 "Canonical Codemod Creation Documentation",
                 &[
                     LocalDocSource {
-                        path: "docs/oss-quickstart.mdx",
+                        path: "docs/community/oss-quickstart.mdx",
                         content: LOCAL_OSS_QUICKSTART_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/cli.mdx",
+                        path: "docs/community/cli.mdx",
                         content: LOCAL_CLI_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/package-structure.mdx",
+                        path: "docs/community/package-structure.mdx",
                         content: LOCAL_PACKAGE_STRUCTURE_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/workflows/reference.mdx",
+                        path: "docs/community/workflows/reference.mdx",
                         content: LOCAL_WORKFLOW_REFERENCE_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/jssg/testing.mdx",
+                        path: "docs/community/jssg/testing.mdx",
                         content: LOCAL_JSSG_TESTING_DOC,
                     },
                 ],
@@ -865,19 +1016,19 @@ fn local_codemod_maintainer_monorepo_docs_bundle() -> &'static str {
                         content: LOCAL_DOCS_README,
                     },
                     LocalDocSource {
-                        path: "docs/oss.mdx",
+                        path: "docs/community/oss.mdx",
                         content: LOCAL_OSS_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/workflows/introduction.mdx",
+                        path: "docs/community/workflows.mdx",
                         content: LOCAL_WORKFLOW_INTRODUCTION_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/workflows/reference.mdx",
+                        path: "docs/community/workflows/reference.mdx",
                         content: LOCAL_WORKFLOW_REFERENCE_DOC,
                     },
                     LocalDocSource {
-                        path: "docs/package-structure.mdx",
+                        path: "docs/community/package-structure.mdx",
                         content: LOCAL_PACKAGE_STRUCTURE_DOC,
                     },
                 ],
@@ -1210,14 +1361,7 @@ impl CodemodMcpServer {
                     move || async move {
                         build_public_docs_bundle(
                             "Canonical JSSG Documentation",
-                            &[
-                                JSSG_QUICKSTART_DOC_URL,
-                                JSSG_REFERENCE_DOC_URL,
-                                JSSG_ADVANCED_DOC_URL,
-                                JSSG_TESTING_DOC_URL,
-                                JSSG_METRICS_DOC_URL,
-                                JSSG_SEMANTIC_ANALYSIS_DOC_URL,
-                            ],
+                            jssg_public_doc_urls(),
                             fallback,
                         )
                         .await
@@ -1238,8 +1382,13 @@ impl CodemodMcpServer {
                     initial_wait,
                     move || async move {
                         build_public_docs_bundle(
-                            "Canonical JSSG Import Utilities Documentation",
-                            &[JSSG_UTILS_DOC_URL],
+                            "Canonical JSSG Utilities Documentation",
+                            &[
+                                JSSG_UTILS_DOC_URL,
+                                JSSG_UTILS_JAVASCRIPT_DOC_URL,
+                                JSSG_UTILS_JAVA_DOC_URL,
+                                JSSG_UTILS_XML_DOC_URL,
+                            ],
                             fallback,
                         )
                         .await
@@ -1591,7 +1740,7 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG test execution, and Codemod package validation. Available tools: dump_ast, get_node_types, run_jssg_tests, validate_codemod_package. Available resources: jssg-instructions, jssg-gotchas, ast-grep-gotchas, jssg-utils-instructions, jssg-runtime-capabilities-instructions, codemod-cli-instructions, sharding-instructions, codemod-troubleshooting-instructions, codemod-creation-workflow-instructions, codemod-maintainer-monorepo-instructions. For codemod authoring, read codemod-creation-workflow-instructions first, then read jssg-gotchas and ast-grep-gotchas before writing source-transform code. If registry search finds no exact existing package, run direct codemod init immediately; in non-interactive flows, pass only user- or task-provided metadata flags and rely on CLI defaults/auth-derived author handling for the rest. Call validate_codemod_package before you stop work on a codemod package. Use dump_ast when pattern shape is unclear. If symbol origin matters, use semantic analysis and binding-aware checks. If you discover a Codemod platform gap, ask the user for explicit consent before submitting anonymous feedback. With consent, run `codemod ai feedback --category <category> --message <short message>` using categories like jssg, workflow, ai-docs, mcp, cli, registry, package-validation, or other. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG test execution, and Codemod package validation. Available tools: dump_ast, get_node_types, run_jssg_tests, validate_codemod_package. Available resources: jssg-instructions, jssg-gotchas, ast-grep-gotchas, jssg-utils-instructions, jssg-runtime-capabilities-instructions, codemod-cli-instructions, sharding-instructions, codemod-troubleshooting-instructions, codemod-creation-workflow-instructions, codemod-maintainer-monorepo-instructions. For codemod authoring, read codemod-creation-workflow-instructions first, then read jssg-gotchas and ast-grep-gotchas before writing source-transform code. jssg-gotchas includes Performant codemods for transforms and mining (do not rebuild a repo index per file; time a no-op vs the real package on the same entry path). For Insights metrics packages, put useMetricAtom in the selected step js-ast-grep script from the published package and return null. If registry search finds no exact existing package, run direct codemod init immediately; in non-interactive flows, pass only user- or task-provided metadata flags and rely on CLI defaults/auth-derived author handling for the rest. Call validate_codemod_package before you stop work on a codemod package. Use dump_ast when pattern shape is unclear. If symbol origin matters, use semantic analysis and binding-aware checks. If you discover a Codemod platform gap, ask the user for explicit consent before submitting anonymous feedback. With consent, run `codemod ai feedback --category <category> --message <short message>` using categories like jssg, workflow, ai-docs, mcp, cli, registry, package-validation, or other. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.".to_string()),
         }
     }
 
@@ -1698,7 +1847,7 @@ mod tests {
         assert!(content.contains(
             "These instructions are bundled from this release's local `docs/` directory."
         ));
-        assert!(content.contains("<!-- Local source: docs/cli.mdx -->"));
+        assert!(content.contains("<!-- Local source: docs/community/cli.mdx -->"));
         assert!(content.contains("CLI Command Reference"));
     }
 
@@ -1834,6 +1983,8 @@ mod tests {
         assert!(!instructions.contains("scaffold_codemod_package"));
         assert!(instructions.contains("jssg-gotchas"));
         assert!(instructions.contains("codemod-creation-workflow-instructions"));
+        assert!(instructions.contains("Insights metrics"));
+        assert!(instructions.contains("Performant codemods"));
         assert!(instructions.contains("direct codemod init"));
         assert!(instructions.contains("auth-derived author"));
         assert!(instructions.contains("anonymous feedback"));
@@ -1959,7 +2110,22 @@ mod tests {
             .expect("expected ast-grep gotchas");
 
         assert!(jssg_gotchas.contains("Canonical JSSG Gotchas Documentation"));
+        assert!(jssg_gotchas.contains("Performant codemods"));
+        // Unique to advanced/performance.mdx (hub only links here).
+        assert!(jssg_gotchas.contains("Verify wall clock before you ship"));
+        assert!(jssg_gotchas.contains("fresh QuickJS runtime"));
+        assert!(jssg_gotchas.contains("useMetricAtom"));
         assert!(ast_grep_gotchas.contains("Canonical ast-grep Usage Documentation"));
+    }
+
+    #[test]
+    fn jssg_public_doc_urls_include_advanced_topic_children() {
+        let urls = jssg_public_doc_urls();
+        assert!(urls.contains(&JSSG_ADVANCED_DOC_URL));
+        assert!(urls.contains(&JSSG_ADVANCED_TRANSFORMS_DOC_URL));
+        assert!(urls.contains(&JSSG_ADVANCED_WORKFLOW_DOC_URL));
+        assert!(urls.contains(&JSSG_ADVANCED_MULTI_FILE_DOC_URL));
+        assert!(urls.contains(&JSSG_ADVANCED_PERFORMANCE_DOC_URL));
     }
 
     #[tokio::test]

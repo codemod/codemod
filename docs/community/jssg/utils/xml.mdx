@@ -1,0 +1,65 @@
+---
+title: "XML"
+description: "Read XML elements, attributes, and indentation with @jssg/utils."
+---
+
+These helpers read XML elements, attributes, and indentation from nodes produced by `codemod:ast-grep/langs/xml`.
+
+```typescript
+import {
+  elementByTagRule,
+  findElementsByTag,
+  findElementByTag,
+  findElementByKind,
+  getAttributeValue,
+  hasTag,
+  getLineIndent,
+} from "@jssg/utils/xml/elements";
+```
+
+## `elementByTagRule`
+
+Return an ast-grep rule that matches an XML element whose start tag or empty-element tag equals `tag`.
+
+**Example**
+
+```typescript
+const elements = root.findAll({ rule: elementByTagRule("PackageReference") });
+```
+
+## `findElementsByTag`
+
+Return every XML element under `root` whose start tag or empty-element tag matches `tag`.
+
+## `findElementByTag`
+
+Return the first XML element under `node` whose start tag or empty-element tag matches `tag`, or `null` when none matches.
+
+## `findElementByKind`
+
+Return the first descendant of `node` whose tree-sitter kind is `kind`, or `null` when none matches. `kind` is an XML node kind such as `"ETag"` or `"Attribute"`.
+
+## `getAttributeValue`
+
+Return the unquoted value of `attrName` on this element's own start tag or empty-element tag. Attributes on descendant elements are ignored. Returns `null` when the attribute is missing.
+
+**Example**
+
+```typescript
+const element = findElementByTag(root, "PackageReference");
+const include = element ? getAttributeValue(element, "Include") : null;
+```
+
+## `hasTag`
+
+Return whether `root` contains an element whose start tag or empty-element tag matches `tag`.
+
+## `getLineIndent`
+
+Return the spaces or tabs between the start of the line and `node`. Pass the file source as `src`. Returns an empty string when non-whitespace text appears before `node` on that line.
+
+**Example**
+
+```typescript
+const indent = getLineIndent(source, element);
+```

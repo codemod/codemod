@@ -1,0 +1,25 @@
+---
+title: "ast-grep YAML queries"
+sidebarTitle: "ast-grep YAML queries"
+---
+
+ast-grep YAML queries use [ast-grep YAML rules](https://ast-grep.github.io/reference/yaml.html) to match code patterns. Use them for syntax-level counts that do not need custom JSSG logic.
+
+You can generate ast-grep rules with the help of AI [using Codemod Studio](/enterprise/codemod-studio#use-codemod-ai).
+
+| Configuration | Description |
+|---|---|
+| **Rule** | An ast-grep YAML rule, or a rule template variable |
+| **Select** | `Match count` or `File count` |
+| **Repository** | One or more repositories, or a repository template variable |
+| **Group by** | `repository` and/or `codeowner` |
+| **File path filter** | Include or exclude files using glob patterns |
+| **Snapshot base** | A specific date or commit hash to analyze at a point in time, available for single number and table widgets |
+| **Query alias** | A label for the query result, available for timeseries and table widgets |
+
+## Related
+
+- [JSSG (JS ast-grep) queries](/enterprise/insights/jssg-queries)
+- [Package dependency queries](/enterprise/insights/dependency-queries)
+- [Smart (Jev-powered) queries](/enterprise/insights/smart-queries)
+- [Template variables](/enterprise/insights#template-variables)

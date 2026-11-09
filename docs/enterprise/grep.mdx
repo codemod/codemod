@@ -1,0 +1,211 @@
+---
+title: 'Grep'
+sidebarTitle: 'Grep'
+icon: 'magnifying-glass'
+description: 'Search indexed private repositories with patterns, regex, or ast-grep YAML rules.'
+tag: 'NEW'
+---
+
+Grep searches the latest indexed snapshots of repositories you can access in Codemod. Use it to find structural code patterns, text matches, or advanced ast-grep rules across your organization or personal Git account.
+
+Open Grep at [app.codemod.com/grep](https://app.codemod.com/grep).
+
+<Info>
+  Codemod Grep searches **private and organization repositories** you have granted Codemod access to. Public structural search across open-source repositories lives at [grep.codemod.com](https://grep.codemod.com/).
+</Info>
+
+## Prerequisites
+
+- Sign in to Codemod.
+- Connect [GitHub](/enterprise/integrations/github) or [GitLab](/enterprise/integrations/gitlab) so repositories appear in your scope.
+- Index the repositories you want to search. Listing and searching never start indexing automatically.
+
+Repository scope follows the app context: the active organization when one is selected, or your personal Git repositories otherwise.
+
+## Search indexed code
+
+<Steps>
+  <Step title="Open Grep">
+    Go to **[Grep](https://app.codemod.com/grep)** in the Codemod app.
+  </Step>
+
+  <Step title="Index repositories (first run)">
+    If no repositories are searchable yet, select the repositories to index and start indexing. Wait until they show as searchable before you run a query.
+
+    When some repositories are already searchable, use **Add repositories** to index more without leaving the search studio.
+  </Step>
+
+  <Step title="Choose a mode and write a query">
+    Pick **Pattern**, **Regex**, or **YAML**, then enter the query. Optionally narrow by language, repository, and path filter.
+  </Step>
+
+  <Step title="Review matches">
+    Results group by repository and file, with snippets, exact line ranges, and links back to GitHub or GitLab. Use pagination to load more files when the result set continues.
+  </Step>
+</Steps>
+
+## Query modes
+
+| Mode | Use when | Example |
+| ---- | -------- | ------- |
+| **Pattern** | You want structural matches with ast-grep pattern syntax and metavariables | `console.log($$$ARGS)` |
+| **Regex** | You want text, names, or messages (PostgreSQL regular expressions) | `class\s+StandardScaler` |
+| **YAML** | You need a full ast-grep rule with `language` and `rule` (optional `constraints` / `utils`) | A single YAML document containing `language` and `rule` |
+
+<Tip>
+  Prefer **Pattern** for source-code searches and **YAML** for multi-condition or constrained ast-grep rules. Use **Regex** when the target is genuinely textual, the language parser is unsupported, or a precise ast-grep query cannot be formed.
+</Tip>
+
+Pattern and YAML run through Codemod's indexed ast-grep engine. Regex runs as a PostgreSQL regular expression against decrypted snapshot content inside the database. Interactive Grep does not execute user-authored JavaScript.
+
+## Filters
+
+- **Language**: search all indexed languages in scope, or limit to one or more parsers.
+- **Repositories**: omit the filter to search every searchable repository in the current scope, or select a subset.
+- **Path**: optional `glob`, `contains`, `prefix`, or `basename` filter to limit which files are considered.
+
+YAML mode uses the language declared in the YAML document. That top-level `language` is authoritative for the rule.
+
+## Results
+
+Successful searches return:
+
+- Match counts and truncated state when limits apply
+- File-grouped snippets with exact ranges (not full source files)
+- Provider links to the indexed commit on GitHub or GitLab
+- Partial failures for repositories that are not indexed, lack the selected language, or fail during execution
+
+### Check coverage before concluding that code is absent
+
+Returned snippets remain useful even when some repositories fail. A zero-match page does not prove that code is absent when coverage is incomplete.
+
+If your search reports repository failures, inspect those failures and narrow the language, path, or expression within the scope you intended to search. Avoid repeatedly submitting the same failing query.
+
+When more pages are available, continue the same search. Changing the query, mode, repositories, language, or path starts a new search; do not reuse a continuation cursor from the old search. Reuse snippets and focused source ranges for files you already found.
+
+## Grep MCP
+
+MCP clients can search the same repository scope through [Codemod MCP](/enterprise/codemod-mcp):
+
+```text
+https://app.codemod.com/api/v1/mcp
+```
+
+Authenticate with a Codemod API key that has **Use Grep** enabled, or with OAuth for the full tool set:
+
+```json
+{
+  "mcpServers": {
+    "codemod-grep": {
+      "type": "http",
+      "url": "https://app.codemod.com/api/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CODEMOD_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+API keys expose Grep read tools only (`grep_list_repositories`, `grep_search`, `grep_read_ranges`, and related Grep reads). OAuth can also index and create Insights dashboards when scopes allow. Index repositories in the Grep UI (or with `grep_index_*` under OAuth) before searching from an MCP client.
+
+Store the key in a secret or environment variable. Do not commit it into MCP configuration files.
+
+### Agent workflow
+
+1. Narrow path, language, and repositories when you can.
+2. Call `grep_search` — MCP returns a small text page (~12 KiB) with a coverage header such as `[matches 1–N of ≥M in F files]`, numbered snippets, and per-file `readHints` for follow-up reads.
+3. Share the leading `Grep <absolute URL>` short link unchanged so a person can open the same search.
+4. Pull more source with `grep_read_ranges` using those `readHints` (or known ranges). Do not paste large dumps into chat.
+5. Continue with one cursor and identical inputs when the page says `more:` — either the search `cursor` or an `outputCursor` for buffered text. Cursors expire after about 30 minutes.
+6. For naming variants (snake / Pascal / camel), prefer `grep_multi_search` with labelled queries instead of many separate searches.
+
+Default MCP `fileLimit` is 20 matching files per page (max 1,000). Optional `definitionsOnly` with `mode=regex` prefers declaration-like matches on page 1.
+
+### Select supported languages
+
+For `grep_search`, use the scalar `"all"` or a non-empty array of parser names advertised in the tool's input schema, such as `["go", "typescript"]`. `["all"]` is not a valid selection. Neither `markdown` nor `makefile` is a supported parser value.
+
+If a language selection is rejected, choose supported parsers that match your intended scope. Use `"all"` only when you intend to search all indexed languages; unsupported selections are not silently broadened.
+
+### Interpret search results
+
+MCP search and range tools return **text only** (no `structuredContent` on those calls). Trust the coverage header and `more:` footer in the text. Before claiming absence or exhaustive coverage:
+
+- Partial repository failures do **not** mark the tool result as a hard error when matching files are still present — keep usable evidence and inspect failures separately.
+- Incomplete coverage (`countComplete: false` or a continuation footer) is not proof of absence, even with zero matches on the page.
+- Continue with identical inputs when a cursor is present. Changing query, mode, repositories, language, or path starts a new search; do not reuse an old cursor.
+
+## Create Insights dashboards from Grep
+
+Use Grep for exploratory searches, then promote a useful query into a persistent [Insights](/enterprise/insights) dashboard. The dashboard keeps the query and repository scope as editable configuration so you can track the same pattern over time—with Insights features such as timeseries trends, table breakdowns, and group-by dimensions like repository or codeowner (team ownership).
+
+Grep finds the matches. Insights turns that search into ongoing visibility.
+
+<Steps>
+  <Step title="Run a Grep search">
+    Complete a Pattern, Regex, or YAML search against the repositories you care about. Refine language and path filters until the results look right.
+  </Step>
+
+  <Step title="Create an Insights dashboard">
+    After results load, choose **Create Insights dashboard**. Name the dashboard, confirm which repositories to include (up to 10), and select the languages to track.
+  </Step>
+
+  <Step title="Review and extend in Insights">
+    Open the new dashboard to see the generated match-total and repository-breakdown widgets. From there, add timeseries charts, ownership breakdowns, formulas, or additional queries using the normal Insights editor.
+  </Step>
+</Steps>
+
+What Grep hands off:
+
+- The exact query, mode, optional path filter, and selected repositories
+- Count-oriented widgets for total matches and per-repository breakdown
+- Languages you chose at creation time (fewer languages usually compute faster)
+
+What it does not copy into Insights:
+
+- Match snippets, file paths, or individual result rows from the Grep UI
+
+After creation, the dashboard is a normal Insights dashboard: you can edit widgets, change repositories, and use template variables under the usual Insights permissions.
+
+<Tip>
+  Prefer a focused language selection when creating the dashboard. Searching with language `all` in Grep is fine for discovery; for tracking, choose only the languages you need so Insights stays faster.
+</Tip>
+
+<Note>
+  Regex dashboards use Insights/JSSG regex semantics, which can differ slightly from interactive Grep's PostgreSQL regex results.
+</Note>
+
+## Troubleshooting
+
+| Symptom | What to try |
+| ------- | ----------- |
+| No repositories appear | Connect GitHub or GitLab, confirm app install permissions, and switch to the correct organization if you work in one. |
+| Search returns not indexed | Index the repository from Grep, wait until it is searchable, then retry. |
+| Invalid MCP language selection | Use scalar `"all"`, not `["all"]`, or a non-empty array of supported parser names from the input schema. Do not mix unsupported parser names into the array. |
+| Unsupported language failures | Narrow the language filter to supported languages present in the indexed snapshot. Select `all` only if you intend to broaden the search. |
+| Partial failures or incomplete counts | Keep usable snippets, inspect the failures, and narrow the search. Do not treat zero results or a null cursor as proof of absence. |
+| Pattern finds nothing that Regex finds | Confirm the Pattern query is complete, valid syntax for the language, and not a bare text fragment. |
+| MCP searches fail with auth errors | Use an API key with **Use Grep** enabled, or OAuth with `grep:read`. Organization keys require the creator to still be a member. Endpoint is `/api/v1/mcp` (not a Grep-only path). |
+| MCP page looks truncated | Expected — pages are ~12 KiB. Use `readHints` with `grep_read_ranges`, or continue with the same cursor and identical inputs. |
+| Cursor rejected after a pause | Cursors expire after about 30 minutes. Re-run the search with identical inputs. |
+
+## Related docs
+
+<CardGroup cols={2}>
+  <Card title="Insights" icon="chart-simple" href="/enterprise/insights">
+    Track pattern adoption and migration progress with dashboards.
+  </Card>
+  <Card title="ast-grep YAML queries" icon="file-code" href="/enterprise/insights/ast-grep-queries">
+    Reuse ast-grep rules in Insights widgets.
+  </Card>
+  <Card title="Codemod Agent" icon="wand-magic-sparkles" href="/enterprise/codemod-agent">
+    Ask about your code in chat and get answers backed by Grep searches.
+  </Card>
+  <Card title="Codemod MCP" icon="screwdriver-wrench" href="/enterprise/codemod-mcp">
+    Connect assistants to Grep, Insights, and other Codemod tools.
+  </Card>
+  <Card title="GitHub integration" icon="github" href="/enterprise/integrations/github">
+    Grant repository access so Grep can index and search your code.
+  </Card>
+</CardGroup>

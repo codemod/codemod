@@ -1721,10 +1721,21 @@ async fn test_get_workflow_status() {
         .await
         .unwrap();
 
-    // Allow some time for the workflow to start
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
-    let status = engine.get_workflow_status(workflow_run_id).await.unwrap();
+    // Poll instead of a single fixed sleep: under a loaded test run the
+    // workflow can still be Pending after a short sleep, which made this
+    // test flaky.
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    let status = loop {
+        let status = engine.get_workflow_status(workflow_run_id).await.unwrap();
+        if status == WorkflowStatus::Running || status == WorkflowStatus::Completed {
+            break status;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "workflow did not reach Running/Completed in time, last status: {status:?}"
+        );
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    };
 
     // The workflow should be running or completed
     assert!(status == WorkflowStatus::Running || status == WorkflowStatus::Completed);
@@ -5691,6 +5702,124 @@ export default function transform(root) {
     assert!(
         skipped_b.contains("var b"),
         "files NOT in matrix._meta_files must be left untouched: {skipped_b}"
+    );
+}
+
+/// CDMD-5018: a js-ast-grep step whose transform matches nothing must not
+/// rewrite any file, and committed edits must keep leading blank lines, BOMs,
+/// and CRLF line endings byte-for-byte.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_execute_js_ast_grep_step_preserves_leading_bytes_and_skips_noop_writes() {
+    let temp_dir = TempDir::new().unwrap();
+    let temp_path = temp_dir.path();
+
+    // Like the old `codemod init` starter, always returns `commitEdits(edits)`
+    // even when `edits` is empty. Renames identifier `a` to `renamed`.
+    create_test_file(
+        temp_path,
+        "codemod.js",
+        r#"
+export default function transform(root) {
+  const rootNode = root.root();
+  const edits = rootNode
+    .findAll({ rule: { kind: 'identifier', regex: '^a$' } })
+    .map((node) => node.replace('renamed'));
+  return rootNode.commitEdits(edits);
+}
+"#,
+    );
+
+    let untouched: &[(&str, &str)] = &[
+        ("src/leading_blank.ts", "\nexport const x = 1;\n"),
+        (
+            "src/leading_blanks_comment.ts",
+            "\n\n// comment\nexport const y = 2;\n",
+        ),
+        ("src/bom.ts", "\u{feff}\n\nexport const x = 1;\n"),
+        (
+            "src/crlf.ts",
+            "\r\n\r\nexport const x = 1;\r\nexport const y = 2;\r\n",
+        ),
+    ];
+    let old_mtime = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+    for (name, content) in untouched {
+        let path = create_test_file(temp_path, name, content);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(old_mtime)
+            .unwrap();
+    }
+    create_test_file(
+        temp_path,
+        "src/edited.ts",
+        "\u{feff}\r\n\r\n// header\r\nvar a = 1;\r\nexport const y = 2;\r\n",
+    );
+
+    let config = workflow_run_config! {
+        bundle_path: temp_path.to_path_buf(),
+        target_path: temp_path.to_path_buf(),
+        ..WorkflowRunConfig::default()
+    };
+    let engine = Engine::with_workflow_run_config(config);
+
+    let result = engine
+        .execute_js_ast_grep_step(
+            "noop-preserves-bytes".to_string(),
+            None,
+            "noop-step".to_string(),
+            "noop-step".to_string(),
+            None,
+            None,
+            &UseJSAstGrep {
+                js_file: "codemod.js".to_string(),
+                base_path: None,
+                include: Some(vec!["src/**/*.ts".to_string()]),
+                exclude: None,
+                max_threads: Some(1),
+                dry_run: Some(false),
+                language: Some("typescript".to_string()),
+                capabilities: None,
+                semantic_analysis: Some(SemanticAnalysisConfig::Mode(SemanticAnalysisMode::File)),
+            },
+            None,
+            None,
+            &CapabilitiesData {
+                capabilities: None,
+                capabilities_security_callback: None,
+            },
+            &None,
+            None,
+            None,
+            &StructuredLogger::default(),
+            None,
+            None,
+            None,
+        )
+        .await;
+    assert!(
+        result.is_ok(),
+        "step should execute successfully: {result:?}"
+    );
+
+    for (name, content) in untouched {
+        let path = temp_path.join(name);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            content.as_bytes(),
+            "{name}: a transform with zero edits must not change any bytes"
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            old_mtime,
+            "{name}: a file whose content did not change must not be rewritten"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(temp_path.join("src/edited.ts")).unwrap(),
+        "\u{feff}\r\n\r\n// header\r\nvar renamed = 1;\r\nexport const y = 2;\r\n",
+        "edited file must keep its BOM, leading blank lines, and CRLF endings"
     );
 }
 

@@ -187,7 +187,7 @@ fn ai_docs_reads_resource_query() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Canonical Codemod CLI and Workflow Documentation"));
-    assert!(stdout.contains("<!-- Local source: docs/cli.mdx -->"));
+    assert!(stdout.contains("<!-- Local source: docs/community/cli.mdx -->"));
 }
 
 #[test]

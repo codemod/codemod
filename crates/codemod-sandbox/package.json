@@ -29,7 +29,8 @@
     "build:runtime": "pnpm run copy-runtime-files",
     "build": "pnpm run build:runtime && pnpm run build:tsc",
     "lint": "pnpm run build:tsc && eslint js/ --ext .ts",
-    "test": "pnpm run build && node --test --enable-source-maps --test-reporter spec dist/tests/*.js"
+    "test": "pnpm run build && node --test --enable-source-maps --test-reporter spec dist/tests/*.js",
+    "test:ast-grep": "tsx --test tests/ast-grep.ts"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "^0.4.1",

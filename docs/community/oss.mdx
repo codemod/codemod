@@ -1,0 +1,262 @@
+---
+title: "Codemod for OSS Maintainers"
+sidebarTitle: 'OSS Maintainers'
+---
+Framework, library, and SDK builders use codemods to move users to new releases without carrying long-term backward compatibility.
+
+Building and maintaining codemods is hard. It does not scale well, adoption is hard to measure, and feedback is limited.
+
+Codemod gives maintainers an easy way to publish official codemods with each release, accept community contributions, and see how codemods are actually used.
+
+Codemod is already used by projects like React, Node.js, ESLint, Express, Nuxt, and many more.
+
+<CardGroup cols={4}>
+  <Card 
+    href="https://github.com/nodejs/userland-migrations"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="/images/logos/nodejs-dark.svg" 
+          alt="Node.js logo"
+          className="block dark:hidden" 
+          noZoom
+        />
+        <img 
+          src="/images/logos/nodejs-light.svg" 
+          alt="Node.js logo"
+          className="absolute inset-0 m-auto hidden dark:block" 
+          noZoom
+        />
+      </div>
+    </div>
+  </Card>
+  <Card href="https://react.dev/blog/2024/04/25/react-19-upgrade-guide#codemods">
+  <div className="relative w-full pb-[100%]">
+    <div className="absolute inset-0 flex items-center justify-center">
+      <img 
+        src="/images/logos/react-dark-and-light.svg" 
+        alt="React logo"
+        className="block dark:hidden" 
+        noZoom
+      />
+      <img 
+        src="/images/logos/react-dark-and-light.svg" 
+        alt="React logo"
+        className="absolute inset-0 m-auto hidden dark:block" 
+        noZoom
+      />
+    </div>
+  </div>
+  </Card>
+  <Card 
+    href="https://github.com/eslint/codemods"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="/images/logos/eslint-dark.svg" 
+          alt="ESLint logo"
+          className="block dark:hidden" 
+          noZoom
+        />
+        <img 
+          src="/images/logos/eslint-light.svg" 
+          alt="ESLint logo"
+          className="absolute inset-0 m-auto hidden dark:block" 
+          noZoom
+        />
+      </div>
+    </div>
+  </Card>
+  <Card 
+    href="https://webpack.js.org/migrate/5/#codemods"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="/images/logos/webpack-dark.svg" 
+          alt="Webpack logo"
+          className="block dark:hidden" 
+          noZoom
+        />
+        <img 
+          src="/images/logos/webpack-light.svg" 
+          alt="Webpack logo"
+          className="absolute inset-0 m-auto hidden dark:block" 
+          noZoom
+        />
+      </div>
+    </div>
+  </Card>
+  <Card 
+    href="https://nuxt.com/docs/4.x/getting-started/upgrade#migrating-using-codemods"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="/images/logos/nuxt-dark.svg" 
+          alt="Nuxt logo"
+          className="block dark:hidden" 
+          noZoom
+        />
+        <img 
+          src="/images/logos/nuxt-light.svg" 
+          alt="Nuxt logo"
+          className="absolute inset-0 m-auto hidden dark:block" 
+          noZoom
+        />
+      </div>
+    </div>
+  </Card>
+  <Card 
+    href="https://github.com/pnpm/codemod?tab=readme-ov-file"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="/images/logos/pnpm-dark.svg" 
+          alt="pnpm logo"
+          className="block dark:hidden" 
+          noZoom
+        />
+        <img 
+          src="/images/logos/pnpm-light.svg" 
+          alt="pnpm logo"
+          className="absolute inset-0 m-auto hidden dark:block" 
+          noZoom
+        />
+      </div>
+    </div>
+  </Card>
+  <Card 
+    href="https://github.com/mswjs/codemods"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="/images/logos/msw-dark.svg" 
+          alt="MSW logo"
+          className="block dark:hidden" 
+          noZoom
+        />
+        <img 
+          src="/images/logos/msw-light.svg" 
+          alt="MSW logo"
+          className="absolute inset-0 m-auto hidden dark:block" 
+          noZoom
+        />
+      </div>
+    </div>
+  </Card>
+  <Card 
+    href="https://reactrouter.com/upgrading/remix#2-update-dependencies"
+  >
+    <div className="relative w-full pb-[100%]">
+      <div className="absolute inset-0 flex items-center justify-center">
+        <img 
+          src="/images/logos/react-router-dark.svg" 
+          alt="React Router logo"
+          className="block dark:hidden" 
+          noZoom
+        />
+        <img 
+          src="/images/logos/react-router-light.svg" 
+          alt="React Router logo"
+          className="absolute inset-0 m-auto hidden dark:block" 
+          noZoom
+        />
+      </div>
+    </div>
+  </Card>
+</CardGroup>
+
+
+## Get started
+
+<Frame>
+  <div style={{ position: 'relative', paddingBottom: 'calc(62.5% + 41px)', height: '0', width: '100%' }}>
+    <iframe
+      src="https://demo.arcade.software/QEtLo6oVoxUnNNejORqp?embed&embed_mobile=inline&embed_desktop=inline&show_copy_link=true"
+      title="Quickstart"
+      frameBorder="0"
+      loading="lazy"
+      allowFullScreen
+      allow="clipboard-write"
+      style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', colorScheme: 'light' }}
+    />
+  </div>
+</Frame>
+
+<Steps>
+  <Step title="Create a dedicated repo to host your codemods">
+    Scaffold a dedicated repository under your project’s GitHub organization to host official codemods:
+
+    ```bash
+    npx codemod init --workspace
+    ```
+
+    The generated layout:
+    - keeps shared publishing and repo configuration at the root
+    - isolates each codemod under `codemods/<slug>/`
+    - keeps migration logic separate from product code
+    - gives maintainers a dedicated repo for collaboration and releases under the project scope
+
+    See the [ESLint codemods repo](https://github.com/eslint/codemods) for an example.
+  </Step>
+  <Step title="Secure your official scope">
+    - Create a free Codemod account and sign in.
+    - Add your GitHub organization.
+    - Install the Codemod GitHub App on your codemod repo.
+
+    This enables trusted publishing under your org scope from GitHub Actions with no API keys or secrets to manage. See the [Node.js official codemods filtered via scope:nodejs in the registry](https://app.codemod.com/registry?q=scope%3Anodejs) for an example.
+
+  </Step>
+  <Step title="Build and publish codemods">
+    At this point, your repo is fully set up for collaboration and publishing.
+      - You or your community can open PRs to add or improve codemods.
+      - Once merged, you can use the GitHub Action to publish the codemod to the registry under your org scope. Make sure codemod names start with your scope (`@your-github-org-name/codemod-name`, for example `@eslint/v8-to-v9-config`).
+  </Step>
+</Steps>
+
+<Tip>
+If you do not know how to build or publish codemods yet, check out the following guides: 
+  - [Build your first codemod with MCP](/community/oss-quickstart#2-scaffold-and-build-your-codemod)
+  - Use [Codemod Studio](/enterprise/codemod-studio) for:
+    * A live codemod runner
+    * An AST viewer
+    * Shareable links with test fixtures for review and debugging
+  - [Publishing codemods](/community/publishing) to the registry.
+  </Tip>
+
+
+
+
+
+## Getting help
+
+<CardGroup cols={2}>
+  <Card title="Join the community" icon="slack" href="https://go.codemod.com/community">
+    Ask questions, get help, and connect with other framework maintainers on Slack.
+  </Card>
+  <Card title="Book a call" icon="calendar" href="https://cal.com/alexbit">
+    Schedule a demo or get hands-on help from the Codemod team.
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="CLI" icon="terminal" href="/community/cli">
+    Learn more about Codemod CLI.
+  </Card>
+  <Card title="Workflows" icon="diagram-project" href="/community/workflows">
+    Orchestrate complex multi-step migrations.
+  </Card>
+  <Card title="JSSG" icon="js" href="/community/jssg">
+    Learn the transformation engine in depth.
+  </Card>
+  <Card title="Publishing" icon="upload" href="/community/publishing">
+    Authentication methods and CI/CD setup.
+  </Card>
+</CardGroup>
