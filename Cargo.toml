@@ -4,10 +4,8 @@ members = [
     "crates/core",
     "crates/cli",
     "crates/runners",
+    "crates/orchestration",
     "crates/orchestration-agent",
-    "crates/orchestration-build",
-    "crates/orchestration-quickjs-host",
-    "crates/orchestration-walker",
     "crates/state",
     "crates/codemod-sandbox",
     "crates/codemod-sandbox/build",
@@ -21,8 +19,6 @@ members = [
     "crates/language-python",
     "crates/semantic-factory",
     "crates/tree-sitter-loader",
-    "crates/jssg-batch",
-    "crates/bench-timings",
 ]
 resolver = "2"
 
@@ -58,8 +54,6 @@ language-javascript = { path = "crates/language-javascript" }
 language-python = { path = "crates/language-python" }
 semantic-factory = { path = "crates/semantic-factory" }
 tree-sitter-loader = { path = "crates/tree-sitter-loader" }
-jssg-batch = { path = "crates/jssg-batch" }
-bench-timings = { path = "crates/bench-timings" }
 
 # Ruff Python semantic analysis and ty_ide
 ruff_python_semantic = { git = "https://github.com/astral-sh/ruff.git", tag = "0.14.0" }

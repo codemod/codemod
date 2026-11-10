@@ -75,7 +75,7 @@ fn a_transform_in_an_imported_module_is_split_into_an_artifact() {
     let scratch = Scratch::with(&initial());
     let built = tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(orchestration_build::build_file(&fixture(
+        .block_on(orchestration::build::build_file(&fixture(
             "load/definitions.ts",
         )))
         .unwrap();

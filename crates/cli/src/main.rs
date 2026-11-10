@@ -256,23 +256,9 @@ fn should_prompt_for_no_command_action() -> bool {
 }
 
 fn exit_with_code(code: i32) -> ! {
-    finish_timings();
     let _ = io::stdout().flush();
     let _ = io::stderr().flush();
     std::process::exit(code);
-}
-
-/// Benchmark timings (`timings` feature, `CODEMOD_TIMINGS_FILE`): the time
-/// between the engine finishing and the status poll seeing it is
-/// `idle_wait`; then the file is written once.
-fn finish_timings() {
-    if let (Some(done), Some(saw)) = (
-        bench_timings::mark_ns("engine_done"),
-        bench_timings::mark_ns("poll_saw"),
-    ) {
-        bench_timings::add(bench_timings::Phase::IdleWait, saw.saturating_sub(done), 1);
-    }
-    bench_timings::finish();
 }
 
 /// Effective analytics opt-out, including implicit `codemod @pkg … --disable-analytics`
@@ -424,7 +410,6 @@ async fn handle_implicit_run_command(
 
 #[tokio::main]
 async fn main() {
-    bench_timings::init("yaml");
     if let Err(error) = run_cli().await {
         if error
             .downcast_ref::<workflow_runner::WorkflowFailureAlreadyReported>()
@@ -435,7 +420,6 @@ async fn main() {
         }
         exit_with_code(1);
     }
-    finish_timings();
 }
 
 async fn run_cli() -> Result<()> {

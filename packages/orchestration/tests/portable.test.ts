@@ -4,7 +4,7 @@
  * - everything reachable from `src/portable.ts` (authoring, `run()`, replay,
  *   history, scheduling, the capability contract, and the JSSG + shell
  *   execution path) imports no `node:*` module, no Node-only package, and uses
- *   no Node global; only the files in `NODE_ONLY` may;
+ *   no Node global, and no other `src` file imports `node:*` either;
  * - `core/posix.ts` matches `node:path.posix`.
  */
 import { readdirSync, readFileSync } from "node:fs";
@@ -14,10 +14,6 @@ import { createPosixPath } from "../src/portable.ts";
 
 const src = resolve(import.meta.dirname, "../src");
 const rel = (file: string) => relative(src, file).split("\\").join("/");
-
-/** The only modules allowed to use Node: the Node host, process trees, and the Node entry. */
-const NODE_ONLY = [/^index\.ts$/u, /^host\//u, /^execution\/process-tree\.ts$/u];
-const isNodeOnly = (file: string) => NODE_ONLY.some((pattern) => pattern.test(rel(file)));
 
 /** Pure-JavaScript packages the portable closure may bundle. */
 const PORTABLE_PACKAGES = new Set(["ignore"]);
@@ -89,7 +85,6 @@ describe("the portable closure", () => {
     ]) {
       expect(files).toContain(required);
     }
-    expect(files.filter((file) => isNodeOnly(join(src, file)))).toEqual([]);
   });
 
   it("imports no node:* module and no Node-only package", () => {
@@ -114,12 +109,11 @@ describe("the portable closure", () => {
     expect(violations).toEqual([]);
   });
 
-  it("is the only place outside NODE_ONLY: no other src file imports node:*", () => {
+  it("leaves no src file importing node:*", () => {
     const files = readdirSync(src, { recursive: true, encoding: "utf8" })
       .filter((name) => name.endsWith(".ts"))
       .map((name) => join(src, name));
     const violations = files
-      .filter((file) => !isNodeOnly(file))
       .filter((file) =>
         valueImports(readFileSync(file, "utf8")).some((specifier) => specifier.startsWith("node:")),
       )
@@ -155,8 +149,7 @@ describe("the portable closure", () => {
 
 describe("the QuickJS bundle entry (host/quickjs/entry.ts) closure", () => {
   // Everything the quickjs bundle evaluates inside QuickJS: the entry plus
-  // the portable control plane it imports. It lives under host/ (a Node-only
-  // folder) but must obey the portable rules.
+  // the portable control plane it imports.
   const closure = portableClosure(join(src, "host", "quickjs", "entry.ts"));
   const inHost = (file: string) => rel(file).startsWith("host/");
 
@@ -168,7 +161,6 @@ describe("the QuickJS bundle entry (host/quickjs/entry.ts) closure", () => {
         .map(rel)
         .filter((f) => !f.startsWith("host/quickjs/")),
     ).toEqual([]);
-    expect(files.filter((f) => !inHost(f) && isNodeOnly(f)).map(rel)).toEqual([]);
     expect(files.map(rel)).toContain("execution/jssg.ts");
   });
 

@@ -1,21 +1,16 @@
 /**
  * The host seam: everything the portable control plane (authoring, runtime,
  * history, replay, scheduling) and the portable JSSG + shell execution path
- * need from the platform they run on. Nothing outside the Node host
- * implementation (`src/host/node-host.ts`) and the Node-only build and
- * runtime-launch modules may import `node:*` or touch `process`;
- * `tests/portable.test.ts` enforces it with a static import scan.
+ * need from the platform they run on. No `src` module imports `node:*` or
+ * touches `process`; `tests/portable.test.ts` enforces it with a static
+ * import scan.
  *
- * Two implementations:
- *
- * - QuickJS (`src/host/quickjs/host.ts`, the Rust binary hosting one
- *   QuickJS context): the runtime. It installs itself with `setHost()` or by
- *   defining `globalThis[HOST_GLOBAL]` before the workflow bundle is
- *   evaluated. See `RUNTIMES.md` for exactly what it must provide.
- * - Node (`createNodeHost()` in `src/host/node-host.ts`): wraps `node:fs`,
- *   `node:path`, `node:child_process`, `node:os`, and `AsyncLocalStorage`,
- *   for the test harness (`src/host/harness.ts`) and Node consumers of the
- *   package (`src/index.ts`).
+ * The runtime's implementation is the QuickJS host
+ * (`src/host/quickjs/host.ts`, over the Rust natives in the codemod
+ * binary). It installs itself with `setHost()` or by defining
+ * `globalThis[HOST_GLOBAL]` before the workflow bundle is evaluated. The
+ * specs run on Node under Vitest and install a Node host
+ * (`tests/support/node-host.ts`).
  *
  * Every filesystem call is synchronous on purpose: selection, containment,
  * staging, and the commit are synchronous today, the single JS thread is the
@@ -206,12 +201,6 @@ export interface Host {
   createAsyncContext<T>(): AsyncContextVariable<T>;
   /** Milliseconds since the Unix epoch. */
   now(): number;
-  /**
-   * Optional monotonic clock with sub-microsecond resolution, for the
-   * benchmark timings (`core/timings.ts`): `ns()` is nanoseconds from an
-   * arbitrary origin. Node: `performance.now()`; QuickJS: a Rust clock.
-   */
-  readonly clock?: { ns(): number };
   setTimeout(callback: () => void, ms: number): HostTimer;
   clearTimeout(timer: HostTimer): void;
   /** RFC 4122 v4 UUID; used for unique temporary names. */
@@ -222,7 +211,7 @@ export interface Host {
    * ancestor's ignore files, the override sets, lossy entry names, symlinks
    * skipped), returning target-relative `/` paths sorted by `comparePaths`.
    * `files.ts` uses it when present and falls back to walking through `fs`.
-   * The QuickJS host implements it in Rust (`crates/orchestration-walker`);
+   * The QuickJS host implements it in Rust (`crates/orchestration/src/walker`);
    * `tests/files-native.test.ts` checks it against the TypeScript walker.
    */
   readonly selectFiles?: (request: HostSelectRequest) => string[];
@@ -239,9 +228,7 @@ let installed: Host | undefined;
 /** Thrown when portable code needs the platform before any host was installed. */
 export class HostNotInstalledError extends Error {
   constructor() {
-    super(
-      `no orchestration host is installed; import '@codemod.com/orchestration' (Node), call setHost(), or define globalThis.${HOST_GLOBAL}`,
-    );
+    super(`no orchestration host is installed; call setHost() or define globalThis.${HOST_GLOBAL}`);
     this.name = "HostNotInstalledError";
   }
 }

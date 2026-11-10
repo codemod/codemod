@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cancelled, createHarness, failed, unknown } from "../src/host/harness.ts";
+import { cancelled, createHarness, failed, unknown } from "./support/harness.ts";
 import {
   DuplicateCommandIdError,
   MemoryHistoryStore,

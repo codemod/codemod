@@ -483,15 +483,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55248b47b0caf0546f7988906588779981c43bb1bc9d0c44087278f80cdb44ba"
 
 [[package]]
-name = "bench-timings"
-version = "1.18.6"
-dependencies = [
- "libc",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "better_scoped_tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -765,7 +756,6 @@ dependencies = [
  "ast-grep-config",
  "async-trait",
  "base64 0.22.1",
- "bench-timings",
  "butterflow-models",
  "butterflow-runners",
  "butterflow-scheduler",
@@ -1118,7 +1108,6 @@ dependencies = [
  "ast-grep-language",
  "async-trait",
  "base64 0.22.1",
- "bench-timings",
  "butterflow-core",
  "butterflow-models",
  "butterflow-runners",
@@ -1150,8 +1139,7 @@ dependencies = [
  "num_cpus",
  "oauth2",
  "open",
- "orchestration-build",
- "orchestration-quickjs-host",
+ "orchestration",
  "percent-encoding",
  "portable-pty",
  "rand 0.8.5",
@@ -1254,7 +1242,6 @@ dependencies = [
  "ast-grep-core",
  "ast-grep-dynamic",
  "ast-grep-language",
- "bench-timings",
  "bytes",
  "codemod-llrt-capabilities",
  "dashmap 6.1.0",
@@ -3509,22 +3496,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jssg-batch"
-version = "1.18.6"
-dependencies = [
- "ast-grep-config",
- "ast-grep-core",
- "codemod-sandbox",
- "ignore",
- "language-core",
- "semantic-factory",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
-]
-
-[[package]]
 name = "junction"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4812,6 +4783,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "orchestration"
+version = "1.18.6"
+dependencies = [
+ "anyhow",
+ "arcstr",
+ "ast-grep-config",
+ "ast-grep-core",
+ "codemod-sandbox",
+ "hex",
+ "ignore",
+ "language-core",
+ "libc",
+ "oxc 0.96.0",
+ "regex",
+ "regress",
+ "reqwest 0.12.23",
+ "rolldown",
+ "rolldown_common",
+ "rolldown_plugin",
+ "rquickjs",
+ "semantic-factory",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "orchestration-agent"
 version = "1.18.6"
 dependencies = [
@@ -4821,54 +4822,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
-]
-
-[[package]]
-name = "orchestration-build"
-version = "1.18.6"
-dependencies = [
- "anyhow",
- "arcstr",
- "hex",
- "libc",
- "oxc 0.96.0",
- "regex",
- "rolldown",
- "rolldown_common",
- "rolldown_plugin",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "orchestration-quickjs-host"
-version = "1.18.6"
-dependencies = [
- "bench-timings",
- "codemod-sandbox",
- "jssg-batch",
- "libc",
- "orchestration-walker",
- "reqwest 0.12.23",
- "rquickjs",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "orchestration-walker"
-version = "1.18.6"
-dependencies = [
- "bench-timings",
- "regex",
- "regress",
- "tempfile",
 ]
 
 [[package]]

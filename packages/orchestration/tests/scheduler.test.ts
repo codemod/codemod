@@ -4,7 +4,7 @@
  * executor the test releases by hand, so nothing here depends on durations.
  */
 import { describe, expect, it } from "vitest";
-import { createHarness, failed } from "../src/host/harness.ts";
+import { createHarness, failed } from "./support/harness.ts";
 import {
   AdmissionScheduler,
   CAPACITY_ENV,

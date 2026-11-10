@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createHarness } from "../src/host/harness.ts";
+import { createHarness } from "./support/harness.ts";
 import {
   MemoryHistoryStore,
   NondeterminismError,

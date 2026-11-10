@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createHarness, failed, type Harness, type HarnessRun } from "../src/host/harness.ts";
+import { createHarness, failed, type Harness, type HarnessRun } from "./support/harness.ts";
 import {
   DuplicateCommandIdError,
   agent,

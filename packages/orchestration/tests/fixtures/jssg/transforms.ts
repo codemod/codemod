@@ -1,5 +1,5 @@
 /**
- * Inline transforms for the runtime e2e tests. This module is only ever built
+ * Inline transforms for the end-to-end specs. This module is only ever built
  * (`buildFile`), never imported: the tests take each definition's artifact by
  * name and bind it to a runnable of their own. It is typechecked with the
  * package, which is what proves the inline authoring types.

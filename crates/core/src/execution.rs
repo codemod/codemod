@@ -118,8 +118,6 @@ impl CodemodExecutionConfig {
         }
 
         let explicit_files = self.explicit_files.clone();
-        // Benchmark timings: building the globs and the counting walk.
-        let select = bench_timings::start();
         let globs = if explicit_files.is_some() {
             None
         } else {
@@ -131,7 +129,6 @@ impl CodemodExecutionConfig {
         } else {
             self.count_files(&search_base, &globs)?
         };
-        bench_timings::stop(bench_timings::Phase::Select, select);
 
         if let Some(ref progress_cb) = self.progress_callback.as_ref() {
             (progress_cb.callback)(task_id, "start", "counting", Some(&total_files), &0);
@@ -181,68 +178,52 @@ impl CodemodExecutionConfig {
                     .map_or(1, |n| n.get())
                     .min(12)
             });
-            bench_timings::set_threads_used(num_threads);
 
             let walker = self
                 .create_walk_builder(&search_base, globs)
                 .threads(num_threads)
                 .build_parallel();
 
-            // Benchmark timings: the file loop is one region of `num_threads`
-            // walker threads (`bench_timings::parallel`); on each thread, the
-            // time outside the per-file callback (traversal, ignore rules,
-            // progress updates) is `select`, and the callback's own work
-            // around the spans inside it (progress tracking, the per-file
-            // task and runtime handoff) is `setup`.
-            bench_timings::parallel(num_threads, || {
-                walker.run(|| {
-                    let ctx = Arc::clone(&shared_context);
-                    let mut walking = bench_timings::Span::new(bench_timings::Phase::Select);
+            walker.run(|| {
+                let ctx = Arc::clone(&shared_context);
 
-                    Box::new(move |entry| match entry {
-                        Ok(dir_entry) => {
-                            let file_path = dir_entry.path();
+                Box::new(move |entry| match entry {
+                    Ok(dir_entry) => {
+                        let file_path = dir_entry.path();
 
-                            if dir_entry.file_type().is_some_and(|ft| ft.is_file()) {
-                                if let Some(ref progress_cb) = ctx.progress_callback.as_ref() {
-                                    let file_path_str = file_path.to_string_lossy();
-                                    (progress_cb.callback)(
-                                        &ctx.task_id,
-                                        &file_path_str,
-                                        "processing",
-                                        Some(&ctx.total_files),
-                                        &ctx.processed_count.load(Ordering::Relaxed),
-                                    );
-                                }
-
-                                walking.pause();
-                                let per_file =
-                                    bench_timings::Residual::new(bench_timings::Phase::Setup);
-                                (ctx.callback)(file_path, ctx.config);
-                                per_file.finish();
-                                walking.resume();
-
-                                let current_count =
-                                    ctx.processed_count.fetch_add(1, Ordering::Relaxed);
-
-                                if let Some(ref progress_cb) = ctx.progress_callback.as_ref() {
-                                    (progress_cb.callback)(
-                                        &ctx.task_id,
-                                        "",
-                                        "increment",
-                                        Some(&ctx.total_files),
-                                        &(current_count + 1),
-                                    );
-                                }
+                        if dir_entry.file_type().is_some_and(|ft| ft.is_file()) {
+                            if let Some(ref progress_cb) = ctx.progress_callback.as_ref() {
+                                let file_path_str = file_path.to_string_lossy();
+                                (progress_cb.callback)(
+                                    &ctx.task_id,
+                                    &file_path_str,
+                                    "processing",
+                                    Some(&ctx.total_files),
+                                    &ctx.processed_count.load(Ordering::Relaxed),
+                                );
                             }
-                            WalkState::Continue
+
+                            (ctx.callback)(file_path, ctx.config);
+
+                            let current_count = ctx.processed_count.fetch_add(1, Ordering::Relaxed);
+
+                            if let Some(ref progress_cb) = ctx.progress_callback.as_ref() {
+                                (progress_cb.callback)(
+                                    &ctx.task_id,
+                                    "",
+                                    "increment",
+                                    Some(&ctx.total_files),
+                                    &(current_count + 1),
+                                );
+                            }
                         }
-                        Err(err) => {
-                            eprintln!("Walk error: {err}");
-                            WalkState::Continue
-                        }
-                    })
-                });
+                        WalkState::Continue
+                    }
+                    Err(err) => {
+                        eprintln!("Walk error: {err}");
+                        WalkState::Continue
+                    }
+                })
             });
         }
 

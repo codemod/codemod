@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createHarness, failed } from "../src/host/harness.ts";
+import { createHarness, failed } from "./support/harness.ts";
 import {
   CompositionValidationError,
   DuplicateCommandIdError,

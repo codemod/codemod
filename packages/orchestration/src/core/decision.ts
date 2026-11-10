@@ -2,7 +2,7 @@
  * Which decision model answers assessments, read from the environment only:
  * workflow code never names a provider, endpoint, or key. The QuickJS host
  * resolves the same base URL to scope its network allowlist
- * (`crates/orchestration-quickjs-host/src/http.rs`); keep the two in step.
+ * (`crates/orchestration/src/host/http.rs`); keep the two in step.
  *
  * | Variable               | Meaning                                              |
  * | ---------------------- | ---------------------------------------------------- |

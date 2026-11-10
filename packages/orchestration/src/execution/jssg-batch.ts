@@ -2,7 +2,7 @@
  * The JSSG batch loop of the `quickjs` runtime: a
  * `JssgDispatch` that runs transforms in the same JS realm as the control
  * plane. Every rule of the batch lives in Rust, in one place
- * (`crates/jssg-batch`), reached through the engine:
+ * (`crates/orchestration/src/jssg_batch.rs`), reached through the engine:
  *
  * - `open` plans the batch (`BatchPlan`: hash check, canonical target root,
  *   every path contained in it, language, compiled selector, params, the
@@ -32,7 +32,6 @@
  * transform that never returns cannot be interrupted in-process.
  */
 import type { Json } from "../core/json.ts";
-import { Phase, lap, now } from "../core/timings.ts";
 import {
   PROTOCOL_VERSION,
   type ArtifactRef,
@@ -183,13 +182,6 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
     });
     let pending: Promise<unknown[]> | undefined;
     try {
-      // Benchmark timings (`core/timings.ts`; no-ops when off), as
-      // back-to-back laps of the loop: waiting for a chunk is `parse` (the
-      // parse itself on this thread, or blocked on worker threads, whose CPU
-      // the engine reports); per file, the loop's own work and the first
-      // evaluation of the module are `setup`, the call `transform`, and
-      // reading its result `convert`.
-      let mark = now();
       if (batch.indexesWorkspace) {
         for (let start = 0; start < files.length; start += chunkSize) {
           if (signal?.aborted) return failed("cancelled");
@@ -198,7 +190,6 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
             files.slice(start, start + chunkSize).map((file) => file.content),
           );
         }
-        mark = lap(Phase.setup, mark);
       }
       const transformRange = batch.transformRange?.bind(batch);
       if (transformRange !== undefined) {
@@ -223,7 +214,6 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
             }
           }
         }
-        lap(Phase.transform, mark);
         return succeeded();
       }
       const parse = (start: number) =>
@@ -234,7 +224,6 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
       pending = files.length > 0 ? parse(0) : undefined;
       for (let start = 0; pending !== undefined; start += chunkSize) {
         const roots = await pending;
-        mark = lap(Phase.parse, mark);
         // Parse the next chunk (off-thread, where the engine can) while this one transforms.
         pending = start + chunkSize < files.length ? parse(start + chunkSize) : undefined;
         for (const [offset, root] of roots.entries()) {
@@ -257,7 +246,6 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
           } catch (error) {
             return failed(`JSSG failed for '${file.path}': ${engine.describeError(error)}`);
           }
-          mark = lap(Phase.setup, mark);
           let outcome: FileOutcome;
           try {
             let ran: unknown;
@@ -266,9 +254,7 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
             } catch (error) {
               throw new Error(`JSSG failed for '${file.path}': ${engine.describeError(error)}`);
             }
-            mark = lap(Phase.transform, mark);
             outcome = batch.finish(index, root, ran);
-            mark = lap(Phase.convert, mark);
           } catch (error) {
             const message = (error as Error).message ?? String(error);
             if (!fileFailed(file.path, message)) return failed(message);

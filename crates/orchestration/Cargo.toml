@@ -1,0 +1,48 @@
+[package]
+name = "orchestration"
+version.workspace = true
+edition = "2021"
+authors.workspace = true
+description = "TypeScript workflows for `codemod workflow run -w`: builds a workflow into one QuickJS bundle and runs it in the codemod process"
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+# `std::io::pipe` (stdout and stderr of a shell child share one pipe).
+rust-version = "1.87"
+publish = false
+
+[dependencies]
+# The rolldown the CLI already uses for `jssg bundle`, so the CLI links one copy.
+rolldown = { git = "https://github.com/rolldown/rolldown.git", rev = "3d1985ab40923590b3ae9f626b2438d9543dc588" }
+rolldown_common = { git = "https://github.com/rolldown/rolldown.git", rev = "3d1985ab40923590b3ae9f626b2438d9543dc588" }
+rolldown_plugin = { git = "https://github.com/rolldown/rolldown.git", rev = "3d1985ab40923590b3ae9f626b2438d9543dc588" }
+# The oxc that rolldown revision uses.
+oxc = { version = "=0.96.0", features = ["semantic", "transformer", "codegen"] }
+anyhow = "1"
+arcstr = "1.2"
+ast-grep-config = { workspace = true }
+ast-grep-core = { workspace = true }
+codemod-sandbox = { workspace = true, features = ["native"] }
+hex = "0.4"
+language-core = { workspace = true }
+libc = "0.2"
+# ECMAScript regular expressions (non-unicode mode, UTF-16 code units), so
+# node-ignore's generated `RegExp` sources match exactly as they do in JS.
+regress = { version = "0.10", features = ["utf16"] }
+# Fast path for ignore rules whose JS semantics the `regex` crate provably
+# shares on ASCII paths (`walker::node_ignore::fast_source`).
+regex = { workspace = true }
+# `httpRequest` (assessment only; restricted to the decision API root).
+reqwest = { workspace = true, features = ["blocking"] }
+rquickjs = { version = "0.11", features = ["full-async"] }
+semantic-factory = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+tokio = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+# The walker parity contract (`tests/jssg_batch_contracts.rs`) uses the engine's walker.
+ignore = { workspace = true }
+tempfile = { workspace = true }

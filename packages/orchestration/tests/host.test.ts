@@ -6,15 +6,13 @@
  *   conflict checks, the transactional commit, and nothing written on failure;
  * - `executeShell` against the Node host, with the workflow engine's DirectRunner
  *   semantics (merged output, line normalization, exit codes, env, shebang
- *   scripts, abort);
- * - the Node host's own contract (EILSEQ, symlink-free directory entries).
+ *   scripts, abort).
  */
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  NODE_HOST,
   PROTOCOL_VERSION,
   executeJssgCommand,
   executeShell,
@@ -218,36 +216,4 @@ describe("executeShell over the Node host", () => {
       expect(await pending).toMatchObject({ status: "cancelled" });
     },
   );
-});
-
-describe("the Node host", () => {
-  let dir: string;
-  beforeEach(() => {
-    dir = realpathSync.native(mkdtempSync(join(tmpdir(), "codemod-host-")));
-  });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
-
-  it("reports invalid UTF-8 as EILSEQ only when fatal", () => {
-    writeFileSync(join(dir, "bad.txt"), Uint8Array.from([0x61, 0xff, 0x62]));
-    expect(NODE_HOST.fs.readText(join(dir, "bad.txt"))).toBe("a�b");
-    expect(() => NODE_HOST.fs.readText(join(dir, "bad.txt"), { fatal: true })).toThrow(
-      expect.objectContaining({ code: "EILSEQ" }),
-    );
-    expect(() => NODE_HOST.fs.readText(join(dir, "missing.txt"))).toThrow(
-      expect.objectContaining({ code: "ENOENT" }),
-    );
-  });
-
-  it.skipIf(process.platform === "win32")("types symlinks as neither file nor directory", () => {
-    mkdirSync(join(dir, "sub"));
-    writeFileSync(join(dir, "file"), "");
-    symlinkSync(join(dir, "sub"), join(dir, "link"));
-    const entries = NODE_HOST.fs.readdir(dir).sort((a, b) => a.name.localeCompare(b.name));
-    expect(entries).toEqual([
-      { name: "file", isFile: true, isDirectory: false },
-      { name: "link", isFile: false, isDirectory: false },
-      { name: "sub", isFile: false, isDirectory: true },
-    ]);
-    expect(NODE_HOST.fs.lstat(join(dir, "link")).isSymbolicLink).toBe(true);
-  });
 });

@@ -46,7 +46,6 @@ use crate::slog;
 use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
 use crate::task_state_service::TaskStateService;
 use crate::utils::validate_workflow;
-use crate::workflow_completion::{WorkflowCompletionSignal, WorkflowExecutorRegistry};
 use crate::workflow_runtime::{publish_event, WorkflowEvent};
 use chrono::Utc;
 use codemod_sandbox::llm::{LlmRequestHandler, LlmResponse};
@@ -613,10 +612,6 @@ pub struct Engine {
     /// (today: the js-ast-grep file loop). `cancel_workflow` flips every entry
     /// so the step can short-circuit without polling the state backend.
     step_cancel_signals: Arc<std::sync::Mutex<HashMap<Uuid, Arc<AtomicBool>>>>,
-
-    /// Exit signals for workflow executors spawned by this engine (and its
-    /// clones), keyed by workflow run id. See [`Engine::completion_signal`].
-    workflow_executors: WorkflowExecutorRegistry,
 }
 
 /// Represents a codemod dependency chain for cycle detection
@@ -1095,7 +1090,6 @@ impl Engine {
                 .with_text_log_fallthrough(true),
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            workflow_executors: WorkflowExecutorRegistry::default(),
         }
     }
 
@@ -1123,7 +1117,6 @@ impl Engine {
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            workflow_executors: WorkflowExecutorRegistry::default(),
         }
     }
 
@@ -1221,7 +1214,6 @@ impl Engine {
             structured_logger,
             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            workflow_executors: WorkflowExecutorRegistry::default(),
         }
     }
 
@@ -1488,10 +1480,6 @@ impl Engine {
 
     fn spawn_workflow_executor(&self, workflow_run_id: Uuid) {
         let mut workflow_engine = self.clone();
-        // Registered before the thread starts so a subscriber that arrives
-        // right after `run_workflow` returns still observes this executor.
-        // The guard reports the exit when dropped, including on panic.
-        let mut executor_guard = self.workflow_executors.begin(workflow_run_id);
 
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_multi_thread()
@@ -1499,32 +1487,12 @@ impl Engine {
                 .enable_all()
                 .build()
                 .expect("failed to build workflow runtime");
-            rt.block_on(async {
-                let result = workflow_engine.execute_workflow(workflow_run_id).await;
-                bench_timings::mark("engine_done");
-                if let Err(e) = result {
-                    let message = format!("Workflow execution failed: {e}");
-                    workflow_engine.emit_error(message.clone());
-                    executor_guard.fail(message);
+            rt.block_on(async move {
+                if let Err(e) = workflow_engine.execute_workflow(workflow_run_id).await {
+                    workflow_engine.emit_error(format!("Workflow execution failed: {e}"));
                 }
             });
-            // Signal before tearing the runtime down so waiters don't also
-            // wait for its shutdown.
-            drop(executor_guard);
-            drop(rt);
         });
-    }
-
-    /// Wake-up signal for executors of `workflow_run_id` started by this
-    /// engine or one of its clones (`run_workflow`, `resume_workflow`,
-    /// `trigger_all`). Returns `None` when no executor for the run was started
-    /// in this process, e.g. a run driven by another process through shared
-    /// state; callers must then rely on polling alone.
-    ///
-    /// The signal only says "an executor exited". The workflow status in the
-    /// state adapter stays authoritative, so re-read it after waking.
-    pub fn completion_signal(&self, workflow_run_id: Uuid) -> Option<WorkflowCompletionSignal> {
-        self.workflow_executors.subscribe(workflow_run_id)
     }
 
     pub(crate) async fn append_task_log(
@@ -2029,9 +1997,6 @@ impl Engine {
 
     /// Execute a workflow
     async fn execute_workflow(&mut self, workflow_run_id: Uuid) -> Result<()> {
-        // Benchmark timings: the scheduling loop around the tasks (state
-        // reads and writes, matrix recompilation) is `plan`.
-        let mut plan = bench_timings::Span::new(bench_timings::Phase::Plan);
         // Get the workflow run
         let workflow_run = self
             .state_adapter
@@ -2332,7 +2297,6 @@ impl Engine {
                     .unwrap(); // Should exist based on how tasks are created
 
                 // Execute task synchronously to ensure state updates are applied before matrix recompilation
-                plan.pause();
                 let execution_result = std::panic::AssertUnwindSafe(self.execute_task(task_id))
                     .catch_unwind()
                     .await
@@ -2342,7 +2306,6 @@ impl Engine {
                             panic_payload_message(panic_payload.as_ref())
                         )))
                     });
-                plan.resume();
                 if let Err(e) = execution_result {
                     let current_task = self.state_adapter.lock().await.get_task(task_id).await?;
                     if matches!(
@@ -2465,8 +2428,6 @@ impl Engine {
 
     /// Execute a task
     async fn execute_task(&self, task_id: Uuid) -> Result<()> {
-        // Benchmark timings: the task's bookkeeping around its steps is `plan`.
-        let mut plan = bench_timings::Span::new(bench_timings::Phase::Plan);
         let task = self.state_adapter.lock().await.get_task(task_id).await?;
 
         let workflow_run = self
@@ -2638,7 +2599,6 @@ impl Engine {
                 None
             };
 
-            plan.pause();
             let result = std::panic::AssertUnwindSafe(StepExecutor::new(self).execute(
                 StepExecutionRequest {
                     runner: runner.as_ref(),
@@ -2670,7 +2630,6 @@ impl Engine {
                     panic_payload_message(panic_payload.as_ref())
                 )))
             });
-            plan.resume();
             // Drop the capture guard to restore stdout before emitting step_end.
             // This ensures all captured output is flushed and attributed to this step.
             drop(_stdout_capture);
@@ -4399,7 +4358,6 @@ impl Clone for Engine {
             structured_logger: self.structured_logger.clone(),
             output_heartbeat_callbacks: Arc::clone(&self.output_heartbeat_callbacks),
             step_cancel_signals: Arc::clone(&self.step_cancel_signals),
-            workflow_executors: self.workflow_executors.clone(),
         }
     }
 }

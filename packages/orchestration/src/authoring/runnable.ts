@@ -174,7 +174,7 @@ export interface JssgOptions<L extends string, I, O> extends DataOptions<I, O> {
   selector?: JssgSelector<JssgTypes<L>>;
   /**
    * The one transform, with the documented `(root, options)` contract. The
-   * build step (`crates/orchestration-build`) replaces it with an `ArtifactRef` before the
+   * build step (`crates/orchestration/src/build`) replaces it with an `ArtifactRef` before the
    * module runs; a function reaching this call means the module was not
    * built, which is refused.
    */

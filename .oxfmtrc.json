@@ -7,7 +7,6 @@
     "crates/cli/src/templates/**",
     "packages/jssg-types/src/llrt/**",
     "schemas/*.json",
-    "crates/codemod-sandbox/tests/integration/sg_api/*.json",
-    "benchmarks/runtimes/results/**"
+    "crates/codemod-sandbox/tests/integration/sg_api/*.json"
   ]
 }

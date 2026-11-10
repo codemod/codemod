@@ -1,11 +1,8 @@
 /**
- * `@codemod.com/orchestration` on Node: the portable API (`portable.ts`),
- * with the Node host installed, plus the agent and assessment executors.
- * Workflows run through `codemod workflow run -w`, whose bundles map this
- * import to `portable.ts`.
+ * `@codemod.com/orchestration`: the portable API (`portable.ts`) plus the
+ * agent and assessment executors. Workflows run through
+ * `codemod workflow run -w`, whose bundles map this import to `portable.ts`.
  */
-import "./host/node-host.ts";
-
 export * from "./portable.ts";
 export {
   DEFAULT_ASSESSMENT_FILE_CONCURRENCY,
@@ -36,4 +33,3 @@ export {
   executeAgent,
 } from "./execution/agent.ts";
 export type { AgentExecutionOptions } from "./execution/agent.ts";
-export { NODE_HOST, createNodeHost, nodeHost } from "./host/node-host.ts";

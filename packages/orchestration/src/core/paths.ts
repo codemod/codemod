@@ -2,7 +2,7 @@
  * Path rules shared by JSSG targets, JSSG definitions
  * (`semanticAnalysis.root`), the wire protocol, and the commit. The Rust
  * batch rules apply the same rules (`validate_relative_path` and the
- * containment checks in `crates/jssg-batch`), so a value accepted here is
+ * containment checks in `crates/orchestration/src/jssg_batch.rs`), so a value accepted here is
  * accepted there and every path is checked independently on both sides.
  */
 import { getHost, type Host, type HostFs } from "./host.ts";

@@ -15,7 +15,7 @@
 //!    (target directory, staged writes, no dry run, no test mode) and
 //!    attaches the globals;
 //! 3. [`root_value`] hands a parsed [`CoreRoot`] (the embedder parses, e.g.
-//!    with `jssg_batch::BatchPlan::parse`) to JavaScript as an `SgRoot`;
+//!    with `orchestration::jssg_batch::BatchPlan::parse`) to JavaScript as an `SgRoot`;
 //! 4. around every transform call, [`begin_call`] clears the staged-changes
 //!    accumulator, sets the params `jssgTransform` forwards, and builds the
 //!    transform `options` exactly as the per-file engine does;
@@ -28,7 +28,7 @@
 //! `jssgTransform` params are per context, so one transform call is in
 //! flight at a time (between [`begin_call`] and [`end_call`]). Semantic
 //! analysis comes with the roots: a root answers through the provider it
-//! was created with (`jssg_batch::BatchPlan::parse`).
+//! was created with (`orchestration::jssg_batch::BatchPlan::parse`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -1,6 +1,7 @@
 /**
  * `executeJssgCommand` against a scripted batch dispatch. No Rust is involved;
- * the real batch runners are exercised by the runtimes' e2e tests.
+ * the real batch runner is exercised by `crates/cli/tests/typescript_workflow.rs`
+ * and `jssg_parity.rs`.
  */
 import {
   chmodSync,
@@ -71,8 +72,8 @@ type Edits = FileOutcome["edits"];
 const edit = (path: string, content: string, renameTo?: string) =>
   renameTo === undefined ? { path, content } : { path, content, renameTo };
 
-/** Scripted edits per mode for one file; `secondary` is the path a.ts also writes. */
-const modes: Record<string, (path: string, content: string, secondary?: string) => Edits> = {
+/** Scripted edits per mode for one file. */
+const modes: Record<string, (path: string, content: string) => Edits> = {
   escape: (path, content) => [edit(path, content, "../escaped.ts")],
   "escape-symlink": (path, content) => [edit(path, content, "linkdir/out.ts")],
   "escape-absolute": () => [edit("/etc/passwd", "pwned")],
@@ -86,10 +87,6 @@ const modes: Record<string, (path: string, content: string, secondary?: string) 
     path === "a.ts"
       ? [edit(path, content), edit("b.ts", "b\n", "b.renamed.ts")]
       : [edit(path, `${content}// b\n`)],
-  secondary: (path, content, secondary) => [
-    edit(path, `${content}// primary ${path}\n`),
-    ...(path === "a.ts" ? [edit(secondary!, "// secondary\n")] : []),
-  ],
 };
 
 /**
@@ -97,7 +94,7 @@ const modes: Record<string, (path: string, content: string, secondary?: string) 
  * aborted; `modes` script edits; any other mode appends `// fake\n` to every
  * file and outputs `{ path, context, input }` (the request context without files).
  */
-function scriptedDispatch(mode: string, secondary?: string): JssgDispatch {
+function scriptedDispatch(mode: string): JssgDispatch {
   return async (request, signal) => {
     const reply = (completion: Omit<OperationCompletion, "protocolVersion" | "commandId">) =>
       ({
@@ -117,7 +114,7 @@ function scriptedDispatch(mode: string, secondary?: string): JssgDispatch {
     const outcomes = files.map(
       ({ path, content }): FileOutcome =>
         mode in modes
-          ? { path, edits: modes[mode]!(path, content, secondary) }
+          ? { path, edits: modes[mode]!(path, content) }
           : {
               path,
               edits: [edit(path, `${content}// fake\n`)],
@@ -129,13 +126,10 @@ function scriptedDispatch(mode: string, secondary?: string): JssgDispatch {
 }
 
 /** `abort` fires the signal once the scripted dispatch has started (a hanging one is listening). */
-function run(
-  op: JssgOperation,
-  options: { mode?: string; secondary?: string; abort?: boolean } = {},
-) {
+function run(op: JssgOperation, options: { mode?: string; abort?: boolean } = {}) {
   let dispatched = 0;
   const controller = new AbortController();
-  const dispatch = scriptedDispatch(options.mode ?? "echo", options.secondary);
+  const dispatch = scriptedDispatch(options.mode ?? "echo");
   return executeJssgCommand({
     cwd: repo,
     artifacts: new Map([[built.hash, built]]),
@@ -163,11 +157,9 @@ const paths = (completion: OperationCompletion) =>
 
 describe("a successful batch", () => {
   let result: Awaited<ReturnType<typeof run>>;
-  let after: Record<string, string>;
   beforeAll(async () => {
     createRepo();
     result = await run(operation({ semanticAnalysis: "workspace", input: { n: 1 } }));
-    after = tree();
   });
   afterAll(removeDirs);
 
@@ -184,15 +176,6 @@ describe("a successful batch", () => {
       path: "a.ts",
       context: { targetRoot: repo, artifact: { source: built.source } },
       input: { n: 1 },
-    });
-  });
-
-  it("commits the edits of selected files and leaves the others untouched", () => {
-    expect(after).toEqual({
-      "a.ts": "a\n// fake\n",
-      "b.ts": "b\n// fake\n",
-      "c.js": "c\n// fake\n",
-      "d.md": "d\n",
     });
   });
 });
@@ -271,21 +254,6 @@ describe("executeJssgCommand", () => {
       ]);
     },
   );
-
-  it("renames a file: writes the destination and removes the source", async () => {
-    await run(operation({ include: ["**/*.ts"] }), { mode: "rename" });
-    const { "a.ts": a, "b.ts": b, ...rest } = untouched;
-    expect(tree()).toEqual({ ...rest, "a.moved.ts": a, "b.moved.ts": b });
-  });
-
-  it("writes a secondary edit to a new path, creating its directories", async () => {
-    await run(operation({ include: ["a.ts"] }), { mode: "secondary", secondary: "new/dir/n.ts" });
-    expect(tree()).toEqual({
-      ...untouched,
-      "a.ts": "a\n// primary a.ts\n",
-      "new/dir/n.ts": "// secondary\n",
-    });
-  });
 
   it("skips a file that is not UTF-8", async () => {
     writeFileSync(join(repo, "b.ts"), Buffer.from([0xff, 0xfe, 0x62]));

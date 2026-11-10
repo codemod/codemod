@@ -9,8 +9,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { descendants, killProcessTree } from "../src/execution/process-tree.ts";
-import { createHarness } from "../src/host/harness.ts";
+import { descendants, killProcessTree } from "./support/process-tree.ts";
+import { createHarness } from "./support/harness.ts";
 import {
   DEFAULT_BUILTIN_AGENT_TOOLS,
   DEFAULT_CLAUDE_CODE_TOOLS,

@@ -3,7 +3,7 @@
  * inside a workflow issues it, and static composition nodes are awaitable data.
  */
 import { describe, expect, it } from "vitest";
-import { createHarness, failed } from "../src/host/harness.ts";
+import { createHarness, failed } from "./support/harness.ts";
 import {
   DuplicateCommandIdError,
   PROTOCOL_VERSION,

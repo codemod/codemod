@@ -2,7 +2,7 @@
  * `AsyncContextVariable` with `AsyncLocalStorage` semantics for the QuickJS
  * host, by propagating a context frame through `Promise.prototype.then`.
  *
- * Why not promise hooks (the approach `RUNTIMES.md` first proposed): the
+ * Why not promise hooks: the
  * vendored quickjs-ng (`rquickjs-sys` 0.11) emits `JS_PROMISE_HOOK_BEFORE`/
  * `AFTER` only around thenable-resolution jobs, not around ordinary promise
  * reaction jobs, and `await` registers its continuation without a derived
@@ -10,7 +10,7 @@
  * capability). A hook-based variable could not see an `await` resume.
  *
  * What works instead, exactly: the bundle is built with async functions and
- * async generators lowered to generators (`crates/orchestration-build`), so
+ * async generators lowered to generators (`crates/orchestration/src/build`), so
  * every continuation in the bundle is registered through
  * `Promise.prototype.then` (the `__async` helper does `Promise.resolve(x).then(fulfilled, rejected)`; `Promise.all`,
  * `finally`, and thenable adoption invoke `then` too). `then` is patched once

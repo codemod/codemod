@@ -1,16 +1,16 @@
 /**
- * `agent` steps on the node and quickjs runtimes (`execution/agent.ts`):
- * one `codemod-agent` process per step, started through the host, here
- * against a stand-in runner (`fixtures/fake-agent.mjs`). The runner itself
- * is tested in `crates/orchestration-agent`; the QuickJS host path in
- * `quickjs.e2e.test.ts`.
+ * `agent` steps (`execution/agent.ts`): one `codemod-agent` process per
+ * step, started through the host, here against a stand-in runner
+ * (`fixtures/fake-agent.mjs`). The runner itself is tested in
+ * `crates/orchestration-agent`; the QuickJS host path in
+ * `crates/cli/tests/typescript_workflow.rs`.
  */
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { executeAgent, type AgentExecutionOptions } from "../src/execution/agent.ts";
-import { canListProcesses } from "../src/execution/process-tree.ts";
+import { canListProcesses } from "./support/process-tree.ts";
 import {
   MemoryHistoryStore,
   PROTOCOL_VERSION,
@@ -131,10 +131,6 @@ describe("a builtin agent", () => {
     expect(completion.status).toBe("succeeded");
   });
 
-  it("hands the runner the request unchanged", () => {
-    expect(echoed(completion).request).toEqual(request);
-  });
-
   it("starts the runner in the target repository", () => {
     expect(realpathSync(echoed(completion).cwd)).toBe(realpathSync(repo));
   });
@@ -144,11 +140,6 @@ describe("a builtin agent", () => {
       HOME: "/home/dev",
       EXTRA: "1",
     });
-  });
-
-  it("sends the LLM key on stdin and marks that it did", () => {
-    const { secrets, env } = echoed(completion);
-    expect([secrets, env.CODEMOD_AGENT_SECRETS]).toEqual([{ LLM_API_KEY: "llm-key" }, "stdin"]);
   });
 
   it("sends no secrets and no marker without an LLM key", () => {

@@ -54,8 +54,6 @@ language-python = { workspace = true, optional = true }
 tree-sitter-loader = { workspace = true, optional = true }
 ast-grep-dynamic = { workspace = true, optional = true }
 
-bench-timings = { workspace = true }
-
 [dev-dependencies]
 tempfile = { workspace = true }
 
@@ -95,6 +93,3 @@ native = [
 jssg-in-memory = ["native"]
 real-fs = ["tokio", "ignore"]
 mock-fs = []
-# Benchmark phase timings (setup/parse/transform/convert per file) when
-# CODEMOD_TIMINGS_FILE is set; without it the spans compile to nothing.
-timings = ["bench-timings/timings"]

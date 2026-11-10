@@ -24,7 +24,6 @@ import { comparePaths, readSelectedSources, selectFiles } from "./files.ts";
 import { getHost, type Host } from "../core/host.ts";
 import type { Json } from "../core/json.ts";
 import { lexists, resolveInsideRoot } from "../core/paths.ts";
-import { Phase, lap, now } from "../core/timings.ts";
 import {
   PROTOCOL_VERSION,
   isFileOutcomes,
@@ -92,11 +91,6 @@ export async function executeJssgCommand(
     );
   }
 
-  // Benchmark timings (`core/timings.ts`; no-ops when off): target root and
-  // walk `select`, reads `read` (native worker CPU adds `cpu_ns`), result
-  // validation and conflict checks `conflict`, writes `commit`. The dispatch
-  // times its own phases.
-  let mark = now();
   let targetRoot: string;
   let files: BatchFile[];
   try {
@@ -115,12 +109,10 @@ export async function executeJssgCommand(
       globalExcludes: options.globalExcludes,
       host,
     });
-    mark = lap(Phase.select, mark);
     files = readSelectedSources(host, targetRoot, paths);
   } catch (error) {
     return fail("failed", (error as Error).message, { phase: "select" });
   }
-  lap(Phase.read, mark);
 
   let completion: OperationCompletion;
   try {
@@ -142,8 +134,6 @@ export async function executeJssgCommand(
       error: { message: (error as Error).message ?? String(error) },
     };
   }
-  // Validating the result and the conflict checks below are `conflict`.
-  mark = now();
   // The batch runner never writes, so anything short of success leaves the
   // repository unchanged.
   if (completion.status !== "succeeded") {
@@ -178,7 +168,6 @@ export async function executeJssgCommand(
   } catch (error) {
     return fail("failed", (error as Error).message, { phase: "stage" });
   }
-  mark = lap(Phase.conflict, mark);
   if (signal?.aborted) return fail("cancelled", "cancelled before commit", { phase: "commit" });
   const applied: string[] = [];
   const steps = [
@@ -208,7 +197,6 @@ export async function executeJssgCommand(
     }
     applied.push(step.path);
   }
-  lap(Phase.commit, mark);
   return {
     protocolVersion: PROTOCOL_VERSION,
     commandId,

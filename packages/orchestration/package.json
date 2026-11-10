@@ -10,14 +10,6 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
-    "./dashboard": {
-      "types": "./src/host/dashboard/index.ts",
-      "default": "./src/host/dashboard/index.ts"
-    },
-    "./harness": {
-      "types": "./src/host/harness.ts",
-      "default": "./src/host/harness.ts"
-    },
     "./portable": {
       "types": "./src/portable.ts",
       "default": "./src/portable.ts"

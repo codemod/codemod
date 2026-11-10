@@ -2,7 +2,7 @@
  * The `fetch` assessments get inside the QuickJS host
  * (`AssessmentExecutorOptions.fetch`), built on the host's `httpRequest`.
  * The host refuses any URL outside the configured decision API root
- * (`crates/orchestration-quickjs-host/src/http.rs`); there is no global
+ * (`crates/orchestration/src/host/http.rs`); there is no global
  * `fetch` in the context, so workflow and transform code get no network.
  *
  * Only what the decision transport uses is implemented:

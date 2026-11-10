@@ -3,7 +3,7 @@
  * fast; `quickjs` has every one.
  */
 import { describe, expect, it } from "vitest";
-import { createHarness } from "../src/host/harness.ts";
+import { createHarness } from "./support/harness.ts";
 import {
   OperationError,
   UnsupportedInRuntimeError,

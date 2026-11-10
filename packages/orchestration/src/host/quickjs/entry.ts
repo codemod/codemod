@@ -1,7 +1,7 @@
 /**
  * The entry of a `quickjs` workflow bundle (built by
- * `crates/orchestration-build` for `codemod workflow run -w`), evaluated once by the Rust
- * host (`crates/orchestration-quickjs-host`) in its single QuickJS context.
+ * `crates/orchestration/src/build` for `codemod workflow run -w`), evaluated once by the Rust
+ * host (`crates/orchestration/src/host`) in its single QuickJS context.
  *
  * Evaluating this module installs, before any workflow code runs: the
  * then-propagating async context (`async-context.ts`), the QuickJS `Host`
@@ -28,7 +28,6 @@ import {
   type OperationCompletion,
   type OperationRequest,
 } from "../../core/protocol.ts";
-import { configureTimings, timingsEnabled, timingsSnapshot } from "../../core/timings.ts";
 import {
   executeAssessmentOperation,
   type AssessmentExecutorOptions,
@@ -68,9 +67,6 @@ const host = createQuickjsHost(native);
 setHost(host);
 globals[HOST_GLOBAL] = host;
 globals.console = createQuickjsConsole(native);
-// Benchmark timings: on when the Rust host collects them; the JS-side phases
-// go back in the result and the host merges them into its file.
-configureTimings({ enabled: native.timingsEnabled === true, clock: host.clock?.ns });
 
 /** `jssg` in context, `shell` through the Rust spawn; everything else refused. */
 class QuickjsExecutor implements OperationExecutor {
@@ -122,10 +118,7 @@ class QuickjsExecutor implements OperationExecutor {
   }
 }
 
-/**
- * Run the bundled workflow; resolves with `{ ok, output | error, history,
- * timings? }` as JSON text (`timings`: the JS-side phases, when on).
- */
+/** Run the bundled workflow; resolves with `{ ok, output | error, history }` as JSON text. */
 export async function runBundled(
   workflow: Record<string, unknown>,
   bundled: Record<string, BundledArtifact>,
@@ -148,7 +141,6 @@ export async function runBundled(
     output?: unknown;
     error?: string;
     history?: unknown;
-    timings?: Json;
   } = { ok: false };
   try {
     store =
@@ -181,6 +173,5 @@ export async function runBundled(
     result.error = error instanceof Error ? error.message : String(error);
   }
   if (store !== undefined) result.history = store.toJSON();
-  if (timingsEnabled()) result.timings = timingsSnapshot() as unknown as Json;
   return JSON.stringify(result);
 }

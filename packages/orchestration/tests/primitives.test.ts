@@ -1,6 +1,6 @@
 /** Author-facing shell and dynamic primitives. */
 import { describe, expect, it } from "vitest";
-import { createHarness } from "../src/host/harness.ts";
+import { createHarness } from "./support/harness.ts";
 import {
   dynamic,
   guard,

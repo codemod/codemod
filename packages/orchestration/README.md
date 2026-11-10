@@ -4,7 +4,7 @@ TypeScript-first prototype of the Codemod orchestration runtime. Workflows are
 plain async TypeScript; calling a runnable creates a command, awaiting it inside
 a workflow issues it, and every issued command is recorded in an append-only
 history and replayed from that history on later runs. A workflow runs in the
-`quickjs` runtime (`RUNTIMES.md`): the whole bundled workflow in one QuickJS
+`quickjs` runtime (see "Runtime"): the whole bundled workflow in one QuickJS
 context hosted inside the Rust `codemod` CLI (`codemod workflow run -w`), no
 Node at run time. It executes every
 operation kind. `shell` runs in-process
@@ -20,7 +20,7 @@ and no repository access beyond the matched files. JSSG transforms are written
 inline next to the workflow, split off into standalone bundles at build time,
 and orchestrated here in TypeScript (file selection, ordering, conflict
 checks, transactional commit, output aggregation, failure classification)
-around the shared Rust batch rules (`crates/jssg-batch`: containment, static
+around the shared Rust batch rules (`crates/orchestration/src/jssg_batch.rs`: containment, static
 selector, semantic providers, result conversion), which the QuickJS host calls
 in-process (see `PROTOCOL.md`). The evidence, problem statement, proposal,
 boundaries, and migration path are summarized in `DESIGN.md`.
@@ -31,9 +31,8 @@ boundaries, and migration path are summarized in `DESIGN.md`.
 packages/orchestration/
   DESIGN.md              problem statement, proposal, scope, and migration path
   PROTOCOL.md            the operation protocol, JSSG batch, agent runner, security model, transactions
-  RUNTIMES.md            the quickjs runtime, the Host seam, async context, registry
-  src/index.ts           Node API: portable.ts + Node host + the assessment and agent executors
-  src/portable.ts        Node-free API (`./portable` export) for non-Node hosts such as QuickJS
+  src/index.ts           package API: portable.ts + the assessment and agent executors
+  src/portable.ts        the API the workflow bundle imports (`./portable` export)
   src/core/              plain data contracts shared by every layer
     host.ts              Host seam (fs, path, os, env, spawn, async context, clock) + install
     protocol.ts          versioned JSON OperationRequest / OperationCompletion (v8)
@@ -62,32 +61,27 @@ packages/orchestration/
     agent.ts             executeAgent: one codemod-agent runner process per agent operation
     agent-env.ts         agentLaunch: the runner's allowlisted environment and stdin key channel
     scheduler.ts         AdmissionScheduler: weighted, bounded admission at the executor
-    process-tree.ts      best-effort process-tree kill on abort, timeout, and host exit (Node host)
     jssg.ts              executeJssgCommand: artifact, select, dispatch batch, validate, stage, commit
-    jssg-batch.ts        the portable JSSG batch loop (over crates/jssg-batch)
+    jssg-batch.ts        the portable JSSG batch loop (over crates/orchestration/src/jssg_batch.rs)
     files.ts             file selection with the engine's walker semantics (npm `ignore`)
     languages.json       language -> extensions, pinned to the engine table by a cargo test
   src/runtime/           runs a workflow: issue commands, replay or execute, record history
     run.ts               run lifecycle, history, and command execution
     gate.ts              CommandGate seam + ReplayGate (replay matching, errors)
     capabilities.ts      runtime descriptors (quickjs) and capability checks
-  src/host/              entry points that assemble a run (Node only)
-    node-host.ts         the Node Host (harness, Node consumers); importing it installs it
-    quickjs/             the bundle entry and Host inside the QuickJS host (incl. fetch.ts)
-    harness.ts           test harness with scripted completions (`./harness` export)
-    dashboard/           the run dashboard's page and run model (`./dashboard` export); no server for now
-      monitor.ts         RunMonitor: one run's projected, sequenced envelopes + snapshot
-      ui.html            the page, dependency-free
+  src/host/quickjs/      the bundle entry and Host inside the QuickJS host (incl. fetch.ts)
   fixtures/protocol      shared JSON fixtures checked by TS and Rust tests
   fixtures/walker        file-walker contract checked by TS and Rust (engine walker) tests
   tests/                 unit tests (fast; fake agent runner) + *.live.test.ts (opt-in)
+    support/             test-only Node host, scripted harness, process-tree kill (Vitest runs on Node)
 crates/cli/src/commands/workflow/typescript.rs  `codemod workflow run -w workflow.ts`
-crates/cli/tests/        end-to-end specs: typescript_workflow.rs, jssg_parity.rs, typescript_timings.rs
-crates/orchestration-build/        the build step: jssg() split (oxc), bundles (rolldown), cache, embedded runtime
-crates/jssg-batch/       the JSSG batch rules the QuickJS host calls (BatchPlan)
-crates/orchestration-quickjs-host/ the quickjs runtime's Rust host library, run in-process by the CLI (incl. the transform pool)
-crates/orchestration-walker/       native file selection and reads for the QuickJS host
-crates/orchestration-agent/        `codemod-agent`: one agent operation over stdin/stdout
+crates/cli/tests/        end-to-end specs: typescript_workflow.rs, jssg_parity.rs
+crates/orchestration/    the Rust side, one crate:
+  src/build/             the build step: jssg() split (oxc), bundles (rolldown), cache, embedded runtime
+  src/host/              the QuickJS host, run in-process by the CLI (incl. the transform pool)
+  src/walker/            native file selection and reads for the host
+  src/jssg_batch.rs      the JSSG batch rules the host calls (BatchPlan)
+crates/orchestration-agent/  `codemod-agent`: one agent operation over stdin/stdout
 ```
 
 Dependencies between `src/` folders point one way; a folder imports only from
@@ -220,7 +214,7 @@ export default dynamic(async () => {
   beneath the target root and is only valid with `workspace`. Without
   `include`, the definition applies to the language's file extensions, exactly
   as a YAML `js-ast-grep` step without `include`; the list is
-  `src/execution/languages.json`, which `cargo test -p jssg-batch`
+  `src/execution/languages.json`, which `cargo test -p orchestration`
   checks against the engine's table so it cannot drift silently. Languages
   outside that table need an explicit `include`.
 
@@ -245,7 +239,7 @@ The workflow and its transforms are authored together but never run
 together. The workflow body runs in the control plane and each transform is
 evaluated from its own bundled artifact; nothing is serialized with `Function.prototype.toString()` and no
 closure crosses the boundary. Instead, a build step splits the module before
-it runs (`crates/orchestration-build`, `src/split.rs`):
+it runs (`crates/orchestration/src/build/split.rs`):
 
 1. The module is parsed with oxc. Every
    `jssg({ ... })` call (an object literal with a string-literal `name` and a
@@ -278,7 +272,7 @@ failing at run time:
 
 A transform function that reaches `jssg()` at runtime means the module was
 loaded without the build step; the call throws with that explanation.
-The workflow bundler (`crates/orchestration-build/src/bundle.rs`, used by
+The workflow bundler (`crates/orchestration/src/build/bundle.rs`, used by
 `codemod workflow run -w`) applies the split to every module in the workflow's
 graph that calls `jssg(`, including definitions in imported files and packages
 under `node_modules`, and carries the artifacts it collected in the bundle.
@@ -296,7 +290,7 @@ npm build dependency.
 
 `selector` is optional ast-grep rule data, `{ rule, constraints?, utils? }`,
 typed for the definition's language. The runtime evaluates it natively
-(`crates/jssg-batch`), before the file reaches JavaScript, on every selected file; files without a
+(`crates/orchestration/src/jssg_batch.rs`), before the file reaches JavaScript, on every selected file; files without a
 match are skipped and produce no edit and no output. It is an eligibility
 prefilter and nothing else: the transform finds its nodes with the normal
 `root.find` / `root.findAll` APIs, and `options.matches` is not populated.
@@ -488,7 +482,7 @@ picks the provider and model:
   `score` (may fall between levels), `legend`, `probabilities` per level, and
   `confidence`; a yesno answer has `yes`, the probability of yes. Any answer
   may instead be `{ type: "refused" }` when the model declined, so workflow
-  code narrows on `answer.type` (see `demo/10-assisted.ts`). `provider` is
+  code narrows on `answer.type`. `provider` is
   the adapter that asked, `model` is the versioned model that answered (e.g.
   `jev-1.13.0` for `jev-latest`), `calibrated` says whether the provider
   documents its probabilities and confidence as calibrated (configurable,
@@ -754,14 +748,12 @@ Security model of `agent` (a trusted-local prototype, not a sandbox):
   killed children first, then the group is killed. A stopped parent cannot
   reap an exited child, so its PID cannot be reused before the kill; the only
   reuse window is between the snapshot and stopping a parent outside the
-  group. The Node host (`killProcessTree`) and the QuickJS host's `kill` do
-  the same. On Windows (Node host) `taskkill /T /F` is used. A descendant that
+  group. The QuickJS host's `kill` does this. A descendant that
   daemonized, or a sandbox that hides the process list (only the group is
   reached then), can leave processes behind.
 - Host lifetime: runners are detached, so they do not receive the terminal's
   signals. `codemod workflow run -w` turns SIGINT, SIGTERM, and SIGHUP into an
-  abort; on the Node host, any normal exit of the process kills runners still
-  running.
+  abort.
   Programs that embed `run()` with `executeAgent` must do the same: abort the
   run's `signal` on SIGINT, SIGTERM, and SIGHUP (or exit normally). If the
   host is killed with SIGKILL or crashes, nothing runs and runners and their
@@ -785,9 +777,9 @@ target/debug/codemod workflow run -w ./path/to/workflow.ts --target ./repository
 codemod workflow run -w <workflow.ts|.mts> [--target <directory>] [--input <json>] [--history <file>]
 ```
 
-- A `.ts` or `.mts` workflow runs on the `quickjs` runtime (`RUNTIMES.md`): the
+- A `.ts` or `.mts` workflow runs on the `quickjs` runtime (see Runtime): the
   bundled workflow in one QuickJS context hosted by
-  `crates/orchestration-quickjs-host` inside the `codemod` process, with no
+  `crates/orchestration/src/host` inside the `codemod` process, with no
   Node at run time. It executes every operation kind and JSSG semantic
   analysis. The other `codemod workflow run` flags belong to YAML workflows and
   do not apply.
@@ -799,7 +791,6 @@ codemod workflow run -w <workflow.ts|.mts> [--target <directory>] [--input <json
 - `--input <json>` supplies the root input when the workflow declares one.
 - `--history <file>` resumes from the file when it exists and writes the
   run's history back to it.
-- `--dashboard` is not available for now (see Dashboard).
 
 The command prints the workflow's final value as JSON on stdout and errors on
 stderr with exit code 1; workflow and transform console output also goes to
@@ -846,98 +837,77 @@ Prototype limitation of the build step: transform errors report positions in
 the bundled artifact (named `<name>.jssg.js`), not the workflow source.
 
 The programmatic API is `run()` with an `OperationExecutor` of your own for
-control over history and settings (the test harness, `createHarness`, runs
-workflows that way in Node with scripted executors). There is no Node API that
-runs a whole workflow on the QuickJS host any more: that is
-`codemod workflow run -w`, which resumes from and writes back a history file
-with `--history <file>` (`RUNTIMES.md`).
+control over history and settings (the test harness in `tests/support` runs
+workflows that way with scripted executors). Running a whole workflow on the
+QuickJS host is `codemod workflow run -w`, which resumes from and writes back a
+history file with `--history <file>`.
 
-## Dashboard
+## Runtime
 
-`--dashboard` is not available for now. The server that hosted the page
-(`DashboardSession`, `startDashboard`, and their HTTP API) ran only on the
-removed `node` runtime and was deleted with it; it returns with the Rust
-`codemod` CLI, fed by the QuickJS host's run events. What stays in this
-package is the page (`src/host/dashboard/ui.html`) and its run model
-(`RunMonitor`, the `./dashboard` export). The rest of this section describes
-the page as it worked behind that server.
+```text
+codemod workflow run -w wf.ts --target R
+  Rust: cached_quickjs_bundle(wf.ts)      oxc + rolldown only on a cache miss
+  orchestration::host::run(bundle, R)     in the same process
+    Rust: one AsyncRuntime + one AsyncContext; transform built-ins (codemod:ast-grep over
+          sg_core, ...) + LLRT globals; globalThis.__codemodQuickjsNative (fs, env, clock,
+          spawn, jssg*)
+    JS:   bundle entry installs the Host and async context, then
+          run(workflow, { executor, runtime: QUICKJS_RUNTIME })
+          jssg       -> executeJssgCommand -> batch loop (jssg-batch.ts) over BatchPlan:
+                        jssgBegin -> [workspace: jssgIndex] -> per chunk jssgParse ->
+                        per file transform(root, options) -> jssgFinish -> stage, commit
+          shell      -> executeShell over Host.spawn (own process group, merged pipe)
+          assessment -> executeAssessmentOperation (decision adapter, fetch over httpRequest)
+          agent      -> executeAgent -> Host.spawn codemod-agent (key on stdin)
+```
 
-The page is written for an operator, phone first. The top answers what the
-workflow is, whether it is Running, Paused, Done, Failed or Stopped, what is
-running **Now** and what is **Waiting**, with one large Pause/Resume button
-(pinned to the bottom of the screen on a phone), a smaller **Restart** under
-it while the run is open, and **Run again** in its place once the run is
-over. Everything diagnostic is behind a single **Details** disclosure, and
-earlier runs behind a collapsed **Recent runs** one. How the plain words map
-to the runtime:
-
-- **Run status.** Running and Paused describe admission while the run is
-  open. Paused means nothing more is admitted; steps already admitted keep
-  running, and the page says so ("Letting 2 running steps finish"). Done is
-  `completed` (`run()` resolved, including a run answered entirely from
-  history), Failed is `failed` (`run()` rejected, with its message under the
-  status), Stopped is `cancelled` (`run()` rejected after SIGINT/SIGTERM or a
-  Restart aborted the run). Pause and Resume are hidden, and refused by the
-  server, once a run is over; Run again takes their place.
-- **Steps.** The serializable IR of the root executable (`executableIr()`),
-  known before anything runs, as an indented list: `sequence` groups are
-  labelled "In order" and `parallel` groups "At the same time"; a group nested
-  in a group of the same kind is flattened into it, and a one-member group is
-  drawn as its member. A `dynamic()` stage is a "Chosen while running" row.
-  Commands the static plan does not name (everything issued inside a
-  `dynamic()` body) are listed under that row when the plan has exactly one
-  dynamic stage, and under "Added while running" otherwise.
-- **Per-step state.** Not started -> Waiting (`scheduled` or `queued`) ->
-  Running -> Done / Failed / Stopped / Result unknown (`succeeded` / `failed` /
-  `cancelled` / `unknown`). Commands answered from history read "Done earlier"
-  (or their recorded outcome plus "earlier"). A step still open when the run
-  ends reads "Didn't finish". Failed steps show their message and JSSG phase
-  inline, and are also listed under **Failed** while the run is open; never
-  the operation content.
-- **Details.** The run number and id, start time, the admission limit and how
-  much of it is in use, and a plain-language activity list for the current
-  run; process ids and weights are not shown.
-- **Pause / Resume.** Admission pause at the scheduler seam
-  (`AdmissionScheduler.pause()` / `resume()`): the FIFO queue is held, admitted
-  operations run to completion, and resume pumps the queue again in order.
-  A pause on its own never produces a `cancelled` or `unknown` completion;
-  SIGINT during a pause still cancels as it always does (queued commands are
-  refused, admitted ones are killed). Pause state lives in the process only;
-  there is no durable cross-process resume.
-- **Restart / Run again.** Both launch a fresh run of the same loaded
-  workflow, target, runtime, built artifacts, and root input, under a new run
-  id with a fresh scheduler and an empty history, so nothing is replayed from
-  the earlier run. Restart while a run is open first asks ("Stop what's
-  running and start the workflow over?"), then aborts it exactly as SIGINT
-  would (queued steps refused, running child processes killed), waits until
-  every step has settled, and only then starts the next run: the two never
-  overlap. Restart on a finished run and Run again are the same fresh launch.
-  Run again while a run is open is refused (`409`) and the page points at
-  Restart; a second tap during a restart joins the one in progress instead of
-  starting a third run.
-- **Recent runs.** The last 20 runs of this process, newest first, each with
-  its number, outcome, duration, and start time. Tapping one shows its final
-  snapshot read-only under a banner ("Looking at run 2, from earlier"); the
-  page keeps following the current run underneath, and the banner's button
-  or the big bottom button returns to it. The list lives in memory only: it is
-  gone when the command exits, and it is not history in the replay sense.
-
-The pieces that remain (`src/host/dashboard/`):
-
-- `RunMonitor` is the run's `EventSink`. Each `RunEvent` is projected to a
-  payload without operation content (no `env`, bound inputs, or outputs; a
-  failure keeps its message and phase), stamped with a process-local `runId`,
-  a monotonic `seq`, and an ISO timestamp, folded into an in-memory snapshot,
-  and kept in a bounded buffer (500 envelopes) for reconnects. Every envelope
-  also carries the run status, the scheduler counters, and the command it
-  changed, after the event, so a client applies it without its own reducer.
-  `emit` is synchronous bookkeeping; a subscriber can neither block nor break
-  the run. None of this touches history: command identity, `ScheduledCommand`,
-  and replay are unchanged.
-- The page is one dependency-free HTML file, responsive down to a phone, in
-  light and dark. It uses `EventSource` and re-renders from the snapshot plus
-  envelopes; it fetches `/api/runs` for the list and `/api/runs/<id>` for an
-  earlier run, and nothing else.
+- **Bundle** (`crates/orchestration/src/build`): the entry, the portable closure,
+  the workflow graph with each inline transform replaced by an `ArtifactRef`
+  (so command identities are content hashes), and every artifact's source keyed
+  by hash. `@codemod.com/orchestration` resolves to `src/portable.ts`; `node:*`
+  fails the build; `codemod:*` stays external.
+- **Host seam** (`src/core/host.ts`): synchronous `fs` with POSIX error codes,
+  `path`, `os`, `env`, `spawn` (full explicit env, stdin, merged output, abort
+  kills the process tree), `createAsyncContext`, clock, timers and `randomUUID`.
+  No `src` module imports `node:*`; `tests/portable.test.ts` scans for it. The
+  QuickJS host builds the `Host` from Rust primitives
+  (`src/host/quickjs/host.ts`); the specs run on Node with a test-only Node host
+  (`tests/support/node-host.ts`).
+- **Transforms** are evaluated once per run per artifact hash, so module-level
+  state is shared across files and commands of a run (unsupported). Batches of
+  64 files or more run in chunks on the host's transform pool
+  (`CODEMOD_JSSG_WORKERS` threads, else the core count capped at 4), each worker
+  with its own context. Every batch rule (hash check, containment, selector
+  skip, semantic provider, result conversion) is Rust, in
+  `crates/orchestration/src/jssg_batch.rs`; the TypeScript loop owns only
+  chunking, the workspace index pass, cancellation between files and turning
+  failures into a completion.
+- **File selection is native.** The host implements `Host.selectFiles` and
+  `Host.fs.readSources` over `crates/orchestration/src/walker`, a port of
+  `src/execution/files.ts` (the `ignore` npm package rule by rule, evaluated by
+  `regress`), with subdirectories walked and files read on worker threads.
+  `CODEMOD_NATIVE_SELECT=0` runs the TypeScript walker instead; same result,
+  slower.
+- **Source encoding.** Sources reach transforms verbatim, as the YAML engine
+  hands them over: a BOM stays as U+FEFF, CRLF stays CRLF, a missing final
+  newline stays missing, non-UTF-8 files are skipped. `jssg_parity.rs` compares
+  the written bytes with the YAML engine's.
+- **Async context.** Promise hooks are incomplete on the vendored quickjs-ng, so
+  the bundle is built with async functions and async generators lowered to
+  generators, and the entry patches `Promise.prototype.then` to carry the
+  current frame into each continuation: the rule V8 uses for
+  `AsyncLocalStorage`. Transform artifacts are not lowered.
+- **Cancellation.** SIGINT, SIGTERM and SIGHUP abort the run; child process
+  trees are killed. A JSSG batch yields to the event loop before each 64-file
+  chunk, so a signal mid-batch cancels within one chunk with nothing written. A
+  transform that never returns cannot be interrupted.
+- **Capabilities** (`src/runtime/capabilities.ts`): `QUICKJS_RUNTIME` supports
+  every operation kind and semantic analysis. A registered runtime that declares
+  less is refused statically before anything runs, and operations issued inside
+  `dynamic()` that it cannot execute complete as `failed` with
+  `phase: "config"`.
+- **Console:** workflow and transform `console.*` go to stderr; stdout is the
+  result.
 
 ## Bounded admission
 
@@ -976,7 +946,7 @@ module and are not part of any command's identity or history:
 
 - `CODEMOD_ORCHESTRATION_CAPACITY=<n>` for operators and CI;
 - `run(executable, { scheduler: new AdmissionScheduler({ capacity, weights, host }) })`
-  for tests and benchmarks. `scheduler.stats()` reports
+  for tests. `scheduler.stats()` reports
   `{ capacity, used, active, queued, peakActive, peakUsed, paused }`, and the
   run's `EventSink` receives `scheduler.queued`, `scheduler.admitted`, and
   `scheduler.released`.
@@ -987,7 +957,7 @@ operation runs to completion and returns its permit; `scheduler.resume()`
 pumps the queue again from the head. Both are idempotent and report
 `scheduler.paused` / `scheduler.resumed` to the scheduler's own `events` sink
 (`new AdmissionScheduler({ events })`; the scheduler `run()` creates by default
-reports to the run's sink). This is the dashboard's one control.
+reports to the run's sink).
 
 Cancellation splits by admission state. A command aborted while queued is
 removed from the queue and completes `cancelled` without the executor ever
@@ -1023,16 +993,15 @@ helper it bundles) replays as `changed`, while moving the checkout does not.
 
 The body may receive flowing data, but never a runtime context. `run()` binds
 the run's runtime to the body through the host's async context
-(`Host.createAsyncContext()`: `AsyncLocalStorage` on the Node host, then
-propagation in the `quickjs` runtime with no Node API at all; see
-`RUNTIMES.md`), so commands awaited anywhere in the body's async continuations
+(`Host.createAsyncContext()`: then-propagation in the `quickjs` runtime, see
+Runtime; `AsyncLocalStorage` on the test-only Node host), so commands awaited anywhere in the body's async continuations
 issue to that run, two concurrent runs never see each other's runtime, and
 nothing is stored on a process-global. A command awaited outside any run
 rejects instead of running.
 
 ## Determinism warning
 
-Running workflow code in Node (the test harness, Node consumers) is NOT a secure deterministic sandbox. Workflow code only
+Running workflow code under the Node test harness is NOT a secure deterministic sandbox. Workflow code only
 needs the runnables it imports, but nothing prevents it from reading `Date`,
 `Math.random`, `fs`, or `process`. Determinism is validated after the fact by
 replay comparison; if a workflow uses such inputs the replay will fail with
@@ -1046,7 +1015,7 @@ remain, so it does not make a workflow deterministic either.
 interfaces with JSON-only inputs and outputs. Each in-memory implementation can
 move to Rust one at a time without changing workflow source. `shell` runs
 in-process over `Host.spawn`, local `jssg` has the TypeScript orchestrator
-around the shared Rust batch rules (`crates/jssg-batch`), `agent` has a
+around the shared Rust batch rules (`crates/orchestration/src/jssg_batch.rs`), `agent` has a
 process adapter over the `codemod-agent` runner (`codemod-ai` or an external
 CLI), and `assessment` has in-process HTTP adapters per decision provider;
 the executor is the QuickJS bundle's; the
@@ -1062,18 +1031,14 @@ pnpm --filter @codemod.com/orchestration test          # fast TS tests (fake age
 pnpm --filter @codemod.com/orchestration typecheck
 pnpm --filter @codemod.com/orchestration build:agent   # = cargo build -p orchestration-agent
 cargo test --release -p codemod --test typescript_workflow --test jssg_parity   # end to end
-cargo test --release -p codemod --features timings --test typescript_timings  # benchmark timings
-cargo test -p orchestration-build                      # the jssg() split, bundles, cache
-cargo test -p jssg-batch                               # batch rules, walker and language contracts
+cargo test -p orchestration                            # the jssg() split, bundles, cache, batch rules, walker
 cargo test -p orchestration-agent                      # agent protocol fixtures, binary, external CLIs
 ```
 
 The vitest suite covers the portable runtime. The end-to-end specs run
 `codemod workflow run -w` on the fixtures in `tests/fixtures`:
 `typescript_workflow.rs` the whole engine, `jssg_parity.rs` JSSG edge cases on
-`quickjs`, with the encoding case compared byte for byte with the YAML engine;
-the YAML engine is the external reference for the benchmark transforms through
-`benchmarks/runtimes/verify.sh`.
+`quickjs`, with the encoding case compared byte for byte with the YAML engine.
 
 Live tests call real services, cost money or subscription quota, and are
 opt-in, one flag per backend. Each live agent test uses a temporary git

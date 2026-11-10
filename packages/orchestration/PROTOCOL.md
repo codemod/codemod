@@ -2,8 +2,8 @@
 
 `src/core/protocol.ts` (protocol version 8) is the one wire contract between
 the control plane and whatever executes an operation: an `OperationRequest`
-goes in, an `OperationCompletion` comes out. The runtime, `quickjs` (see
-`RUNTIMES.md`), executes every operation kind against it.
+goes in, an `OperationCompletion` comes out. The runtime, `quickjs` (see the
+README's "Runtime"), executes every operation kind against it.
 The control plane never reads author files, and an executor never walks a
 repository, interprets globs, orders files, applies edits, aggregates outputs,
 or decides repository-level failure policy; all of that is
@@ -12,7 +12,7 @@ or decides repository-level failure policy; all of that is
 ```text
 shell       executeShell (shell.ts) over Host.spawn                    in-process, DirectRunner semantics
 jssg        executeJssgCommand (jssg.ts) -> shared batch loop           in-process (QuickJS host)
-              (jssg-batch.ts) -> crates/jssg-batch BatchPlan
+              (jssg-batch.ts) -> crates/orchestration/src/jssg_batch.rs BatchPlan
 agent       executeAgent (agent.ts) -> Host.spawn codemod-agent         one runner process per operation
               -> codemod_ai::execute::execute_ai_step (builtin)
               -> `claude` / `codex` CLI process (claude-code, codex)
@@ -23,7 +23,7 @@ assessment  executeAssessmentOperation (assessment.ts)                  in-proce
 Until 2026-11-08 a third runtime, `bridge`, ran `shell`, `jssg`, and `agent`
 in one Rust process per command (`crates/execution-bridge`), exchanging the
 same JSON through request and response files. It was removed; the protocol,
-the JSSG batch rules (now `crates/jssg-batch`), and the agent runner (now
+the JSSG batch rules (now `crates/orchestration/src/jssg_batch.rs`), and the agent runner (now
 `crates/orchestration-agent`) are what remains of it. A `node` runtime (the
 workflow in one Node process, JSSG over a napi addon, `crates/jssg-napi`) was
 removed after it.
@@ -35,11 +35,11 @@ removed after it.
 - `fixtures/protocol/*.json`: shared conformance fixtures, checked by
   `tests/protocol.test.ts` and, for the agent fixtures, by
   `crates/orchestration-agent/tests/protocol.rs`.
-- `crates/jssg-batch`: the JSSG batch rules of the runtime (`BatchPlan`:
+- `crates/orchestration/src/jssg_batch.rs`: the JSSG batch rules of the runtime (`BatchPlan`:
   planning, containment, workspace index, selector skip, parse, result
   conversion) and the serde mirror of the batch's protocol data (`ArtifactRef`,
   `Selector`, `SemanticAnalysis`, `BatchFile`, `Edit`, `FileOutcome`). Used by
-  the QuickJS host (`crates/orchestration-quickjs-host`, run in-process by
+  the QuickJS host (`crates/orchestration/src/host`, run in-process by
   `codemod workflow run -w`), in the bundle's
   context and in each transform pool worker. `tests/contracts.rs` is the engine
   side of `fixtures/walker/cases.json` and of `src/execution/languages.json`.
@@ -233,7 +233,7 @@ failure), or answer ranges.
   executor's environment, never from the operation. File-oriented assessments
   read their files through the `Host`. The QuickJS context has no global
   `fetch`; the executor gets an adapter (`src/host/quickjs/fetch.ts`) over the
-  host function `httpRequest` (`crates/orchestration-quickjs-host/src/http.rs`),
+  host function `httpRequest` (`crates/orchestration/src/host/http.rs`),
   which only reaches the decision API root (see "Security model"). An assessment cannot change the
   repository: failures are `failed`, aborts `cancelled`, never `unknown`.
 
@@ -284,7 +284,7 @@ capped at 4), each thread with its own context and its own evaluation of the
 artifact, so there that state is per worker.
 
 The artifact is self-contained (rolldown inlined every helper at build time,
-`crates/orchestration-build`), so there is no
+`crates/orchestration/src/build`), so there is no
 module resolver, no tsconfig discovery, and no transpiler on this path: the
 only imports left in an artifact are `codemod:*` modules and built-ins. A
 legacy `getSelector` export in an artifact is ignored; Butterflow,
@@ -346,7 +346,7 @@ that left its process group (see "Security model").
 Every JSSG path is validated independently on both sides of the batch
 boundary. Neither side trusts the other's check.
 
-Rust (`crates/jssg-batch`):
+Rust (`crates/orchestration/src/jssg_batch.rs`):
 
 - `targetRoot` must be absolute and canonicalize to a directory;
   `semanticAnalysis.root` must be a safe relative path (non-empty, not
@@ -459,7 +459,7 @@ cross-file transaction on ordinary filesystems.
 ## Why this shape
 
 - Rust keeps what only Rust can do: ast-grep, the semantic providers, and the
-  batch rules, in one crate (`jssg-batch`) the runtime calls, so nothing
+  batch rules, in one crate (`crates/orchestration`, module `jssg_batch`) the runtime calls, so nothing
   re-implements them in TypeScript.
 - Everything that is policy (which files, in what order, what counts as a
   conflict, when to write, how to classify a failure) and everything that is

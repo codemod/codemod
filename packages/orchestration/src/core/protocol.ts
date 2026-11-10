@@ -2,7 +2,7 @@
  * Versioned JSON wire protocol between the TypeScript runtime and any
  * OperationExecutor, including the Rust agent runner
  * (`crates/orchestration-agent`) and the JSSG batch rules
- * (`crates/jssg-batch`). Keep this file JSON-only: no classes, no
+ * (`crates/orchestration/src/jssg_batch.rs`). Keep this file JSON-only: no classes, no
  * functions on the wire. The Rust serde structs mirror these shapes exactly;
  * `fixtures/protocol/*.json` are the shared conformance fixtures.
  */
@@ -48,7 +48,7 @@ export type SemanticAnalysis = "file" | "workspace" | { mode: "file" | "workspac
 
 /**
  * Build-time identity of one transform artifact: the definition's `name` and
- * the lowercase hex SHA-256 of the bundled source (`crates/orchestration-build`). It carries no
+ * the lowercase hex SHA-256 of the bundled source (`crates/orchestration/src/build`). It carries no
  * path, so the command identity recorded in history is the same on every
  * checkout; the source itself travels in `RequestContext.artifact`.
  */
@@ -376,7 +376,7 @@ export function isSemanticAnalysis(value: unknown): value is SemanticAnalysis {
   );
 }
 
-/** A non-empty name and a lowercase hex SHA-256; `jssg-batch` checks the same. */
+/** A non-empty name and a lowercase hex SHA-256; `orchestration::jssg_batch` checks the same. */
 export function isArtifactRef(value: unknown): value is ArtifactRef {
   return (
     isRecord(value) &&

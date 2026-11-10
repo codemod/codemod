@@ -1,8 +1,8 @@
 /**
  * In-context JSSG for the `quickjs` runtime: the `JssgBatchEngine` the
  * portable batch loop (`execution/jssg-batch.ts`) drives. Every batch rule
- * is the shared Rust (`crates/jssg-batch`), reached through the host's
- * primitives (`crates/orchestration-quickjs-host/src/jssg.rs`):
+ * is the shared Rust (`crates/orchestration/src/jssg_batch.rs`), reached through the host's
+ * primitives (`crates/orchestration/src/host/jssg.rs`):
  *
  * - `jssgBegin(config, paths)`: `BatchPlan` (hash check, containment of
  *   every path, selector, params, semantic provider);
@@ -49,12 +49,6 @@ const describe = (error: unknown) => {
   return stack.startsWith(head) ? stack : `${head}\n${stack}`;
 };
 
-/**
- * Benchmark timings: the host times `jssgBegin` (setup) in Rust; the
- * shared loop times the chunk waits (parse: the yield, then `jssgParse`),
- * the loop's per-file work and the first module evaluation (setup), the
- * transform calls, and `finish` (convert).
- */
 export function createQuickjsDispatch(native: QuickjsNative): JssgDispatch {
   // One transform call in flight across the run (the staging is per
   // context). Without contention a call starts at once, and a synchronous

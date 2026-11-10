@@ -5,13 +5,13 @@
 > 2026-11-08: the `bridge` runtime (one Rust process per command, `crates/execution-bridge`)
 > was removed. The `node` runtime (the workflow in one Node process, JSSG over a napi addon)
 > was removed after it, so `quickjs` is the only runtime: it executes every operation kind,
-> JSSG transforms run in-process over the shared Rust batch rules (`crates/jssg-batch`), and
-> `agent` runs in a `codemod-agent` runner process. See `RUNTIMES.md` and `PROTOCOL.md`. The
+> JSSG transforms run in-process over the shared Rust batch rules (`crates/orchestration/src/jssg_batch.rs`), and
+> `agent` runs in a `codemod-agent` runner process. See the README's "Runtime" and `PROTOCOL.md`. The
 > sections below that describe execution have been updated minimally; the proposal itself
 > is unchanged.
 
 > 2026-11-09: the Node launcher was removed. `codemod workflow run -w <workflow.ts>` in the
-> Rust CLI builds the workflow (`crates/orchestration-build`) and runs it on the QuickJS host
+> Rust CLI builds the workflow (`crates/orchestration/src/build`) and runs it on the QuickJS host
 > in-process, so Node is not needed to run a workflow.
 
 ## Problem
@@ -536,7 +536,7 @@ and the parts that need rapid iteration:
 Rust owns only execution and the checks on its own side of the boundary.
 Shell commands run in-process with the semantics of the existing
 `butterflow_runners::DirectRunner`. For JSSG, the shared Rust batch rules
-(`crates/jssg-batch`, reached through the QuickJS host) receive the bundled transform source and the selected files
+(`crates/orchestration/src/jssg_batch.rs`, reached through the QuickJS host) receive the bundled transform source and the selected files
 with their contents, verify the source against the recorded hash, build one
 semantic provider, evaluate the static selector natively, parse every eligible
 file for the transform, validate every path they receive or produce against
@@ -547,7 +547,7 @@ and build without the full Codemod CLI.
 
 The build step that splits a workflow module into the trusted workflow and one
 bundled artifact per transform is Rust as well since 2026-11-09
-(`crates/orchestration-build`: oxc for extraction, rolldown for bundling,
+(`crates/orchestration/src/build`: oxc for extraction, rolldown for bundling,
 SHA-256 for identity), run by `codemod workflow run -w`; its rules are
 unchanged.
 
@@ -555,7 +555,7 @@ unchanged.
 workflow.ts -> build step -> workflow module + transform artifacts
 TypeScript workflow -> replay gate -> the bundle's executor (quickjs)
     shell -> executeShell over Host.spawn (DirectRunner semantics)
-    jssg -> executeJssgCommand (artifact, select, read) -> in-process batch (crates/jssg-batch) -> (validate, stage, commit)
+    jssg -> executeJssgCommand (artifact, select, read) -> in-process batch (crates/orchestration/src/jssg_batch.rs) -> (validate, stage, commit)
     agent -> codemod-agent runner process (request on stdin, completion on stdout)
     assessment -> decision provider adapter + HTTP transport in-process
 ```
@@ -688,12 +688,6 @@ Included:
   author-facing concurrency knob
 - an experimental trusted-local runner for TypeScript workflows,
   `codemod workflow run -w` in the Rust CLI
-- the page and run model of a local run dashboard: live command status, the
-  static topology with dynamic stages left opaque, an operator admission
-  pause/resume at the scheduler seam, restart and re-run, and the last runs of
-  the process for read-only viewing; the server that hosted it behind the
-  Node CLI's `--dashboard` was removed with the `node` runtime, so a dashboard
-  is not available for now
 
 Not included:
 

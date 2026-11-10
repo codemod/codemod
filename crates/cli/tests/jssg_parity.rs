@@ -1,7 +1,7 @@
 //! JSSG edge cases (`fixtures/parity/`) through `codemod workflow run -w
 //! workflow.ts`: result conversion, path containment, the selector skip,
 //! per-file skips and the transform pool, all reaching the Rust batch rules
-//! (`crates/jssg-batch`) the YAML engine shares. The encoding case also runs
+//! (`crates/orchestration/src/jssg_batch.rs`) the YAML engine shares. The encoding case also runs
 //! the YAML engine and requires the same bytes.
 
 mod support;

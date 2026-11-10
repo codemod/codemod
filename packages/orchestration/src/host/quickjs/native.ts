@@ -1,5 +1,5 @@
 /**
- * The primitives the Rust QuickJS host (`crates/orchestration-quickjs-host`,
+ * The primitives the Rust QuickJS host (`crates/orchestration/src/host`,
  * `src/native.rs` and `src/jssg.rs`) publishes as
  * `globalThis.__codemodQuickjsNative` before the workflow bundle evaluates.
  * Runs inside QuickJS: Node-free (`tests/portable.test.ts`).
@@ -19,7 +19,7 @@ export interface QuickjsNative {
   lstat(path: string): HostFileStat;
   realpath(path: string): string;
   readdir(path: string): HostDirEntry[];
-  /** `Host.selectFiles` (`crates/orchestration-walker`); the request as JSON. */
+  /** `Host.selectFiles` (`crates/orchestration/src/walker`); the request as JSON. */
   selectFiles(request: string): string[];
   /** `Host.fs.readSources`; files are read on worker threads. */
   readSources(root: string, paths: string[]): (string | undefined)[];
@@ -33,14 +33,6 @@ export interface QuickjsNative {
   env(): Record<string, string>;
   /** Milliseconds since the Unix epoch. */
   now(): number;
-  /** Nanoseconds since the host process started (monotonic): `Host.clock.ns()`. */
-  clockNs(): number;
-  /**
-   * Benchmark timings are on: the host has its `timings` feature and
-   * `CODEMOD_TIMINGS_FILE` is set; the entry then returns its JS-side
-   * phases in the result (`core/timings.ts`).
-   */
-  readonly timingsEnabled: boolean;
   randomUUID(): string;
   /** Console output (the host writes it to stderr). */
   print(stream: "stdout" | "stderr", text: string): void;
