@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use butterflow_core::config::WorkflowRunConfig;
 use butterflow_core::engine::Engine;
 use butterflow_core::utils;
+use butterflow_core::workflow_completion::WorkflowCompletionSignal;
 use butterflow_models::node::NodeType;
 use butterflow_models::task::TaskErrorDetails;
 use butterflow_models::trigger::TriggerType;
@@ -118,13 +119,40 @@ pub async fn wait_for_workflow_completion(
     let workflow_run_uuid = workflow_run_id.parse::<Uuid>()?;
     let wait_started = Instant::now();
     let mut last_heartbeat = Instant::now();
+    // Wakes the loop as soon as this process's executor for the run exits;
+    // `None` (run driven elsewhere) falls back to plain polling.
+    let mut completion = engine.completion_signal(workflow_run_uuid);
 
     loop {
+        // Snapshot executor activity before reading the status, so any status
+        // write by an executor that has already exited is visible below.
+        let executor_activity = completion.as_ref().map(|signal| signal.activity());
+
         // Get workflow status
         let status = engine
             .get_workflow_status(workflow_run_uuid)
             .await
             .context("Failed to get workflow status")?;
+
+        if !is_settled_workflow_status(status) {
+            if let Some(error) = executor_activity
+                .filter(|activity| activity.failed_without_executor())
+                .and_then(|activity| activity.last_error)
+            {
+                // The executor gave up without recording a final status;
+                // polling would never see one, so report its error instead.
+                println!(
+                    "{} {}",
+                    style("Workflow failed").red(),
+                    style(format!(
+                        "after {:.1}s",
+                        wait_started.elapsed().as_secs_f64()
+                    ))
+                    .dim()
+                );
+                return Err(anyhow::anyhow!(error));
+            }
+        }
 
         match status {
             WorkflowStatus::Completed => {
@@ -224,7 +252,7 @@ pub async fn wait_for_workflow_completion(
                     last_heartbeat = Instant::now();
                 }
                 // Still running, wait a bit before checking again
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                wait_for_run_progress(completion.as_mut(), Duration::from_secs(2)).await;
             }
             WorkflowStatus::Canceled => {
                 println!(
@@ -236,12 +264,41 @@ pub async fn wait_for_workflow_completion(
             }
             _ => {
                 // Wait a bit before checking again
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                wait_for_run_progress(completion.as_mut(), Duration::from_secs(1)).await;
             }
         }
     }
 
     Ok(())
+}
+
+/// Statuses a wait loop stops on: terminal ones plus `AwaitingTrigger`.
+fn is_settled_workflow_status(status: WorkflowStatus) -> bool {
+    matches!(
+        status,
+        WorkflowStatus::Completed
+            | WorkflowStatus::Failed
+            | WorkflowStatus::Canceled
+            | WorkflowStatus::AwaitingTrigger
+    )
+}
+
+/// Sleep for `fallback` before the next status poll, waking early when an
+/// in-process executor for the run exits. Each exit wakes the loop once, so a
+/// status that stays non-terminal falls back to plain polling.
+pub(crate) async fn wait_for_run_progress(
+    completion: Option<&mut WorkflowCompletionSignal>,
+    fallback: Duration,
+) {
+    match completion {
+        Some(signal) => {
+            tokio::select! {
+                _ = signal.executor_exited() => {}
+                _ = tokio::time::sleep(fallback) => {}
+            }
+        }
+        None => tokio::time::sleep(fallback).await,
+    }
 }
 
 fn failed_workflow_error(tasks: &[Task]) -> Option<anyhow::Error> {
