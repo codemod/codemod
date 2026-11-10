@@ -1,8 +1,7 @@
 /**
  * `@codemod.com/orchestration/portable`: everything that runs without Node.
  * Authoring, static composition, `run()` with replay/history/scheduling, the
- * runtime capability contract, the `Host` seam, and the portable JSSG + shell
- * execution path. Nothing reachable from this entry imports `node:*` or
+ * `Host` seam, and the portable JSSG + shell execution path. Nothing reachable from this entry imports `node:*` or
  * touches `process` (`tests/portable.test.ts`), so a QuickJS workflow bundle
  * can alias `@codemod.com/orchestration` to it. A host must be installed
  * (`setHost` or `globalThis[HOST_GLOBAL]`) before the first run.
@@ -78,21 +77,6 @@ export { dynamic } from "./authoring/dynamic.ts";
 export type { Awaitable, Dynamic } from "./authoring/dynamic.ts";
 export { run } from "./runtime/run.ts";
 export type { RootInput, RunOptions, RunResult, RunSettings } from "./runtime/run.ts";
-export {
-  BUILTIN_RUNTIMES,
-  CapabilityExecutor,
-  DEFAULT_RUNTIME,
-  QUICKJS_RUNTIME,
-  RUNTIME_NAMES,
-  UnsupportedInRuntimeError,
-  assertRuntimeSupports,
-  unsupportedFeature,
-} from "./runtime/capabilities.ts";
-export type {
-  BuiltinRuntimeName,
-  RuntimeCapabilities,
-  RuntimeDescriptor,
-} from "./runtime/capabilities.ts";
 export { guard, SchemaError } from "./authoring/schema.ts";
 export type { InferOutput, StandardSchemaV1 } from "./authoring/schema.ts";
 export {

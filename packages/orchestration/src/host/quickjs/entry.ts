@@ -9,7 +9,7 @@
  * `console` writing to the host's stderr. The generated bundle entry then
  * calls `runBundled(workflowModule, artifacts, request)` from its exported
  * `main`, which runs the workflow with the portable control plane (replay,
- * history, scheduling, the `quickjs` capability contract) and resolves with
+ * history, scheduling) and resolves with
  * the JSON text the host prints.
  *
  * Runs inside QuickJS: Node-free (`tests/portable.test.ts`).
@@ -36,7 +36,6 @@ import { AGENT_BIN_ENV, executeAgent } from "../../execution/agent.ts";
 import { executeJssgCommand, type JssgDispatch } from "../../execution/jssg.ts";
 import type { OperationExecutor } from "../../execution/operation-executor.ts";
 import { executeShell } from "../../execution/shell.ts";
-import { QUICKJS_RUNTIME, UnsupportedInRuntimeError } from "../../runtime/capabilities.ts";
 import { run } from "../../runtime/run.ts";
 import { installPromiseContextPropagation } from "./async-context.ts";
 import { createQuickjsDispatch } from "./dispatch.ts";
@@ -101,17 +100,13 @@ class QuickjsExecutor implements OperationExecutor {
       case "assessment":
         return await executeAssessmentOperation(this.assessment, this.cwd, request, signal);
       default:
-        // `run()` refuses these before they get here (`CapabilityExecutor`).
         return {
           protocolVersion: PROTOCOL_VERSION,
           commandId: request.commandId,
           status: "failed",
           error: {
-            message: new UnsupportedInRuntimeError(
-              "quickjs",
-              `operation kind '${(operation as { kind: string }).kind}'`,
-            ).message,
-            details: { phase: "config", runtime: "quickjs", repositoryMayBeModified: false },
+            message: `unknown operation kind '${(operation as { kind: string }).kind}'`,
+            details: { phase: "config", repositoryMayBeModified: false },
           },
         };
     }
@@ -161,7 +156,6 @@ export async function runBundled(
       executable as Executable,
       {
         executor,
-        runtime: QUICKJS_RUNTIME,
         history: store,
         signal: controller.signal,
         ...(hasInput ? { input: JSON.parse(request.input!) as Json } : {}),

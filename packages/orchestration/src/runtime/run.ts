@@ -26,11 +26,6 @@ import {
 } from "../authoring/composition.ts";
 import { AdmissionScheduler, SchedulingExecutor } from "../execution/scheduler.ts";
 import { validate } from "../authoring/schema.ts";
-import {
-  CapabilityExecutor,
-  assertRuntimeSupports,
-  type RuntimeDescriptor,
-} from "./capabilities.ts";
 
 export interface RunSettings {
   executor: OperationExecutor;
@@ -51,15 +46,6 @@ export interface RunSettings {
    * capacity in a test; it is host configuration, never workflow authoring.
    */
   scheduler?: AdmissionScheduler;
-  /**
-   * The runtime executing this run (`runtime/capabilities.ts`). When given,
-   * the static topology is checked against its capabilities before anything
-   * runs (`UnsupportedInRuntimeError`), and operations issued inside
-   * `dynamic()` that it cannot execute complete as `failed` with
-   * `details.phase: "config"` without reaching `executor` or the scheduler.
-   * Omitted: no capability checks (the executor decides), as before.
-   */
-  runtime?: RuntimeDescriptor;
 }
 
 /**
@@ -83,18 +69,15 @@ export async function run<T extends Executable>(
   executable: T,
   options: RunOptions<StageInput<T>>,
 ): Promise<RunResult<ExecutableOutput<T>>> {
-  if (options.runtime !== undefined) assertRuntimeSupports(options.runtime, executable);
   const store = options.history ?? new MemoryHistoryStore();
   const events = options.events ?? new CollectingSink();
   // Only commands the gate actually executes pass through here, so a replayed
-  // command never takes a permit; a command the runtime refuses takes none either.
-  const scheduled = new SchedulingExecutor(
+  // command never takes a permit.
+  const executor = new SchedulingExecutor(
     options.executor,
     options.scheduler ?? new AdmissionScheduler({ events }),
     events,
   );
-  const executor =
-    options.runtime === undefined ? scheduled : new CapabilityExecutor(options.runtime, scheduled);
   const gate = new ReplayGate(await store.load(), store, executor, events, options.signal);
   const runtime = new RunRuntime(gate);
   let output: unknown;

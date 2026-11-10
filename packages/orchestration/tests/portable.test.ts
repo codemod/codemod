@@ -2,7 +2,7 @@
  * The host seam, statically and behaviorally:
  *
  * - everything reachable from `src/portable.ts` (authoring, `run()`, replay,
- *   history, scheduling, the capability contract, and the JSSG + shell
+ *   history, scheduling, and the JSSG + shell
  *   execution path) imports no `node:*` module, no Node-only package, and uses
  *   no Node global, and no other `src` file imports `node:*` either;
  * - `core/posix.ts` matches `node:path.posix`.
@@ -79,7 +79,6 @@ describe("the portable closure", () => {
       "execution/jssg.ts",
       "execution/scheduler.ts",
       "execution/shell.ts",
-      "runtime/capabilities.ts",
       "runtime/gate.ts",
       "runtime/run.ts",
     ]) {
