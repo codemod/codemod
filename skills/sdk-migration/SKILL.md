@@ -14,7 +14,7 @@ argument-hint: "<sdk> <from-version> <to-version> <changelog-or-guide-url>"
 # SDK Migration Codemod Authoring
 
 codemod-compatibility: skill-package-v1
-codemod-skill-version: 0.1.0
+codemod-skill-version: 0.1.1
 
 Turn an SDK/library version bump into publishable Codemod packages.
 
@@ -70,10 +70,26 @@ Write a short plan that includes:
 - Source links used
 - Codemod author: name and email (from auth or user-provided)
 - Registry defaults: **public visibility and public access**
-- Proposed package list (one granular `from -> to` transform per package unless the user asked for a multi-hop series)
+- Proposed package list (see packaging rules below)
 - Languages / file globs
 - Breaking changes in scope vs deferred / manual follow-ups
 - Test strategy (fixtures + validation commands)
+
+### Packaging rules
+
+**Default: one registry package per SDK version bump**, named like `<sdk>-<from>-to-<to>`, with a **multi-step** `workflow.yaml`:
+
+- One sequential `js-ast-grep` step per independent breaking change
+- Separate transform scripts (keep `scripts/codemod.ts` as the first/primary step for package validation)
+- Separate fixture dirs per step (e.g. `tests/<step-slug>/…`)
+- Package `test` script runs `jssg test` for every step
+
+Split into multiple packages only when:
+
+- The user explicitly asks for separate packages, or
+- Breaks target unrelated surfaces that should ship/version independently (different languages, optional product areas, or opt-in migrations)
+
+Do **not** publish N one-step packages for the same `from → to` bump by default.
 
 Default every new package to:
 
@@ -95,10 +111,33 @@ Show the plan to the user, then proceed unless they revise it.
 - Author: <Name> <<email>>
 - Registry: access=public, visibility=public
 - Sources: <urls>
-- Packages:
-  1. `<scope>/<sdk>-<change-slug>` — <one-sentence intent>
+- Package(s):
+  1. `<scope>/<sdk>-<from>-to-<to>` — multi-step: <step intents>
 - Out of scope / manual: <bullets>
 - Test plan: fixtures + `workflow validate` + `validate_codemod_package` + package tests
+```
+
+### Multi-step workflow shape
+
+```yaml
+version: "1"
+nodes:
+  - id: migrate
+    name: Migrate <sdk> <from> → <to>
+    type: automatic
+    steps:
+      - name: "<break A>"
+        js-ast-grep:
+          js_file: scripts/codemod.ts
+          language: "typescript"
+          include: ["**/*.{ts,tsx}"]
+          exclude: ["**/node_modules/**", "**/dist/**"]
+      - name: "<break B>"
+        js-ast-grep:
+          js_file: scripts/<break-b>.ts
+          language: "typescript"
+          include: ["**/*.{ts,tsx}"]
+          exclude: ["**/node_modules/**", "**/dist/**"]
 ```
 
 ## 2. Codemods built locally
@@ -111,6 +150,8 @@ npx codemod ai docs jssg-gotchas
 npx codemod ai docs ast-grep-gotchas
 ```
 
+Scaffold **outside** product app monorepos when possible (dedicated workspace such as `~/…/<sdk>-codemods/` or `codemods/<sdk>-<from>-to-<to>/`). Do not leave migration packages under unrelated repos (e.g. app backends) unless the user asked to put them there.
+
 For each planned package:
 
 1. Scaffold immediately (pass only known flags; include author when resolved):
@@ -120,12 +161,10 @@ npx codemod init <path> --no-interactive --name <name> --author "Name <email>"
 ```
 
 2. Set `codemod.yaml` author, description, keywords (`upgrade`, `breaking-change`, sdk name, versions), languages, and **public** registry access/visibility.
-3. Replace starter transform, README, and fixtures. Keep one exact migration per package.
+3. Replace starter transform, README, and fixtures. Wire a multi-step `workflow.yaml` when there is more than one break. Keep each step focused on one exact migration.
 4. Stay AST-first with `js-ast-grep` for parser-backed languages. Use `npx codemod ai dump-ast` and `npx codemod ai node-types <lang>` when node shape is unclear.
 5. Follow Performant codemods in `jssg-gotchas`: discriminating selectors/token gates, no per-file full-repo walks, timed no-op vs real run before done.
-6. Align transform, fixtures, README, `codemod.yaml`, `workflow.yaml`, and package scripts on the same migration and globs.
-
-Prefer a dedicated workspace directory such as `codemods/<sdk>-<from>-to-<to>/`.
+6. Align transforms, fixtures, README, `codemod.yaml`, `workflow.yaml`, and package scripts on the same migration and globs.
 
 ## 3. Codemods tested — fix and retest
 
@@ -139,7 +178,7 @@ npx codemod ai call validate_codemod_package --input '{"package_path":"<package-
 
 Also required:
 
-- Positive, negative, edge, and no-op fixtures
+- Positive, negative, edge, and no-op fixtures **per step**
 - No starter-scaffold markers left in README/transform/fixtures
 - If tests or validation fail: fix the codemod, re-run the same checks, and repeat until green
 
@@ -168,6 +207,8 @@ If publish fails because of scope verification or permissions, explain the error
 - Public visibility and access by default.
 - Author must be the authenticated user or an author the user provided.
 - Search the registry before creating duplicates.
+- Default to one multi-step package per SDK version bump; do not split without cause.
 - Do not stop on the first test failure — fix and retest.
 - Do not commit or push git changes unless the user asked.
+- Do not open a PR unless the user asked.
 - Do not apply the new codemods across unrelated customer repos unless the user asked; this skill's deliverable is planned, built, tested, and published packages.

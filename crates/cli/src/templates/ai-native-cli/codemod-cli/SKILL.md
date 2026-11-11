@@ -10,7 +10,7 @@ argument-hint: "<migration-intent>"
 # Codemod Migration Assistant
 
 codemod-compatibility: mcs-v1
-codemod-skill-version: 1.2.1
+codemod-skill-version: 1.2.2
 
 Use this skill for migrations, upgrades, deprecation rollouts, large mechanical refactors, codemod package authoring (including read-only mining / Insights metrics packages), and AST inspection. Use Codemod before falling back to an open-ended AI rewrite.
 
@@ -50,7 +50,7 @@ For mining / Insights metrics packages, Insights loads the `js-ast-grep` script 
 
 When the user wants to **author and publish** codemods for an SDK or library upgrade and provides a source version, target version, and a changelog / migration guide / helpful link: use the sibling `sdk-migration` skill at `sdk-migration/SKILL.md` (same skills root as this file). If it is not installed, fetch and follow `https://raw.githubusercontent.com/codemod/codemod/main/skills/sdk-migration/SKILL.md` before scaffolding.
 
-That workflow's outputs are: a public-by-default migration plan (with author name/email from `npx codemod whoami --detailed` or the user), locally built packages, tested packages with fix-and-retest until green, then `npx codemod publish`.
+That workflow's outputs are: a public-by-default migration plan (with author name/email from `npx codemod whoami --detailed` or the user), locally built packages, tested packages with fix-and-retest until green, then `npx codemod publish`. Packaging defaults live in `sdk-migration`: **one multi-step package per SDK version bump** unless the user asks to split.
 
 ## Migrations: search the registry first
 
@@ -64,7 +64,7 @@ That workflow's outputs are: a public-by-default migration plan (with author nam
 - Keep transforms AST-first. Parser-backed formats (JavaScript, TypeScript, TSX, Python, Rust, Go, Java, HTML, XML, CSS, Kotlin, Angular templates, C#, C, C++, PHP, Ruby, Elixir, JSON, YAML, TOML) use a `js-ast-grep` step: AST queries select the nodes, `node.replace(...)` edits them, `root.root().commitEdits(...)` applies the edits.
 - Do not use regex, line splitting, whole-file `.replace(...)`, or Python, shell, or Node `fs` rewrites for those formats, and do not use JSSG only as a file walker around such rewrites. Do not add a shell step to reach a related file when JSSG can make that hop. Use raw text only for unsupported plain-text formats, document the fallback, and cover it with fixtures.
 - Run `npx codemod ai dump-ast` before broadening heuristics and `npx codemod ai node-types` when node kinds or fields are unclear. Use semantic, binding-aware checks when symbol origin matters.
-- Keep one granular transform or one exact `from -> to` migration per package unless the request is clearly open-ended or multi-hop.
+- Keep each transform focused on one exact change. For SDK/library version bumps, follow `sdk-migration` (one multi-step package per bump by default). For other authoring, prefer one focused package unless the request is clearly open-ended.
 - Inspect only 1-3 representative repo files before you settle the transform shape.
 - In non-interactive `codemod init`, pass only flags the user or task gave you. Do not invent `--author`, `--license`, `--description`, or `--git-repository-url`; leave missing metadata to CLI defaults and the publish-time auth fallback.
 - Define positive, negative, edge, and no-op fixtures before deep implementation, then replace the starter transform, README, and fixtures.

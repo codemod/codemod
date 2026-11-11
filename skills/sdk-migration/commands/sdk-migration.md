@@ -14,8 +14,10 @@ Deliver, in order:
 
 Non-negotiable:
 - Search the registry before creating duplicates
+- Default to **one package per SDK version bump** with a multi-step workflow (one JSSG step per break; separate scripts + fixture dirs); split packages only on request or clearly independent surfaces
+- Scaffold in a dedicated workspace — not inside unrelated product repos unless asked
 - Read `npx codemod ai docs codemod-creation-workflow`, then `jssg-gotchas` and `ast-grep-gotchas`, before writing transforms
 - Stay AST-first with `js-ast-grep` for parser-backed formats
 - Do not publish until `workflow validate`, `validate_codemod_package`, and package tests pass
 - Do not default packages to private
-- Do not commit or push unless the user asked for git operations
+- Do not commit, push, or open a PR unless the user asked for those git operations
