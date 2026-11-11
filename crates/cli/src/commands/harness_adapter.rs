@@ -44,8 +44,7 @@ const MCS_COMMAND_MD: &str =
 const SDK_MIGRATION_SKILL_COMPONENT_ID: &str = "sdk-migration";
 const SDK_MIGRATION_SKILL_DIR_NAME: &str = "sdk-migration";
 const SDK_MIGRATION_SKILL_VERSION: &str = "0.1.0";
-const SDK_MIGRATION_SKILL_MD: &str =
-    include_str!("../../../../skills/sdk-migration/SKILL.md");
+const SDK_MIGRATION_SKILL_MD: &str = include_str!("../../../../skills/sdk-migration/SKILL.md");
 const SDK_MIGRATION_COMMAND_MD: &str =
     include_str!("../../../../skills/sdk-migration/commands/sdk-migration.md");
 const SDK_MIGRATION_OPENAI_YAML: &str =
@@ -2595,10 +2594,14 @@ fn install_mcs_skill_bundle_with_runtime(
         scope: Some(request.scope),
     }];
 
-    let sdk_migration_root =
-        skills_root_for_harness(harness, request.scope, runtime_paths)?.join(SDK_MIGRATION_SKILL_DIR_NAME);
+    let sdk_migration_root = skills_root_for_harness(harness, request.scope, runtime_paths)?
+        .join(SDK_MIGRATION_SKILL_DIR_NAME);
     let sdk_migration_skill_md_path = sdk_migration_root.join("SKILL.md");
-    write_skill_file(&sdk_migration_skill_md_path, SDK_MIGRATION_SKILL_MD, request.force)?;
+    write_skill_file(
+        &sdk_migration_skill_md_path,
+        SDK_MIGRATION_SKILL_MD,
+        request.force,
+    )?;
     write_skill_file(
         &sdk_migration_root.join("commands/sdk-migration.md"),
         SDK_MIGRATION_COMMAND_MD,
@@ -2671,7 +2674,10 @@ fn mcs_install_requires_force_with_runtime(
 
     let sdk_migration_root =
         skills_root_for_harness(harness, scope, runtime_paths)?.join(SDK_MIGRATION_SKILL_DIR_NAME);
-    if managed_text_file_requires_force(&sdk_migration_root.join(SKILL_FILE_NAME), SDK_MIGRATION_SKILL_MD)? {
+    if managed_text_file_requires_force(
+        &sdk_migration_root.join(SKILL_FILE_NAME),
+        SDK_MIGRATION_SKILL_MD,
+    )? {
         return Ok(true);
     }
 
@@ -6708,13 +6714,18 @@ codemod-skill-version: 0.1.0
     }
 
     fn assert_bundled_args_are_known(prefix: &str, known: Vec<&str>) {
-        let unknown: Vec<&str> = [MCS_SKILL_MD, MCS_COMMAND_MD, SDK_MIGRATION_SKILL_MD, SDK_MIGRATION_COMMAND_MD]
-            .iter()
-            .flat_map(|doc| doc.split(prefix).skip(1))
-            .filter_map(|rest| rest.split_whitespace().next())
-            .map(|arg| arg.trim_matches(|c: char| "`'\",.".contains(c)))
-            .filter(|arg| !arg.starts_with('<') && !known.contains(arg))
-            .collect();
+        let unknown: Vec<&str> = [
+            MCS_SKILL_MD,
+            MCS_COMMAND_MD,
+            SDK_MIGRATION_SKILL_MD,
+            SDK_MIGRATION_COMMAND_MD,
+        ]
+        .iter()
+        .flat_map(|doc| doc.split(prefix).skip(1))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(|arg| arg.trim_matches(|c: char| "`'\",.".contains(c)))
+        .filter(|arg| !arg.starts_with('<') && !known.contains(arg))
+        .collect();
         assert!(unknown.is_empty(), "unknown after `{prefix}`: {unknown:?}");
     }
 
