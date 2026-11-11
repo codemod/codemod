@@ -1,6 +1,6 @@
 ---
 name: codemod
-description: Use Codemod CLI whenever the user wants to migrate, upgrade, update, or refactor a codebase in a repeatable way. This includes framework migrations, library upgrades, version bump migrations, API surface changes, deprecations, large-scale mechanical edits, codemod package authoring, AST inspection, tree-sitter node type lookup, and Codemod documentation lookup through `npx codemod ai` commands. First search the Codemod Registry for an existing package, prefer deterministic codemods before open-ended AI rewrites, run dry-runs before apply, and create a codemod package only when no suitable package exists.
+description: Use Codemod CLI whenever the user wants to migrate, upgrade, update, or refactor a codebase in a repeatable way. This includes framework migrations, library upgrades, version bump migrations, API surface changes, deprecations, large-scale mechanical edits, codemod package authoring, AST inspection, tree-sitter node type lookup, and Codemod documentation lookup through `npx codemod ai` commands. First search the Codemod Registry for an existing package, prefer deterministic codemods before open-ended AI rewrites, run dry-runs before apply, and create a codemod package only when no suitable package exists. For authoring and publishing SDK/library version-migration packages from a changelog or migration guide, use the sibling sdk-migration skill.
 allowed-tools:
   - Bash(codemod *)
   - Bash(npx codemod *)
@@ -10,7 +10,7 @@ argument-hint: "<migration-intent>"
 # Codemod Migration Assistant
 
 codemod-compatibility: mcs-v1
-codemod-skill-version: 1.2.0
+codemod-skill-version: 1.2.1
 
 Use this skill for migrations, upgrades, deprecation rollouts, large mechanical refactors, codemod package authoring (including read-only mining / Insights metrics packages), and AST inspection. Use Codemod before falling back to an open-ended AI rewrite.
 
@@ -45,6 +45,12 @@ Everything below runs through the Codemod CLI. For work on the user's Codemod pl
 The Performant codemods section of `jssg-gotchas` is required reading for any JSSG package: discriminating selectors or token gates, no per-file full-repo walks, and a timed no-op vs real run on the same entry path (`workflow run` when the package uses selectors/globs; otherwise `jssg run --language`) before you claim it is done.
 
 For mining / Insights metrics packages, Insights loads the `js-ast-grep` script of the one bound workflow step: call `useMetricAtom` and `increment` in that script and `return null`, not only in a package-entry file or helper import.
+
+## SDK version migration packages
+
+When the user wants to **author and publish** codemods for an SDK or library upgrade and provides a source version, target version, and a changelog / migration guide / helpful link: use the sibling `sdk-migration` skill at `sdk-migration/SKILL.md` (same skills root as this file). If it is not installed, fetch and follow `https://raw.githubusercontent.com/codemod/codemod/main/skills/sdk-migration/SKILL.md` before scaffolding.
+
+That workflow's outputs are: a public-by-default migration plan (with author name/email from `npx codemod whoami --detailed` or the user), locally built packages, tested packages with fix-and-retest until green, then `npx codemod publish`.
 
 ## Migrations: search the registry first
 
