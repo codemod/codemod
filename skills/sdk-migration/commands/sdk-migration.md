@@ -15,6 +15,7 @@ Deliver, in order:
 Non-negotiable:
 - Search the registry before creating duplicates
 - Default to **one package per SDK version bump** with a multi-step workflow (one JSSG step per break; separate scripts + fixture dirs); split packages only on request or clearly independent surfaces
+- Registry `name`: letters/numbers/hyphens/underscores only (optional `@scope/`). **No dots** — hyphenate versions (`sdk-1-24-to-1-25`, not `1.24-to-1.25`)
 - Scaffold in a dedicated workspace — not inside unrelated product repos unless asked
 - Read `npx codemod ai docs codemod-creation-workflow`, then `jssg-gotchas`, `ast-grep-gotchas`, `jssg-utils`, `semantic analysis`, and `jssg metrics`, before writing transforms
 - Prefer `@jssg/utils` for import gates / style / renames; enable `semantic_analysis` when symbol origin or generic method names matter

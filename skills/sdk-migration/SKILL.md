@@ -14,7 +14,7 @@ argument-hint: "<sdk> <from-version> <to-version> <changelog-or-guide-url>"
 # SDK Migration Codemod Authoring
 
 codemod-compatibility: skill-package-v1
-codemod-skill-version: 0.1.3
+codemod-skill-version: 0.1.4
 
 Turn an SDK/library version bump into publishable Codemod packages.
 
@@ -79,6 +79,7 @@ Write a short plan that includes:
 
 **Default: one registry package per SDK version bump**, named like `<sdk>-<from>-to-<to>`, with a **multi-step** `workflow.yaml`:
 
+- **Registry `name` rules (publish will reject otherwise):** optional `@scope/`, then only letters, numbers, hyphens, underscores. **No dots, no spaces.** Write versions with hyphens (`1-24-to-1-25`), never semver dots (`1.24-to-1.25` is invalid).
 - One sequential `js-ast-grep` step per independent breaking change
 - Separate transform scripts (keep `scripts/codemod.ts` as the first/primary step for package validation)
 - Separate fixture dirs per step (e.g. `tests/<step-slug>/…`)
@@ -112,7 +113,7 @@ Show the plan to the user, then proceed unless they revise it.
 - Registry: access=public, visibility=public
 - Sources: <urls>
 - Package(s):
-  1. `<scope>/<sdk>-<from>-to-<to>` — multi-step: <step intents>
+  1. `<scope>/<sdk>-<from>-to-<to>` — multi-step: <step intents> (versions hyphenated, e.g. `temporalio-sdk-1-24-to-1-25`)
 - Out of scope / manual: <bullets>
 - Test plan: fixtures + `workflow validate` + `validate_codemod_package` + package tests
 ```
@@ -167,7 +168,7 @@ For each planned package:
 npx codemod init <path> --no-interactive --name <name> --author "Name <email>"
 ```
 
-2. Set `codemod.yaml` author, description, keywords (`upgrade`, `breaking-change`, sdk name, versions), languages, and **public** registry access/visibility.
+2. Set `codemod.yaml` / `package.json` `name` to a publish-safe id (no dots), plus author, description, keywords (`upgrade`, `breaking-change`, sdk name, versions), languages, and **public** registry access/visibility.
 3. Replace starter transform, README, and fixtures. Wire a multi-step `workflow.yaml` when there is more than one break. Keep each step focused on one exact migration.
 4. Stay AST-first with `js-ast-grep` for parser-backed languages. Use `npx codemod ai dump-ast` and `npx codemod ai node-types <lang>` when node shape is unclear.
 5. **Prefer `@jssg/utils`** for JS/TS/Java: import gates (`getImport` / `listImports`), style (`getFileStyle`), renames/bindings (`importBindingOf` / `renameReferences`). Do not ship hand-rolled import pattern lists or bare identifier renames when a helper covers the case. Add `@jssg/utils` to package dependencies when used.
@@ -220,6 +221,7 @@ If publish fails because of scope verification or permissions, explain the error
 - Default to one multi-step package per SDK version bump; do not split without cause.
 - Prefer `@jssg/utils` and enable `semantic_analysis` when import origin, aliases, or generic method names matter.
 - Each transform step emits metrics (`useMetricAtom` + cardinality; keep the metric count low).
+- Registry package names: no dots — hyphenate version segments (`1-24-to-1-25`).
 - Do not stop on the first test failure — fix and retest.
 - Do not commit or push git changes unless the user asked.
 - Do not open a PR unless the user asked.

@@ -88,6 +88,8 @@ For codemod authoring, start by reading `codemod-creation-workflow-instructions`
 
 When registry discovery does not find an exact package, agents should scaffold with direct `codemod init`. In non-interactive flows, agents should pass only values supplied by the user or task and rely on the CLI defaults/auth-derived author handling for optional metadata.
 
+Registry package names must satisfy `^(@[A-Za-z0-9\-_.]+/)?[A-Za-z0-9\-_]+$`: optional `@scope/`, then **no dots** in the name (hyphenate versions like `lib-1-2-to-1-3`).
+
 ## Why use Codemod MCP?
 
 Codemod MCP democratizes code transformation by integrating robust deterministic engines into AI-powered development workflows:

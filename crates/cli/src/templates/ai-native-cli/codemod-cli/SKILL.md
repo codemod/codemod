@@ -10,7 +10,7 @@ argument-hint: "<migration-intent>"
 # Codemod Migration Assistant
 
 codemod-compatibility: mcs-v1
-codemod-skill-version: 1.2.4
+codemod-skill-version: 1.2.5
 
 Use this skill for migrations, upgrades, deprecation rollouts, large mechanical refactors, codemod package authoring (including read-only mining / Insights metrics packages), and AST inspection. Use Codemod before falling back to an open-ended AI rewrite.
 
@@ -69,6 +69,7 @@ That workflow's outputs are: a public-by-default migration plan (with author nam
 - Prefer `@jssg/utils` over hand-rolled import pattern lists, style string building, and bare identifier renames. Add the dependency when used.
 - Enable `semantic_analysis` on `js-ast-grep` steps when matching generic method names, renaming symbols, or following aliases; use binding-aware checks (`importBindingOf` / `renameReferences` / `definition`) instead of filename-level import gates alone.
 - Emit metrics from each transform `js-ast-grep` step (`useMetricAtom` in that script). Prefer one metric per step with cardinality dimensions; snapshot `metrics.json`. Mining/Insights packages still `return null` after incrementing.
+- Registry package `name` (in `codemod.yaml` / `package.json`): optional `@scope/`, then only `[A-Za-z0-9\-_]`. **No dots** — hyphenate version segments (`pkg-1-2-to-1-3`, not `1.2-to-1.3`).
 - Keep each transform focused on one exact change. For SDK/library version bumps, follow `sdk-migration` (one multi-step package per bump by default). For other authoring, prefer one focused package unless the request is clearly open-ended.
 - Inspect only 1-3 representative repo files before you settle the transform shape.
 - In non-interactive `codemod init`, pass only flags the user or task gave you. Do not invent `--author`, `--license`, `--description`, or `--git-repository-url`; leave missing metadata to CLI defaults and the publish-time auth fallback.

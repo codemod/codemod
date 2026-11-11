@@ -378,6 +378,17 @@ impl PackageValidationHandler {
             ));
         }
 
+        if let Some(invalid_name) = invalid_registry_package_name(&package_root) {
+            issues.push(issue(
+                "error",
+                "invalid_package_name",
+                &format!(
+                    "Package name `{invalid_name}` is invalid for publish. Use optional @scope/ then only letters, numbers, hyphens, or underscores — no dots (e.g. `lib-1-2-to-1-3`, not `lib-1.2-to-1.3`)."
+                ),
+                Some(package_root.join("codemod.yaml")),
+            ));
+        }
+
         push_missing_file_issues(
             &files,
             package_kind,
@@ -816,6 +827,60 @@ fn issue(severity: &str, code: &str, message: &str, path: Option<PathBuf>) -> Va
         message: message.to_string(),
         path: path.map(|path| path.display().to_string()),
     }
+}
+
+/// Publish-time registry name rules (must stay aligned with `crates/cli` publish validation):
+/// `^(@[A-Za-z0-9\-_.]+/)?[A-Za-z0-9\-_]+$` — dots allowed only inside an `@scope/`, never in the name.
+fn is_valid_registry_package_name(name: &str) -> bool {
+    // Keep aligned with crates/cli publish MAX_PACKAGE_NAME_LENGTH.
+    if name.is_empty() || name.len() > 50 {
+        return false;
+    }
+
+    let rest = if let Some(without_at) = name.strip_prefix('@') {
+        let Some((scope, package)) = without_at.split_once('/') else {
+            return false;
+        };
+        if scope.is_empty()
+            || !scope
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        {
+            return false;
+        }
+        package
+    } else {
+        name
+    };
+
+    !rest.is_empty()
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+}
+
+fn invalid_registry_package_name(package_root: &Path) -> Option<String> {
+    let mut candidates = Vec::new();
+
+    if let Some(content) = read_file_if_exists(&package_root.join("codemod.yaml")) {
+        if let Ok(manifest) = serde_yaml::from_str::<YamlValue>(&content) {
+            if let Some(name) = manifest.get("name").and_then(|value| value.as_str()) {
+                candidates.push(name.to_string());
+            }
+        }
+    }
+
+    if let Some(content) = read_file_if_exists(&package_root.join("package.json")) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(name) = parsed.get("name").and_then(|value| value.as_str()) {
+                candidates.push(name.to_string());
+            }
+        }
+    }
+
+    candidates
+        .into_iter()
+        .find(|name| !is_valid_registry_package_name(name))
 }
 
 fn format_line_list(lines: &[usize]) -> String {
@@ -1821,6 +1886,65 @@ mod tests {
             .iter()
             .any(|issue| issue.code == "workflow_path_invalid"));
         assert!(response.workflow_valid);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn registry_package_names_reject_dots_in_the_name_segment() {
+        assert!(is_valid_registry_package_name(
+            "temporalio-sdk-1-24-to-1-25"
+        ));
+        assert!(is_valid_registry_package_name("@org/my-codemod"));
+        assert!(is_valid_registry_package_name("@org.name/my-codemod"));
+        assert!(!is_valid_registry_package_name(
+            "temporalio-sdk-1.24-to-1.25"
+        ));
+        assert!(!is_valid_registry_package_name("@org/my.codemod"));
+        assert!(!is_valid_registry_package_name(""));
+    }
+
+    #[tokio::test]
+    async fn invalid_dotted_package_name_is_reported() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::create_dir_all(dir.join("tests/basic")).unwrap();
+        fs::write(
+            dir.join("codemod.yaml"),
+            "name: temporalio-sdk-1.24-to-1.25\nworkflow: workflow.yaml\n",
+        )
+        .unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(
+            dir.join("package.json"),
+            "{\n  \"name\": \"temporalio-sdk-1.24-to-1.25\",\n  \"scripts\": { \"test\": \"echo ok\" }\n}\n",
+        )
+        .unwrap();
+        fs::write(dir.join("README.md"), "# Example\n").unwrap();
+        fs::write(
+            dir.join("scripts/codemod.ts"),
+            "export default function() { return null; }\n",
+        )
+        .unwrap();
+        fs::write(dir.join("tests/basic/input.ts"), "console.log('x');\n").unwrap();
+        fs::write(dir.join("tests/basic/expected.ts"), "console.log('x');\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(response
+            .issues
+            .iter()
+            .any(|issue| issue.code == "invalid_package_name"));
+        assert!(!response.ready);
 
         fs::remove_dir_all(dir).unwrap();
     }
