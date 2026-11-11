@@ -113,7 +113,7 @@ Show the plan to the user, then proceed unless they revise it.
 - Registry: access=public, visibility=public
 - Sources: <urls>
 - Package(s):
-  1. `<scope>/<sdk>-<from>-to-<to>` — multi-step: <step intents> (versions hyphenated, e.g. `temporalio-sdk-1-24-to-1-25`)
+  1. `<scope>/<sdk>-<from>-to-<to>` — multi-step: <step intents> (versions hyphenated, e.g. `temporal-ts-sdk-1-24-to-1-25`)
 - Out of scope / manual: <bullets>
 - Test plan: fixtures + `workflow validate` + `validate_codemod_package` + package tests
 ```

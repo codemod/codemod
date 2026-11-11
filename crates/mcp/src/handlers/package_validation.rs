@@ -1893,7 +1893,7 @@ mod tests {
     #[test]
     fn registry_package_names_reject_dots_in_the_name_segment() {
         assert!(is_valid_registry_package_name(
-            "temporalio-sdk-1-24-to-1-25"
+            "temporal-ts-sdk-1-24-to-1-25"
         ));
         assert!(is_valid_registry_package_name("@org/my-codemod"));
         assert!(is_valid_registry_package_name("@org.name/my-codemod"));
