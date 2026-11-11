@@ -8,14 +8,7 @@
 //
 // CODEMOD_BIN: the codemod binary (default: target/debug/codemod, then PATH).
 import { spawn } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  writeFileSync,
-  copyFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
