@@ -1,9 +1,9 @@
 //! Binding-agnostic AST core behind the JSSG `SgRoot` / `SgNode` API.
 //!
 //! This module is pure Rust over `ast-grep-core`; it has no knowledge of any
-//! JavaScript engine. JS facades (the rquickjs classes in
-//! [`super::sg_node`], and the napi-rs addon) are thin wrappers that convert
-//! arguments/results and map [`CoreError`] into their engine's exceptions.
+//! JavaScript engine. The JS facade (the rquickjs classes in
+//! [`super::sg_node`]) is a thin wrapper that converts arguments and results
+//! and maps [`CoreError`] into QuickJS exceptions.
 //!
 //! # Ownership model
 //!
@@ -27,9 +27,7 @@
 //! `definition()`, `references()` and `typeInfo()` go through
 //! [`CoreNode::semantic`], which consults the root's [`SemanticSeam`]:
 //! `Disabled` behaves like "no provider configured" (JS sees `null` / `[]`),
-//! `Unsupported` makes every semantic call fail with the given message (used
-//! by runtimes that do not wire semantic analysis), and `Provider` (native
-//! builds only) forwards to a [`language_core::SemanticProvider`].
+//! and `Provider` (native builds only) forwards to a [`language_core::SemanticProvider`].
 //!
 //! # Host-specific behaviour kept out of the core
 //!
@@ -221,9 +219,6 @@ pub enum SemanticSeam {
     /// a semantic provider.
     #[default]
     Disabled,
-    /// Semantic analysis is not available in this runtime; every semantic
-    /// call fails with this message.
-    Unsupported(Arc<str>),
     /// Forward to a semantic provider (native builds only).
     #[cfg(feature = "native")]
     Provider(Arc<dyn SemanticProvider>),
@@ -926,7 +921,6 @@ impl CoreNode {
 
     /// Enter the semantic seam.
     ///
-    /// * `Err(_)` when the root's seam is [`SemanticSeam::Unsupported`].
     /// * `Ok(None)` when semantic analysis is disabled or the root has no
     ///   filename: JS `definition()`/`typeInfo()` return `null` and
     ///   `references()` returns `[]`.
@@ -934,7 +928,6 @@ impl CoreNode {
     pub fn semantic(&self) -> CoreResult<Option<SemanticRequest<'_>>> {
         match &self.root.inner.semantic {
             SemanticSeam::Disabled => Ok(None),
-            SemanticSeam::Unsupported(message) => Err(CoreError::error(message.to_string())),
             #[cfg(feature = "native")]
             SemanticSeam::Provider(provider) => {
                 let Some(filename) = &self.root.inner.filename else {
@@ -1192,18 +1185,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_semantic_seam_errors() {
-        let grep = AstGrep::new("x", CoreLang::from_str("typescript").unwrap());
-        let root = CoreRoot::from_ast_grep(
-            grep,
-            RootOptions {
-                filename: Some("/tmp/a.ts".into()),
-                semantic: SemanticSeam::Unsupported("semantic analysis is unsupported".into()),
-                ..Default::default()
-            },
-        );
-        let err = root.root().semantic().err().unwrap();
-        assert_eq!(err.message, "semantic analysis is unsupported");
+    fn disabled_semantic_seam_yields_none() {
         assert!(parse("x").root().semantic().unwrap().is_none());
     }
 

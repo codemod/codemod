@@ -89,7 +89,6 @@ function spawnChild(options: HostSpawnOptions): HostChild {
 
 export function createNodeHost(): Host {
   return {
-    name: "node",
     fs: {
       readText(file, options) {
         if (!options?.fatal) return readFileSync(file, "utf8");

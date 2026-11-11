@@ -6,13 +6,8 @@
  * functions on the wire. The Rust serde structs mirror these shapes exactly;
  * `fixtures/protocol/*.json` are the shared conformance fixtures.
  */
-import {
-  isAssessmentEntry,
-  isAssessmentQuestions,
-  type AssessmentQuestions,
-  type AssessmentState,
-} from "./assessment.ts";
-import { DECISION_PROVIDERS, type DecisionProvider } from "./decision.ts";
+import type { AssessmentQuestions, AssessmentState } from "./assessment.ts";
+import type { DecisionProvider } from "./decision.ts";
 import type { Json } from "./json.ts";
 import { isSafeRelativePath } from "./paths.ts";
 
@@ -298,23 +293,11 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isStringMap(value: unknown): value is Record<string, string> {
-  return isRecord(value) && Object.values(value).every((v) => typeof v === "string");
-}
-
 export function isJson(value: unknown): value is Json {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;
   if (typeof value === "number") return Number.isFinite(value);
   if (Array.isArray(value)) return value.every(isJson);
   return isRecord(value) && Object.values(value).every(isJson);
-}
-
-function isStringList(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((v) => typeof v === "string");
-}
-
-function isNonEmptyStringList(value: unknown): value is string[] {
-  return isStringList(value) && value.length > 0 && value.every((item) => item.trim() !== "");
 }
 
 function isNonBlank(value: unknown): value is string {
@@ -323,57 +306,6 @@ function isNonBlank(value: unknown): value is string {
 
 export function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
-}
-
-/**
- * Field sets per operation kind. Validation is strict: a field from another
- * variant, most importantly a `target` on `shell`, `agent`, or `assessment`, makes the operation
- * invalid rather than being ignored. Mirrors `deny_unknown_fields` in the Rust crates.
- */
-const OPERATION_FIELDS = {
-  shell: ["kind", "command", "env"],
-  jssg: [
-    "kind",
-    "transform",
-    "language",
-    "include",
-    "exclude",
-    "semanticAnalysis",
-    "selector",
-    "target",
-    "input",
-    "onFileError",
-  ],
-  agent: ["kind", "prompt", "input", "backend", "responseFormat"],
-  assessment: ["kind", "state", "questions", "provider", "model"],
-} as const satisfies Record<Operation["kind"], readonly string[]>;
-
-/**
- * Wire shape plus the path rule Rust also enforces (`root` is a safe
- * relative path). Normalization and non-empty lists live in `authoring/target.ts`.
- */
-export function isTarget(value: unknown): value is Target {
-  return (
-    isRecord(value) &&
-    hasOnlyKeys(value, ["root", "include", "exclude"]) &&
-    (value.root === undefined ||
-      (typeof value.root === "string" && isSafeRelativePath(value.root))) &&
-    (value.include === undefined || isStringList(value.include)) &&
-    (value.exclude === undefined || isStringList(value.exclude))
-  );
-}
-
-export function isSemanticAnalysis(value: unknown): value is SemanticAnalysis {
-  if (value === "file" || value === "workspace") return true;
-  return (
-    isRecord(value) &&
-    hasOnlyKeys(value, ["mode", "root"]) &&
-    (value.mode === "file" || value.mode === "workspace") &&
-    (value.root === undefined ||
-      (value.mode === "workspace" &&
-        typeof value.root === "string" &&
-        isSafeRelativePath(value.root)))
-  );
 }
 
 /** A non-empty name and a lowercase hex SHA-256; `orchestration::jssg_batch` checks the same. */
@@ -399,29 +331,6 @@ export function isSelector(value: unknown): value is Selector {
     Object.keys(value.rule).length > 0 &&
     (value.constraints === undefined || isJsonRecord(value.constraints)) &&
     (value.utils === undefined || isJsonRecord(value.utils))
-  );
-}
-
-function isBatchFile(value: unknown): value is BatchFile {
-  return (
-    isRecord(value) &&
-    hasOnlyKeys(value, ["path", "content"]) &&
-    typeof value.path === "string" &&
-    isSafeRelativePath(value.path) &&
-    typeof value.content === "string"
-  );
-}
-
-function isRequestContext(value: unknown): value is RequestContext {
-  return (
-    isRecord(value) &&
-    hasOnlyKeys(value, ["targetRoot", "files", "artifact"]) &&
-    (value.targetRoot === undefined || isNonBlank(value.targetRoot)) &&
-    (value.files === undefined || (Array.isArray(value.files) && value.files.every(isBatchFile))) &&
-    (value.artifact === undefined ||
-      (isRecord(value.artifact) &&
-        hasOnlyKeys(value.artifact, ["source"]) &&
-        typeof value.artifact.source === "string"))
   );
 }
 
@@ -514,68 +423,8 @@ export function agentBackendProblem(value: unknown): string | undefined {
   }
 }
 
-export function isAgentBackend(value: unknown): value is AgentBackend {
-  return agentBackendProblem(value) === undefined;
-}
-
 export function isMaxSteps(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1;
-}
-
-export function isOperation(value: unknown): value is Operation {
-  if (!isRecord(value)) return false;
-  switch (value.kind) {
-    case "shell":
-      return (
-        hasOnlyKeys(value, OPERATION_FIELDS.shell) &&
-        typeof value.command === "string" &&
-        (value.env === undefined || isStringMap(value.env))
-      );
-    case "jssg":
-      return (
-        hasOnlyKeys(value, OPERATION_FIELDS.jssg) &&
-        isArtifactRef(value.transform) &&
-        isNonBlank(value.language) &&
-        (value.include === undefined || isNonEmptyStringList(value.include)) &&
-        (value.exclude === undefined || isNonEmptyStringList(value.exclude)) &&
-        (value.semanticAnalysis === undefined || isSemanticAnalysis(value.semanticAnalysis)) &&
-        (value.selector === undefined || isSelector(value.selector)) &&
-        (value.target === undefined || isTarget(value.target)) &&
-        (value.input === undefined || isJson(value.input)) &&
-        (value.onFileError === undefined ||
-          value.onFileError === "skip" ||
-          value.onFileError === "fail")
-      );
-    case "agent":
-      return (
-        hasOnlyKeys(value, OPERATION_FIELDS.agent) &&
-        typeof value.prompt === "string" &&
-        (value.input === undefined || isJson(value.input)) &&
-        isAgentBackend(value.backend) &&
-        (value.responseFormat === undefined || value.responseFormat === "json")
-      );
-    case "assessment":
-      return (
-        hasOnlyKeys(value, OPERATION_FIELDS.assessment) &&
-        isAssessmentEntry(value.state) &&
-        isAssessmentQuestions(value.questions) &&
-        (DECISION_PROVIDERS as readonly unknown[]).includes(value.provider) &&
-        isNonBlank(value.model)
-      );
-    default:
-      return false;
-  }
-}
-
-export function isOperationRequest(value: unknown): value is OperationRequest {
-  return (
-    isRecord(value) &&
-    hasOnlyKeys(value, ["protocolVersion", "commandId", "operation", "context"]) &&
-    value.protocolVersion === PROTOCOL_VERSION &&
-    typeof value.commandId === "string" &&
-    isOperation(value.operation) &&
-    (value.context === undefined || isRequestContext(value.context))
-  );
 }
 
 export function isOperationCompletion(value: unknown): value is OperationCompletion {

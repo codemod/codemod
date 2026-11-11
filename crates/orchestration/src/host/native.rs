@@ -482,8 +482,8 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: Rc<HostState>) -> rquickjs::Result<()
     Ok(())
 }
 
-/// Kill a spawned child's whole process tree, as the Node host does
-/// (`execution/process-tree.ts::killProcessTree`): the child leads its own
+/// Kill a spawned child's whole process tree, as the specs' Node host does
+/// (`tests/support/process-tree.ts::killProcessTree`): the child leads its own
 /// process group; descendants that left the group (an agent's `bash`
 /// session, `setsid` daemons) are found through one `ps` snapshot taken while
 /// the group is stopped, so nothing forks past it. Best effort.

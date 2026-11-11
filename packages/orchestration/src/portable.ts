@@ -1,14 +1,13 @@
 /**
- * `@codemod.com/orchestration/portable`: everything that runs without Node.
- * Authoring, static composition, `run()` with replay/history/scheduling, the
- * `Host` seam, and the portable JSSG + shell execution path. Nothing reachable from this entry imports `node:*` or
- * touches `process` (`tests/portable.test.ts`), so a QuickJS workflow bundle
- * can alias `@codemod.com/orchestration` to it. A host must be installed
+ * `@codemod.com/orchestration/portable`: authoring, static composition,
+ * `run()` with replay/history/scheduling, the `Host` seam, and the JSSG and
+ * shell execution path. Nothing reachable from this entry imports `node:*` or
+ * touches `process` (`tests/portable.test.ts`), so the QuickJS workflow bundle
+ * aliases `@codemod.com/orchestration` to it. A host must be installed
  * (`setHost` or `globalThis[HOST_GLOBAL]`) before the first run.
  *
- * The Node entry (`src/index.ts`) re-exports all of this, installs the Node
- * host, and adds the Node-only pieces: the build step, the runtime registry
- * and providers, and the agent and assessment executors.
+ * `src/index.ts` re-exports all of this and adds the agent and assessment
+ * executors.
  */
 export {
   agent,
@@ -50,7 +49,6 @@ export type { Command, Invocation, JssgInvocation } from "./authoring/command.ts
 export { NoActiveRunError } from "./authoring/context.ts";
 export { normalizeTarget } from "./authoring/target.ts";
 export {
-  executableIr,
   executableRequiresInput,
   isExecutable,
   isParallel,
@@ -84,7 +82,6 @@ export {
   RESERVED_KEYS,
   assessmentResultProblem,
   getAssessmentAsk,
-  isAssessmentQuestions,
   questionsProblem,
   setAssessmentAsk,
 } from "./core/assessment.ts";
@@ -122,15 +119,11 @@ export {
   DEFAULT_CODEX_SANDBOX,
   PROTOCOL_VERSION,
   agentBackendProblem,
-  isAgentBackend,
   isArtifactRef,
   isFileOutcomes,
   isJson,
-  isOperation,
   isOperationCompletion,
-  isOperationRequest,
   isSelector,
-  isTarget,
   parseCompletion,
 } from "./core/protocol.ts";
 export type {
@@ -191,7 +184,7 @@ export {
 export type { Selection } from "./execution/files.ts";
 export { executeJssgCommand } from "./execution/jssg.ts";
 export type { JssgCommandOptions, JssgDispatch } from "./execution/jssg.ts";
-export { createJssgBatchDispatch, describeError } from "./execution/jssg-batch.ts";
+export { createJssgBatchDispatch } from "./execution/jssg-batch.ts";
 export type {
   JssgBatch,
   JssgBatchConfig,

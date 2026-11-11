@@ -188,25 +188,6 @@ export function executableRequiresInput(executable: Executable): boolean {
   return stageRequiresInput(executable);
 }
 
-/**
- * The static topology of anything `run()` accepts, as plain data: a bare
- * runnable is one operation node, a dynamic root stays opaque, and static
- * nodes expose their IR. Commands issued at runtime that this tree does not
- * name (everything inside `dynamic()`) are visible only through run events.
- */
-export function executableIr(executable: Executable): CompositionIrNode {
-  if (isRunnable(executable)) {
-    return {
-      type: "operation",
-      id: executable.name,
-      name: executable.name,
-      kind: executable.kind,
-      input: executable.input === undefined ? "none" : "flow",
-    };
-  }
-  return irOf(executable);
-}
-
 export async function runStage(
   runtime: Runtime,
   stage: Executable,

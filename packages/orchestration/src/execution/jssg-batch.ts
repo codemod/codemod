@@ -99,7 +99,7 @@ export interface JssgBatch<Root = unknown, Ran = unknown> {
 /** One file of a `transformRange`: its outcome, or the `JSSG failed for '<path>': ...` message. */
 export type RangeResult = { outcome: FileOutcome } | { error: string };
 
-/** What a runtime provides to run JSSG batches in-process. */
+/** What the host provides to run JSSG batches in-process. */
 export interface JssgBatchEngine<Root = unknown, Ran = unknown> {
   /** Plan a batch; throws with the planning error (nothing has run). */
   open(config: JssgBatchConfig, paths: string[]): JssgBatch<Root, Ran>;
@@ -111,20 +111,14 @@ export interface JssgBatchEngine<Root = unknown, Ran = unknown> {
 
 export interface JssgBatchDispatchOptions {
   engine: JssgBatchEngine<any, any>;
-  /** Files parsed per `parse` call; the next chunk is requested before this one transforms. Default 64. */
-  chunkSize?: number;
 }
 
-/** `Name: message` (what the sandbox's error shows for a thrown `Error`). */
-export function describeError(error: unknown): string {
-  if (error instanceof Error) return `${error.name}: ${error.message}`;
-  return String(error);
-}
+/** Files parsed per `parse` call; the next chunk is requested before this one transforms. */
+const CHUNK_SIZE = 64;
 
 /** A `JssgDispatch` running transforms in this realm; create one per run. */
 export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): JssgDispatch {
   const { engine } = options;
-  const chunkSize = Math.max(1, options.chunkSize ?? 64);
   const modules = new Map<string, Promise<unknown>>();
   const load = (artifact: TransformArtifact, module: string) => {
     let loaded = modules.get(artifact.hash);
@@ -183,11 +177,11 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
     let pending: Promise<unknown[]> | undefined;
     try {
       if (batch.indexesWorkspace) {
-        for (let start = 0; start < files.length; start += chunkSize) {
+        for (let start = 0; start < files.length; start += CHUNK_SIZE) {
           if (signal?.aborted) return failed("cancelled");
           await batch.index(
             start,
-            files.slice(start, start + chunkSize).map((file) => file.content),
+            files.slice(start, start + CHUNK_SIZE).map((file) => file.content),
           );
         }
       }
@@ -196,7 +190,7 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
         // Small chunks keep every worker busy until the end of the batch.
         const size = Math.max(
           1,
-          Math.min(chunkSize, Math.ceil(files.length / ((batch.parallelism ?? 1) * 4))),
+          Math.min(CHUNK_SIZE, Math.ceil(files.length / ((batch.parallelism ?? 1) * 4))),
         );
         const ranges: Promise<RangeResult[]>[] = [];
         for (let start = 0; start < files.length; start += size) {
@@ -219,13 +213,13 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
       const parse = (start: number) =>
         batch.parse(
           start,
-          files.slice(start, start + chunkSize).map((file) => file.content),
+          files.slice(start, start + CHUNK_SIZE).map((file) => file.content),
         );
       pending = files.length > 0 ? parse(0) : undefined;
-      for (let start = 0; pending !== undefined; start += chunkSize) {
+      for (let start = 0; pending !== undefined; start += CHUNK_SIZE) {
         const roots = await pending;
         // Parse the next chunk (off-thread, where the engine can) while this one transforms.
-        pending = start + chunkSize < files.length ? parse(start + chunkSize) : undefined;
+        pending = start + CHUNK_SIZE < files.length ? parse(start + CHUNK_SIZE) : undefined;
         for (const [offset, root] of roots.entries()) {
           if (signal?.aborted) return failed("cancelled");
           const index = start + offset;

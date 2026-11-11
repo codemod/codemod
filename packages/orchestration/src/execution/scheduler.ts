@@ -18,11 +18,6 @@
  * JSSG selection and file reading happen (`jssg.ts`), so a queued command
  * retains only its `OperationRequest`: operation metadata, never a repository
  * snapshot.
- *
- * Pause is an admission pause, the one operator control: `pause()` stops
- * admitting from the queue while every admitted operation runs to completion,
- * and `resume()` pumps the queue again. Nothing in flight is interrupted, so a
- * pause never produces a `cancelled` or `unknown` completion by itself.
  */
 import { nullSink, type EventSink } from "../core/events.ts";
 import { getHost } from "../core/host.ts";
@@ -90,19 +85,9 @@ const WORKSPACE_FOOTPRINT_BYTES = 512 * 1024 * 1024;
 export interface SchedulerOptions {
   /** Total capacity in weight units. Defaults to `defaultCapacity()`. */
   capacity?: number;
-  weights?: Partial<OperationWeights>;
-  /** Defaults to the installed host's facts (`installedHostFacts`). */
-  host?: SchedulerHost;
-  /** Defaults to the installed host's environment. */
-  env?: Readonly<Record<string, string | undefined>>;
-  /**
-   * Receives `scheduler.paused` / `scheduler.resumed`. Per-command scheduling
-   * events go to the sink of the run that asked for the permit instead.
-   */
-  events?: EventSink;
 }
 
-/** What the scheduler is doing right now; a deterministic hook for tests and benchmarks. */
+/** What the scheduler is doing right now; a deterministic hook for tests. */
 export interface SchedulerStats {
   capacity: number;
   /** Weight currently held by admitted operations. */
@@ -114,8 +99,6 @@ export interface SchedulerStats {
   peakActive: number;
   /** Highest `used` reached during this run. */
   peakUsed: number;
-  /** Admission is paused; `active` operations still run to completion. */
-  paused: boolean;
 }
 
 export interface Permit {
@@ -182,22 +165,18 @@ interface Waiter {
  */
 export class AdmissionScheduler {
   readonly capacity: number;
-  readonly weights: OperationWeights;
-  readonly #events: EventSink;
+  readonly weights: OperationWeights = DEFAULT_WEIGHTS;
   readonly #queue: Waiter[] = [];
   #used = 0;
   #active = 0;
   #peakActive = 0;
   #peakUsed = 0;
-  #paused = false;
 
   constructor(options: SchedulerOptions = {}) {
-    this.weights = { ...DEFAULT_WEIGHTS, ...options.weights };
-    this.capacity = options.capacity ?? defaultCapacity(this.weights, options.host, options.env);
+    this.capacity = options.capacity ?? defaultCapacity(this.weights);
     if (!Number.isInteger(this.capacity) || this.capacity < 1) {
       throw new Error(`scheduler capacity must be a positive integer, got ${this.capacity}`);
     }
-    this.#events = options.events ?? nullSink;
   }
 
   stats(): SchedulerStats {
@@ -208,35 +187,7 @@ export class AdmissionScheduler {
       queued: this.#queue.length,
       peakActive: this.#peakActive,
       peakUsed: this.#peakUsed,
-      paused: this.#paused,
     };
-  }
-
-  get paused(): boolean {
-    return this.#paused;
-  }
-
-  /** Stop admitting. Idempotent; admitted operations are not touched. */
-  pause(): void {
-    if (this.#paused) return;
-    this.#paused = true;
-    this.#events.emit({
-      type: "scheduler.paused",
-      queued: this.#queue.length,
-      active: this.#active,
-    });
-  }
-
-  /** Admit again from the head of the queue. Idempotent. */
-  resume(): void {
-    if (!this.#paused) return;
-    this.#paused = false;
-    this.#events.emit({
-      type: "scheduler.resumed",
-      queued: this.#queue.length,
-      active: this.#active,
-    });
-    this.#pump();
   }
 
   weightFor(operation: Operation): number {
@@ -259,7 +210,7 @@ export class AdmissionScheduler {
   ): Promise<Permit | undefined> {
     const cost = this.#cost(weight);
     if (signal?.aborted) return Promise.resolve(undefined);
-    if (!this.#paused && this.#queue.length === 0 && this.#used + cost <= this.capacity) {
+    if (this.#queue.length === 0 && this.#used + cost <= this.capacity) {
       return Promise.resolve(this.#admit(commandId, cost, events));
     }
     events.emit({ type: "scheduler.queued", commandId, weight: cost });
@@ -326,11 +277,7 @@ export class AdmissionScheduler {
 
   /** Admit from the head only, so a heavy operation is never overtaken forever. */
   #pump(): void {
-    while (
-      !this.#paused &&
-      this.#queue.length > 0 &&
-      this.#used + this.#queue[0]!.weight <= this.capacity
-    ) {
+    while (this.#queue.length > 0 && this.#used + this.#queue[0]!.weight <= this.capacity) {
       const waiter = this.#queue.shift()!;
       waiter.settle(this.#admit(waiter.commandId, waiter.weight, waiter.events));
     }

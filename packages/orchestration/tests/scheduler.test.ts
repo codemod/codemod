@@ -97,15 +97,13 @@ const workspaceJssg = jssg({
 async function start(
   body: Executable,
   capacity: number,
-  options: { signal?: AbortSignal; history?: MemoryHistoryStore; paused?: boolean } = {},
+  options: { signal?: AbortSignal; history?: MemoryHistoryStore } = {},
 ) {
   const events: RunEvent[] = [];
   const sink = { emit: (event: RunEvent) => events.push(event) };
-  const scheduler = new AdmissionScheduler({ capacity, events: sink });
-  const { paused, ...runOptions } = options;
-  if (paused) scheduler.pause();
+  const scheduler = new AdmissionScheduler({ capacity });
   const control = controllable();
-  const result = run(body, { ...runOptions, executor: control.executor, scheduler, events: sink });
+  const result = run(body, { ...options, executor: control.executor, scheduler, events: sink });
   const outcome = result.then(
     (value) => value,
     (error: unknown) => error,
@@ -359,86 +357,6 @@ describe("cancellation", () => {
     it("admits and starts nothing", async () => {
       const { started, scheduler } = await alreadyAborted();
       expect({ started, ...scheduler.stats() }).toMatchObject({ started: [], peakActive: 0 });
-    });
-  });
-});
-
-describe("pause and resume", () => {
-  it("admits nothing while paused, even with capacity free", async () => {
-    const { started, scheduler } = await start(group(3), 3, { paused: true });
-    expect({ started, ...scheduler.stats() }).toMatchObject({
-      started: [],
-      paused: true,
-      queued: 3,
-      used: 0,
-    });
-  });
-
-  it("admits the held commands in declaration order on resume", async () => {
-    const { started, scheduler } = await start(group(3), 3, { paused: true });
-    scheduler.resume();
-    await settle();
-    expect({ started, ...scheduler.stats() }).toMatchObject({
-      started: ids(3),
-      paused: false,
-      queued: 0,
-    });
-  });
-
-  it("reports the queue and active counts when it pauses and resumes", async () => {
-    const { scheduler, events } = await start(group(3), 3, { paused: true });
-    scheduler.resume();
-    expect([
-      events.find((e) => e.type === "scheduler.paused"),
-      events.find((e) => e.type === "scheduler.resumed"),
-    ]).toEqual([
-      { type: "scheduler.paused", queued: 0, active: 0 },
-      { type: "scheduler.resumed", queued: 3, active: 0 },
-    ]);
-  });
-
-  it("returns a finished command's permit without admitting the next one", async () => {
-    const { started, finish, scheduler } = await start(group(2), 1);
-    scheduler.pause();
-    finish("s0");
-    await settle();
-    expect({ started, ...scheduler.stats() }).toMatchObject({
-      started: ["s0"],
-      used: 0,
-      active: 0,
-      queued: 1,
-    });
-  });
-
-  it("reports only actual changes between paused and running", () => {
-    const events: RunEvent[] = [];
-    const scheduler = new AdmissionScheduler({
-      capacity: 1,
-      events: { emit: (e) => events.push(e) },
-    });
-    scheduler.pause();
-    scheduler.pause();
-    scheduler.resume();
-    scheduler.resume();
-    scheduler.pause();
-    expect(events.map((event) => event.type)).toEqual([
-      "scheduler.paused",
-      "scheduler.resumed",
-      "scheduler.paused",
-    ]);
-  });
-
-  it("still refuses a queued command that is aborted while paused", async () => {
-    const controller = new AbortController();
-    const { started, scheduler } = await start(group(2), 1, { signal: controller.signal });
-    scheduler.pause();
-    controller.abort();
-    await settle();
-    expect({ started, ...scheduler.stats() }).toMatchObject({
-      started: ["s0"],
-      paused: true,
-      queued: 0,
-      active: 1,
     });
   });
 });

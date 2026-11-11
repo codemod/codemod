@@ -5,13 +5,10 @@ import {
   PROTOCOL_VERSION,
   shell,
   isFileOutcomes,
-  isOperation,
   isOperationCompletion,
-  isOperationRequest,
   isSelector,
   parseCompletion,
 } from "../src/index.ts";
-import { ref } from "./helpers.ts";
 
 const dir = join(import.meta.dirname, "..", "fixtures", "protocol");
 const text = (name: string) => readFileSync(join(dir, name), "utf8");
@@ -19,11 +16,6 @@ const fixture = (name: string) => JSON.parse(text(name)) as unknown;
 const fixtures = (suffix: string) => readdirSync(dir).filter((name) => name.endsWith(suffix));
 
 describe("protocol fixtures shared with crates/orchestration-agent", () => {
-  it.each(fixtures("-request.json"))("accepts %s at the current protocol version", (name) => {
-    const value = fixture(name) as { protocolVersion: number };
-    expect([isOperationRequest(value), value.protocolVersion]).toEqual([true, PROTOCOL_VERSION]);
-  });
-
   it.each(fixtures("-completion.json"))("accepts and round-trips %s", (name) => {
     expect([isOperationCompletion(fixture(name)), parseCompletion(text(name))]).toEqual([
       true,
@@ -46,80 +38,7 @@ describe("protocol fixtures shared with crates/orchestration-agent", () => {
   });
 });
 
-describe("operation requests", () => {
-  const base = fixture("jssg-request.json") as Record<string, unknown>;
-  const withContext = (context: unknown) => ({ ...base, context });
-
-  it.each<[string, unknown]>([
-    ["a target root context", withContext({ targetRoot: "/r" })],
-    ["an empty context", withContext({})],
-    [
-      "a batch of safe relative files and the artifact source",
-      withContext({ files: [{ path: "src/a.ts", content: "" }], artifact: { source: "" } }),
-    ],
-  ])("accepts a request with %s", (_name, value) => {
-    expect(isOperationRequest(value)).toBe(true);
-  });
-
-  it.each<[string, unknown]>([
-    ["a blank target root", withContext({ targetRoot: " " })],
-    ["the removed script root", withContext({ scriptRoot: "/w" })],
-    ["an artifact with extra fields", withContext({ artifact: { source: "", hash: "h" } })],
-    ["an artifact without source", withContext({ artifact: {} })],
-    ["an unknown context field", withContext({ cwd: "/tmp" })],
-    ["a non-object context", withContext("/tmp")],
-    ["a context field on the envelope", { ...base, targetRoot: "/tmp" }],
-    ["an absolute batch path", withContext({ files: [{ path: "/a.ts", content: "" }] })],
-    [
-      "an unknown batch file field",
-      withContext({ files: [{ path: "a.ts", content: "", mode: 1 }] }),
-    ],
-  ])("rejects a request with %s", (_name, value) => {
-    expect(isOperationRequest(value)).toBe(false);
-  });
-});
-
-describe("operations", () => {
-  const jssg = { kind: "jssg", transform: ref("x"), language: "typescript" };
-  const hash = "a".repeat(64);
-
-  it.each<[string, unknown]>([
-    ["a jssg operation with a transform reference", jssg],
-    ["a target root with '..' inside a name", { ...jssg, target: { root: "apps/a..b" } }],
-    ["file-mode semantic analysis", { ...jssg, semanticAnalysis: { mode: "file" } }],
-  ])("accepts %s", (_name, value) => {
-    expect(isOperation(value)).toBe(true);
-  });
-
-  it.each<[string, unknown]>([
-    ["no transform", { ...jssg, transform: undefined }],
-    ["a transform path instead of a reference", { ...jssg, transform: "scripts/x.ts" }],
-    ["a transform without a hash", { ...jssg, transform: { name: "x" } }],
-    ["a transform with an empty name", { ...jssg, transform: { name: "", hash } }],
-    ["a transform hash of 63 digits", { ...jssg, transform: { name: "x", hash: "a".repeat(63) } }],
-    ["an uppercase transform hash", { ...jssg, transform: { name: "x", hash: "A".repeat(64) } }],
-    ["a transform carrying its source", { ...jssg, transform: { name: "x", hash, source: "" } }],
-    ["the removed script field", { ...jssg, script: "scripts/x.ts" }],
-    [
-      "a root on file-mode semantic analysis",
-      { ...jssg, semanticAnalysis: { mode: "file", root: "src" } },
-    ],
-    ["the removed exec kind", { kind: "exec", command: "true" }],
-    ["a target on a shell operation", { kind: "shell", command: "true", target: { root: "a" } }],
-  ])("rejects an operation with %s", (_name, value) => {
-    expect(isOperation(value)).toBe(false);
-  });
-
-  it.each(["/abs/x.ts", "\\\\server\\x.ts", "C:\\x.ts", "c:/x.ts", "../x.ts", " "])(
-    "rejects %j as a target root or a workspace analysis root",
-    (root) => {
-      expect([
-        isOperation({ ...jssg, target: { root } }),
-        isOperation({ ...jssg, semanticAnalysis: { mode: "workspace", root } }),
-      ]).toEqual([false, false]);
-    },
-  );
-
+describe("selectors", () => {
   it.each<[string, unknown]>([
     ["a rule", { rule: { pattern: "a($B)" } }],
     [
@@ -130,8 +49,8 @@ describe("operations", () => {
         utils: { u: { kind: "call" } },
       },
     ],
-  ])("accepts a selector with %s, alone and on a jssg operation", (_name, selector) => {
-    expect([isSelector(selector), isOperation({ ...jssg, selector })]).toEqual([true, true]);
+  ])("accepts a selector with %s", (_name, selector) => {
+    expect(isSelector(selector)).toBe(true);
   });
 
   it.each<[string, unknown]>([
@@ -143,8 +62,8 @@ describe("operations", () => {
     ["a fix", { rule: { pattern: "a" }, fix: "b" }],
     ["non-JSON data", { rule: { pattern: "a", when: () => true } }],
     ["a non-object", "a($B)"],
-  ])("rejects a selector with %s, alone and on a jssg operation", (_name, selector) => {
-    expect([isSelector(selector), isOperation({ ...jssg, selector })]).toEqual([false, false]);
+  ])("rejects a selector with %s", (_name, selector) => {
+    expect(isSelector(selector)).toBe(false);
   });
 });
 

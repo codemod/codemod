@@ -11,7 +11,7 @@
  * which is also what the engine's override globs use, plus brace alternation
  * (globset has it, gitignore does not) expanded up front.
  * `fixtures/walker/cases.json` pins parity with the engine;
- * `tests/files.test.ts` and `crates/orchestration/src/jssg_batch.rs/tests/contracts.rs` run
+ * `tests/files.test.ts` and `crates/orchestration/tests/jssg_batch_contracts.rs` run
  * the two sides. Every filesystem and path operation goes through the `Host`
  * (`core/host.ts`).
  */

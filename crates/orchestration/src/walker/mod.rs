@@ -1,4 +1,4 @@
-//! Native file selection for the TypeScript orchestration runtimes.
+//! Native file selection for the TypeScript orchestration runtime.
 //!
 //! [`select`] is `walk()` of `packages/orchestration/src/execution/files.ts`
 //! in Rust, and [`read_sources`] is `readSource` of

@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::jssg_batch::{BatchConfig, BatchPlan, Containment};
+use crate::jssg_batch::{BatchConfig, BatchPlan};
 use codemod_sandbox::sandbox::engine::embedded::{
     begin_call, core_root, end_call, root_value, transform_output,
 };
@@ -75,12 +75,9 @@ pub fn install<'js>(
                     let config: BatchConfig = serde_json::from_str(&config).map_err(|error| {
                         throw(&ctx, None, &format!("invalid JSSG batch: {error}"))
                     })?;
-                    let plan = BatchPlan::for_paths(
-                        &config.batch(),
-                        paths.iter().map(String::as_str),
-                        Containment::PerFile,
-                    )
-                    .map_err(|error| throw(&ctx, None, &error))?;
+                    let plan =
+                        BatchPlan::for_paths(&config.batch(), paths.iter().map(String::as_str))
+                            .map_err(|error| throw(&ctx, None, &error))?;
                     let id = state.next_id();
                     let module = plan.module.clone();
                     let indexes_workspace = plan.indexes_workspace();

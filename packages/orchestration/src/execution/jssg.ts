@@ -7,7 +7,7 @@
  *    invocation target, engine walker semantics), reading every file;
  * 3. hand the artifact source and the whole batch to `dispatch`, which
  *    returns one `FileOutcome` per file (snapshot semantics: no transform
- *    sees another's edits). The runtimes dispatch to the shared batch loop
+ *    sees another's edits). The host dispatches to the shared batch loop
  *    (`jssg-batch.ts`), which verifies the hash, indexes the batch for
  *    workspace semantics, skips files the static selector does not match,
  *    and transforms the rest;

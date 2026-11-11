@@ -8,7 +8,6 @@ import {
   canonicalJson,
   shell,
   guard,
-  isOperation,
   jssg,
   normalizeTarget,
   parallel,
@@ -346,78 +345,5 @@ describe("targets in dynamic workflows and replay", () => {
       dynamic(() => renameApi({ target: { root: "./apps/web/" } })),
     );
     expect(replay.replayed).toBe(true);
-  });
-});
-
-describe("protocol validation of operations", () => {
-  const jssgOp = { kind: "jssg", transform: ref("x"), language: "typescript" };
-  const shellOp = { kind: "shell", command: "x" };
-  const agentOp = { kind: "agent", prompt: "p", backend: { kind: "builtin", tools: [] } };
-  const assessmentOp = {
-    kind: "assessment",
-    state: "s",
-    questions: { ok: { type: "yesno", instructions: "ok?" } },
-    provider: "systemone",
-    model: "jev-latest",
-  };
-
-  it.each<[string, object]>([
-    [
-      "jssg include, exclude, and workspace semantic analysis",
-      {
-        ...jssgOp,
-        include: ["**/*.ts"],
-        exclude: ["**/*.d.ts"],
-        semanticAnalysis: { mode: "workspace", root: "src" },
-      },
-    ],
-    ["a jssg target with a root", { ...jssgOp, target: { root: "a" } }],
-    [
-      "a jssg target with include and exclude",
-      { ...jssgOp, target: { include: ["a"], exclude: ["b"] } },
-    ],
-    ["an empty jssg target", { ...jssgOp, target: {} }],
-    ["a shell operation", shellOp],
-    ["an agent operation", agentOp],
-    ["an assessment operation", assessmentOp],
-  ])("accepts %s", (_label, operation) => {
-    expect(isOperation(operation)).toBe(true);
-  });
-
-  it.each<[string, object]>([
-    ["a jssg include that is not a list", { ...jssgOp, include: "**/*.ts" }],
-    ["an empty jssg include list", { ...jssgOp, include: [] }],
-    ["a blank jssg exclude pattern", { ...jssgOp, exclude: [""] }],
-    ["semantic analysis given as a string", { ...jssgOp, semanticAnalysis: "repository" }],
-    [
-      "file-mode semantic analysis with a root",
-      { ...jssgOp, semanticAnalysis: { mode: "file", root: "src" } },
-    ],
-    [
-      "an unknown semantic analysis field",
-      { ...jssgOp, semanticAnalysis: { mode: "workspace", threads: 4 } },
-    ],
-    ["a jssg target that is a string", { ...jssgOp, target: "apps/web" }],
-    ["a jssg target root that is not a string", { ...jssgOp, target: { root: 1 } }],
-    ["a jssg target include that is not a list", { ...jssgOp, target: { include: "src/**" } }],
-    ["a null jssg target exclude pattern", { ...jssgOp, target: { exclude: [null] } }],
-    ["an unknown jssg target field", { ...jssgOp, target: { root: "a", files: ["a.ts"] } }],
-    ["a package field on a shell operation", { ...shellOp, package: "p" }],
-    [
-      "package and command fields on a jssg operation",
-      { kind: "jssg", package: "p", command: "x" },
-    ],
-    ["an env field on an agent operation", { ...agentOp, env: {} }],
-    ["an unknown operation kind", { kind: "ai", prompt: "p" }],
-  ])("rejects %s", (_label, operation) => {
-    expect(isOperation(operation)).toBe(false);
-  });
-
-  it.each<[string, object]>([
-    ["a shell", shellOp],
-    ["an agent", agentOp],
-    ["an assessment", assessmentOp],
-  ])("rejects a target, even an empty one, on %s operation", (_kind, operation) => {
-    expect([web, {}].some((target) => isOperation({ ...operation, target }))).toBe(false);
   });
 });

@@ -2,7 +2,7 @@
  * Runtime and lifecycle for arbitrary workflows and static composition. The
  * runtime for the current run is bound to async continuations (see
  * `authoring/context.ts`). Determinism is NOT enforced by a
- * sandbox in this prototype: it is validated after the fact by replaying
+ * sandbox: it is validated after the fact by replaying
  * history and comparing issued commands (see README).
  */
 import { operationOf, type Command } from "../authoring/command.ts";
@@ -75,7 +75,7 @@ export async function run<T extends Executable>(
   // command never takes a permit.
   const executor = new SchedulingExecutor(
     options.executor,
-    options.scheduler ?? new AdmissionScheduler({ events }),
+    options.scheduler ?? new AdmissionScheduler(),
     events,
   );
   const gate = new ReplayGate(await store.load(), store, executor, events, options.signal);

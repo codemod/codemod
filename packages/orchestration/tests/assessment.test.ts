@@ -19,7 +19,6 @@ import {
   getHost,
   guard,
   isOperationCompletion,
-  isOperationRequest,
   parallel,
   run,
   sequence,
@@ -901,10 +900,6 @@ describe("assessment failures", () => {
 describe("protocol fixtures", () => {
   const fixture = (name: string) =>
     JSON.parse(readFileSync(join(import.meta.dirname, "../fixtures/protocol", name), "utf8"));
-
-  it("accept the assessment request", () => {
-    expect(isOperationRequest(fixture("assessment-request.json"))).toBe(true);
-  });
 
   it("accept the assessment completion", () => {
     expect(isOperationCompletion(fixture("assessment-completion.json"))).toBe(true);

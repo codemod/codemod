@@ -343,7 +343,7 @@ impl Module<'_, '_> {
 
     /// Imports used only inside extracted transforms live in the artifacts
     /// now. Keeping them would make the runner evaluate transform modules
-    /// (and their `codemod:*` imports, which only the runtimes resolve).
+    /// (and their `codemod:*` imports, which only the runtime resolves).
     fn imports_only_transforms_use(&self, extracted: &[Span]) -> Vec<Edit> {
         let scoping = self.semantic.scoping();
         let inside = |span: Span| extracted.iter().any(|range| contains(*range, span));

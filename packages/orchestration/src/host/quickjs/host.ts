@@ -49,13 +49,12 @@ function spawn(native: QuickjsNative, options: HostSpawnOptions): HostChild {
  * The QuickJS `Host`. File selection and source reads run natively in Rust
  * (`Host.selectFiles`, `Host.fs.readSources`) unless the environment sets
  * `CODEMOD_NATIVE_SELECT=0`, which walks in the interpreter instead (the
- * same result; for comparisons and benchmarks).
+ * same result; the end-to-end tests compare the two).
  */
 export function createQuickjsHost(native: QuickjsNative): Host {
   const timers = globalThis as unknown as Timers;
   const nativeSelect = native.env().CODEMOD_NATIVE_SELECT !== "0";
   return {
-    name: "quickjs",
     fs: {
       readText: (path, options) => native.readText(path, options?.fatal === true),
       writeText: (path, content, options) => native.writeText(path, content, options?.mode),

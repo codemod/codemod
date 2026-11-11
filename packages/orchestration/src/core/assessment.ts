@@ -238,10 +238,6 @@ export function questionsProblem(questions: unknown): string | undefined {
   return undefined;
 }
 
-export function isAssessmentQuestions(value: unknown): value is AssessmentQuestions {
-  return questionsProblem(value) === undefined;
-}
-
 const within = (value: unknown, min: number, max: number): value is number =>
   typeof value === "number" &&
   Number.isFinite(value) &&

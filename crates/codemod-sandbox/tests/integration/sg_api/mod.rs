@@ -4,7 +4,7 @@
 //! returns a JSON report. The expected report in `api_report.snapshot.json`
 //! was recorded from the rquickjs implementation that predates the
 //! binding-agnostic `sg_core` split, so this test pins "zero behaviour change"
-//! for the QuickJS facade. Future facades (napi) can reuse the same script.
+//! for the QuickJS facade.
 //!
 //! To re-record (only when a behaviour change is intended), run with
 //! `SG_API_SNAPSHOT_OUT=/some/path.json` and copy the file over the snapshot.
@@ -61,7 +61,6 @@ async fn sg_api_report_matches_snapshot() {
         cancellation_flag: None,
         test_mode: false,
         dry_run: false,
-        stage_writes: false,
         target_directory: &work_dir,
     };
 

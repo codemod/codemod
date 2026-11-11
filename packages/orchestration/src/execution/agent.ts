@@ -35,7 +35,7 @@ import { AGENT_SECRETS_ENV, agentLaunch, externalAgentEnvProblem } from "./agent
 
 /** The runner binary's file name. */
 export const AGENT_BINARY = "codemod-agent";
-/** Overrides where the runtimes look for the runner. */
+/** Overrides where the runtime looks for the runner. */
 export const AGENT_BIN_ENV = "CODEMOD_AGENT_BIN";
 /** Default wall-clock limit for one `claude-code` or `codex` agent step: 30 minutes. */
 export const DEFAULT_EXTERNAL_AGENT_TIMEOUT_MS = 30 * 60 * 1000;

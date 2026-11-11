@@ -30,11 +30,7 @@ export type RunEvent =
       weight: number;
       active: number;
       used: number;
-    }
-  /** Admission paused: queued commands stay queued, admitted ones run to completion. */
-  | { type: "scheduler.paused"; queued: number; active: number }
-  /** Admission resumed: the queue is pumped again in FIFO order. */
-  | { type: "scheduler.resumed"; queued: number; active: number };
+    };
 
 /** Migration seam: where engine events go (CLI, TUI, JSONL, ...). */
 export interface EventSink {

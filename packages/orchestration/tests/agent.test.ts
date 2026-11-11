@@ -27,7 +27,6 @@ import {
   dynamic,
   executeAgent,
   guard,
-  isOperation,
   run,
   sequence,
   shell,
@@ -194,43 +193,6 @@ describe("agent request serialization", () => {
     ["maxSteps outside the backend", { maxSteps: 3 }, "unknown option 'maxSteps'"],
   ])("refuses %s when the step is defined", (_name, options, message) => {
     expect(define(options)).toThrow(message);
-  });
-
-  it.each<[string, unknown]>([
-    [
-      "a builtin step with input, maxSteps and a JSON response",
-      operation({ input: { a: 1 }, backend: builtin({ maxSteps: 3 }), responseFormat: "json" }),
-    ],
-    [
-      "a claude-code step with no tools",
-      operation({ backend: { kind: "claude-code", tools: [] } }),
-    ],
-    ["a read-only codex step", operation({ backend: { kind: "codex", sandbox: "read-only" } })],
-  ])("accepts %s on the wire", (_name, value) => {
-    expect(isOperation(value)).toBe(true);
-  });
-
-  it.each<[string, unknown]>([
-    ["no backend", { kind: "agent", prompt: "p" }],
-    ["tools outside the backend", { kind: "agent", prompt: "p", tools: [] }],
-    ["an unknown builtin tool", operation({ backend: builtin({ tools: ["shell"] }) })],
-    ["a repeated builtin tool", operation({ backend: builtin({ tools: ["glob", "glob"] }) })],
-    ["zero builtin maxSteps", operation({ backend: builtin({ maxSteps: 0 }) })],
-    [
-      "claude-code maxSteps",
-      operation({ backend: { kind: "claude-code", tools: ["Read"], maxSteps: 2 } }),
-    ],
-    ["a codex backend without a sandbox", operation({ backend: { kind: "codex" } })],
-    [
-      "an unsafe codex sandbox",
-      operation({ backend: { kind: "codex", sandbox: "danger-full-access" } }),
-    ],
-    ["an XML response format", operation({ responseFormat: "xml" })],
-    ["non-JSON input", operation({ input: Number.NaN })],
-    ["a model", operation({ model: "x" })],
-    ["the removed 'ai' kind", { kind: "ai", prompt: "p" }],
-  ])("rejects %s on the wire", (_name, value) => {
-    expect(isOperation(value)).toBe(false);
   });
 });
 

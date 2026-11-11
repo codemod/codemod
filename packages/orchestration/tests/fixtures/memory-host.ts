@@ -46,7 +46,6 @@ export function createMemoryHost(cwd = "/repo"): MemoryHost {
     return node;
   };
   const host: MemoryHost = {
-    name: "memory",
     calls,
     fs: {
       readText(target, options) {

@@ -186,8 +186,6 @@ export interface AsyncContextVariable<T> {
 export type HostTimer = unknown;
 
 export interface Host {
-  /** Implementation name for diagnostics: `node`, `quickjs`, ... */
-  readonly name: string;
   readonly fs: HostFs;
   readonly path: HostPath;
   readonly os: HostOs;
@@ -212,7 +210,8 @@ export interface Host {
    * skipped), returning target-relative `/` paths sorted by `comparePaths`.
    * `files.ts` uses it when present and falls back to walking through `fs`.
    * The QuickJS host implements it in Rust (`crates/orchestration/src/walker`);
-   * `tests/files-native.test.ts` checks it against the TypeScript walker.
+   * the end-to-end tests check it against the TypeScript walker
+   * (`CODEMOD_NATIVE_SELECT=0`).
    */
   readonly selectFiles?: (request: HostSelectRequest) => string[];
 }

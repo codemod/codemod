@@ -239,10 +239,6 @@ pub struct JssgExecutionOptions<'a, R> {
     pub test_mode: bool,
     /// Whether this is a dry-run execution (passed to codemod via options.dryRun)
     pub dry_run: bool,
-    /// Route `SgRoot.write()` on semantic roots into `CodemodOutput::secondary`
-    /// instead of writing to disk. Hosts that stage and commit edits themselves
-    /// set this; the workflow engine leaves it `false`.
-    pub stage_writes: bool,
     /// The target directory the codemod is running against.
     /// Used to validate that `jssgTransform` and `rename()` only access files within this directory.
     pub target_directory: &'a Path,
@@ -503,7 +499,7 @@ where
             },
         })?;
 
-        ctx.store_userdata(StageFileWrites(options.stage_writes)).map_err(|e| ExecutionError::Runtime {
+        ctx.store_userdata(StageFileWrites(false)).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store StageFileWrites: {:?}", e),
             },
@@ -1224,7 +1220,6 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1299,7 +1294,6 @@ export default async function transform() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1370,7 +1364,6 @@ export default async function transform() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1446,7 +1439,6 @@ export default function transform(root, options) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: true,
-            stage_writes: false,
             target_directory: &target_dir,
         };
 
@@ -1517,7 +1509,6 @@ export default function transform() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: true,
-            stage_writes: false,
             target_directory: temp_dir.path(),
         };
 
@@ -1562,7 +1553,6 @@ export default function transform(root, options) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: &target_dir,
         };
 
@@ -1626,7 +1616,6 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1680,7 +1669,6 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1734,7 +1722,6 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1780,7 +1767,6 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -1824,7 +1810,6 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory,
         }
     }
@@ -1937,7 +1922,6 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2049,7 +2033,6 @@ function example() {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2130,7 +2113,6 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2179,7 +2161,6 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2228,7 +2209,6 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2277,7 +2257,6 @@ export default async function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
 
@@ -2372,7 +2351,6 @@ export default function transform(root) {
                         cancellation_flag: None,
                         test_mode: false,
                         dry_run: false,
-                        stage_writes: false,
                         target_directory: Path::new("."),
                     },
                     InMemoryLoader::new(resolver),
@@ -2461,7 +2439,6 @@ export default function transform(root) {
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
-            stage_writes: false,
             target_directory: Path::new("."),
         };
         execute_codemod_with_quickjs(options)
