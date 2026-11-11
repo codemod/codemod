@@ -11,6 +11,8 @@ export type RunEvent =
       dynamicId?: string;
     }
   | { type: "command.completed"; commandId: string; completion: OperationCompletion }
+  /** Console or process output written while the command ran, as it arrived. */
+  | { type: "command.output"; commandId: string; text: string }
   | { type: "run.finished"; output: Json; replayed: boolean }
   /** A command had to wait for execution capacity; nothing is spawned yet. */
   | { type: "scheduler.queued"; commandId: string; weight: number }
@@ -42,6 +44,18 @@ export interface EventSink {
 }
 
 export const nullSink: EventSink = { emit() {} };
+
+/** One JSON line per event, stamped with `at` (ms since the epoch): the `--events` stream. */
+export class JsonLinesSink implements EventSink {
+  constructor(
+    private readonly append: (line: string) => void,
+    private readonly now: () => number,
+  ) {}
+
+  emit(event: RunEvent): void {
+    this.append(`${JSON.stringify({ at: this.now(), ...event })}\n`);
+  }
+}
 
 export class CollectingSink implements EventSink {
   readonly events: RunEvent[] = [];

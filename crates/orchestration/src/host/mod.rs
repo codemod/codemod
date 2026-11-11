@@ -54,6 +54,8 @@ pub struct HostOptions {
     pub input: Option<String>,
     /// History JSON to resume from (text of a `History`), if any.
     pub history: Option<String>,
+    /// File the run appends its events to, one JSON line each.
+    pub events: Option<PathBuf>,
 }
 
 /// What the bundle's `main` resolved to: a JSON object with `ok`, then
@@ -92,6 +94,7 @@ async fn run_async(options: HostOptions) -> Result<HostOutcome, String> {
 
     let input = options.input;
     let history = options.history;
+    let events = options.events;
     let result: Result<String, String> = async_with!(context => |ctx| {
         install_context(&ctx, globals, &target).map_err(|error| error.to_string())?;
         let state = Rc::new(native::HostState {
@@ -130,6 +133,11 @@ async fn run_async(options: HostOptions) -> Result<HostOutcome, String> {
         }
         if let Some(history) = &history {
             request.set("history", history.as_str()).map_err(|error| error.to_string())?;
+        }
+        if let Some(events) = &events {
+            request
+                .set("events", events.to_string_lossy().as_ref())
+                .map_err(|error| error.to_string())?;
         }
 
         // SIGINT/SIGTERM/SIGHUP abort the run (the bundle's entry publishes

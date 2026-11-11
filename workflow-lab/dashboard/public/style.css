@@ -1,0 +1,252 @@
+:root {
+  --bg: #fafaf9;
+  --panel: #ffffff;
+  --text: #1c1917;
+  --muted: #78716c;
+  --border: #e7e5e4;
+  --accent: #2563eb;
+  --ok: #15803d;
+  --bad: #b91c1c;
+  --warn: #b45309;
+  --run: #2563eb;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0c0a09;
+    --panel: #1c1917;
+    --text: #f5f5f4;
+    --muted: #a8a29e;
+    --border: #292524;
+    --accent: #60a5fa;
+    --ok: #4ade80;
+    --bad: #f87171;
+    --warn: #fbbf24;
+    --run: #60a5fa;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  min-height: 100vh;
+  font:
+    14px/1.45 system-ui,
+    -apple-system,
+    sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+aside {
+  border-right: 1px solid var(--border);
+  padding: 16px;
+  background: var(--panel);
+}
+aside h1 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+nav a {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
+  margin-bottom: 2px;
+}
+nav a.active,
+nav a:hover {
+  background: var(--bg);
+}
+nav a small {
+  display: block;
+  color: var(--muted);
+}
+main {
+  padding: 20px 28px;
+  max-width: 1200px;
+  min-width: 0;
+}
+h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+h3 {
+  margin: 24px 0 8px;
+  font-size: 15px;
+}
+.muted {
+  color: var(--muted);
+}
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-top: 14px;
+}
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+input {
+  font: 13px var(--mono);
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  min-width: 280px;
+}
+button {
+  font: inherit;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+}
+td.num,
+th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+tr.clickable {
+  cursor: pointer;
+}
+tr.clickable:hover,
+tr.selected {
+  background: var(--bg);
+}
+code,
+.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid currentColor;
+}
+.s-succeeded,
+.s-replayed {
+  color: var(--ok);
+}
+.s-failed,
+.s-unknown {
+  color: var(--bad);
+}
+.s-cancelled,
+.s-queued,
+.s-lost {
+  color: var(--warn);
+}
+.s-running,
+.s-scheduled {
+  color: var(--run);
+}
+.bar {
+  position: relative;
+  height: 10px;
+  background: var(--bg);
+  border-radius: 3px;
+  min-width: 160px;
+}
+.bar span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: currentColor;
+  opacity: 0.75;
+}
+.bar span.wait {
+  opacity: 0.2;
+}
+pre.logs {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  max-height: 280px;
+  overflow: auto;
+  font: 12px/1.4 var(--mono);
+  white-space: pre-wrap;
+  margin: 8px 0 0;
+}
+.stats {
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+}
+.stat b {
+  display: block;
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.stat span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.heat {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.tabs button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+details summary {
+  cursor: pointer;
+  color: var(--muted);
+}

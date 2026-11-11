@@ -229,7 +229,7 @@ export type {
 } from "./execution/scheduler.ts";
 export { ReplayGate } from "./runtime/gate.ts";
 export type { CommandGate } from "./runtime/gate.ts";
-export { CollectingSink, nullSink } from "./core/events.ts";
+export { CollectingSink, JsonLinesSink, nullSink } from "./core/events.ts";
 export type { EventSink, RunEvent } from "./core/events.ts";
 export {
   DuplicateCommandIdError,

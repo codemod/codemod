@@ -14,6 +14,7 @@ export interface QuickjsNative {
   // Synchronous file system; errors carry a POSIX `code`.
   readText(path: string, fatal: boolean): string;
   writeText(path: string, content: string, mode: number | undefined): void;
+  appendText(path: string, content: string): void;
   mkdir(path: string, recursive: boolean): void;
   rm(path: string, force: boolean, recursive: boolean): void;
   lstat(path: string): HostFileStat;

@@ -223,6 +223,20 @@ pub fn install<'js>(ctx: &Ctx<'js>, state: Rc<HostState>) -> rquickjs::Result<()
         )?,
     )?;
     native.set(
+        "appendText",
+        Function::new(
+            ctx.clone(),
+            |ctx: Ctx<'js>, path: String, content: String| {
+                fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(&path)
+                    .and_then(|mut file| file.write_all(content.as_bytes()))
+                    .map_err(|error| fs_error(&ctx, "open", &path, error))
+            },
+        )?,
+    )?;
+    native.set(
         "mkdir",
         Function::new(
             ctx.clone(),

@@ -71,6 +71,27 @@ fn dynamic_bodies_run_concurrent_commands_invocation_targets_and_a_shell_step() 
 }
 
 #[test]
+fn the_event_stream_records_a_shell_steps_output_under_its_command() {
+    let scratch = Scratch::with(&initial());
+    let events = scratch.path("events.jsonl");
+    scratch.run(
+        &quickjs("jssg-dynamic.ts"),
+        &["--events", events.to_str().unwrap()],
+    );
+    let streamed: String = fs::read_to_string(events)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| event["type"] == "command.output" && event["commandId"] == "listing")
+        .map(|event| event["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        streamed,
+        "./a.ts\n./b.ts\n./c.ts\n./sub/d.new.ts\nnewApi(1);\n"
+    );
+}
+
+#[test]
 fn a_transform_in_an_imported_module_is_split_into_an_artifact() {
     let scratch = Scratch::with(&initial());
     let built = tokio::runtime::Runtime::new()

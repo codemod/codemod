@@ -1,0 +1,5 @@
+{
+  "title": "React 19 readiness",
+  "description": "Per package of a monorepo: React 19 breaking APIs still in use and the React versions each package declares. Read-only.",
+  "target": "~/lab-repos/backstage-src"
+}

@@ -31,6 +31,8 @@ pub struct Options<'a> {
     pub input: Option<&'a str>,
     /// Resumed from when it exists; the run's history is written back to it.
     pub history: Option<&'a Path>,
+    /// Run events are appended to it as JSON lines.
+    pub events: Option<&'a Path>,
 }
 
 /// The portable runtime built into this binary, or the sources at
@@ -100,6 +102,7 @@ pub async fn run_typescript_workflow(options: Options<'_>) -> Result<()> {
         target,
         input: options.input.map(str::to_owned),
         history,
+        events: options.events.map(Path::to_path_buf),
     };
     // The host drives its own current-thread runtime.
     let outcome = tokio::task::spawn_blocking(move || run(host))

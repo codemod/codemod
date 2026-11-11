@@ -20,6 +20,7 @@ import {
   type Executable,
 } from "../../authoring/composition.ts";
 import type { JssgArtifact } from "../../core/artifacts.ts";
+import { JsonLinesSink, type EventSink } from "../../core/events.ts";
 import { HOST_GLOBAL, setHost } from "../../core/host.ts";
 import { MemoryHistoryStore } from "../../core/history.ts";
 import type { Json } from "../../core/json.ts";
@@ -57,6 +58,8 @@ export interface QuickjsRequest {
   input?: string;
   /** A `History` (JSON text) to resume from. */
   history?: string;
+  /** File the run appends its events to as JSON lines (`--events`). */
+  events?: string;
 }
 
 const globals = globalThis as Record<string, unknown>;
@@ -65,7 +68,25 @@ installPromiseContextPropagation();
 const host = createQuickjsHost(native);
 setHost(host);
 globals[HOST_GLOBAL] = host;
-globals.console = createQuickjsConsole(native);
+/** The command a continuation belongs to, so its console output is attributed to it. */
+const currentCommand = host.createAsyncContext<string>();
+let events: EventSink | undefined;
+const emitOutput = (commandId: string | undefined, text: string) => {
+  if (events !== undefined && commandId !== undefined) {
+    events.emit({ type: "command.output", commandId, text });
+  }
+};
+const hostConsole = createQuickjsConsole(native);
+globals.console = Object.fromEntries(
+  Object.entries(hostConsole).map(([name, write]) => [
+    name,
+    (...items: unknown[]) => {
+      write(...items);
+      const text = items.map((item) => (typeof item === "string" ? item : JSON.stringify(item)));
+      emitOutput(currentCommand.get(), `${text.join(" ")}\n`);
+    },
+  ]),
+);
 
 /** `jssg` in context, `shell` through the Rust spawn; everything else refused. */
 class QuickjsExecutor implements OperationExecutor {
@@ -76,11 +97,22 @@ class QuickjsExecutor implements OperationExecutor {
     private readonly assessment: AssessmentExecutorOptions,
   ) {}
 
-  async execute(request: OperationRequest, signal?: AbortSignal): Promise<OperationCompletion> {
+  execute(request: OperationRequest, signal?: AbortSignal): Promise<OperationCompletion> {
+    return currentCommand.run(request.commandId, () => this.dispatchOperation(request, signal));
+  }
+
+  private async dispatchOperation(
+    request: OperationRequest,
+    signal?: AbortSignal,
+  ): Promise<OperationCompletion> {
     const operation = request.operation;
     switch (operation.kind) {
       case "shell":
-        return await executeShell({ cwd: this.cwd, host }, request, signal);
+        return await executeShell(
+          { cwd: this.cwd, host, onOutput: (text) => emitOutput(request.commandId, text) },
+          request,
+          signal,
+        );
       case "jssg":
         return await executeJssgCommand({
           cwd: this.cwd,
@@ -121,6 +153,13 @@ export async function runBundled(
 ): Promise<string> {
   const controller = new AbortController();
   globals[ABORT_GLOBAL] = () => controller.abort();
+  if (request.events !== undefined) {
+    const path = request.events;
+    events = new JsonLinesSink(
+      (line) => native.appendText(path, line),
+      () => native.now(),
+    );
+  }
   const artifacts = new Map<string, JssgArtifact>(
     Object.entries(bundled).map(([hash, artifact]) => [
       hash,
@@ -157,6 +196,7 @@ export async function runBundled(
       {
         executor,
         history: store,
+        ...(events === undefined ? {} : { events }),
         signal: controller.signal,
         ...(hasInput ? { input: JSON.parse(request.input!) as Json } : {}),
       } as Parameters<typeof run>[1],

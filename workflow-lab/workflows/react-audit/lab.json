@@ -1,0 +1,5 @@
+{
+  "title": "React audit across repos",
+  "description": "Nine detectors from the jssg React/Next.js audit, fanned out over every git repo in a folder. Read-only.",
+  "target": "~/lab-repos/react-apps"
+}

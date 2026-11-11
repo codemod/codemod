@@ -98,6 +98,11 @@ pub struct Command {
     /// written after the run
     #[arg(long, value_name = "FILE")]
     history: Option<PathBuf>,
+
+    /// Event stream of a TypeScript workflow: one JSON line per run event
+    /// (scheduled, output, completed, finished), appended as they happen
+    #[arg(long, value_name = "FILE")]
+    events: Option<PathBuf>,
 }
 
 fn should_auto_launch_workflow_tui(
@@ -128,11 +133,14 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             target: args.target_path.as_deref(),
             input: args.input.as_deref(),
             history: args.history.as_deref(),
+            events: args.events.as_deref(),
         })
         .await;
     }
-    if args.input.is_some() || args.history.is_some() {
-        anyhow::bail!("--input and --history apply to TypeScript workflows (.ts, .mts) only");
+    if args.input.is_some() || args.history.is_some() || args.events.is_some() {
+        anyhow::bail!(
+            "--input, --history and --events apply to TypeScript workflows (.ts, .mts) only"
+        );
     }
     if args.no_color {
         console::set_colors_enabled(false);

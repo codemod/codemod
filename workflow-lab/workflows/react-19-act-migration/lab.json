@@ -1,0 +1,6 @@
+{
+  "title": "React 19 act import migration",
+  "description": "Branch, count, rewrite act imports from react-dom/test-utils to react, count again, check the diff, commit.",
+  "target": "~/lab-repos/backstage-src",
+  "input": { "base": "origin/master" }
+}
