@@ -19,12 +19,12 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
-const MCS_SKILL_VERSION: &str = "1.2.2";
+const MCS_SKILL_VERSION: &str = "1.2.4";
 const MCS_COMMAND_NAME: &str = "codemod";
 const SKILL_PACKAGE_COMPATIBILITY_MARKER: &str = "codemod-compatibility: skill-package-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
-const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.2.2";
+const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.2.4";
 const CODEMOD_VERSION_MARKER_PREFIX: &str = "codemod-skill-version:";
 const MCP_SERVER_NAME: &str = "codemod";
 const CODEMOD_CLI_COMMAND: &str = "codemod";
@@ -43,7 +43,7 @@ const MCS_COMMAND_MD: &str =
 
 const SDK_MIGRATION_SKILL_COMPONENT_ID: &str = "sdk-migration";
 const SDK_MIGRATION_SKILL_DIR_NAME: &str = "sdk-migration";
-const SDK_MIGRATION_SKILL_VERSION: &str = "0.1.1";
+const SDK_MIGRATION_SKILL_VERSION: &str = "0.1.3";
 const SDK_MIGRATION_SKILL_MD: &str = include_str!("../../../../skills/sdk-migration/SKILL.md");
 const SDK_MIGRATION_COMMAND_MD: &str =
     include_str!("../../../../skills/sdk-migration/commands/sdk-migration.md");

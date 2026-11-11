@@ -16,7 +16,9 @@ Non-negotiable:
 - Search the registry before creating duplicates
 - Default to **one package per SDK version bump** with a multi-step workflow (one JSSG step per break; separate scripts + fixture dirs); split packages only on request or clearly independent surfaces
 - Scaffold in a dedicated workspace — not inside unrelated product repos unless asked
-- Read `npx codemod ai docs codemod-creation-workflow`, then `jssg-gotchas` and `ast-grep-gotchas`, before writing transforms
+- Read `npx codemod ai docs codemod-creation-workflow`, then `jssg-gotchas`, `ast-grep-gotchas`, `jssg-utils`, `semantic analysis`, and `jssg metrics`, before writing transforms
+- Prefer `@jssg/utils` for import gates / style / renames; enable `semantic_analysis` when symbol origin or generic method names matter
+- Each `js-ast-grep` step emits metrics (`useMetricAtom` in that script; prefer one metric per step with cardinality; snapshot `metrics.json`)
 - Stay AST-first with `js-ast-grep` for parser-backed formats
 - Do not publish until `workflow validate`, `validate_codemod_package`, and package tests pass
 - Do not default packages to private

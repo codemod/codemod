@@ -14,7 +14,7 @@ argument-hint: "<sdk> <from-version> <to-version> <changelog-or-guide-url>"
 # SDK Migration Codemod Authoring
 
 codemod-compatibility: skill-package-v1
-codemod-skill-version: 0.1.1
+codemod-skill-version: 0.1.3
 
 Turn an SDK/library version bump into publishable Codemod packages.
 
@@ -130,15 +130,19 @@ nodes:
         js-ast-grep:
           js_file: scripts/codemod.ts
           language: "typescript"
+          semantic_analysis: file
           include: ["**/*.{ts,tsx}"]
           exclude: ["**/node_modules/**", "**/dist/**"]
       - name: "<break B>"
         js-ast-grep:
           js_file: scripts/<break-b>.ts
           language: "typescript"
+          semantic_analysis: file
           include: ["**/*.{ts,tsx}"]
           exclude: ["**/node_modules/**", "**/dist/**"]
 ```
+
+Use `semantic_analysis: workspace` when a step must resolve cross-file imports or rename across modules. Omit semantic analysis only when the transform is a pure AST shape with no shared method names and no symbol renames—and say so in the README.
 
 ## 2. Codemods built locally
 
@@ -148,9 +152,12 @@ Before writing transforms, read:
 npx codemod ai docs codemod-creation-workflow
 npx codemod ai docs jssg-gotchas
 npx codemod ai docs ast-grep-gotchas
+npx codemod ai docs jssg-utils
+npx codemod ai docs semantic analysis
+npx codemod ai docs jssg metrics
 ```
 
-Scaffold **outside** product app monorepos when possible (dedicated workspace such as `~/…/<sdk>-codemods/` or `codemods/<sdk>-<from>-to-<to>/`). Do not leave migration packages under unrelated repos (e.g. app backends) unless the user asked to put them there.
+Scaffold **outside** product app monorepos when possible (dedicated workspace such as `~/…/<sdk>-codemods/` or `codemods/<sdk>/<target-version>/`). Do not leave migration packages under unrelated repos (e.g. app backends) unless the user asked to put them there.
 
 For each planned package:
 
@@ -163,8 +170,11 @@ npx codemod init <path> --no-interactive --name <name> --author "Name <email>"
 2. Set `codemod.yaml` author, description, keywords (`upgrade`, `breaking-change`, sdk name, versions), languages, and **public** registry access/visibility.
 3. Replace starter transform, README, and fixtures. Wire a multi-step `workflow.yaml` when there is more than one break. Keep each step focused on one exact migration.
 4. Stay AST-first with `js-ast-grep` for parser-backed languages. Use `npx codemod ai dump-ast` and `npx codemod ai node-types <lang>` when node shape is unclear.
-5. Follow Performant codemods in `jssg-gotchas`: discriminating selectors/token gates, no per-file full-repo walks, timed no-op vs real run before done.
-6. Align transforms, fixtures, README, `codemod.yaml`, `workflow.yaml`, and package scripts on the same migration and globs.
+5. **Prefer `@jssg/utils`** for JS/TS/Java: import gates (`getImport` / `listImports`), style (`getFileStyle`), renames/bindings (`importBindingOf` / `renameReferences`). Do not ship hand-rolled import pattern lists or bare identifier renames when a helper covers the case. Add `@jssg/utils` to package dependencies when used.
+6. **Decide `semantic_analysis` per step** before matching generic methods (`.update`, `.get`, …), renaming types/APIs, or following aliases. Binding-aware checks beat filename-level “has import” gates alone.
+7. **Emit metrics per `js-ast-grep` step**: declare `useMetricAtom` in that step’s script (statically visible name). Prefer **one metric per step**; encode variants as **cardinality** dimensions (e.g. `shape`, `kind`, `callee`). Increment on real edits. Snapshot `metrics.json` beside fixtures that produce counts.
+8. Follow Performant codemods in `jssg-gotchas`: discriminating selectors/token gates, no per-file full-repo walks, timed no-op vs real run before done.
+9. Align transforms, fixtures, README, `codemod.yaml`, `workflow.yaml`, and package scripts on the same migration and globs.
 
 ## 3. Codemods tested — fix and retest
 
@@ -208,6 +218,8 @@ If publish fails because of scope verification or permissions, explain the error
 - Author must be the authenticated user or an author the user provided.
 - Search the registry before creating duplicates.
 - Default to one multi-step package per SDK version bump; do not split without cause.
+- Prefer `@jssg/utils` and enable `semantic_analysis` when import origin, aliases, or generic method names matter.
+- Each transform step emits metrics (`useMetricAtom` + cardinality; keep the metric count low).
 - Do not stop on the first test failure — fix and retest.
 - Do not commit or push git changes unless the user asked.
 - Do not open a PR unless the user asked.
