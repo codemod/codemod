@@ -1,0 +1,4 @@
+interface:
+  display_name: "SDK Migration Codemods"
+  short_description: "Plan, build, test, and publish SDK version-migration codemods"
+  default_prompt: "Use $sdk-migration to plan, build, test, and publish public Codemod packages for an SDK upgrade. I already ran npx codemod login. Source version, target version, and changelog/migration guide: $ARGUMENTS"
