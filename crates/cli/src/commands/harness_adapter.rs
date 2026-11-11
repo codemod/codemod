@@ -19,7 +19,7 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
-const MCS_SKILL_VERSION: &str = "1.2.0";
+const MCS_SKILL_VERSION: &str = "1.2.1";
 const MCS_COMMAND_NAME: &str = "codemod";
 const SKILL_PACKAGE_COMPATIBILITY_MARKER: &str = "codemod-compatibility: skill-package-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
@@ -40,6 +40,16 @@ const REQUIRED_FRONTMATTER_KEYS: [&str; 3] = ["name:", "description:", "allowed-
 const MCS_SKILL_MD: &str = include_str!("../templates/ai-native-cli/codemod-cli/SKILL.md");
 const MCS_COMMAND_MD: &str =
     include_str!("../templates/ai-native-cli/codemod-cli/commands/codemod.md");
+
+const SDK_MIGRATION_SKILL_COMPONENT_ID: &str = "sdk-migration";
+const SDK_MIGRATION_SKILL_DIR_NAME: &str = "sdk-migration";
+const SDK_MIGRATION_SKILL_VERSION: &str = "0.1.0";
+const SDK_MIGRATION_SKILL_MD: &str =
+    include_str!("../../../../skills/sdk-migration/SKILL.md");
+const SDK_MIGRATION_COMMAND_MD: &str =
+    include_str!("../../../../skills/sdk-migration/commands/sdk-migration.md");
+const SDK_MIGRATION_OPENAI_YAML: &str =
+    include_str!("../../../../skills/sdk-migration/agents/openai.yaml");
 const SKILL_DISCOVERY_SECTION_BEGIN: &str = "<!-- codemod-skill-discovery:begin -->";
 const SKILL_DISCOVERY_SECTION_END: &str = "<!-- codemod-skill-discovery:end -->";
 const AGENTS_GUIDE_FILE_NAME: &str = "AGENTS.md";
@@ -2585,6 +2595,27 @@ fn install_mcs_skill_bundle_with_runtime(
         scope: Some(request.scope),
     }];
 
+    let sdk_migration_root =
+        skills_root_for_harness(harness, request.scope, runtime_paths)?.join(SDK_MIGRATION_SKILL_DIR_NAME);
+    let sdk_migration_skill_md_path = sdk_migration_root.join("SKILL.md");
+    write_skill_file(&sdk_migration_skill_md_path, SDK_MIGRATION_SKILL_MD, request.force)?;
+    write_skill_file(
+        &sdk_migration_root.join("commands/sdk-migration.md"),
+        SDK_MIGRATION_COMMAND_MD,
+        request.force,
+    )?;
+    write_skill_file(
+        &sdk_migration_root.join("agents/openai.yaml"),
+        SDK_MIGRATION_OPENAI_YAML,
+        request.force,
+    )?;
+    installed.push(InstalledSkill {
+        name: SDK_MIGRATION_SKILL_COMPONENT_ID.to_string(),
+        path: sdk_migration_skill_md_path,
+        version: Some(SDK_MIGRATION_SKILL_VERSION.to_string()),
+        scope: Some(request.scope),
+    });
+
     if let Some(mcp_config_path) = maybe_install_mcp_server_config(harness, request, runtime_paths)?
     {
         let invocation = codemod_cli_invocation_for_mcp(request.scope, runtime_paths);
@@ -2635,6 +2666,12 @@ fn mcs_install_requires_force_with_runtime(
     let skill_root =
         skills_root_for_harness(harness, scope, runtime_paths)?.join(MCS_SKILL_DIR_NAME);
     if managed_text_file_requires_force(&skill_root.join(SKILL_FILE_NAME), MCS_SKILL_MD)? {
+        return Ok(true);
+    }
+
+    let sdk_migration_root =
+        skills_root_for_harness(harness, scope, runtime_paths)?.join(SDK_MIGRATION_SKILL_DIR_NAME);
+    if managed_text_file_requires_force(&sdk_migration_root.join(SKILL_FILE_NAME), SDK_MIGRATION_SKILL_MD)? {
         return Ok(true);
     }
 
@@ -6671,7 +6708,7 @@ codemod-skill-version: 0.1.0
     }
 
     fn assert_bundled_args_are_known(prefix: &str, known: Vec<&str>) {
-        let unknown: Vec<&str> = [MCS_SKILL_MD, MCS_COMMAND_MD]
+        let unknown: Vec<&str> = [MCS_SKILL_MD, MCS_COMMAND_MD, SDK_MIGRATION_SKILL_MD, SDK_MIGRATION_COMMAND_MD]
             .iter()
             .flat_map(|doc| doc.split(prefix).skip(1))
             .filter_map(|rest| rest.split_whitespace().next())
@@ -6703,6 +6740,25 @@ codemod-skill-version: 0.1.0
         let read = |file| fs::read_to_string(format!("{dir}{file}")).unwrap();
         let repo_copy = [read("SKILL.md"), read("commands/codemod.md")];
         assert_eq!(repo_copy, [MCS_SKILL_MD, MCS_COMMAND_MD]);
+    }
+
+    #[test]
+    fn repository_sdk_migration_skill_matches_embedded_bundle() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../skills/sdk-migration/");
+        let read = |file| fs::read_to_string(format!("{dir}{file}")).unwrap();
+        let repo_copy = [
+            read("SKILL.md"),
+            read("commands/sdk-migration.md"),
+            read("agents/openai.yaml"),
+        ];
+        assert_eq!(
+            repo_copy,
+            [
+                SDK_MIGRATION_SKILL_MD,
+                SDK_MIGRATION_COMMAND_MD,
+                SDK_MIGRATION_OPENAI_YAML
+            ]
+        );
     }
 
     #[test]
