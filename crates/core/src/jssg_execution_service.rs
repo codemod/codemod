@@ -832,7 +832,9 @@ impl<'a> JssgExecutionService<'a> {
                     }
 
                     match execution_result {
-                        Ok(Ok(CodemodOutput { primary, secondary })) => {
+                        Ok(Ok(CodemodOutput {
+                            primary, secondary, ..
+                        })) => {
                             succeeded_file_count_for_closure.fetch_add(1, Ordering::Relaxed);
                             let apply_change =
                                 |change_path: &Path, result: &ExecutionResult| match result {

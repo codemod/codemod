@@ -1,13 +1,9 @@
 use rquickjs::{Ctx, Error as QError, FromJs, IntoJs, Object, Result, Value};
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct JsPosition {
-    pub line: usize,
-    pub column: usize,
-    pub index: usize,
-}
+// The plain data types live in the binding-agnostic core; this module only
+// adds the rquickjs conversions.
+pub use super::sg_core::{Edit as JsEdit, NodeRange as JsNodeRange, Position as JsPosition};
 
 impl<'js> FromJs<'js> for JsPosition {
     fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
@@ -36,12 +32,6 @@ impl<'js> IntoJs<'js> for JsPosition {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct JsNodeRange {
-    pub start: JsPosition,
-    pub end: JsPosition,
-}
-
 impl<'js> FromJs<'js> for JsNodeRange {
     fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
         let obj = value
@@ -62,15 +52,6 @@ impl<'js> IntoJs<'js> for JsNodeRange {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct JsEdit {
-    #[serde(rename = "startPos")]
-    pub start_pos: u32,
-    #[serde(rename = "endPos")]
-    pub end_pos: u32,
-    #[serde(rename = "insertedText")]
-    pub inserted_text: String,
-}
 impl<'js> FromJs<'js> for JsEdit {
     fn from_js(_ctx: &Ctx<'js>, value: Value<'js>) -> Result<Self> {
         let obj = value

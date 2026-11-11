@@ -1,85 +1,34 @@
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-use crate::ast_grep::wasm_lang::WasmDoc;
-#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
-use ast_grep_core::tree_sitter::StrDoc as TSStrDoc;
-use ast_grep_core::{AstGrep, Node, NodeMatch};
-
-#[cfg(all(
-    not(all(feature = "wasm", target_arch = "wasm32")),
-    not(feature = "native")
-))]
-use ast_grep_language::SupportLang;
-
-#[cfg(feature = "native")]
-use language_core::SemanticProvider;
+//! rquickjs facade for the JSSG `SgRoot` / `SgNode` classes.
+//!
+//! Every method is a thin adapter over [`super::sg_core`]: convert JS
+//! arguments, call the core, convert the result, and map [`CoreError`] to a
+//! QuickJS exception. Host-specific behaviour that depends on the QuickJS
+//! context userdata (target-directory containment, dry-run and staged writes)
+//! lives here rather than in the core.
 
 use rquickjs::{
     class, class::Trace, methods, prelude::Opt, Ctx, Exception, IntoJs, JsLifetime, Result, Value,
 };
 use std::marker::PhantomData;
-use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 
+use crate::ast_grep::sg_core::{CoreError, CoreErrorKind, CoreNode, CoreRoot, DefinitionOptions};
 use crate::ast_grep::types::JsEdit;
 use crate::ast_grep::types::JsNodeRange;
 use crate::ast_grep::utils::convert_matcher;
 
-#[cfg(all(
-    not(all(feature = "wasm", target_arch = "wasm32")),
-    not(feature = "native")
-))]
-use ast_grep_language::SupportLang as Lang;
-
-#[cfg(feature = "native")]
-use crate::sandbox::engine::codemod_lang::CodemodLang;
-#[cfg(feature = "native")]
-use CodemodLang as Lang;
-
-#[cfg(all(
-    not(all(feature = "wasm", target_arch = "wasm32")),
-    not(feature = "native")
-))]
-type TSDoc = TSStrDoc<SupportLang>;
-#[cfg(feature = "native")]
-type TSDoc = TSStrDoc<CodemodLang>;
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-type TSDoc = WasmDoc;
-
-/// Full source text of the parsed document, including any leading whitespace or BOM.
-///
-/// Prefer this over `grep.root().text()`: tree-sitter's root node range starts at the first
-/// token, so its text drops leading padding.
-#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
-pub(crate) fn document_source(grep: &AstGrep<TSDoc>) -> std::borrow::Cow<'_, str> {
-    std::borrow::Cow::Borrowed(grep.source())
-}
-
-/// Full source text of the parsed document, including any leading whitespace or BOM.
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-pub(crate) fn document_source(grep: &AstGrep<TSDoc>) -> std::borrow::Cow<'_, str> {
-    std::borrow::Cow::Owned(grep.root().get_doc().source_text())
-}
-
-pub(crate) struct SgRootInner {
-    pub(crate) grep: AstGrep<TSDoc>,
-    filename: Option<String>,
-    relative_filename: Option<String>,
-    target_directory: Option<std::path::PathBuf>,
-    /// Optional rename target path set by root.rename()
-    pub(crate) rename_to: Mutex<Option<String>>,
-    /// Optional semantic provider for symbol indexing (native only)
-    #[cfg(feature = "native")]
-    pub(crate) semantic_provider: Option<Arc<dyn SemanticProvider>>,
-    /// The current file being processed (for write() validation)
-    #[cfg(feature = "native")]
-    pub(crate) current_file_path: Option<String>,
+/// Raise a [`CoreError`] as the matching QuickJS exception.
+pub(crate) fn throw_core_error(ctx: &Ctx<'_>, error: CoreError) -> rquickjs::Error {
+    match error.kind {
+        CoreErrorKind::Error => Exception::throw_message(ctx, &error.message),
+        CoreErrorKind::TypeError => Exception::throw_type(ctx, &error.message),
+    }
 }
 
 #[derive(Trace, Clone)]
 #[class(rename_all = "camelCase")]
 pub struct SgRootRjs<'js> {
     #[qjs(skip_trace)]
-    pub(crate) inner: Arc<SgRootInner>,
+    pub(crate) core: CoreRoot,
     #[qjs(skip_trace)]
     _phantom: PhantomData<&'js ()>,
 }
@@ -99,32 +48,46 @@ impl<'js> SgRootRjs<'js> {
     }
 
     pub fn root(&self, _ctx: Ctx<'js>) -> Result<SgNodeRjs<'js>> {
-        let node = self.inner.grep.root();
-        let node_match: NodeMatch<_> = node.into();
-        let static_node_match: NodeMatch<'static, TSDoc> =
-            unsafe { std::mem::transmute(node_match) };
-        Ok(SgNodeRjs {
-            root: Arc::clone(&self.inner),
-            inner_node: static_node_match,
-            _phantom: PhantomData,
-        })
+        Ok(SgNodeRjs::from_core(self.core.root()))
     }
 
     pub fn filename(&self) -> Result<String> {
-        Ok(self.inner.filename.clone().unwrap_or_default())
+        Ok(self.core.filename().unwrap_or_default().to_string())
     }
 
     #[qjs(rename = "relativeFilename")]
     pub fn relative_filename(&self) -> Result<String> {
         Ok(self
-            .inner
-            .relative_filename
-            .clone()
-            .unwrap_or_else(|| self.inner.filename.clone().unwrap_or_default()))
+            .core
+            .relative_filename()
+            .unwrap_or_default()
+            .to_string())
     }
 
     pub fn source(&self) -> Result<String> {
-        Ok(document_source(&self.inner.grep).into_owned())
+        Ok(self.core.root_text())
+    }
+
+    /// Rename the current file to a new path.
+    ///
+    /// If the path is relative, it is resolved against the current file's parent directory.
+    /// If absolute, it is used as-is.
+    pub fn rename(&self, new_path: String, ctx: Ctx<'js>) -> Result<()> {
+        let resolved_path = self
+            .core
+            .resolve_rename_path(&new_path)
+            .map_err(|e| throw_core_error(&ctx, e))?;
+
+        // Validate: resolved path must stay within the target directory
+        #[cfg(feature = "native")]
+        {
+            use crate::sandbox::engine::execution_engine::validate_path_within_target;
+            validate_path_within_target(&ctx, std::path::Path::new(&resolved_path), "rename()")?;
+        }
+
+        self.core
+            .set_rename_to(resolved_path)
+            .map_err(|e| throw_core_error(&ctx, e))
     }
 
     /// Write content to this file.
@@ -134,53 +97,6 @@ impl<'js> SgRootRjs<'js> {
     /// modified content from the `transform()` function instead.
     ///
     /// After writing, the semantic provider's cache is updated with the new content.
-    /// Rename the current file to a new path.
-    ///
-    /// If the path is relative, it is resolved against the current file's parent directory.
-    /// If absolute, it is used as-is.
-    pub fn rename(&self, new_path: String, ctx: Ctx<'js>) -> Result<()> {
-        if new_path.is_empty() {
-            return Err(Exception::throw_message(
-                &ctx,
-                "rename() requires a non-empty path",
-            ));
-        }
-
-        let resolved_path = if std::path::Path::new(&new_path).is_absolute() {
-            new_path
-        } else {
-            // Resolve relative to current file's parent directory
-            match &self.inner.filename {
-                Some(filename) => {
-                    let parent = std::path::Path::new(filename)
-                        .parent()
-                        .unwrap_or(std::path::Path::new("."));
-                    parent.join(&new_path).to_string_lossy().to_string()
-                }
-                None => new_path,
-            }
-        };
-
-        // Validate: resolved path must stay within the target directory
-        #[cfg(feature = "native")]
-        {
-            use crate::sandbox::engine::execution_engine::validate_path_within_target;
-            validate_path_within_target(&ctx, std::path::Path::new(&resolved_path), "rename()")?;
-        }
-
-        let mut rename_to = self.inner.rename_to.lock().map_err(|e| {
-            Exception::throw_message(&ctx, &format!("Failed to lock rename_to mutex: {e}"))
-        })?;
-        if rename_to.is_some() {
-            return Err(Exception::throw_message(
-                &ctx,
-                "rename() has already been called for this file. It can only be called once.",
-            ));
-        }
-        *rename_to = Some(resolved_path);
-        Ok(())
-    }
-
     pub fn write(&self, content: String, ctx: Ctx<'js>) -> Result<()> {
         #[cfg(not(feature = "native"))]
         {
@@ -192,31 +108,10 @@ impl<'js> SgRootRjs<'js> {
         }
         #[cfg(feature = "native")]
         {
-            let file_path = match &self.inner.filename {
-                Some(f) => f,
-                None => {
-                    return Err(Exception::throw_message(
-                        &ctx,
-                        "Cannot write: file has no path",
-                    ))
-                }
-            };
-
-            if let Some(current_file) = &self.inner.current_file_path {
-                let file_path_normalized = std::path::Path::new(file_path)
-                    .canonicalize()
-                    .unwrap_or_else(|_| std::path::PathBuf::from(file_path));
-                let current_file_normalized = std::path::Path::new(current_file)
-                    .canonicalize()
-                    .unwrap_or_else(|_| std::path::PathBuf::from(current_file));
-
-                if file_path_normalized == current_file_normalized {
-                    return Err(Exception::throw_message(
-                        &ctx,
-                        "Cannot call write() on the current file. Return the modified content from transform() instead.",
-                    ));
-                }
-            }
+            let file_path = self
+                .core
+                .check_write_target()
+                .map_err(|e| throw_core_error(&ctx, e))?;
 
             let dry_run = ctx
                 .userdata::<crate::sandbox::engine::execution_engine::DryRunExecutionFlag>()
@@ -227,6 +122,44 @@ impl<'js> SgRootRjs<'js> {
             }
 
             let path = std::path::Path::new(file_path);
+            let stage_writes = ctx
+                .userdata::<crate::sandbox::engine::execution_engine::StageFileWrites>()
+                .map(|flag| flag.0)
+                .unwrap_or(false);
+            if stage_writes {
+                // A staging host owns the filesystem: hand the edit back as a
+                // secondary change (like `jssgTransform`) instead of writing.
+                use crate::sandbox::engine::execution_engine::{
+                    validate_path_within_target, ExecutionResult, FileChange, JssgFileChanges,
+                    ModifiedResult,
+                };
+                validate_path_within_target(&ctx, path, "write()")?;
+                let changes = ctx
+                    .userdata::<JssgFileChanges>()
+                    .map(|guard| guard.clone())
+                    .ok_or_else(|| {
+                        Exception::throw_message(&ctx, "JssgFileChanges not found in userdata")
+                    })?;
+                changes
+                    .changes
+                    .lock()
+                    .map_err(|e| {
+                        Exception::throw_message(
+                            &ctx,
+                            &format!("Failed to lock file_changes mutex: {e}"),
+                        )
+                    })?
+                    .push(FileChange {
+                        path: path.to_path_buf(),
+                        result: ExecutionResult::Modified(ModifiedResult {
+                            content: content.clone(),
+                            rename_to: None,
+                        }),
+                    });
+                self.core.notify_written(path, &content);
+                return Ok(());
+            }
+
             std::fs::write(path, &content).map_err(|e| {
                 Exception::throw_message(
                     &ctx,
@@ -234,9 +167,7 @@ impl<'js> SgRootRjs<'js> {
                 )
             })?;
 
-            if let Some(ref provider) = self.inner.semantic_provider {
-                let _ = provider.notify_file_processed(path, &content);
-            }
+            self.core.notify_written(path, &content);
 
             Ok(())
         }
@@ -244,13 +175,11 @@ impl<'js> SgRootRjs<'js> {
 }
 
 impl<'js> SgRootRjs<'js> {
-    /// Get the rename target path, if rename() was called.
-    pub fn get_rename_to(&self) -> Option<String> {
-        self.inner
-            .rename_to
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+    pub(crate) fn from_core(core: CoreRoot) -> Self {
+        SgRootRjs {
+            core,
+            _phantom: PhantomData,
+        }
     }
 
     pub fn try_new(
@@ -259,168 +188,15 @@ impl<'js> SgRootRjs<'js> {
         filename: Option<String>,
         target_directory: Option<&std::path::Path>,
     ) -> std::result::Result<Self, String> {
-        #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-        {
-            if !crate::ast_grep::wasm_lang::WasmLang::is_parser_initialized() {
-                return Err(
-                    "Tree-sitter parser not initialized. Call setupParser() first before parsing."
-                        .to_string(),
-                );
-            }
-
-            let lang = crate::ast_grep::wasm_lang::WasmLang::from_str(&lang_str)
-                .map_err(|e| e.to_string())?;
-            let doc = crate::ast_grep::wasm_lang::WasmDoc::try_new(src, lang)
-                .map_err(|e| e.to_string())?;
-
-            Ok(SgRootRjs {
-                inner: Arc::new(SgRootInner {
-                    grep: unsafe { std::mem::transmute(doc) },
-                    relative_filename: compute_relative_filename(
-                        filename.as_deref(),
-                        target_directory,
-                    ),
-                    target_directory: target_directory.map(|path| path.to_path_buf()),
-                    filename,
-                    rename_to: Mutex::new(None),
-                }),
-                _phantom: PhantomData,
-            })
-        }
-
-        #[cfg(all(
-            not(all(feature = "wasm", target_arch = "wasm32")),
-            not(feature = "native")
-        ))]
-        {
-            let lang = SupportLang::from_str(&lang_str)
-                .map_err(|e| format!("Unsupported language: {lang_str}. Error: {e}"))?;
-            let grep = AstGrep::new(src, lang);
-            Ok(SgRootRjs {
-                inner: Arc::new(SgRootInner {
-                    grep,
-                    relative_filename: compute_relative_filename(
-                        filename.as_deref(),
-                        target_directory,
-                    ),
-                    target_directory: target_directory.map(|path| path.to_path_buf()),
-                    filename,
-                    rename_to: Mutex::new(None),
-                    #[cfg(feature = "native")]
-                    semantic_provider: None,
-                    #[cfg(feature = "native")]
-                    current_file_path: None,
-                }),
-                _phantom: PhantomData,
-            })
-        }
-
-        #[cfg(feature = "native")]
-        {
-            let lang = CodemodLang::from_str(&lang_str)
-                .map_err(|e| format!("Unsupported language: {lang_str}. Error: {e}"))?;
-            let grep = AstGrep::new(src, lang);
-            Ok(SgRootRjs {
-                inner: Arc::new(SgRootInner {
-                    grep,
-                    relative_filename: compute_relative_filename(
-                        filename.as_deref(),
-                        target_directory,
-                    ),
-                    target_directory: target_directory.map(|path| path.to_path_buf()),
-                    filename,
-                    rename_to: Mutex::new(None),
-                    #[cfg(feature = "native")]
-                    semantic_provider: None,
-                    #[cfg(feature = "native")]
-                    current_file_path: None,
-                }),
-                _phantom: PhantomData,
-            })
-        }
+        CoreRoot::parse(&lang_str, src, filename, target_directory).map(Self::from_core)
     }
-
-    pub fn try_new_from_ast_grep(
-        grep: AstGrep<TSDoc>,
-        filename: Option<String>,
-        target_directory: Option<&std::path::Path>,
-    ) -> std::result::Result<Self, String> {
-        Ok(SgRootRjs {
-            inner: Arc::new(SgRootInner {
-                grep,
-                relative_filename: compute_relative_filename(filename.as_deref(), target_directory),
-                target_directory: target_directory.map(|path| path.to_path_buf()),
-                filename,
-                rename_to: Mutex::new(None),
-                #[cfg(feature = "native")]
-                semantic_provider: None,
-                #[cfg(feature = "native")]
-                current_file_path: None,
-            }),
-            _phantom: PhantomData,
-        })
-    }
-
-    /// Create a new SgRootRjs with a semantic provider for symbol indexing.
-    #[cfg(feature = "native")]
-    pub fn try_new_with_semantic(
-        grep: AstGrep<TSDoc>,
-        filename: Option<String>,
-        semantic_provider: Option<Arc<dyn SemanticProvider>>,
-        current_file_path: Option<String>,
-        target_directory: Option<&std::path::Path>,
-    ) -> std::result::Result<Self, String> {
-        Ok(SgRootRjs {
-            inner: Arc::new(SgRootInner {
-                grep,
-                relative_filename: compute_relative_filename(filename.as_deref(), target_directory),
-                target_directory: target_directory.map(|path| path.to_path_buf()),
-                filename,
-                rename_to: Mutex::new(None),
-                semantic_provider,
-                current_file_path,
-            }),
-            _phantom: PhantomData,
-        })
-    }
-}
-
-fn compute_relative_filename(
-    filename: Option<&str>,
-    target_directory: Option<&std::path::Path>,
-) -> Option<String> {
-    let filename = filename?;
-    let target_directory = target_directory?;
-
-    let file_path = std::path::Path::new(filename);
-    if let Ok(relative) = file_path.strip_prefix(target_directory) {
-        return Some(relative.to_string_lossy().replace('\\', "/"));
-    }
-
-    let canonical_target = target_directory.canonicalize().ok()?;
-    let canonical_file = file_path.canonicalize().ok().or_else(|| {
-        file_path.parent().and_then(|parent| {
-            let file_name = file_path.file_name()?;
-            parent
-                .canonicalize()
-                .ok()
-                .map(|canonical_parent| canonical_parent.join(file_name))
-        })
-    })?;
-
-    canonical_file
-        .strip_prefix(&canonical_target)
-        .ok()
-        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
 }
 
 #[derive(Trace, Clone)]
 #[class(rename_all = "camelCase")]
 pub struct SgNodeRjs<'js> {
-    #[qjs(skip_trace)] // Strong reference to keep root alive
-    pub(crate) root: Arc<SgRootInner>,
-    #[qjs(skip_trace)] // NodeMatch is not Trace
-    pub(crate) inner_node: NodeMatch<'static, TSDoc>,
+    #[qjs(skip_trace)] // Holds the root alive; not a JS value
+    pub(crate) core: CoreNode,
     #[qjs(skip_trace)]
     pub(crate) _phantom: PhantomData<&'js ()>,
 }
@@ -429,485 +205,184 @@ unsafe impl<'js> JsLifetime<'js> for SgNodeRjs<'js> {
     type Changed<'to> = SgNodeRjs<'to>;
 }
 
-/// Helper to find the tightest node containing a byte range.
-#[cfg(feature = "native")]
-fn find_node_at_range<'a>(
-    root: &'a Node<'a, TSDoc>,
-    start: usize,
-    end: usize,
-) -> Option<Node<'a, TSDoc>> {
-    let mut current = root.clone();
-
-    // traverse down to find the tightest node containing the range
-    loop {
-        let mut found_child = None;
-        for child in current.children() {
-            let child_range = child.range();
-            if child_range.start <= start && child_range.end >= end {
-                // This child contains our range, go deeper
-                found_child = Some(child);
-                break;
-            }
+impl<'js> SgNodeRjs<'js> {
+    pub(crate) fn from_core(core: CoreNode) -> Self {
+        SgNodeRjs {
+            core,
+            _phantom: PhantomData,
         }
+    }
 
-        match found_child {
-            Some(child) => {
-                // check if this child exactly matches or is tighter
-                let child_range = child.range();
-                if child_range.start == start && child_range.end == end {
-                    return Some(child);
-                }
-                current = child;
-            }
-            None => {
-                // no child contains the range, current is the tightest
-                let current_range = current.range();
-                if current_range.start <= start && current_range.end >= end {
-                    return Some(current);
-                }
-                return None;
-            }
+    fn wrap_all(nodes: Vec<CoreNode>) -> Vec<SgNodeRjs<'js>> {
+        nodes.into_iter().map(SgNodeRjs::from_core).collect()
+    }
+
+    fn wrap_opt(node: Option<CoreNode>, ctx: Ctx<'js>) -> Result<Value<'js>> {
+        match node {
+            Some(node) => SgNodeRjs::from_core(node).into_js(&ctx),
+            None => Ok(Value::new_null(ctx)),
         }
+    }
+
+    fn matcher(
+        &self,
+        matcher: Value<'js>,
+        ctx: &Ctx<'js>,
+    ) -> Result<crate::ast_grep::sg_core::CoreMatcher> {
+        convert_matcher(matcher, self.core.root().lang(), ctx)
     }
 }
 
 #[methods]
 impl<'js> SgNodeRjs<'js> {
     pub fn text(&self) -> Result<String> {
-        Ok(self.inner_node.text().to_string())
+        Ok(self.core.text())
     }
 
     pub fn is(&self, kind: String) -> Result<bool> {
-        Ok(self.inner_node.kind() == kind)
+        Ok(self.core.is(&kind))
     }
 
     pub fn kind(&self) -> Result<String> {
-        Ok(self.inner_node.kind().to_string())
+        Ok(self.core.kind())
     }
 
     pub fn range(&self, _ctx: Ctx<'js>) -> Result<JsNodeRange> {
-        let start_pos_obj = self.inner_node.start_pos();
-        let end_pos_obj = self.inner_node.end_pos();
-        let byte_range = self.inner_node.range();
-
-        let result = JsNodeRange {
-            start: crate::ast_grep::types::JsPosition {
-                line: start_pos_obj.line(),
-                column: start_pos_obj.column(&self.inner_node),
-                index: byte_range.start,
-            },
-            end: crate::ast_grep::types::JsPosition {
-                line: end_pos_obj.line(),
-                column: end_pos_obj.column(&self.inner_node),
-                index: byte_range.end,
-            },
-        };
-        Ok(result)
+        Ok(self.core.range())
     }
 
     pub fn id(&self) -> Result<usize> {
-        Ok(self.inner_node.node_id())
+        Ok(self.core.id())
     }
 
     #[qjs(rename = "isLeaf")]
     pub fn is_leaf(&self) -> Result<bool> {
-        Ok(self.inner_node.is_leaf())
+        Ok(self.core.is_leaf())
     }
 
     #[qjs(rename = "isNamed")]
     pub fn is_named(&self) -> Result<bool> {
-        Ok(self.inner_node.is_named())
+        Ok(self.core.is_named())
     }
 
     #[qjs(rename = "isNamedLeaf")]
     pub fn is_named_leaf(&self) -> Result<bool> {
-        Ok(self.inner_node.is_named_leaf())
+        Ok(self.core.is_named_leaf())
     }
 
     pub fn parent(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        match self.inner_node.parent() {
-            Some(node) => {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                let sg_node = SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                };
-                sg_node.into_js(&ctx)
-            }
-            None => Ok(Value::new_null(ctx)),
-        }
+        Self::wrap_opt(self.core.parent(), ctx)
     }
 
     pub fn child(&self, nth: usize, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        match self.inner_node.child(nth) {
-            Some(node) => {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                let sg_node = SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                };
-                sg_node.into_js(&ctx)
-            }
-            None => Ok(Value::new_null(ctx)),
-        }
+        Self::wrap_opt(self.core.child(nth), ctx)
     }
 
     pub fn children(&self) -> Result<Vec<SgNodeRjs<'js>>> {
-        Ok(self
-            .inner_node
-            .children()
-            .map(|node: Node<TSDoc>| {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                }
-            })
-            .collect())
+        Ok(Self::wrap_all(self.core.children()))
     }
 
     pub fn ancestors(&self) -> Result<Vec<SgNodeRjs<'js>>> {
-        Ok(self
-            .inner_node
-            .ancestors()
-            .map(|node: Node<TSDoc>| {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                }
-            })
-            .collect())
+        Ok(Self::wrap_all(self.core.ancestors()))
     }
 
     pub fn next(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        match self.inner_node.next() {
-            Some(node) => {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                let sg_node = SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                };
-                sg_node.into_js(&ctx)
-            }
-            None => Ok(Value::new_null(ctx)),
-        }
+        Self::wrap_opt(self.core.next(), ctx)
     }
 
     #[qjs(rename = "nextAll")]
     pub fn next_all(&self) -> Result<Vec<SgNodeRjs<'js>>> {
-        Ok(self
-            .inner_node
-            .next_all()
-            .map(|node: Node<TSDoc>| {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                }
-            })
-            .collect())
+        Ok(Self::wrap_all(self.core.next_all()))
     }
 
     pub fn prev(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        match self.inner_node.prev() {
-            Some(node) => {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                let sg_node = SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                };
-                sg_node.into_js(&ctx)
-            }
-            None => Ok(Value::new_null(ctx)),
-        }
+        Self::wrap_opt(self.core.prev(), ctx)
     }
 
     #[qjs(rename = "prevAll")]
     pub fn prev_all(&self) -> Result<Vec<SgNodeRjs<'js>>> {
-        Ok(self
-            .inner_node
-            .prev_all()
-            .map(|node: Node<TSDoc>| {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                }
-            })
-            .collect())
+        Ok(Self::wrap_all(self.core.prev_all()))
     }
 
     pub fn field(&self, name: String, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        match self.inner_node.field(&name) {
-            Some(node) => {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                let sg_node = SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                };
-                sg_node.into_js(&ctx)
-            }
-            None => Ok(Value::new_null(ctx)),
-        }
+        Self::wrap_opt(self.core.field(&name), ctx)
     }
 
     #[qjs(rename = "fieldChildren")]
     pub fn field_children(&self, name: String) -> Result<Vec<SgNodeRjs<'js>>> {
-        Ok(self
-            .inner_node
-            .field_children(&name)
-            .map(|node: Node<TSDoc>| {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                }
-            })
-            .collect())
+        Ok(Self::wrap_all(self.core.field_children(&name)))
     }
 
     pub fn matches(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
-        let lang = get_language(&self.root.grep);
-        let matcher = convert_matcher(matcher, lang, &ctx)?;
-        Ok(self.inner_node.matches(&matcher))
+        let matcher = self.matcher(matcher, &ctx)?;
+        Ok(self.core.matches(&matcher))
     }
 
     pub fn inside(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
-        let lang = get_language(&self.root.grep);
-        let matcher = convert_matcher(matcher, lang, &ctx)?;
-        Ok(self.inner_node.inside(&matcher))
+        let matcher = self.matcher(matcher, &ctx)?;
+        Ok(self.core.inside(&matcher))
     }
 
     pub fn has(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
-        let lang = get_language(&self.root.grep);
-        let matcher = convert_matcher(matcher, lang, &ctx)?;
-        Ok(self.inner_node.has(&matcher))
+        let matcher = self.matcher(matcher, &ctx)?;
+        Ok(self.core.has(&matcher))
     }
 
     pub fn precedes(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
-        let lang = get_language(&self.root.grep);
-        let matcher = convert_matcher(matcher, lang, &ctx)?;
-        Ok(self.inner_node.precedes(&matcher))
+        let matcher = self.matcher(matcher, &ctx)?;
+        Ok(self.core.precedes(&matcher))
     }
 
     pub fn follows(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
-        let lang = get_language(&self.root.grep);
-        let matcher = convert_matcher(matcher, lang, &ctx)?;
-        Ok(self.inner_node.follows(&matcher))
+        let matcher = self.matcher(matcher, &ctx)?;
+        Ok(self.core.follows(&matcher))
     }
 
     #[qjs(rename = "getMatch")]
     pub fn get_match(&self, meta_var: String, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        match self.inner_node.get_env().get_match(&meta_var) {
-            Some(node) => {
-                let node_match: NodeMatch<_> = node.clone().into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                let sg_node = SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                };
-                sg_node.into_js(&ctx)
-            }
-            None => Ok(Value::new_null(ctx)),
-        }
+        Self::wrap_opt(self.core.get_match(&meta_var), ctx)
     }
 
     #[qjs(rename = "getMultipleMatches")]
     pub fn get_multiple_matches(&self, meta_var: String) -> Result<Vec<SgNodeRjs<'js>>> {
-        let matches = self.inner_node.get_env().get_multiple_matches(&meta_var);
-        Ok(matches
-            .into_iter()
-            .map(|node| {
-                let node_match: NodeMatch<_> = node.into();
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                }
-            })
-            .collect())
+        Ok(Self::wrap_all(self.core.get_multiple_matches(&meta_var)))
     }
 
     #[qjs(rename = "getTransformed")]
     pub fn get_transformed(&self, meta_var: String, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        match self.inner_node.get_env().get_transformed(&meta_var) {
+        match self.core.get_transformed_raw(&meta_var) {
             Some(s) => s.into_js(&ctx),
             None => Ok(Value::new_null(ctx)),
         }
     }
 
     pub fn find(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        let lang = get_language(&self.root.grep);
-        let matcher = convert_matcher(matcher, lang, &ctx)?;
-        match self.inner_node.find(&matcher) {
-            Some(node_match) => {
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                let sg_node = SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                };
-                sg_node.into_js(&ctx)
-            }
-            None => Ok(Value::new_null(ctx)),
-        }
+        let matcher = self.matcher(matcher, &ctx)?;
+        Self::wrap_opt(self.core.find(&matcher), ctx)
     }
 
     #[qjs(rename = "findAll")]
     pub fn find_all(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<Vec<SgNodeRjs<'js>>> {
-        let lang = get_language(&self.root.grep);
-        let matcher = convert_matcher(matcher, lang, &ctx)?;
-        Ok(self
-            .inner_node
-            .find_all(&matcher)
-            .map(|node_match| {
-                let static_node_match: NodeMatch<'static, TSDoc> =
-                    unsafe { std::mem::transmute(node_match) };
-                SgNodeRjs {
-                    root: self.root.clone(),
-                    inner_node: static_node_match,
-                    _phantom: PhantomData,
-                }
-            })
-            .collect())
+        let matcher = self.matcher(matcher, &ctx)?;
+        Ok(Self::wrap_all(self.core.find_all(&matcher)))
     }
 
     pub fn replace(&self, text: String) -> Result<JsEdit> {
-        let byte_range = self.inner_node.range();
-        Ok(JsEdit {
-            start_pos: byte_range.start as u32,
-            end_pos: byte_range.end as u32,
-            inserted_text: text,
-        })
+        Ok(self.core.replace(text))
     }
 
     #[qjs(rename = "commitEdits")]
     pub fn commit_edits(&self, edits: Vec<JsEdit>) -> Result<String> {
-        // tree-sitter starts the root node at its first token, so the root node's text omits
-        // leading blank lines, whitespace, and a BOM. Committing against that text silently
-        // dropped those bytes from every file, even when `edits` was empty. When committing on
-        // the root node, splice into the full document source instead so untouched bytes are
-        // preserved exactly.
-        let is_root = self.inner_node.parent().is_none();
-        let (old_content, offset) = if is_root {
-            (document_source(&self.root.grep), 0)
-        } else {
-            (self.inner_node.text(), self.inner_node.range().start)
-        };
-
-        if edits.is_empty() {
-            return Ok(old_content.into_owned());
-        }
-
-        let mut sorted_edits = edits;
-        sorted_edits.sort_by_key(|edit| edit.start_pos);
-
-        let mut new_content = String::with_capacity(old_content.len());
-        let mut start = 0;
-
-        for edit in sorted_edits {
-            let pos = edit.start_pos as usize - offset;
-            // Skip overlapping edits
-            if start > pos {
-                continue;
-            }
-            new_content.push_str(&old_content[start..pos]);
-            new_content.push_str(&edit.inserted_text);
-            start = edit.end_pos as usize - offset;
-        }
-
-        // Add trailing content
-        new_content.push_str(&old_content[start..]);
-        Ok(new_content)
+        Ok(self.core.commit_edits(&edits))
     }
 
     pub fn debug(&self) -> Result<String> {
-        fn format_node<D: ast_grep_core::Doc>(
-            node: &ast_grep_core::Node<D>,
-            indent: usize,
-        ) -> String {
-            let indent_str = "  ".repeat(indent);
-            let kind = node.kind();
-            let is_named = node.is_named();
-
-            let mut result = String::new();
-
-            if is_named {
-                let text = node.text();
-                let has_children = node.children().next().is_some();
-
-                if has_children {
-                    result.push_str(&format!("{indent_str}{kind}:\n"));
-                    for child in node.children() {
-                        result.push_str(&format_node(&child, indent + 1));
-                    }
-                } else {
-                    // Leaf named node — show text inline
-                    let display_text = if text.len() > 40 {
-                        match text.char_indices().nth(40) {
-                            Some((idx, _)) => format!("{}...", &text[..idx]),
-                            None => text.to_string(),
-                        }
-                    } else {
-                        text.to_string()
-                    };
-                    result.push_str(&format!("{indent_str}{kind}: {display_text:?}\n"));
-                }
-            } else {
-                // Anonymous node (punctuation, keywords)
-                let text = node.text();
-                result.push_str(&format!("{indent_str}[{text:?}]\n"));
-            }
-
-            result
-        }
-
-        let node: ast_grep_core::Node<TSDoc> = self.inner_node.clone().into();
-        Ok(format_node(&node, 0))
+        Ok(self.core.debug())
     }
 
     #[qjs(rename = "getRoot")]
     pub fn get_root(&self, _ctx: Ctx<'js>) -> Result<SgRootRjs<'js>> {
-        Ok(SgRootRjs {
-            inner: Arc::clone(&self.root),
-            _phantom: PhantomData,
-        })
+        Ok(SgRootRjs::from_core(self.core.root().clone()))
     }
 
     /// Get the definition of the symbol at this node's position.
@@ -926,124 +401,34 @@ impl<'js> SgNodeRjs<'js> {
         ctx: Ctx<'js>,
         options: Opt<rquickjs::Object<'js>>,
     ) -> Result<Value<'js>> {
-        #[cfg(not(feature = "native"))]
-        {
-            let _ = options;
+        let Some(request) = self
+            .core
+            .semantic()
+            .map_err(|e| throw_core_error(&ctx, e))?
+        else {
             return Ok(Value::new_null(ctx));
-        }
-        #[cfg(feature = "native")]
+        };
+
+        // Parse options
+        let resolve_external = if let Some(opts) = options.0 {
+            opts.get::<_, Option<bool>>("resolveExternal")?
+                .unwrap_or(true)
+        } else {
+            true
+        };
+
+        match request
+            .definition(DefinitionOptions { resolve_external })
+            .map_err(|e| throw_core_error(&ctx, e))?
         {
-            let provider = match &self.root.semantic_provider {
-                Some(p) => p,
-                None => return Ok(Value::new_null(ctx)),
-            };
-
-            let file_path = match &self.root.filename {
-                Some(f) => std::path::PathBuf::from(f),
-                None => return Ok(Value::new_null(ctx)),
-            };
-
-            // Parse options
-            let resolve_external = if let Some(opts) = options.0 {
-                opts.get::<_, Option<bool>>("resolveExternal")?
-                    .unwrap_or(true)
-            } else {
-                true
-            };
-
-            let def_options = language_core::DefinitionOptions { resolve_external };
-
-            let byte_range = self.inner_node.range();
-            let range =
-                language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
-
-            match provider.get_definition(&file_path, range, def_options) {
-                Ok(Some(def_result)) => {
-                    let is_same_file = def_result.location.file_path == file_path;
-                    let loc = &def_result.location;
-
-                    // Convert DefinitionKind to string for JS
-                    let kind_str = def_result.kind.as_str();
-
-                    if is_same_file {
-                        // Definition is in the same file, use existing root
-                        let root_node = self.root.grep.root();
-                        if let Some(node) = find_node_at_range(
-                            &root_node,
-                            loc.range.start as usize,
-                            loc.range.end as usize,
-                        ) {
-                            let node_match: NodeMatch<_> = node.into();
-                            let static_node_match: NodeMatch<'static, TSDoc> =
-                                unsafe { std::mem::transmute(node_match) };
-
-                            let result_obj = rquickjs::Object::new(ctx.clone())?;
-
-                            let sg_node = SgNodeRjs {
-                                root: Arc::clone(&self.root),
-                                inner_node: static_node_match,
-                                _phantom: PhantomData,
-                            };
-                            result_obj.set("node", sg_node)?;
-
-                            let sg_root = SgRootRjs {
-                                inner: Arc::clone(&self.root),
-                                _phantom: PhantomData,
-                            };
-                            result_obj.set("root", sg_root)?;
-                            result_obj.set("kind", kind_str)?;
-
-                            return result_obj.into_js(&ctx);
-                        }
-                    } else {
-                        // Definition is in a different file, create new root
-                        let lang_str = detect_language_from_path(&def_result.location.file_path);
-                        let lang = Lang::from_str(&lang_str).map_err(|e| {
-                            Exception::throw_message(&ctx, &format!("Unsupported language: {}", e))
-                        })?;
-                        let grep = AstGrep::new(def_result.content.clone(), lang);
-
-                        if let Ok(new_root) = SgRootRjs::try_new_with_semantic(
-                            grep,
-                            Some(def_result.location.file_path.to_string_lossy().to_string()),
-                            self.root.semantic_provider.clone(),
-                            self.root.current_file_path.clone(),
-                            self.root.target_directory.as_deref(),
-                        ) {
-                            let root_node = new_root.inner.grep.root();
-                            if let Some(node) = find_node_at_range(
-                                &root_node,
-                                loc.range.start as usize,
-                                loc.range.end as usize,
-                            ) {
-                                let node_match: NodeMatch<_> = node.into();
-                                let static_node_match: NodeMatch<'static, TSDoc> =
-                                    unsafe { std::mem::transmute(node_match) };
-
-                                let result_obj = rquickjs::Object::new(ctx.clone())?;
-
-                                let sg_node = SgNodeRjs {
-                                    root: Arc::clone(&new_root.inner),
-                                    inner_node: static_node_match,
-                                    _phantom: PhantomData,
-                                };
-                                result_obj.set("node", sg_node)?;
-                                result_obj.set("root", new_root)?;
-                                result_obj.set("kind", kind_str)?;
-
-                                return result_obj.into_js(&ctx);
-                            }
-                        }
-                    }
-
-                    Ok(Value::new_null(ctx))
-                }
-                Ok(None) => Ok(Value::new_null(ctx)),
-                Err(e) => Err(Exception::throw_message(
-                    &ctx,
-                    &format!("Failed to get definition: {}", e),
-                )),
+            Some(def) => {
+                let result_obj = rquickjs::Object::new(ctx.clone())?;
+                result_obj.set("node", SgNodeRjs::from_core(def.node))?;
+                result_obj.set("root", SgRootRjs::from_core(def.root))?;
+                result_obj.set("kind", def.kind)?;
+                result_obj.into_js(&ctx)
             }
+            None => Ok(Value::new_null(ctx)),
         }
     }
 
@@ -1061,124 +446,38 @@ impl<'js> SgNodeRjs<'js> {
     /// In accurate mode, this searches the entire workspace.
     #[qjs(rename = "references")]
     pub fn references(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        #[cfg(not(feature = "native"))]
-        {
+        let Some(request) = self
+            .core
+            .semantic()
+            .map_err(|e| throw_core_error(&ctx, e))?
+        else {
             return rquickjs::Array::new(ctx.clone())?.into_js(&ctx);
-        }
-        #[cfg(feature = "native")]
-        {
-            let provider = match &self.root.semantic_provider {
-                Some(p) => p,
-                None => return rquickjs::Array::new(ctx.clone())?.into_js(&ctx),
+        };
+
+        let files = request
+            .references()
+            .map_err(|e| throw_core_error(&ctx, e))?;
+
+        let result_array = rquickjs::Array::new(ctx.clone())?;
+        for (idx, file_refs) in files.into_iter().enumerate() {
+            // Unsupported-language files leave a hole, as before.
+            let Some(file_refs) = file_refs else {
+                continue;
             };
+            let file_obj = rquickjs::Object::new(ctx.clone())?;
+            file_obj.set("root", SgRootRjs::from_core(file_refs.root))?;
 
-            let file_path = match &self.root.filename {
-                Some(f) => std::path::PathBuf::from(f),
-                None => return rquickjs::Array::new(ctx.clone())?.into_js(&ctx),
-            };
-
-            let byte_range = self.inner_node.range();
-            let range =
-                language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
-
-            match provider.find_references(&file_path, range) {
-                Ok(refs_result) => {
-                    let result_array = rquickjs::Array::new(ctx.clone())?;
-
-                    for (idx, file_refs) in refs_result.files.iter().enumerate() {
-                        let is_same_file = file_refs.file_path == file_path;
-
-                        let file_obj = rquickjs::Object::new(ctx.clone())?;
-
-                        if is_same_file {
-                            // Use existing root for same file
-                            let sg_root = SgRootRjs {
-                                inner: Arc::clone(&self.root),
-                                _phantom: PhantomData,
-                            };
-                            file_obj.set("root", sg_root)?;
-
-                            // Find nodes for each location
-                            let nodes_array = rquickjs::Array::new(ctx.clone())?;
-                            let root_node = self.root.grep.root();
-
-                            for (node_idx, loc) in file_refs.locations.iter().enumerate() {
-                                if let Some(node) = find_node_at_range(
-                                    &root_node,
-                                    loc.range.start as usize,
-                                    loc.range.end as usize,
-                                ) {
-                                    let node_match: NodeMatch<_> = node.into();
-                                    let static_node_match: NodeMatch<'static, TSDoc> =
-                                        unsafe { std::mem::transmute(node_match) };
-
-                                    let sg_node = SgNodeRjs {
-                                        root: Arc::clone(&self.root),
-                                        inner_node: static_node_match,
-                                        _phantom: PhantomData,
-                                    };
-                                    nodes_array.set(node_idx, sg_node)?;
-                                }
-                            }
-                            file_obj.set("nodes", nodes_array)?;
-                        } else {
-                            // Create new root for different file
-                            let lang_str = detect_language_from_path(&file_refs.file_path);
-                            let lang = match Lang::from_str(&lang_str) {
-                                Ok(l) => l,
-                                Err(_) => continue, // Skip files with unsupported languages
-                            };
-                            let grep = AstGrep::new(file_refs.content.clone(), lang);
-
-                            if let Ok(new_root) = SgRootRjs::try_new_with_semantic(
-                                grep,
-                                Some(file_refs.file_path.to_string_lossy().to_string()),
-                                self.root.semantic_provider.clone(),
-                                self.root.current_file_path.clone(),
-                                self.root.target_directory.as_deref(),
-                            ) {
-                                file_obj.set("root", new_root.clone())?;
-
-                                // Find nodes for each location
-                                let nodes_array = rquickjs::Array::new(ctx.clone())?;
-                                let root_node = new_root.inner.grep.root();
-
-                                for (node_idx, loc) in file_refs.locations.iter().enumerate() {
-                                    if let Some(node) = find_node_at_range(
-                                        &root_node,
-                                        loc.range.start as usize,
-                                        loc.range.end as usize,
-                                    ) {
-                                        let node_match: NodeMatch<_> = node.into();
-                                        let static_node_match: NodeMatch<'static, TSDoc> =
-                                            unsafe { std::mem::transmute(node_match) };
-
-                                        let sg_node = SgNodeRjs {
-                                            root: Arc::clone(&new_root.inner),
-                                            inner_node: static_node_match,
-                                            _phantom: PhantomData,
-                                        };
-                                        nodes_array.set(node_idx, sg_node)?;
-                                    }
-                                }
-                                file_obj.set("nodes", nodes_array)?;
-                            } else {
-                                // Skip files we can't parse
-                                continue;
-                            }
-                        }
-
-                        result_array.set(idx, file_obj)?;
-                    }
-
-                    result_array.into_js(&ctx)
+            let nodes_array = rquickjs::Array::new(ctx.clone())?;
+            for (node_idx, node) in file_refs.nodes.into_iter().enumerate() {
+                if let Some(node) = node {
+                    nodes_array.set(node_idx, SgNodeRjs::from_core(node))?;
                 }
-                Err(e) => Err(Exception::throw_message(
-                    &ctx,
-                    &format!("Failed to find references: {}", e),
-                )),
             }
+            file_obj.set("nodes", nodes_array)?;
+            result_array.set(idx, file_obj)?;
         }
+
+        result_array.into_js(&ctx)
     }
 
     /// Get type information for the symbol at this node's position.
@@ -1190,58 +489,17 @@ impl<'js> SgNodeRjs<'js> {
     /// - Type information is not available
     #[qjs(rename = "typeInfo")]
     pub fn type_info(&self, ctx: Ctx<'js>) -> Result<Value<'js>> {
-        #[cfg(not(feature = "native"))]
-        {
+        let Some(request) = self
+            .core
+            .semantic()
+            .map_err(|e| throw_core_error(&ctx, e))?
+        else {
             return Ok(Value::new_null(ctx));
-        }
-        #[cfg(feature = "native")]
-        {
-            let provider = match &self.root.semantic_provider {
-                Some(p) => p,
-                None => return Ok(Value::new_null(ctx)),
-            };
+        };
 
-            let file_path = match &self.root.filename {
-                Some(f) => std::path::PathBuf::from(f),
-                None => return Ok(Value::new_null(ctx)),
-            };
-
-            let byte_range = self.inner_node.range();
-            let range =
-                language_core::ByteRange::new(byte_range.start as u32, byte_range.end as u32);
-
-            match provider.get_type(&file_path, range) {
-                Ok(Some(type_str)) => type_str.into_js(&ctx),
-                Ok(None) => Ok(Value::new_null(ctx)),
-                Err(e) => Err(Exception::throw_message(
-                    &ctx,
-                    &format!("Failed to get type: {}", e),
-                )),
-            }
+        match request.type_info().map_err(|e| throw_core_error(&ctx, e))? {
+            Some(type_str) => type_str.into_js(&ctx),
+            None => Ok(Value::new_null(ctx)),
         }
     }
-}
-
-/// Detect language from file path extension.
-#[cfg(feature = "native")]
-fn detect_language_from_path(path: &std::path::Path) -> String {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("ts") | Some("mts") | Some("cts") => "typescript".to_string(),
-        Some("tsx") => "tsx".to_string(),
-        Some("js") | Some("mjs") | Some("cjs") => "javascript".to_string(),
-        Some("jsx") => "jsx".to_string(),
-        Some("py") | Some("pyi") => "python".to_string(),
-        _ => "typescript".to_string(), // Default to typescript
-    }
-}
-
-/// Get the language from an AstGrep instance.
-#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
-fn get_language(grep: &AstGrep<TSDoc>) -> Lang {
-    *grep.lang()
-}
-
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-fn get_language(grep: &AstGrep<TSDoc>) -> crate::ast_grep::wasm_lang::WasmLang {
-    grep.lang().clone()
 }

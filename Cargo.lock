@@ -1139,6 +1139,7 @@ dependencies = [
  "num_cpus",
  "oauth2",
  "open",
+ "orchestration",
  "percent-encoding",
  "portable-pty",
  "rand 0.8.5",
@@ -2776,6 +2777,12 @@ name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
+
+[[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hex-simd"
@@ -4774,6 +4781,48 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
+name = "orchestration"
+version = "1.18.6"
+dependencies = [
+ "anyhow",
+ "arcstr",
+ "ast-grep-config",
+ "ast-grep-core",
+ "codemod-sandbox",
+ "hex",
+ "ignore",
+ "language-core",
+ "libc",
+ "oxc 0.96.0",
+ "regex",
+ "regress",
+ "reqwest 0.12.23",
+ "rolldown",
+ "rolldown_common",
+ "rolldown_plugin",
+ "rquickjs",
+ "semantic-factory",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "orchestration-agent"
+version = "1.18.6"
+dependencies = [
+ "codemod-ai",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "ordered-float"

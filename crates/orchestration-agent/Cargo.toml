@@ -1,0 +1,26 @@
+[package]
+name = "orchestration-agent"
+version.workspace = true
+edition = "2021"
+authors.workspace = true
+description = "codemod-agent: runs one agent operation (builtin, claude-code, codex) for the TypeScript orchestration runtimes"
+documentation.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "codemod-agent"
+path = "src/main.rs"
+
+[dependencies]
+codemod-ai = { path = "../ai" }
+# The response channel: a private, close-on-exec copy of stdout.
+libc = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+# A private directory for the Codex last-message file.
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]

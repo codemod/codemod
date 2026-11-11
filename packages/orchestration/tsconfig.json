@@ -1,0 +1,12 @@
+{
+  "extends": "@codemod.com/tsconfig/lib.json",
+  "include": ["./src", "./tests"],
+  "exclude": ["./dist", "./node_modules"],
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "lib": ["ESNext"],
+    "types": ["node"],
+    "allowImportingTsExtensions": true
+  }
+}

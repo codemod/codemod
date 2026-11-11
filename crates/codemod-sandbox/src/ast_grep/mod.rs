@@ -1,3 +1,4 @@
+pub mod sg_core;
 pub(crate) mod sg_node;
 mod types;
 mod utils;
@@ -31,7 +32,10 @@ use crate::{
             validate_path_within_target, DryRunExecutionFlag, FileChange, JssgExecutionContext,
             JssgFileChanges,
         },
-        transform_helpers::{build_transform_options, process_transform_result, ModificationCheck},
+        transform_helpers::{
+            build_transform_options, process_transform_result, ModificationCheck,
+            SECONDARY_STRUCTURED_RESULT,
+        },
         ExecutionModeFlag,
     },
     utils::quickjs_utils::maybe_promise,
@@ -39,7 +43,7 @@ use crate::{
 use rquickjs::module::{Declarations, Exports, ModuleDef};
 use rquickjs::{prelude::Func, Class, Ctx, Exception, Function, Object, Result, Value};
 #[cfg(feature = "native")]
-use std::{str::FromStr, sync::Arc};
+use std::str::FromStr;
 
 use sg_node::{SgNodeRjs, SgRootRjs};
 
@@ -227,9 +231,9 @@ fn jssg_transform_rjs<'js>(
     )
     .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?;
 
-    let sg_root_inner = Arc::clone(&sg_root.inner);
+    let sg_root_core = sg_root.core.clone();
 
-    let lang_str = CodemodLang::from_str(sg_root.inner.grep.lang().to_string().as_str())
+    let lang_str = CodemodLang::from_str(sg_root.core.lang().to_string().as_str())
         .map(|l| l.to_string())
         .unwrap_or_default();
 
@@ -259,9 +263,17 @@ fn jssg_transform_rjs<'js>(
             .await
             .map_err(|e| Exception::throw_message(&ctx2, &format!("Transform failed: {e}")))?;
 
+        // Structured `{ content, output }` results are only understood for the
+        // top-level transform, where the engine collects `output`. A secondary
+        // transform has nowhere to deliver structured data, so it is rejected
+        // rather than silently discarded.
+        if result.is_object() {
+            return Err(Exception::throw_message(&ctx2, SECONDARY_STRUCTURED_RESULT));
+        }
+
         let exec_result = process_transform_result(
             &result,
-            &sg_root_inner,
+            &sg_root_core,
             ModificationCheck::StringEquality {
                 original_content: &content,
             },

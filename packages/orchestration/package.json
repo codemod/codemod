@@ -1,0 +1,37 @@
+{
+  "name": "@codemod.com/orchestration",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TypeScript prototype of the Codemod orchestration runtime (static composition, workflows, replay history) run in a sandboxed QuickJS runtime",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./portable": {
+      "types": "./src/portable.ts",
+      "default": "./src/portable.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "build:agent": "cargo build -p orchestration-agent",
+    "test:live:agent:builtin": "pnpm build:agent && CODEMOD_LIVE_AGENT_BUILTIN=1 vitest run tests/agent.builtin.live.test.ts",
+    "test:live:agent:claude-code": "pnpm build:agent && CODEMOD_LIVE_AGENT_CLAUDE_CODE=1 vitest run tests/agent.claude-code.live.test.ts",
+    "test:live:agent:codex": "pnpm build:agent && CODEMOD_LIVE_AGENT_CODEX=1 vitest run tests/agent.codex.live.test.ts",
+    "test:live:assessment": "vitest run tests/assessment.live.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@codemod.com/jssg-types": "workspace:*",
+    "ignore": "^5.3.1"
+  },
+  "devDependencies": {
+    "@codemod.com/tsconfig": "workspace:*",
+    "@types/node": "*",
+    "typescript": "catalog:",
+    "vitest": "^1.6.0"
+  }
+}

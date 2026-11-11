@@ -16,6 +16,7 @@ butterflow-core = { workspace = true }
 butterflow-state = { workspace = true }
 butterflow-runners = { workspace = true }
 codemod-sandbox = { workspace = true }
+orchestration = { path = "../orchestration" }
 codemod-telemetry = { workspace = true }
 codemod-mcp = { workspace = true }
 testing-utils = { workspace = true }

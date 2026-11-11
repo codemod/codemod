@@ -4,6 +4,8 @@ members = [
     "crates/core",
     "crates/cli",
     "crates/runners",
+    "crates/orchestration",
+    "crates/orchestration-agent",
     "crates/state",
     "crates/codemod-sandbox",
     "crates/codemod-sandbox/build",

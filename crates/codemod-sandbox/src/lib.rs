@@ -8,6 +8,8 @@ pub mod sandbox;
 pub mod utils;
 pub mod workflow_global;
 
+/// Binding-agnostic `SgRoot`/`SgNode` core behind the QuickJS facade.
+pub use ast_grep::sg_core;
 #[cfg(feature = "native")]
 pub use ast_grep::{scan_file_with_combined_scan, with_combined_scan};
 pub use metrics::{MetricsContext, MetricsData};

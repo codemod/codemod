@@ -1,44 +1,31 @@
-use crate::ast_grep::types::AstGrepError;
-#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-use crate::ast_grep::wasm_lang::WasmLang as SupportLang;
-#[cfg(feature = "native")]
-use crate::sandbox::engine::codemod_lang::CodemodLang as SupportLang;
-use ast_grep_config::{DeserializeEnv, RuleCore, SerializableRuleCore};
-use ast_grep_core::{
-    matcher::{KindMatcher, Matcher},
-    meta_var::MetaVarEnv,
-    Doc, Node, Pattern,
+use crate::ast_grep::sg_core::{
+    compile_matcher, CoreLang as SupportLang, CoreMatcher, MatcherInput,
 };
-#[cfg(all(
-    not(all(feature = "wasm", target_arch = "wasm32")),
-    not(feature = "native")
-))]
-use ast_grep_language::SupportLang;
+use crate::ast_grep::sg_node::throw_core_error;
+use crate::ast_grep::types::AstGrepError;
 use rquickjs::{Ctx, Exception, FromJs, Result as QResult, Value};
-use std::borrow::Cow;
 use std::str::FromStr;
 
 use super::serde::JsValue;
 
-#[allow(clippy::large_enum_variant)]
-pub enum JsMatcherRjs {
-    Pattern(Pattern),
-    Kind(KindMatcher),
-    Config(RuleCore),
-}
-
-impl Matcher for JsMatcherRjs {
-    fn match_node_with_env<'tree, D: Doc>(
-        &self,
-        node: Node<'tree, D>,
-        env: &mut Cow<'_, MetaVarEnv<'tree, D>>,
-    ) -> Option<Node<'tree, D>> {
-        match self {
-            JsMatcherRjs::Pattern(p) => p.match_node_with_env(node, env),
-            JsMatcherRjs::Kind(k) => k.match_node_with_env(node, env),
-            JsMatcherRjs::Config(c) => c.match_node_with_env(node, env),
-        }
+/// Convert a JavaScript matcher argument (pattern string, kind id, or rule
+/// config object) to a [`MatcherInput`].
+pub fn js_matcher_input<'js>(value: Value<'js>, ctx: &Ctx<'js>) -> QResult<MatcherInput> {
+    if value.is_string() {
+        let pattern_str = value.as_string().unwrap().to_string()?;
+        return Ok(MatcherInput::Pattern(pattern_str));
+    } else if value.is_number() {
+        let kind_id = value.as_number().unwrap() as u16;
+        return Ok(MatcherInput::Kind(kind_id));
+    } else if value.is_object() {
+        let js_value = JsValue::from_js(ctx, value)?;
+        return Ok(MatcherInput::Config(js_value.0));
     }
+
+    Err(Exception::throw_type(
+        ctx,
+        "Matcher must be an object with a 'pattern' or 'kind' property",
+    ))
 }
 
 // Convert a JavaScript value to an appropriate ast-grep matcher
@@ -46,30 +33,9 @@ pub fn convert_matcher<'js>(
     value: Value<'js>,
     lang: SupportLang,
     ctx: &Ctx<'js>,
-) -> QResult<JsMatcherRjs> {
-    if value.is_string() {
-        let pattern_str = value.as_string().unwrap().to_string()?;
-        let pattern = Pattern::new(&pattern_str, lang);
-        return Ok(JsMatcherRjs::Pattern(pattern));
-    } else if value.is_number() {
-        let kind_id = value.as_number().unwrap() as u16;
-        let kind_matcher = KindMatcher::from_id(kind_id);
-        return Ok(JsMatcherRjs::Kind(kind_matcher));
-    } else if value.is_object() {
-        let js_value = JsValue::from_js(ctx, value)?;
-        let serde_value: SerializableRuleCore = serde_json::from_value(js_value.0)
-            .map_err(|e| Exception::throw_type(ctx, &e.to_string()))?;
-        let env = DeserializeEnv::new(lang);
-        let config = serde_value
-            .get_matcher(env)
-            .map_err(|e| Exception::throw_type(ctx, &e.to_string()))?;
-        return Ok(JsMatcherRjs::Config(config));
-    }
-
-    Err(Exception::throw_type(
-        ctx,
-        "Matcher must be an object with a 'pattern' or 'kind' property",
-    ))
+) -> QResult<CoreMatcher> {
+    let input = js_matcher_input(value, ctx)?;
+    compile_matcher(input, lang).map_err(|e| throw_core_error(ctx, e))
 }
 
 pub fn detect_language_from_extension(extension: &str) -> Result<&'static str, AstGrepError> {
