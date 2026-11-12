@@ -7,7 +7,7 @@ Required context (ask for anything missing):
 - Assume the user already ran `npx codemod login` or set `CODEMOD_AUTH_TOKEN`; verify with `npx codemod whoami --detailed` (if whoami fails but `CODEMOD_AUTH_TOKEN` is set, ask for author `Name <email>`)
 
 Deliver, in order:
-1. Migration plan — include author name/email from auth (or user-provided), public visibility/access by default, and a **full break inventory** classifying every changelog item as `codemod` / `deferred-automatable` / `manual`
+1. Migration plan — include author name/email from auth (or user-provided), public visibility/access by default, and a **full break inventory** classifying every breaking change (and clearly breaking Changed/Removed item) as `codemod` / `deferred-automatable` / `manual` — not every additive feature or bugfix
 2. Explicit confirmation of that inventory split (auth-only / “continue” is not enough)
 3. Codemods built locally — transforms for `codemod` rows **and** before/after fixture backlog for every `deferred-automatable` row
 4. Codemods tested — on failure, fix and retest until green (wired steps only)
