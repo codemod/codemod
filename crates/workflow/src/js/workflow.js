@@ -49,8 +49,9 @@ export class AwaitingApprovalError extends Error {
 
 // ------------------------------------------------------------------ state ---
 
-/** Read workflow state. Values are frozen. */
+/** Read one state key, or the whole state as an object when called without one. Values are frozen. */
 export function getState(key) {
+  if (key === undefined) return Object.freeze(Object.fromEntries(state));
   return state.get(key);
 }
 
@@ -102,8 +103,22 @@ export function forEachFile(selector, callback) {
 }
 
 function hostTask(kind, options) {
-  checkJson(options, kind);
-  return Object.freeze({ [TASK]: "host", content: { ...options, kind } });
+  const content = withoutUndefined(options);
+  checkJson(content, kind);
+  return Object.freeze({ [TASK]: "host", content: { ...content, kind } });
+}
+
+/** Drop `undefined` object properties, so optional task options can be left unset. */
+function withoutUndefined(value) {
+  if (Array.isArray(value)) return value.map(withoutUndefined);
+  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    const result = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (item !== undefined) result[key] = withoutUndefined(item);
+    }
+    return result;
+  }
+  return value;
 }
 
 /** Run a shell command. */

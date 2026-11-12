@@ -20,6 +20,7 @@ codemod-sandbox = { path = "../codemod-sandbox", features = ["native"] }
 ignore = { workspace = true }
 oxc = { version = "0.99.0", features = ["transformer", "codegen", "semantic"] }
 rquickjs = { version = "0.11", default-features = false, features = ["loader", "macro", "classes", "properties"] }
+regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = "0.10"
@@ -29,4 +30,5 @@ tokio = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+serde_yaml = { workspace = true }
 tempfile = { workspace = true }

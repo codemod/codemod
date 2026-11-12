@@ -56,7 +56,7 @@ pub fn load_workflow(path: &Path) -> Result<LoadedWorkflow, EngineError> {
     let typescript = if is_typescript(path) {
         source
     } else {
-        crate::compat::translate_source(&source, path)
+        crate::compat::translate_file(path)
             .map_err(EngineError::Compat)?
             .source
     };
