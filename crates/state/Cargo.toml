@@ -20,3 +20,7 @@ async-trait = { workspace = true }
 reqwest = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,6 +1,6 @@
 [package]
-name = "codemod-flow"
-description = "Spike: step() and forEachFile for TypeScript workflows"
+name = "codemod-workflow"
+description = "Code-first workflow engine: step(), forEachFile and tasks for TypeScript workflows"
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -9,6 +9,9 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+butterflow-models = { workspace = true }
+butterflow-state = { workspace = true }
+chrono = { workspace = true }
 codemod-sandbox = { path = "../codemod-sandbox", features = ["native"] }
 ignore = { workspace = true }
 oxc = { version = "0.99.0", features = ["transformer", "codegen", "semantic"] }
@@ -17,6 +20,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = "0.10"
 thiserror = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -26,7 +26,7 @@ use oxc::transformer::{TransformOptions, Transformer};
 use sha2::{Digest, Sha256};
 
 /// Specifier of the authoring module.
-pub const FLOW_MODULE: &str = "codemod:flow";
+pub const FLOW_MODULE: &str = "codemod:workflow";
 
 /// Prelude appended to every extracted callback module.
 const CALLBACK_PRELUDE: &str = include_str!("js/callback_prelude.js");

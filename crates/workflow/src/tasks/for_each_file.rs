@@ -5,8 +5,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use codemod_sandbox::AstGrepModule;
 use ignore::overrides::OverrideBuilder;
@@ -15,6 +15,8 @@ use rquickjs::loader::{BuiltinLoader, BuiltinResolver, ModuleLoader};
 use rquickjs::{CatchResultExt, Context, Function, Module, Runtime};
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+use super::{TaskContext, TaskOutcome};
 
 const CALLBACK_MODULE: &str = "callback.js";
 
@@ -53,18 +55,32 @@ struct Planned {
     delete: bool,
 }
 
-pub struct ForEachFile<'a> {
-    pub target: &'a Path,
-    pub module: &'a str,
-    pub selector: &'a Selector,
-    pub captures: &'a str,
-    pub dry_run: bool,
-    /// Serializes commits from steps running at the same time.
-    pub commit_lock: &'a Mutex<()>,
+#[derive(Deserialize)]
+struct Request {
+    selector: Selector,
+    callback: String,
+    captures: Value,
 }
 
-pub fn run(task: ForEachFile<'_>) -> Result<Value, String> {
-    let files = select(task.target, task.selector)?;
+pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome, String> {
+    let request: Request =
+        serde_json::from_value(request).map_err(|e| format!("bad forEachFile task: {e}"))?;
+    let run = task.run;
+    let module = run
+        .callbacks
+        .get(&request.callback)
+        .ok_or_else(|| format!("unknown callback '{}'", request.callback))?;
+    let captures = serde_json::to_string(&request.captures).map_err(|e| e.to_string())?;
+    let files = select(&run.target, &request.selector)?;
+    let total = files.len();
+    let processed = AtomicUsize::new(0);
+    let report_every = (total / 100).max(1);
+    let progress = || {
+        let done = processed.fetch_add(1, Ordering::SeqCst) + 1;
+        if done == total || done % report_every == 0 {
+            task.progress(done, total);
+        }
+    };
 
     let next = AtomicUsize::new(0);
     let workers = std::thread::available_parallelism()
@@ -80,11 +96,15 @@ pub fn run(task: ForEachFile<'_>) -> Result<Value, String> {
             .map(|_| {
                 scope.spawn(|| {
                     worker(
-                        task.module,
-                        task.captures,
-                        task.selector.language.as_deref(),
-                        &files,
-                        &next,
+                        Worker {
+                            module,
+                            captures: &captures,
+                            language: request.selector.language.as_deref(),
+                            files: &files,
+                            next: &next,
+                            cancel: &run.cancel,
+                        },
+                        &progress,
                     )
                 })
             })
@@ -122,8 +142,13 @@ pub fn run(task: ForEachFile<'_>) -> Result<Value, String> {
         }
     }
 
-    let changes = commit(task.target, &planned, task.dry_run, task.commit_lock)?;
-    Ok(json!({ "outputs": outputs, "changes": changes, "failures": failures }))
+    if run.canceled() {
+        return Err("canceled".to_string());
+    }
+    let changes = commit(&run.target, &planned, run.dry_run, &run.commit_lock)?;
+    Ok(TaskOutcome::new(
+        json!({ "outputs": outputs, "changes": changes, "failures": failures }),
+    ))
 }
 
 /// Select files: globs and `.gitignore` first, then the text filter. Returns
@@ -185,14 +210,27 @@ fn select(target: &Path, selector: &Selector) -> Result<Vec<(String, String)>, S
 
 type WorkerResult = Result<Vec<(usize, Result<FileOutcome, String>)>, String>;
 
-fn worker(
-    module: &str,
-    captures: &str,
-    language: Option<&str>,
-    files: &[(String, String)],
-    next: &AtomicUsize,
-) -> WorkerResult {
+struct Worker<'a> {
+    module: &'a str,
+    captures: &'a str,
+    language: Option<&'a str>,
+    files: &'a [(String, String)],
+    next: &'a AtomicUsize,
+    cancel: &'a Arc<AtomicBool>,
+}
+
+fn worker(job: Worker<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
+    let Worker {
+        module,
+        captures,
+        language,
+        files,
+        next,
+        cancel,
+    } = job;
     let runtime = Runtime::new().map_err(|e| e.to_string())?;
+    let interrupt = Arc::clone(cancel);
+    runtime.set_interrupt_handler(Some(Box::new(move || interrupt.load(Ordering::SeqCst))));
     let context = Context::full(&runtime).map_err(|e| e.to_string())?;
     runtime.set_loader(
         (
@@ -222,6 +260,9 @@ fn worker(
 
         let mut results = Vec::new();
         loop {
+            if cancel.load(Ordering::SeqCst) {
+                break;
+            }
             let index = next.fetch_add(1, Ordering::SeqCst);
             let Some((path, text)) = files.get(index) else {
                 break;
@@ -234,6 +275,7 @@ fn worker(
                     serde_json::from_str::<FileOutcome>(&json).map_err(|e| e.to_string())
                 });
             results.push((index, outcome));
+            progress();
         }
         Ok(results)
     })

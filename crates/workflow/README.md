@@ -1,11 +1,11 @@
-# codemod-flow (spike)
+# codemod-workflow
 
 A throwaway spike of the `step()` / `forEachFile` workflow API. It is not wired
 into the CLI and not published. Design doc: "Design: step() and forEachFile for
 TypeScript workflows" in Notion.
 
 ```ts
-import { step, forEachFile, parse } from "codemod:flow";
+import { step, forEachFile, parse } from "codemod:workflow";
 
 const LEGACY = "moment";
 
@@ -29,7 +29,7 @@ export default async function main() {
 **Build** (`src/build.rs`) uses oxc's semantic analysis:
 
 - finds every `forEachFile(selector, callback)` whose `forEachFile` is imported
-  from `codemod:flow`;
+  from `codemod:workflow`;
 - extracts the callback into its own module, copying in the module-level
   declarations it uses (transitively) and the `codemod:*` imports it needs;
 - turns locals of enclosing functions into captures, and rewrites the call site
@@ -75,5 +75,5 @@ export default async function main() {
 ## Run
 
 ```bash
-cargo test -p codemod-flow
+cargo test -p codemod-workflow
 ```
