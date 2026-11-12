@@ -11,7 +11,8 @@
     "strictNullChecks": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": true
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true
   },
   "exclude": ["tests"]
 }

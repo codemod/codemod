@@ -51,7 +51,7 @@
     "./src"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit --emitDeclarationOnly false",
+    "typecheck": "tsc --noEmit --emitDeclarationOnly false && tsc -p type-tests",
     "pull-llrt-types": "bash scripts/pull-llrt-types.sh"
   },
   "devDependencies": {

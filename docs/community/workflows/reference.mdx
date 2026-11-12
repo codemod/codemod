@@ -233,6 +233,36 @@ npx codemod workflow cancel --id <run-id>
 
 Runs are stored under your data directory (`~/Library/Application Support/codemod/runs` on macOS). Set `CODEMOD_RUN_STORE_DIR` to store them elsewhere, or `CODEMOD_RUN_STORE=memory` to keep nothing. A dry run is never saved.
 
+## Editor types
+
+Types for `codemod:workflow` ship in `@codemod.com/jssg-types`, the same package that types JSSG transforms. Packages created with `codemod init` are already set up. For an existing package:
+
+```bash
+npm install --save-dev @codemod.com/jssg-types typescript
+```
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["@codemod.com/jssg-types"],
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true
+  }
+}
+```
+
+The package also needs `"type": "module"` in its `package.json`. Then `npx tsc` checks `workflow.ts` along with your transforms:
+
+- Step results are typed and read-only. `forEachFile` collects what the callback returns: returning `file.path` or `undefined` gives `outputs: readonly string[]`.
+- A step result or callback return value that is not JSON is a type error, for example a `Set`, a `Map`, a `Date`, a function, or a `Promise` returned from an `async` callback.
+- Type the default export's argument with `WorkflowContext`: `main({ params }: WorkflowContext<{ replacement?: string }>)`.
+- Type `parse` with a language map: `parse<TS>(file)`, where `TS` is imported from `codemod:ast-grep/langs/typescript`.
+
+The callback rules that depend on scope, such as assigning to an outside variable, are checked by `codemod workflow validate`, not by TypeScript.
+
 ## Validation
 
 ```bash

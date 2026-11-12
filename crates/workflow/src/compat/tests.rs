@@ -163,8 +163,8 @@ fn the_documented_features_translate_and_build() {
 
     expect("\"pr_size\": 20");
     expect("\"mode\": \"safe\"");
-    expect("setState(\"shards\", await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", jssg: { path: \"scripts/codemod.ts\", language: \"tsx\", params }, previous: getState(\"shards\") })));");
-    expect("(getState(\"shards\") ?? []).map((matrix: Matrix, index: number) => applyNodeFor(params, matrix, index))");
+    expect("setState(\"shards\", await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", jssg: { path: \"scripts/codemod.ts\", language: \"tsx\", params }, previous: getState<any>(\"shards\") })));");
+    expect("(getState<any>(\"shards\") ?? []).map((matrix: Matrix, index: number) => applyNodeFor(params, matrix, index))");
     expect("await step(approval(\"Run 'Apply transforms'?\"));");
     expect("const branchName = `codemod-apply-${index}`;");
     expect("jssg(\"scripts/codemod.ts\", { files: matrix?._meta_files, language: \"tsx\", params, matrix: matrix ?? undefined })");

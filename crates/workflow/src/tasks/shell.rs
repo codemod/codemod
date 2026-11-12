@@ -91,6 +91,12 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let events = Arc::clone(&run.events);
     let position = task.position;
     let on_line: butterflow_runners::OutputCallback = Arc::new(move |line: String| {
+        // The runner tags each line with its stream; stdout needs no tag in step logs.
+        let line = line
+            .strip_prefix("[stdio] ")
+            .or_else(|| line.strip_prefix("[stdout] "))
+            .map(str::to_string)
+            .unwrap_or(line);
         events.emit(crate::events::Event::StepLog { position, line });
     });
     let output =

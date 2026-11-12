@@ -91,7 +91,8 @@ fn path(expression: &str) -> Option<String> {
     let base = match root {
         "params" => format!("params.{}", rest[0]),
         "matrix" => format!("matrix?.{}", rest[0]),
-        "state" => format!("getState({})", js_string(rest[0])),
+        // State has no declared types in workflow.yaml, so it is read as `any`.
+        "state" => format!("getState<any>({})", js_string(rest[0])),
         _ => return None,
     };
     Some(
@@ -185,7 +186,7 @@ mod tests {
         );
         assert_eq!(
             template("${{ state.count }}`"),
-            "`${getState(\"count\")}\\``"
+            "`${getState<any>(\"count\")}\\``"
         );
     }
 
@@ -205,7 +206,7 @@ mod tests {
         );
         assert_eq!(
             condition("state.count > 0 && !params.skip"),
-            "getState(\"count\") > 0 && !params.skip"
+            "getState<any>(\"count\") > 0 && !params.skip"
         );
         assert_eq!(condition("true"), "true");
         assert!(condition("contains(params.list, \"a\")").starts_with("evaluate(\"condition\""));

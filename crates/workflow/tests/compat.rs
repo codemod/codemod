@@ -10,11 +10,17 @@ use common::{output, Harness};
 use serde_json::{json, Value};
 
 const TRANSFORM: &str = r#"
-import { setState, getState } from "codemod:workflow";
+import { setState, getState, acquireLock } from "codemod:workflow";
 export default function transform(root: any, options: any) {
   const text = root.root().text();
   if (!text.includes("OLD")) return null;
-  setState("seen", (getState("seen") ?? 0) + 1);
+  // Files run in parallel: without the lock, two can read the same count.
+  const release = acquireLock("seen");
+  try {
+    setState("seen", (getState("seen") ?? 0) + 1);
+  } finally {
+    release();
+  }
   const suffix = options.matrixValues?.suffix ?? "";
   return text.replace("OLD", options.params.replacement + suffix);
 }
@@ -87,7 +93,7 @@ nodes:
         - dir: two
           suffix: "-2"
     steps:
-      - name: Apply
+      - name: Apply in ${{ matrix.dir }}
         js-ast-grep:
           js_file: scripts/codemod.ts
           base_path: "${{ matrix.dir }}"
@@ -97,7 +103,9 @@ nodes:
     assert!(output(&report).is_ok(), "{:?}", report.ending);
     assert_eq!(h.read("one/a.ts"), "x = 'NEW-1'\n");
     assert_eq!(h.read("two/a.ts"), "x = 'NEW-2'\n");
-    assert_eq!(report.steps.len(), 2);
+    let mut labels: Vec<&str> = report.steps.iter().map(|s| s.label.as_str()).collect();
+    labels.sort();
+    assert_eq!(labels, ["Apply in one", "Apply in two"]);
 }
 
 #[test]

@@ -232,4 +232,430 @@ declare module "codemod:workflow" {
     /** Arbitrary metadata exposed as matrix variables */
     [key: string]: unknown;
   }
+
+  // ── Workflow authoring (workflow.ts) ───────────────────────────────────
+  //
+  // Everything below is used from a workflow file. `getState`, `setState` and
+  // `unsetState` above work in both places; `acquireLock` and the step output
+  // functions only inside JSSG transforms.
+
+  import type { SgRoot, TypesMap } from "codemod:ast-grep";
+
+  /** A JSON value: what step results, captured variables and state may hold. */
+  export type JsonValue =
+    | string
+    | number
+    | boolean
+    | null
+    | readonly JsonValue[]
+    | { readonly [key: string]: JsonValue };
+
+  /** Stands in for a value that is not JSON, so the type error names the problem. */
+  export interface NotJson<Reason extends string> {
+    readonly __notJson: Reason;
+  }
+
+  /**
+   * `T` with every part that is not JSON replaced by a `NotJson` marker,
+   * so a value of type `T` is JSON when it is assignable to `JsonCompatible<T>`.
+   */
+  export type JsonCompatible<T> = unknown extends T
+    ? T
+    : T extends string | number | boolean | null | undefined | void
+      ? T
+      : T extends PromiseLike<unknown>
+        ? NotJson<"a Promise: await it first (forEachFile callbacks must be synchronous)">
+        : T extends (...args: never[]) => unknown
+          ? NotJson<"a function">
+          : T extends ReadonlySet<unknown>
+            ? NotJson<"a Set: use an array">
+            : T extends ReadonlyMap<unknown, unknown>
+              ? NotJson<"a Map: use a plain object">
+              : T extends Date
+                ? NotJson<"a Date: use date.toISOString()">
+                : T extends RegExp
+                  ? NotJson<"a RegExp: use its source string">
+                  : T extends object
+                    ? { [K in keyof T]: JsonCompatible<T[K]> }
+                    : NotJson<"not JSON">;
+
+  /** Step results are deeply frozen. */
+  export type Frozen<T> = T extends (...args: never[]) => unknown
+    ? T
+    : T extends readonly (infer U)[]
+      ? readonly Frozen<U>[]
+      : T extends object
+        ? { readonly [K in keyof T]: Frozen<T[K]> }
+        : T;
+
+  const taskResult: unique symbol;
+
+  /** Work for `step()` to run, made by `forEachFile` or a task such as `jssg`. */
+  export interface Task<Result> {
+    readonly [taskResult]: Result;
+  }
+
+  /** What the workflow's default export receives. */
+  export interface WorkflowContext<Params = Record<string, unknown>> {
+    /** `--param key=value` values (JSON when they parse as JSON, otherwise strings). */
+    params: Params;
+    /** Absolute path of the directory the workflow runs on. */
+    target: string;
+    /** Whether this is a dry run: file changes are computed but not written. */
+    dryRun: boolean;
+  }
+
+  /**
+   * Runs a task as a durable step and resolves to its frozen result.
+   *
+   * The step starts when `step()` is called, so `Promise.all` runs steps in
+   * parallel. Its result is recorded; on `codemod workflow resume`, finished
+   * steps are replayed from the record instead of running again.
+   *
+   * @example
+   * ```ts
+   * const renamed = await step("Rename stylesheets", forEachFile("src/**\/*.less", (file) => {
+   *   file.rename(file.path.replace(/\.less$/, ".css"));
+   * }));
+   * ```
+   */
+  export function step<Result>(task: Task<Result>): Promise<Frozen<Result>>;
+  export function step<Result>(label: string, task: Task<Result>): Promise<Frozen<Result>>;
+  /**
+   * Runs a function once and records its result, which must be JSON.
+   * The function has no file system or network access; use a task for that.
+   */
+  export function step<Result>(
+    run: () => PromiseLike<Checked<Result>>,
+  ): Promise<Frozen<StepValue<Result>>>;
+  export function step<Result>(
+    label: string,
+    run: () => PromiseLike<Checked<Result>>,
+  ): Promise<Frozen<StepValue<Result>>>;
+  export function step<Result>(run: () => Checked<Result>): Promise<Frozen<StepValue<Result>>>;
+  export function step<Result>(
+    label: string,
+    run: () => Checked<Result>,
+  ): Promise<Frozen<StepValue<Result>>>;
+
+  /**
+   * `T`, checked to be JSON: `Result` is inferred from the value, which must
+   * then also be assignable to its JSON-compatible form.
+   */
+  export type Checked<T> = T & NoInfer<JsonCompatible<T>>;
+
+  /** A function step that returns nothing records `null`. */
+  export type StepValue<T> = [T] extends [void | undefined] ? null : Exclude<T, void | undefined>;
+
+  /** One glob or several. */
+  export type Globs = string | readonly string[];
+
+  /** Languages `forEachFile` can select files by, through their extensions. */
+  export type SelectorLanguage =
+    | "typescript"
+    | "tsx"
+    | "javascript"
+    | "css"
+    | "json"
+    | "html"
+    | "python"
+    | "rust"
+    | "go"
+    | "java"
+    | "yaml";
+
+  /**
+   * Which files `forEachFile` visits: a glob, a list of globs, or an object.
+   * `.gitignore` is respected.
+   */
+  export type FileSelector =
+    | Globs
+    | {
+        include: Globs;
+        exclude?: Globs;
+        /** The default language for `parse(file)`. */
+        language?: string;
+        /** Only files whose text contains this string. */
+        containing?: string;
+      }
+    | {
+        include?: Globs;
+        exclude?: Globs;
+        /** Selects the language's file extensions, and is the default for `parse(file)`. */
+        language: SelectorLanguage;
+        containing?: string;
+      };
+
+  /** The file a `forEachFile` callback receives. Changes are applied when the step ends. */
+  export interface WorkflowFile {
+    /** Path relative to the target. */
+    readonly path: string;
+    /** Contents when the step started. */
+    readonly text: string;
+    /** Replace the contents. */
+    write(text: string): void;
+    /** Move the file to `path`, relative to the target. */
+    rename(path: string): void;
+    /** Remove the file. */
+    delete(): void;
+  }
+
+  /** Files a step changed. */
+  export interface FileChanges {
+    written: string[];
+    renamed: { from: string; to: string }[];
+    deleted: string[];
+  }
+
+  export interface FileFailure {
+    path: string;
+    error: string;
+  }
+
+  export interface ForEachFileResult<Output> {
+    /** What the callback returned, in path order. Files that returned nothing are left out. */
+    outputs: Output[];
+    changes: FileChanges;
+    /** Files whose callback threw. */
+    failures: FileFailure[];
+  }
+
+  /**
+   * Runs `callback` once for every selected file, in parallel, in isolated
+   * contexts. Returned values are collected into `outputs`.
+   *
+   * The callback must be written inline and be synchronous. Variables from
+   * outside it arrive as frozen copies and must be JSON; assigning to them is a
+   * build error.
+   *
+   * @example
+   * ```ts
+   * const usages = await step(forEachFile({ language: "typescript", containing: "moment" }, (file) => {
+   *   const found = parse(file).root().findAll({ rule: { pattern: 'import $X from "moment"' } });
+   *   return found.length ? file.path : undefined;
+   * }));
+   * usages.outputs; // readonly string[]
+   * ```
+   */
+  export function forEachFile<Output = undefined>(
+    selector: FileSelector,
+    callback: (file: WorkflowFile) => Checked<Output>,
+  ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
+
+  /**
+   * Parses a file with ast-grep. Only available inside a `forEachFile` callback.
+   * The language comes from the argument, then the selector's `language`, then
+   * the file extension.
+   *
+   * @example
+   * ```ts
+   * import type TS from "codemod:ast-grep/langs/typescript";
+   * const root = parse<TS>(file);
+   * ```
+   */
+  export function parse<M extends TypesMap = TypesMap>(
+    file: WorkflowFile,
+    language?: string,
+  ): SgRoot<M>;
+
+  /**
+   * Returns the whole workflow state as a frozen object.
+   * (With a key, see the `getState(name)` overload above.)
+   */
+  export function getState(): Readonly<Record<string, JsonValue>>;
+
+  /**
+   * A result for tasks that do nothing in some runs: shell commands, agents
+   * and skill installs in a dry run, git tasks without `--managed-git`.
+   */
+  export type Skippable<T> =
+    | (T & { skipped?: false })
+    | ({ skipped: true } & { [K in keyof T]?: undefined });
+
+  export interface ShellOptions {
+    /** Extra environment variables. */
+    env?: Readonly<Record<string, string>>;
+    /** Directory to run in, relative to the target (or absolute). Defaults to the current directory. */
+    cwd?: string;
+  }
+
+  /**
+   * Runs a shell command. It can read the workflow state from `$CODEMOD_STATE`
+   * (a JSON file) or `$CODEMOD_STATE_<KEY>`, and set state by writing
+   * `key=value` (or `key@=value` to append) lines to `$STATE_OUTPUTS`.
+   */
+  export function shell(
+    command: string,
+    options?: ShellOptions,
+  ): Task<Skippable<{ output: string }>>;
+
+  export type Capability = "fs" | "fetch" | "child_process";
+
+  export interface JssgOptions {
+    include?: Globs;
+    exclude?: Globs;
+    /** Directory under the target to restrict the run to. */
+    basePath?: string;
+    /** Process exactly these files, relative to the target. */
+    files?: readonly string[];
+    /** Defaults to `typescript`. */
+    language?: string;
+    /** Merged over the run's params; the transform reads them as `options.params`. */
+    params?: Readonly<Record<string, unknown>>;
+    /** The transform reads these as `options.matrixValues`. */
+    matrix?: Readonly<Record<string, unknown>>;
+    capabilities?: readonly Capability[];
+    semanticAnalysis?: "file" | "workspace" | { mode: "workspace"; root?: string };
+    threads?: number;
+    /** Run the transform without applying its changes. */
+    dryRun?: boolean;
+  }
+
+  export interface JssgResult {
+    changes: FileChanges;
+    unmodified: number;
+    failures: FileFailure[];
+  }
+
+  /** Runs a JSSG transform file. `path` is relative to the workflow file. */
+  export function jssg(path: string, options?: JssgOptions): Task<JssgResult>;
+
+  export interface AstGrepOptions {
+    include?: Globs;
+    exclude?: Globs;
+    basePath?: string;
+    threads?: number;
+  }
+
+  export interface AstGrepResult {
+    changes: FileChanges;
+    matches: number;
+    failures: FileFailure[];
+  }
+
+  /** Applies an ast-grep YAML rule file. `path` is relative to the workflow file. */
+  export function astGrep(path: string, options?: AstGrepOptions): Task<AstGrepResult>;
+
+  export type ShardMethod =
+    | {
+        type: "directory" | "codeowner";
+        /** Target number of files per shard. */
+        maxFilesPerShard: number;
+        /** Trailing shards smaller than this are merged into the previous one. */
+        minShardSize?: number;
+      }
+    | {
+        /** A JS/TS file whose default export receives a `ShardInput` and returns `ShardResult[]`. */
+        function: string;
+      };
+
+  export interface ShardOptions {
+    method: ShardMethod;
+    /** Directory to scan, relative to the target. */
+    target?: string;
+    /** Glob for eligible files when `jssg` is not set. */
+    filePattern?: string;
+    /** Keep only the files this transform would change. */
+    jssg?: JssgOptions & { path: string };
+    /** An earlier result of this step, so existing assignments are kept. */
+    previous?: readonly ShardResult[];
+  }
+
+  /** Splits files into groups ("shards"), for example one per directory or code owner. */
+  export function shard(options: ShardOptions): Task<ShardResult[]>;
+
+  /** Runs another codemod package (registry name or local path) as part of this step. */
+  export function codemod(
+    source: string,
+    options?: { params?: Readonly<Record<string, unknown>> },
+  ): Task<{ output: JsonValue }>;
+
+  export interface AgentOptions {
+    systemPrompt?: string;
+    model?: string;
+    maxSteps?: number;
+    tools?: readonly string[];
+    endpoint?: string;
+    apiKey?: string;
+    llmProtocol?: string;
+  }
+
+  export interface AgentResult {
+    skipped?: true;
+    /** Whether the prompt was handed to an external coding agent. */
+    handedOff?: boolean;
+    /** The agent that ran the prompt. */
+    agent?: string;
+    /** Structured output from the built-in agent. */
+    data?: JsonValue;
+  }
+
+  /** Hands a prompt to a coding agent. */
+  export function agent(prompt: string, options?: AgentOptions): Task<AgentResult>;
+
+  export interface InstallSkillOptions {
+    /** Package to install, for example `@codemod/jest-to-vitest`. */
+    package: string;
+    /** Skill source path inside the package. */
+    path?: string;
+    harness?: "auto" | "claude" | "goose" | "opencode" | "cursor" | "codex" | "antigravity";
+    scope?: "project" | "user";
+    force?: boolean;
+  }
+
+  /** Installs a package's agent skill into a coding-agent harness. */
+  export function installSkill(options: InstallSkillOptions): Task<Skippable<{ output: string }>>;
+
+  /**
+   * Waits for a person to approve. Interactive runs ask; with `--no-interactive`
+   * the run pauses here until `codemod workflow resume --id <id> --approve`.
+   */
+  export function approval(message: string): Task<{ approved: true }>;
+
+  /** Checks out a branch for the following changes. Only with `--managed-git`. */
+  export function branch(name: string): Task<Skippable<{ branch: string }>>;
+
+  /** Commits changes. Only with `--managed-git`. */
+  export function commit(
+    message: string,
+    options?: { add?: readonly string[]; allowEmpty?: boolean },
+  ): Task<Skippable<{ committed: boolean }>>;
+
+  export interface PullRequestOptions {
+    title: string;
+    body?: string;
+    draft?: boolean;
+    base?: string;
+    /** Defaults to the current branch. */
+    branch?: string;
+  }
+
+  /** Pushes the branch and opens a pull request. Only with `--managed-git`. */
+  export function pullRequest(
+    options: PullRequestOptions,
+  ): Task<Skippable<{ branch: string; url: string | null }>>;
+
+  /** A finished step changed since the run was recorded, so resume cannot reuse its result. */
+  export class NondeterminismError extends Error {}
+
+  /** A step failed. */
+  export class StepError extends Error {
+    readonly label: string;
+  }
+
+  /** The run was canceled. */
+  export class CanceledError extends Error {}
+
+  /** The run is paused at an approval. */
+  export class AwaitingApprovalError extends Error {}
+
+  /**
+   * Evaluates a workflow.yaml `${{ }}` expression.
+   * @internal Emitted by `codemod workflow upgrade`; not for hand-written workflows.
+   */
+  export function __evaluate(
+    kind: "condition" | "string" | "list",
+    expression: string,
+    scope: Readonly<Record<string, unknown>>,
+  ): any;
 }

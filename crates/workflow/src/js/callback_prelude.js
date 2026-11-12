@@ -122,7 +122,7 @@ export function __run(path, text) {
     open = false;
   }
   if (output && typeof output.then === "function") {
-    throw new Error("forEachFile callbacks must be synchronous in this spike");
+    throw new Error("forEachFile callbacks must be synchronous");
   }
   if (output !== undefined) __checkJson(output, "return value");
   return JSON.stringify({

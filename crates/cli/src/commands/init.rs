@@ -1009,17 +1009,23 @@ fn create_shell_project(project_path: &Path, _config: &ProjectConfig) -> Result<
     Ok(())
 }
 
-fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+/// package.json and tsconfig.json for a package with TypeScript in it (the
+/// workflow.ts and JSSG scripts), typed by `@codemod.com/jssg-types`.
+fn create_typescript_package_files(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let package_manager = selected_package_manager(config);
     let codemod_command = codemod_cli_command_for_package_manager(package_manager);
-    // Create package.json
     let package_json = JS_PACKAGE_JSON_TEMPLATE
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
         .replace("{package_manager}", selected_package_manager_spec(config))
         .replace("{codemod_command}", codemod_command);
-
     fs::write(project_path.join("package.json"), package_json)?;
+    fs::write(project_path.join("tsconfig.json"), JS_TSCONFIG_TEMPLATE)?;
+    Ok(())
+}
+
+fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    create_typescript_package_files(project_path, config)?;
 
     // Create scripts directory
     let scripts_dir = project_path.join("scripts");
@@ -1048,9 +1054,6 @@ fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Res
         _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT.to_string(),
     };
     fs::write(scripts_dir.join("codemod.ts"), codemod_script.as_str())?;
-
-    // Create tsconfig.json
-    fs::write(project_path.join("tsconfig.json"), JS_TSCONFIG_TEMPLATE)?;
 
     // Create tests
     create_js_tests(project_path, config)?;
@@ -1157,53 +1160,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
     }
 
     create_js_tests(project_path, config)?;
-
-    // Create package.json and tsconfig.json at project root
-    let package_json_content = format!(
-        r#"{{
-  "name": "{}",
-  "version": "1.0.0",
-  "description": "{}",
-  "packageManager": "{}",
-  "main": "scripts/codemod.ts",
-  "scripts": {{
-    "test": "node scripts/codemod.ts"
-  }},
-  "dependencies": {{
-    "codemod:ast-grep": "latest"
-  }},
-  "devDependencies": {{
-    "@types/node": "^20.0.0",
-    "typescript": "^7.0.0"
-  }}
-}}"#,
-        config.name,
-        config.description,
-        selected_package_manager_spec(config)
-    );
-
-    let tsconfig_content = r#"{
-  "compilerOptions": {
-    "target": "ES2020",
-    "module": "commonjs",
-    "lib": ["ES2020"],
-    "outDir": "./dist",
-    "rootDir": "./",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "moduleResolution": "node",
-    "allowSyntheticDefaultImports": true,
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
-  },
-  "include": ["scripts/**/*"],
-  "exclude": ["node_modules", "dist"]
-}"#;
-
-    fs::write(project_path.join("package.json"), package_json_content)?;
-    fs::write(project_path.join("tsconfig.json"), tsconfig_content)?;
+    create_typescript_package_files(project_path, config)?;
 
     Ok(())
 }

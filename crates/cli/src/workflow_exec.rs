@@ -290,11 +290,13 @@ impl EventSink for Renderer {
     fn emit(&self, event: Event) {
         if self.format == OutputFormat::Jsonl {
             let mut record = serde_json::to_value(&event).unwrap_or(Value::Null);
+            // Hold stdout while numbering, so lines come out in `seq` order even
+            // when events arrive from several worker threads at once.
+            let mut stdout = std::io::stdout().lock();
             if let Value::Object(map) = &mut record {
                 map.insert("seq".into(), self.seq.fetch_add(1, Ordering::SeqCst).into());
                 map.insert("ts".into(), chrono::Utc::now().to_rfc3339().into());
             }
-            let mut stdout = std::io::stdout().lock();
             let _ = writeln!(stdout, "{record}");
             return;
         }

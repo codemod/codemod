@@ -257,7 +257,7 @@ impl Generator {
                     }
                     (None, Some(key)) => {
                         self.import("getState");
-                        format!("(getState({}) ?? [])", js_string(key))
+                        format!("(getState<any>({}) ?? [])", js_string(key))
                     }
                     (None, None) => "[]".into(),
                 });
@@ -401,7 +401,8 @@ impl Generator {
         scope: &Scope<'_>,
         _templates: &HashMap<String, String>,
     ) -> (String, String) {
-        let name = js_string(&step.name);
+        // `${{ }}` in a step name is filled in, so matrix steps get distinct labels.
+        let name = template(&step.name);
         let mut notes = String::new();
         let task = match &step.action {
             StepAction::RunScript(command) => {
@@ -576,7 +577,7 @@ impl Generator {
                 }
                 fields.push((
                     "previous",
-                    format!("getState({})", js_string(&shard.output_state)),
+                    format!("getState<any>({})", js_string(&shard.output_state)),
                 ));
                 let statement = format!(
                     "setState({}, await step({name}, shard({})));",
@@ -664,7 +665,9 @@ impl Generator {
         if self.body.contains("evaluate(") {
             imports.push("__evaluate as evaluate");
         }
-        if self.body.contains("getState(") && !imports.contains(&"getState") {
+        if (self.body.contains("getState(") || self.body.contains("getState<"))
+            && !imports.contains(&"getState")
+        {
             imports.push("getState");
         }
         imports.sort_by_key(|name| name.trim_start_matches("__"));
