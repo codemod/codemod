@@ -14,7 +14,7 @@ argument-hint: "<sdk> <from-version> <to-version> <changelog-or-guide-url>"
 # SDK Migration Codemod Authoring
 
 codemod-compatibility: skill-package-v1
-codemod-skill-version: 0.1.6
+codemod-skill-version: 0.1.7
 
 Turn an SDK/library version bump into publishable Codemod packages.
 
@@ -254,7 +254,9 @@ Only then mark the package ready to publish.
 
 ## 4. Publish codemods
 
-Confirm auth still works (`npx codemod whoami`), then from each package directory:
+Confirm auth still works (`npx codemod whoami`), then from each package directory.
+
+If this is a **follow-up change** to a package that was already published (or already has a non-scaffold version), bump `version` in both `codemod.yaml` and `package.json` first (semver: patch for fixes, minor for new steps/features, major for breaking package behavior). Never republish the same version with different contents.
 
 ```bash
 npx codemod publish
@@ -283,6 +285,7 @@ If publish fails because of scope verification or permissions, explain the error
 - Prefer `@jssg/utils` and enable `semantic_analysis` when import origin, aliases, or generic method names matter.
 - Each transform step emits metrics (`useMetricAtom` + cardinality; keep the metric count low).
 - Registry package names: no dots — hyphenate version segments (`1-24-to-1-25`).
+- After any material change to an existing package, bump `version` in `codemod.yaml` and `package.json` before republish.
 - Do not stop on the first test failure — fix and retest.
 - Do not commit or push git changes unless the user asked.
 - Do not open a PR unless the user asked.

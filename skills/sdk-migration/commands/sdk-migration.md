@@ -24,5 +24,6 @@ Non-negotiable:
 - Stay AST-first with `js-ast-grep` for parser-backed formats
 - Fixtures are the coverage map of the whole migration: depth for wired steps (positive / negative / edge / no-op per distinct surface) plus backlog fixtures for deferred-automatable breaks
 - Do not publish until `workflow validate`, `validate_codemod_package`, and package tests pass
+- After any material change to an existing package, bump `version` in both `codemod.yaml` and `package.json` before republish (never reuse a published version with different contents)
 - Do not default packages to private
 - Do not commit, push, or open a PR unless the user asked for those git operations
