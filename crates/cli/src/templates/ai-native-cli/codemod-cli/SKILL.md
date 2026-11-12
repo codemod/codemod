@@ -1,6 +1,6 @@
 ---
 name: codemod
-description: Use Codemod CLI whenever the user wants to migrate, upgrade, update, or refactor a codebase in a repeatable way. This includes framework migrations, library upgrades, version bump migrations, API surface changes, deprecations, large-scale mechanical edits, codemod package authoring, AST inspection, tree-sitter node type lookup, and Codemod documentation lookup through `npx codemod ai` commands. First search the Codemod Registry for an existing package, prefer deterministic codemods before open-ended AI rewrites, run dry-runs before apply, and create a codemod package only when no suitable package exists.
+description: Use Codemod CLI whenever the user wants to migrate, upgrade, update, or refactor a codebase in a repeatable way. This includes framework migrations, library upgrades, version bump migrations, API surface changes, deprecations, large-scale mechanical edits, codemod package authoring, AST inspection, tree-sitter node type lookup, and Codemod documentation lookup through `npx codemod ai` commands. First search the Codemod Registry for an existing package, prefer deterministic codemods before open-ended AI rewrites, run dry-runs before apply, and create a codemod package only when no suitable package exists. For authoring and publishing SDK/library version-migration packages from a changelog or migration guide, use the sibling sdk-migration skill.
 allowed-tools:
   - Bash(codemod *)
   - Bash(npx codemod *)
@@ -10,7 +10,7 @@ argument-hint: "<migration-intent>"
 # Codemod Migration Assistant
 
 codemod-compatibility: mcs-v1
-codemod-skill-version: 1.2.0
+codemod-skill-version: 1.2.6
 
 Use this skill for migrations, upgrades, deprecation rollouts, large mechanical refactors, codemod package authoring (including read-only mining / Insights metrics packages), and AST inspection. Use Codemod before falling back to an open-ended AI rewrite.
 
@@ -36,7 +36,8 @@ Everything below runs through the Codemod CLI. For work on the user's Codemod pl
 | Write transform or mining code (read before coding) | `npx codemod ai docs jssg-gotchas`, then `npx codemod ai docs ast-grep-gotchas` |
 | Implement the transform once a package exists | `npx codemod ai docs jssg` |
 | Need Node/LLRT APIs, capability-gated modules, or multi-file JSSG work | `npx codemod ai docs jssg-runtime-capabilities` |
-| Need reusable JSSG helpers | `npx codemod ai docs jssg-utils` |
+| JS/TS/Java transforms (imports, style, renames, bindings) — read before hand-rolling | `npx codemod ai docs jssg-utils` |
+| Symbol origin, aliases, generic method names, cross-file rename, or metrics (`useMetricAtom`, cardinality) | `npx codemod ai docs jssg` |
 | Run or discover codemods, or need exact command syntax | `npx codemod ai docs codemod-cli` |
 | Maintain a codemod monorepo or a multi-hop version series | `npx codemod ai docs codemod-maintainer-monorepo` |
 | Split a large migration into multiple PRs | `npx codemod ai docs sharding` |
@@ -45,6 +46,12 @@ Everything below runs through the Codemod CLI. For work on the user's Codemod pl
 The Performant codemods section of `jssg-gotchas` is required reading for any JSSG package: discriminating selectors or token gates, no per-file full-repo walks, and a timed no-op vs real run on the same entry path (`workflow run` when the package uses selectors/globs; otherwise `jssg run --language`) before you claim it is done.
 
 For mining / Insights metrics packages, Insights loads the `js-ast-grep` script of the one bound workflow step: call `useMetricAtom` and `increment` in that script and `return null`, not only in a package-entry file or helper import.
+
+## SDK version migration packages
+
+When the user wants to **author and publish** codemods for an SDK or library upgrade and provides a source version, target version, and a changelog / migration guide / helpful link: use the sibling `sdk-migration` skill at `sdk-migration/SKILL.md` (same skills root as this file). If it is not installed, fetch and follow `https://raw.githubusercontent.com/codemod/codemod/main/skills/sdk-migration/SKILL.md` before scaffolding.
+
+That workflow's outputs are: a public-by-default migration plan (with author name/email from `npx codemod whoami --detailed` or the user), locally built packages, tested packages with fix-and-retest until green, then `npx codemod publish`. Packaging defaults live in `sdk-migration`: **one multi-step package per SDK version bump** unless the user asks to split.
 
 ## Migrations: search the registry first
 
@@ -57,8 +64,12 @@ For mining / Insights metrics packages, Insights loads the `js-ast-grep` script 
 
 - Keep transforms AST-first. Parser-backed formats (JavaScript, TypeScript, TSX, Python, Rust, Go, Java, HTML, XML, CSS, Kotlin, Angular templates, C#, C, C++, PHP, Ruby, Elixir, JSON, YAML, TOML) use a `js-ast-grep` step: AST queries select the nodes, `node.replace(...)` edits them, `root.root().commitEdits(...)` applies the edits.
 - Do not use regex, line splitting, whole-file `.replace(...)`, or Python, shell, or Node `fs` rewrites for those formats, and do not use JSSG only as a file walker around such rewrites. Do not add a shell step to reach a related file when JSSG can make that hop. Use raw text only for unsupported plain-text formats, document the fallback, and cover it with fixtures.
-- Run `npx codemod ai dump-ast` before broadening heuristics and `npx codemod ai node-types` when node kinds or fields are unclear. Use semantic, binding-aware checks when symbol origin matters.
-- Keep one granular transform or one exact `from -> to` migration per package unless the request is clearly open-ended or multi-hop.
+- Run `npx codemod ai dump-ast` before broadening heuristics and `npx codemod ai node-types` when node kinds or fields are unclear.
+- Prefer `@jssg/utils` over hand-rolled import pattern lists, style string building, and bare identifier renames. Add the dependency when used.
+- Enable `semantic_analysis` on `js-ast-grep` steps when matching generic method names, renaming symbols, or following aliases; use binding-aware checks (`importBindingOf` / `renameReferences` / `definition`) instead of filename-level import gates alone.
+- Emit metrics from each transform `js-ast-grep` step (`useMetricAtom` in that script). Prefer one metric per step with cardinality dimensions; snapshot `metrics.json`. Mining/Insights packages still `return null` after incrementing.
+- Registry package `name` (in `codemod.yaml` / `package.json`): optional `@scope/`, then only `[A-Za-z0-9\-_]`. **No dots** — hyphenate version segments (`pkg-1-2-to-1-3`, not `1.2-to-1.3`).
+- Keep each transform focused on one exact change. For SDK/library version bumps, follow `sdk-migration` (one multi-step package per bump by default). For other authoring, prefer one focused package unless the request is clearly open-ended.
 - Inspect only 1-3 representative repo files before you settle the transform shape.
 - In non-interactive `codemod init`, pass only flags the user or task gave you. Do not invent `--author`, `--license`, `--description`, or `--git-repository-url`; leave missing metadata to CLI defaults and the publish-time auth fallback.
 - Define positive, negative, edge, and no-op fixtures before deep implementation, then replace the starter transform, README, and fixtures.

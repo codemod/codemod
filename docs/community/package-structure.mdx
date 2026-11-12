@@ -186,12 +186,13 @@ Codemod workflow schema version.
 <ParamField path="name" type="string" required>
 Codemod package name (unique within scope).
 
-**Naming rules:** `/^[a-z0-9-_/]+$/` (lowercase letters, numbers, hyphens, underscores, and `/` for scope separation only)
+**Naming rules:** `^(@[A-Za-z0-9\-_.]+/)?[A-Za-z0-9\-_]+$` — optional `@scope/` (scope may include dots), then letters, numbers, hyphens, or underscores only.
 
-**Not allowed:** uppercase letters, dots, commas, spaces, or other special characters
+**Not allowed in the name segment:** dots, commas, spaces, or other special characters. Version bumps in the package id must use hyphens (`react-18-to-19`, `temporal-ts-sdk-1-24-to-1-25`), not semver dots (`…-1.24-to-1.25` fails publish).
 
 Valid examples:
 - <code>remove-console-logs</code>
+- <code>temporal-ts-sdk-1-24-to-1-25</code>
 - <code>@scope/remove-console-logs</code> (using `@organization-or-project-scope/name` provides better discoverability in the [Codemod Registry](https://go.codemod.com/registry))
 </ParamField>
 

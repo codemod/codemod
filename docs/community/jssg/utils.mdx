@@ -5,6 +5,20 @@ description: "Reusable @jssg/utils helpers for JavaScript, TypeScript, Java, and
 
 `@jssg/utils` provides reusable helpers for JSSG codemods. Open the page for the language of the AST you are transforming.
 
+## When to use `@jssg/utils`
+
+Do **not** hand-roll these if a helper already exists. Before writing custom import/style/binding logic, read `npx codemod ai docs jssg-utils` (or the MCP `jssg-utils-instructions` resource) and prefer the helpers below.
+
+| You are about to… | Prefer |
+| --- | --- |
+| Gate on “file imports module X” with many string patterns | `getImport` / `getAllImports` / `listImports` |
+| Add, remove, or rewrite imports | `addImport` / `removeImport` / `updateImport` |
+| Insert code and match the file’s quotes / semicolons / indent | `getFileStyle` |
+| Rename a symbol and update its uses safely | `importBindingOf` / `renameReferences` (and enable [semantic analysis](/community/jssg/semantic-analysis) when origin matters) |
+| Resolve whether a call/identifier comes from a specific import | `importBindingOf` / `resolveDefinition` |
+
+Hand-rolled import pattern lists and bare identifier renames are a smell: they miss aliases, alternate quote styles, `require()`, and type-only imports, and they create false positives.
+
 ## Installation
 
 Add `@jssg/utils` to your codemod project:

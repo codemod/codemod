@@ -5,6 +5,19 @@ description: "Find symbol definitions and references across your codebase using 
 
 Semantic analysis enables your codemods to understand symbol relationships in code—finding where variables are defined, tracking all references to a function, or discovering cross-file dependencies. This goes beyond pattern matching to provide IDE-like intelligence for your transformations.
 
+## When to enable it
+
+Pattern matching alone is not enough when **symbol origin** matters. Enable `semantic_analysis` on the `js-ast-grep` step (usually `file` first; `workspace` when you need cross-file resolution) before you ship if any of these are true:
+
+| Risk | Example | What to do |
+| --- | --- | --- |
+| Generic method / property name | `$RECV.update(...)`, `.map(...)`, `.get(...)` | Prove the receiver binds to the intended API (import/type), not every same-named call |
+| Rename by identifier text | Replace all `Foo` identifiers | Resolve the binding / references from the real import, not a global name regex |
+| Aliased or re-exported symbols | `import { createX as cx }` | Follow the binding; do not match only the original export spelling |
+| Cross-file move or rename | Update call sites in other modules | Use `workspace` scope |
+
+Also prefer [`@jssg/utils` binding helpers](/community/jssg/utils/javascript) (`importBindingOf`, `resolveDefinition`, `renameReferences`) instead of reinventing resolution. If you skip semantic analysis, document why in the package README (for example: pure string API shape with no shared method names).
+
 ## Supported Languages
 
 | Language              | Provider                             | Features                                                                            |
