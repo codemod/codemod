@@ -9,9 +9,13 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+butterflow-core = { workspace = true }
 butterflow-models = { workspace = true }
+butterflow-runners = { workspace = true }
 butterflow-state = { workspace = true }
 chrono = { workspace = true }
+codemod-ai = { path = "../ai" }
+codemod-llrt-capabilities = { workspace = true }
 codemod-sandbox = { path = "../codemod-sandbox", features = ["native"] }
 ignore = { workspace = true }
 oxc = { version = "0.99.0", features = ["transformer", "codegen", "semantic"] }
@@ -19,7 +23,9 @@ rquickjs = { version = "0.11", default-features = false, features = ["loader", "
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = "0.10"
+tempfile = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]

@@ -229,6 +229,7 @@ impl Engine {
             services: Arc::clone(&self.services),
             cancel: Arc::clone(&self.cancel),
             commit_lock: Mutex::new(()),
+            chain: Vec::new(),
         });
         let ending = execute(&workflow.built, context);
         *self.current.lock().unwrap_or_else(|e| e.into_inner()) = None;

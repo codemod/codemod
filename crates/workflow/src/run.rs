@@ -44,6 +44,8 @@ pub(crate) struct RunContext {
     pub cancel: Arc<AtomicBool>,
     /// Serializes file commits from steps running at the same time.
     pub commit_lock: Mutex<()>,
+    /// Codemod packages this run is nested in, for cycle detection.
+    pub chain: Vec<String>,
 }
 
 impl RunContext {
@@ -80,6 +82,7 @@ pub enum RunError {
 #[derive(Deserialize)]
 struct HostRequest {
     position: u64,
+    label: String,
     task: serde_json::Value,
     #[serde(default)]
     state: serde_json::Map<String, serde_json::Value>,
@@ -250,6 +253,7 @@ fn run_host_task(run: &Arc<RunContext>, request: &str) -> Result<String, String>
     let task = TaskContext {
         run,
         position: request.position,
+        label: request.label,
         state: request.state,
     };
     match tasks::dispatch(&task, request.task) {

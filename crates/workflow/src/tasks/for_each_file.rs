@@ -2,11 +2,10 @@
 //! pool of threads (one QuickJS context per thread), and commits the
 //! recorded file effects in one go.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use codemod_sandbox::AstGrepModule;
 use ignore::overrides::OverrideBuilder;
@@ -16,6 +15,7 @@ use rquickjs::{CatchResultExt, Context, Function, Module, Runtime};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::changes::{self, is_safe_relative, PlannedChange};
 use super::{TaskContext, TaskOutcome};
 
 const CALLBACK_MODULE: &str = "callback.js";
@@ -46,15 +46,6 @@ struct FileOutcome {
     has_output: bool,
 }
 
-/// What one file ends up as after its effects are folded together.
-struct Planned {
-    path: String,
-    original: String,
-    text: String,
-    rename_to: Option<String>,
-    delete: bool,
-}
-
 #[derive(Deserialize)]
 struct Request {
     selector: Selector,
@@ -77,7 +68,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     let report_every = (total / 100).max(1);
     let progress = || {
         let done = processed.fetch_add(1, Ordering::SeqCst) + 1;
-        if done == total || done % report_every == 0 {
+        if done == total || done.is_multiple_of(report_every) {
             task.progress(done, total);
         }
     };
@@ -145,7 +136,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     if run.canceled() {
         return Err("canceled".to_string());
     }
-    let changes = commit(&run.target, &planned, run.dry_run, &run.commit_lock)?;
+    let changes = changes::commit(task, &planned, run.dry_run)?;
     Ok(TaskOutcome::new(
         json!({ "outputs": outputs, "changes": changes, "failures": failures }),
     ))
@@ -281,8 +272,8 @@ fn worker(job: Worker<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
     })
 }
 
-fn fold(path: String, original: String, effects: Vec<Effect>) -> Result<Planned, String> {
-    let mut plan = Planned {
+fn fold(path: String, original: String, effects: Vec<Effect>) -> Result<PlannedChange, String> {
+    let mut plan = PlannedChange {
         text: original.clone(),
         path,
         original,
@@ -307,97 +298,6 @@ fn fold(path: String, original: String, effects: Vec<Effect>) -> Result<Planned,
         plan.rename_to = None;
     }
     Ok(plan)
-}
-
-/// Check the plan for conflicts, then apply it unless this is a dry run.
-/// Either every change is applied or none is.
-fn commit(
-    target: &Path,
-    planned: &[Planned],
-    dry_run: bool,
-    lock: &Mutex<()>,
-) -> Result<Value, String> {
-    let vacated: HashSet<&str> = planned
-        .iter()
-        .filter(|p| p.delete || p.rename_to.is_some())
-        .map(|p| p.path.as_str())
-        .collect();
-    let mut claimed: HashMap<&str, &str> = HashMap::new();
-    for plan in planned.iter().filter(|p| !p.delete) {
-        let Some(to) = plan.rename_to.as_deref() else {
-            continue;
-        };
-        if let Some(other) = claimed.insert(to, plan.path.as_str()) {
-            return Err(format!(
-                "conflicting changes: '{other}' and '{}' are both renamed to '{to}'",
-                plan.path
-            ));
-        }
-        let kept_in_place = planned
-            .iter()
-            .any(|p| p.path == to && !vacated.contains(p.path.as_str()));
-        if kept_in_place || (!vacated.contains(to) && target.join(to).exists()) {
-            return Err(format!(
-                "conflicting changes: '{}' is renamed to '{to}', which already exists",
-                plan.path
-            ));
-        }
-    }
-
-    let mut written = Vec::new();
-    let mut renamed = Vec::new();
-    let mut deleted = Vec::new();
-    let mut removals: Vec<PathBuf> = Vec::new();
-    let mut writes: BTreeMap<String, &str> = BTreeMap::new();
-    for plan in planned {
-        if plan.delete {
-            deleted.push(plan.path.clone());
-            removals.push(target.join(&plan.path));
-            continue;
-        }
-        let changed = plan.text != plan.original;
-        match &plan.rename_to {
-            Some(to) => {
-                renamed.push(json!({ "from": plan.path, "to": to }));
-                removals.push(target.join(&plan.path));
-                writes.insert(to.clone(), &plan.text);
-                if changed {
-                    written.push(to.clone());
-                }
-            }
-            None if changed => {
-                written.push(plan.path.clone());
-                writes.insert(plan.path.clone(), &plan.text);
-            }
-            None => {}
-        }
-    }
-
-    if !dry_run {
-        let _guard = lock
-            .lock()
-            .map_err(|_| "commit lock poisoned".to_string())?;
-        for path in &removals {
-            fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        }
-        for (path, text) in &writes {
-            let full = target.join(path);
-            if let Some(parent) = full.parent() {
-                fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-            }
-            fs::write(&full, text).map_err(|e| format!("{}: {e}", full.display()))?;
-        }
-    }
-
-    Ok(json!({ "written": written, "renamed": renamed, "deleted": deleted }))
-}
-
-fn is_safe_relative(path: &str) -> bool {
-    let path = Path::new(path);
-    !path.as_os_str().is_empty()
-        && path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
 }
 
 fn extensions(language: &str) -> Option<&'static [&'static str]> {

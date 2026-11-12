@@ -231,7 +231,7 @@ async function runStep(position, label, task) {
       if (result === undefined) result = null;
       checkJson(result, `result of step '${name}'`);
     } else {
-      const outcome = await startHostTask(position, content);
+      const outcome = await startHostTask(position, name, content);
       result = outcome.result ?? null;
       changes = outcome.state ?? null;
     }
@@ -251,8 +251,8 @@ async function runStep(position, label, task) {
   return result;
 }
 
-function startHostTask(position, content) {
-  const id = host.start(JSON.stringify({ position, task: content, state: stateSnapshot() }));
+function startHostTask(position, label, content) {
+  const id = host.start(JSON.stringify({ position, label, task: content, state: stateSnapshot() }));
   return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
 }
 

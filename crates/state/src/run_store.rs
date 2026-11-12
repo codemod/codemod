@@ -187,7 +187,7 @@ impl RunStore for MemoryStore {
     fn list_runs(&self, limit: usize) -> StoreResult<Vec<RunRecord>> {
         let mut records: Vec<RunRecord> =
             self.with(|runs| runs.values().filter_map(|r| r.record.clone()).collect());
-        records.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        records.sort_by_key(|r| std::cmp::Reverse(r.started_at));
         records.truncate(limit);
         Ok(records)
     }
@@ -317,7 +317,7 @@ impl RunStore for LocalStore {
                 records.push(record);
             }
         }
-        records.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        records.sort_by_key(|r| std::cmp::Reverse(r.started_at));
         records.truncate(limit);
         Ok(records)
     }

@@ -15,6 +15,7 @@ use tempfile::TempDir;
 
 /// A target directory, a directory for the workflow file, and an engine.
 pub struct Harness {
+    pub summary: Arc<codemod_workflow::Summary>,
     pub target: TempDir,
     pub bundle: TempDir,
     pub store: Arc<dyn RunStore>,
@@ -40,14 +41,20 @@ impl Harness {
         services: Services,
     ) -> Self {
         let events = Arc::new(CollectEvents::default());
+        let summary = Arc::clone(&services.summary);
         let engine = Engine::new(Arc::clone(&store), events.clone(), interaction, services);
         Self {
+            summary,
             target: TempDir::new().unwrap(),
             bundle: TempDir::new().unwrap(),
             store,
             events,
             engine,
         }
+    }
+
+    pub fn engine_summary_diffs(&self) -> usize {
+        self.summary.diffs().len()
     }
 
     pub fn write(&self, path: &str, text: &str) {

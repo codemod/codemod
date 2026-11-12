@@ -51,7 +51,7 @@ pub(crate) fn evaluate(
             let items: Vec<String> =
                 serde_json::from_str(expression).map_err(|e| js_error(e.to_string()))?;
             resolve_string_list(&items, &scope.params, &scope.state, matrix, None, None)
-                .map(|list| Value::from(list))
+                .map(Value::from)
         }
         other => return Err(js_error(format!("unknown expression kind '{other}'"))),
     }
