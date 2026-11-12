@@ -12,6 +12,7 @@ const DOCS: &[&str] = &[
     "community/workflows.mdx",
     "community/workflows/reference.mdx",
     "community/workflows/sharding.mdx",
+    "community/workflows/yaml.mdx",
     "community/jssg.mdx",
     "community/jssg/reference.mdx",
     "community/jssg/security.mdx",

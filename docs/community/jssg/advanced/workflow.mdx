@@ -35,37 +35,17 @@ const codemod: Codemod<TSX> = async (root, options) => {
 export default codemod;
 ```
 
-```yaml workflow.yaml
-# --- Basic schema example ---
-version: "1"
-params:
-  schema:
-    library:
-      name: "Library"
-      description: "Internationalization library to use"
-      type: string
-      default: "next-intl"
-    shardingMethod:
-      name: "Sharding Method"
-      type: string
-      default: "directory"
-    prSize:
-      name: "PR Size"
-      type: string
-      default: "50"
+```ts workflow.ts
+import { step, jssg } from "codemod:workflow";
 
----
-# --- Enum schema example (multi-document YAML) ---
-version: "1"
-params:
-  schema:
-    format:
-      name: "Module format"
-      type: string
-      default: "esm"
-      oneOf:
-        - type: string
-          enum: ["esm", "cjs"]
+export default async function main({ params }: { params: Record<string, string> }) {
+  // Run parameters (--param key=value) reach the transform as options.params.
+  // Values passed in `params` here are merged over them.
+  await step(jssg("./codemod.ts", {
+    language: "tsx",
+    params: { library: params.library ?? "next-intl", prSize: "50" },
+  }));
+}
 ```
 </CodeGroup>
 
@@ -124,28 +104,28 @@ export default codemod;
 Prefer checking sharding against a project-relative path (e.g., `path.relative(process.cwd(), root.filename())`) to avoid mismatches across environments.
 </Tip>
 
-### Matrix Strategy Configuration
+### Passing matrix values
 
-Matrix strategy is defined in your workflow:
+Pass values with the `matrix` option of the `jssg` task. A common pattern is one `jssg` step per shard:
 
-```yaml workflow.yaml
-version: "1"
-state:
-  schema:
-    shards:
-      type: array
-      items:
-        type: object
-        properties:
-          team: { type: string }
-          shard: { type: string }
-          shardId: { type: string }
+```ts workflow.ts
+import { step, shard, jssg } from "codemod:workflow";
+
+export default async function main() {
+  const shards = await step(shard({ method: { type: "codeowner", maxFilesPerShard: 30 }, filePattern: "**/*.tsx" }));
+  await Promise.all(shards.map((current) =>
+    step(`Migrate ${current.name}`, jssg("./codemod.ts", {
+      language: "tsx",
+      files: current._meta_files,
+      matrix: { team: current.team, shardId: current.name },
+    })),
+  ));
+}
 ```
 
 <Note>
-**Parameters vs Matrix Values**: `options.params` contains user-configured workflow settings, while `options.matrixValues` contains values from matrix strategy (e.g., `team`, `shard`, `shardId` from the `shards` state array). See [Matrix Strategy](/community/workflows/reference#matrix-strategy) for details.
+**Parameters vs matrix values**: `options.params` holds run parameters, while `options.matrixValues` holds the values passed with `matrix`. In `workflow.yaml`, matrix values come from a node's matrix strategy; see the [workflow.yaml reference](/community/workflows/yaml).
 </Note>
-
 
 ## State Management
 
@@ -235,22 +215,19 @@ Always call `release()` in a `finally` block. Failing to release a lock will blo
 Simple `setState` calls that don't depend on the current value (e.g., `setState("status", "done")`) don't need locking — they are individually atomic.
 </Info>
 
-### Persisting State Across Workflow Steps
+### Using State Across Workflow Steps
 
-State set with `persist: true` (the default) is automatically saved after a `js-ast-grep` step completes. Subsequent steps in the same workflow node can read this state:
+State set with `persist: true` (the default) is saved when the `jssg` step finishes. Later steps see it: other transforms through `getState`, the workflow itself through `getState` from `codemod:workflow`, and shell commands through `CODEMOD_STATE`. The values are saved with the step, so they come back when a run is resumed.
 
 <CodeGroup>
-```yaml workflow.yaml
-nodes:
-  - id: analyze
-    steps:
-      - name: "Scan files"
-        js-ast-grep:
-          js_file: scripts/scan.ts
-          language: "tsx"
-      - name: "Process results"
-        run: |
-          codemod jssg exec $CODEMOD_PATH/scripts/process.ts
+```ts workflow.ts
+import { step, jssg, shell, getState } from "codemod:workflow";
+
+export default async function main() {
+  await step("Scan files", jssg("./scripts/scan.ts", { language: "tsx" }));
+  const files = getState("filesToProcess") ?? [];
+  await step(`Process ${files.length} files`, shell("codemod jssg exec $CODEMOD_PATH/scripts/process.ts"));
+}
 ```
 
 ```ts scripts/scan.ts
@@ -277,8 +254,7 @@ export default codemod;
 ```ts scripts/process.ts
 import { getState } from "codemod:workflow";
 
-// This runs in a subsequent "run" step via jssg exec.
-// State from the previous js-ast-grep step is available.
+// Runs in a later shell step through `codemod jssg exec`.
 const files = getState<string[]>("filesToProcess") ?? [];
 console.log(`Processing ${files.length} files`);
 ```

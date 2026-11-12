@@ -43,7 +43,8 @@
                 "pages": [
                   "community/workflows/reference",
                   "community/workflows/ai-harness-rig",
-                  "community/workflows/sharding"
+                  "community/workflows/sharding",
+                  "community/workflows/yaml"
                 ]
               },
               {

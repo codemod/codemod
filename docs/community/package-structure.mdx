@@ -32,7 +32,7 @@ npx codemod init
 <Tree>
   <Tree.Folder name="my-codemod-package" defaultOpen>
     <Tree.File name="codemod.yaml" />
-    <Tree.File name="workflow.yaml" />
+    <Tree.File name="workflow.ts" />
     <Tree.Folder name="scripts" defaultOpen>
       <Tree.File name="codemod.ts" />
     </Tree.Folder>
@@ -51,13 +51,13 @@ npx codemod init
 | File/Folder | Purpose |
 |-------------|---------|
 | `codemod.yaml` | Package metadata (name, version, author, etc.) |
-| `workflow.yaml` | [Workflow definition](/community/workflows/reference) with nodes and steps |
+| `workflow.ts` | [Workflow definition](/community/workflows/reference). Packages may still use a legacy [`workflow.yaml`](/community/workflows/yaml). |
 | `scripts/` | JavaScript/TypeScript codemods ([JSSG](/community/jssg)) |
 | `rules/` | YAML ast-grep rule definitions |
 | `tests/` | Test fixtures with `input.*`/`expected.*` pairs or `input/` + `expected/` directory snapshots |
 
 <Info>
-The `scripts/` and `rules/` folders are conventional, not required—use any paths you prefer as long as you reference them correctly in `workflow.yaml`.
+The `scripts/` and `rules/` folders are conventional, not required—use any paths you prefer as long as you reference them correctly in your workflow.
 
 Detection-only **mining** packages still use this layout. The JSSG step returns `null`, emits [metrics](/community/jssg/metrics), and proves behavior with `metrics.json` fixtures next to `input`/`expected`. Insights discovers metrics from each selected step’s `js-ast-grep` script in the published package (not from a separate package-entry file).
 </Info>
@@ -65,9 +65,9 @@ Detection-only **mining** packages still use this layout. The JSSG step returns 
 ## Package Behavior
 
 Codemod packages use a workflow-first model and can be:
-- **Workflow-only**: `workflow.yaml` has executable steps and no `install-skill` steps.
-- **Skill-only**: `workflow.yaml` has `install-skill` steps and no executable steps, with authored skill files under `agents/skill/<skill-name>/`.
-- **Workflow + skill**: `workflow.yaml` has both executable and `install-skill` steps, with authored skill files under `agents/skill/<skill-name>/`.
+- **Workflow-only**: the workflow has executable steps and no `installSkill` steps.
+- **Skill-only**: the workflow has `installSkill` steps and no executable steps, with authored skill files under `agents/skill/<skill-name>/`.
+- **Workflow + skill**: the workflow has both executable and `installSkill` steps, with authored skill files under `agents/skill/<skill-name>/`.
 
 Use `codemod init` to scaffold a workflow package, `codemod init --skill` for a skill package, or `codemod init --with-skill` for a package that ships both. Skill-only scaffolds cannot also set `--project-type`.
 
@@ -97,7 +97,7 @@ version: "0.1.0"
 description: "Transform legacy patterns to modern syntax"
 author: "Your Name <you@example.com>"
 license: "MIT"
-workflow: "workflow.yaml"
+workflow: "workflow.ts"
 repository: "https://github.com/username/codemod-repo"
 category: "migration"
 
@@ -111,7 +111,7 @@ registry:
   visibility: "public"
 ```
 
-For skill-only packages, keep `workflow: "workflow.yaml"` and define `install-skill` steps in that workflow; authored skill content lives under `agents/skill/<skill-name>/`.
+For skill-only packages, keep `workflow: "workflow.ts"` and call `installSkill` in that workflow; authored skill content lives under `agents/skill/<skill-name>/`.
 
 ### Multiple workflows per package
 
@@ -129,7 +129,7 @@ license: "MIT"
 # Pick exactly one of `workflow` (single-workflow) or `workflows` (multi-workflow).
 workflows:
   - name: main
-    path: workflow.yaml
+    path: workflow.ts
     default: true
     description: "Run the full migration in one pass"
   - name: sharded
@@ -212,7 +212,7 @@ License identifier (SPDX), e.g., <code>MIT</code>.
 </ParamField>
 
 <ParamField path="workflow" type="string" default="workflow.yaml">
-Relative path to your workflow file. Use this for single-workflow packages. Mutually exclusive with `workflows`. Required for workflow-only, skill-only, and workflow + skill packages unless `workflows` is set.
+Relative path to your workflow file (`workflow.ts`, or a legacy `workflow.yaml`). `codemod init` and `codemod workflow upgrade` set it for you. Use this for single-workflow packages. Mutually exclusive with `workflows`. Required for workflow-only, skill-only, and workflow + skill packages unless `workflows` is set.
 
 Path must be package-relative; absolute paths and `..` segments are rejected at publish time.
 </ParamField>
@@ -230,7 +230,7 @@ Example:
 ```yaml
 workflows:
   - name: main
-    path: workflow.yaml
+    path: workflow.ts
     default: true
   - name: sharded
     path: workflows/sharded.yaml
