@@ -14,7 +14,7 @@ argument-hint: "<sdk> <from-version> <to-version> <changelog-or-guide-url>"
 # SDK Migration Codemod Authoring
 
 codemod-compatibility: skill-package-v1
-codemod-skill-version: 0.1.4
+codemod-skill-version: 0.1.5
 
 Turn an SDK/library version bump into publishable Codemod packages.
 
@@ -45,13 +45,17 @@ SDK migration progress:
 
 ## 0. Auth and author
 
+Publish accepts a stored login **or** `CODEMOD_AUTH_TOKEN`. Resolve auth the same way:
+
 1. Run `npx codemod whoami --detailed`.
-2. If not authenticated, stop and tell the user to run `npx codemod login`, then retry.
-3. Resolve package author as `Name <email>`:
+2. If `whoami` succeeds, use that session for author/scope metadata.
+3. If `whoami` fails but `CODEMOD_AUTH_TOKEN` is set in the environment, treat publish as authenticated. Do **not** invent author metadata from a different stored account — ask once for `Name <email>` (and scope if needed).
+4. If neither `whoami` nor `CODEMOD_AUTH_TOKEN` is available, stop and tell the user to run `npx codemod login` (or set `CODEMOD_AUTH_TOKEN`), then retry.
+5. Resolve package author as `Name <email>`:
    - Prefer an author the user explicitly provided.
    - Otherwise use name/email from `whoami --detailed`.
    - If email is missing, ask once; do not invent an email.
-4. Note the publish scope from `whoami` (user or org). Use that scope for package names unless the user specifies another verified scope.
+6. Note the publish scope from `whoami` when available (user or org). Use that scope for package names unless the user specifies another verified scope.
 
 ## 1. Plan for the migration
 
@@ -154,19 +158,29 @@ npx codemod ai docs codemod-creation-workflow
 npx codemod ai docs jssg-gotchas
 npx codemod ai docs ast-grep-gotchas
 npx codemod ai docs jssg-utils
-npx codemod ai docs semantic analysis
-npx codemod ai docs jssg metrics
+npx codemod ai docs jssg
 ```
+
+`jssg` includes semantic analysis and metrics guidance. Do not pass multi-word topic phrases to `ai docs` — they fall through to snippet search.
 
 Scaffold **outside** product app monorepos when possible (dedicated workspace such as `~/…/<sdk>-codemods/` or `codemods/<sdk>/<target-version>/`). Do not leave migration packages under unrelated repos (e.g. app backends) unless the user asked to put them there.
 
 For each planned package:
 
-1. Scaffold immediately (pass only known flags; include author when resolved):
+1. Resolve non-interactive scaffold metadata from the plan (do not omit required flags — `init --no-interactive` fails without them). Use `--project-type hybrid` when the package needs shell/YAML steps; otherwise default to `ast-grep-js` for JSSG-only multi-step workflows:
 
 ```bash
-npx codemod init <path> --no-interactive --name <name> --author "Name <email>"
+npx codemod init <path> --no-interactive \
+  --project-type ast-grep-js \
+  --package-manager npm \
+  --language typescript \
+  --name <name> \
+  --description "<one-line migration description>" \
+  --author "Name <email>" \
+  --license MIT
 ```
+
+Replace `npm` / `typescript` / `MIT` with plan values when they differ. Ask once for any required field still missing.
 
 2. Set `codemod.yaml` / `package.json` `name` to a publish-safe id (no dots), plus author, description, keywords (`upgrade`, `breaking-change`, sdk name, versions), languages, and **public** registry access/visibility.
 3. Replace starter transform, README, and fixtures. Wire a multi-step `workflow.yaml` when there is more than one break. Keep each step focused on one exact migration.

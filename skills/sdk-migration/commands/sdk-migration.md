@@ -4,7 +4,7 @@ Required context (ask for anything missing):
 - SDK / package name
 - Source version and target version
 - Link to a changelog, migration guide, or other helpful docs
-- Assume the user already ran `npx codemod login`; verify with `npx codemod whoami --detailed`
+- Assume the user already ran `npx codemod login` or set `CODEMOD_AUTH_TOKEN`; verify with `npx codemod whoami --detailed` (if whoami fails but `CODEMOD_AUTH_TOKEN` is set, ask for author `Name <email>`)
 
 Deliver, in order:
 1. Migration plan — include author name/email from auth (or user-provided), and public visibility/access by default
@@ -17,7 +17,7 @@ Non-negotiable:
 - Default to **one package per SDK version bump** with a multi-step workflow (one JSSG step per break; separate scripts + fixture dirs); split packages only on request or clearly independent surfaces
 - Registry `name`: letters/numbers/hyphens/underscores only (optional `@scope/`). **No dots** — hyphenate versions (`sdk-1-24-to-1-25`, not `1.24-to-1.25`)
 - Scaffold in a dedicated workspace — not inside unrelated product repos unless asked
-- Read `npx codemod ai docs codemod-creation-workflow`, then `jssg-gotchas`, `ast-grep-gotchas`, `jssg-utils`, `semantic analysis`, and `jssg metrics`, before writing transforms
+- Read `npx codemod ai docs codemod-creation-workflow`, then `jssg-gotchas`, `ast-grep-gotchas`, `jssg-utils`, and `jssg` (covers semantic analysis + metrics), before writing transforms
 - Prefer `@jssg/utils` for import gates / style / renames; enable `semantic_analysis` when symbol origin or generic method names matter
 - Each `js-ast-grep` step emits metrics (`useMetricAtom` in that script; prefer one metric per step with cardinality; snapshot `metrics.json`)
 - Stay AST-first with `js-ast-grep` for parser-backed formats

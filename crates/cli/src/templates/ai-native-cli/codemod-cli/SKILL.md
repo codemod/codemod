@@ -10,7 +10,7 @@ argument-hint: "<migration-intent>"
 # Codemod Migration Assistant
 
 codemod-compatibility: mcs-v1
-codemod-skill-version: 1.2.5
+codemod-skill-version: 1.2.6
 
 Use this skill for migrations, upgrades, deprecation rollouts, large mechanical refactors, codemod package authoring (including read-only mining / Insights metrics packages), and AST inspection. Use Codemod before falling back to an open-ended AI rewrite.
 
@@ -37,8 +37,7 @@ Everything below runs through the Codemod CLI. For work on the user's Codemod pl
 | Implement the transform once a package exists | `npx codemod ai docs jssg` |
 | Need Node/LLRT APIs, capability-gated modules, or multi-file JSSG work | `npx codemod ai docs jssg-runtime-capabilities` |
 | JS/TS/Java transforms (imports, style, renames, bindings) — read before hand-rolling | `npx codemod ai docs jssg-utils` |
-| Symbol origin, aliases, generic method names, cross-file rename | `npx codemod ai docs semantic analysis` |
-| Transform or mining metrics (`useMetricAtom`, cardinality) | `npx codemod ai docs jssg metrics` |
+| Symbol origin, aliases, generic method names, cross-file rename, or metrics (`useMetricAtom`, cardinality) | `npx codemod ai docs jssg` |
 | Run or discover codemods, or need exact command syntax | `npx codemod ai docs codemod-cli` |
 | Maintain a codemod monorepo or a multi-hop version series | `npx codemod ai docs codemod-maintainer-monorepo` |
 | Split a large migration into multiple PRs | `npx codemod ai docs sharding` |

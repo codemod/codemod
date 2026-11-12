@@ -19,12 +19,12 @@ use toml_edit::{value, Array, DocumentMut, Item, Table};
 
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
-const MCS_SKILL_VERSION: &str = "1.2.5";
+const MCS_SKILL_VERSION: &str = "1.2.6";
 const MCS_COMMAND_NAME: &str = "codemod";
 const SKILL_PACKAGE_COMPATIBILITY_MARKER: &str = "codemod-compatibility: skill-package-v1";
 const CODEMOD_COMPATIBILITY_MARKER_PREFIX: &str = "codemod-compatibility:";
 const MCS_COMPATIBILITY_MARKER: &str = "codemod-compatibility: mcs-v1";
-const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.2.5";
+const MCS_VERSION_MARKER: &str = "codemod-skill-version: 1.2.6";
 const CODEMOD_VERSION_MARKER_PREFIX: &str = "codemod-skill-version:";
 const MCP_SERVER_NAME: &str = "codemod";
 const CODEMOD_CLI_COMMAND: &str = "codemod";
@@ -43,7 +43,7 @@ const MCS_COMMAND_MD: &str =
 
 const SDK_MIGRATION_SKILL_COMPONENT_ID: &str = "sdk-migration";
 const SDK_MIGRATION_SKILL_DIR_NAME: &str = "sdk-migration";
-const SDK_MIGRATION_SKILL_VERSION: &str = "0.1.4";
+const SDK_MIGRATION_SKILL_VERSION: &str = "0.1.5";
 const SDK_MIGRATION_SKILL_MD: &str = include_str!("../../../../skills/sdk-migration/SKILL.md");
 const SDK_MIGRATION_COMMAND_MD: &str =
     include_str!("../../../../skills/sdk-migration/commands/sdk-migration.md");
@@ -2647,14 +2647,25 @@ pub(crate) fn upsert_mcs_command_entrypoints_with_runtime(
     match harness {
         Harness::Goose => upsert_goose_mcs_command_with_runtime(scope, force, runtime_paths),
         _ => {
-            let Some(command_path) =
-                mcs_command_entrypoint_path_for_harness(harness, scope, runtime_paths)?
-            else {
-                return Ok(Vec::new());
-            };
+            let mut written = Vec::new();
+            for (command_name, content) in [
+                (MCS_COMMAND_NAME, MCS_COMMAND_MD),
+                (SDK_MIGRATION_SKILL_COMPONENT_ID, SDK_MIGRATION_COMMAND_MD),
+            ] {
+                let Some(command_path) = mcs_command_entrypoint_path_for_harness(
+                    harness,
+                    scope,
+                    command_name,
+                    runtime_paths,
+                )?
+                else {
+                    continue;
+                };
 
-            write_skill_file(&command_path, MCS_COMMAND_MD, force)?;
-            Ok(vec![command_path])
+                write_skill_file(&command_path, content, force)?;
+                written.push(command_path);
+            }
+            Ok(written)
         }
     }
 }
@@ -2680,6 +2691,18 @@ fn mcs_install_requires_force_with_runtime(
     )? {
         return Ok(true);
     }
+    if managed_text_file_requires_force(
+        &sdk_migration_root.join("commands/sdk-migration.md"),
+        SDK_MIGRATION_COMMAND_MD,
+    )? {
+        return Ok(true);
+    }
+    if managed_text_file_requires_force(
+        &sdk_migration_root.join("agents/openai.yaml"),
+        SDK_MIGRATION_OPENAI_YAML,
+    )? {
+        return Ok(true);
+    }
 
     match harness {
         Harness::Goose => {
@@ -2688,11 +2711,19 @@ fn mcs_install_requires_force_with_runtime(
             }
         }
         _ => {
-            if let Some(command_path) =
-                mcs_command_entrypoint_path_for_harness(harness, scope, runtime_paths)?
-            {
-                if managed_text_file_requires_force(&command_path, MCS_COMMAND_MD)? {
-                    return Ok(true);
+            for (command_name, content) in [
+                (MCS_COMMAND_NAME, MCS_COMMAND_MD),
+                (SDK_MIGRATION_SKILL_COMPONENT_ID, SDK_MIGRATION_COMMAND_MD),
+            ] {
+                if let Some(command_path) = mcs_command_entrypoint_path_for_harness(
+                    harness,
+                    scope,
+                    command_name,
+                    runtime_paths,
+                )? {
+                    if managed_text_file_requires_force(&command_path, content)? {
+                        return Ok(true);
+                    }
                 }
             }
         }
@@ -3963,9 +3994,10 @@ fn mcs_command_is_available(harness: Harness, scope: InstallScope) -> bool {
 fn mcs_command_entrypoint_path_for_harness(
     harness: Harness,
     scope: InstallScope,
+    command_name: &str,
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<Option<PathBuf>> {
-    let file_name = format!("{MCS_COMMAND_NAME}.md");
+    let file_name = format!("{command_name}.md");
     match harness {
         Harness::Claude => Ok(Some(match scope {
             InstallScope::Project => runtime_paths.cwd.join(".claude/commands").join(&file_name),
@@ -4529,8 +4561,9 @@ mod tests {
         runtime_paths: &RuntimePaths,
         harness: Harness,
         scope: InstallScope,
+        command_name: &str,
     ) -> Option<PathBuf> {
-        let file_name = format!("{MCS_COMMAND_NAME}.md");
+        let file_name = format!("{command_name}.md");
         match harness {
             Harness::Claude => Some(match scope {
                 InstallScope::Project => {
@@ -5688,13 +5721,27 @@ codemod-skill-version: 0.1.0
             )
             .unwrap();
 
-            let expected =
-                expected_mcs_command_path(&runtime_paths, harness, InstallScope::Project)
-                    .expect("expected command path");
-            assert_eq!(paths, vec![expected.clone()]);
-            let content = fs::read_to_string(expected).unwrap();
-            assert!(content.contains("/codemod"));
-            assert!(content.contains("Use the installed `codemod` skill"));
+            let expected_codemod = expected_mcs_command_path(
+                &runtime_paths,
+                harness,
+                InstallScope::Project,
+                MCS_COMMAND_NAME,
+            )
+            .expect("expected codemod command path");
+            let expected_sdk = expected_mcs_command_path(
+                &runtime_paths,
+                harness,
+                InstallScope::Project,
+                SDK_MIGRATION_SKILL_COMPONENT_ID,
+            )
+            .expect("expected sdk-migration command path");
+            assert_eq!(paths, vec![expected_codemod.clone(), expected_sdk.clone()]);
+            let codemod_content = fs::read_to_string(expected_codemod).unwrap();
+            assert!(codemod_content.contains("/codemod"));
+            assert!(codemod_content.contains("Use the installed `codemod` skill"));
+            let sdk_content = fs::read_to_string(expected_sdk).unwrap();
+            assert!(sdk_content.contains("/sdk-migration"));
+            assert!(sdk_content.contains("Use the installed `sdk-migration` skill"));
         }
     }
 
@@ -6371,18 +6418,37 @@ codemod-skill-version: 0.1.0
             &runtime_paths,
         )
         .unwrap();
-        let installed_skill = installed.first().unwrap();
+        let installed_skill = installed
+            .iter()
+            .find(|entry| entry.name == MCS_SKILL_COMPONENT_ID)
+            .expect("expected codemod skill");
+        let sdk_skill = installed
+            .iter()
+            .find(|entry| entry.name == SDK_MIGRATION_SKILL_COMPONENT_ID)
+            .expect("expected sdk-migration skill");
         let mcp_entry = installed
             .iter()
             .find(|entry| entry.name == "codemod-mcp")
             .expect("expected MCP install entry");
 
-        assert_eq!(installed_skill.name, MCS_SKILL_COMPONENT_ID);
         assert!(installed_skill.path.exists());
         assert!(installed_skill
             .path
             .to_string_lossy()
             .contains(".claude/skills/codemod/SKILL.md"));
+        assert!(sdk_skill.path.exists());
+        assert!(sdk_skill
+            .path
+            .to_string_lossy()
+            .contains(".claude/skills/sdk-migration/SKILL.md"));
+        assert!(runtime_paths
+            .cwd
+            .join(".claude/skills/sdk-migration/commands/sdk-migration.md")
+            .exists());
+        assert!(runtime_paths
+            .cwd
+            .join(".claude/skills/sdk-migration/agents/openai.yaml")
+            .exists());
 
         assert!(mcp_entry.path.exists());
         let config: serde_json::Value =
@@ -6415,13 +6481,30 @@ codemod-skill-version: 0.1.0
             let installed =
                 install_mcs_skill_bundle_with_runtime(harness, &install_request, &runtime_paths)
                     .unwrap();
-            let installed_skill = installed.first().unwrap();
+            let installed_skill = installed
+                .iter()
+                .find(|entry| entry.name == MCS_SKILL_COMPONENT_ID)
+                .expect("expected codemod skill");
+            let sdk_skill = installed
+                .iter()
+                .find(|entry| entry.name == SDK_MIGRATION_SKILL_COMPONENT_ID)
+                .expect("expected sdk-migration skill");
             let expected_skills_root =
                 skills_root_for_harness(harness, InstallScope::Project, &runtime_paths).unwrap();
             assert_eq!(
                 installed_skill.path,
                 expected_skills_root.join("codemod").join("SKILL.md")
             );
+            assert_eq!(
+                sdk_skill.path,
+                expected_skills_root.join("sdk-migration").join("SKILL.md")
+            );
+            assert!(expected_skills_root
+                .join("sdk-migration/commands/sdk-migration.md")
+                .exists());
+            assert!(expected_skills_root
+                .join("sdk-migration/agents/openai.yaml")
+                .exists());
 
             if harness_supports_mcp(harness) {
                 let mcp_entry = installed
@@ -7116,6 +7199,55 @@ codemod-skill-version: 0.1.0
     }
 
     #[test]
+    fn mcs_install_requires_force_detects_sdk_migration_companion_conflicts() {
+        let (runtime_paths, _temp_dir) = runtime_paths_with_temp_roots();
+        let install_request = InstallRequest {
+            scope: InstallScope::Project,
+            force: false,
+        };
+
+        install_mcs_skill_bundle_with_runtime(Harness::Claude, &install_request, &runtime_paths)
+            .unwrap();
+
+        assert!(!mcs_install_requires_force_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths
+        )
+        .unwrap());
+
+        let command_path = runtime_paths
+            .cwd
+            .join(".claude/skills/sdk-migration/commands/sdk-migration.md");
+        fs::write(&command_path, "# changed companion command\n").unwrap();
+        assert!(mcs_install_requires_force_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths
+        )
+        .unwrap());
+
+        fs::write(&command_path, SDK_MIGRATION_COMMAND_MD).unwrap();
+        assert!(!mcs_install_requires_force_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths
+        )
+        .unwrap());
+
+        let agent_path = runtime_paths
+            .cwd
+            .join(".claude/skills/sdk-migration/agents/openai.yaml");
+        fs::write(&agent_path, "name: changed\n").unwrap();
+        assert!(mcs_install_requires_force_with_runtime(
+            Harness::Claude,
+            InstallScope::Project,
+            &runtime_paths
+        )
+        .unwrap());
+    }
+
+    #[test]
     fn package_skill_install_requires_force_detects_conflicting_authored_content() {
         let (runtime_paths, temp_dir) = runtime_paths_with_temp_roots();
         let install_request = InstallRequest {
@@ -7251,13 +7383,21 @@ codemod-skill-version: 0.1.0
             .unwrap();
 
         let skills = list_skills_with_runtime(Harness::Claude, &runtime_paths).unwrap();
-        assert_eq!(skills.len(), 2);
-        assert!(skills
-            .iter()
-            .any(|skill| skill.scope == Some(InstallScope::Project)));
-        assert!(skills
-            .iter()
-            .any(|skill| skill.scope == Some(InstallScope::User)));
+        assert_eq!(skills.len(), 4);
+        assert!(skills.iter().any(|skill| {
+            skill.name == MCS_SKILL_COMPONENT_ID && skill.scope == Some(InstallScope::Project)
+        }));
+        assert!(skills.iter().any(|skill| {
+            skill.name == SDK_MIGRATION_SKILL_COMPONENT_ID
+                && skill.scope == Some(InstallScope::Project)
+        }));
+        assert!(skills.iter().any(|skill| {
+            skill.name == MCS_SKILL_COMPONENT_ID && skill.scope == Some(InstallScope::User)
+        }));
+        assert!(skills.iter().any(|skill| {
+            skill.name == SDK_MIGRATION_SKILL_COMPONENT_ID
+                && skill.scope == Some(InstallScope::User)
+        }));
     }
 
     #[test]
@@ -7275,8 +7415,16 @@ codemod-skill-version: 0.1.0
             let roots = skill_roots_for_listing(harness, &runtime_paths).unwrap();
             let shares_root = roots.len() == 1;
             if shares_root {
-                assert_eq!(skills.len(), 1, "harness: {}", harness.as_str());
-                assert_eq!(skills[0].scope, Some(InstallScope::User));
+                assert_eq!(skills.len(), 2, "harness: {}", harness.as_str());
+                assert!(skills
+                    .iter()
+                    .all(|skill| skill.scope == Some(InstallScope::User)));
+                assert!(skills
+                    .iter()
+                    .any(|skill| skill.name == MCS_SKILL_COMPONENT_ID));
+                assert!(skills
+                    .iter()
+                    .any(|skill| skill.name == SDK_MIGRATION_SKILL_COMPONENT_ID));
             }
             let mut paths = skills.iter().map(|skill| &skill.path).collect::<Vec<_>>();
             paths.dedup();
@@ -7311,8 +7459,16 @@ codemod-skill-version: 0.1.0
         assert_eq!(roots, vec![(InstallScope::User, user_root)]);
 
         let skills = list_skills_with_runtime(Harness::Claude, &runtime_paths).unwrap();
-        assert_eq!(skills.len(), 1, "skills: {skills:?}");
-        assert_eq!(skills[0].scope, Some(InstallScope::User));
+        assert_eq!(skills.len(), 2, "skills: {skills:?}");
+        assert!(skills
+            .iter()
+            .all(|skill| skill.scope == Some(InstallScope::User)));
+        assert!(skills
+            .iter()
+            .any(|skill| skill.name == MCS_SKILL_COMPONENT_ID));
+        assert!(skills
+            .iter()
+            .any(|skill| skill.name == SDK_MIGRATION_SKILL_COMPONENT_ID));
     }
 
     #[test]
@@ -7327,8 +7483,16 @@ codemod-skill-version: 0.1.0
             .unwrap();
 
         let checks = verify_skills_with_runtime(Harness::Claude, &runtime_paths).unwrap();
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].status, VerificationStatus::Pass);
+        assert_eq!(checks.len(), 2);
+        assert!(checks
+            .iter()
+            .all(|check| check.status == VerificationStatus::Pass));
+        assert!(checks
+            .iter()
+            .any(|check| check.skill == MCS_SKILL_COMPONENT_ID));
+        assert!(checks
+            .iter()
+            .any(|check| check.skill == SDK_MIGRATION_SKILL_COMPONENT_ID));
     }
 
     #[test]
@@ -7344,8 +7508,16 @@ codemod-skill-version: 0.1.0
                 .unwrap();
 
             let checks = verify_skills_with_runtime(harness, &runtime_paths).unwrap();
-            assert_eq!(checks.len(), 1);
-            assert_eq!(checks[0].status, VerificationStatus::Pass);
+            assert_eq!(checks.len(), 2, "harness: {}", harness.as_str());
+            assert!(checks
+                .iter()
+                .all(|check| check.status == VerificationStatus::Pass));
+            assert!(checks
+                .iter()
+                .any(|check| check.skill == MCS_SKILL_COMPONENT_ID));
+            assert!(checks
+                .iter()
+                .any(|check| check.skill == SDK_MIGRATION_SKILL_COMPONENT_ID));
         }
     }
 
@@ -7363,19 +7535,31 @@ codemod-skill-version: 0.1.0
             &runtime_paths,
         )
         .unwrap();
-        let skill_path = &installed[0].path;
+        let skill_path = &installed
+            .iter()
+            .find(|skill| skill.name == MCS_SKILL_COMPONENT_ID)
+            .expect("codemod skill should be installed")
+            .path;
 
         let original_content = fs::read_to_string(skill_path).unwrap();
         let updated_content = original_content.replace(MCS_COMPATIBILITY_MARKER, "");
         fs::write(skill_path, updated_content).unwrap();
 
         let checks = verify_skills_with_runtime(Harness::Claude, &runtime_paths).unwrap();
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].status, VerificationStatus::Fail);
+        assert_eq!(checks.len(), 2);
+        let codemod_check = checks
+            .iter()
+            .find(|check| check.skill == MCS_SKILL_COMPONENT_ID)
+            .expect("codemod verification result");
+        assert_eq!(codemod_check.status, VerificationStatus::Fail);
         assert_eq!(
-            checks[0].reason,
+            codemod_check.reason,
             Some("missing compatibility marker".to_string())
         );
+        assert!(checks.iter().any(|check| {
+            check.skill == SDK_MIGRATION_SKILL_COMPONENT_ID
+                && check.status == VerificationStatus::Pass
+        }));
     }
 
     #[test]
@@ -7467,19 +7651,31 @@ codemod-skill-version: 0.1.0
             &runtime_paths,
         )
         .unwrap();
-        let skill_path = &installed[0].path;
+        let skill_path = &installed
+            .iter()
+            .find(|skill| skill.name == MCS_SKILL_COMPONENT_ID)
+            .expect("codemod skill should be installed")
+            .path;
         let original_content = fs::read_to_string(skill_path).unwrap();
         let updated_content = original_content.replace("Bash(codemod *)", "Bash(node *)");
         fs::write(skill_path, updated_content).unwrap();
 
         let checks = verify_skills_with_runtime(Harness::Claude, &runtime_paths).unwrap();
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].status, VerificationStatus::Fail);
-        assert!(checks[0]
+        assert_eq!(checks.len(), 2);
+        let codemod_check = checks
+            .iter()
+            .find(|check| check.skill == MCS_SKILL_COMPONENT_ID)
+            .expect("codemod verification result");
+        assert_eq!(codemod_check.status, VerificationStatus::Fail);
+        assert!(codemod_check
             .reason
             .as_ref()
             .unwrap()
             .contains("unknown or unsafe allowed-tools entry"));
+        assert!(checks.iter().any(|check| {
+            check.skill == SDK_MIGRATION_SKILL_COMPONENT_ID
+                && check.status == VerificationStatus::Pass
+        }));
     }
 
     #[test]
@@ -7903,10 +8099,17 @@ codemod-skill-version: 0.1.0
         .unwrap();
 
         assert!(installed.iter().all(|entry| entry.name != "codemod-mcp"));
-        assert_eq!(installed.len(), 1);
-        assert!(installed[0]
-            .path
-            .ends_with(".agents/skills/codemod/SKILL.md"));
+        assert_eq!(installed.len(), 2);
+        assert!(installed.iter().any(|entry| {
+            entry.name == MCS_SKILL_COMPONENT_ID
+                && entry.path.ends_with(".agents/skills/codemod/SKILL.md")
+        }));
+        assert!(installed.iter().any(|entry| {
+            entry.name == SDK_MIGRATION_SKILL_COMPONENT_ID
+                && entry
+                    .path
+                    .ends_with(".agents/skills/sdk-migration/SKILL.md")
+        }));
     }
 
     #[test]

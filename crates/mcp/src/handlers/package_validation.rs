@@ -860,27 +860,12 @@ fn is_valid_registry_package_name(name: &str) -> bool {
 }
 
 fn invalid_registry_package_name(package_root: &Path) -> Option<String> {
-    let mut candidates = Vec::new();
-
-    if let Some(content) = read_file_if_exists(&package_root.join("codemod.yaml")) {
-        if let Ok(manifest) = serde_yaml::from_str::<YamlValue>(&content) {
-            if let Some(name) = manifest.get("name").and_then(|value| value.as_str()) {
-                candidates.push(name.to_string());
-            }
-        }
-    }
-
-    if let Some(content) = read_file_if_exists(&package_root.join("package.json")) {
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(name) = parsed.get("name").and_then(|value| value.as_str()) {
-                candidates.push(name.to_string());
-            }
-        }
-    }
-
-    candidates
-        .into_iter()
-        .find(|name| !is_valid_registry_package_name(name))
+    // Publish validates the registry identity from `codemod.yaml` only.
+    // `package.json` name is independent npm metadata and must not fail ready.
+    let content = read_file_if_exists(&package_root.join("codemod.yaml"))?;
+    let manifest = serde_yaml::from_str::<YamlValue>(&content).ok()?;
+    let name = manifest.get("name")?.as_str()?.to_string();
+    (!is_valid_registry_package_name(&name)).then_some(name)
 }
 
 fn format_line_list(lines: &[usize]) -> String {
@@ -1917,7 +1902,7 @@ mod tests {
         fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
         fs::write(
             dir.join("package.json"),
-            "{\n  \"name\": \"temporalio-sdk-1.24-to-1.25\",\n  \"scripts\": { \"test\": \"echo ok\" }\n}\n",
+            "{\n  \"name\": \"temporal-ts-sdk-1-24-to-1-25\",\n  \"scripts\": { \"test\": \"echo ok\" }\n}\n",
         )
         .unwrap();
         fs::write(dir.join("README.md"), "# Example\n").unwrap();
@@ -1945,6 +1930,50 @@ mod tests {
             .iter()
             .any(|issue| issue.code == "invalid_package_name"));
         assert!(!response.ready);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn dotted_package_json_name_does_not_fail_when_codemod_yaml_is_valid() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::create_dir_all(dir.join("tests/basic")).unwrap();
+        fs::write(
+            dir.join("codemod.yaml"),
+            "name: temporal-ts-sdk-1-24-to-1-25\nworkflow: workflow.yaml\n",
+        )
+        .unwrap();
+        fs::write(dir.join("workflow.yaml"), "version: \"1\"\nnodes: []\n").unwrap();
+        fs::write(
+            dir.join("package.json"),
+            "{\n  \"name\": \"my.local.npm.name\",\n  \"scripts\": { \"test\": \"echo ok\" }\n}\n",
+        )
+        .unwrap();
+        fs::write(dir.join("README.md"), "# Example\n").unwrap();
+        fs::write(
+            dir.join("scripts/codemod.ts"),
+            "export default function() { return null; }\n",
+        )
+        .unwrap();
+        fs::write(dir.join("tests/basic/input.ts"), "console.log('x');\n").unwrap();
+        fs::write(dir.join("tests/basic/expected.ts"), "console.log('x');\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(!response
+            .issues
+            .iter()
+            .any(|issue| issue.code == "invalid_package_name"));
 
         fs::remove_dir_all(dir).unwrap();
     }
