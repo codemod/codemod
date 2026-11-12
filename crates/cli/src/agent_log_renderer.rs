@@ -102,91 +102,8 @@ pub(crate) fn render_agent_event_payload_styled(
     }
 }
 
-pub(crate) fn render_task_log_line(line: &str) -> String {
-    render_agent_event_payload_plain(line).unwrap_or_else(|| line.to_string())
-}
-
-pub(crate) fn render_task_log_lines(lines: &[String]) -> Vec<String> {
-    let mut rendered = Vec::new();
-    let mut message_buffer = String::new();
-
-    for line in lines {
-        if let Some(delta) = agent_message_delta(line) {
-            message_buffer.push_str(&delta);
-            continue;
-        }
-
-        flush_message_buffer(&mut rendered, &mut message_buffer);
-        rendered.push(render_task_log_line(line));
-    }
-
-    flush_message_buffer(&mut rendered, &mut message_buffer);
-    rendered
-}
-
 pub(crate) fn render_agent_message_fragment(fragment: &str, already_open: bool) -> String {
     format_message_fragment(fragment, already_open, true)
-}
-
-fn render_agent_event_payload_plain(payload: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
-    match value.get("event").and_then(serde_json::Value::as_str)? {
-        "message" => {
-            let text = value.get("text").and_then(serde_json::Value::as_str)?;
-            Some(format!("  › {text}"))
-        }
-        "tool_call" => {
-            let tool_name = value
-                .get("tool_name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("tool");
-            let params = value
-                .get("tool_params")
-                .filter(|params| !params.as_object().is_some_and(|object| object.is_empty()))
-                .map(compact_tool_params)
-                .unwrap_or_default();
-            let mut line = if params.is_empty() {
-                format!("  • {tool_name}")
-            } else {
-                format!("  • {tool_name} {params}")
-            };
-            if let Some(diff) = value
-                .get("tool_params")
-                .and_then(|params| format_tool_diff(tool_name, params, false))
-            {
-                line.push('\n');
-                line.push_str(&diff);
-            }
-            Some(line)
-        }
-        "warning" => {
-            let message = value
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("warning");
-            Some(format!("  ! {message}"))
-        }
-        "status" => {
-            let status = value
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("status");
-            let detail = value
-                .get("detail")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            if detail.is_empty() {
-                Some(format!("  • {status}"))
-            } else {
-                Some(format!("  • {status} {detail}"))
-            }
-        }
-        "raw" => value
-            .get("line")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string),
-        _ => None,
-    }
 }
 
 fn compact_tool_params(value: &serde_json::Value) -> String {
@@ -627,33 +544,6 @@ fn truncate_tool_value(value: &str, max_chars: usize) -> String {
     truncated
 }
 
-fn agent_message_delta(line: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    if value.get("event").and_then(serde_json::Value::as_str) != Some("message") {
-        return None;
-    }
-    if !value
-        .get("delta")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
-        return None;
-    }
-    value
-        .get("text")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-}
-
-fn flush_message_buffer(rendered: &mut Vec<String>, message_buffer: &mut String) {
-    if message_buffer.trim().is_empty() {
-        message_buffer.clear();
-        return;
-    }
-    rendered.push(format!("  › {}", message_buffer.trim_end()));
-    message_buffer.clear();
-}
-
 #[cfg(test)]
 mod tests {
     use super::{render_agent_event_payload_styled, RenderedAgentEvent};
@@ -699,20 +589,6 @@ mod tests {
         assert!(line.contains("diff"));
         assert!(line.contains("-\"name\": \"calcom-monorepo\""));
         assert!(line.contains("+\"name\": \"calcom\""));
-    }
-
-    #[test]
-    fn task_log_lines_coalesce_message_deltas() {
-        let lines = vec![
-            r#"{"agent":"claude-code","stream":"stdout","event":"message","text":"Ren","delta":true}"#.to_string(),
-            r#"{"agent":"claude-code","stream":"stdout","event":"message","text":"amed to `calcom`.","delta":true}"#.to_string(),
-            r#"{"agent":"claude-code","stream":"stderr","event":"tool_call","tool_name":"Read","tool_params":{"file_path":"package.json"}}"#.to_string(),
-        ];
-
-        let rendered = super::render_task_log_lines(&lines);
-
-        assert_eq!(rendered[0], "  › Renamed to `calcom`.");
-        assert!(rendered[1].contains("Read"));
     }
 
     #[test]

@@ -6,7 +6,6 @@ use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 mod agent_log_renderer;
-mod agent_select;
 mod ascii_art;
 mod auth;
 mod auth_provider;
@@ -21,9 +20,8 @@ mod pro_dry_run;
 mod progress_bar;
 mod report_server;
 mod suitability;
-mod tui;
 mod utils;
-mod workflow_runner;
+mod workflow_exec;
 use crate::auth::TokenStorage;
 use ascii_art::print_ascii_art;
 use codemod_telemetry::{
@@ -135,8 +133,8 @@ enum WorkflowCommands {
     /// Cancel a workflow run
     Cancel(commands::workflow::cancel::Command),
 
-    /// Browse and interact with workflow runs in the terminal
-    Tui(commands::workflow::tui::Command),
+    /// Convert workflow.yaml files to workflow.ts
+    Upgrade(commands::workflow::upgrade::Command),
 }
 
 #[derive(Subcommand, Debug)]
@@ -412,7 +410,7 @@ async fn handle_implicit_run_command(
 async fn main() {
     if let Err(error) = run_cli().await {
         if error
-            .downcast_ref::<workflow_runner::WorkflowFailureAlreadyReported>()
+            .downcast_ref::<workflow_exec::WorkflowFailureAlreadyReported>()
             .is_none()
             && error.downcast_ref::<NoCommandAlreadyReported>().is_none()
         {
@@ -529,8 +527,8 @@ async fn dispatch_command(cli: &Cli, telemetry_sender: TelemetrySenderMutex) -> 
             WorkflowCommands::Cancel(args) => {
                 commands::workflow::cancel::handler(args).await?;
             }
-            WorkflowCommands::Tui(args) => {
-                commands::workflow::tui::handler(args, telemetry_sender.clone()).await?;
+            WorkflowCommands::Upgrade(args) => {
+                commands::workflow::upgrade::handler(args)?;
             }
         },
         Some(Commands::Jssg(args)) => match &args.command {

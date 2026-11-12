@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use butterflow_core::config::InstallSkillExecutor;
 use butterflow_core::diff::FileDiff;
 use butterflow_core::execution_stats::ExecutionStats;
+use butterflow_core::nested_codemod_run::NestedCodemodRunObserver;
 use butterflow_core::registry::RegistryClient;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::MetricsData;
@@ -27,7 +28,7 @@ pub mod interaction;
 mod run;
 mod tasks;
 
-pub use build::{build, BuildError, Built, FLOW_MODULE};
+pub use build::{build, inspect, BuildError, Built, Inspection, InstalledSkill, FLOW_MODULE};
 pub use butterflow_state::run_store::{
     LocalStore, MemoryStore, RunRecord, RunStatus, RunStore, StepRecord, StepStatus,
 };
@@ -51,6 +52,8 @@ pub struct Services {
     pub agent: Option<String>,
     /// Skip `shard(...)` steps, returning no shards (pro dry runs).
     pub skip_shard_steps: bool,
+    /// Told when a `codemod(...)` step runs a registry package.
+    pub nested_observer: Option<Arc<dyn NestedCodemodRunObserver>>,
     /// Diffs, counters and metrics collected while the run progresses.
     pub summary: Arc<Summary>,
 }

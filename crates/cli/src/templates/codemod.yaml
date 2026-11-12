@@ -8,7 +8,7 @@ license: "{license}"
 {repository}
 
 targets:
-  # Keep this aligned with the files matched in workflow.yaml.
+  # Keep this aligned with the files matched in workflow.ts.
   languages: ["{language}"]
 
 keywords: ["transformation", "migration"]
@@ -22,4 +22,4 @@ capabilities: []
 workflows:
   - name: main
     default: true
-    path: workflow.yaml
+    path: workflow.ts

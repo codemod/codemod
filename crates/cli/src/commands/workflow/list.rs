@@ -1,10 +1,8 @@
-use anyhow::{Context, Result};
-use butterflow_core::utils;
+use anyhow::Result;
 use clap::Args;
-use tabled::settings::{object::Columns, Alignment, Modify, Style};
 use tabled::{Table, Tabled};
 
-use crate::engine::create_engine;
+use crate::workflow_exec::store;
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -14,85 +12,38 @@ pub struct Command {
 }
 
 #[derive(Tabled)]
-pub struct WorkflowRunRow {
+struct RunRow {
     #[tabled(rename = "ID")]
     pub id: String,
     #[tabled(rename = "Name")]
     pub name: String,
     #[tabled(rename = "Status")]
     pub status: String,
-    #[tabled(rename = "Started At")]
+    #[tabled(rename = "Started")]
     pub started_at: String,
-    #[tabled(rename = "Ended At")]
-    pub ended_at: String,
-    #[tabled(rename = "Duration")]
-    pub duration: String,
 }
 
-/// List workflow runs
+/// List workflow runs, most recent first
 pub async fn handler(args: &Command) -> Result<()> {
-    let (engine, _) = create_engine(
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        None,
-        None,
-        false,
-        None,
-        false,
-        Default::default(),
-        None,
-        None,
-        None,
-    )?;
-
-    // Get workflow runs
-    let workflow_runs = engine
-        .list_workflow_runs(args.limit)
-        .await
-        .context("Failed to list workflow runs")?;
-
-    if workflow_runs.is_empty() {
-        println!("No workflow runs found");
+    let runs = store()?.list_runs(args.limit)?;
+    if runs.is_empty() {
+        println!("No workflow runs found.");
         return Ok(());
     }
-
-    println!("Recent workflow runs:");
-    let rows: Vec<WorkflowRunRow> = workflow_runs
-        .iter()
-        .map(|workflow_run| WorkflowRunRow {
-            id: workflow_run.id.to_string(),
-            name: workflow_run
-                .workflow
-                .nodes
-                .first()
-                .map(|n| n.name.clone())
-                .unwrap_or("unknown".to_string()),
-            status: format!("{:?}", workflow_run.status),
-            started_at: workflow_run.started_at.to_string(),
-            ended_at: workflow_run
-                .ended_at
-                .map(|d| d.to_string())
-                .unwrap_or("unknown".to_string()),
-            duration: utils::format_duration(
-                workflow_run
-                    .ended_at
-                    .map(|d| {
-                        d.signed_duration_since(workflow_run.started_at)
-                            .num_seconds()
-                    })
-                    .unwrap_or(0) as u64,
-            ),
+    let rows: Vec<RunRow> = runs
+        .into_iter()
+        .map(|run| RunRow {
+            name: run.name.clone().unwrap_or_else(|| {
+                run.workflow_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            }),
+            id: run.id,
+            status: run.status.as_str().to_string(),
+            started_at: run.started_at.format("%Y-%m-%d %H:%M:%S").to_string(),
         })
         .collect();
-
-    let mut table = Table::new(rows);
-    table
-        .with(Style::rounded())
-        .with(Modify::new(Columns::new(..)).with(Alignment::left())); // align all columns left
-    println!("{table}");
-
+    println!("{}", Table::new(rows));
     Ok(())
 }

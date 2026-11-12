@@ -207,6 +207,45 @@ fn find_js_files_in_workflow(workflow: &Workflow, package_path: &Path) -> Result
     Ok(js_files)
 }
 
+/// Check that a workflow.ts builds, and find the transform files it passes
+/// to `jssg(...)`, relative to the package.
+fn typescript_workflow_transforms(
+    package_path: &Path,
+    workflow_path: &Path,
+) -> Result<Vec<String>> {
+    codemod_workflow::load_workflow(workflow_path).map_err(|e| anyhow!("Invalid workflow: {e}"))?;
+    let source = fs::read_to_string(workflow_path)?;
+    let inspection = codemod_workflow::inspect(&workflow_path.display().to_string(), &source)
+        .map_err(|e| anyhow!("Invalid workflow: {e}"))?;
+    let workflow_dir = workflow_path.parent().unwrap_or(package_path);
+    let mut js_files = Vec::new();
+    for file in inspection.files {
+        let resolved = resolve_relative_path_within_root(workflow_dir, &file).ok_or_else(|| {
+            anyhow!("File referenced in workflow must stay within the package: {file}")
+        })?;
+        if !resolved.exists() {
+            return Err(anyhow!(
+                "File referenced in workflow not found: {}",
+                resolved.display()
+            ));
+        }
+        let is_script = matches!(
+            resolved.extension().and_then(|e| e.to_str()),
+            Some("js" | "ts" | "mjs" | "mts" | "jsx" | "tsx")
+        );
+        if !is_script {
+            continue;
+        }
+        let relative = resolved
+            .strip_prefix(package_path)
+            .unwrap_or(&resolved)
+            .to_string_lossy()
+            .replace('\\', "/");
+        js_files.push(relative);
+    }
+    Ok(js_files)
+}
+
 /// Bundle a JavaScript file and return the bundled code
 async fn bundle_js_file(package_path: &Path, js_file: &str) -> Result<String> {
     let js_file_path = resolve_relative_path_within_root(package_path, js_file).ok_or_else(|| {
@@ -339,6 +378,10 @@ fn validate_common_package_metadata(package_path: &Path, manifest: &CodemodManif
 }
 
 fn validate_workflow_behavior(package_path: &Path, workflow_path: &Path) -> Result<Vec<String>> {
+    if codemod_workflow::is_typescript(workflow_path) {
+        return typescript_workflow_transforms(package_path, workflow_path);
+    }
+
     // Validate workflow file
     let workflow_content = fs::read_to_string(workflow_path)?;
     let workflow: Workflow = serde_yaml::from_str(&workflow_content)

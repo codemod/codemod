@@ -12,6 +12,9 @@ use serde_json::{json, Value};
 use super::{block_on, TaskContext, TaskError, TaskOutcome, TaskResult};
 use crate::events::{Event, EventSink};
 use crate::run::{execute, Ending, RunContext};
+use butterflow_core::nested_codemod_run::{
+    NestedCodemodRun, NestedCodemodRunEvent, NestedCodemodRunOutcome,
+};
 use butterflow_state::run_store::StepStatus;
 
 #[derive(Deserialize)]
@@ -42,6 +45,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         )));
     }
 
+    let mut nested_run: Option<NestedCodemodRun> = None;
     let package_dir = if local {
         let path = run.bundle_dir.join(&request.source);
         match &run.services.registry {
@@ -59,9 +63,29 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         let registry = run.services.registry.as_ref().ok_or_else(|| {
             TaskError::Failed("running registry codemods is not available here".into())
         })?;
-        block_on(registry.resolve_package(&request.source, None, false, None))
-            .map_err(|e| TaskError::Failed(format!("cannot resolve '{}': {e}", request.source)))?
-            .package_dir
+        let package = block_on(registry.resolve_package(&request.source, None, false, None))
+            .map_err(|e| TaskError::Failed(format!("cannot resolve '{}': {e}", request.source)))?;
+        nested_run = package
+            .registry_metadata
+            .as_ref()
+            .map(|metadata| NestedCodemodRun {
+                codemod_name: metadata.package_web_path.clone(),
+                package_version: package.version.clone(),
+                execution_id: uuid::Uuid::new_v4().to_string(),
+                dependency_path: run
+                    .chain
+                    .iter()
+                    .map(|identity| {
+                        if identity.starts_with('/') {
+                            "<local>".to_string()
+                        } else {
+                            identity.clone()
+                        }
+                    })
+                    .chain(std::iter::once(request.source.clone()))
+                    .collect(),
+            });
+        package.package_dir
     };
     let workflow_path = find_workflow(&package_dir)?;
     let workflow = crate::engine::load_workflow(&workflow_path)
@@ -91,7 +115,32 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         commit_lock: Mutex::new(()),
         chain,
     });
-    match execute(&workflow.built, child).map_err(|e| TaskError::Failed(e.to_string()))? {
+    let observer = run.services.nested_observer.clone();
+    if let (Some(observer), Some(nested)) = (&observer, &nested_run) {
+        block_on(observer.record(NestedCodemodRunEvent::Started(nested.clone())));
+    }
+    let started = std::time::Instant::now();
+    let ending = execute(&workflow.built, child).map_err(|e| TaskError::Failed(e.to_string()))?;
+    if let (Some(observer), Some(nested)) = (&observer, nested_run) {
+        let outcome = match &ending {
+            Ending::Succeeded(_) => NestedCodemodRunOutcome::Succeeded,
+            Ending::Failed(error) => NestedCodemodRunOutcome::Failed {
+                error_message: error.clone(),
+            },
+            Ending::Canceled => NestedCodemodRunOutcome::Failed {
+                error_message: "canceled".into(),
+            },
+            Ending::AwaitingApproval(message) => NestedCodemodRunOutcome::Failed {
+                error_message: format!("waiting for approval: {message}"),
+            },
+        };
+        block_on(observer.record(NestedCodemodRunEvent::Completed {
+            run: nested,
+            outcome,
+            duration_ms: started.elapsed().as_millis(),
+        }));
+    }
+    match ending {
         Ending::Succeeded(output) => Ok(TaskOutcome::new(json!({ "output": output }))),
         Ending::Failed(error) => Err(TaskError::Failed(format!(
             "codemod '{}' failed: {error}",

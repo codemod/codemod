@@ -1,6 +1,5 @@
 use std::io::{self, IsTerminal};
 
-use butterflow_core::config::WorkflowRunConfig;
 use console::style;
 
 pub(crate) enum ProDryRunReason<'a> {
@@ -42,13 +41,6 @@ pub(crate) fn notify_pro_dry_run_required(reason: ProDryRunReason<'_>, no_intera
     }
 }
 
-pub(crate) fn apply_pro_dry_run_execution_settings(cfg: &mut WorkflowRunConfig) {
-    cfg.execution.auto_trigger_manual_steps = true;
-    cfg.execution.skip_shard_steps = true;
-    cfg.execution.skip_state_writes = true;
-    cfg.execution.flatten_matrix_tasks = true;
-}
-
 /// Block until the user presses any key. Falls back to a no-op when either
 /// stdin or stdout isn't a terminal (e.g. piped input or redirected output)
 /// or when raw mode can't be enabled. Callers must ensure any prompt they want
@@ -71,21 +63,4 @@ fn wait_for_any_key() {
         }
     }
     let _ = disable_raw_mode();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn apply_pro_dry_run_execution_settings_enables_preview_only_mode() {
-        let mut config = WorkflowRunConfig::default();
-
-        apply_pro_dry_run_execution_settings(&mut config);
-
-        assert!(config.execution.auto_trigger_manual_steps);
-        assert!(config.execution.skip_shard_steps);
-        assert!(config.execution.skip_state_writes);
-        assert!(config.execution.flatten_matrix_tasks);
-    }
 }

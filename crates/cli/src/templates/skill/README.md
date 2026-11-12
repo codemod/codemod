@@ -11,7 +11,7 @@ npx codemod {name}
 
 ## Usage
 
-This package is skill-oriented and includes `workflow.yaml` with an `install-skill` step.
+This package is skill-oriented and includes `workflow.ts` with an `installSkill` step.
 After installation, reload your harness session so the new skill is discoverable.
 
 ## Development

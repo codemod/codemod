@@ -1,7 +1,7 @@
 use crate::utils::skill_layout::{
     expected_authored_skill_relative_file, AGENTS_SKILL_ROOT_RELATIVE_PATH,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use console::{style, Emoji};
 use inquire::{Confirm, Select, Text};
@@ -840,7 +840,7 @@ fn create_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     // Create codemod.yaml
     create_manifest(project_path, config)?;
 
-    // Always create workflow.yaml (workflow-first package model)
+    // Always create workflow.ts (workflow-first package model)
     create_workflow(project_path, config)?;
 
     // Create workflow project structure
@@ -936,8 +936,28 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         );
     }
 
-    fs::write(project_path.join("workflow.yaml"), workflow_content)?;
+    fs::write(
+        project_path.join("workflow.ts"),
+        workflow_typescript(&workflow_content)?,
+    )?;
     Ok(())
+}
+
+/// The init templates are written as workflow.yaml; new packages get the
+/// equivalent workflow.ts.
+fn workflow_typescript(yaml: &str) -> Result<String> {
+    let workflow: butterflow_models::Workflow =
+        serde_yaml::from_str(yaml).context("invalid workflow template")?;
+    let translated = codemod_workflow::compat::translate(&workflow);
+    Ok(translated
+        .source
+        .lines()
+        .skip_while(|line| line.starts_with("// "))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_start()
+        .to_string()
+        + "\n")
 }
 
 fn default_include_patterns(language: &str) -> String {
@@ -1483,7 +1503,7 @@ fn create_codemod_in_workspace(codemod_path: &Path, config: &ProjectConfig) -> R
     // Create codemod.yaml
     create_manifest(codemod_path, config)?;
 
-    // Always create workflow.yaml (workflow-first package model)
+    // Always create workflow.ts (workflow-first package model)
     create_workflow(codemod_path, config)?;
 
     // Create workflow project structure
@@ -1686,7 +1706,7 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         );
         println!("{CHECKMARK} Generated codemod.yaml manifest");
         if config.package_behavior.includes_workflow() {
-            println!("{CHECKMARK} Generated workflow.yaml definition");
+            println!("{CHECKMARK} Generated workflow.ts definition");
         }
         if config.package_behavior.includes_skill() {
             println!(
@@ -1731,15 +1751,15 @@ fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             style("Use your harness to execute the installed skill instructions.").dim()
         );
     } else {
-        // Determine the path to the workflow.yaml
+        // Determine the path to the workflow.ts
         let workflow_path = if config.workspace {
             format!(
-                "{}/codemods/{}/workflow.yaml",
+                "{}/codemods/{}/workflow.ts",
                 project_path.display(),
                 codemod_dir_name
             )
         } else {
-            format!("{}/workflow.yaml", project_path.display())
+            format!("{}/workflow.ts", project_path.display())
         };
 
         println!();
@@ -1913,17 +1933,20 @@ mod tests {
         assert!(skill_root.join("references/index.md").is_file());
         assert!(skill_root.join("references/usage.md").is_file());
         assert!(project_path.join("README.md").is_file());
-        assert!(project_path.join("workflow.yaml").is_file());
+        assert!(project_path.join("workflow.ts").is_file());
 
         let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
         assert!(manifest.contains("capabilities:"));
-        assert!(manifest.contains("workflow: \"workflow.yaml\""));
+        assert!(manifest.contains("workflow: \"workflow.ts\""));
         let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
         let validation = validate_skill_behavior(&project_path, &parsed_manifest).unwrap();
         assert_eq!(validation.linked_reference_count, 1);
-        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
-        assert!(workflow.contains("install-skill:"));
-        assert!(workflow.contains("package: \"@codemod/sample-skill\""));
+        let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
+        assert!(workflow.contains("installSkill({"));
+        assert!(
+            workflow.contains("package: \"@codemod/sample-skill\""),
+            "{workflow}"
+        );
         assert!(workflow.contains("path: \"./agents/skill/sample-skill/SKILL.md\""));
 
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
@@ -1949,13 +1972,13 @@ mod tests {
         assert!(codemod_path.join("codemod.yaml").is_file());
         assert!(skill_root.join("SKILL.md").is_file());
         assert!(skill_root.join("references/index.md").is_file());
-        assert!(codemod_path.join("workflow.yaml").is_file());
+        assert!(codemod_path.join("workflow.ts").is_file());
         let manifest = fs::read_to_string(codemod_path.join("codemod.yaml")).unwrap();
         let parsed_manifest: CodemodManifest = serde_yaml::from_str(&manifest).unwrap();
         let validation = validate_skill_behavior(&codemod_path, &parsed_manifest).unwrap();
         assert_eq!(validation.linked_reference_count, 1);
-        let workflow = fs::read_to_string(codemod_path.join("workflow.yaml")).unwrap();
-        assert!(workflow.contains("install-skill:"));
+        let workflow = fs::read_to_string(codemod_path.join("workflow.ts")).unwrap();
+        assert!(workflow.contains("installSkill({"));
         assert!(workflow.contains("path: \"./agents/skill/sample-skill/SKILL.md\""));
 
         let readme = fs::read_to_string(codemod_path.join("README.md")).unwrap();
@@ -1994,10 +2017,10 @@ mod tests {
         // shape with a single `main` entry pointing at `workflow.yaml`.
         assert!(manifest.contains("workflows:"));
         assert!(manifest.contains("name: main"));
-        assert!(manifest.contains("path: workflow.yaml"));
+        assert!(manifest.contains("path: workflow.ts"));
         assert!(manifest.contains("default: true"));
         assert!(manifest.contains("capabilities: []"));
-        assert!(manifest.contains("Keep this aligned with the files matched in workflow.yaml."));
+        assert!(manifest.contains("Keep this aligned with the files matched in workflow.ts."));
     }
 
     #[test]
@@ -2022,11 +2045,14 @@ mod tests {
 
         create_project(&project_path, &config).unwrap();
 
-        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
         assert!(workflow.contains("language: \"toml\""));
-        assert!(workflow.contains("depends_on: [shell-transform]"));
+        assert!(
+            workflow.contains("after([shellTransformNodeDone]"),
+            "{workflow}"
+        );
         assert!(!workflow.contains("apply-yaml"));
-        assert!(!workflow.contains("\n        ast-grep:"));
+        assert!(!workflow.contains("astGrep("));
 
         let codemod_script = fs::read_to_string(project_path.join("scripts/codemod.ts")).unwrap();
         assert!(codemod_script.contains("langs/toml"));
@@ -2063,13 +2089,13 @@ mod tests {
             .join("hybrid-project");
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
 
-        assert!(project_path.join("workflow.yaml").is_file());
+        assert!(project_path.join("workflow.ts").is_file());
         assert!(skill_root.join("SKILL.md").is_file());
         assert!(skill_root.join("references/index.md").is_file());
         assert!(manifest.contains("workflows:"));
-        assert!(manifest.contains("path: workflow.yaml"));
-        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
-        assert!(workflow.contains("install-skill:"));
+        assert!(manifest.contains("path: workflow.ts"));
+        let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
+        assert!(workflow.contains("installSkill({"));
         assert!(workflow.contains("package: \"@codemod/hybrid-project\""));
         assert!(workflow.contains("path: \"./agents/skill/hybrid-project/SKILL.md\""));
         assert!(readme.contains("## Skill Installation"));
@@ -2187,12 +2213,12 @@ mod tests {
         assert!(readme
             .contains("Document the exact migration this codemod performs before publishing."));
         assert!(readme.contains("pnpm test"));
-        assert!(readme.contains("codemod workflow validate -w workflow.yaml"));
+        assert!(readme.contains("codemod workflow validate -w workflow.ts"));
         assert!(!readme.contains("Converting `var` declarations to `const`/`let`"));
 
-        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
-        assert!(workflow.contains("base_path: \".\""));
-        assert!(workflow.contains("include:"));
+        let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
+        assert!(workflow.contains("basePath: \".\""), "{workflow}");
+        assert!(workflow.contains("include: ["));
         assert!(workflow.contains("\"**/*.{ts,tsx,mts,cts}\""));
         assert!(workflow.contains("\"**/node_modules/**\""));
 
@@ -2249,7 +2275,7 @@ mod tests {
         assert!(project_path.join("scripts/codemod.ts").is_file());
         assert!(project_path.join("tests/fixtures/input.xml").is_file());
         assert!(project_path.join("tests/fixtures/expected.xml").is_file());
-        let workflow = fs::read_to_string(project_path.join("workflow.yaml")).unwrap();
+        let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
         assert!(workflow.contains("\"**/*.{xml,csproj,props,targets,config,resx,xaml}\""));
     }
 

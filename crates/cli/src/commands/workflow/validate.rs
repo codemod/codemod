@@ -109,6 +109,17 @@ fn load_manifest(package_root: &Path) -> Result<CodemodManifest> {
 }
 
 fn validate_workflow_file(workflow_path: &Path) -> Result<()> {
+    if codemod_workflow::is_typescript(workflow_path) {
+        let loaded =
+            codemod_workflow::load_workflow(workflow_path).map_err(|e| anyhow!("❌ {e}"))?;
+        println!("✅ Workflow builds");
+        println!(
+            "✅ forEachFile callbacks: Valid ({} extracted)",
+            loaded.built.callbacks.len()
+        );
+        return Ok(());
+    }
+
     let workflow = utils::parse_workflow_file(workflow_path).context(format!(
         "❌ Failed to parse workflow file: {}",
         workflow_path.display()
@@ -155,11 +166,30 @@ fn validate_workflow_file(workflow_path: &Path) -> Result<()> {
         .count();
     println!("✅ Matrix strategies: Valid ({matrix_nodes} matrix nodes)");
 
+    let translated =
+        codemod_workflow::compat::translate_file(workflow_path).map_err(|e| anyhow!("❌ {e}"))?;
+    codemod_workflow::build(&workflow_path.display().to_string(), &translated.source)
+        .map_err(|e| anyhow!("❌ The TypeScript translation does not build: {e}"))?;
+    println!("✅ Runs on the TypeScript engine");
+    for warning in &translated.warnings {
+        println!("⚠️  {warning}");
+    }
+    if workflow_path
+        .extension()
+        .is_some_and(|ext| ext == "yaml" || ext == "yml")
+    {
+        println!("💡 Convert it with: codemod workflow upgrade");
+    }
+
     Ok(())
 }
 
 fn normalize_non_package_workflow_path(input_path: &Path) -> Result<PathBuf> {
     if input_path.is_dir() {
+        let typescript = input_path.join("workflow.ts");
+        if typescript.is_file() {
+            return Ok(typescript);
+        }
         return Ok(input_path.join(DEFAULT_WORKFLOW_FILE_NAME));
     }
 

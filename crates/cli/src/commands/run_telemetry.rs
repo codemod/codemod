@@ -3,7 +3,6 @@ use crate::{TelemetrySenderMutex, CLI_VERSION};
 use butterflow_core::nested_codemod_run::{
     NestedCodemodRun, NestedCodemodRunEvent, NestedCodemodRunObserver, NestedCodemodRunOutcome,
 };
-use butterflow_models::WorkflowRun;
 use codemod_telemetry::send_event::BaseEvent;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -244,25 +243,6 @@ pub(crate) fn nested_codemod_run_observer(
     })
 }
 
-pub(crate) fn persisted_workflow_root_name(workflow_run: &WorkflowRun) -> String {
-    workflow_run
-        .name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .or_else(|| {
-            workflow_run
-                .bundle_path
-                .as_deref()
-                .and_then(|path| path.file_name())
-                .and_then(|name| name.to_str())
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| format!("workflow:{}", workflow_run.id))
-}
-
 struct NestedCodemodTelemetryObserver {
     telemetry: TelemetrySenderMutex,
     root_execution_id: String,
@@ -317,12 +297,8 @@ impl NestedCodemodRunObserver for NestedCodemodTelemetryObserver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use butterflow_models::{workflow::Workflow, WorkflowStatus};
-    use chrono::Utc;
     use codemod_telemetry::send_event::{PartialTelemetrySenderOptions, TelemetrySender};
-    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
-    use uuid::Uuid;
 
     struct RecordingTelemetrySender {
         events: Arc<Mutex<Vec<String>>>,
@@ -494,54 +470,6 @@ mod tests {
                 "@codemod/child-b".to_string(),
             ],
         }
-    }
-
-    fn persisted_workflow_run(
-        id: Uuid,
-        name: Option<&str>,
-        bundle_path: Option<&str>,
-    ) -> WorkflowRun {
-        WorkflowRun {
-            id,
-            workflow: Workflow {
-                version: "1".to_string(),
-                state: None,
-                params: None,
-                templates: vec![],
-                nodes: vec![],
-            },
-            status: WorkflowStatus::Running,
-            params: Default::default(),
-            tasks: vec![],
-            started_at: Utc::now(),
-            ended_at: None,
-            bundle_path: bundle_path.map(PathBuf::from),
-            capabilities: None,
-            name: name.map(str::to_owned),
-            target_path: None,
-        }
-    }
-
-    #[test]
-    fn persisted_workflow_name_uses_name_then_bundle_basename_then_id() {
-        let run_id = Uuid::new_v4();
-
-        let named = persisted_workflow_run(
-            run_id,
-            Some("  persisted migration  "),
-            Some("/private/source/bundle-name"),
-        );
-        assert_eq!(persisted_workflow_root_name(&named), "persisted migration");
-
-        let bundled =
-            persisted_workflow_run(run_id, Some("   "), Some("/private/source/bundle-name"));
-        assert_eq!(persisted_workflow_root_name(&bundled), "bundle-name");
-
-        let anonymous = persisted_workflow_run(run_id, None, None);
-        assert_eq!(
-            persisted_workflow_root_name(&anonymous),
-            format!("workflow:{run_id}")
-        );
     }
 
     #[test]

@@ -8,3 +8,4 @@ pub(crate) mod registry_link;
 pub(crate) mod resolve_capabilities;
 pub(crate) mod rolldown_bundler;
 pub(crate) mod skill_layout;
+pub mod workflow_source;

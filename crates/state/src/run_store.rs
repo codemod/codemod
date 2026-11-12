@@ -132,11 +132,14 @@ pub trait RunStore: Send + Sync {
 }
 
 /// Select a store from `CODEMOD_RUN_STORE` (`local`, the default, or
-/// `memory`).
+/// `memory`). `CODEMOD_RUN_STORE_DIR` moves the local store.
 pub fn store_from_env() -> StoreResult<Box<dyn RunStore>> {
     match std::env::var("CODEMOD_RUN_STORE").as_deref() {
         Ok("memory") => Ok(Box::new(MemoryStore::default())),
-        _ => Ok(Box::new(LocalStore::default_location()?)),
+        _ => match std::env::var_os("CODEMOD_RUN_STORE_DIR") {
+            Some(dir) => Ok(Box::new(LocalStore::new(dir))),
+            None => Ok(Box::new(LocalStore::default_location()?)),
+        },
     }
 }
 

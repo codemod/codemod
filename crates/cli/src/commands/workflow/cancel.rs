@@ -1,44 +1,37 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Result};
+use butterflow_state::run_store::RunStatus;
+use chrono::Utc;
 use clap::Args;
-use uuid::Uuid;
 
-use crate::engine::create_engine;
+use crate::workflow_exec::store;
 
 #[derive(Args, Debug)]
 pub struct Command {
     /// Workflow run ID
     #[arg(short, long)]
-    id: Uuid,
+    id: String,
 }
 
-/// Cancel a workflow
+/// Cancel a workflow run. A run in progress (in this or another terminal)
+/// stops before its next step; a paused run is marked canceled.
 pub async fn handler(args: &Command) -> Result<()> {
-    let (engine, _) = create_engine(
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        None,
-        None,
-        false,
-        None,
-        false,
-        Default::default(),
-        None,
-        None,
-        None,
-    )?;
-
-    println!("Canceling workflow run {}...", args.id);
-
-    // Cancel workflow
-    engine
-        .cancel_workflow(args.id)
-        .await
-        .context("Failed to cancel workflow")?;
-
-    println!("✅ Workflow run canceled successfully");
-
+    let store = store()?;
+    let mut run = store
+        .get_run(&args.id)?
+        .ok_or_else(|| anyhow!("run '{}' not found", args.id))?;
+    match run.status {
+        RunStatus::Running => {
+            store.request_cancel(&args.id)?;
+            println!("Asked run {} to stop.", args.id);
+        }
+        RunStatus::AwaitingApproval | RunStatus::Failed => {
+            run.status = RunStatus::Canceled;
+            run.awaiting = None;
+            run.ended_at = Some(Utc::now());
+            store.update_run(&run)?;
+            println!("Run {} canceled.", args.id);
+        }
+        status => println!("Run {} already {}.", args.id, status.as_str()),
+    }
     Ok(())
 }

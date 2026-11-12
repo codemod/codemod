@@ -509,3 +509,133 @@ fn error_at(file: &str, source: &str, offset: u32, message: String) -> BuildErro
         message,
     }
 }
+
+/// What a workflow module does, read without running it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Inspection {
+    /// `codemod:workflow` functions the module calls, by imported name, in
+    /// source order (`step`, `forEachFile`, `jssg`, `installSkill`, ...).
+    pub calls: Vec<String>,
+    /// `installSkill({ package, path })` calls whose options are literals.
+    pub install_skills: Vec<InstalledSkill>,
+    /// String-literal paths passed to `jssg`, `astGrep` and shard functions.
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InstalledSkill {
+    pub package: String,
+    pub path: Option<String>,
+}
+
+impl Inspection {
+    pub fn calls(&self, name: &str) -> bool {
+        self.calls.iter().any(|call| call == name)
+    }
+}
+
+/// Read a workflow module's task calls without running it.
+pub fn inspect(file: &str, source: &str) -> Result<Inspection, BuildError> {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKey};
+
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
+    if let Some(error) = parsed.errors.first() {
+        return Err(error_at(file, source, 0, error.to_string()));
+    }
+    let program = parsed.program;
+    let semantic = SemanticBuilder::new().build(&program).semantic;
+    let scoping = semantic.scoping();
+
+    let mut imported: HashMap<SymbolId, String> = HashMap::new();
+    for statement in &program.body {
+        if let Statement::ImportDeclaration(import) = statement {
+            if import.source.value != FLOW_MODULE {
+                continue;
+            }
+            for specifier in import.specifiers.iter().flatten() {
+                if let ImportDeclarationSpecifier::ImportSpecifier(s) = specifier {
+                    imported.insert(s.local.symbol_id(), s.imported.name().to_string());
+                }
+            }
+        }
+    }
+
+    let string_of = |expression: &Expression| match expression {
+        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
+        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
+            .quasis
+            .first()
+            .and_then(|q| q.value.cooked.as_ref().map(|c| c.to_string())),
+        _ => None,
+    };
+
+    let mut inspection = Inspection::default();
+    for node in semantic.nodes().iter() {
+        let AstKind::CallExpression(call) = node.kind() else {
+            continue;
+        };
+        let Expression::Identifier(callee) = &call.callee else {
+            continue;
+        };
+        let Some(name) = scoping
+            .get_reference(callee.reference_id())
+            .symbol_id()
+            .and_then(|symbol| imported.get(&symbol))
+        else {
+            continue;
+        };
+        inspection.calls.push(name.clone());
+        let first = call.arguments.first().and_then(|a| a.as_expression());
+        match name.as_str() {
+            "jssg" | "astGrep" => {
+                if let Some(path) = first.and_then(string_of) {
+                    inspection.files.push(path);
+                }
+            }
+            "installSkill" | "shard" => {
+                let Some(Expression::ObjectExpression(object)) = first else {
+                    continue;
+                };
+                let mut package = None;
+                let mut path = None;
+                for property in &object.properties {
+                    let ObjectPropertyKind::ObjectProperty(property) = property else {
+                        continue;
+                    };
+                    let key = match &property.key {
+                        PropertyKey::StaticIdentifier(id) => id.name.to_string(),
+                        PropertyKey::StringLiteral(s) => s.value.to_string(),
+                        _ => continue,
+                    };
+                    match (name.as_str(), key.as_str()) {
+                        ("installSkill", "package") => package = string_of(&property.value),
+                        ("installSkill", "path") => path = string_of(&property.value),
+                        ("shard", "method") => {
+                            if let Expression::ObjectExpression(method) = &property.value {
+                                for inner in &method.properties {
+                                    if let ObjectPropertyKind::ObjectProperty(inner) = inner {
+                                        let is_function = matches!(&inner.key, PropertyKey::StaticIdentifier(id) if id.name == "function");
+                                        if is_function {
+                                            if let Some(file) = string_of(&inner.value) {
+                                                inspection.files.push(file);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(package) = package {
+                    inspection
+                        .install_skills
+                        .push(InstalledSkill { package, path });
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(inspection)
+}
