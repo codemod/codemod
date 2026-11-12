@@ -1,78 +1,48 @@
 # codemod-workflow
 
-A throwaway spike of the `step()` / `forEachFile` workflow API. It is not wired
-into the CLI and not published. Design doc: "Design: step() and forEachFile for
-TypeScript workflows" in Notion.
+The workflow engine. It runs `workflow.ts` files, and `workflow.yaml` files
+through a translation to the same TypeScript. User docs:
+`docs/community/workflows/reference.mdx`.
 
 ```ts
-import { step, forEachFile, parse } from "codemod:workflow";
-
-const LEGACY = "moment";
+import { step, forEachFile, parse, jssg } from "codemod:workflow";
 
 export default async function main() {
   const usages = await step("Find moment imports",
-    forEachFile({ language: "typescript", containing: LEGACY }, (file) => {
-      const found = parse(file).root().findAll({ rule: { pattern: `import $X from "${LEGACY}"` } });
+    forEachFile({ language: "typescript", containing: "moment" }, (file) => {
+      const found = parse(file).root().findAll({ rule: { pattern: 'import $X from "moment"' } });
       return found.length ? file.path : undefined;
     }),
   );
-
-  await step(forEachFile({ language: "typescript" }, (file) => {
-    if (!usages.outputs.includes(file.path)) return;   // captured step result
-    file.write(rewrite(parse(file)));
-  }));
+  await step(jssg("./scripts/codemod.ts", { files: usages.outputs }));
 }
 ```
 
-## How it works
+## Layout
 
-**Build** (`src/build.rs`) uses oxc's semantic analysis:
+| Path | What it does |
+|---|---|
+| `src/build.rs` | oxc build: extracts `forEachFile` callbacks, turns outside variables into captures, reports the callback rules as build errors; `inspect` reads a module's task calls without running it |
+| `src/run.rs`, `src/js/workflow.js` | The `codemod:workflow` runtime in one QuickJS context: `step()`, replay by position and content, state, events, cancellation |
+| `src/engine.rs` | `Engine::start` / `resume` / `cancel` over a `RunStore` (`crates/state`) |
+| `src/tasks/` | Host tasks, each a thin adapter over an existing executor: `forEachFile`, `jssg` (`butterflow_core::jssg_runner`), `astGrep`, `shell`, `shard`, `codemod`, `agent`, `installSkill`, `approval`, `branch` / `commit` / `pullRequest` |
+| `src/tasks/changes.rs` | One commit path for every task that edits files: conflict checks, dry run, diffs |
+| `src/compat/` | workflow.yaml to TypeScript; `${{ }}` expressions become TypeScript or fall back to `evaluate()`, which uses the YAML engine's evaluator |
+| `src/events.rs`, `src/interaction.rs` | What the engine reports, and the questions it asks; the CLI implements both |
 
-- finds every `forEachFile(selector, callback)` whose `forEachFile` is imported
-  from `codemod:workflow`;
-- extracts the callback into its own module, copying in the module-level
-  declarations it uses (transitively) and the `codemod:*` imports it needs;
-- turns locals of enclosing functions into captures, and rewrites the call site
-  to `__flowCallback(id, () => ({ ...captures }))`;
-- rejects, with a file:line:column error: assigning to an outside variable,
-  capturing a reassigned local, capturing a function or class (including a
-  `const` holding one), using a reassigned module-level binding, starting a
-  step inside a callback, and passing a callback by name.
+The engine never writes to the terminal: the CLI (`crates/cli/src/workflow_exec.rs`)
+renders events and answers prompts.
 
-**Run** (`src/run.rs`, `src/js/flow.js`):
+## Not done yet
 
-- the workflow body runs in one QuickJS context; `step()` starts its task
-  immediately, so `Promise.all` runs steps at the same time;
-- `forEachFile` tasks run on host threads; a small loop settles their promises;
-- captures are checked as strict JSON when the step starts, and every step
-  result is deep-frozen;
-- history is keyed by position plus a canonical form of the task. A recorded
-  success is replayed if its content matches and is a `NondeterminismError` if
-  not; a recorded failure is run again. With `history_path` set, history is
-  rewritten after every step.
+- A TUI on top of step events.
+- Step results captured by reference: captures are copied into each step's
+  history entry.
+- `codemod:llm` inside JSSG transforms run by the `jssg` task.
+- Async `forEachFile` callbacks, and creating or reading other files from one.
+- Crash-safe file commits, and conflict checks between steps running in parallel.
 
-**Files** (`src/files.rs`, `src/js/callback_prelude.js`):
-
-- selection: globs (or the language's extensions), `.gitignore`, then the
-  `containing` text filter; contents are read once up front (snapshot);
-- the callback runs on a pool of threads, one QuickJS context per thread, with
-  the module and captures loaded once per context;
-- `file.write`, `file.rename` and `file.delete` record intents; the step
-  checks for conflicts and then applies all changes, or none on a conflict;
-- a callback that throws fails only its file, reported in `failures`.
-
-## Left out
-
-- `shell` and `agent` tasks, the `matching` selector, async callbacks, and
-  creating or reading other files from a callback.
-- Step results captured by reference: captures are inline, so a later step's
-  history entry repeats the earlier result.
-- CLI wiring, progress output, timeouts and memory limits, `console` in
-  callbacks, imports of local modules.
-- Crash-safe commits, and conflict checks between steps running in parallel.
-- Windows: nothing here is Unix-specific, but it was not tested.
-
-## Run
+## Run the tests
 
 ```bash
 cargo test -p codemod-workflow
