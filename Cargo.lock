@@ -1202,6 +1202,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codemod-flow"
+version = "1.18.7"
+dependencies = [
+ "codemod-sandbox",
+ "ignore",
+ "oxc 0.99.0",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.16",
+]
+
+[[package]]
 name = "codemod-llrt-capabilities"
 version = "1.18.7"
 dependencies = [

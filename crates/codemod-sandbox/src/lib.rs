@@ -9,7 +9,7 @@ pub mod utils;
 pub mod workflow_global;
 
 #[cfg(feature = "native")]
-pub use ast_grep::{scan_file_with_combined_scan, with_combined_scan};
+pub use ast_grep::{scan_file_with_combined_scan, with_combined_scan, AstGrepModule};
 pub use metrics::{MetricsContext, MetricsData};
 #[cfg(feature = "native")]
 pub use sandbox::engine::codemod_lang::CodemodLang;

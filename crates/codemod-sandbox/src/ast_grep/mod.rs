@@ -49,8 +49,10 @@ pub(crate) mod serde;
 #[cfg(feature = "native")]
 pub use native::{scan_file_with_combined_scan, with_combined_scan};
 
+/// The `codemod:ast-grep` runtime module. Public so other hosts can register
+/// it in their own QuickJS runtimes.
 #[allow(dead_code)]
-pub(crate) struct AstGrepModule;
+pub struct AstGrepModule;
 
 impl ModuleDef for AstGrepModule {
     fn declare(declare: &Declarations) -> Result<()> {
