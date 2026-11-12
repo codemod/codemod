@@ -90,5 +90,3 @@ portable-pty = "0.9"
 
 [features]
 default = []
-docker = ["butterflow-models/docker", "butterflow-runners/docker"]
-podman = ["butterflow-models/podman", "butterflow-runners/podman"]

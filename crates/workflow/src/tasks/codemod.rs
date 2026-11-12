@@ -192,6 +192,10 @@ impl EventSink for NestedEvents {
                 (StepStatus::Failed, None) => format!("✗ {label}"),
             },
             Event::StepLog { line, .. } => format!("  {line}"),
+            Event::StepAgent { agent, .. } => {
+                self.parent.emit(Event::StepAgent { position, agent });
+                return;
+            }
             Event::StepProgress {
                 processed, total, ..
             } => {

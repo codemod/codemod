@@ -41,7 +41,6 @@ butterflow-models = { path = "crates/models" }
 butterflow-core = { path = "crates/core" }
 butterflow-state = { path = "crates/state" }
 butterflow-runners = { path = "crates/runners" }
-butterflow-scheduler = { path = "crates/scheduler" }
 codemod-sandbox = { path = "crates/codemod-sandbox" }
 codemod-workflow = { path = "crates/workflow" }
 codemod-telemetry = { path = "crates/telemetry" }

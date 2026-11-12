@@ -8,7 +8,7 @@ description: Use when changing Codemod CLI commands, terminal UI, workflow comma
 ## Key Areas
 
 - Commands: `crates/cli/src/commands`
-- TUI: `crates/cli/src/tui`
+- Workflow runs (event rendering, prompts): `crates/cli/src/workflow_exec.rs`
 - Templates: `crates/cli/src/templates`
 - CLI helpers: `crates/cli/src/utils`
 - npm wrapper: `crates/cli/npm`

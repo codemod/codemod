@@ -4,10 +4,18 @@ use log::warn;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::{
-    engine::CodemodDependency,
-    registry::{RegistryClient, ResolvedPackage},
-};
+use crate::registry::{RegistryClient, ResolvedPackage};
+
+/// Represents a codemod dependency chain for cycle detection
+#[derive(Debug, Clone)]
+pub struct CodemodDependency {
+    /// Source identifier (registry package or local path), as written
+    pub(crate) source: String,
+    /// What the source refers to: the canonical directory of a local source,
+    /// otherwise the source itself. Cycles are detected on this, because the
+    /// same local path names a different package at each nesting level.
+    pub(crate) identity: String,
+}
 
 pub(crate) struct ResolvedNestedCodemod {
     pub(crate) package: ResolvedPackage,

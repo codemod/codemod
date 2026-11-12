@@ -37,7 +37,7 @@ pub enum AgentLogEventKind {
 }
 
 impl AgentLogEvent {
-    pub(crate) fn new(
+    pub fn new(
         agent: impl Into<String>,
         stream: impl Into<String>,
         kind: AgentLogEventKind,
@@ -50,7 +50,7 @@ impl AgentLogEvent {
     }
 }
 
-pub(crate) fn agent_display_name(canonical: &str) -> &str {
+pub fn agent_display_name(canonical: &str) -> &str {
     LAUNCHABLE_AGENTS
         .iter()
         .find(|agent| agent.canonical == canonical)
@@ -58,31 +58,31 @@ pub(crate) fn agent_display_name(canonical: &str) -> &str {
         .unwrap_or(canonical)
 }
 
-pub(crate) trait AgentStreamNormalizer {
+pub trait AgentStreamNormalizer {
     fn normalize_line(&mut self, stream: &str, line: &str) -> Option<NormalizedAgentLine>;
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum NormalizedAgentLine {
+pub enum NormalizedAgentLine {
     Event(AgentLogEvent),
     Suppress,
 }
 
 #[derive(Default)]
-pub(crate) struct ClaudeStreamNormalizer {
+pub struct ClaudeStreamNormalizer {
     active_tool_name: Option<String>,
     active_tool_input: String,
 }
 
 #[derive(Default)]
-pub(crate) struct OpenCodeStreamNormalizer {
+pub struct OpenCodeStreamNormalizer {
     started: bool,
     rendered_tools: HashSet<String>,
     text_lengths: HashMap<String, usize>,
 }
 
 #[derive(Default)]
-pub(crate) struct CodexStreamNormalizer {
+pub struct CodexStreamNormalizer {
     rendered_items: HashSet<String>,
 }
 
@@ -434,11 +434,7 @@ impl CodexStreamNormalizer {
     }
 }
 
-pub(crate) fn normalize_raw_agent_line(
-    canonical: &str,
-    stream: &str,
-    line: String,
-) -> AgentLogEvent {
+pub fn normalize_raw_agent_line(canonical: &str, stream: &str, line: String) -> AgentLogEvent {
     let line = if should_preserve_agent_stream(canonical) {
         sanitize_agent_text(&line)
     } else {

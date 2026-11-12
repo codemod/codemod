@@ -2217,6 +2217,8 @@ mod tests {
         assert!(!readme.contains("Converting `var` declarations to `const`/`let`"));
 
         let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
+        codemod_workflow::load_workflow(&project_path.join("workflow.ts"))
+            .unwrap_or_else(|e| panic!("generated workflow.ts does not build: {e}\n{workflow}"));
         assert!(workflow.contains("basePath: \".\""), "{workflow}");
         assert!(workflow.contains("include: ["));
         assert!(workflow.contains("\"**/*.{ts,tsx,mts,cts}\""));

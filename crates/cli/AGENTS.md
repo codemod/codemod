@@ -31,4 +31,3 @@ commands, workflow subcommands, report UI serving, and terminal UI.
 - CLI crate: `cargo test -p codemod`
 - CLI wrapper: `pnpm --filter codemod test`
 - Terminal dependency check: `bash ./scripts/check-single-crossterm.sh`
-- TUI perf-sensitive changes: inspect or run the scripts under `scripts/` and `crates/cli/src/tui`.

@@ -758,8 +758,6 @@ dependencies = [
  "base64 0.22.1",
  "butterflow-models",
  "butterflow-runners",
- "butterflow-scheduler",
- "butterflow-state",
  "bytes",
  "chrono",
  "codemod-ai",
@@ -825,38 +823,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "butterflow-scheduler"
-version = "1.18.7"
-dependencies = [
- "butterflow-models",
- "chrono",
- "js-sys",
- "log",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "tokio",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
-]
-
-[[package]]
 name = "butterflow-state"
 version = "1.18.7"
 dependencies = [
- "async-trait",
- "butterflow-models",
  "chrono",
  "dirs",
- "log",
- "reqwest 0.12.23",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.16",
- "tokio",
- "uuid",
 ]
 
 [[package]]
@@ -11914,7 +11889,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "ts-rs 12.0.1",
 ]
 
 [[package]]

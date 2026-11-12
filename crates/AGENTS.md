@@ -5,9 +5,10 @@ workspace dependencies from the root `Cargo.toml` over adding direct versions in
 
 ## Change Discipline
 
-- Use existing crate roles: `models` for data contracts, `core` for workflow execution, `state` for
-  persistence adapters, `runners` for runtime execution, `scheduler` for scheduling logic, `cli` for
-  command/UI surfaces, and `testing-utils` for shared test helpers.
+- Use existing crate roles: `models` for data contracts (workflow.yaml types), `workflow` for the
+  workflow engine, `core` for services the engine and CLI share, `state` for run storage adapters,
+  `runners` for running shell commands, `cli` for command/UI surfaces, and `testing-utils` for
+  shared test helpers.
 - Avoid adding cross-crate dependencies that invert those roles. If a lower-level crate needs a
   higher-level type, move the shared contract down instead.
 - Keep public model changes backward-compatible unless the task is explicitly a breaking change.

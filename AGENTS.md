@@ -6,9 +6,12 @@ JSSG sandbox, shared TypeScript packages, semantic-analysis providers, and Mintl
 ## Repo Map
 
 - `crates/cli`: Rust `codemod` binary, command handlers, templates, auth, publishing, workflow
-  commands, report server, and TUI.
-- `crates/core`, `crates/models`, `crates/state`, `crates/runners`, `crates/scheduler`: workflow
-  engine, schemas, scheduling, state, runtime execution, and runner abstractions.
+  commands, and report server.
+- `crates/workflow`: the code-first workflow engine (`workflow.ts`): build, runtime, tasks, and
+  the workflow.yaml compatibility translator.
+- `crates/core`, `crates/models`, `crates/state`, `crates/runners`: services the engine and CLI
+  use (registry, JSSG runner, git, diffs, reports), workflow.yaml schemas, run storage adapters,
+  and the shell runner.
 - `crates/codemod-sandbox`: Rust and TypeScript JavaScript sandbox used by JSSG, ast-grep
   integration, WASM/native packaging, and runtime module shims.
 - `crates/language-*`, `crates/semantic-factory`, `crates/tree-sitter-loader`: semantic providers,
@@ -26,7 +29,7 @@ JSSG sandbox, shared TypeScript packages, semantic-analysis providers, and Mintl
   provider refactors unless the request requires it.
 - Do not edit generated outputs unless the request is specifically about generated artifacts:
   `dist/`, `target/`, `crates/codemod-sandbox/js/factory.js`,
-  `crates/codemod-sandbox/sandbox.wasm`, `crates/scheduler/npm/pkg`, tree-sitter WASM files, or
+  `crates/codemod-sandbox/sandbox.wasm`, tree-sitter WASM files, or
   package manager generated folders.
 - When a Rust change affects exported workflow models or schemas, run `cargo xtask schema` and check
   for resulting committed schema changes.
@@ -70,14 +73,13 @@ Mintlify beyond a short human Wish overview.
 - TypeScript/JavaScript lint: `pnpm lint`
 - TypeScript/JavaScript format: `pnpm format`
 - JSSG utils tests: `pnpm --filter @jssg/utils test`
-- Scheduler npm tests: `pnpm --filter @codemod.com/butterflow-scheduler test`
 
 ## Output Discipline
 
 - Only the CLI package may write user-facing output to the terminal. All other crates and packages
   must return structured data, errors, events, reports, or logs for `crates/cli` to route.
 - Do not call `println!`, `eprintln!`, `console.log`, `console.error`, or write directly to
-  stdout/stderr from engine, scheduler, sandbox, semantic-provider, package, or utility code.
+  stdout/stderr from engine, sandbox, semantic-provider, package, or utility code.
 - Direct terminal writes outside the CLI can leak to stdout while the TUI is shown and can bypass the
   JSONL formatter. Treat that as a correctness bug, not just noisy output.
 - TUI/quiet mode owns the terminal. While `WorkflowOutputSettings.quiet` is true, route workflow
@@ -89,7 +91,7 @@ Mintlify beyond a short human Wish overview.
 Use these skills when the task matches the area:
 
 - `.agents/skills/codemod-rust-workspace/SKILL.md`: Rust workspace, workflow engine, models,
-  scheduler, state, runners, schema, and CI parity.
+  state, runners, schema, and CI parity.
 - `.agents/skills/codemod-cli-tui/SKILL.md`: CLI commands, TUI, terminal output, templates, auth,
   package publishing, and npm wrapper behavior.
 - `.agents/skills/codemod-jssg-sandbox/SKILL.md`: JSSG sandbox, ast-grep bindings, QuickJS/WASM,

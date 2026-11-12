@@ -225,6 +225,8 @@ pub struct Renderer {
     format: OutputFormat,
     multi: MultiProgress,
     bars: Mutex<HashMap<u64, ProgressBar>>,
+    /// Streamed agent message text not yet followed by a full line.
+    agent_text: Mutex<HashMap<u64, String>>,
     seq: AtomicU64,
 }
 
@@ -238,6 +240,7 @@ impl Renderer {
             format,
             multi,
             bars: Mutex::new(HashMap::new()),
+            agent_text: Mutex::new(HashMap::new()),
             seq: AtomicU64::new(0),
         }
     }
@@ -248,6 +251,13 @@ impl Renderer {
             eprintln!("{text}");
         } else {
             let _ = self.multi.println(text);
+        }
+    }
+
+    fn flush_agent_text(&self, position: u64) {
+        let text = self.agent_text.lock().unwrap().remove(&position);
+        if let Some(text) = text.filter(|t| !t.trim().is_empty()) {
+            self.line(format!("  {} {}", style("›").cyan(), text.trim_end()));
         }
     }
 
@@ -312,6 +322,25 @@ impl EventSink for Renderer {
                 bar.set_position(processed as u64);
             }
             Event::StepLog { line, .. } => self.line(format!("  {}", style(line).dim())),
+            Event::StepAgent { position, agent } => {
+                let payload = agent.to_string();
+                match crate::agent_log_renderer::render_agent_event_payload_styled(&payload, false)
+                {
+                    Some(crate::agent_log_renderer::RenderedAgentEvent::Line(line)) => {
+                        self.flush_agent_text(position);
+                        self.line(line);
+                    }
+                    Some(crate::agent_log_renderer::RenderedAgentEvent::Fragment(fragment)) => {
+                        self.agent_text
+                            .lock()
+                            .unwrap()
+                            .entry(position)
+                            .or_default()
+                            .push_str(&fragment);
+                    }
+                    None => {}
+                }
+            }
             Event::StepFinished {
                 position,
                 label,
@@ -322,6 +351,7 @@ impl EventSink for Renderer {
                 if let Some(bar) = self.bars.lock().unwrap().remove(&position) {
                     bar.finish_and_clear();
                 }
+                self.flush_agent_text(position);
                 let elapsed = format!("({:.1}s)", duration_ms as f64 / 1000.0);
                 match status {
                     StepStatus::Succeeded => self.line(format!(

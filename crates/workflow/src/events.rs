@@ -33,6 +33,12 @@ pub enum Event {
         position: u64,
         line: String,
     },
+    /// A normalized coding-agent event (message, tool call, status) from an
+    /// `agent(...)` step.
+    StepAgent {
+        position: u64,
+        agent: serde_json::Value,
+    },
     StepFinished {
         position: u64,
         label: String,

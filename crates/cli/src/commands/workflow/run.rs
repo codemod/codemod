@@ -121,6 +121,9 @@ pub(crate) async fn dry_run_only_dependency(
     }
     let definition = utils::parse_workflow_file(workflow_path)
         .with_context(|| format!("Failed to parse workflow file: {}", workflow_path.display()))?;
+    utils::validate_codemod_dependencies(&definition, workflow_path.parent(), registry)
+        .await
+        .context("Invalid codemod dependencies")?;
     utils::find_dry_run_only_codemod_dependency(&definition, workflow_path.parent(), registry)
         .await
         .context("Failed to inspect bundled codemods")

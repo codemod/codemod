@@ -9,6 +9,10 @@
 use std::io::{BufRead, BufReader};
 use std::process::Stdio;
 
+use butterflow_core::ai_agent_stream::{
+    normalize_raw_agent_line, AgentStreamNormalizer, ClaudeStreamNormalizer, CodexStreamNormalizer,
+    NormalizedAgentLine, OpenCodeStreamNormalizer,
+};
 use butterflow_core::ai_handoff::{
     build_agent_command, detect_parent_coding_agent, discover_installed_agents,
     find_agent_executable, resolve_agent_name, DetectionConfidence,
@@ -166,17 +170,47 @@ fn launch(
     let stderr = child.stderr.take();
     let events = std::sync::Arc::clone(&task.run.events);
     let position = task.position;
+    let agent = canonical.to_string();
     let stderr_reader = std::thread::spawn(move || {
         if let Some(stderr) = stderr {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                events.emit(crate::events::Event::StepLog { position, line });
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let event = normalize_raw_agent_line(&agent, "stderr", line);
+                if let Ok(event) = serde_json::to_value(&event) {
+                    events.emit(crate::events::Event::StepAgent {
+                        position,
+                        agent: event,
+                    });
+                }
             }
         }
     });
     if let Some(stdout) = child.stdout.take() {
+        let mut normalizer: Option<Box<dyn AgentStreamNormalizer>> = match canonical {
+            "claude-code" => Some(Box::new(ClaudeStreamNormalizer::default())),
+            "opencode" => Some(Box::new(OpenCodeStreamNormalizer::default())),
+            "codex" => Some(Box::new(CodexStreamNormalizer::default())),
+            _ => None,
+        };
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if !line.trim().is_empty() {
-                task.log(line);
+            if line.trim().is_empty() {
+                continue;
+            }
+            let normalized = normalizer
+                .as_mut()
+                .and_then(|n| n.normalize_line("stdout", &line));
+            let event = match normalized {
+                Some(NormalizedAgentLine::Event(event)) => event,
+                Some(NormalizedAgentLine::Suppress) => continue,
+                None => normalize_raw_agent_line(canonical, "stdout", line),
+            };
+            if let Ok(event) = serde_json::to_value(&event) {
+                task.run.events.emit(crate::events::Event::StepAgent {
+                    position: task.position,
+                    agent: event,
+                });
             }
         }
     }
