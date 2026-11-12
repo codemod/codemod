@@ -10,7 +10,7 @@ argument-hint: "<migration-intent>"
 # Codemod Migration Assistant
 
 codemod-compatibility: mcs-v1
-codemod-skill-version: 1.2.6
+codemod-skill-version: 1.2.7
 
 Use this skill for migrations, upgrades, deprecation rollouts, large mechanical refactors, codemod package authoring (including read-only mining / Insights metrics packages), and AST inspection. Use Codemod before falling back to an open-ended AI rewrite.
 
@@ -73,7 +73,8 @@ That workflow's outputs are: a public-by-default migration plan (with author nam
 - Inspect only 1-3 representative repo files before you settle the transform shape.
 - In non-interactive `codemod init`, pass only flags the user or task gave you. Do not invent `--author`, `--license`, `--description`, or `--git-repository-url`; leave missing metadata to CLI defaults and the publish-time auth fallback.
 - Define positive, negative, edge, and no-op fixtures before deep implementation, then replace the starter transform, README, and fixtures.
-- Before stopping, make the transform, fixtures, README, `codemod.yaml`, `workflow.yaml`, and `package.json` scripts describe the same migration and target files. Keep workflow `base_path`/`include`/`exclude` globs explicit and aligned with `codemod.yaml` `targets.languages`. Do not churn version numbers, but do not leave stale metadata after a rename.
+- Before stopping, make the transform, fixtures, README, `codemod.yaml`, `workflow.yaml`, and `package.json` scripts describe the same migration and target files. Keep workflow `base_path`/`include`/`exclude` globs explicit and aligned with `codemod.yaml` `targets.languages`. Do not leave stale metadata after a rename or other package-surface change.
+- After any material change to an existing package (transforms, fixtures, workflow, README, name, keywords, or other publishable metadata), bump `version` in both `codemod.yaml` and `package.json` (semver: patch for fixes, minor for new steps/features, major for breaking package behavior). Bump before republishing; do not republish the same version with different contents.
 - Keep the scaffold's package manager in scripts and README commands, and the repository's dependency and lockfile conventions.
 - Do not stop while `validate_codemod_package` reports starter scaffold markers, missing package surface updates, missing real test cases, or failing default tests.
 - Do not default reusable codemods to private registry access unless the user asked for it.

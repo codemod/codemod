@@ -14,7 +14,7 @@ argument-hint: "<sdk> <from-version> <to-version> <changelog-or-guide-url>"
 # SDK Migration Codemod Authoring
 
 codemod-compatibility: skill-package-v1
-codemod-skill-version: 0.1.5
+codemod-skill-version: 0.1.7
 
 Turn an SDK/library version bump into publishable Codemod packages.
 
@@ -37,9 +37,10 @@ Collect any missing inputs before scaffolding:
 ```
 SDK migration progress:
 - [ ] 0. Auth + author resolved
-- [ ] 1. Migration plan written (public by default)
-- [ ] 2. Codemods built locally
-- [ ] 3. Codemods tested (fix and retest until green)
+- [ ] 1. Migration plan written (break inventory + public by default)
+- [ ] 1b. User confirmed in-scope / deferred-automatable / manual split
+- [ ] 2. Codemods built locally (transforms + full fixture backlog)
+- [ ] 3. Codemods tested (fix and retest until green for wired steps)
 - [ ] 4. Codemods published
 ```
 
@@ -68,6 +69,20 @@ npx codemod search "<sdk> migration"
 
 If an existing public package already covers the exact migration, report it and ask whether to improve it or publish new packages. Do not duplicate blindly.
 
+### Changelog coverage inventory (required)
+
+Enumerate **every** breaking change (and clearly breaking “Changed/Removed” item) from the provided sources. Do **not** collapse the changelog into a short “out of scope” bullet list.
+
+Classify each item into exactly one bucket:
+
+| Bucket | Meaning | Transform? | Fixtures? |
+| --- | --- | --- | --- |
+| `codemod` | Automatable in this package’s language(s); ship a workflow step now | Yes | Yes, wired to `jssg test` / package `test` |
+| `deferred-automatable` | Could be a codemod later (config/API/string rewrite), but not in this publish | No (yet) | Yes — before/after fixtures under `tests/<step-slug>/…` without a test script entry |
+| `manual` | Truly non-source (runtime/JDK, reindex/data plane, ops cutover, salt/behavior-only) | No | Optional note-only fixture **or** plan bullet; do not invent fake rewrites |
+
+Prefer `deferred-automatable` over `manual` when checked-in source or config can express the before/after. Never dump automatable config/API renames into `manual` just to shrink the first package.
+
 Write a short plan that includes:
 
 - SDK name, source version, target version
@@ -76,18 +91,18 @@ Write a short plan that includes:
 - Registry defaults: **public visibility and public access**
 - Proposed package list (see packaging rules below)
 - Languages / file globs
-- Breaking changes in scope vs deferred / manual follow-ups
-- Test strategy (fixtures + validation commands)
+- **Full break inventory table** (`codemod` / `deferred-automatable` / `manual` + one-line why)
+- Test strategy (wired fixtures for `codemod` steps + backlog fixtures for `deferred-automatable`)
 
 ### Packaging rules
 
 **Default: one registry package per SDK version bump**, named like `<sdk>-<from>-to-<to>`, with a **multi-step** `workflow.yaml`:
 
 - **Registry `name` rules (publish will reject otherwise):** optional `@scope/`, then only letters, numbers, hyphens, underscores. **No dots, no spaces.** Write versions with hyphens (`1-24-to-1-25`), never semver dots (`1.24-to-1.25` is invalid).
-- One sequential `js-ast-grep` step per independent breaking change
+- One sequential `js-ast-grep` step per independent **`codemod`** breaking change
 - Separate transform scripts (keep `scripts/codemod.ts` as the first/primary step for package validation)
-- Separate fixture dirs per step (e.g. `tests/<step-slug>/…`)
-- Package `test` script runs `jssg test` for every step
+- Separate fixture dirs per step (e.g. `tests/<step-slug>/…`) — including dirs for `deferred-automatable` backlog items
+- Package `test` script runs `jssg test` for every **wired** (`codemod`) step only
 
 Split into multiple packages only when:
 
@@ -106,7 +121,11 @@ registry:
 
 Only use private access/visibility when the user explicitly asks.
 
-Show the plan to the user, then proceed unless they revise it.
+### Plan confirmation gate
+
+Show the plan **including the full inventory table** to the user. Do **not** treat login success, “continue”, or auth-only replies as approval of a narrow scope.
+
+Proceed to build/publish only after the user explicitly confirms the `codemod` / `deferred-automatable` / `manual` split (or revises it). If they only confirm auth, ask once: “Is this inventory split OK to build?”
 
 ### Plan template
 
@@ -117,9 +136,17 @@ Show the plan to the user, then proceed unless they revise it.
 - Registry: access=public, visibility=public
 - Sources: <urls>
 - Package(s):
-  1. `<scope>/<sdk>-<from>-to-<to>` — multi-step: <step intents> (versions hyphenated, e.g. `temporal-ts-sdk-1-24-to-1-25`)
-- Out of scope / manual: <bullets>
-- Test plan: fixtures + `workflow validate` + `validate_codemod_package` + package tests
+  1. `<scope>/<sdk>-<from>-to-<to>` — multi-step: <codemod step intents> (versions hyphenated)
+- Break inventory:
+  | Break | Bucket | Why |
+  | --- | --- | --- |
+  | <item> | codemod | <one line> |
+  | <item> | deferred-automatable | <one line> |
+  | <item> | manual | <one line> |
+- Test plan:
+  - Wired fixtures + `jssg test` for every `codemod` step
+  - Before/after backlog fixtures for every `deferred-automatable` break
+  - `workflow validate` + `validate_codemod_package` + package tests
 ```
 
 ### Multi-step workflow shape
@@ -183,13 +210,27 @@ npx codemod init <path> --no-interactive \
 Replace `npm` / `typescript` / `MIT` with plan values when they differ. Ask once for any required field still missing.
 
 2. Set `codemod.yaml` / `package.json` `name` to a publish-safe id (no dots), plus author, description, keywords (`upgrade`, `breaking-change`, sdk name, versions), languages, and **public** registry access/visibility.
-3. Replace starter transform, README, and fixtures. Wire a multi-step `workflow.yaml` when there is more than one break. Keep each step focused on one exact migration.
+3. Replace starter transform, README, and fixtures. Wire a multi-step `workflow.yaml` for every **`codemod`** break. Keep each step focused on one exact migration.
 4. Stay AST-first with `js-ast-grep` for parser-backed languages. Use `npx codemod ai dump-ast` and `npx codemod ai node-types <lang>` when node shape is unclear.
 5. **Prefer `@jssg/utils`** for JS/TS/Java: import gates (`getImport` / `listImports`), style (`getFileStyle`), renames/bindings (`importBindingOf` / `renameReferences`). Do not ship hand-rolled import pattern lists or bare identifier renames when a helper covers the case. Add `@jssg/utils` to package dependencies when used.
 6. **Decide `semantic_analysis` per step** before matching generic methods (`.update`, `.get`, …), renaming types/APIs, or following aliases. Binding-aware checks beat filename-level “has import” gates alone.
 7. **Emit metrics per `js-ast-grep` step**: declare `useMetricAtom` in that step’s script (statically visible name). Prefer **one metric per step**; encode variants as **cardinality** dimensions (e.g. `shape`, `kind`, `callee`). Increment on real edits. Snapshot `metrics.json` beside fixtures that produce counts.
 8. Follow Performant codemods in `jssg-gotchas`: discriminating selectors/token gates, no per-file full-repo walks, timed no-op vs real run before done.
 9. Align transforms, fixtures, README, `codemod.yaml`, `workflow.yaml`, and package scripts on the same migration and globs.
+10. **Fixture backlog:** for every `deferred-automatable` inventory row, add `tests/<step-slug>/<case>/{input,expected}.*` before/after samples now. Do not wait for a later request. Do **not** wire those dirs into package `test` until a transform exists.
+
+### Fixture depth (wired + backlog)
+
+Fixtures are the coverage map of the **whole migration**, not only of shipped steps.
+
+For each **`codemod`** step, include enough cases that distinct surfaces are covered—not a token 1-positive + 1-noop pair:
+
+- At least one **positive** rewrite
+- At least one **no-op** / already-migrated (or absent) case
+- At least one **negative** / keep-unrelated case when false positives are plausible
+- **Edge** cases for each distinct literal shape the transform claims (quotes, nested keys, multiple occurrences, path vs setting key, mixed endpoint+field, sole vs sibling object properties, etc.)
+
+For each **`deferred-automatable`** break, add at least one realistic before/after pair that a future step can wire up. Prefer the same languages/globs as the package.
 
 ## 3. Codemods tested — fix and retest
 
@@ -203,7 +244,9 @@ npx codemod ai call validate_codemod_package --input '{"package_path":"<package-
 
 Also required:
 
-- Positive, negative, edge, and no-op fixtures **per step**
+- Positive, negative, edge, and no-op fixtures **per wired step** (see Fixture depth)
+- Before/after backlog fixtures present for every `deferred-automatable` inventory row
+- Plan inventory still matches what was built (no silent drop of in-scope or deferred-automatable items)
 - No starter-scaffold markers left in README/transform/fixtures
 - If tests or validation fail: fix the codemod, re-run the same checks, and repeat until green
 
@@ -211,7 +254,9 @@ Only then mark the package ready to publish.
 
 ## 4. Publish codemods
 
-Confirm auth still works (`npx codemod whoami`), then from each package directory:
+Confirm auth still works (`npx codemod whoami`), then from each package directory.
+
+If this is a **follow-up change** to a package that was already published (or already has a non-scaffold version), bump `version` in both `codemod.yaml` and `package.json` first (semver: patch for fixes, minor for new steps/features, major for breaking package behavior). Never republish the same version with different contents.
 
 ```bash
 npx codemod publish
@@ -223,6 +268,7 @@ Report for each package:
 - Version
 - Access and visibility
 - Registry URL if printed by the CLI
+- Counts: wired steps / wired fixture cases / deferred-automatable backlog fixtures / manual items
 
 If publish fails because of scope verification or permissions, explain the error and the docs fix (`npx codemod ai docs codemod-cli` / publishing docs). Do not silently switch to private.
 
@@ -233,9 +279,13 @@ If publish fails because of scope verification or permissions, explain the error
 - Author must be the authenticated user or an author the user provided.
 - Search the registry before creating duplicates.
 - Default to one multi-step package per SDK version bump; do not split without cause.
+- Full changelog inventory with `codemod` / `deferred-automatable` / `manual` — no collapsed “out of scope” dump of automatable breaks.
+- Explicit user confirmation of that inventory before build/publish; auth-only replies are not scope approval.
+- Fixture backlog for every `deferred-automatable` break in the same publish cycle as the first package.
 - Prefer `@jssg/utils` and enable `semantic_analysis` when import origin, aliases, or generic method names matter.
 - Each transform step emits metrics (`useMetricAtom` + cardinality; keep the metric count low).
 - Registry package names: no dots — hyphenate version segments (`1-24-to-1-25`).
+- After any material change to an existing package, bump `version` in `codemod.yaml` and `package.json` before republish.
 - Do not stop on the first test failure — fix and retest.
 - Do not commit or push git changes unless the user asked.
 - Do not open a PR unless the user asked.
