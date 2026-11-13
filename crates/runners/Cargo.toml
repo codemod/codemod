@@ -19,6 +19,3 @@ async-trait = { workspace = true }
 uuid = { workspace = true }
 libc = "0.2"
 
-[features]
-docker = ["butterflow-models/docker"]
-podman = ["butterflow-models/podman"]

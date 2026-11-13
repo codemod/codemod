@@ -6,14 +6,13 @@ use super::transform_helpers::{
     build_transform_options, process_transform_result, ModificationCheck,
 };
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
-use crate::ast_grep::AstGrepModule;
-use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
-use crate::metrics::{MetricsContext, MetricsModule};
+use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
+use crate::metrics::MetricsContext;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver};
-use crate::sandbox::runtime_module::{RuntimeHooksContext, RuntimeModule};
+use crate::sandbox::runtime_module::RuntimeHooksContext;
 use crate::utils::quickjs_utils::maybe_promise;
-use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
+use crate::workflow_global::SharedStateContext;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::tree_sitter::StrDoc;
@@ -220,27 +219,10 @@ where
     } else {
         LlrtModuleBuilder::build()
     };
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+    let (mut built_in_resolver, built_in_loader, global_attachment) =
         module_builder.builder.build();
-
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
-
-    // In-memory callers have no capability set; supplying the engine-owned
-    // handler is their explicit authorization to expose model access.
-    if options.llm_request_handler.is_some() {
-        built_in_resolver = built_in_resolver.add_name("codemod:llm");
-        built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
-    }
-
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
+    let (codemod_resolver, mut built_in_loader) =
+        crate::with_codemod_modules!(built_in_loader, llm: options.llm_request_handler.is_some());
 
     // Register the curated fs module as `fs` / `fs/promises` when the caller
     // asked for a curated sandbox. The config is installed into userdata
@@ -257,7 +239,7 @@ where
 
     runtime
         .set_loader(
-            (built_in_resolver, in_memory_resolver),
+            (codemod_resolver, built_in_resolver, in_memory_resolver),
             (built_in_loader, noop_loader),
         )
         .await;

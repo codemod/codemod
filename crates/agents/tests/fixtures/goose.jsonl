@@ -1,0 +1,5 @@
+{"type":"message","message":{"id":"m1","role":"assistant","created":1794547500,"content":[{"type":"toolRequest","id":"t1","toolCall":{"status":"success","value":{"name":"developer__text_editor","arguments":{"command":"write","path":"hello.txt","file_text":"hi"}}}}],"metadata":{"userVisible":true,"agentVisible":true}}}
+{"type":"message","message":{"id":"m2","role":"user","created":1794547501,"content":[{"type":"toolResponse","id":"t1","toolResult":{"status":"success","value":{"content":[{"type":"text","text":"Wrote hello.txt"}],"isError":false}}}],"metadata":{"userVisible":true,"agentVisible":true}}}
+{"type":"message","message":{"id":"m3","role":"assistant","created":1794547502,"content":[{"type":"text","text":"DO"}],"metadata":{"userVisible":true,"agentVisible":true}}}
+{"type":"message","message":{"id":"m3","role":"assistant","created":1794547502,"content":[{"type":"text","text":"NE"}],"metadata":{"userVisible":true,"agentVisible":true}}}
+{"type":"complete","total_tokens":1234,"input_tokens":1000,"output_tokens":234,"cost_usd":0.01}

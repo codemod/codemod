@@ -1,5 +1,5 @@
-import type { Codemod } from "codemod:ast-grep";
-import type Python from "codemod:ast-grep/langs/python";
+import type { Codemod } from "codemod/ast-grep";
+import type Python from "codemod/ast-grep/langs/python";
 
 const codemod: Codemod<Python> = async (root) => {
   const rootNode = root.root();

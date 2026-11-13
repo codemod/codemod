@@ -270,9 +270,34 @@ impl SharedStateContext {
             .collect()
     }
 
+    /// Every entry, persisted or not: the state as the code sees it now.
+    pub fn snapshot(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.data
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().value.clone()))
+            .collect()
+    }
+
     /// Return keys that were explicitly unset.
     pub fn get_removals(&self) -> Vec<String> {
         self.removals.iter().map(|e| e.key().clone()).collect()
+    }
+
+    /// What changed against `initial`, the state the code started with: keys
+    /// set to a new value, and removed keys as `null`.
+    pub fn changes_since(
+        &self,
+        initial: &HashMap<String, serde_json::Value>,
+    ) -> std::collections::BTreeMap<String, serde_json::Value> {
+        let mut changes: std::collections::BTreeMap<_, _> = self
+            .get_persistable()
+            .into_iter()
+            .filter(|(key, value)| initial.get(key) != Some(value))
+            .collect();
+        for key in self.get_removals() {
+            changes.insert(key, serde_json::Value::Null);
+        }
+        changes
     }
 
     /// Acquire a named lock. Blocks until the lock is available.
@@ -395,7 +420,18 @@ fn set_state_rjs(ctx: Ctx<'_>, name: String, value: JsValue, persist: Opt<bool>)
     Ok(())
 }
 
-fn get_state_rjs<'js>(ctx: Ctx<'js>, name: String) -> Result<rquickjs::Value<'js>> {
+/// `getState(name)`: one value, or `undefined`. `getState()`: the whole
+/// state as an object. Either way the caller gets its own copy.
+fn get_state_rjs<'js>(ctx: Ctx<'js>, name: Opt<String>) -> Result<rquickjs::Value<'js>> {
+    let Some(name) = name.0 else {
+        let all = ctx
+            .userdata::<SharedStateContext>()
+            .ok_or_else(|| {
+                Exception::throw_message(&ctx, "SharedStateContext not found in runtime userdata")
+            })?
+            .snapshot();
+        return JsValue(serde_json::Value::Object(all)).into_js(&ctx);
+    };
     let value = {
         let shared_state = ctx.userdata::<SharedStateContext>().ok_or_else(|| {
             Exception::throw_message(&ctx, "SharedStateContext not found in runtime userdata")

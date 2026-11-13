@@ -6,15 +6,34 @@ JSSG sandbox, shared TypeScript packages, semantic-analysis providers, and Mintl
 ## Repo Map
 
 - `crates/cli`: Rust `codemod` binary, command handlers, templates, auth, publishing, workflow
-  commands, report server, and TUI.
-- `crates/core`, `crates/models`, `crates/state`, `crates/runners`, `crates/scheduler`: workflow
-  engine, schemas, scheduling, state, runtime execution, and runner abstractions.
+  commands, and report server.
+- `crates/workflow`: the code-first workflow engine (`workflow.ts`): build, runtime, tasks, and
+  the workflow.yaml compatibility translator.
+- `crates/core`, `crates/models`, `crates/state`, `crates/runners`: services the engine and CLI
+  use (registry, JSSG runner, git, diffs, reports), workflow.yaml schemas, run storage adapters,
+  and the shell runner.
 - `crates/codemod-sandbox`: Rust and TypeScript JavaScript sandbox used by JSSG, ast-grep
   integration, WASM/native packaging, and runtime module shims.
 - `crates/language-*`, `crates/semantic-factory`, `crates/tree-sitter-loader`: semantic providers,
   provider factory, and parser loading.
-- `packages/jssg-types`, `packages/jssg-utils`, `packages/tsconfig`: public TypeScript types,
-  utilities, and shared TS config for codemod authors.
+- `crates/cli/npm/types`: the public type declarations (the `codemod/*` modules, also importable as `codemod:*`, and languages), shipped
+  in the `codemod` npm package; `packages/jssg-types` mirrors them for existing users.
+- `crates/cli/npm/testing`: `codemod/testing`, helpers for testing workflows. TypeScript workflows
+  run in the test process on the Node.js host; with `host: "quickjs"` (and for YAML) they run the
+  CLI's hidden `workflow harness` command (`crates/cli/src/workflow_test.rs`), which
+  `codemod workflow test` also uses.
+- `crates/agents`: coding-agent adapters (Claude Code, Codex, Cursor, Gemini, OpenCode, ...): how to
+  launch each headlessly, normalize its streamed output into `AgentEvent`s, and detect running
+  inside one. Used by `agent(...)` workflow steps and the report server's feedback drafts. Recorded
+  output for the parsers lives in `crates/agents/tests/fixtures`; `tests/live.rs` runs installed
+  agents when `CODEMOD_AGENTS_LIVE` is set.
+- `crates/node`: the native addon (`codemod.node`, napi) behind the Node.js/Bun host: hosted runs
+  over `codemod_workflow::HostedRun` and the `codemod/ast-grep` API. Its JavaScript side is
+  `crates/cli/npm/runtime` (`codemod/host`, the Node.js `codemod/*` modules, `codemod/register` for the older `codemod:*` spelling,
+  `codemod/vite`). The orchestrator (`crates/workflow/src/js/orchestrator.js`) is shared by both
+  hosts; `runtime/orchestrator.mjs` is a generated copy (`pnpm --filter codemod sync-orchestrator`).
+- `packages/jssg-utils`, `packages/tsconfig`: public TypeScript utilities and shared TS config
+  for codemod authors.
 - `docs`: Mintlify docs.
 - `scripts`: repository maintenance checks used by CI.
 
@@ -26,7 +45,7 @@ JSSG sandbox, shared TypeScript packages, semantic-analysis providers, and Mintl
   provider refactors unless the request requires it.
 - Do not edit generated outputs unless the request is specifically about generated artifacts:
   `dist/`, `target/`, `crates/codemod-sandbox/js/factory.js`,
-  `crates/codemod-sandbox/sandbox.wasm`, `crates/scheduler/npm/pkg`, tree-sitter WASM files, or
+  `crates/codemod-sandbox/sandbox.wasm`, tree-sitter WASM files, or
   package manager generated folders.
 - When a Rust change affects exported workflow models or schemas, run `cargo xtask schema` and check
   for resulting committed schema changes.
@@ -70,14 +89,13 @@ Mintlify beyond a short human Wish overview.
 - TypeScript/JavaScript lint: `pnpm lint`
 - TypeScript/JavaScript format: `pnpm format`
 - JSSG utils tests: `pnpm --filter @jssg/utils test`
-- Scheduler npm tests: `pnpm --filter @codemod.com/butterflow-scheduler test`
 
 ## Output Discipline
 
 - Only the CLI package may write user-facing output to the terminal. All other crates and packages
   must return structured data, errors, events, reports, or logs for `crates/cli` to route.
 - Do not call `println!`, `eprintln!`, `console.log`, `console.error`, or write directly to
-  stdout/stderr from engine, scheduler, sandbox, semantic-provider, package, or utility code.
+  stdout/stderr from engine, sandbox, semantic-provider, package, or utility code.
 - Direct terminal writes outside the CLI can leak to stdout while the TUI is shown and can bypass the
   JSONL formatter. Treat that as a correctness bug, not just noisy output.
 - TUI/quiet mode owns the terminal. While `WorkflowOutputSettings.quiet` is true, route workflow
@@ -89,7 +107,7 @@ Mintlify beyond a short human Wish overview.
 Use these skills when the task matches the area:
 
 - `.agents/skills/codemod-rust-workspace/SKILL.md`: Rust workspace, workflow engine, models,
-  scheduler, state, runners, schema, and CI parity.
+  state, runners, schema, and CI parity.
 - `.agents/skills/codemod-cli-tui/SKILL.md`: CLI commands, TUI, terminal output, templates, auth,
   package publishing, and npm wrapper behavior.
 - `.agents/skills/codemod-jssg-sandbox/SKILL.md`: JSSG sandbox, ast-grep bindings, QuickJS/WASM,

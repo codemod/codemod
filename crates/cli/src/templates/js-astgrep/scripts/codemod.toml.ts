@@ -1,5 +1,5 @@
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type Toml from "codemod:ast-grep/langs/toml";
+import type { Codemod, Edit } from "codemod/ast-grep";
+import type Toml from "codemod/ast-grep/langs/toml";
 
 const codemod: Codemod<Toml> = async (root) => {
   const rootNode = root.root();

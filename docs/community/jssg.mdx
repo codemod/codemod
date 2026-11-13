@@ -7,12 +7,12 @@ On this page, you will learn what JSSG is and how it works, see a sample codemod
 
 ## What is JSSG?
 
-**JavaScript ast-grep (JSSG)** is Codemod’s engine for running **ast-grep** codemods: your transform executes in a **sandboxed JavaScript** runtime (QuickJS, with LLRT for Node-compatible builtins) and loads **`codemod:ast-grep`** for Tree-sitter parsing, pattern matching, and edits—so you author TypeScript against a small AST API instead of wiring Babel or Recast yourself.
+**JavaScript ast-grep (JSSG)** is Codemod’s engine for running **ast-grep** codemods: your transform executes in a **sandboxed JavaScript** runtime (QuickJS, with LLRT for Node-compatible builtins) and loads **`codemod/ast-grep`** for Tree-sitter parsing, pattern matching, and edits—so you author TypeScript against a small AST API instead of wiring Babel or Recast yourself.
 
 ### How it works
 
 - A JSSG codemod is a module that `export default`s a function receiving an `SgRoot<L>` (the parsed file) and returning a `string` (modified code) or `null`/`undefined` (no change). Any other return type is a runtime error.
-- The `codemod:ast-grep` built‑in provides parsing and pattern matching. At runtime it exports `parse` and `parseAsync`; `SgRoot` and `SgNode` are TypeScript types from `@codemod.com/jssg-types` that describe the AST API you interact with in the transform.
+- The `codemod/ast-grep` built‑in provides parsing and pattern matching. At runtime it exports `parse` and `parseAsync`; `SgRoot` and `SgNode` are TypeScript types, shipped in the `codemod` package (`codemod/main`, or `@codemod.com/jssg-types/main` in older projects), that describe the AST API you interact with in the transform.
 - You express search conditions as ast-grep rule objects (plain JS), traverse nodes, create edits with `node.replace(...)`, and finalize with `rootNode.commitEdits(edits)`.
 
 <Info>
@@ -33,9 +33,9 @@ You can author rules as plain JavaScript objects. See the [ast‑grep rule confi
 Below is a sample JSSG codemod that moves React components declared inside other components up to module scope.
 
 ```ts scripts/codemod.ts expandable
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type { SgNode } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod, Edit } from "codemod/ast-grep";
+import type { SgNode } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
@@ -174,7 +174,7 @@ export default codemod;
 *How codemods run: safety, observability, and power during execution.*
 
 - **Deny-by-default security** — No file system, child processes, or network access unless you grant [capabilities](/community/jssg/security)—unlike typical Node transform runners where full `fs` and `require` are the default.
-- **Metrics for mining, not only edits** — Use [`codemod:metrics`](/community/jssg/metrics) to count and aggregate findings (usage, readiness, rollouts) with the same harness you use for rewrites.
+- **Metrics for mining, not only edits** — Use [`codemod/metrics`](/community/jssg/metrics) to count and aggregate findings (usage, readiness, rollouts) with the same harness you use for rewrites.
 - **Import and edit utilities** — [`@jssg/utils`](/community/jssg/utils) and similar helpers cover tedious import and AST chores without custom Babel plugins.
 - **Multi-file and file-path changes** — Use [`jssgTransform`](/community/jssg/reference#multi-file-transforms-with-jssgtransform) to drive coordinated edits across files, and [`root.rename()`](/community/jssg/reference#file-renaming) for moves and extension changes—not only in-place source edits.
 

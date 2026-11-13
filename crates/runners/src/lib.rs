@@ -22,5 +22,3 @@ pub trait Runner: Send + Sync {
 #[cfg(any(windows, test))]
 mod cmd_script;
 pub mod direct_runner;
-pub mod docker_runner;
-pub mod podman_runner;

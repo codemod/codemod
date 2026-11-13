@@ -5,7 +5,9 @@ This subtree contains shared TypeScript packages used by codemod authors and int
 ## Package Contracts
 
 - Public packages must preserve export paths declared in `package.json`.
-- `packages/jssg-types` is declaration-first; do not introduce runtime code there unless the package
+- Type declarations for codemod authors live in `crates/cli/npm/types` and ship in the `codemod`
+  npm package. `packages/jssg-types` only mirrors them (`scripts/sync.mjs`, run on pack); do not
+  edit its generated `src/`. The declarations are declaration-first; do not introduce runtime code unless the package
   contract changes intentionally.
 - `packages/jssg-utils` helpers should return predictable ast-grep edits and avoid hidden global
   state.
@@ -20,5 +22,5 @@ This subtree contains shared TypeScript packages used by codemod authors and int
 
 - JSSG utils: `pnpm --filter @jssg/utils test`
 - JSSG utils typecheck: `pnpm --filter @jssg/utils typecheck`
-- JSSG types typecheck: `pnpm --filter @codemod.com/jssg-types typecheck`
+- Type declarations typecheck: `pnpm --filter codemod typecheck`
 - Repo lint/format: `pnpm lint` and `pnpm format`

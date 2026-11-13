@@ -6,7 +6,7 @@ sidebarTitle: "AI step"
 This page documents the internal runtime behavior of the `ai` step when executed by Codemod's Rig-based harness.
 
 <Note>
-The workflow contract does not change. Keep using the same `ai.*` fields documented in [Workflow Reference](/community/workflows/reference#ai-step).
+The workflow contract does not change. Keep using the same `ai.*` fields documented in the [workflow.yaml reference](/community/workflows/yaml#ai-step), and the same options on the `agent` task in [workflow.ts](/community/workflows/reference#tasks).
 </Note>
 
 ## What the harness provides
@@ -47,20 +47,14 @@ Available but not default-enabled:
 
 ## Parent-agent handoff mode
 
-Before running Rig, Codemod checks whether it is executing under a known coding-agent parent context.
+Before running Rig, Codemod checks whether the run itself was started by a coding agent. It recognizes the agents the `agent` task supports, listed under [Coding agents](/community/workflows/reference#coding-agents), in two ways:
 
-Recognized agent families include:
+- the agent's executable is among the processes that started the run (the nearest one wins), or
+- an environment variable that the agent sets for the commands it runs is present, such as `CLAUDECODE` or `CODEX_THREAD_ID`.
 
-- `codex`
-- `claude-code`
-- `aider`
-- `cursor`
-- `windsurf`
-- `goose`
-- `opencode`
-- `openclaw`
+Agents that set no such variable are recognized only from the processes.
 
-If detection confidence is `detected`, the step emits:
+When an agent is recognized, the step emits:
 
 - `[AI INSTRUCTIONS]`
 - prompt/system content
@@ -68,7 +62,7 @@ If detection confidence is `detected`, the step emits:
 
 and skips Rig execution for that step.
 
-If confidence is `uncertain` or `not_detected`, normal Rig execution continues.
+Otherwise normal Rig execution continues.
 
 ## Memory and context management
 

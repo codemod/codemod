@@ -22,10 +22,10 @@ Keep the metric count small. Encode differences as cardinality keys/values on th
 
 ## Basic Usage
 
-Import `useMetricAtom` from `codemod:metrics` to create a metric tracker:
+Import `useMetricAtom` from `codemod/metrics` to create a metric tracker:
 
 ```typescript
-import { useMetricAtom } from "codemod:metrics";
+import { useMetricAtom } from "codemod/metrics";
 
 const metric = useMetricAtom("my-metric");
 
@@ -62,9 +62,9 @@ Use cardinality to capture context about what you're counting. For example, when
 This read-only codemod counts how many times each prop is used on `Button` components:
 
 ```typescript
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
-import { useMetricAtom } from "codemod:metrics";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
+import { useMetricAtom } from "codemod/metrics";
 
 const propUsageMetric = useMetricAtom("prop-usage");
 

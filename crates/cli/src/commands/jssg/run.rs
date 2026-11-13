@@ -261,8 +261,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 runtime_event_callback: Some(runtime_event_callback),
                 cancellation_flag: None,
                 test_mode: false,
-                dry_run: false,
+                // In a dry run the script's own file system access is off too.
+                dry_run: config.dry_run,
                 target_directory: &target_directory,
+                pending_files: None,
             };
 
             // Execute the codemod on this file

@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "status": "ok",
+  "final": "DONE",
+  "payloads": [{ "text": "DONE" }],
+  "usage": { "input": 120, "output": 8, "total": 128 },
+  "costUsd": 0.0021,
+  "assistantTurns": 2,
+  "model": "claude-sonnet",
+  "provider": "anthropic",
+  "sessionId": "019-oc"
+}

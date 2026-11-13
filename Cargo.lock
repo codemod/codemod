@@ -758,8 +758,6 @@ dependencies = [
  "base64 0.22.1",
  "butterflow-models",
  "butterflow-runners",
- "butterflow-scheduler",
- "butterflow-state",
  "bytes",
  "chrono",
  "codemod-ai",
@@ -825,36 +823,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "butterflow-scheduler"
-version = "1.18.7"
-dependencies = [
- "butterflow-models",
- "chrono",
- "js-sys",
- "log",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "tokio",
- "uuid",
- "wasm-bindgen",
- "wasm-bindgen-futures",
-]
-
-[[package]]
 name = "butterflow-state"
 version = "1.18.7"
 dependencies = [
- "async-trait",
- "butterflow-models",
  "chrono",
  "dirs",
- "log",
- "reqwest 0.12.23",
  "serde",
  "serde_json",
- "tokio",
- "uuid",
+ "tempfile",
+ "thiserror 2.0.16",
 ]
 
 [[package]]
@@ -1114,10 +1091,12 @@ dependencies = [
  "butterflow-state",
  "chrono",
  "clap",
+ "codemod-agents",
  "codemod-llrt-capabilities",
  "codemod-mcp",
  "codemod-sandbox",
  "codemod-telemetry",
+ "codemod-workflow",
  "console 0.15.11",
  "crossterm",
  "dirs",
@@ -1173,6 +1152,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codemod-agents"
+version = "1.18.7"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.16",
+]
+
+[[package]]
 name = "codemod-ai"
 version = "1.18.7"
 dependencies = [
@@ -1220,6 +1210,7 @@ dependencies = [
  "butterflow-core",
  "codemod-llrt-capabilities",
  "codemod-sandbox",
+ "codemod-workflow",
  "libc",
  "reqwest 0.12.23",
  "rmcp 0.8.3",
@@ -1231,6 +1222,24 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
+]
+
+[[package]]
+name = "codemod-node"
+version = "1.18.7"
+dependencies = [
+ "ast-grep-core",
+ "butterflow-state",
+ "codemod-llrt-capabilities",
+ "codemod-sandbox",
+ "codemod-workflow",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
 ]
 
 [[package]]
@@ -1298,6 +1307,33 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.16",
  "tokio",
+]
+
+[[package]]
+name = "codemod-workflow"
+version = "1.18.7"
+dependencies = [
+ "butterflow-core",
+ "butterflow-models",
+ "butterflow-runners",
+ "butterflow-state",
+ "chrono",
+ "codemod-agents",
+ "codemod-ai",
+ "codemod-llrt-capabilities",
+ "codemod-sandbox",
+ "ignore",
+ "oxc 0.99.0",
+ "regex",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.16",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -1455,6 +1491,15 @@ name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "convert_case"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1af709f1f33454bf52eadfc8c78b3b9ef9cb26fb54d16dc9cd9a7299f899fd1b"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -1644,6 +1689,12 @@ checksum = "0b51940c54c6ca015d3add383571ec5610114466eb67aa0a27096e1dcf3c9e29"
 dependencies = [
  "smallvec",
 ]
+
+[[package]]
+name = "ctor"
+version = "1.0.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "914a755b7c2d4af2bdcff7ce1739e2db9a1b81a9b07123d8015786ae03c0980d"
 
 [[package]]
 name = "curve25519-dalek"
@@ -4372,6 +4423,67 @@ dependencies = [
 ]
 
 [[package]]
+name = "napi"
+version = "3.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "567c62b9c2d0fae123713f766686ad66a2c75b45ba3ee01ed8b06a7e99bc435b"
+dependencies = [
+ "bitflags 2.10.0",
+ "ctor",
+ "futures",
+ "libc",
+ "napi-build",
+ "napi-sys",
+ "nohash-hasher",
+ "rustc-hash",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "napi-build"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b899b545d3aa6dca985939059f258c5488d34e4ecf39c274e20009748f4b846d"
+
+[[package]]
+name = "napi-derive"
+version = "3.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94c8098ed9d61a1bbd019519c637817531b0e24023ef4b5678f2f0cbe24bed9c"
+dependencies = [
+ "convert_case 0.12.0",
+ "ctor",
+ "napi-derive-backend",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "napi-derive-backend"
+version = "7.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "314cd6ca42bd978fd8bae84b4137e1322bbf3e83552fca8dbd7d18034188ff3a"
+dependencies = [
+ "convert_case 0.12.0",
+ "proc-macro2",
+ "quote",
+ "semver",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "napi-sys"
+version = "3.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d153beb7d5c973f4b9395be8a83054a28968b61188f1dd1a2cc2321af22daea2"
+dependencies = [
+ "libloading 0.9.0",
+]
+
+[[package]]
 name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4409,6 +4521,12 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
 ]
+
+[[package]]
+name = "nohash-hasher"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 
 [[package]]
 name = "nom"
@@ -11884,7 +12002,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "ts-rs 12.0.1",
 ]
 
 [[package]]

@@ -323,6 +323,7 @@ impl JssgTestHandler {
                         test_mode: true,
                         dry_run: false,
                         target_directory: &target_directory,
+                        pending_files: None,
                     };
                     let CodemodOutput { primary, .. } =
                         execute_codemod_with_quickjs(options).await?;

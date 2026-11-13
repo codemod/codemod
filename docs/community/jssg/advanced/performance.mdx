@@ -7,7 +7,7 @@ description: "Keep transforms and miners fast at scale: selectors, once-per-scan
 
 JSSG already calls your function once per matching file, so cost is `files × work_per_file`. Anything that walks or parses the rest of the repo *inside* that callback is quadratic. That is true for source transforms and for read-only miners.
 
-Each file callback runs in a **fresh QuickJS runtime**. Module-level variables do not survive from one file to the next. Cross-file coordination must use `codemod:workflow` state (or the filesystem), not a module cache.
+Each file callback runs in a **fresh QuickJS runtime**. Module-level variables do not survive from one file to the next. Cross-file coordination must use `codemod/workflow` state (or the filesystem), not a module cache.
 
 Use this diagnostic before you rewrite queries:
 
@@ -86,7 +86,7 @@ The package should sit near the no-op, not 10–100× it. Check edit or metric *
 ### Consistent Patterns
 
 1. **Use `const codemod: Codemod<TSX> = async (root, options) => {}` with `export default codemod`**
-2. **Import proper types** - use `Codemod`, `GetSelector`, and language-specific types from `codemod:ast-grep`
+2. **Import proper types** - use `Codemod`, `GetSelector`, and language-specific types from `codemod/ast-grep`
 3. **Handle edge cases** - always check for null/undefined values and use try-catch for async operations
 4. **Use early returns** - skip processing when possible, especially for sharding
 5. **Batch operations** - collect edits before committing

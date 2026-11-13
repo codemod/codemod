@@ -12,18 +12,86 @@
   "homepage": "https://codemod.com",
   "repository": "https://github.com/codemod/codemod",
   "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts"
+    },
+    "./ast-grep": {
+      "types": "./types/main.d.ts",
+      "default": "./runtime/ast-grep.mjs"
+    },
+    "./ast-grep/langs/*": {
+      "types": "./types/langs/*.d.ts"
+    },
+    "./host": {
+      "types": "./runtime/host.d.mts",
+      "default": "./runtime/host.mjs"
+    },
+    "./langs/*": {
+      "types": "./types/langs/*.d.ts"
+    },
+    "./llm": {
+      "types": "./types/llm.d.ts",
+      "default": "./runtime/llm.mjs"
+    },
+    "./main": {
+      "types": "./types/main.d.ts",
+      "default": "./runtime/ast-grep.mjs"
+    },
+    "./metrics": {
+      "types": "./types/metrics.d.ts",
+      "default": "./runtime/metrics.mjs"
+    },
+    "./package.json": "./package.json",
+    "./register": {
+      "types": "./register.d.mts",
+      "default": "./register.mjs"
+    },
+    "./runtime": {
+      "types": "./types/runtime.d.ts",
+      "default": "./runtime/runtime.mjs"
+    },
+    "./testing": {
+      "types": "./testing/index.d.mts",
+      "default": "./testing/index.mjs"
+    },
+    "./vite": {
+      "types": "./vite.d.mts",
+      "default": "./vite.mjs"
+    },
+    "./workflow": {
+      "types": "./types/workflow.d.ts",
+      "default": "./runtime/workflow.mjs"
+    }
+  },
+  "types": "./types/index.d.ts",
   "bin": {
     "codemod": "codemod"
   },
   "files": [
+    "!types/tsconfig.json",
     "README.md",
-    "codemod"
+    "codemod",
+    "register.d.mts",
+    "register.mjs",
+    "runtime",
+    "testing",
+    "types",
+    "vite.d.mts",
+    "vite.mjs"
   ],
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js tests/*.test.mjs",
+    "typecheck": "tsc -p types && tsc -p type-tests",
+    "pull-llrt-types": "bash scripts/pull-llrt-types.sh",
+    "sync-orchestrator": "node scripts/sync-orchestrator.mjs"
   },
   "dependencies": {
     "detect-libc": "^2.0.3"
+  },
+  "devDependencies": {
+    "@codemod.com/tsconfig": "workspace:*",
+    "typescript": "catalog:"
   },
   "optionalDependencies": {
     "@codemod.com/cli-darwin-arm64": "0.0.0",

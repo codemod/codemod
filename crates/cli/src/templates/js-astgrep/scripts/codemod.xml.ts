@@ -1,5 +1,5 @@
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type Xml from "codemod:ast-grep/langs/xml";
+import type { Codemod, Edit } from "codemod/ast-grep";
+import type Xml from "codemod/ast-grep/langs/xml";
 
 const codemod: Codemod<Xml> = async (root) => {
   const rootNode = root.root();

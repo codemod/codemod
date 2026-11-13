@@ -567,11 +567,21 @@ fn infer_validation_package_kind(
     ValidationPackageKind::Unknown
 }
 
+/// `workflow.ts` when the package has one, otherwise `workflow.yaml`.
+fn default_workflow_file(package_root: &Path) -> &'static str {
+    if package_root.join("workflow.ts").is_file() {
+        "workflow.ts"
+    } else {
+        "workflow.yaml"
+    }
+}
+
 fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
+    let default_file = default_workflow_file(package_root);
     let manifest_path = package_root.join("codemod.yaml");
     let Some(content) = read_file_if_exists(&manifest_path) else {
         return WorkflowPathResolution {
-            path: package_root.join("workflow.yaml"),
+            path: package_root.join(default_file),
             codemod_yaml_invalid: false,
             workflow_path_invalid: false,
         };
@@ -579,16 +589,28 @@ fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
 
     let Ok(manifest) = serde_yaml::from_str::<YamlValue>(&content) else {
         return WorkflowPathResolution {
-            path: package_root.join("workflow.yaml"),
+            path: package_root.join(default_file),
             codemod_yaml_invalid: true,
             workflow_path_invalid: false,
         };
     };
+    let listed = manifest
+        .get("workflows")
+        .and_then(|value| value.as_sequence())
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| entry.get("default").and_then(|d| d.as_bool()) == Some(true))
+                .or_else(|| entries.first())
+        })
+        .and_then(|entry| entry.get("path"))
+        .and_then(|value| value.as_str());
     let workflow = manifest
         .get("workflow")
         .and_then(|value| value.as_str())
+        .or(listed)
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or("workflow.yaml");
+        .unwrap_or(default_file);
 
     let workflow_path = Path::new(workflow);
     let unsafe_workflow_path = workflow_path.is_absolute()
@@ -598,7 +620,7 @@ fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
 
     WorkflowPathResolution {
         path: if unsafe_workflow_path {
-            package_root.join("workflow.yaml")
+            package_root.join(default_file)
         } else {
             package_root.join(workflow_path)
         },
@@ -608,6 +630,11 @@ fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
 }
 
 fn validate_workflow_at_path(workflow_path: &Path) -> Result<()> {
+    if codemod_workflow::is_typescript(workflow_path) {
+        return codemod_workflow::load_workflow(workflow_path)
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("Workflow validation failed: {e}"));
+    }
     let workflow = parse_workflow_file(workflow_path)
         .with_context(|| format!("Failed to parse workflow {}", workflow_path.display()))?;
     let parent_dir = workflow_path

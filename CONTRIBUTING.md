@@ -132,6 +132,22 @@ cargo build --release --package codemod --bin codemod
 ./target/release/codemod jssg --help
 ```
 
+### Check compatibility with existing codemods
+
+Changes to the workflow engine, the JSSG runtime or the `workflow.yaml` translation can change what existing codemods do. Before releasing them, run codemod packages' fixtures with the released CLI and your build, and compare:
+
+```bash
+# The released CLI to compare against (macOS arm64 shown)
+npm pack @codemod.com/cli-darwin-arm64@latest && tar xzf codemod.com-cli-darwin-arm64-*.tgz
+
+node scripts/compat-sweep.mjs --old package/codemod --new target/release/codemod \
+  --corpus ~/src/codemods --upgrade --out .compat
+```
+
+`--corpus` is any directory of codemod packages with `tests/` fixtures (repeat it for several). For every fixture, the sweep runs the package's workflow with both CLIs and compares the files left, the run status, the metrics and the transforms' warnings, and checks each against the fixture's `expected/` files. `--upgrade` also converts each package with `codemod workflow upgrade` and checks the `workflow.ts` gives the same result as the `workflow.yaml`. Read `.compat/summary.md` for the differences; each run's output is under `.compat/runs/`. `--filter <text>` and `--exclude <text>` pick fixtures by id, and `--retry .compat/report.json` re-runs only the ones that differed (write it to another `--out`).
+
+Packages need their dependencies installed (`pnpm install` in the package) for fixtures that import them; without them both CLIs fail, and the released one may hang until `--timeout`.
+
 ## Project Structure
 
 This monorepo contains the open-source Codemod CLI and core libraries:
@@ -161,7 +177,7 @@ This monorepo contains the open-source Codemod CLI and core libraries:
 
 ### Shared Packages
 
-- **`packages/jssg-types/`** – TypeScript types for JSSG codemods
+- **`crates/cli/npm/types/`** – TypeScript types for codemods and workflows, shipped in the `codemod` npm package (`packages/jssg-types/` mirrors them as `@codemod.com/jssg-types`)
 - **`packages/jssg-utils/`** – Utility functions for JSSG codemods
 - **`packages/tsconfig/`** – Shared TypeScript configuration
 - **`packages/codemod-utils/`** – Public utilities for codemod authors

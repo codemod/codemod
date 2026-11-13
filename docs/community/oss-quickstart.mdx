@@ -87,50 +87,36 @@ registry:
 capabilities: []
 ```
 
-```yaml workflow.yaml expandable
-# yaml-language-server: $schema=https://raw.githubusercontent.com/codemod/codemod/refs/heads/main/schemas/workflow.json
+```ts workflow.ts expandable
+import { step, jssg, agent } from "codemod/workflow";
 
-version: "1"
+export default async function main({ params }: { params: { run_ai_step?: string } }) {
+  await step(
+    "Move inner components to module scope",
+    jssg("scripts/codemod.ts", { language: "tsx" }),
+  );
 
-params:
-  schema:
-    run_ai_step:
-      name: "Run AI step"
-      description: "Enable AI-powered fixups for edge cases"
-      type: string
-      default: "false"
+  if (params.run_ai_step === "true") {
+    await step("AI fixups for complex cases", agent(`
+The previous AST step extracted inner React components to module scope.
+Some cases could not be handled deterministically. Scan for remaining
+components defined inside other components and fix them:
 
-nodes:
-  - id: extract-inner-components
-    name: Extract inner React components to module scope
-    type: automatic
-    steps:
-      - name: "Move inner components to module scope"
-        js-ast-grep:
-          js_file: scripts/codemod.ts
-          language: "tsx"
+1. If the inner component closes over parent state or props, convert those
+   to explicit props on the extracted component and update the call site.
+2. If the inner component uses generics from the parent, lift the type
+   parameters to the extracted component's signature.
+3. Add a TODO comment for any case you cannot safely transform.
 
-      - name: "AI fixups for complex cases"
-        if: params.run_ai_step == "true"
-        ai:
-          prompt: |
-            The previous AST step extracted inner React components to module scope.
-            Some cases could not be handled deterministically. Scan for remaining
-            components defined inside other components and fix them:
-
-            1. If the inner component closes over parent state or props, convert those
-               to explicit props on the extracted component and update the call site.
-            2. If the inner component uses generics from the parent, lift the type
-               parameters to the extracted component's signature.
-            3. Add a TODO comment for any case you cannot safely transform.
-
-            Only modify files that still contain inner component definitions.
+Only modify files that still contain inner component definitions.`));
+  }
+}
 ```
 
 ```ts scripts/codemod.ts expandable
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type { SgNode } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod, Edit } from "codemod/ast-grep";
+import type { SgNode } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
@@ -288,7 +274,7 @@ npx codemod workflow run -w . -t /path/to/your/project
   LLM_API_KEY=your-key npx codemod workflow run -w . -t /path/to/project --param run_ai_step=true
   ```
 
-  Set `LLM_API_KEY` as an environment variable for your chosen provider. With an API key, the built-in AI step runs normally. Without one, Codemod prints `[AI INSTRUCTIONS]`, which parent agents such as Codex- or Claude-style tooling can pick up. See [Workflow Reference — AI steps](/community/workflows/reference#ai-step) for provider configuration.
+  Set `LLM_API_KEY` as an environment variable for your chosen provider. With an API key, the built-in AI step runs normally. Without one, Codemod prints `[AI INSTRUCTIONS]`, which parent agents such as Codex- or Claude-style tooling can pick up. See [AI step](/community/workflows/ai-harness-rig) for provider configuration.
 </Tip>
 
 For all CLI options, see [CLI reference](/community/cli#codemod-workflow).

@@ -8,16 +8,15 @@ use super::transform_helpers::{
     build_transform_options, process_transform_result, ModificationCheck,
 };
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
-use crate::ast_grep::AstGrepModule;
-use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
-use crate::metrics::{MetricsContext, MetricsModule};
+use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
+use crate::metrics::MetricsContext;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::sandbox::runtime_module::{
-    RuntimeEvent, RuntimeEventCallback, RuntimeEventKind, RuntimeHooksContext, RuntimeModule,
+    RuntimeEvent, RuntimeEventCallback, RuntimeEventKind, RuntimeHooksContext,
 };
 use crate::utils::quickjs_utils::maybe_promise;
-use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
+use crate::workflow_global::SharedStateContext;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
@@ -48,11 +47,21 @@ unsafe impl<'js> rquickjs::JsLifetime<'js> for ExecutionModeFlag {
 #[derive(Debug, Clone, Copy)]
 pub struct DryRunExecutionFlag(pub bool);
 
+/// Marks a context that runs workflow callbacks (function steps and
+/// `forEachFile` callbacks). File changes there go through the step's commit,
+/// so roots made by `parse()` cannot write or rename files themselves.
+#[derive(Debug, Clone, Copy)]
+pub struct CallbackIsolate;
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for CallbackIsolate {
+    type Changed<'to> = CallbackIsolate;
+}
+
 unsafe impl<'js> rquickjs::JsLifetime<'js> for DryRunExecutionFlag {
     type Changed<'to> = DryRunExecutionFlag;
 }
 
-fn install_console_bridge(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+pub(crate) fn install_console_bridge(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
     let console = Object::new(ctx.clone())?;
     console.set("log", Function::new(ctx.clone(), console_log)?)?;
     console.set("info", Function::new(ctx.clone(), console_log)?)?;
@@ -167,6 +176,9 @@ pub struct CodemodOutput {
 #[derive(Debug, Clone, Default)]
 pub struct JssgFileChanges {
     pub changes: Arc<Mutex<Vec<FileChange>>>,
+    /// The step's unwritten files, when the caller keeps them: `jssgTransform`
+    /// then reads and updates a file through it.
+    pub pending: Option<super::PendingFiles>,
 }
 
 unsafe impl<'js> rquickjs::JsLifetime<'js> for JssgFileChanges {
@@ -253,6 +265,9 @@ pub struct JssgExecutionOptions<'a, R> {
     /// The target directory the codemod is running against.
     /// Used to validate that `jssgTransform` and `rename()` only access files within this directory.
     pub target_directory: &'a Path,
+    /// The step's unwritten files, shared by every file's execution, so that
+    /// changes several files make to one file with `jssgTransform` add up.
+    pub pending_files: Option<super::PendingFiles>,
 }
 
 struct DryRunDiskFetcher {
@@ -417,30 +432,10 @@ where
         None
     };
 
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+    let (mut built_in_resolver, built_in_loader, global_attachment) =
         module_builder.builder.build();
-    // Add AstGrepModule
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
-
-    // Add WorkflowGlobalModule (step outputs)
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
-
-    // Add MetricsModule (metrics tracking)
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
-
-    // Engine-owned model access can make network requests, so expose it only
-    // when the caller explicitly grants the fetch capability.
-    if llm_capability_enabled {
-        built_in_resolver = built_in_resolver.add_name("codemod:llm");
-        built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
-    }
-
-    // Add RuntimeModule (progress/failure hooks)
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+    let (codemod_resolver, mut built_in_loader) =
+        crate::with_codemod_modules!(built_in_loader, llm: llm_capability_enabled);
 
     if curated_fs_target.is_some() {
         built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
@@ -455,7 +450,7 @@ where
     // Combine resolvers and loaders
     runtime
         .set_loader(
-            (built_in_resolver, fs_resolver),
+            (codemod_resolver, built_in_resolver, fs_resolver),
             (built_in_loader, fs_loader),
         )
         .await;
@@ -498,7 +493,10 @@ where
         })?;
 
         // Store shared accumulator for jssgTransform file changes
-        let jssg_file_changes = JssgFileChanges::default();
+        let jssg_file_changes = JssgFileChanges {
+            pending: options.pending_files.clone(),
+            ..JssgFileChanges::default()
+        };
         ctx.store_userdata(jssg_file_changes.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store JssgFileChanges: {:?}", e),
@@ -775,28 +773,16 @@ where
     module_builder.enable_fs();
     module_builder.enable_child_process();
 
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
-        module_builder.builder.build();
-
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
-
-    // Add WorkflowGlobalModule (step outputs)
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+    let (built_in_resolver, built_in_loader, global_attachment) = module_builder.builder.build();
+    let (codemod_resolver, built_in_loader) =
+        crate::with_codemod_modules!(built_in_loader, llm: false);
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
 
     runtime
         .set_loader(
-            (built_in_resolver, fs_resolver),
+            (codemod_resolver, built_in_resolver, fs_resolver),
             (built_in_loader, fs_loader),
         )
         .await;
@@ -961,20 +947,10 @@ where
         None
     };
 
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+    let (mut built_in_resolver, built_in_loader, global_attachment) =
         module_builder.builder.build();
-
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+    let (codemod_resolver, mut built_in_loader) =
+        crate::with_codemod_modules!(built_in_loader, llm: false);
 
     if curated_fs_target.is_some() {
         built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
@@ -988,7 +964,7 @@ where
 
     runtime
         .set_loader(
-            (built_in_resolver, fs_resolver),
+            (codemod_resolver, built_in_resolver, fs_resolver),
             (built_in_loader, fs_loader),
         )
         .await;
@@ -1220,6 +1196,7 @@ function example() {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1294,6 +1271,7 @@ export default async function transform() {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let output = execute_codemod_with_quickjs(options)
@@ -1364,6 +1342,7 @@ export default async function transform() {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let error = execute_codemod_with_quickjs(options)
@@ -1439,6 +1418,7 @@ export default function transform(root, options) {
             test_mode: false,
             dry_run: true,
             target_directory: &target_dir,
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options)
@@ -1509,6 +1489,7 @@ export default function transform() {
             test_mode: false,
             dry_run: true,
             target_directory: temp_dir.path(),
+            pending_files: None,
         };
 
         execute_codemod_with_quickjs(options)
@@ -1553,6 +1534,7 @@ export default function transform(root, options) {
             test_mode: false,
             dry_run: false,
             target_directory: &target_dir,
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options)
@@ -1616,6 +1598,7 @@ function example() {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1669,6 +1652,7 @@ function example() {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1722,6 +1706,7 @@ function example() {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1767,6 +1752,7 @@ function example() {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1817,6 +1803,7 @@ function example() {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1928,6 +1915,7 @@ function example() {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1963,6 +1951,67 @@ function example() {
             3,
             "Should have counted 3 console.log calls"
         );
+    }
+
+    #[tokio::test]
+    async fn codemod_modules_import_as_codemod_slash_and_the_older_colon_spelling() {
+        use crate::metrics::MetricsContext;
+
+        let metrics_ctx = MetricsContext::new();
+        // Both spellings name one module: an atom from each counts into the
+        // same metric, and the module objects are the same.
+        let codemod_content = r#"
+import { useMetricAtom } from "codemod/metrics";
+import * as colon from "codemod:metrics";
+import { parse } from "codemod/ast-grep";
+import { parse as parseColon } from "codemod:ast-grep";
+import { progress } from "codemod/runtime";
+
+export default function transform(root) {
+  if (parse !== parseColon) throw new Error("two ast-grep modules");
+  progress("visiting");
+  useMetricAtom("calls").increment({ via: "slash" });
+  colon.useMetricAtom("calls").increment({ via: "colon" });
+  return parse("javascript", root.root().text().replace("old", "new")).root().text();
+}
+        "#
+        .trim();
+
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "const old = 1;",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: Some(metrics_ctx.clone()),
+            llm_request_handler: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: Path::new("."),
+            pending_files: None,
+        };
+
+        match execute_codemod_with_quickjs(options).await {
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert_eq!(modified.content, "const new = 1;")
+                }
+                other => panic!("expected a modified result, got {other:?}"),
+            },
+            Err(e) => panic!("expected success, got {e:?}"),
+        }
+        let calls = metrics_ctx.get_all().remove("calls").unwrap();
+        assert_eq!(calls.len(), 2, "{calls:?}");
     }
 
     #[tokio::test]
@@ -2008,6 +2057,7 @@ export default function transform(root) {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -2056,6 +2106,7 @@ export default function transform(root) {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -2104,6 +2155,7 @@ export default function transform(root) {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -2152,6 +2204,7 @@ export default async function transform(root) {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -2270,6 +2323,7 @@ export default function transform(root) {
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
         execute_codemod_with_quickjs(options)
             .await

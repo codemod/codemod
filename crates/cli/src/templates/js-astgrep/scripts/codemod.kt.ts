@@ -1,5 +1,5 @@
-import type { Codemod } from "codemod:ast-grep";
-import type Kotlin from "codemod:ast-grep/langs/kotlin";
+import type { Codemod } from "codemod/ast-grep";
+import type Kotlin from "codemod/ast-grep/langs/kotlin";
 
 const codemod: Codemod<Kotlin> = async (root) => {
   const rootNode = root.root();

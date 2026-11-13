@@ -49,7 +49,7 @@ fn confirm_request(
         return Err(rejection_error(&request));
     }
 
-    if !no_interactive {
+    if crate::utils::interactive::is_interactive(no_interactive) {
         let prompt = match request.kind {
             DirtyGitApprovalKind::UncommittedChanges => dirty_prompt(&request.path),
             DirtyGitApprovalKind::NotTracked => not_tracked_prompt(&request.path),

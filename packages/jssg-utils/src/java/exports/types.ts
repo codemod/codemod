@@ -1,5 +1,5 @@
-import type Java from "@codemod.com/jssg-types/langs/java";
-import type { Edit, SgNode } from "@codemod.com/jssg-types/main";
+import type Java from "codemod/langs/java";
+import type { Edit, SgNode } from "codemod/main";
 import {
   collectImports,
   hasConflictingSimpleImport,

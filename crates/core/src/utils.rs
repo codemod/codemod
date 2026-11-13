@@ -9,7 +9,7 @@ use serde_yaml;
 use butterflow_models::{Error, Node, Result, Workflow};
 
 use crate::{
-    engine::CodemodDependency, nested_codemod_service::NestedCodemodService,
+    nested_codemod_service::{CodemodDependency, NestedCodemodService},
     registry::RegistryClient,
 };
 
@@ -125,6 +125,18 @@ pub async fn find_dry_run_only_codemod_dependency(
 ) -> Result<Option<String>> {
     NestedCodemodService::new(registry_client)
         .find_dry_run_only_dependency(workflow, bundle_path, &[] as &[CodemodDependency])
+        .await
+}
+
+/// Resolve every nested `codemod` step (transitively) and reject dependency
+/// cycles, before a run starts.
+pub async fn validate_codemod_dependencies(
+    workflow: &Workflow,
+    bundle_path: Option<&Path>,
+    registry_client: &RegistryClient,
+) -> Result<()> {
+    NestedCodemodService::new(registry_client)
+        .validate_workflow_dependencies(workflow, bundle_path, &[] as &[CodemodDependency])
         .await
 }
 

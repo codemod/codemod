@@ -1,7 +1,7 @@
 import { ok as assert } from "assert";
 import { parse } from "codemod:ast-grep";
-import type Java from "@codemod.com/jssg-types/langs/java";
-import type { SgNode } from "@codemod.com/jssg-types/main";
+import type Java from "codemod/langs/java";
+import type { SgNode } from "codemod/main";
 import {
   cleanupImports,
   collectImports,

@@ -1,5 +1,5 @@
-import type { Codemod } from "codemod:ast-grep";
-import type CSS from "codemod:ast-grep/langs/css";
+import type { Codemod } from "codemod/ast-grep";
+import type CSS from "codemod/ast-grep/langs/css";
 
 const codemod: Codemod<CSS> = async (root) => {
   const rootNode = root.root();

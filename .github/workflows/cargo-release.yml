@@ -64,9 +64,15 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" == "windows-2022" ]; then
             echo "path=target/${{ matrix.target }}/release/codemod.exe" >> "$GITHUB_OUTPUT"
+            echo "addon=target/${{ matrix.target }}/release/codemod_node.dll" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "path=target/${{ matrix.target }}/release/codemod" >> "$GITHUB_OUTPUT"
+          if [ "${{ matrix.os }}" == "macos-latest" ]; then
+            echo "addon=target/${{ matrix.target }}/release/libcodemod_node.dylib" >> "$GITHUB_OUTPUT"
+          else
+            echo "addon=target/${{ matrix.target }}/release/libcodemod_node.so" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -131,6 +137,17 @@ jobs:
           # Optional override; falls back to the default Scarf gateway when unset.
           SCARF_GATEWAY_URL: ${{ vars.SCARF_GATEWAY_URL }}
 
+      # The Node.js addon behind `codemod/host` and `codemod/testing`. Node on
+      # musl loads addons dynamically, so musl builds link the C runtime
+      # dynamically here.
+      - name: Build Node.js addon
+        shell: bash
+        run: |
+          if [[ "${{ matrix.target }}" == *-musl ]]; then
+            export RUSTFLAGS="-C target-feature=-crt-static"
+          fi
+          cargo build --release -p codemod-node --target ${{ matrix.target }}
+
       - name: Chmod binary
         run: |
           chmod 755 ${{ steps.binary_path.outputs.path }}
@@ -151,10 +168,26 @@ jobs:
             --verbose \
             ${{ steps.binary_path.outputs.path }}
 
+      - name: Sign Node.js addon (macOS only)
+        if: matrix.os == 'macos-latest'
+        env:
+          APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          timeout 300 codesign \
+            --force \
+            --timestamp \
+            --sign "$APPLE_IDENTITY" \
+            --team-id "$APPLE_TEAM_ID" \
+            --options runtime \
+            --verbose \
+            ${{ steps.binary_path.outputs.addon }}
+
       - name: Verify Signing (macOS only)
         if: matrix.os == 'macos-latest'
         run: |
           codesign --verify --deep --verbose=4 ${{ steps.binary_path.outputs.path }}
+          codesign --verify --verbose=4 ${{ steps.binary_path.outputs.addon }}
 
       - name: Create ZIP for Notarization (macOS only)
         if: matrix.os == 'macos-latest'
@@ -191,11 +224,21 @@ jobs:
           cd target/${{ matrix.target }}/release
           mv codemod.exe ${{ matrix.binary_name }}
 
+      - name: Name Node.js addon
+        shell: bash
+        run: cp ${{ steps.binary_path.outputs.addon }} target/${{ matrix.target }}/release/codemod.node
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+
+      - name: Upload Node.js addon
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}-node
+          path: target/${{ matrix.target }}/release/codemod.node
 
   changelog:
     name: Generate Changelog
@@ -336,6 +379,15 @@ jobs:
 
           # Make binaries executable
           chmod +x crates/cli/npm/platforms/*/codemod
+
+          # Node.js addons, for codemod/host and codemod/testing
+          cp artifacts/aarch64-apple-darwin-node/codemod.node crates/cli/npm/platforms/darwin-arm64/codemod.node
+          cp artifacts/x86_64-apple-darwin-node/codemod.node crates/cli/npm/platforms/darwin-x64/codemod.node
+          cp artifacts/x86_64-unknown-linux-gnu-node/codemod.node crates/cli/npm/platforms/linux-x64-gnu/codemod.node
+          cp artifacts/x86_64-unknown-linux-musl-node/codemod.node crates/cli/npm/platforms/linux-x64-musl/codemod.node
+          cp artifacts/aarch64-unknown-linux-gnu-node/codemod.node crates/cli/npm/platforms/linux-arm64-gnu/codemod.node
+          cp artifacts/aarch64-unknown-linux-musl-node/codemod.node crates/cli/npm/platforms/linux-arm64-musl/codemod.node
+          cp artifacts/x86_64-pc-windows-msvc-node/codemod.node crates/cli/npm/platforms/win32-x64-msvc/codemod.node
 
       - name: Update package versions
         run: |

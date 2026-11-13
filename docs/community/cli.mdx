@@ -40,7 +40,7 @@ npx codemod jssg test ./transform.ts --language tsx
 npx codemod init
 
 # Validate workflow
-npx codemod workflow validate -w workflow.yaml
+npx codemod workflow validate -w workflow.ts
 
 # Publish to registry
 npx codemod publish
@@ -348,13 +348,13 @@ Example machine-readable failure (`--format json`):
 
 Manage and execute [Codemod packages](/community/package-structure).
 
-A Codemod package is a directory containing `workflow.yaml` and transformation scripts. Workflows orchestrate multiple steps using different engines (jssg, YAML ast-grep, shell commands, AI, etc.).
+A Codemod package is a directory containing `workflow.ts` (or a legacy `workflow.yaml`) and transformation scripts. Workflows run durable steps using different engines (jssg, YAML ast-grep, shell commands, AI agents, etc.); every step is recorded so a run can be resumed.
 
 **When to use**:
 - ✅ Production codemods with multiple steps
 - ✅ Parameterized transformations
 - ✅ Multi-repo orchestration
-- ✅ State management and resumption
+- ✅ Resuming long migrations
 
 **Learn more**: [Workflow Reference](/community/workflows/reference)
 
@@ -368,7 +368,7 @@ Run a complete Codemod package.
 <CodeGroup>
 
 ```bash Running a local workflow
-npx codemod workflow run -w <workflow.yaml|directory>
+npx codemod workflow run -w <workflow.ts|workflow.yaml|directory>
 ```
 
 ```bash Running a workflow from Codemod Registry
@@ -378,7 +378,27 @@ npx codemod <package-name>
 </CodeGroup>
 
 <ResponseField name="-w, --workflow <PATH>" type="string" required>
-  Path to workflow file or directory.
+  Path to a workflow file or a package directory. In a directory, the workflow declared in `codemod.yaml` runs, otherwise `workflow.ts`, otherwise `workflow.yaml`.
+</ResponseField>
+
+<ResponseField name="--dry-run" type="boolean">
+  Run every step without changing files. Shell commands, agents and skill installs are skipped, and the run is not saved.
+</ResponseField>
+
+<ResponseField name="--approve" type="boolean">
+  Give every approval the workflow asks for (`approval(...)` steps, manual nodes in `workflow.yaml`, pull requests). Without it, a run nobody can answer for pauses at the first approval and can be continued with `workflow resume --approve`.
+
+  `--approve` does not grant capabilities: those come from `--allow-fs`, `--allow-fetch` and `--allow-child-process`, or from your answer when the package asks.
+</ResponseField>
+
+A run is unattended when you pass `--no-interactive`, and also when there is no terminal to ask on (in CI, or with input piped in). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something.
+
+<ResponseField name="--managed-git" type="boolean">
+  Let `branch`, `commit` and `pullRequest` steps (or `branch_name`, `commit` and `pull_request` in `workflow.yaml`) change the repository. Without it, those steps are recorded as skipped.
+</ResponseField>
+
+<ResponseField name="--format <text|jsonl>" type="string">
+  `jsonl` prints one JSON object per engine event (`run_started`, `step_started`, `step_progress`, `step_log`, `step_finished`, `run_finished`, ...) on stdout.
 </ResponseField>
 
 <ResponseField name="-t, --target <PATH>" type="string">
@@ -394,22 +414,22 @@ npx codemod <package-name>
 </ResponseField>
 
 <ResponseField name="--param <KEY=VALUE>" type="string">
-  Pass key=value pairs to your workflow. Parameters are exposed to jssg transforms via `options.params`.
+  Pass key=value pairs to your workflow. Parameters reach the workflow as `params` and jssg transforms as `options.params`.
 
   ```bash
   # Single parameter:
-  npx codemod workflow run -w workflow.yaml --param format=cjs
+  npx codemod workflow run -w workflow.ts --param format=cjs
   
   # Multiple parameters:
-  npx codemod workflow run -w workflow.yaml --param format=cjs --param strict=true
+  npx codemod workflow run -w workflow.ts --param format=cjs --param strict=true
   ```
 </ResponseField>
 
 <ResponseField name="--install-skill" type="boolean">
-  In non-interactive runs, execute `install-skill` workflow steps instead of skipping them by default.
+  In non-interactive runs, execute `installSkill` steps instead of failing them.
 
   ```bash
-  npx codemod workflow run -w workflow.yaml --no-interactive --install-skill
+  npx codemod workflow run -w workflow.ts --no-interactive --install-skill
   npx codemod <package-name> --no-interactive --install-skill
   ```
 </ResponseField>
@@ -445,38 +465,38 @@ npx codemod <package-name>
 
 **`workflow resume`**
 
-Resume a paused workflow.
+Continue a run that failed, was canceled or interrupted, or is waiting for approval. Steps that already finished are not run again: their recorded results are reused, in the order the steps finished the first time. If you changed the workflow, you may change the step that failed and later ones; changing a step that already finished stops the resume with a `NondeterminismError`.
+
+The run continues with what it was started with: its capabilities, `--managed-git` and `--agent` carry over, and flags you pass add to them. A run that another process is still executing cannot be resumed; wait for it or cancel it. A run started with `runWorkflow` in Node.js is resumed there, not here.
 
 ```bash
-npx codemod workflow resume -i <ID> [-t <TASK>] [--trigger-all]
+npx codemod workflow resume --id <ID> [--approve]
 ```
 
 <ResponseField name="-i, --id <ID>" type="string" required>
-  Workflow run ID.
+  Run ID, from `workflow list` or the end of a failed run's output.
 </ResponseField>
 
-<ResponseField name="-t, --task <TASK>" type="string">
-  Task ID to trigger (can be specified multiple times).
-</ResponseField>
-
-<ResponseField name="--trigger-all" type="boolean">
-  Trigger all awaiting tasks.
+<ResponseField name="--approve" type="boolean">
+  Give the approval the run is waiting for, and any later ones. `--trigger-all` is accepted as an alias.
 </ResponseField>
 
 <ResponseField name="--install-skill" type="boolean">
-  In non-interactive resume runs, execute pending `install-skill` workflow steps instead of skipping them by default.
+  In non-interactive resumes, execute pending `installSkill` steps.
 
   ```bash
-  npx codemod workflow resume -w workflow.yaml -i <ID> --trigger-all --no-interactive --install-skill
+  npx codemod workflow resume --id <ID> --approve --no-interactive --install-skill
   ```
 </ResponseField>
+
+The run remembers its workflow file, target and parameters, so `-w` and `-t` are not needed.
 
 **`workflow validate`**
 
 Validate a workflow file.
 
 ```bash
-npx codemod workflow validate -w <workflow.yaml>
+npx codemod workflow validate -w <workflow.ts|workflow.yaml|directory>
 ```
 
 `workflow validate` is capability-aware for codemod packages:
@@ -489,16 +509,20 @@ npx codemod workflow validate -w <workflow.yaml>
   Path to workflow file or codemod package directory.
 </ResponseField>
 
-| Check                       | Ensures                                |
-| --------------------------- | -------------------------------------- |
-| Schema validation           | YAML matches the workflow spec         |
-| Unique IDs                  | Node & template IDs are unique         |
-| Dependency validation       | Every `depends_on` exists              |
-| Cyclic dependency detection | DAG has no cycles                      |
-| Template references         | All `template:` IDs exist              |
-| Matrix validation           | `from_state` matches schema            |
-| State schema validation     | `state.schema` is valid                |
-| Variable syntax             | `${{…}}` uses `params`, `env`, `state` |
+For `workflow.ts`, validation builds the workflow: it parses it and checks the `forEachFile` callback rules, reporting errors with file, line and column.
+
+For `workflow.yaml`:
+
+| Check                       | Ensures                                          |
+| --------------------------- | ------------------------------------------------ |
+| Parsing                     | The YAML matches the workflow spec               |
+| Unique IDs                  | Node and template IDs are unique                 |
+| Dependency validation       | Every `depends_on` exists and there are no cycles |
+| Template references         | All `template:` IDs exist                        |
+| Matrix validation           | Every matrix has `values` or `from_state`        |
+| Translation                 | The workflow translates to TypeScript that builds |
+
+It also lists features the translation drops (for example `state.schema` or `runtime: docker`) and suggests `workflow upgrade`.
 
 <Info>
   Why validate?
@@ -507,7 +531,7 @@ npx codemod workflow validate -w <workflow.yaml>
 </Info>
 
 <Accordion title="Validation vs. Logical Correctness">
-  For workflow behavior, `workflow validate` ensures your YAML is syntactically correct and follows the schema, but it cannot verify:
+  `workflow validate` checks that your workflow is well formed, but it cannot verify:
 
   - **Logical correctness**: Whether your workflow does what you intend
   - **Runtime behavior**: How your workflow behaves with real data
@@ -515,9 +539,77 @@ npx codemod workflow validate -w <workflow.yaml>
   - **State consistency**: Whether state updates are logically sound
 </Accordion>
 
+**`workflow upgrade`**
+
+Convert `workflow.yaml` files to `workflow.ts`.
+
+```bash
+npx codemod workflow upgrade [PATH] [--keep-yaml] [--dry-run]
+```
+
+In a package directory (the current directory by default), every YAML workflow declared in `codemod.yaml` (or a bare `workflow.yaml`) is converted to a `.ts` file next to it, `codemod.yaml` is updated to point at it, and the YAML file is removed. Features the conversion drops are listed as warnings and marked in the generated file with `// codemod upgrade:` comments.
+
+Run it in a directory that holds several packages, such as a monorepo of recipes, and every package below it is upgraded. Directories that start with `.`, `node_modules`, `target` and `dist` are skipped.
+
+```bash
+npx codemod workflow upgrade .        # every package under the current directory
+```
+
+Transform files and their tests are not changed: `codemod jssg test` keeps working on them as before, and `codemod workflow test` runs the same fixtures through the whole workflow. The generated `workflow.ts` references the `codemod/workflow` types, so `tsc` checks it in any project that depends on `codemod`. If the nearest `package.json` does not, `upgrade` suggests adding it.
+
+<ResponseField name="--keep-yaml" type="boolean">
+  Keep the YAML files.
+</ResponseField>
+
+<ResponseField name="--dry-run" type="boolean">
+  Print the generated TypeScript instead of writing files.
+</ResponseField>
+
+**`workflow test`**
+
+Run the workflow on each fixture and compare the files it leaves with the fixture's expected output. See [Testing workflows](/community/workflows/testing).
+
+```bash
+npx codemod workflow test [TESTS] [-w <PATH>] [-u] [--filter <TEXT>] [--strictness <LEVEL>]
+```
+
+Each fixture is a directory with `input/` and `expected/` directories, or `input.<ext>` and `expected.<ext>` files, and optionally a `params.json` with the run's parameters. The workflow runs on a temporary copy of each one; nothing is recorded in the run store. Approvals are given and the capabilities `codemod.yaml` declares are granted. The command exits with an error when a fixture fails.
+
+<ResponseField name="TESTS" type="string" default="tests">
+  Directory of fixtures, one per subdirectory.
+</ResponseField>
+
+<ResponseField name="-w, --workflow <PATH>" type="string" default=".">
+  Path to a workflow file or a codemod package directory.
+</ResponseField>
+
+<ResponseField name="--workflow-name <NAME>" type="string">
+  Which workflow to test when `codemod.yaml` declares several.
+</ResponseField>
+
+<ResponseField name="-u, --update" type="boolean">
+  Write each run's files into its fixture's expected output.
+</ResponseField>
+
+<ResponseField name="--filter <TEXT>" type="string">
+  Only run fixtures whose name contains this text.
+</ResponseField>
+
+<ResponseField name="--strictness <LEVEL>" type="string" default="strict">
+  How files are compared: `strict` (text), `cst`, `ast`, or `loose`, as in [`jssg test`](/community/jssg/testing#strictness-levels). Files in languages without a parser are compared as text.
+</ResponseField>
+
+<ResponseField name="--allow-fs, --allow-fetch, --allow-child-process" type="boolean">
+  Grant capabilities on top of those `codemod.yaml` declares.
+</ResponseField>
+
+<ResponseField name="--no-approve" type="boolean">
+  Leave manual approvals unanswered. A run that reaches one waits, and its fixture fails.
+</ResponseField>
+
 **`workflow status`**
 
-Show workflow run status.
+Show a run and each of its recorded steps. A step is `succeeded`, `failed`, `canceled`, or `awaiting-approval`; the last two run again when the run is resumed. A run shown as `interrupted` was still running when its process was killed: resume or cancel it.
 
 ```bash
 npx codemod workflow status -i <ID>
@@ -541,7 +633,7 @@ npx codemod workflow list [-l <LIMIT>]
 
 **`workflow cancel`**
 
-Cancel a workflow run.
+Cancel a workflow run. A run in progress, in this or another terminal, stops the step it is on (a shell command and what it started are terminated) and writes nothing more. Any other unfinished run (failed, waiting for approval, or interrupted) is marked canceled. A canceled run can still be resumed.
 
 ```bash
 npx codemod workflow cancel -i <ID>
@@ -568,7 +660,7 @@ jssg is the **primary transformation engine** for Codemod. These commands let yo
 - ❌ Production deployments → use `codemod workflow` for orchestration
 
 <Tip>
-  For production, embed your jssg transform in a workflow using a `js-ast-grep` step. See [Workflow Reference: JSSG Step](/community/workflows/reference#jssg-step).
+  For production, run your jssg transform from a workflow with the `jssg` task. See [Workflow Reference: Tasks](/community/workflows/reference#tasks).
 </Tip>
 
 **Learn more**: [jssg documentation](/community/jssg)
@@ -792,7 +884,7 @@ Both workflows use [trusted publishers](/community/publishing#trusted-publishers
 </ResponseField>
 
 <ResponseField name="--skill" type="boolean">
-  Scaffold a skill-only package with a workflow-first template (`workflow.yaml` contains `install-skill`) and authored files under `agents/skill/<skill-name>/`.
+  Scaffold a skill-only package with a workflow-first template (`workflow.ts` contains `installSkill`) and authored files under `agents/skill/<skill-name>/`.
 
   The generated `SKILL.md` uses the authored package skill markers:
   - `codemod-compatibility: skill-package-v1`
@@ -919,6 +1011,8 @@ Publish a Codemod package to a registry.
 ```bash
 npx codemod publish [PATH]
 ```
+
+`node_modules` is not published. A `workflow.ts`, and each transform file it passes to `jssg("...")` as a string, is bundled with what it imports from npm packages; the modules the CLI provides (`codemod/workflow`, `codemod/ast-grep`, `fs`, ...) stay imports. A transform whose path is computed at run time is published as it is, so keep such transforms free of package imports.
 
 <ResponseField name="[PATH]" type="string">
   Path to codemod directory (defaults to current directory).

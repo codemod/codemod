@@ -1,3 +1,4 @@
+use codemod_agents::{AgentEvent, FileChange, FileChangeKind};
 use console::style;
 use similar::{ChangeTag, TextDiff};
 
@@ -6,186 +7,84 @@ pub(crate) enum RenderedAgentEvent {
     Fragment(String),
 }
 
-pub(crate) fn render_agent_event_payload_styled(
-    payload: &str,
+/// How to show one thing a coding agent did. `line_open` says whether the
+/// previous fragment left a line open.
+pub(crate) fn render_agent_activity(
+    activity: &AgentEvent,
     line_open: bool,
 ) -> Option<RenderedAgentEvent> {
-    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
-    match value.get("event").and_then(serde_json::Value::as_str)? {
-        "message" => {
-            let text = value.get("text").and_then(serde_json::Value::as_str)?;
-            let delta = value
-                .get("delta")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if delta {
-                Some(RenderedAgentEvent::Fragment(format_message_fragment(
-                    text, line_open, true,
-                )))
-            } else {
-                Some(RenderedAgentEvent::Line(format!(
-                    "  {} {}",
-                    style("›").cyan(),
-                    text
-                )))
-            }
+    match activity {
+        AgentEvent::Started { model, .. } => Some(RenderedAgentEvent::Line(match model {
+            Some(model) => format!("  {} started {}", style("•").cyan(), style(model).dim()),
+            None => format!("  {} started", style("•").cyan()),
+        })),
+        AgentEvent::Text { text, delta: true } => Some(RenderedAgentEvent::Fragment(
+            format_message_fragment(text, line_open, true),
+        )),
+        AgentEvent::Text { text, delta: false } => {
+            let text = text.trim_end();
+            (!text.is_empty()).then(|| {
+                RenderedAgentEvent::Line(
+                    format_message_fragment(text, false, true)
+                        .trim_end()
+                        .to_string(),
+                )
+            })
         }
-        "tool_call" => {
-            let tool_name = value
-                .get("tool_name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("tool");
-            let params = value
-                .get("tool_params")
+        AgentEvent::Thinking { .. } => None,
+        AgentEvent::ToolCall {
+            name,
+            input,
+            changes,
+            ..
+        } => {
+            let params = Some(input)
+                .filter(|params| !params.is_null())
                 .filter(|params| !params.as_object().is_some_and(|object| object.is_empty()))
                 .map(compact_tool_params)
                 .unwrap_or_default();
             let mut line = if params.is_empty() {
-                format!("  {} {}", style("•").green(), style(tool_name).bold())
+                format!("  {} {}", style("•").green(), style(name).bold())
             } else {
                 format!(
                     "  {} {} {}",
                     style("•").green(),
-                    style(tool_name).bold(),
+                    style(name).bold(),
                     style(params).dim()
                 )
             };
-            if let Some(diff) = value
-                .get("tool_params")
-                .and_then(|params| format_tool_diff(tool_name, params, true))
-            {
+            if let Some(diff) = format_file_changes(changes, true) {
                 line.push('\n');
                 line.push_str(&diff);
             }
             Some(RenderedAgentEvent::Line(line))
         }
-        "warning" => {
-            let message = value
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("warning");
+        AgentEvent::ToolResult {
+            output,
+            is_error: true,
+            ..
+        } => {
+            let first = output.lines().next().unwrap_or("the tool failed");
             Some(RenderedAgentEvent::Line(format!(
                 "  {} {}",
                 style("!").yellow(),
-                message
+                style(truncate_tool_value(first, 160)).dim()
             )))
         }
-        "status" => {
-            let status = value
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("status");
-            let detail = value
-                .get("detail")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            if detail.is_empty() {
-                Some(RenderedAgentEvent::Line(format!(
-                    "  {} {}",
-                    style("•").cyan(),
-                    status
-                )))
-            } else {
-                Some(RenderedAgentEvent::Line(format!(
-                    "  {} {} {}",
-                    style("•").cyan(),
-                    status,
-                    style(detail).dim()
-                )))
-            }
+        AgentEvent::ToolResult { .. } => None,
+        AgentEvent::Warning { message } => Some(RenderedAgentEvent::Line(format!(
+            "  {} {}",
+            style("!").yellow(),
+            message
+        ))),
+        AgentEvent::Error { message } => Some(RenderedAgentEvent::Line(format!(
+            "  {} {}",
+            style("✗").red(),
+            message
+        ))),
+        AgentEvent::Output { line, .. } => {
+            Some(RenderedAgentEvent::Line(format!("  {}", style(line).dim())))
         }
-        "raw" => value
-            .get("line")
-            .and_then(serde_json::Value::as_str)
-            .map(|line| RenderedAgentEvent::Line(line.to_string())),
-        _ => None,
-    }
-}
-
-pub(crate) fn render_task_log_line(line: &str) -> String {
-    render_agent_event_payload_plain(line).unwrap_or_else(|| line.to_string())
-}
-
-pub(crate) fn render_task_log_lines(lines: &[String]) -> Vec<String> {
-    let mut rendered = Vec::new();
-    let mut message_buffer = String::new();
-
-    for line in lines {
-        if let Some(delta) = agent_message_delta(line) {
-            message_buffer.push_str(&delta);
-            continue;
-        }
-
-        flush_message_buffer(&mut rendered, &mut message_buffer);
-        rendered.push(render_task_log_line(line));
-    }
-
-    flush_message_buffer(&mut rendered, &mut message_buffer);
-    rendered
-}
-
-pub(crate) fn render_agent_message_fragment(fragment: &str, already_open: bool) -> String {
-    format_message_fragment(fragment, already_open, true)
-}
-
-fn render_agent_event_payload_plain(payload: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
-    match value.get("event").and_then(serde_json::Value::as_str)? {
-        "message" => {
-            let text = value.get("text").and_then(serde_json::Value::as_str)?;
-            Some(format!("  › {text}"))
-        }
-        "tool_call" => {
-            let tool_name = value
-                .get("tool_name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("tool");
-            let params = value
-                .get("tool_params")
-                .filter(|params| !params.as_object().is_some_and(|object| object.is_empty()))
-                .map(compact_tool_params)
-                .unwrap_or_default();
-            let mut line = if params.is_empty() {
-                format!("  • {tool_name}")
-            } else {
-                format!("  • {tool_name} {params}")
-            };
-            if let Some(diff) = value
-                .get("tool_params")
-                .and_then(|params| format_tool_diff(tool_name, params, false))
-            {
-                line.push('\n');
-                line.push_str(&diff);
-            }
-            Some(line)
-        }
-        "warning" => {
-            let message = value
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("warning");
-            Some(format!("  ! {message}"))
-        }
-        "status" => {
-            let status = value
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("status");
-            let detail = value
-                .get("detail")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            if detail.is_empty() {
-                Some(format!("  • {status}"))
-            } else {
-                Some(format!("  • {status} {detail}"))
-            }
-        }
-        "raw" => value
-            .get("line")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string),
-        _ => None,
     }
 }
 
@@ -224,126 +123,45 @@ fn format_message_fragment(fragment: &str, already_open: bool, styled: bool) -> 
     output
 }
 
-fn format_tool_diff(tool_name: &str, params: &serde_json::Value, styled: bool) -> Option<String> {
-    if let Some(diff) = params
-        .pointer("/metadata/diff")
-        .and_then(serde_json::Value::as_str)
-        .filter(|diff| !diff.trim().is_empty())
-    {
-        return Some(format_unified_diff_preview(diff, styled));
+/// The preview under a tool call that changes files: the change itself for
+/// one, a count for several.
+fn format_file_changes(changes: &[FileChange], styled: bool) -> Option<String> {
+    let summary = |text: String| format!("    {} {}", dim("diff", styled), dim(&text, styled));
+    let first = changes.first()?;
+    let path = compact_path_display(&first.path);
+    if changes.len() > 1 {
+        let files = changes
+            .iter()
+            .map(|change| change.path.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        return Some(summary(if files == 1 {
+            format!("{} edits in {path}", changes.len())
+        } else {
+            format!("{files} files, first {path}")
+        }));
     }
 
-    match tool_name {
-        "Write" | "Edit" | "Delete" if params.get("changes").is_some() => {
-            format_codex_changes_diff(params, styled)
-        }
-        "Write" => {
-            let file_path = params
-                .get("file_path")
-                .and_then(serde_json::Value::as_str)?;
-            let content = params.get("content").and_then(serde_json::Value::as_str)?;
-            Some(format_write_preview(file_path, content, styled))
-        }
-        "Edit" => {
-            let file_path = params
-                .get("file_path")
-                .and_then(serde_json::Value::as_str)?;
-            let old = params
-                .get("old_string")
-                .and_then(serde_json::Value::as_str)?;
-            let new = params
-                .get("new_string")
-                .and_then(serde_json::Value::as_str)?;
-            Some(format_compact_diff(file_path, old, new, styled))
-        }
-        "MultiEdit" => {
-            let file_path = params
-                .get("file_path")
-                .and_then(serde_json::Value::as_str)?;
-            let edits = params
-                .get("edits")
-                .and_then(serde_json::Value::as_array)
-                .map(Vec::len)
-                .unwrap_or(0);
-            Some(format!(
-                "    {} {}",
-                dim("diff", styled),
-                dim(
-                    &format!("{edits} edits in {}", compact_path_display(file_path)),
-                    styled
-                )
-            ))
-        }
-        _ => None,
+    if let Some(diff) = first.diff.as_deref().filter(|diff| !diff.trim().is_empty()) {
+        return Some(format_unified_diff_preview(&first.path, diff, styled));
     }
-}
-
-fn format_codex_changes_diff(params: &serde_json::Value, styled: bool) -> Option<String> {
-    let changes = params
-        .get("changes")
-        .and_then(serde_json::Value::as_array)?;
-    if changes.len() != 1 {
-        let files = params
-            .get("files")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(changes.len() as u64);
-        let path = params
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("files");
-        return Some(format!(
-            "    {} {}",
-            dim("diff", styled),
-            dim(
-                &format!("{files} files, first {}", compact_path_display(path)),
-                styled
-            )
-        ));
-    }
-
-    let change = changes.first()?;
-    let path = change.get("path").and_then(serde_json::Value::as_str)?;
-    if let Some(diff) = change
-        .get("diff")
-        .or_else(|| change.get("unified_diff"))
-        .or_else(|| change.get("patch"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|diff| !diff.trim().is_empty())
-    {
-        return Some(format_unified_diff_preview(diff, styled));
-    }
-
-    let kind = change
-        .get("kind")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("update");
-    let original = change
-        .get("old")
-        .or_else(|| change.get("before"))
-        .or_else(|| change.get("previous"))
-        .and_then(serde_json::Value::as_str);
-    let modified = change
-        .get("new")
-        .or_else(|| change.get("after"))
-        .or_else(|| change.get("content"))
-        .and_then(serde_json::Value::as_str);
-
-    match (kind, original, modified) {
-        ("delete" | "remove", Some(original), _) => {
-            Some(format_compact_diff(path, original, "", styled))
-        }
-        ("add" | "create", _, Some(modified)) => {
-            Some(format_create_preview(path, modified, styled))
-        }
-        (_, Some(original), Some(modified)) => {
-            Some(format_compact_diff(path, original, modified, styled))
-        }
-        _ => Some(format!(
-            "    {} {}",
-            dim("diff", styled),
-            dim(&format!("changed {}", compact_path_display(path)), styled)
-        )),
-    }
+    Some(
+        match (first.kind, first.old.as_deref(), first.new.as_deref()) {
+            (FileChangeKind::Delete, Some(old), _) => {
+                format_compact_diff(&first.path, old, "", styled)
+            }
+            (FileChangeKind::Create, _, Some(new)) => {
+                format_create_preview(&first.path, new, styled)
+            }
+            (FileChangeKind::Write, _, Some(new)) => format_write_preview(&first.path, new, styled),
+            (_, Some(old), Some(new)) => format_compact_diff(&first.path, old, new, styled),
+            (FileChangeKind::Create, ..) => summary(format!("creates {path}")),
+            (FileChangeKind::Delete, ..) => summary(format!("deletes {path}")),
+            (FileChangeKind::Write | FileChangeKind::Update, ..) => {
+                summary(format!("changed {path}"))
+            }
+        },
+    )
 }
 
 fn format_compact_diff(file_path: &str, original: &str, modified: &str, styled: bool) -> String {
@@ -458,8 +276,9 @@ fn format_create_preview(file_path: &str, content: &str, styled: bool) -> String
     output.trim_end().to_string()
 }
 
-fn format_unified_diff_preview(diff: &str, styled: bool) -> String {
-    let mut file_path = "";
+/// A unified diff, cut short. `file_path` is used when the diff names no file.
+fn format_unified_diff_preview(file_path: &str, diff: &str, styled: bool) -> String {
+    let mut file_path = file_path;
     let mut body = Vec::new();
 
     for line in diff.lines() {
@@ -627,46 +446,34 @@ fn truncate_tool_value(value: &str, max_chars: usize) -> String {
     truncated
 }
 
-fn agent_message_delta(line: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    if value.get("event").and_then(serde_json::Value::as_str) != Some("message") {
-        return None;
-    }
-    if !value
-        .get("delta")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
-        return None;
-    }
-    value
-        .get("text")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-}
-
-fn flush_message_buffer(rendered: &mut Vec<String>, message_buffer: &mut String) {
-    if message_buffer.trim().is_empty() {
-        message_buffer.clear();
-        return;
-    }
-    rendered.push(format!("  › {}", message_buffer.trim_end()));
-    message_buffer.clear();
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{render_agent_event_payload_styled, RenderedAgentEvent};
+    use super::{render_agent_activity, RenderedAgentEvent};
+    use codemod_agents::{AgentEvent, FileChange, FileChangeKind};
+    use serde_json::json;
+
+    fn line(activity: AgentEvent) -> String {
+        match render_agent_activity(&activity, false).expect("rendered") {
+            RenderedAgentEvent::Line(line) => console::strip_ansi_codes(&line).into_owned(),
+            RenderedAgentEvent::Fragment(_) => panic!("expected a line"),
+        }
+    }
 
     #[test]
-    fn delta_messages_render_as_fragments_without_repeating_prefix() {
-        let first = render_agent_event_payload_styled(
-            r#"{"agent":"claude-code","stream":"stdout","event":"message","text":"Ren","delta":true}"#,
+    fn delta_text_renders_as_fragments_without_repeating_prefix() {
+        let first = render_agent_activity(
+            &AgentEvent::Text {
+                text: "Ren".into(),
+                delta: true,
+            },
             false,
         )
         .expect("first fragment");
-        let second = render_agent_event_payload_styled(
-            r#"{"agent":"claude-code","stream":"stdout","event":"message","text":"amed to `calcom`.","delta":true}"#,
+        let second = render_agent_activity(
+            &AgentEvent::Text {
+                text: "amed to `calcom`.".into(),
+                delta: true,
+            },
             true,
         )
         .expect("second fragment");
@@ -677,70 +484,117 @@ mod tests {
         );
     }
 
-    #[test]
-    fn edit_tool_renders_compact_diff() {
-        let payload = serde_json::json!({
-            "agent": "claude-code",
-            "stream": "stderr",
-            "event": "tool_call",
-            "tool_name": "Edit",
-            "tool_params": {
-                "file_path": "package.json",
-                "old_string": "\"name\": \"calcom-monorepo\"",
-                "new_string": "\"name\": \"calcom\""
-            }
-        })
-        .to_string();
+    fn change(path: &str, kind: FileChangeKind) -> FileChange {
+        FileChange {
+            path: path.into(),
+            kind,
+            old: None,
+            new: None,
+            diff: None,
+        }
+    }
 
-        let rendered = render_agent_event_payload_styled(&payload, false).expect("rendered");
-        let RenderedAgentEvent::Line(line) = rendered else {
-            panic!("expected line");
-        };
-        assert!(line.contains("diff"));
+    /// A tool call by an agent whose tool names and input mean nothing here.
+    fn tool_call(changes: Vec<FileChange>) -> String {
+        line(AgentEvent::ToolCall {
+            id: None,
+            name: "some_agents_file_tool".into(),
+            input: json!({ "target": "package.json" }),
+            changes,
+        })
+    }
+
+    #[test]
+    fn a_replacement_renders_as_a_compact_diff() {
+        let line = tool_call(vec![FileChange {
+            old: Some("\"name\": \"calcom-monorepo\"".into()),
+            new: Some("\"name\": \"calcom\"".into()),
+            ..change("package.json", FileChangeKind::Update)
+        }]);
+        assert!(line.contains("diff package.json"), "{line}");
         assert!(line.contains("-\"name\": \"calcom-monorepo\""));
         assert!(line.contains("+\"name\": \"calcom\""));
     }
 
     #[test]
-    fn task_log_lines_coalesce_message_deltas() {
-        let lines = vec![
-            r#"{"agent":"claude-code","stream":"stdout","event":"message","text":"Ren","delta":true}"#.to_string(),
-            r#"{"agent":"claude-code","stream":"stdout","event":"message","text":"amed to `calcom`.","delta":true}"#.to_string(),
-            r#"{"agent":"claude-code","stream":"stderr","event":"tool_call","tool_name":"Read","tool_params":{"file_path":"package.json"}}"#.to_string(),
-        ];
+    fn written_and_created_files_render_with_their_size() {
+        let written = tool_call(vec![FileChange {
+            new: Some("a\nb\n".into()),
+            ..change("src/lib/new.ts", FileChangeKind::Write)
+        }]);
+        assert!(
+            written.contains("writes src/lib/new.ts (2 lines)"),
+            "{written}"
+        );
 
-        let rendered = super::render_task_log_lines(&lines);
-
-        assert_eq!(rendered[0], "  › Renamed to `calcom`.");
-        assert!(rendered[1].contains("Read"));
+        let created = tool_call(vec![FileChange {
+            new: Some("first line\n".into()),
+            ..change("new.ts", FileChangeKind::Create)
+        }]);
+        assert!(created.contains("creates new.ts (+1 lines)"), "{created}");
+        assert!(created.contains("+first line"), "{created}");
     }
 
     #[test]
-    fn codex_change_payload_renders_diff() {
-        let payload = serde_json::json!({
-            "agent": "codex",
-            "stream": "stdout",
-            "event": "tool_call",
-            "tool_name": "Edit",
-            "tool_params": {
-                "path": "package.json",
-                "files": 1,
-                "changes": [{
-                    "path": "package.json",
-                    "kind": "update",
-                    "old": "\"name\": \"calcom-monorepo\"",
-                    "new": "\"name\": \"calcom\""
-                }]
-            }
-        })
-        .to_string();
+    fn a_unified_diff_renders_as_given() {
+        let line = tool_call(vec![FileChange {
+            diff: Some("--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n-old\n+new\n".into()),
+            ..change("/work/x.ts", FileChangeKind::Update)
+        }]);
+        assert!(line.contains("diff x.ts"), "{line}");
+        assert!(line.contains("-old") && line.contains("+new"), "{line}");
+    }
 
-        let rendered = render_agent_event_payload_styled(&payload, false).expect("rendered");
-        let RenderedAgentEvent::Line(line) = rendered else {
-            panic!("expected line");
-        };
-        assert!(line.contains("diff"));
-        assert!(line.contains("-\"name\": \"calcom-monorepo\""));
-        assert!(line.contains("+\"name\": \"calcom\""));
+    #[test]
+    fn changes_without_content_and_lists_of_changes_render_as_a_summary() {
+        let deleted = tool_call(vec![change("old.ts", FileChangeKind::Delete)]);
+        assert!(deleted.contains("deletes old.ts"), "{deleted}");
+        let updated = tool_call(vec![change("a.ts", FileChangeKind::Update)]);
+        assert!(updated.contains("changed a.ts"), "{updated}");
+
+        let files = tool_call(vec![
+            change("a.ts", FileChangeKind::Update),
+            change("b.ts", FileChangeKind::Create),
+        ]);
+        assert!(files.contains("2 files, first a.ts"), "{files}");
+        let edits = tool_call(vec![
+            change("a.ts", FileChangeKind::Update),
+            change("a.ts", FileChangeKind::Update),
+        ]);
+        assert!(edits.contains("2 edits in a.ts"), "{edits}");
+    }
+
+    #[test]
+    fn a_tool_call_that_changes_no_file_renders_on_one_line() {
+        let line = line(AgentEvent::ToolCall {
+            id: None,
+            name: "Bash".into(),
+            input: json!({ "command": "ls" }),
+            changes: Vec::new(),
+        });
+        assert_eq!(line.trim(), "• Bash command=ls");
+    }
+
+    #[test]
+    fn failures_and_errors_render_and_successful_results_do_not() {
+        assert!(line(AgentEvent::ToolResult {
+            id: None,
+            output: "permission denied\nmore".into(),
+            is_error: true,
+        })
+        .contains("permission denied"));
+        assert!(render_agent_activity(
+            &AgentEvent::ToolResult {
+                id: None,
+                output: "ok".into(),
+                is_error: false,
+            },
+            false
+        )
+        .is_none());
+        assert!(line(AgentEvent::Error {
+            message: "rate limited".into()
+        })
+        .contains("rate limited"));
     }
 }

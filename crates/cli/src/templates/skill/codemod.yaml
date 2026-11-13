@@ -16,6 +16,6 @@ registry:
   access: "{access}"
   visibility: "{visibility}"
 
-workflow: "workflow.yaml"
+workflow: "workflow.ts"
 
 capabilities: []

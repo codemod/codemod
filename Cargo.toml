@@ -17,6 +17,9 @@ members = [
     "crates/language-python",
     "crates/semantic-factory",
     "crates/tree-sitter-loader",
+    "crates/workflow",
+    "crates/node",
+    "crates/agents",
 ]
 resolver = "2"
 
@@ -40,8 +43,9 @@ butterflow-models = { path = "crates/models" }
 butterflow-core = { path = "crates/core" }
 butterflow-state = { path = "crates/state" }
 butterflow-runners = { path = "crates/runners" }
-butterflow-scheduler = { path = "crates/scheduler" }
 codemod-sandbox = { path = "crates/codemod-sandbox" }
+codemod-workflow = { path = "crates/workflow" }
+codemod-agents = { path = "crates/agents" }
 codemod-telemetry = { path = "crates/telemetry" }
 codemod-mcp = { path = "crates/mcp" }
 testing-utils = { path = "crates/testing-utils" }

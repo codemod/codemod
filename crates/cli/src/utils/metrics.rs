@@ -10,7 +10,7 @@ fn count_metric_entries(metrics: &MetricsData) -> usize {
 /// Determine whether the user wants to view the report.
 ///
 /// - `--report` → always true
-/// - `--no-interactive` → always false
+/// - `--no-interactive`, or no terminal to ask on → always false
 /// - otherwise → prompt the user, mentioning collected metrics if any
 pub fn should_show_report(
     report_flag: bool,
@@ -21,7 +21,7 @@ pub fn should_show_report(
     if report_flag {
         return true;
     }
-    if no_interactive {
+    if !crate::utils::interactive::is_interactive(no_interactive) {
         return false;
     }
 
@@ -45,6 +45,20 @@ pub fn should_show_report(
         .with_help_message(&help_message)
         .prompt()
         .unwrap_or(false)
+}
+
+/// Print the metrics as one JSONL record (`{"event":"metrics",...}`), for
+/// `--format jsonl` runs, if any metrics were collected.
+pub fn print_metrics_jsonl(metrics: &MetricsData) {
+    if metrics.values().all(|entries| entries.is_empty()) {
+        return;
+    }
+    let record = serde_json::json!({
+        "event": "metrics",
+        "metrics": metrics,
+        "ts": chrono::Utc::now().to_rfc3339(),
+    });
+    println!("{record}");
 }
 
 /// Print metrics report to stdout if any metrics were collected

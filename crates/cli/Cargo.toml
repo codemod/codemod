@@ -16,6 +16,8 @@ butterflow-core = { workspace = true }
 butterflow-state = { workspace = true }
 butterflow-runners = { workspace = true }
 codemod-sandbox = { workspace = true }
+codemod-workflow = { workspace = true }
+codemod-agents = { workspace = true }
 codemod-telemetry = { workspace = true }
 codemod-mcp = { workspace = true }
 testing-utils = { workspace = true }
@@ -89,5 +91,3 @@ portable-pty = "0.9"
 
 [features]
 default = []
-docker = ["butterflow-models/docker", "butterflow-runners/docker"]
-podman = ["butterflow-models/podman", "butterflow-runners/podman"]

@@ -1,5 +1,5 @@
-import type { Codemod } from "codemod:ast-grep";
-import type Go from "codemod:ast-grep/langs/go";
+import type { Codemod } from "codemod/ast-grep";
+import type Go from "codemod/ast-grep/langs/go";
 
 const codemod: Codemod<Go> = async (root) => {
   const rootNode = root.root();

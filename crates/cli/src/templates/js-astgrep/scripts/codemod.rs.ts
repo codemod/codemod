@@ -1,5 +1,5 @@
-import type { Codemod } from "codemod:ast-grep";
-import type Rust from "codemod:ast-grep/langs/rust";
+import type { Codemod } from "codemod/ast-grep";
+import type Rust from "codemod/ast-grep/langs/rust";
 
 const codemod: Codemod<Rust> = async (root) => {
   const rootNode = root.root();

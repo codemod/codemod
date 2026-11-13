@@ -381,13 +381,7 @@ fn configured_skill_file_from_workflow(
             continue;
         }
 
-        let workflow = parse_workflow_file(&workflow_path).map_err(|error| {
-            anyhow!(
-                "Failed to parse workflow file {}: {error}",
-                workflow_path.display()
-            )
-        })?;
-        let install_skill_steps = collect_install_skill_steps(&workflow);
+        let install_skill_steps = install_skill_steps_of(&workflow_path)?;
         let exact_matches = install_skill_steps
             .iter()
             .filter(|install_skill| {
@@ -554,6 +548,10 @@ fn workflow_paths_with_manifest_hint(
             .map(|r| r.path)
             .collect())
     } else {
+        let typescript = package_path.join("workflow.ts");
+        if typescript.is_file() {
+            return Ok(vec![typescript]);
+        }
         Ok(vec![package_path.join(DEFAULT_WORKFLOW_FILE_NAME)])
     }
 }
@@ -567,7 +565,62 @@ fn workflow_behavior_summary_from_path_optional(
     workflow_behavior_summary_from_path(workflow_path)
 }
 
+/// Tasks that change something; a workflow with none of them only installs
+/// skills or asks for approvals.
+const EXECUTABLE_TASKS: &[&str] = &[
+    "forEachFile",
+    "shell",
+    "jssg",
+    "astGrep",
+    "codemod",
+    "agent",
+    "shard",
+];
+
+fn inspect_typescript(workflow_path: &Path) -> Result<codemod_workflow::Inspection> {
+    let source = std::fs::read_to_string(workflow_path)
+        .map_err(|error| anyhow!("Failed to read {}: {error}", workflow_path.display()))?;
+    codemod_workflow::inspect(&workflow_path.display().to_string(), &source).map_err(|error| {
+        anyhow!(
+            "Failed to parse workflow file {}: {error}",
+            workflow_path.display()
+        )
+    })
+}
+
+fn install_skill_steps_of(
+    workflow_path: &Path,
+) -> Result<Vec<butterflow_models::step::UseInstallSkill>> {
+    if codemod_workflow::is_typescript(workflow_path) {
+        return Ok(inspect_typescript(workflow_path)?
+            .install_skills
+            .into_iter()
+            .filter_map(|skill| {
+                serde_json::from_value(serde_json::json!({
+                    "package": skill.package,
+                    "path": skill.path,
+                }))
+                .ok()
+            })
+            .collect());
+    }
+    let workflow = parse_workflow_file(workflow_path).map_err(|error| {
+        anyhow!(
+            "Failed to parse workflow file {}: {error}",
+            workflow_path.display()
+        )
+    })?;
+    Ok(collect_install_skill_steps(&workflow))
+}
+
 fn workflow_behavior_summary_from_path(workflow_path: &Path) -> Result<WorkflowBehaviorSummary> {
+    if codemod_workflow::is_typescript(workflow_path) {
+        let inspection = inspect_typescript(workflow_path)?;
+        return Ok(WorkflowBehaviorSummary {
+            has_install_skill_steps: inspection.calls("installSkill"),
+            has_executable_steps: EXECUTABLE_TASKS.iter().any(|task| inspection.calls(task)),
+        });
+    }
     let workflow = parse_workflow_file(workflow_path).map_err(|error| {
         anyhow!(
             "Failed to parse workflow file {}: {error}",
