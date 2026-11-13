@@ -853,14 +853,17 @@ fn property(key: &str) -> String {
     }
 }
 
-/// Whether `text` uses `word` as an identifier.
+/// Whether `text` uses `word` as an identifier. Text inside generated string
+/// literals counts too, which only ever declares a name that goes unused.
 fn mentions(text: &str, word: &str) -> bool {
     text.match_indices(word).any(|(at, _)| {
-        let before = text[..at].chars().next_back();
+        let before = &text[..at];
         let after = text[at + word.len()..].chars().next();
         let boundary =
             |c: Option<char>| !c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
-        boundary(before) && boundary(after) && before != Some('.')
+        // `a.word` is a property; `...word` spreads the identifier.
+        let property = before.ends_with('.') && !before.ends_with("...");
+        boundary(before.chars().next_back()) && boundary(after) && !property
     })
 }
 

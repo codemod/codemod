@@ -14,8 +14,8 @@ use codemod_sandbox::MetricsData;
 use codemod_workflow::events::{CollectEvents, Event};
 use codemod_workflow::interaction::NonInteractive;
 use codemod_workflow::{
-    load_workflow, Ending, Engine, MemoryStore, RunReport, Services, StartRequest, StepStatus,
-    Summary, TestPlan,
+    load_workflow, Ending, Engine, MemoryStore, RunReport, Services, StartRequest, Summary,
+    TestPlan,
 };
 use serde::Serialize;
 use serde_json::{json, Map, Value};
@@ -111,16 +111,6 @@ fn logs(events: Vec<Event>) -> Vec<LogLine> {
 }
 
 impl CaseRun {
-    pub fn status(&self) -> &'static str {
-        match self.report.ending {
-            Ending::Succeeded(_) => "succeeded",
-            Ending::Failed(_) => "failed",
-            Ending::Canceled => "canceled",
-            Ending::AwaitingApproval(_) => "awaiting-approval",
-            Ending::Stopped(_) => "stopped",
-        }
-    }
-
     /// Why the run did not finish, for messages.
     pub fn problem(&self) -> Option<String> {
         match &self.report.ending {
@@ -133,43 +123,13 @@ impl CaseRun {
         }
     }
 
-    /// The result the `codemod/testing` helpers read.
+    /// The result the `codemod/testing` helpers read: the run's report, plus
+    /// what the run logged and measured.
     pub fn to_json(&self) -> Value {
-        let (output, error, awaiting, stopped_at) = match &self.report.ending {
-            Ending::Succeeded(output) => (output.clone(), None, None, None),
-            Ending::Failed(error) => (Value::Null, Some(error.clone()), None, None),
-            Ending::Canceled => (Value::Null, None, None, None),
-            Ending::AwaitingApproval(message) => (Value::Null, None, Some(message.clone()), None),
-            Ending::Stopped(label) => (Value::Null, None, None, Some(label.clone())),
-        };
-        let steps: Vec<Value> = self
-            .report
-            .steps
-            .iter()
-            .map(|step| {
-                json!({
-                    "position": step.position,
-                    "label": step.label,
-                    "status": match step.status {
-                        StepStatus::Succeeded => "succeeded",
-                        StepStatus::Failed => "failed",
-                    },
-                    "result": step.result,
-                    "error": step.error,
-                    "given": step.given,
-                })
-            })
-            .collect();
-        json!({
-            "status": self.status(),
-            "output": output,
-            "error": error,
-            "awaiting": awaiting,
-            "stoppedAt": stopped_at,
-            "steps": steps,
-            "logs": self.logs,
-            "metrics": self.metrics,
-        })
+        let mut report = self.report.to_json();
+        report["logs"] = json!(self.logs);
+        report["metrics"] = json!(self.metrics);
+        report
     }
 }
 

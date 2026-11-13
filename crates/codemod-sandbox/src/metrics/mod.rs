@@ -203,9 +203,13 @@ impl MetricAtom {
         cardinality: Opt<rquickjs::Value<'js>>,
         amount: Opt<rquickjs::Value<'js>>,
     ) -> Result<()> {
+        // A whole amount of at least 0; anything that is not a number counts 1.
         let increment_amount = match amount.0 {
-            Some(val) if val.is_int() => val.as_int().unwrap_or(1) as u64,
-            Some(val) if val.is_float() => val.as_float().unwrap_or(1.0) as u64,
+            Some(val) if val.is_int() => val.as_int().unwrap_or(1).max(0) as u64,
+            Some(val) if val.is_float() => match val.as_float() {
+                Some(amount) if amount.is_finite() => amount.max(0.0) as u64,
+                _ => 1,
+            },
             _ => 1,
         };
 
@@ -222,7 +226,8 @@ impl MetricAtom {
                     if value.is_undefined() || value.is_null() {
                         continue;
                     }
-                    let value_str: String = value.get()?;
+                    // As `String(value)`: numbers and booleans are fine as labels.
+                    let value_str = value.get::<rquickjs::Coerced<String>>()?.0;
                     pairs.push((key, value_str));
                 }
                 pairs

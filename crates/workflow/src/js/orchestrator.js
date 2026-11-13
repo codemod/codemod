@@ -6,15 +6,23 @@
 //   history(): StepRecord[]               steps recorded by earlier runs
 //   record(entry, ms)                     persist one step's outcome
 //   event(event)                          report step started / replayed
-//   canceled(): boolean                   whether the run was asked to stop
+//   canceled(): boolean                   whether a step about to start must not,
+//                                         because the run was asked to stop
 //   start(request): Promise<outcome>      run a task; rejects with { name, message }
 //   evaluate(kind, expression, scope)     evaluate a workflow.yaml `${{ }}` expression
 //   now(): number                         the real time, for step records
 //   advanceClock(ms)                      move the body's clock forward
 //   testPlan(): { until?, given? } | null when the run is a test
 //   stop()                                the test's `until` step has started
+//   wake?()                               a replayed step waits for `replayNext()`
 //   callbackId?(fn): string               identifies a callback given as a function;
 //                                         hosts without it need the build to extract callbacks
+//
+// The host drives two more things, on the object `createRuntime` returns:
+//   replayNext(): boolean   settle the next replayed step; call it whenever the
+//                           workflow has nothing left to run, until it is false
+//   close()                 the run is ending: no step starts from here on
+//   isClosed(): boolean     whether steps issued now would never start
 
 export class NondeterminismError extends Error {
   constructor(message) {
@@ -171,7 +179,12 @@ export function createRuntime(host) {
   const { callbackOf } = tasks;
 
   const recorded = new Map();
-  for (const entry of host.history()) recorded.set(entry.position, entry);
+  // Steps are numbered in the order they finish, across executions of the run.
+  let nextSeq = 0;
+  for (const entry of host.history()) {
+    recorded.set(entry.position, entry);
+    if (typeof entry.seq === "number") nextSeq = Math.max(nextSeq, entry.seq + 1);
+  }
 
   const state = new Map();
   let nextPosition = 0;
@@ -180,7 +193,34 @@ export function createRuntime(host) {
   // result (`given`), both matched by label.
   const plan = host.testPlan() ?? {};
   const given = new Map(Object.entries(plan.given ?? {}));
-  let stopped = false;
+
+  // Once closed, no step starts: steps issued from then on never settle. A
+  // run closes when a test's `until` step starts, when a step is canceled or
+  // waits for an approval, and when the host ends the run.
+  let closed = false;
+
+  // Recorded steps the body has issued again, waiting to settle. They settle
+  // one at a time in the order they finished when they ran, so the body sees
+  // state, the clock and promise races as it did then.
+  const replaying = [];
+
+  function replayNext() {
+    if (closed || replaying.length === 0) return false;
+    let next = 0;
+    for (let i = 1; i < replaying.length; i++) {
+      if (replaying[i].order < replaying[next].order) next = i;
+    }
+    replaying.splice(next, 1)[0].settle();
+    return true;
+  }
+
+  function close() {
+    closed = true;
+  }
+
+  function isClosed() {
+    return closed;
+  }
 
   // The body's clock only moves when a step finishes, to the time recorded
   // for it, so Date.now() in the body gives the same answer on every replay.
@@ -220,6 +260,31 @@ export function createRuntime(host) {
 
   function stateSnapshot() {
     return Object.fromEntries(state);
+  }
+
+  // The body runs alone, so a lock there has nothing to wait for; steps and
+  // callbacks get the real one from their own runtime.
+  function acquireLock(_name) {
+    return () => {};
+  }
+
+  // Step outputs are kept for the transforms that still set them; nothing in
+  // a workflow reads them back but these functions.
+  const stepOutputs = new Map();
+  const outputKey = (stepId, name) => JSON.stringify([stepId, name]);
+
+  function setStepOutput(name, value) {
+    stepOutputs.set(outputKey("", name), String(value));
+  }
+
+  function getStepOutput(stepId, name) {
+    return stepOutputs.get(outputKey(stepId, name)) ?? null;
+  }
+
+  function getOrSetStepOutput(stepId, name, value) {
+    const key = outputKey(stepId, name);
+    if (!stepOutputs.has(key)) stepOutputs.set(key, String(value));
+    return stepOutputs.get(key);
   }
 
   /** Evaluate a workflow.yaml `${{ }}` expression; used by translated workflows. */
@@ -271,16 +336,18 @@ export function createRuntime(host) {
 
     const name = label ?? defaultLabel(position, content);
     const key = canonical(content);
-    // Steps started after a test's `until` step never run, and never settle.
-    if (stopped) return new Promise(() => {});
+    if (closed) return new Promise(() => {});
     if (plan.until !== undefined && name === plan.until) {
-      stopped = true;
+      closed = true;
       host.stop();
     }
     if (given.has(name)) {
       const result = given.get(name);
       host.event({ type: "stepReplayed", position, label: name });
-      host.record({ position, label: name, key, status: "succeeded", result, given: true }, 0);
+      host.record(
+        { position, label: name, key, status: "succeeded", result, given: true, seq: nextSeq++ },
+        0,
+      );
       return JSON.parse(JSON.stringify(result ?? null));
     }
     const prior = recorded.get(position);
@@ -290,15 +357,30 @@ export function createRuntime(host) {
           `step #${position} ('${name}') differs from the recorded run; the workflow changed before this step, so its recorded result cannot be reused`,
         );
       }
-      applyState(prior.state);
-      settleClock(prior);
-      host.event({ type: "stepReplayed", position, label: name });
-      return prior.result;
+      return new Promise((resolve) => {
+        replaying.push({
+          // Steps recorded before finishing order was kept replay in the
+          // order they were issued.
+          order: prior.seq ?? prior.position,
+          settle() {
+            applyState(prior.state);
+            settleClock(prior);
+            host.event({ type: "stepReplayed", position, label: name });
+            resolve(prior.result);
+          },
+        });
+        host.wake?.();
+      });
     }
 
-    if (host.canceled()) throw new CanceledError();
+    if (host.canceled()) {
+      closed = true;
+      throw new CanceledError();
+    }
     host.event({ type: "stepStarted", position, label: name });
     const started = host.now();
+    const record = (entry) =>
+      host.record({ position, label: name, key, seq: nextSeq++, ...entry }, host.now() - started);
     let result;
     let changes = null;
     try {
@@ -313,19 +395,25 @@ export function createRuntime(host) {
       changes = outcome.state ?? null;
     } catch (cause) {
       const error = asError(cause);
-      if (error instanceof CanceledError || error instanceof AwaitingApprovalError) throw error;
-      host.record(
-        { position, label: name, key, status: "failed", error: messageOf(error) },
-        host.now() - started,
-      );
+      // A step that was canceled or waits for an approval runs again when
+      // the run is resumed; nothing else starts in this execution.
+      const interrupted =
+        error instanceof CanceledError
+          ? "canceled"
+          : error instanceof AwaitingApprovalError
+            ? "awaiting-approval"
+            : null;
+      if (interrupted) {
+        closed = true;
+        record({ status: interrupted, error: messageOf(error) });
+        throw error;
+      }
+      record({ status: "failed", error: messageOf(error) });
       throw new StepError(name, error);
     }
     applyState(changes);
     const finishedAt = host.now();
-    host.record(
-      { position, label: name, key, status: "succeeded", result, state: changes, finishedAt },
-      finishedAt - started,
-    );
+    record({ status: "succeeded", result, state: changes, finishedAt });
     settleClock({ finishedAt });
     return result;
   }
@@ -358,7 +446,21 @@ export function createRuntime(host) {
   }
 
   const { callbackOf: _, ...builders } = tasks;
-  return { ...builders, getState, setState, unsetState, __evaluate, step };
+  return {
+    ...builders,
+    getState,
+    setState,
+    unsetState,
+    acquireLock,
+    setStepOutput,
+    getStepOutput,
+    getOrSetStepOutput,
+    __evaluate,
+    step,
+    replayNext,
+    close,
+    isClosed,
+  };
 }
 
 function withoutUndefined(value) {
@@ -456,7 +558,8 @@ function sortKeys(value) {
   return value;
 }
 
-function freeze(value) {
+/** Freeze a JSON value, all the way down. */
+export function freeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     Object.freeze(value);
     for (const key of Object.keys(value)) freeze(value[key]);
@@ -464,11 +567,69 @@ function freeze(value) {
   return value;
 }
 
+/**
+ * An error as a step's failure says it. Changing a captured value or a step
+ * result fails as a TypeError that does not say why; the hint does.
+ */
+export function describeError(error) {
+  if (!error || typeof error !== "object") return String(error);
+  let message = `${error.name || "Error"}: ${error.message}`;
+  if (
+    error instanceof TypeError &&
+    /extensible|read-only|read only|frozen|non-writable/i.test(error.message)
+  ) {
+    message += " (captured values and step results are frozen; copy one before changing it)";
+  }
+  return message;
+}
+
+/**
+ * The `file` a `forEachFile` callback gets, and the effects it records on it:
+ * `{ op: "write", text }`, `{ op: "rename", to }` and `{ op: "delete" }`.
+ * After `close()`, when the callback has finished, the file takes no more.
+ */
+export function fileHandle(path, text, language) {
+  const effects = [];
+  let open = true;
+  const guard = (name) => {
+    if (!open) throw new Error(`file.${name}() was called after the callback finished`);
+  };
+  const file = Object.freeze({
+    path,
+    text,
+    language,
+    write(next) {
+      guard("write");
+      if (typeof next !== "string") throw new TypeError("file.write(text) expects a string");
+      effects.push({ op: "write", text: next });
+    },
+    rename(to) {
+      guard("rename");
+      if (typeof to !== "string" || to === "") {
+        throw new TypeError("file.rename(path) expects a non-empty path");
+      }
+      effects.push({ op: "rename", to });
+    },
+    delete() {
+      guard("delete");
+      effects.push({ op: "delete" });
+    },
+  });
+  return {
+    file,
+    effects,
+    close() {
+      open = false;
+    },
+  };
+}
+
 function messageOf(error) {
   return error && typeof error === "object" && "message" in error ? error.message : String(error);
 }
 
-function checkJson(value, path, seen = new Set()) {
+/** Throw a TypeError naming the first part of `value` that is not JSON. */
+export function checkJson(value, path, seen = new Set()) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return;
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new TypeError(`${path} is ${value}, which is not JSON`);

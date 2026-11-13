@@ -47,7 +47,8 @@ pub trait Interaction: Send + Sync {
 /// Answers without asking: manual approvals are deferred, capability
 /// requests denied, and shell commands and pull requests allowed.
 pub struct NonInteractive {
-    /// Treat every approval as given (`--approve`, or pro dry runs).
+    /// Treat approvals as given (`--approve`, or pro dry runs). Capabilities
+    /// are the exception: they are granted up front, never by a blanket yes.
     pub approve_all: bool,
 }
 
@@ -57,13 +58,53 @@ impl Interaction for NonInteractive {
     }
 
     fn approve(&self, approval: &Approval) -> Decision {
-        if self.approve_all {
-            return Decision::Approved;
-        }
         match approval {
-            Approval::Manual { .. } => Decision::Deferred,
             Approval::Capabilities { .. } => Decision::Denied,
-            Approval::ShellCommand { .. } | Approval::PullRequest { .. } => Decision::Approved,
+            Approval::Manual { .. } if !self.approve_all => Decision::Deferred,
+            Approval::Manual { .. }
+            | Approval::ShellCommand { .. }
+            | Approval::PullRequest { .. } => Decision::Approved,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capabilities() -> Approval {
+        Approval::Capabilities {
+            modules: vec!["child_process".into()],
+        }
+    }
+
+    #[test]
+    fn a_blanket_approval_does_not_grant_capabilities() {
+        let all = NonInteractive { approve_all: true };
+        assert_eq!(all.approve(&capabilities()), Decision::Denied);
+        assert_eq!(
+            all.approve(&Approval::Manual {
+                message: "go?".into()
+            }),
+            Decision::Approved
+        );
+    }
+
+    #[test]
+    fn unattended_runs_defer_manual_approvals() {
+        let none = NonInteractive { approve_all: false };
+        assert_eq!(
+            none.approve(&Approval::Manual {
+                message: "go?".into()
+            }),
+            Decision::Deferred
+        );
+        assert_eq!(none.approve(&capabilities()), Decision::Denied);
+        assert_eq!(
+            none.approve(&Approval::ShellCommand {
+                command: "ls".into()
+            }),
+            Decision::Approved
+        );
     }
 }

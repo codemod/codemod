@@ -30,18 +30,31 @@ pub fn with_combined_scan<T>(
     let combined_scan = CombinedScan::new(rule_configs.iter().collect());
     let rule_refs: Vec<&RuleConfig<SupportLang>> = rule_configs.iter().collect();
 
-    let original_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {
-        // Silently ignore panics during ast-grep scanning
-    }));
-    let result = f(&CombinedScanWithRuleConfigs {
+    f(&CombinedScanWithRuleConfigs {
         combined_scan,
         rule_refs,
-    })?;
-    // Restore the original panic hook
-    panic::set_hook(original_hook);
+    })
+}
 
-    Ok(result)
+thread_local! {
+    /// Set while this thread scans a file: a panic then is reported as that
+    /// file's error, not printed.
+    static SCANNING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Keep panics from scanning threads off the terminal. The hook is installed
+/// once and only quiets threads that are scanning, so steps running at the
+/// same time do not fight over it.
+fn quiet_scan_panics() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let previous = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            if !SCANNING.with(std::cell::Cell::get) {
+                previous(info);
+            }
+        }));
+    });
 }
 
 pub fn scan_file_with_combined_scan(
@@ -61,16 +74,24 @@ pub fn scan_file_with_combined_scan(
     let language = SupportLang::from_str(language_str)
         .map_err(|_| AstGrepError::Language(format!("Language not supported: {language_str}")))?;
 
-    let doc = StrDoc::new(&content, language);
-    let root = AstGrep::doc(doc);
-
-    let scan_result = scan_content(
-        &root,
-        &content,
-        file_path.to_string_lossy().to_string(),
-        combined_scan,
-        apply_fixes,
-    )?;
+    // Parsing and matching can panic on input the grammar does not expect:
+    // that is this file's failure, not the step's.
+    quiet_scan_panics();
+    SCANNING.with(|scanning| scanning.set(true));
+    let scanned = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        let root = AstGrep::doc(StrDoc::new(&content, language));
+        scan_content(
+            &root,
+            &content,
+            file_path.to_string_lossy().to_string(),
+            combined_scan,
+            apply_fixes,
+        )
+    }));
+    SCANNING.with(|scanning| scanning.set(false));
+    let scan_result = scanned.map_err(|_| {
+        AstGrepError::Config(format!("ast-grep could not scan '{}'", file_path.display()))
+    })??;
 
     let file_modified = scan_result.file_modified;
     let new_content = if file_modified {

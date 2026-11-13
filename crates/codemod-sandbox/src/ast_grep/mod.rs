@@ -376,13 +376,24 @@ fn jssg_transform_rjs<'js>(
     // Validate: file path must resolve within the target directory
     validate_path_within_target(&ctx, file_path, "jssgTransform()")?;
 
-    // Read the file
-    let content = std::fs::read_to_string(file_path).map_err(|e| {
+    // Read the file: as the step has it so far when the caller keeps its
+    // unwritten files, else from disk.
+    let read_error = |e: std::io::Error| {
         Exception::throw_message(
             &ctx,
             &format!("Failed to read file '{}': {}", path_to_file, e),
         )
-    })?;
+    };
+    let (content, taken) = match &file_changes.pending {
+        Some(pending) => {
+            let (content, taken) = pending.take(file_path).map_err(read_error)?;
+            (content, Some(taken))
+        }
+        None => (
+            std::fs::read_to_string(file_path).map_err(read_error)?,
+            None,
+        ),
+    };
 
     // Parse with language and filename
     let target_directory = ctx
@@ -445,6 +456,12 @@ fn jssg_transform_rjs<'js>(
             }
             _ => None,
         };
+
+        // The next transform of this file starts from this one's result.
+        if let (Some(taken), Some(content)) = (&taken, &return_content) {
+            taken.set(content.clone());
+        }
+        drop(taken);
 
         // Push the file change to the shared accumulator instead of writing to disk
         let mut changes = file_changes.changes.lock().map_err(|e| {

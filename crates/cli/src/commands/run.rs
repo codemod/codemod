@@ -7,9 +7,6 @@ use crate::pro_dry_run::{notify_pro_dry_run_required, ProDryRunReason};
 use crate::progress_bar::download_progress_bar;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{default_workflow_path, select_workflow_path};
-use crate::utils::resolve_capabilities::{
-    prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
-};
 use crate::TelemetrySenderMutex;
 use crate::CLI_VERSION;
 use anyhow::{anyhow, Result};
@@ -31,8 +28,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 mod llm_usage;
-
-const WORKFLOW_FILE_NAME: &str = "workflow.yaml";
 
 fn telemetry_codemod_name(
     registry_metadata: Option<&RegistryPackageMetadata>,
@@ -112,29 +107,6 @@ pub struct Command {
     #[arg(long = "target", short = 't')]
     target_path: Option<PathBuf>,
 
-    /// Allow fs access
-    #[arg(long)]
-    allow_fs: bool,
-
-    /// Allow fetch access
-    #[arg(long)]
-    allow_fetch: bool,
-
-    /// Allow child process access
-    #[arg(long)]
-    allow_child_process: bool,
-
-    /// No interactive mode
-    #[arg(long)]
-    no_interactive: bool,
-
-    /// Coding agent to use for AI steps (e.g. claude, codex, aider)
-    #[arg(long)]
-    agent: Option<String>,
-    /// Execute install-skill steps when running in non-interactive mode
-    #[arg(long)]
-    install_skill: bool,
-
     /// Disable colored diff output in dry-run mode
     #[arg(long)]
     no_color: bool,
@@ -143,10 +115,6 @@ pub struct Command {
     #[arg(long)]
     report: bool,
 
-    /// Output format: "text" (default) or "jsonl" for structured logging
-    #[arg(long, default_value_t = OutputFormat::Text)]
-    format: OutputFormat,
-
     /// Write provider-reported nested LLM usage JSON to this path
     #[arg(long, value_name = "PATH")]
     llm_usage_output: Option<PathBuf>,
@@ -154,6 +122,22 @@ pub struct Command {
     /// Name of the workflow to run when the package defines multiple workflows
     #[arg(long, value_name = "NAME")]
     workflow: Option<String>,
+
+    #[command(flatten)]
+    flags: crate::workflow_exec::RunFlags,
+}
+
+/// Removes a directory when dropped.
+struct RemoveWhenDone(Option<PathBuf>);
+
+impl Drop for RemoveWhenDone {
+    fn drop(&mut self) {
+        if let Some(dir) = &self.0 {
+            if let Err(e) = std::fs::remove_dir_all(dir) {
+                debug!("Failed to remove cached pro codemod: {}", e);
+            }
+        }
+    }
 }
 
 impl Command {
@@ -258,13 +242,20 @@ pub async fn handler(
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
     let codemod_config_path = resolved_package.package_dir.join("codemod.yaml");
+    // A package that may only be dry-run is not kept after this command,
+    // however it ends.
+    let _remove_package = RemoveWhenDone(
+        resolved_package
+            .dry_run_only
+            .then(|| resolved_package.package_dir.clone()),
+    );
     let codemod_config = load_codemod_manifest(&codemod_config_path)?;
 
     let (workflow_path, selected_workflow_name) = match select_workflow_for_run(
         &resolved_package.package_dir,
         codemod_config.as_ref(),
         args.workflow.as_deref(),
-        args.no_interactive,
+        args.flags.no_interactive,
     ) {
         Ok(selected) => selected,
         Err(error) => {
@@ -292,35 +283,23 @@ pub async fn handler(
     let pro_dry_run_required = dry_run_only_dependency.is_some();
     if pro_dry_run_required && !args.dry_run {
         if resolved_package.dry_run_only {
-            notify_pro_dry_run_required(ProDryRunReason::TopLevelCodemod, args.no_interactive);
+            notify_pro_dry_run_required(
+                ProDryRunReason::TopLevelCodemod,
+                args.flags.no_interactive,
+            );
         } else if let Some(source) = dry_run_only_dependency.as_deref() {
             notify_pro_dry_run_required(
                 ProDryRunReason::BundledChild { source },
-                args.no_interactive,
+                args.flags.no_interactive,
             );
         }
     }
     let dry_run = args.dry_run || pro_dry_run_required;
 
-    let capabilities = resolve_capabilities(
-        ResolveCapabilitiesArgs {
-            allow_fs: args.allow_fs,
-            allow_fetch: args.allow_fetch,
-            allow_child_process: args.allow_child_process,
-        },
-        codemod_config,
-        None,
-    );
-    let cli_granted = crate::commands::workflow::run::cli_granted_capabilities(
-        args.allow_fs,
-        args.allow_fetch,
-        args.allow_child_process,
-    );
-    let capabilities =
-        prompt_capabilities(capabilities, &cli_granted, args.no_interactive, dry_run);
+    let capabilities = args.flags.capabilities(codemod_config, None, dry_run);
 
     if !dry_run {
-        crate::dirty_git_check::dirty_check(args.no_interactive)(
+        crate::dirty_git_check::dirty_check(args.flags.no_interactive)(
             &target_path,
             args.allow_dirty,
             None,
@@ -343,18 +322,12 @@ pub async fn handler(
         name: Some(canonical_codemod_name.clone()),
         dry_run,
         settings: crate::workflow_exec::ExecSettings {
-            no_interactive: args.no_interactive,
-            format: args.format,
-            capabilities,
-            agent: args.agent.clone(),
-            registry: Some(registry_client.clone()),
-            install_skill: (!args.no_interactive || args.install_skill).then(|| {
-                crate::commands::package_skill::create_install_skill_executor(telemetry.clone())
-            }),
             approve_all: pro_dry_run_required,
-            managed_git: false,
             skip_shard_steps: pro_dry_run_required,
             nested_observer: Some(run_telemetry.nested_observer(telemetry.clone())),
+            ..args
+                .flags
+                .settings(capabilities, registry_client.clone(), &telemetry)
         },
     })
     .await;
@@ -383,9 +356,6 @@ pub async fn handler(
                 0,
             )
             .await;
-            if resolved_package.dry_run_only {
-                let _ = std::fs::remove_dir_all(&resolved_package.package_dir);
-            }
             send_failure_event(&telemetry, &canonical_codemod_name, &error_msg).await;
             return Err(e);
         }
@@ -403,9 +373,6 @@ pub async fn handler(
             duration_ms,
         )
         .await;
-        if resolved_package.dry_run_only {
-            let _ = std::fs::remove_dir_all(&resolved_package.package_dir);
-        }
         send_failure_event(&telemetry, &canonical_codemod_name, &error_msg).await;
         return Err(anyhow!(error_msg));
     }
@@ -427,7 +394,7 @@ pub async fn handler(
     )
     .await;
 
-    if args.format == OutputFormat::Text {
+    if args.flags.format == OutputFormat::Text {
         if dry_run {
             print_dry_run_summary(files_modified, files_unmodified, files_with_errors);
         } else {
@@ -443,7 +410,7 @@ pub async fn handler(
 
     if crate::utils::metrics::should_show_report(
         args.report,
-        args.no_interactive,
+        args.flags.no_interactive,
         &metrics_data,
         files_modified,
     ) {
@@ -468,16 +435,10 @@ pub async fn handler(
         ));
 
         crate::report_server::serve_report(report).await?;
-    } else if args.format == OutputFormat::Text {
+    } else if args.flags.format == OutputFormat::Text {
         crate::utils::metrics::print_metrics(&metrics_data);
     } else {
         crate::utils::metrics::print_metrics_jsonl(&metrics_data);
-    }
-
-    if resolved_package.dry_run_only {
-        if let Err(e) = std::fs::remove_dir_all(&resolved_package.package_dir) {
-            debug!("Failed to remove cached pro codemod: {}", e);
-        }
     }
 
     Ok(())
@@ -519,7 +480,8 @@ fn workflow_path_for_run(
             "Cannot select a named workflow without a codemod.yaml manifest."
         ));
     }
-    Ok(package_dir.join(WORKFLOW_FILE_NAME))
+    butterflow_core::package_workflows::locate_workflow(package_dir, None)
+        .map_err(|error| anyhow!(error))
 }
 
 fn select_workflow_for_run(
@@ -540,8 +502,12 @@ fn select_workflow_for_run(
 
     let entries = manifest.resolved_workflows()?;
     if entries.len() == 1 {
+        // One workflow: the file `workflow run` would pick too, which for a
+        // manifest that names none is the first default file present.
         let entry = entries.into_iter().next().unwrap();
-        return Ok((package_dir.join(&entry.path), Some(entry.name)));
+        let path = butterflow_core::package_workflows::locate_workflow(package_dir, None)
+            .map_err(|error| anyhow!(error))?;
+        return Ok((path, Some(entry.name)));
     }
 
     let stdin_is_tty = io::stdin().is_terminal();
@@ -668,7 +634,7 @@ async fn run_legacy_codemod(args: &Command, disable_analytics: bool) -> Result<(
     if args.allow_dirty {
         legacy_args.push("--skip-git-check".to_string());
     }
-    if args.no_interactive {
+    if args.flags.no_interactive {
         legacy_args.push("--no-interactive".to_string());
     }
     if disable_analytics {

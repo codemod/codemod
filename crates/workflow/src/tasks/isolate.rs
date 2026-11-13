@@ -52,7 +52,11 @@ impl StepIsolates {
         WorkerOptions {
             capabilities: run.services.capabilities.clone(),
             resolver: Arc::clone(&self.resolver),
-            modules: Vec::new(),
+            // The callback prelude takes its helpers from the orchestrator.
+            modules: vec![(
+                crate::run::ORCHESTRATOR_MODULE.to_string(),
+                crate::run::ORCHESTRATOR_JS.to_string(),
+            )],
             metrics: self.metrics.clone(),
             shared_state: self.shared_state.clone(),
             llm_request_handler: None,
@@ -60,7 +64,7 @@ impl StepIsolates {
                 if event.kind != RuntimeEventKind::SetCurrentUnit {
                     events.emit(Event::StepLog {
                         position,
-                        line: event.message,
+                        line: butterflow_core::jssg_runner::format_runtime_event(&event),
                     });
                 }
             })),
@@ -74,16 +78,7 @@ impl StepIsolates {
     /// State the step's code set or removed (`null`), compared with the
     /// state the step started with.
     pub fn state_changes(&self) -> BTreeMap<String, Value> {
-        let mut changes = BTreeMap::new();
-        for (key, value) in self.shared_state.get_persistable() {
-            if self.initial_state.get(&key) != Some(&value) {
-                changes.insert(key, value);
-            }
-        }
-        for key in self.shared_state.get_removals() {
-            changes.insert(key, Value::Null);
-        }
-        changes
+        self.shared_state.changes_since(&self.initial_state)
     }
 
     /// Metrics the step's code recorded, also added to the run summary.

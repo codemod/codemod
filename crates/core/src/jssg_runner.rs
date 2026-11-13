@@ -12,7 +12,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::{
     codemod_lang::CodemodLang, execution_engine::execute_codemod_with_quickjs,
     extract_selector_with_quickjs, CodemodOutput, ExecutionResult, JssgExecutionOptions,
-    SelectorEngineOptions,
+    PendingFiles, SelectorEngineOptions,
 };
 use codemod_sandbox::sandbox::errors::{ExecutionError, RuntimeError};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
@@ -183,7 +183,11 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
 
     let metrics = MetricsContext::new();
     let shared_state = SharedStateContext::with_initial_state(request.initial_state.clone());
-    let changes = Mutex::new(Vec::<JssgFileChange>::new());
+    // Every file's text goes through here, so a file changed more than once
+    // (by its own transform, and by other files' `jssgTransform` calls) ends
+    // up with all of the changes.
+    let pending = PendingFiles::default();
+    let renames = Mutex::new(BTreeMap::<PathBuf, PathBuf>::new());
     let failures = Mutex::new(Vec::<(PathBuf, String)>::new());
     let matched = Mutex::new(Vec::<PathBuf>::new());
     let unmodified = AtomicUsize::new(0);
@@ -201,7 +205,7 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
         {
             return;
         }
-        let Ok(content) = std::fs::read_to_string(file_path) else {
+        let Ok((content, taken)) = pending.take(file_path) else {
             skipped.fetch_add(1, Ordering::SeqCst);
             return;
         };
@@ -248,6 +252,7 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             test_mode: false,
             dry_run: request.dry_run,
             target_directory: &target,
+            pending_files: Some(pending.clone()),
         }));
         if let Some(on_log) = &request.on_log {
             let logs = std::mem::take(&mut *logs.lock().unwrap());
@@ -257,15 +262,16 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
         }
         match result {
             Ok(CodemodOutput { primary, secondary }) => {
-                match &primary {
+                match primary {
                     ExecutionResult::Modified(modified) => {
                         matched.lock().unwrap().push(file_path.to_path_buf());
-                        changes.lock().unwrap().push(JssgFileChange {
-                            path: file_path.to_path_buf(),
-                            original: content.clone(),
-                            content: modified.content.clone(),
-                            rename_to: modified.rename_to.clone(),
-                        });
+                        taken.set(modified.content);
+                        if let Some(to) = modified.rename_to {
+                            renames
+                                .lock()
+                                .unwrap()
+                                .insert(taken.path().to_path_buf(), to);
+                        }
                     }
                     ExecutionResult::Unmodified => {
                         if selector.is_some() {
@@ -277,15 +283,14 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
                         skipped.fetch_add(1, Ordering::SeqCst);
                     }
                 }
+                // What `jssgTransform` made of other files is in `pending`;
+                // only their renames are left to note.
                 for change in secondary {
                     if let ExecutionResult::Modified(modified) = change.result {
-                        let original = std::fs::read_to_string(&change.path).unwrap_or_default();
-                        changes.lock().unwrap().push(JssgFileChange {
-                            path: change.path,
-                            original,
-                            content: modified.content,
-                            rename_to: modified.rename_to,
-                        });
+                        if let Some(to) = modified.rename_to {
+                            let path = change.path.canonicalize().unwrap_or(change.path);
+                            renames.lock().unwrap().insert(path, to);
+                        }
                     }
                 }
             }
@@ -302,10 +307,28 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     });
     walk.map_err(|e| e.to_string())?;
 
-    outcome.changes = changes.into_inner().unwrap();
-    outcome
-        .changes
-        .sort_by(|a, b| a.path.cmp(&b.path).then(a.rename_to.cmp(&b.rename_to)));
+    let mut renames = renames.into_inner().unwrap();
+    for (path, original, content) in pending.changed() {
+        outcome.changes.push(JssgFileChange {
+            rename_to: renames.remove(&path),
+            path,
+            original,
+            content,
+        });
+    }
+    // Files that were only renamed.
+    for (path, to) in renames {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        outcome.changes.push(JssgFileChange {
+            path,
+            original: text.clone(),
+            content: text,
+            rename_to: Some(to),
+        });
+    }
+    outcome.changes.sort_by(|a, b| a.path.cmp(&b.path));
     outcome.failures = failures.into_inner().unwrap();
     outcome.failures.sort();
     outcome.matched = matched.into_inner().unwrap();
@@ -314,15 +337,7 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     outcome.skipped = skipped.load(Ordering::SeqCst);
     outcome.metrics = metrics.get_all();
 
-    let initial = &request.initial_state;
-    for (key, value) in shared_state.get_persistable() {
-        if initial.get(&key) != Some(&value) {
-            outcome.state.insert(key, value);
-        }
-    }
-    for key in shared_state.get_removals() {
-        outcome.state.insert(key, Value::Null);
-    }
+    outcome.state = shared_state.changes_since(&request.initial_state);
 
     if abort.load(Ordering::SeqCst) {
         let first = outcome
@@ -337,7 +352,8 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
 
 /// A runtime event as a log line: console output as written, otherwise
 /// `[warn]` / `[progress]` with the event's metadata.
-fn format_runtime_event(event: &RuntimeEvent) -> String {
+/// A `codemod/runtime` event or `console` line as a step log line.
+pub fn format_runtime_event(event: &RuntimeEvent) -> String {
     if event.meta.as_deref() == Some("console") {
         return event.message.clone();
     }

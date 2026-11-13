@@ -3,14 +3,15 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::adapter::{Adapter, Task, Transcript};
+use crate::adapter::{Adapter, Autonomy, ReadOnly, Task};
 use crate::event::{AgentEvent, Stream, Usage};
+use crate::transcript::Transcript;
 
 /// One run of an agent.
 pub struct Run<'a> {
@@ -23,7 +24,9 @@ pub struct Run<'a> {
     pub timeout: Option<Duration>,
 }
 
-/// How a run that finished went.
+/// What a run came to. For a run that did not finish (see
+/// [`RunError::partial`]) this is what the agent had reported until then,
+/// and `result` is the last text it wrote.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Outcome {
     pub agent: &'static str,
@@ -38,6 +41,16 @@ pub struct Outcome {
 /// Why a run did not finish. `agent` is the agent's label.
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
+    /// Refused before anything was started.
+    #[error("{agent} cannot be kept read-only, so it does not run read-only tasks")]
+    ReadOnlyUnsupported { agent: &'static str },
+    /// Refused before anything was started.
+    #[error(
+        "the prompt is too large for {agent}, which takes it on its command line: {} KiB, and at most {} KiB fit",
+        .size / 1024,
+        MAX_ARGUMENT / 1024
+    )]
+    PromptTooLarge { agent: &'static str, size: usize },
     #[error("cannot start {agent}: {source}")]
     Start {
         agent: &'static str,
@@ -48,26 +61,83 @@ pub enum RunError {
     Failed {
         agent: &'static str,
         message: String,
+        partial: Box<Outcome>,
     },
     #[error("{agent} was stopped")]
-    Canceled { agent: &'static str },
+    Canceled {
+        agent: &'static str,
+        partial: Box<Outcome>,
+    },
     #[error("{agent} did not finish within {}s", .after.as_secs())]
     TimedOut {
         agent: &'static str,
         after: Duration,
+        partial: Box<Outcome>,
     },
 }
 
+impl RunError {
+    /// What the agent had reported before the run ended: its session, the
+    /// usage so far and the last text it wrote. `None` when it never ran.
+    pub fn partial(&self) -> Option<&Outcome> {
+        match self {
+            Self::Failed { partial, .. }
+            | Self::Canceled { partial, .. }
+            | Self::TimedOut { partial, .. } => Some(partial),
+            Self::ReadOnlyUnsupported { .. } | Self::PromptTooLarge { .. } | Self::Start { .. } => {
+                None
+            }
+        }
+    }
+}
+
+/// Where the agent's process is while its output is read.
+enum Phase {
+    Running,
+    /// It exited, at this time. Its pipes may still be open: something it
+    /// started can hold them.
+    Exited(ExitStatus, Instant),
+}
+
+/// How reading a run's output ended.
+enum Ended {
+    /// The agent exited, with its output read to the end or [`DRAIN`] over.
+    Exited(ExitStatus),
+    Canceled,
+    TimedOut(Duration),
+    /// The agent's process could not be waited for.
+    Lost(std::io::Error),
+}
+
 const POLL: Duration = Duration::from_millis(100);
+/// How long output is still read after the agent exited.
+const DRAIN: Duration = Duration::from_secs(2);
+/// How long a process group gets to end after SIGTERM, before SIGKILL.
+const STOP: Duration = Duration::from_secs(3);
 const STDERR_TAIL: usize = 20;
+/// The largest command-line argument a run passes. Linux refuses one of
+/// 128 KiB, and others limit the whole command line.
+const MAX_ARGUMENT: usize = 100 * 1024;
 
 impl Run<'_> {
     /// Run the agent to the end. Every event goes to `on_event` as it
     /// happens.
     pub fn run(self, on_event: &mut dyn FnMut(AgentEvent)) -> Result<Outcome, RunError> {
         let agent = self.adapter.label();
+        if self.task.autonomy == Autonomy::ReadOnly
+            && self.adapter.read_only() == ReadOnly::Unsupported
+        {
+            return Err(RunError::ReadOnlyUnsupported { agent });
+        }
         let started = Instant::now();
         let launch = self.adapter.launch(&self.task, &self.executable);
+        let largest = launch.args.iter().map(|arg| arg.len()).max().unwrap_or(0);
+        if largest > MAX_ARGUMENT {
+            return Err(RunError::PromptTooLarge {
+                agent,
+                size: largest,
+            });
+        }
 
         let mut command = Command::new(&self.executable);
         command
@@ -82,7 +152,7 @@ impl Run<'_> {
             .stderr(Stdio::piped())
             .env("NO_COLOR", "1");
         // The agent starts a session of its own, not one inside ours.
-        for key in self.adapter.session_env() {
+        for key in self.adapter.env_markers() {
             command.env_remove(key);
         }
         for (key, value) in &launch.env {
@@ -96,6 +166,7 @@ impl Run<'_> {
 
         if let (Some(prompt), Some(mut stdin)) = (launch.stdin, child.stdin.take()) {
             // On its own thread: a full pipe must not block reading output.
+            // Not joined: it ends when the agent has read the prompt or is gone.
             std::thread::spawn(move || {
                 let _ = stdin.write_all(prompt.as_bytes());
                 let _ = stdin.write_all(b"\n");
@@ -114,32 +185,57 @@ impl Run<'_> {
         ];
         drop(sender);
 
-        let mut parser = self.adapter.parser();
+        let mut parser = launch.parser;
         let mut transcript = Transcript::default();
+        let mut emit = |events: Vec<AgentEvent>, transcript: &mut Transcript| {
+            for event in events {
+                transcript.observe(&event);
+                on_event(event);
+            }
+        };
         let mut stderr_tail: Vec<String> = Vec::new();
-        loop {
+        let mut phase = Phase::Running;
+        let mut pipes_open = true;
+        let ended = loop {
             if self
                 .cancel
                 .as_ref()
                 .is_some_and(|c| c.load(Ordering::SeqCst))
             {
-                stop(&mut child);
-                return Err(RunError::Canceled { agent });
+                break Ended::Canceled;
             }
             if let Some(after) = self.timeout.filter(|t| started.elapsed() >= *t) {
-                stop(&mut child);
-                return Err(RunError::TimedOut { agent, after });
+                break Ended::TimedOut(after);
+            }
+            if let Phase::Running = phase {
+                match child.try_wait() {
+                    Ok(Some(status)) => phase = Phase::Exited(status, Instant::now()),
+                    Ok(None) => {}
+                    Err(error) => break Ended::Lost(error),
+                }
+            }
+            if let Phase::Exited(status, at) = phase {
+                if !pipes_open || at.elapsed() >= DRAIN {
+                    break Ended::Exited(status);
+                }
+            }
+            if !pipes_open {
+                std::thread::sleep(POLL);
+                continue;
             }
             let (stream, line) = match lines.recv_timeout(POLL) {
                 Ok(line) => line,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    pipes_open = false;
+                    continue;
+                }
             };
-            if line.trim().is_empty() {
-                continue;
-            }
             let events = match stream {
+                // What follows the agent's final report is not part of the run.
+                Stream::Stdout if transcript.ended() => Vec::new(),
                 Stream::Stdout => parser.parse(&line, &mut transcript),
+                Stream::Stderr if line.trim().is_empty() => Vec::new(),
                 Stream::Stderr => {
                     if stderr_tail.len() == STDERR_TAIL {
                         stderr_tail.remove(0);
@@ -148,56 +244,60 @@ impl Run<'_> {
                     vec![AgentEvent::Output { stream, line }]
                 }
             };
-            deliver(events, &mut transcript, on_event);
-        }
-        let events = parser.finish(&mut transcript);
-        deliver(events, &mut transcript, on_event);
-        for reader in readers.into_iter().flatten() {
-            let _ = reader.join();
-        }
-        let status = child
-            .wait()
-            .map_err(|source| RunError::Start { agent, source })?;
+            emit(events, &mut transcript);
+        };
 
-        let finished = transcript.finish();
-        if let Some(message) = finished.error {
-            return Err(RunError::Failed { agent, message });
+        if pipes_open {
+            // The agent is still running, or left something that holds its
+            // pipes. The readers are not joined: a process that left the
+            // group can keep a pipe open, and they end when it closes.
+            stop_group(&mut child);
+        } else {
+            for reader in readers.into_iter().flatten() {
+                let _ = reader.join();
+            }
         }
-        if !status.success() {
-            let exit = match status.code() {
-                Some(code) => format!("exited with code {code}"),
-                None => format!("was stopped ({status})"),
-            };
-            let message = match stderr_tail.join("\n").trim() {
-                "" => exit,
-                tail => format!("{exit}: {tail}"),
-            };
-            return Err(RunError::Failed { agent, message });
+        if let Ended::Exited(_) = ended {
+            let events = parser.finish(&mut transcript);
+            emit(events, &mut transcript);
         }
-        Ok(Outcome {
-            agent: self.adapter.id(),
-            result: finished.result,
-            session_id: finished.session_id,
-            model: finished.model,
-            usage: finished.usage,
-            duration: started.elapsed(),
-        })
-    }
-}
 
-/// Hand events on, noting text for the final answer.
-fn deliver(
-    events: Vec<AgentEvent>,
-    transcript: &mut Transcript,
-    on_event: &mut dyn FnMut(AgentEvent),
-) {
-    for event in events {
-        match &event {
-            AgentEvent::Text { text, delta } => transcript.text(text, *delta),
-            AgentEvent::ToolCall { .. } | AgentEvent::ToolResult { .. } => transcript.close_text(),
-            _ => {}
+        let (outcome, reported) = transcript.into_outcome(self.adapter.id(), started.elapsed());
+        let failed = |message: String, partial: Outcome| RunError::Failed {
+            agent,
+            message,
+            partial: Box::new(partial),
+        };
+        match ended {
+            Ended::Canceled => Err(RunError::Canceled {
+                agent,
+                partial: Box::new(outcome),
+            }),
+            Ended::TimedOut(after) => Err(RunError::TimedOut {
+                agent,
+                after,
+                partial: Box::new(outcome),
+            }),
+            Ended::Lost(error) => Err(failed(
+                format!("its process could not be waited for: {error}"),
+                outcome,
+            )),
+            Ended::Exited(status) => match reported {
+                Some(message) => Err(failed(message, outcome)),
+                None if !status.success() => {
+                    let exit = match status.code() {
+                        Some(code) => format!("exited with code {code}"),
+                        None => format!("was stopped ({status})"),
+                    };
+                    let message = match stderr_tail.join("\n").trim() {
+                        "" => exit,
+                        tail => format!("{exit}: {tail}"),
+                    };
+                    Err(failed(message, outcome))
+                }
+                None => Ok(outcome),
+            },
         }
-        on_event(event);
     }
 }
 
@@ -268,25 +368,30 @@ fn new_process_group(command: &mut Command) {
 #[cfg(not(unix))]
 fn new_process_group(_command: &mut Command) {}
 
+/// End the agent's process group: SIGTERM, then SIGKILL for whatever is
+/// left of the group after [`STOP`], whether or not the agent itself is.
 #[cfg(unix)]
-fn stop(child: &mut Child) {
+fn stop_group(child: &mut Child) {
     let group = child.id() as libc::pid_t;
+    // Whether the group still had a process to signal; signal 0 only asks.
     // SAFETY: signalling a process group we created.
-    unsafe { libc::killpg(group, libc::SIGTERM) };
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let signal = |signal: libc::c_int| unsafe { libc::killpg(group, signal) == 0 };
+    signal(libc::SIGTERM);
+    let deadline = Instant::now() + STOP;
     while Instant::now() < deadline {
-        if let Ok(Some(_)) = child.try_wait() {
+        // The agent has to be reaped, or it stays in its group as a zombie.
+        let reaped = !matches!(child.try_wait(), Ok(None));
+        if reaped && !signal(0) {
             return;
         }
         std::thread::sleep(POLL);
     }
-    // SAFETY: as above.
-    unsafe { libc::killpg(group, libc::SIGKILL) };
+    signal(libc::SIGKILL);
     let _ = child.wait();
 }
 
 #[cfg(not(unix))]
-fn stop(child: &mut Child) {
+fn stop_group(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }

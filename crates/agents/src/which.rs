@@ -3,12 +3,12 @@
 use std::path::{Path, PathBuf};
 
 /// The first `name` on `PATH` that is an executable file.
-pub fn which(name: &str) -> Option<PathBuf> {
+pub(crate) fn which(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     which_in(name, &path)
 }
 
-pub(crate) fn which_in(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
+fn which_in(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
     std::env::split_paths(path).find_map(|dir| {
         candidates(&dir, name)
             .into_iter()

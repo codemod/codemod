@@ -30,11 +30,15 @@ mod run;
 mod tasks;
 
 pub use build::{build, inspect, BuildError, Built, Inspection, InstalledSkill, FLOW_MODULE};
+pub use butterflow_core::package_workflows::{
+    declared_workflows, locate_workflow, DeclaredWorkflow,
+};
 pub use butterflow_state::run_store::{
-    LocalStore, MemoryStore, RunRecord, RunStatus, RunStore, StepRecord, StepStatus,
+    LocalStore, MemoryStore, RunRecord, RunSettings, RunStatus, RunStore, StepRecord, StepStatus,
 };
 pub use engine::{
-    is_typescript, load_workflow, Engine, EngineError, LoadedWorkflow, RunReport, StartRequest,
+    cancel_run, is_typescript, load_workflow, Canceled, Engine, EngineError, LoadedWorkflow,
+    RunReport, StartRequest, StopHandle,
 };
 pub use hosted::{HostedRun, OpenRequest, SelectedFiles};
 pub use run::{Ending, RunError, TestPlan, ORCHESTRATOR_JS};

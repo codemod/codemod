@@ -1,12 +1,11 @@
 use super::codemod_lang::CodemodLang;
 use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
-use super::quickjs_adapters::{CodemodModuleResolver, QuickJSLoader, QuickJSResolver};
-use crate::ast_grep::AstGrepModule;
-use crate::llm::{LlmModule, LlmRuntimeContext};
-use crate::metrics::{MetricsContext, MetricsModule};
+use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
+use crate::llm::LlmRuntimeContext;
+use crate::metrics::MetricsContext;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver};
-use crate::sandbox::runtime_module::{RuntimeHooksContext, RuntimeModule};
+use crate::sandbox::runtime_module::RuntimeHooksContext;
 use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::{RuleConfig, SerializableRuleConfig};
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
@@ -22,7 +21,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::ast_grep::serde::JsValue;
-use crate::workflow_global::WorkflowGlobalModule;
 
 pub struct SelectorEngineOptions<'a, R> {
     pub script_path: &'a Path,
@@ -222,25 +220,10 @@ where
         None
     };
 
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+    let (mut built_in_resolver, built_in_loader, global_attachment) =
         module_builder.builder.build();
-
-    // Add AstGrepModule
-    built_in_loader = built_in_loader.with_module("codemod/ast-grep", AstGrepModule);
-
-    // Add WorkflowGlobalModule (step outputs)
-    built_in_loader = built_in_loader.with_module("codemod/workflow", WorkflowGlobalModule);
-
-    // Add MetricsModule (metrics tracking)
-    built_in_loader = built_in_loader.with_module("codemod/metrics", MetricsModule);
-
-    // Selector extraction evaluates the codemod's module graph, so it must
-    // expose the same runtime imports as normal codemod execution.
-    built_in_loader = built_in_loader.with_module("codemod/runtime", RuntimeModule);
-
-    if llm_capability_enabled {
-        built_in_loader = built_in_loader.with_module("codemod/llm", LlmModule);
-    }
+    let (codemod_resolver, mut built_in_loader) =
+        crate::with_codemod_modules!(built_in_loader, llm: llm_capability_enabled);
 
     // Register the curated `fs` / `fs/promises` modules when applicable.
     if curated_fs_config.is_some() {
@@ -253,11 +236,7 @@ where
     // Combine resolvers and loaders
     runtime
         .set_loader(
-            (
-                CodemodModuleResolver::offering(llm_capability_enabled),
-                built_in_resolver,
-                module_resolver,
-            ),
+            (codemod_resolver, built_in_resolver, module_resolver),
             (built_in_loader, module_loader),
         )
         .await;

@@ -7,21 +7,10 @@ use std::collections::HashSet;
 
 use crate::types::LlrtSupportedModules;
 
-/// Every specifier of the codemod runtime modules: `codemod/<name>`, and the
-/// older spelling `codemod:<name>` (see `codemod_sandbox::codemod_modules`).
-pub const CODEMOD_RUNTIME_MODULES: &[&str] = &[
-    "codemod/ast-grep",
-    "codemod/workflow",
-    "codemod/metrics",
-    "codemod/runtime",
-    "codemod/llm",
-    "codemod:ast-grep",
-    "codemod:workflow",
-    "codemod:metrics",
-    "codemod:runtime",
-    "codemod:llm",
-];
+use crate::codemod_modules::CODEMOD_MODULES;
 
+/// The LLRT modules a runtime can have, as code imports them (bare, or with
+/// the `node:` prefix).
 const LLRT_RUNTIME_MODULES: &[&str] = &[
     "assert",
     "buffer",
@@ -38,54 +27,24 @@ const LLRT_RUNTIME_MODULES: &[&str] = &[
     "process",
     "stream/web",
     "string_decoder",
+    "timers",
     "tty",
     "url",
     "util",
     "zlib",
 ];
 
-pub fn supported_runtime_external_modules() -> Vec<&'static str> {
-    let mut modules =
-        Vec::with_capacity(CODEMOD_RUNTIME_MODULES.len() + LLRT_RUNTIME_MODULES.len() * 2);
-    modules.extend(CODEMOD_RUNTIME_MODULES.iter().copied());
-    for module in LLRT_RUNTIME_MODULES {
-        modules.push(*module);
-        modules.push(match *module {
-            "assert" => "node:assert",
-            "buffer" => "node:buffer",
-            "child_process" => "node:child_process",
-            "console" => "node:console",
-            "crypto" => "node:crypto",
-            "events" => "node:events",
-            "fs" => "node:fs",
-            "fs/promises" => "node:fs/promises",
-            "module" => "node:module",
-            "os" => "node:os",
-            "path" => "node:path",
-            "perf_hooks" => "node:perf_hooks",
-            "process" => "node:process",
-            "stream/web" => "node:stream/web",
-            "string_decoder" => "node:string_decoder",
-            "tty" => "node:tty",
-            "url" => "node:url",
-            "util" => "node:util",
-            "zlib" => "node:zlib",
-            _ => unreachable!("all LLRT runtime modules are covered"),
-        });
-    }
-    modules
-}
-
-pub fn is_supported_runtime_external_module(specifier: &str) -> bool {
-    if CODEMOD_RUNTIME_MODULES.contains(&specifier) {
-        return true;
-    }
-
-    let normalized = specifier
-        .strip_prefix("node:")
-        .unwrap_or(specifier)
-        .trim_end_matches('/');
-    LLRT_RUNTIME_MODULES.contains(&normalized)
+/// Every specifier the runtime itself provides, which a bundle must leave as
+/// an import: the codemod modules in both spellings, and the LLRT modules
+/// with and without `node:`.
+pub fn supported_runtime_external_modules() -> Vec<String> {
+    let codemod = CODEMOD_MODULES
+        .iter()
+        .flat_map(|name| [format!("codemod/{name}"), format!("codemod:{name}")]);
+    let llrt = LLRT_RUNTIME_MODULES
+        .iter()
+        .flat_map(|name| [name.to_string(), format!("node:{name}")]);
+    codemod.chain(llrt).collect()
 }
 
 macro_rules! define_safe_modules {

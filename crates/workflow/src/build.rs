@@ -24,25 +24,25 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use codemod_sandbox::codemod_modules::codemod_module;
+use codemod_sandbox::codemod_modules::{codemod_module, CODEMOD_MODULES};
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{
     Argument, Declaration, Expression, ImportDeclarationSpecifier, Statement, VariableDeclaration,
 };
 use oxc::ast::AstKind;
-use oxc::codegen::Codegen;
+use oxc::codegen::{Codegen, CodegenOptions, CommentOptions};
 use oxc::parser::Parser;
 use oxc::semantic::{Scoping, SemanticBuilder, SymbolFlags, SymbolId};
 use oxc::span::{GetSpan, SourceType, Span};
 use oxc::transformer::{TransformOptions, Transformer};
 use sha2::{Digest, Sha256};
 
-/// Specifier of the authoring module. `codemod/workflow`, the older
+/// Specifier of the authoring module. `codemod:workflow`, the older
 /// spelling, names it too; see [`is_flow_module`].
 pub const FLOW_MODULE: &str = "codemod/workflow";
 
 /// Whether a specifier names the authoring module (`codemod/workflow`, or
-/// the older `codemod/workflow`).
+/// the older `codemod:workflow`).
 pub fn is_flow_module(specifier: &str) -> bool {
     codemod_module(specifier) == Some("workflow")
 }
@@ -112,19 +112,22 @@ pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
         Some(_) => return Ok(ModuleClass::StepsOnly),
         None => {}
     }
-    // Type-only language maps: `codemod/ast-grep/langs/java`.
-    if ["codemod/ast-grep/", "codemod/ast-grep/"]
-        .iter()
-        .any(|prefix| specifier.starts_with(prefix))
+    if let Some(name) = specifier
+        .strip_prefix("codemod/")
+        .or_else(|| specifier.strip_prefix("codemod:"))
     {
-        return Ok(ModuleClass::Pure);
-    }
-    if specifier.starts_with("codemod:") {
-        return Err(format!("unknown module '{specifier}'"));
-    }
-    if let Some(name) = specifier.strip_prefix("codemod/") {
+        // The language maps (`codemod/ast-grep/langs/java`) are types only:
+        // an import of one is gone once the types are stripped.
+        if name.starts_with("ast-grep/langs/") || name.starts_with("langs/") {
+            return Ok(ModuleClass::Pure);
+        }
+        let modules: Vec<String> = CODEMOD_MODULES
+            .iter()
+            .map(|module| format!("codemod/{module}"))
+            .collect();
         return Err(format!(
-            "'{specifier}' is for Node.js, not for workflows: workflows import codemod/workflow, codemod/ast-grep, codemod/metrics, codemod/runtime and codemod/llm ({name} is not one of them)"
+            "'{specifier}' is not a module workflows can import: those are {}. The codemod package's other exports are for Node.js",
+            modules.join(", ")
         ));
     }
     let bare = specifier.strip_prefix("node:").unwrap_or(specifier);
@@ -206,7 +209,8 @@ struct IdentRef {
 
 #[derive(Default)]
 struct CallbackParts {
-    imports: BTreeSet<String>,
+    /// Import lines, by source position: imports run in the order written.
+    imports: BTreeSet<(u32, String)>,
     /// Hoisted declarations, keyed by source position.
     hoisted: BTreeMap<u32, String>,
     captures: BTreeSet<String>,
@@ -264,6 +268,12 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                 let module = import.source.value.to_string();
                 let class = module_class(&module)
                     .map_err(|message| analysis.error(import.source.span.start, message))?;
+                // One spelling in what the build emits, so `codemod:workflow`
+                // and `codemod/workflow` give the same callback ids.
+                let module = match codemod_module(&module) {
+                    Some(name) => format!("codemod/{name}"),
+                    None => module,
+                };
                 import_spans.push(import.span);
                 let Some(specifiers) = &import.specifiers else {
                     side_effect_imports.push((module, import.span.start));
@@ -291,6 +301,14 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                             (&s.local, None, line)
                         }
                         ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
+                            if class == ModuleClass::Workflow {
+                                return Err(analysis.error(
+                                    s.span.start,
+                                    format!(
+                                        "import what you use from \"{module}\" by name (import {{ step, forEachFile }} from \"{module}\"): the build finds callbacks by those names"
+                                    ),
+                                ));
+                            }
                             let line = format!("import * as {} from {:?};", s.local.name, module);
                             (&s.local, None, line)
                         }
@@ -453,7 +471,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
             .join(", ");
 
         let mut module = String::new();
-        for line in &parts.imports {
+        for (_, line) in &parts.imports {
             module.push_str(line);
             module.push('\n');
         }
@@ -464,11 +482,16 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
         module.push_str(&format!(
             "const __make = ({{ {destructure} }}) => ({callback_source});\n"
         ));
+        // The id covers what the author wrote, without comments: not the
+        // prelude, which changes with the CLI. A recorded step must not look
+        // changed after an update, or after a comment was edited.
+        let id = content_id(
+            &strip_types(file, &module, false)
+                .map_err(|message| analysis.error(span.start, message))?,
+        );
         module.push_str(CALLBACK_PRELUDE);
-
-        let module =
-            strip_types(file, &module).map_err(|message| analysis.error(span.start, message))?;
-        let id = content_id(&module);
+        let module = strip_types(file, &module, true)
+            .map_err(|message| analysis.error(span.start, message))?;
         splices.push((
             span,
             format!("__flowCallback({id:?}, () => ({{ {destructure} }}))"),
@@ -483,16 +506,16 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
             .iter()
             .any(|(span, _)| span.start <= at.start && at.end <= span.end)
     };
-    let mut body_lines: Vec<String> = vec![format!(
-        "import {{ __callback as __flowCallback }} from {FLOW_MODULE:?};"
-    )];
+    // The body's imports, by source position: modules are evaluated in the
+    // order they are imported, which a side-effect import may rely on.
+    let mut body_lines: Vec<(u32, String)> = Vec::new();
     let mut body_imports: Vec<BodyImport> = Vec::new();
     let mut bindings: Vec<(&SymbolId, &ImportBinding)> = analysis.imports.iter().collect();
     bindings.sort_by_key(|(_, binding)| (binding.at, binding.line.clone()));
     for (symbol, binding) in bindings {
         let class = module_class(&binding.source).unwrap_or(ModuleClass::Package);
         if class == ModuleClass::Workflow {
-            body_lines.push(binding.line.clone());
+            body_lines.push((binding.at, binding.line.clone()));
             continue;
         }
         let body_use = analysis
@@ -522,7 +545,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                 offset: binding.at,
             });
         }
-        body_lines.push(binding.line.clone());
+        body_lines.push((binding.at, binding.line.clone()));
     }
     for (module, at) in side_effect_imports {
         match module_class(&module).unwrap_or(ModuleClass::Package) {
@@ -538,8 +561,14 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
             }),
             _ => {}
         }
-        body_lines.push(format!("import {module:?};"));
+        body_lines.push((at, format!("import {module:?};")));
     }
+    body_lines.sort();
+    let body_lines: Vec<String> = std::iter::once(format!(
+        "import {{ __callback as __flowCallback }} from {FLOW_MODULE:?};"
+    ))
+    .chain(body_lines.into_iter().map(|(_, line)| line))
+    .collect();
     for span in import_spans {
         splices.push((span, String::new()));
     }
@@ -550,7 +579,8 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
         main.replace_range(span.start as usize..span.end as usize, &replacement);
     }
     let main = format!("{}\n{main}", body_lines.join("\n"));
-    let main = strip_types(file, &main).map_err(|message| error_at(file, source, 0, message))?;
+    let main =
+        strip_types(file, &main, true).map_err(|message| error_at(file, source, 0, message))?;
 
     Ok(Built {
         main,
@@ -705,7 +735,7 @@ impl Analysis<'_> {
                     ),
                 ));
             }
-            parts.imports.insert(import.line.clone());
+            parts.imports.insert((import.at, import.line.clone()));
             return Ok(());
         }
         if self.decls.contains_key(&symbol) {
@@ -812,6 +842,11 @@ impl<R: codemod_sandbox::sandbox::resolvers::ModuleResolver> ImportWalk<'_, R> {
         }
         let text =
             std::fs::read_to_string(path).map_err(|e| format!("cannot read {shown}: {e}"))?;
+        if let Some(call) = callback_call(path, &text) {
+            return Err(format!(
+                "{shown} calls {call} with a callback, but callbacks are only extracted from the workflow file: call it there, and keep the files it imports to plain helpers"
+            ));
+        }
         for specifier in module_specifiers(path, &text) {
             match module_class(&specifier) {
                 Ok(ModuleClass::StepsOnly) => return Ok(Some(vec![shown, specifier])),
@@ -831,6 +866,87 @@ impl<R: codemod_sandbox::sandbox::resolvers::ModuleResolver> ImportWalk<'_, R> {
         }
         Ok(None)
     }
+}
+
+/// A call in a file the workflow imports that needs the build to extract a
+/// callback: `forEachFile(...)`, or `step(...)` given a function. The build
+/// only extracts callbacks from the workflow file, so such a call would fail
+/// when the step starts.
+fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
+    use oxc::ast::ast::ModuleDeclaration;
+
+    let allocator = Allocator::default();
+    let source_type = SourceType::from_path(path).unwrap_or_else(|_| SourceType::mjs());
+    let parsed = Parser::new(&allocator, text, source_type).parse();
+    // Local names of `step` and `forEachFile`, and of the module as a whole.
+    let (mut steps, mut for_each, mut namespaces) = (Vec::new(), Vec::new(), Vec::new());
+    for statement in &parsed.program.body {
+        let Some(ModuleDeclaration::ImportDeclaration(import)) = statement.as_module_declaration()
+        else {
+            continue;
+        };
+        if import.import_kind.is_type() || !is_flow_module(&import.source.value) {
+            continue;
+        }
+        for specifier in import.specifiers.iter().flatten() {
+            match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                    match s.imported.name().as_str() {
+                        "step" => steps.push(s.local.name.to_string()),
+                        "forEachFile" => for_each.push(s.local.name.to_string()),
+                        _ => {}
+                    }
+                }
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
+                    namespaces.push(s.local.name.to_string())
+                }
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(_) => {}
+            }
+        }
+    }
+    if steps.is_empty() && for_each.is_empty() && namespaces.is_empty() {
+        return None;
+    }
+    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    for node in semantic.nodes().iter() {
+        let AstKind::CallExpression(call) = node.kind() else {
+            continue;
+        };
+        let called = match &call.callee {
+            Expression::Identifier(id) if for_each.iter().any(|name| name == id.name.as_str()) => {
+                "forEachFile"
+            }
+            Expression::Identifier(id) if steps.iter().any(|name| name == id.name.as_str()) => {
+                "step"
+            }
+            Expression::StaticMemberExpression(member) => {
+                let on_namespace = matches!(
+                    &member.object,
+                    Expression::Identifier(id) if namespaces.iter().any(|name| name == id.name.as_str())
+                );
+                match (on_namespace, member.property.name.as_str()) {
+                    (true, "forEachFile") => "forEachFile",
+                    (true, "step") => "step",
+                    _ => continue,
+                }
+            }
+            _ => continue,
+        };
+        let given_function = call.arguments.iter().any(|argument| {
+            matches!(
+                argument,
+                Argument::ArrowFunctionExpression(_) | Argument::FunctionExpression(_)
+            )
+        });
+        if called == "forEachFile" || given_function {
+            return Some(if called == "step" {
+                "step()"
+            } else {
+                "forEachFile()"
+            });
+        }
+    }
+    None
 }
 
 /// Every module a JavaScript or TypeScript file imports, re-exports,
@@ -884,8 +1000,8 @@ fn module_specifiers(path: &Path, text: &str) -> Vec<String> {
     specifiers
 }
 
-/// Strip TypeScript syntax.
-fn strip_types(file: &str, source: &str) -> Result<String, String> {
+/// Strip TypeScript syntax, keeping comments or not.
+fn strip_types(file: &str, source: &str, comments: bool) -> Result<String, String> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
     if let Some(error) = parsed.errors.first() {
@@ -902,7 +1018,15 @@ fn strip_types(file: &str, source: &str) -> Result<String, String> {
     if let Some(error) = transformed.errors.first() {
         return Err(format!("could not strip types: {error}"));
     }
-    Ok(Codegen::new().build(&program).code)
+    let options = CodegenOptions {
+        comments: if comments {
+            CommentOptions::default()
+        } else {
+            CommentOptions::disabled()
+        },
+        ..CodegenOptions::default()
+    };
+    Ok(Codegen::new().with_options(options).build(&program).code)
 }
 
 fn content_id(source: &str) -> String {

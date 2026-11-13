@@ -10,15 +10,14 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use butterflow_core::execution::{self, language_globs};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::WorkerOptions;
-use ignore::overrides::OverrideBuilder;
-use ignore::WalkBuilder;
 use rquickjs::{async_with, CatchResultExt, Function, Module, Promise};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::changes::{self, is_safe_relative, PlannedChange};
+use super::changes::{self, Change, PlannedChange};
 use super::isolate::{module_name, StepIsolates};
 use super::{block_on, TaskContext, TaskOutcome};
 use crate::run::RunContext;
@@ -243,8 +242,9 @@ fn package_languages(bundle_dir: &Path) -> Result<Vec<String>, String> {
     Ok(languages)
 }
 
-/// Select files: globs and `.gitignore` first, then the text filter. Returns
-/// paths relative to the target with their contents, sorted by path.
+/// Select files: globs and `.gitignore` first (as `jssg` and `astGrep`
+/// select theirs), then the text filter. Returns paths relative to the
+/// target with their contents, sorted by path.
 fn select(
     target: &Path,
     selector: &Selector,
@@ -259,47 +259,19 @@ fn select(
         };
         let mut globs = Vec::new();
         for language in languages {
-            let extensions =
-                extensions(language).ok_or_else(|| format!("unknown language '{language}'"))?;
-            globs.extend(
-                extensions
-                    .iter()
-                    .map(|extension| format!("**/*.{extension}")),
-            );
+            globs.extend(language_globs(language)?);
         }
         globs
     };
 
-    let mut overrides = OverrideBuilder::new(target);
-    for glob in &include {
-        overrides
-            .add(glob)
-            .map_err(|e| format!("bad glob '{glob}': {e}"))?;
-    }
-    for glob in &selector.exclude {
-        overrides
-            .add(&format!("!{glob}"))
-            .map_err(|e| format!("bad glob '{glob}': {e}"))?;
-    }
-    let overrides = overrides.build().map_err(|e| e.to_string())?;
-
     let mut files = Vec::new();
-    for entry in WalkBuilder::new(target)
-        .overrides(overrides)
-        .require_git(false)
-        .build()
-    {
-        let entry = entry.map_err(|e| e.to_string())?;
-        if !entry.file_type().is_some_and(|t| t.is_file()) {
-            continue;
-        }
-        let relative = entry
-            .path()
+    for path in execution::select_files(target, &include, &selector.exclude)? {
+        let relative = path
             .strip_prefix(target)
             .map_err(|e| e.to_string())?
             .to_string_lossy()
             .replace('\\', "/");
-        let Ok(text) = fs::read_to_string(entry.path()) else {
+        let Ok(text) = fs::read_to_string(&path) else {
             continue; // not UTF-8
         };
         if let Some(needle) = &selector.containing {
@@ -309,7 +281,6 @@ fn select(
         }
         files.push((relative, text));
     }
-    files.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(files)
 }
 
@@ -382,8 +353,9 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                     .catch(&ctx)
                     .map_err(|e| e.to_string())
                     .and_then(|json| serde_json::from_str(&json).map_err(|e| e.to_string()));
-                let reported = sandbox.take_pending_failure().map(|failure| failure.message);
-                let other_files = !sandbox.take_secondary_changes().is_empty();
+                let effects = sandbox.take_side_effects();
+                let reported = effects.failure.map(|failure| failure.message);
+                let other_files = !effects.other_files.is_empty();
                 match outcomes {
                     Ok(outcomes) => {
                         for (index, outcome) in indices.iter().zip(outcomes) {
@@ -414,47 +386,32 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
     })
 }
 
+/// What a callback's effects leave of one file. `delete()` wins over
+/// whatever else the callback did; the last `write()` and `rename()` count.
 fn fold(path: String, original: String, effects: Vec<Effect>) -> Result<PlannedChange, String> {
-    let mut plan = PlannedChange {
-        text: original.clone(),
-        path,
-        original,
-        rename_to: None,
-        delete: false,
-    };
+    let mut text = None;
+    let mut rename_to = None;
+    let mut deleted = false;
     for effect in effects {
         match effect {
-            Effect::Write { text } => plan.text = text,
+            Effect::Write { text: next } => text = Some(next),
             Effect::Rename { to } => {
-                if !is_safe_relative(&to) {
-                    return Err(format!(
+                rename_to = Some(changes::normalize(&to).ok_or_else(|| {
+                    format!(
                         "cannot rename to '{to}': the path must be relative and stay inside the target"
-                    ));
-                }
-                plan.rename_to = Some(to.replace('\\', "/"));
+                    )
+                })?);
             }
-            Effect::Delete => plan.delete = true,
+            Effect::Delete => deleted = true,
         }
     }
-    if plan.rename_to.as_deref() == Some(plan.path.as_str()) {
-        plan.rename_to = None;
+    if deleted {
+        return Ok(PlannedChange {
+            path,
+            original,
+            change: Change::Delete,
+        });
     }
-    Ok(plan)
-}
-
-fn extensions(language: &str) -> Option<&'static [&'static str]> {
-    Some(match language {
-        "typescript" => &["ts", "mts", "cts"],
-        "tsx" => &["tsx"],
-        "javascript" => &["js", "mjs", "cjs", "jsx"],
-        "css" => &["css"],
-        "json" => &["json"],
-        "html" => &["html"],
-        "python" => &["py"],
-        "rust" => &["rs"],
-        "go" => &["go"],
-        "java" => &["java"],
-        "yaml" => &["yaml", "yml"],
-        _ => return None,
-    })
+    let text = text.unwrap_or_else(|| original.clone());
+    Ok(PlannedChange::moved(path, original, text, rename_to))
 }

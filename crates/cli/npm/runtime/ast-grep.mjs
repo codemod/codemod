@@ -4,8 +4,8 @@
 // Roots parsed here have no semantic provider, as with `parse()` in an engine
 // `forEachFile` callback: `definition()` returns null.
 
-import { readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative } from "node:path";
 
 import { addon } from "./addon.mjs";
 import { context } from "./context.mjs";
@@ -52,9 +52,22 @@ export function parse(source, second) {
     );
   }
   if (path === undefined) return native.parse(language, source.text);
+  // The file's real path, and its path inside the target: what the CLI's
+  // runtime gives `filename()` and `relativeFilename()`.
   const target = store?.run?.target;
-  const filename = isAbsolute(path) || !target ? path : join(target, path);
-  return native.parse(language, source.text, filename, isAbsolute(path) ? undefined : path);
+  const filename = real(isAbsolute(path) || !target ? path : join(target, path));
+  const inTarget = target ? relative(real(target), filename) : path;
+  const outside = inTarget.startsWith("..") || isAbsolute(inTarget);
+  return native.parse(language, source.text, filename, outside ? undefined : inTarget);
+}
+
+/** A path with links resolved; as given when it does not exist. */
+function real(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 /** The same as `parse`; parsers are ready at once here. */

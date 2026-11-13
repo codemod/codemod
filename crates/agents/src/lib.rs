@@ -9,10 +9,9 @@
 //! use codemod_agents::{find, Autonomy, Run, Task};
 //!
 //! let agent = find("codex").unwrap();
-//! let installed = agent.installed().expect("codex is not installed");
 //! let outcome = Run {
-//!     adapter: agent.adapter,
-//!     executable: installed,
+//!     adapter: agent,
+//!     executable: agent.installed().expect("codex is not installed"),
 //!     task: Task {
 //!         prompt: "Rename foo to bar in src/",
 //!         system_prompt: None,
@@ -31,72 +30,39 @@
 //! [`parent_agent`] tells whether this program itself runs inside one.
 
 mod adapter;
-pub mod adapters;
+mod adapters;
 mod detect;
 mod event;
-pub mod probe;
+mod parse;
+mod probe;
 mod run;
+mod transcript;
 mod which;
 
 use std::path::PathBuf;
 
-pub use adapter::{
-    json_line, str_at, with_instructions, Adapter, Autonomy, Launch, Parser, Task, TextParser,
-    Transcript,
-};
-pub use adapters::ADAPTERS;
-pub use detect::{parent_agent, Evidence, ParentAgent};
-pub use event::{AgentEvent, Stream, Usage};
+pub use adapter::{Adapter, Autonomy, ReadOnly, Task};
+pub use detect::{agents_in_env, parent_agent, Evidence, ParentAgent};
+pub use event::{AgentEvent, FileChange, FileChangeKind, Stream, Usage};
 pub use run::{Outcome, Run, RunError};
-pub use which::which;
-
-/// A supported agent.
-#[derive(Clone, Copy)]
-pub struct Agent {
-    pub adapter: &'static dyn Adapter,
-}
-
-impl std::fmt::Debug for Agent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Agent").field(&self.adapter.id()).finish()
-    }
-}
-
-impl Agent {
-    pub fn id(&self) -> &'static str {
-        self.adapter.id()
-    }
-
-    pub fn label(&self) -> &'static str {
-        self.adapter.label()
-    }
-
-    /// Where the agent's executable is, when it is installed.
-    pub fn installed(&self) -> Option<PathBuf> {
-        self.adapter
-            .executables()
-            .iter()
-            .find_map(|name| which(name))
-    }
-}
 
 /// Every supported agent.
-pub fn agents() -> impl Iterator<Item = Agent> {
-    ADAPTERS.iter().map(|adapter| Agent { adapter: *adapter })
+pub fn agents() -> impl Iterator<Item = &'static dyn Adapter> {
+    adapters::ADAPTERS.iter().copied()
 }
 
 /// The agent with this id or alias (case-insensitive).
-pub fn find(name: &str) -> Option<Agent> {
+pub fn find(name: &str) -> Option<&'static dyn Adapter> {
     let name = name.trim().to_ascii_lowercase();
     agents().find(|agent| {
         agent.id() == name
-            || agent.adapter.aliases().contains(&name.as_str())
-            || agent.adapter.executables().contains(&name.as_str())
+            || agent.aliases().contains(&name.as_str())
+            || agent.executables().contains(&name.as_str())
     })
 }
 
 /// The supported agents that are installed, with their executables.
-pub fn installed() -> Vec<(Agent, PathBuf)> {
+pub fn installed() -> Vec<(&'static dyn Adapter, PathBuf)> {
     agents()
         .filter_map(|agent| agent.installed().map(|path| (agent, path)))
         .collect()

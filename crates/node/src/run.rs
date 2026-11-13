@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use butterflow_state::run_store::{LocalStore, MemoryStore, RunStore, StepRecord, StepStatus};
+use butterflow_state::run_store::{LocalStore, MemoryStore, RunStore, StepRecord};
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_workflow::events::CollectEvents;
 use codemod_workflow::interaction::NonInteractive;
@@ -37,7 +37,6 @@ pub struct OpenOptions {
 }
 
 struct Inner {
-    engine: Engine,
     run: HostedRun,
     events: Arc<CollectEvents>,
     summary: Arc<Summary>,
@@ -57,6 +56,13 @@ impl Run {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
+        // The CLI builds a workflow before running it, and refuses what
+        // cannot run in its isolates (a callback that changes an outer
+        // variable, `fs` in the body, ...). The same rules hold here, so a
+        // workflow that passes its tests also runs with the CLI.
+        if workflow.is_file() && codemod_workflow::is_typescript(&workflow) {
+            codemod_workflow::load_workflow(&workflow).map_err(to_napi)?;
+        }
         let test = if options.until.is_some() || options.given.is_some() {
             Some(TestPlan {
                 until: options.until,
@@ -67,7 +73,7 @@ impl Run {
         };
         let store: Arc<dyn RunStore> = match options.store.as_deref() {
             None | Some("memory") => Arc::new(MemoryStore::default()),
-            Some("local") => Arc::new(LocalStore::default_location().map_err(to_napi)?),
+            Some("local") => Arc::new(LocalStore::default_location()),
             Some(other) => {
                 return Err(Error::from_reason(format!(
                     "unknown store '{other}'; use \"memory\" or \"local\""
@@ -109,7 +115,6 @@ impl Run {
         .map_err(to_napi)?;
         Ok(Self {
             inner: Arc::new(Inner {
-                engine,
                 run,
                 events,
                 summary,
@@ -118,18 +123,8 @@ impl Run {
     }
 
     #[napi(getter)]
-    pub fn run_id(&self) -> String {
-        self.inner.run.run_id().to_string()
-    }
-
-    #[napi(getter)]
     pub fn target(&self) -> String {
         self.inner.run.target().to_string_lossy().into_owned()
-    }
-
-    #[napi(getter)]
-    pub fn workflow_dir(&self) -> String {
-        self.inner.run.workflow_dir().to_string_lossy().into_owned()
     }
 
     #[napi(getter)]
@@ -140,11 +135,6 @@ impl Run {
     #[napi(getter)]
     pub fn dry_run(&self) -> bool {
         self.inner.run.dry_run()
-    }
-
-    #[napi(getter)]
-    pub fn started_at(&self) -> f64 {
-        self.inner.run.started_at() as f64
     }
 
     /// Steps recorded by earlier executions of this run.
@@ -172,8 +162,8 @@ impl Run {
     }
 
     #[napi]
-    pub fn event(&self, event: String) {
-        self.inner.run.event(&event);
+    pub fn event(&self, event: String) -> Result<()> {
+        self.inner.run.event(&event).map_err(Error::from_reason)
     }
 
     #[napi]
@@ -191,6 +181,12 @@ impl Run {
     #[napi]
     pub fn canceled(&self) -> bool {
         self.inner.run.canceled()
+    }
+
+    /// Whether a step about to start must not, because the run was canceled.
+    #[napi]
+    pub fn refuses_steps(&self) -> bool {
+        self.inner.run.refuses_steps()
     }
 
     #[napi]
@@ -263,79 +259,28 @@ impl Run {
         serde_json::to_value(self.inner.events.take()).map_err(to_napi)
     }
 
-    /// Record how the run ended: `{ status: "succeeded", output }`,
-    /// `{ status: "failed", error }`, `{ status: "canceled" }` or
-    /// `{ status: "awaiting-approval", message }`. Returns the report.
+    /// Record how the run ended, given how its body ended:
+    /// `{ status: "succeeded", detail: output }`, `{ status: "failed", detail: error }`,
+    /// `{ status: "canceled" }`, or `null` when the body cannot end any more
+    /// (the steps it waits for will never start). A step that was canceled or
+    /// waits for an approval decides the ending whatever the body did.
+    /// Returns the report.
     #[napi]
-    pub fn finish(&self, ending: String) -> Result<Value> {
-        let ending: EndingInput = serde_json::from_str(&ending).map_err(to_napi)?;
-        let ending = match ending {
-            EndingInput::Succeeded { output } => Ending::Succeeded(output.unwrap_or(Value::Null)),
-            EndingInput::Failed { error } => Ending::Failed(error),
-            EndingInput::Canceled => Ending::Canceled,
-            EndingInput::AwaitingApproval { message } => Ending::AwaitingApproval(message),
-        };
-        let report = self
-            .inner
-            .engine
-            .finish(&self.inner.run, ending)
-            .map_err(to_napi)?;
-        let (status, output, error, awaiting, stopped_at) = match &report.ending {
-            Ending::Succeeded(output) => ("succeeded", output.clone(), None, None, None),
-            Ending::Failed(error) => ("failed", Value::Null, Some(error.clone()), None, None),
-            Ending::Canceled => ("canceled", Value::Null, None, None, None),
-            Ending::AwaitingApproval(message) => (
-                "awaiting-approval",
-                Value::Null,
-                None,
-                Some(message.clone()),
-                None,
-            ),
-            Ending::Stopped(label) => ("stopped", Value::Null, None, None, Some(label.clone())),
-        };
-        let steps: Vec<Value> = report
-            .steps
-            .iter()
-            .map(|step| {
-                json!({
-                    "position": step.position,
-                    "label": step.label,
-                    "status": match step.status {
-                        StepStatus::Succeeded => "succeeded",
-                        StepStatus::Failed => "failed",
-                    },
-                    "result": step.result,
-                    "error": step.error,
-                    "given": step.given,
-                })
-            })
-            .collect();
+    pub fn finish(&self, body: String) -> Result<Value> {
+        let body: Option<Ending> = serde_json::from_str(&body).map_err(to_napi)?;
+        let mut report = self.inner.run.finish(body).map_err(to_napi)?.to_json();
         let stats = &self.inner.summary.stats;
-        Ok(json!({
-            "runId": report.run.id,
-            "status": status,
-            "output": output,
-            "error": error,
-            "awaiting": awaiting,
-            "stoppedAt": stopped_at,
-            "steps": steps,
-            "metrics": self.inner.summary.metrics(),
-            "stats": {
-                "filesModified": stats.files_modified.load(std::sync::atomic::Ordering::Relaxed),
-                "filesUnmodified": stats.files_unmodified.load(std::sync::atomic::Ordering::Relaxed),
-                "filesWithErrors": stats.files_with_errors.load(std::sync::atomic::Ordering::Relaxed),
-            },
-        }))
+        let count = |counter: &std::sync::atomic::AtomicUsize| {
+            counter.load(std::sync::atomic::Ordering::Relaxed)
+        };
+        report["metrics"] = json!(self.inner.summary.metrics());
+        report["stats"] = json!({
+            "filesModified": count(&stats.files_modified),
+            "filesUnmodified": count(&stats.files_unmodified),
+            "filesWithErrors": count(&stats.files_with_errors),
+        });
+        Ok(report)
     }
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "status", rename_all = "kebab-case")]
-enum EndingInput {
-    Succeeded { output: Option<Value> },
-    Failed { error: String },
-    Canceled,
-    AwaitingApproval { message: String },
 }
 
 /// Run blocking engine work on its own thread: tasks start their own async

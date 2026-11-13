@@ -1,191 +1,170 @@
 //! Agents whose headless mode prints text only (or whose structured output
-//! is undocumented): their output is the answer.
+//! is undocumented): their output is the answer. They differ only in their
+//! command lines, which are data here.
 
 use std::path::Path;
 
-use crate::adapter::{with_instructions, Adapter, Autonomy, Launch, Parser, Task, TextParser};
+use crate::adapter::{Adapter, Autonomy, Launch, ReadOnly, Task};
+use crate::parse::{not_a_flag, with_instructions, TextParser};
 
-/// Aider: `aider --message <prompt> --yes-always`.
-///
-/// Aider never runs the shell commands it suggests in this mode, and only
-/// edits files it decides to add to the chat.
-pub struct Aider;
-
-impl Adapter for Aider {
-    fn id(&self) -> &'static str {
-        "aider"
-    }
-
-    fn label(&self) -> &'static str {
-        "Aider"
-    }
-
-    fn executables(&self) -> &'static [&'static str] {
-        &["aider"]
-    }
-
-    fn launch(&self, task: &Task<'_>, _executable: &Path) -> Launch {
-        let launch = Launch::default()
-            .args([
-                "--yes-always",
-                "--no-pretty",
-                "--no-stream",
-                "--no-auto-commits",
-                "--no-check-update",
-                "--no-show-release-notes",
-            ])
-            .option("--model", task.model);
-        match task.autonomy {
-            Autonomy::Full => launch,
-            Autonomy::ReadOnly => launch.args(["--chat-mode", "ask"]),
-        }
-        .arg("--message")
-        .arg(with_instructions(task.prompt, task.system_prompt))
-    }
-
-    fn parser(&self) -> Box<dyn Parser> {
-        Box::new(TextParser::default())
-    }
+/// An agent that prints text. Its command line is
+/// `[cwd_flag <cwd>] <args> [--model <model>] <full | read_only> <prompt>`.
+pub(crate) struct TextAgent {
+    id: &'static str,
+    label: &'static str,
+    aliases: &'static [&'static str],
+    executables: &'static [&'static str],
+    env_markers: &'static [&'static str],
+    /// The flag that takes the directory to work in, when there is one.
+    cwd_flag: Option<&'static str>,
+    args: &'static [&'static str],
+    /// What lets it edit files and run commands without asking.
+    full: &'static [&'static str],
+    /// How it is kept read-only, and with which arguments.
+    read_only: (ReadOnly, &'static [&'static str]),
+    prompt: Prompt,
 }
 
-/// Crush: `crush run <prompt>`, which approves every action itself.
-pub struct Crush;
-
-impl Adapter for Crush {
-    fn id(&self) -> &'static str {
-        "crush"
-    }
-
-    fn label(&self) -> &'static str {
-        "Crush"
-    }
-
-    fn executables(&self) -> &'static [&'static str] {
-        &["crush"]
-    }
-
-    fn session_env(&self) -> &'static [&'static str] {
-        &["CRUSH"]
-    }
-
-    fn launch(&self, task: &Task<'_>, _executable: &Path) -> Launch {
-        Launch::default()
-            .arg("--cwd")
-            .arg(task.cwd)
-            .args(["run", "--quiet"])
-            .option("--model", task.model)
-            .arg(with_instructions(task.prompt, task.system_prompt))
-    }
-
-    fn parser(&self) -> Box<dyn Parser> {
-        Box::new(TextParser::default())
-    }
+/// Where the prompt goes on the command line.
+enum Prompt {
+    /// `-- <prompt>`.
+    Positional,
+    /// `<flag>=<prompt>`.
+    Joined(&'static str),
+    /// `<flag> <prompt>`, for a flag not known to take `=`: a prompt that
+    /// starts with `-` gets a space in front.
+    After(&'static str),
 }
 
-/// Kiro CLI: `kiro-cli chat --no-interactive <prompt>`.
-pub struct Kiro;
-
-impl Adapter for Kiro {
+impl Adapter for TextAgent {
     fn id(&self) -> &'static str {
-        "kiro"
+        self.id
     }
 
     fn label(&self) -> &'static str {
-        "Kiro CLI"
+        self.label
     }
 
     fn aliases(&self) -> &'static [&'static str] {
-        &["kiro-cli"]
+        self.aliases
     }
 
     fn executables(&self) -> &'static [&'static str] {
-        &["kiro-cli"]
+        self.executables
+    }
+
+    fn env_markers(&self) -> &'static [&'static str] {
+        self.env_markers
+    }
+
+    fn read_only(&self) -> ReadOnly {
+        self.read_only.0
     }
 
     fn launch(&self, task: &Task<'_>, _executable: &Path) -> Launch {
-        let launch = Launch::default()
-            .args(["chat", "--no-interactive"])
-            .option("--model", task.model);
-        match task.autonomy {
-            Autonomy::Full => launch.arg("--trust-all-tools"),
-            Autonomy::ReadOnly => launch,
+        let mut launch = Launch::new(TextParser);
+        if let Some(flag) = self.cwd_flag {
+            launch = launch.arg(flag).arg(task.cwd);
         }
-        .arg(with_instructions(task.prompt, task.system_prompt))
-    }
-
-    fn parser(&self) -> Box<dyn Parser> {
-        Box::new(TextParser::default())
+        let launch =
+            launch
+                .args(self.args)
+                .option("--model", task.model)
+                .args(match task.autonomy {
+                    Autonomy::Full => self.full,
+                    Autonomy::ReadOnly => self.read_only.1,
+                });
+        let prompt = with_instructions(task.prompt, task.system_prompt);
+        match self.prompt {
+            Prompt::Positional => launch.positional(prompt),
+            Prompt::Joined(flag) => launch.joined(flag, &prompt),
+            Prompt::After(flag) => launch.arg(flag).arg(not_a_flag(prompt)),
+        }
     }
 }
+
+/// Aider: `aider --message=<prompt> --yes-always`.
+///
+/// With `--yes-always` Aider never runs the shell commands it suggests, and
+/// only edits files it decides to add to the chat. Read-only is its ask
+/// mode, which answers without editing, as a dry run and without the yes to
+/// every question.
+pub(crate) static AIDER: TextAgent = TextAgent {
+    id: "aider",
+    label: "Aider",
+    aliases: &[],
+    executables: &["aider"],
+    env_markers: &[],
+    cwd_flag: None,
+    args: &[
+        "--no-pretty",
+        "--no-stream",
+        "--no-auto-commits",
+        "--no-check-update",
+        "--no-show-release-notes",
+    ],
+    full: &["--yes-always"],
+    read_only: (
+        ReadOnly::Enforced,
+        &["--chat-mode", "ask", "--dry-run", "--no-gitignore"],
+    ),
+    prompt: Prompt::Joined("--message"),
+};
+
+/// Crush: `crush run -- <prompt>`, which approves every action itself.
+pub(crate) static CRUSH: TextAgent = TextAgent {
+    id: "crush",
+    label: "Crush",
+    aliases: &[],
+    executables: &["crush"],
+    env_markers: &["CRUSH"],
+    cwd_flag: Some("--cwd"),
+    args: &["run", "--quiet"],
+    full: &[],
+    read_only: (ReadOnly::Unsupported, &[]),
+    prompt: Prompt::Positional,
+};
+
+/// Kiro CLI: `kiro-cli chat --no-interactive -- <prompt>`. Without
+/// `--trust-all-tools` it asks before a tool writes or runs a command.
+pub(crate) static KIRO: TextAgent = TextAgent {
+    id: "kiro",
+    label: "Kiro CLI",
+    aliases: &["kiro-cli"],
+    executables: &["kiro-cli"],
+    env_markers: &[],
+    cwd_flag: None,
+    args: &["chat", "--no-interactive"],
+    full: &["--trust-all-tools"],
+    read_only: (ReadOnly::AgentDefaults, &[]),
+    prompt: Prompt::Positional,
+};
 
 /// Auggie (Augment): `auggie --print <prompt>`. Its tool permissions come
-/// from its settings.
-pub struct Auggie;
+/// from its settings, so nothing here can keep it read-only.
+pub(crate) static AUGGIE: TextAgent = TextAgent {
+    id: "auggie",
+    label: "Auggie",
+    aliases: &["augment"],
+    executables: &["auggie"],
+    env_markers: &["AUGMENT_AGENT"],
+    cwd_flag: Some("--workspace-root"),
+    args: &[],
+    full: &[],
+    read_only: (ReadOnly::Unsupported, &[]),
+    prompt: Prompt::After("--print"),
+};
 
-impl Adapter for Auggie {
-    fn id(&self) -> &'static str {
-        "auggie"
-    }
-
-    fn label(&self) -> &'static str {
-        "Auggie"
-    }
-
-    fn aliases(&self) -> &'static [&'static str] {
-        &["augment"]
-    }
-
-    fn executables(&self) -> &'static [&'static str] {
-        &["auggie"]
-    }
-
-    fn session_env(&self) -> &'static [&'static str] {
-        &["AUGMENT_AGENT"]
-    }
-
-    fn launch(&self, task: &Task<'_>, _executable: &Path) -> Launch {
-        Launch::default()
-            .arg("--workspace-root")
-            .arg(task.cwd)
-            .option("--model", task.model)
-            .arg("--print")
-            .arg(with_instructions(task.prompt, task.system_prompt))
-    }
-
-    fn parser(&self) -> Box<dyn Parser> {
-        Box::new(TextParser::default())
-    }
-}
-
-/// Cline CLI: `cline <prompt>`, which approves actions itself by default.
-pub struct Cline;
-
-impl Adapter for Cline {
-    fn id(&self) -> &'static str {
-        "cline"
-    }
-
-    fn label(&self) -> &'static str {
-        "Cline"
-    }
-
-    fn executables(&self) -> &'static [&'static str] {
-        &["cline"]
-    }
-
-    fn launch(&self, task: &Task<'_>, _executable: &Path) -> Launch {
-        let launch = Launch::default()
-            .arg("--cwd")
-            .arg(task.cwd)
-            .option("--model", task.model);
-        match task.autonomy {
-            Autonomy::Full => launch,
-            Autonomy::ReadOnly => launch.args(["--auto-approve", "false"]),
-        }
-        .arg(with_instructions(task.prompt, task.system_prompt))
-    }
-
-    fn parser(&self) -> Box<dyn Parser> {
-        Box::new(TextParser::default())
-    }
-}
+/// Cline CLI: `cline -- <prompt>`, which approves actions itself by default.
+pub(crate) static CLINE: TextAgent = TextAgent {
+    id: "cline",
+    label: "Cline",
+    aliases: &[],
+    executables: &["cline"],
+    env_markers: &[],
+    cwd_flag: Some("--cwd"),
+    args: &[],
+    full: &[],
+    read_only: (ReadOnly::Enforced, &["--auto-approve", "false"]),
+    prompt: Prompt::Positional,
+};

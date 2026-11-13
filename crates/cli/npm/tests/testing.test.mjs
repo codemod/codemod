@@ -316,6 +316,150 @@ export default async function main() {
     assert.equal(result.status, "succeeded", result.error);
     assert.deepEqual(result.output, [1]);
   });
+
+  // What follows used to differ between the hosts.
+
+  test(`${host}: state in a step is copied in and out, as JSON keeps it`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, getState, setState } from "codemod/workflow";
+export default async function main() {
+  setState("seen", ["a"]);
+  setState("same", 1);
+  const inStep = await step("Edit", () => {
+    const seen = getState("seen");
+    seen.push("b");
+    setState("seen", seen);
+    const kept = { n: 1 };
+    setState("kept", kept);
+    kept.n = 2;
+    setState("odd", { at: new Date(0), missing: undefined, big: Number.NaN });
+    setState("same", 1);
+    return Object.keys(getState()).sort();
+  });
+  return { inStep, seen: getState("seen"), kept: getState("kept"), odd: getState("odd") };
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
+    assert.equal(result.status, "succeeded", result.error);
+    assert.deepEqual(result.output, {
+      inStep: ["kept", "odd", "same", "seen"],
+      seen: ["a", "b"],
+      kept: { n: 1 },
+      odd: { at: {}, missing: null, big: null },
+    });
+  });
+
+  test(`${host}: a failing until step fails the run`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step } from "codemod/workflow";
+export default async function main() {
+  await step("Boom", () => { throw new Error("no"); });
+  await step("After", () => 1);
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await runWorkflow(path, { target: { "a.ts": "a\n" }, until: "Boom" });
+    assert.equal(result.status, "failed");
+    assert.equal(result.error, "StepError: step 'Boom' failed: no");
+    assert.equal(result.ok, false);
+  });
+
+  test(`${host}: metrics, runtime logs and reported failures`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+import { useMetricAtom } from "codemod/metrics";
+import { warn, failFile } from "codemod/runtime";
+export default async function main() {
+  const found = await step("Scan", forEachFile("**/*.ts", (file) => {
+    const metric = useMetricAtom("seen");
+    metric.increment({ count: 3 }, 2.9);
+    metric.increment({ count: 3 }, -5);
+    warn("careful", { file: file.path });
+    if (file.path === "b.ts") {
+      try { failFile("not this one"); } catch {}
+    }
+    return file.path;
+  }));
+  return { outputs: found.outputs, failures: found.failures, metrics: found.metrics };
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await runWorkflow(path, { target: { "a.ts": "a\n", "b.ts": "b\n" } });
+    assert.equal(result.status, "succeeded", result.error);
+    assert.deepEqual(result.output.outputs, ["a.ts"]);
+    assert.deepEqual(result.output.failures, [{ path: "b.ts", error: "not this one" }]);
+    assert.deepEqual(result.output.metrics, {
+      seen: [{ cardinality: { count: "3" }, count: 4 }],
+    });
+    const warnings = result.logs.map((log) => log.line).filter((line) => line.includes("careful"));
+    assert.deepEqual(warnings.sort(), [
+      '[warn] careful {"file":"a.ts"}',
+      '[warn] careful {"file":"b.ts"}',
+    ]);
+  });
+
+  test(`${host}: a workflow the CLI would not build is refused`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  let count = 0;
+  await step(forEachFile("**/*.ts", () => { count++; }));
+  return count;
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    await assert.rejects(runWorkflow(path, { target: { "a.ts": "a\n" } }), /assigns to 'count'/);
+  });
+
+  test(
+    `${host}: the body's lock and step outputs are there, and a function result is null`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          "workflow.ts": `
+import { acquireLock, getOrSetStepOutput, getStepOutput, setStepOutput } from "codemod/workflow";
+export default async function main() {
+  const release = acquireLock("x");
+  release();
+  setStepOutput("a", "1");
+  return [getStepOutput("", "a"), getOrSetStepOutput("", "b", "2"), () => 1];
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
+      assert.equal(result.status, "succeeded", result.error);
+      assert.deepEqual(result.output, ["1", "2", null]);
+    },
+  );
+
+  test(`${host}: an aborted run ends as canceled`, HOSTS[host], async () => {
+    const result = await runWorkflow(workflow(), {
+      target: { "a.ts": "old\n" },
+      signal: AbortSignal.abort(),
+    });
+    assert.equal(result.status, "canceled");
+    assert.deepEqual(result.files, { "a.ts": "old\n" });
+  });
 }
 
 // ------------------------------------------------------------ node host ---

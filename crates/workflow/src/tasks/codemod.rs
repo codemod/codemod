@@ -3,16 +3,14 @@
 //! same engine with its own step history, so resuming the parent also resumes
 //! the child.
 
-use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{block_on, TaskContext, TaskError, TaskOutcome, TaskResult};
 use crate::events::{Event, EventSink};
-use crate::run::{execute, Ending, RunContext};
+use crate::run::{execute, Ending};
 use butterflow_core::nested_codemod_run::{
     NestedCodemodRun, NestedCodemodRunEvent, NestedCodemodRunOutcome,
 };
@@ -73,9 +71,11 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
                 codemod_name: metadata.package_web_path.clone(),
                 package_version: package.version.clone(),
                 execution_id: uuid::Uuid::new_v4().to_string(),
+                // The first entry is the run's own workflow, not a dependency.
                 dependency_path: run
                     .chain
                     .iter()
+                    .skip(1)
                     .map(|identity| {
                         if identity.starts_with('/') {
                             "<local>".to_string()
@@ -88,37 +88,28 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             });
         package.package_dir
     };
-    let workflow_path = find_workflow(&package_dir)?;
+    let workflow_path = butterflow_core::package_workflows::locate_workflow(&package_dir, None)
+        .map_err(|e| TaskError::Failed(format!("cannot load '{}': {e}", request.source)))?;
     let workflow = crate::engine::load_workflow(&workflow_path)
         .map_err(|e| TaskError::Failed(format!("cannot load '{}': {e}", request.source)))?;
     task.log(format!("running {}", request.source));
 
-    let mut chain = run.chain.clone();
-    chain.push(identity);
-    let child = Arc::new(RunContext {
-        run_id: format!("{}~{}", run.run_id, task.position),
-        target: run.target.clone(),
-        bundle_dir: package_dir,
-        params: request
-            .params
-            .map(Value::Object)
-            .unwrap_or_else(|| run.params.clone()),
-        dry_run: run.dry_run,
-        started_at: run.started_at,
-        callbacks: workflow.built.callbacks.clone(),
-        store: Arc::clone(&run.store),
-        events: Arc::new(NestedEvents {
-            parent: Arc::clone(&run.events),
-            position: task.position,
-        }),
-        interaction: Arc::clone(&run.interaction),
-        services: Arc::clone(&run.services),
-        cancel: Arc::clone(&run.cancel),
-        commit_lock: Mutex::new(()),
-        chain,
-        test: None,
-        stopped: AtomicBool::new(false),
-    });
+    let child = Arc::new(
+        run.child(
+            task.position,
+            package_dir,
+            request
+                .params
+                .map(Value::Object)
+                .unwrap_or_else(|| run.params.clone()),
+            workflow.built.callbacks.clone(),
+            Arc::new(NestedEvents {
+                parent: Arc::clone(&run.events),
+                position: task.position,
+            }),
+            identity,
+        ),
+    );
     let observer = run.services.nested_observer.clone();
     if let (Some(observer), Some(nested)) = (&observer, &nested_run) {
         block_on(observer.record(NestedCodemodRunEvent::Started(nested.clone())));
@@ -162,20 +153,6 @@ fn is_local(source: &str) -> bool {
     source.starts_with("./") || source.starts_with("../") || source.starts_with('/')
 }
 
-/// `workflow.ts`, or a YAML workflow, in a package directory.
-pub(crate) fn find_workflow(package_dir: &Path) -> Result<PathBuf, TaskError> {
-    ["workflow.ts", "workflow.yaml", "workflow.yml"]
-        .iter()
-        .map(|name| package_dir.join(name))
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            TaskError::Failed(format!(
-                "no workflow.ts or workflow.yaml in {}",
-                package_dir.display()
-            ))
-        })
-}
-
 /// Reports a child workflow's steps as log lines of the parent step.
 struct NestedEvents {
     parent: Arc<dyn EventSink>,
@@ -197,6 +174,8 @@ impl EventSink for NestedEvents {
                 (StepStatus::Succeeded, _) => format!("✓ {label}"),
                 (StepStatus::Failed, Some(error)) => format!("✗ {label}: {error}"),
                 (StepStatus::Failed, None) => format!("✗ {label}"),
+                (StepStatus::Canceled, _) => format!("■ {label}: canceled"),
+                (StepStatus::AwaitingApproval, _) => format!("‖ {label}: waiting for approval"),
             },
             Event::StepLog { line, .. } => format!("  {line}"),
             Event::RunLog { line } => line,

@@ -386,8 +386,12 @@ npx codemod <package-name>
 </ResponseField>
 
 <ResponseField name="--approve" type="boolean">
-  Give every approval the workflow asks for (`approval(...)` steps, manual nodes in `workflow.yaml`, pull requests). Without it, a non-interactive run pauses at the first approval and can be continued with `workflow resume --approve`.
+  Give every approval the workflow asks for (`approval(...)` steps, manual nodes in `workflow.yaml`, pull requests). Without it, a run nobody can answer for pauses at the first approval and can be continued with `workflow resume --approve`.
+
+  `--approve` does not grant capabilities: those come from `--allow-fs`, `--allow-fetch` and `--allow-child-process`, or from your answer when the package asks.
 </ResponseField>
+
+A run is unattended when you pass `--no-interactive`, and also when there is no terminal to ask on (in CI, or with input piped in). When the CLI does ask, pressing Enter answers no: every question is about running or publishing something.
 
 <ResponseField name="--managed-git" type="boolean">
   Let `branch`, `commit` and `pullRequest` steps (or `branch_name`, `commit` and `pull_request` in `workflow.yaml`) change the repository. Without it, those steps are recorded as skipped.
@@ -461,7 +465,9 @@ npx codemod <package-name>
 
 **`workflow resume`**
 
-Continue a run that failed, was canceled, or is waiting for approval. Steps that already finished are not run again: their recorded results are reused. If you changed the workflow, you may change the step that failed and later ones; changing a step that already finished stops the resume with a `NondeterminismError`.
+Continue a run that failed, was canceled or interrupted, or is waiting for approval. Steps that already finished are not run again: their recorded results are reused, in the order the steps finished the first time. If you changed the workflow, you may change the step that failed and later ones; changing a step that already finished stops the resume with a `NondeterminismError`.
+
+The run continues with what it was started with: its capabilities, `--managed-git` and `--agent` carry over, and flags you pass add to them. A run that another process is still executing cannot be resumed; wait for it or cancel it. A run started with `runWorkflow` in Node.js is resumed there, not here.
 
 ```bash
 npx codemod workflow resume --id <ID> [--approve]
@@ -603,7 +609,7 @@ Each fixture is a directory with `input/` and `expected/` directories, or `input
 
 **`workflow status`**
 
-Show a run and each of its recorded steps.
+Show a run and each of its recorded steps. A step is `succeeded`, `failed`, `canceled`, or `awaiting-approval`; the last two run again when the run is resumed. A run shown as `interrupted` was still running when its process was killed: resume or cancel it.
 
 ```bash
 npx codemod workflow status -i <ID>
@@ -627,7 +633,7 @@ npx codemod workflow list [-l <LIMIT>]
 
 **`workflow cancel`**
 
-Cancel a workflow run. A run in progress, in this or another terminal, stops before its next step; a run waiting for approval is marked canceled.
+Cancel a workflow run. A run in progress, in this or another terminal, stops the step it is on (a shell command and what it started are terminated) and writes nothing more. Any other unfinished run (failed, waiting for approval, or interrupted) is marked canceled. A canceled run can still be resumed.
 
 ```bash
 npx codemod workflow cancel -i <ID>
@@ -1005,6 +1011,8 @@ Publish a Codemod package to a registry.
 ```bash
 npx codemod publish [PATH]
 ```
+
+`node_modules` is not published. A `workflow.ts`, and each transform file it passes to `jssg("...")` as a string, is bundled with what it imports from npm packages; the modules the CLI provides (`codemod/workflow`, `codemod/ast-grep`, `fs`, ...) stay imports. A transform whose path is computed at run time is published as it is, so keep such transforms free of package imports.
 
 <ResponseField name="[PATH]" type="string">
   Path to codemod directory (defaults to current directory).

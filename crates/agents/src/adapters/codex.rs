@@ -9,12 +9,12 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::adapter::{
-    json_line, str_at, with_instructions, Adapter, Autonomy, Launch, Parser, Task, Transcript,
-};
-use crate::event::{AgentEvent, Stream, Usage};
+use crate::adapter::{Adapter, Autonomy, Launch, Parser, ReadOnly, Task};
+use crate::event::{AgentEvent, FileChange, FileChangeKind};
+use crate::parse::{started, str_at, token_usage, with_instructions};
+use crate::transcript::Transcript;
 
-pub struct Codex;
+pub(crate) struct Codex;
 
 impl Adapter for Codex {
     fn id(&self) -> &'static str {
@@ -33,7 +33,7 @@ impl Adapter for Codex {
         &["codex"]
     }
 
-    fn session_env(&self) -> &'static [&'static str] {
+    fn env_markers(&self) -> &'static [&'static str] {
         &[
             "CODEX_THREAD_ID",
             "CODEX_SESSION_ID",
@@ -42,8 +42,12 @@ impl Adapter for Codex {
         ]
     }
 
+    fn read_only(&self) -> ReadOnly {
+        ReadOnly::Enforced
+    }
+
     fn launch(&self, task: &Task<'_>, _executable: &Path) -> Launch {
-        let launch = Launch::default()
+        let launch = Launch::new(CodexParser::default())
             .args([
                 "exec",
                 "--json",
@@ -62,37 +66,18 @@ impl Adapter for Codex {
         .env("RUST_LOG", "error")
         .stdin(with_instructions(task.prompt, task.system_prompt))
     }
-
-    fn parser(&self) -> Box<dyn Parser> {
-        Box::new(CodexParser::default())
-    }
 }
 
 #[derive(Default)]
-pub(crate) struct CodexParser {
+struct CodexParser {
     /// Items whose start was reported, so their completion only adds the result.
     started: std::collections::HashSet<String>,
 }
 
 impl Parser for CodexParser {
-    fn parse(&mut self, line: &str, transcript: &mut Transcript) -> Vec<AgentEvent> {
-        let Some(event) = json_line(line) else {
-            return vec![AgentEvent::Output {
-                stream: Stream::Stdout,
-                line: line.to_string(),
-            }];
-        };
-        match str_at(&event, "/type").unwrap_or_default() {
-            "thread.started" => {
-                let session = str_at(&event, "/thread_id").map(str::to_string);
-                if let Some(session) = &session {
-                    transcript.session(session.clone());
-                }
-                vec![AgentEvent::Started {
-                    session_id: session,
-                    model: None,
-                }]
-            }
+    fn event(&mut self, event: &Value, transcript: &mut Transcript) -> Vec<AgentEvent> {
+        match str_at(event, "/type").unwrap_or_default() {
+            "thread.started" => vec![started(transcript, str_at(event, "/thread_id"), None)],
             "item.started" => {
                 let Some(item) = event.get("item") else {
                     return Vec::new();
@@ -114,25 +99,19 @@ impl Parser for CodexParser {
                 self.completed(item)
             }
             "turn.completed" => {
-                transcript.turn_usage(Usage {
-                    input_tokens: event.pointer("/usage/input_tokens").and_then(Value::as_u64),
-                    output_tokens: event
-                        .pointer("/usage/output_tokens")
-                        .and_then(Value::as_u64),
-                    cost_usd: None,
-                });
+                transcript.turn_usage(token_usage(event.get("usage")));
                 Vec::new()
             }
             "turn.failed" => {
-                let message = str_at(&event, "/error/message")
+                let message = str_at(event, "/error/message")
                     .unwrap_or("the turn failed")
                     .to_string();
-                transcript.fail(message.clone());
+                transcript.failed(&message);
                 vec![AgentEvent::Error { message }]
             }
             // Stream errors Codex may retry; a failure ends the turn above.
             "error" => vec![AgentEvent::Warning {
-                message: str_at(&event, "/message").unwrap_or("error").to_string(),
+                message: str_at(event, "/message").unwrap_or("error").to_string(),
             }],
             _ => Vec::new(),
         }
@@ -170,15 +149,19 @@ impl CodexParser {
 /// The tool call an item stands for.
 fn call(item: &Value) -> Option<AgentEvent> {
     let id = str_at(item, "/id").map(str::to_string);
+    let mut changes = Vec::new();
     let (name, input) = match str_at(item, "/type")? {
         "command_execution" => (
             "shell".to_string(),
             json!({ "command": item.get("command") }),
         ),
-        "file_change" => (
-            "edit".to_string(),
-            json!({ "changes": item.get("changes") }),
-        ),
+        "file_change" => {
+            changes = file_changes(item);
+            (
+                "edit".to_string(),
+                json!({ "changes": item.get("changes") }),
+            )
+        }
         "web_search" => (
             "web_search".to_string(),
             json!({ "query": item.get("query") }),
@@ -193,7 +176,35 @@ fn call(item: &Value) -> Option<AgentEvent> {
         ),
         _ => return None,
     };
-    Some(AgentEvent::ToolCall { id, name, input })
+    Some(AgentEvent::ToolCall {
+        id,
+        name,
+        input,
+        changes,
+    })
+}
+
+/// The files a `file_change` item names. Codex says which files and
+/// whether each is added, updated or deleted, not what changed in them.
+fn file_changes(item: &Value) -> Vec<FileChange> {
+    item.get("changes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|change| {
+            Some(FileChange {
+                path: str_at(change, "/path")?.to_string(),
+                kind: match str_at(change, "/kind") {
+                    Some("add") => FileChangeKind::Create,
+                    Some("delete") => FileChangeKind::Delete,
+                    _ => FileChangeKind::Update,
+                },
+                old: None,
+                new: None,
+                diff: None,
+            })
+        })
+        .collect()
 }
 
 /// What a finished item returned.

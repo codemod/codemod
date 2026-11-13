@@ -24,6 +24,9 @@ pub enum AgentEvent {
         id: Option<String>,
         name: String,
         input: Value,
+        /// The files the call changes, when the agent's event says.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        changes: Vec<FileChange>,
     },
     /// What a tool call returned.
     ToolResult {
@@ -38,6 +41,33 @@ pub enum AgentEvent {
     Error { message: String },
     /// A line of output the adapter does not understand.
     Output { stream: Stream, line: String },
+}
+
+/// A change a tool call makes to a file, in one shape for every agent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileChange {
+    pub path: String,
+    pub kind: FileChangeKind,
+    /// The text that is replaced, when the agent gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old: Option<String>,
+    /// The new text: the whole file for `create` and `write`, otherwise what
+    /// replaces `old`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new: Option<String>,
+    /// A unified diff of the change, when the agent gives one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileChangeKind {
+    Create,
+    /// The file gets new content, whether or not it existed.
+    Write,
+    Update,
+    Delete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

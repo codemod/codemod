@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use butterflow_models::Error;
@@ -12,17 +15,57 @@ use crate::{OutputCallback, Runner};
 pub struct DirectRunner {
     /// When true, suppress real-time stdout/stderr printing
     quiet: bool,
+    /// Set to stop a command that is running.
+    cancel: Option<Arc<AtomicBool>>,
 }
+
+/// How often a running command checks whether it was asked to stop.
+const CANCEL_POLL: Duration = Duration::from_millis(50);
+/// How long a stopped command gets to exit before it is killed.
+const STOP_GRACE: Duration = Duration::from_secs(3);
 
 impl DirectRunner {
     /// Create a new direct runner
     pub fn new() -> Self {
-        Self { quiet: false }
+        Self {
+            quiet: false,
+            cancel: None,
+        }
     }
 
     /// Create a new direct runner with quiet mode
     pub fn with_quiet(quiet: bool) -> Self {
-        Self { quiet }
+        Self {
+            quiet,
+            cancel: None,
+        }
+    }
+
+    /// Stop the running command, and everything it started, when `cancel`
+    /// is set; `run_command` then fails with [`Error::Canceled`].
+    pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// Wait for the command, stopping it if the runner is canceled. `None`
+    /// when it was stopped.
+    async fn wait(&self, mut child: Child) -> Result<Option<ExitStatus>> {
+        let cancel = self.cancel.clone();
+        tokio::task::spawn_blocking(move || loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return Ok(Some(status)),
+                Ok(None) => {}
+                Err(e) => return Err(Error::Runtime(format!("Failed to wait for command: {e}"))),
+            }
+            if cancel.as_ref().is_some_and(|c| c.load(Ordering::SeqCst)) {
+                stop_tree(&mut child);
+                return Ok(None);
+            }
+            std::thread::sleep(CANCEL_POLL);
+        })
+        .await
+        .map_err(|e| Error::Runtime(format!("Failed to join wait task: {e}")))?
     }
 
     /// Run a step on Windows. `cmd /C` runs only the first line of its
@@ -92,7 +135,7 @@ impl DirectRunner {
             cmd.stdout(Stdio::from(stdout_file))
                 .stderr(Stdio::from(stderr_file));
 
-            let mut child = cmd
+            let child = cmd
                 .spawn()
                 .map_err(|e| Error::Runtime(format!("Failed to spawn command: {e}")))?;
             drop(cmd);
@@ -126,13 +169,11 @@ impl DirectRunner {
                 collected_output
             });
 
-            let exit_status = tokio::task::spawn_blocking(move || {
-                child
-                    .wait()
-                    .map_err(|e| Error::Runtime(format!("Failed to wait for command: {e}")))
-            })
-            .await
-            .map_err(|e| Error::Runtime(format!("Failed to join wait task: {e}")))??;
+            // A stopped command's output is not waited for: something it
+            // started may still hold the pipe open.
+            let Some(exit_status) = self.wait(child).await? else {
+                return Err(Error::Canceled);
+            };
 
             let combined_output = reader_handle
                 .join()
@@ -229,13 +270,9 @@ impl DirectRunner {
             });
 
             // Wait for the process to complete and collect outputs
-            let exit_status = tokio::task::spawn_blocking(move || {
-                child
-                    .wait()
-                    .map_err(|e| Error::Runtime(format!("Failed to wait for command: {e}")))
-            })
-            .await
-            .map_err(|e| Error::Runtime(format!("Failed to join wait task: {e}")))??;
+            let Some(exit_status) = self.wait(child).await? else {
+                return Err(Error::Canceled);
+            };
 
             let stdout_output = stdout_handle
                 .join()
@@ -254,6 +291,72 @@ impl DirectRunner {
             Ok(stdout_output)
         }
     }
+}
+
+/// Stop a command and every process it started: ask them to exit, then kill
+/// what is left after a grace period.
+fn stop_tree(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let tree = process_tree(child.id());
+        let signal_all = |signal: libc::c_int| {
+            for pid in &tree {
+                // SAFETY: signalling processes by id; one that is gone is an error we ignore.
+                unsafe { libc::kill(*pid as libc::pid_t, signal) };
+            }
+        };
+        signal_all(libc::SIGTERM);
+        let deadline = Instant::now() + STOP_GRACE;
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                break;
+            }
+            std::thread::sleep(CANCEL_POLL);
+        }
+        signal_all(libc::SIGKILL);
+        let _ = child.wait();
+    }
+    #[cfg(not(unix))]
+    {
+        // /T takes the processes the command started with it.
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        let deadline = Instant::now() + STOP_GRACE;
+        while Instant::now() < deadline && !matches!(child.try_wait(), Ok(Some(_))) {
+            std::thread::sleep(CANCEL_POLL);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+/// `root` and its descendants, parents before children.
+#[cfg(unix)]
+fn process_tree(root: u32) -> Vec<u32> {
+    let listing = Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid="])
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default();
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for line in listing.lines() {
+        let mut fields = line.split_whitespace().map(str::parse::<u32>);
+        if let (Some(Ok(pid)), Some(Ok(parent))) = (fields.next(), fields.next()) {
+            children.entry(parent).or_default().push(pid);
+        }
+    }
+    let mut tree = vec![root];
+    let mut next = 0;
+    while next < tree.len() {
+        if let Some(found) = children.get(&tree[next]) {
+            tree.extend(found);
+        }
+        next += 1;
+    }
+    tree
 }
 
 impl Default for DirectRunner {

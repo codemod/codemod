@@ -3,17 +3,20 @@
 
 use std::path::Path;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use super::claude::ClaudeParser;
-use crate::adapter::{
-    json_line, str_at, with_instructions, Adapter, Autonomy, Launch, Parser, Task, Transcript,
-};
+use crate::adapter::{Adapter, Autonomy, Launch, Parser, ReadOnly, Task};
 use crate::event::AgentEvent;
+use crate::parse::{arguments, str_at, text_of, tool_call, with_instructions};
 use crate::probe::supports_flag;
+use crate::transcript::Transcript;
 
 /// Amp: `amp --execute --stream-json`, the prompt on stdin.
-pub struct Amp;
+///
+/// Amp's own permissions ask before commands but not before file edits, and
+/// it has no read-only mode, so it cannot be kept read-only.
+pub(crate) struct Amp;
 
 impl Adapter for Amp {
     fn id(&self) -> &'static str {
@@ -28,23 +31,23 @@ impl Adapter for Amp {
         &["amp"]
     }
 
+    fn read_only(&self) -> ReadOnly {
+        ReadOnly::Unsupported
+    }
+
     fn launch(&self, task: &Task<'_>, _executable: &Path) -> Launch {
         // Amp picks models through modes (`--mode`), not model names.
-        let launch = Launch::default().args(["--execute", "--stream-json"]);
+        let launch = Launch::new(ClaudeParser).args(["--execute", "--stream-json"]);
         match task.autonomy {
             Autonomy::Full => launch.arg("--dangerously-allow-all"),
             Autonomy::ReadOnly => launch,
         }
         .stdin(with_instructions(task.prompt, task.system_prompt))
     }
-
-    fn parser(&self) -> Box<dyn Parser> {
-        Box::new(ClaudeParser)
-    }
 }
 
-/// Qwen Code: `qwen --output-format stream-json --prompt <prompt>`.
-pub struct QwenCode;
+/// Qwen Code: `qwen --output-format stream-json --prompt=<prompt>`.
+pub(crate) struct QwenCode;
 
 impl Adapter for QwenCode {
     fn id(&self) -> &'static str {
@@ -63,12 +66,16 @@ impl Adapter for QwenCode {
         &["qwen"]
     }
 
-    fn session_env(&self) -> &'static [&'static str] {
+    fn env_markers(&self) -> &'static [&'static str] {
         &["QWEN_CODE"]
     }
 
+    fn read_only(&self) -> ReadOnly {
+        ReadOnly::Enforced
+    }
+
     fn launch(&self, task: &Task<'_>, _executable: &Path) -> Launch {
-        Launch::default()
+        Launch::new(ClaudeParser)
             .args(["--output-format", "stream-json"])
             .option("--model", task.model)
             .option("--append-system-prompt", task.system_prompt)
@@ -76,20 +83,15 @@ impl Adapter for QwenCode {
                 Autonomy::Full => ["--approval-mode", "yolo"],
                 Autonomy::ReadOnly => ["--approval-mode", "plan"],
             })
-            .arg("--prompt")
-            .arg(task.prompt)
-    }
-
-    fn parser(&self) -> Box<dyn Parser> {
-        Box::new(ClaudeParser)
+            .joined("--prompt", task.prompt)
     }
 }
 
-/// Cursor Agent: `cursor-agent --print --output-format stream-json <prompt>`.
+/// Cursor Agent: `cursor-agent --print --output-format stream-json -- <prompt>`.
 ///
 /// Like Claude Code, plus `tool_call` events (`started`, `completed`) that
 /// carry the tool as `{ readToolCall: { args } }` and the like.
-pub struct Cursor;
+pub(crate) struct Cursor;
 
 impl Adapter for Cursor {
     fn id(&self) -> &'static str {
@@ -108,12 +110,20 @@ impl Adapter for Cursor {
         &["cursor-agent"]
     }
 
-    fn session_env(&self) -> &'static [&'static str] {
+    fn env_markers(&self) -> &'static [&'static str] {
         &["CURSOR_AGENT"]
     }
 
+    fn editor_env_markers(&self) -> &'static [&'static str] {
+        &["CURSOR_TRACE_ID"]
+    }
+
+    fn read_only(&self) -> ReadOnly {
+        ReadOnly::Enforced
+    }
+
     fn launch(&self, task: &Task<'_>, executable: &Path) -> Launch {
-        let launch = Launch::default()
+        let launch = Launch::new(CursorParser)
             .args(["--print", "--output-format", "stream-json"])
             .arg("--workspace")
             .arg(task.cwd)
@@ -128,23 +138,18 @@ impl Adapter for Cursor {
             Autonomy::Full => launch.arg("--force"),
             Autonomy::ReadOnly => launch.args(["--mode", "ask"]),
         }
-        .arg(with_instructions(task.prompt, task.system_prompt))
-    }
-
-    fn parser(&self) -> Box<dyn Parser> {
-        Box::new(CursorParser)
+        .positional(with_instructions(task.prompt, task.system_prompt))
     }
 }
 
 struct CursorParser;
 
 impl Parser for CursorParser {
-    fn parse(&mut self, line: &str, transcript: &mut Transcript) -> Vec<AgentEvent> {
-        let Some(event) = json_line(line).filter(|e| str_at(e, "/type") == Some("tool_call"))
-        else {
-            return ClaudeParser.parse(line, transcript);
-        };
-        let id = str_at(&event, "/call_id").map(str::to_string);
+    fn event(&mut self, event: &Value, transcript: &mut Transcript) -> Vec<AgentEvent> {
+        if str_at(event, "/type") != Some("tool_call") {
+            return ClaudeParser.event(event, transcript);
+        }
+        let id = str_at(event, "/call_id");
         let Some((kind, call)) = event
             .get("tool_call")
             .and_then(Value::as_object)
@@ -152,21 +157,17 @@ impl Parser for CursorParser {
         else {
             return Vec::new();
         };
-        match str_at(&event, "/subtype") {
-            Some("started") => {
-                let (name, input) = if kind == "function" {
-                    (
-                        str_at(call, "/name").unwrap_or("tool").to_string(),
-                        arguments(call.get("arguments")),
-                    )
-                } else {
-                    (
-                        kind.trim_end_matches("ToolCall").to_string(),
-                        call.get("args").cloned().unwrap_or(Value::Null),
-                    )
-                };
-                vec![AgentEvent::ToolCall { id, name, input }]
-            }
+        match str_at(event, "/subtype") {
+            Some("started") if kind == "function" => vec![tool_call(
+                id,
+                str_at(call, "/name").unwrap_or("tool"),
+                arguments(call.get("arguments")),
+            )],
+            Some("started") => vec![tool_call(
+                id,
+                kind.trim_end_matches("ToolCall"),
+                call.get("args").cloned().unwrap_or(Value::Null),
+            )],
             Some("completed") => {
                 let result = call.get("result").cloned().unwrap_or(Value::Null);
                 let error = result.get("error").filter(|e| !e.is_null()).cloned();
@@ -176,33 +177,12 @@ impl Parser for CursorParser {
                     .map(text_of)
                     .unwrap_or_default();
                 vec![AgentEvent::ToolResult {
-                    id,
+                    id: id.map(str::to_string),
                     output,
                     is_error: error.is_some(),
                 }]
             }
             _ => Vec::new(),
         }
-    }
-}
-
-/// Tool arguments, which some agents send as a JSON string.
-pub(crate) fn arguments(value: Option<&Value>) -> Value {
-    match value {
-        Some(Value::String(text)) => serde_json::from_str(text).unwrap_or_else(|_| json!(text)),
-        Some(other) => other.clone(),
-        None => Value::Null,
-    }
-}
-
-/// A tool's output as text: a string, its `content` or `message`, or JSON.
-pub(crate) fn text_of(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        Value::Null => String::new(),
-        other => str_at(other, "/content")
-            .or_else(|| str_at(other, "/message"))
-            .map(str::to_string)
-            .unwrap_or_else(|| other.to_string()),
     }
 }

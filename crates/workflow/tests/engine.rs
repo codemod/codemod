@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use codemod_workflow::events::Event;
 use codemod_workflow::interaction::NonInteractive;
-use codemod_workflow::{build, Ending, LocalStore, RunStatus, RunStore, StepStatus};
+use codemod_workflow::{
+    build, cancel_run, Canceled, Ending, EngineError, LocalStore, MemoryStore, RunStatus, RunStore,
+    StepStatus,
+};
 use common::{output, Harness};
 use serde_json::{json, Value};
 
@@ -396,9 +399,9 @@ fn events_report_each_step() {
 }
 
 #[test]
-fn setting_the_cancel_flag_stops_a_running_workflow() {
+fn the_stop_handle_stops_a_running_workflow() {
     let h = Harness::new();
-    let flag = h.engine.cancel_flag();
+    let stop = h.engine.stop_handle();
     let workflow = h.workflow(
         r#"
 import { step } from "codemod/workflow";
@@ -409,7 +412,7 @@ export default async function main() {
     );
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(300));
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        stop.stop();
     });
     let report = h.start_loaded(workflow, Value::Null, false);
     assert_eq!(report.ending, Ending::Canceled);
@@ -561,7 +564,361 @@ export default async function main() { return runWorkflow; }
     .unwrap_or_default();
     drop(h);
     assert!(
-        error.contains("'codemod/testing' is for Node.js"),
+        error.contains("'codemod/testing' is not a module workflows can import"),
         "{error}"
     );
+}
+
+#[test]
+fn language_maps_import_under_either_spelling() {
+    // They are types only, so the import is gone once types are stripped.
+    for specifier in [
+        "codemod/ast-grep/langs/tsx",
+        "codemod:ast-grep/langs/tsx",
+        "codemod/langs/tsx",
+    ] {
+        let source = format!(
+            "import TSX from \"{specifier}\";\nexport default async function main() {{ const x: TSX | null = null; return x; }}\n"
+        );
+        assert!(
+            codemod_workflow::build("workflow.ts", &source).is_ok(),
+            "{specifier}"
+        );
+    }
+}
+
+#[test]
+fn a_callback_in_an_imported_file_is_a_build_error() {
+    let h = Harness::new();
+    h.bundle_file(
+        "steps.ts",
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export const rewrite = () => step(forEachFile("**/*.ts", (file) => { file.write(""); }));
+"#,
+    );
+    let path = h.bundle.path().join("workflow.ts");
+    std::fs::write(
+        &path,
+        "import { rewrite } from \"./steps.ts\";\nexport default async function main() { await rewrite(); }\n",
+    )
+    .unwrap();
+    let error = codemod_workflow::load_workflow(&path)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("steps.ts calls forEachFile() with a callback"),
+        "{error}"
+    );
+
+    // Starting host tasks from a helper is fine: nothing to extract.
+    h.bundle_file(
+        "steps.ts",
+        "import { step, shell } from \"codemod/workflow\";\nexport const hello = () => step(shell(\"echo hello\"));\n",
+    );
+    std::fs::write(
+        &path,
+        "import { hello } from \"./steps.ts\";\nexport default async function main() { await hello(); }\n",
+    )
+    .unwrap();
+    assert!(codemod_workflow::load_workflow(&path).is_ok());
+}
+
+#[test]
+fn importing_the_workflow_module_as_a_namespace_is_a_build_error() {
+    let error = build_error(
+        r#"
+import * as wf from "codemod/workflow";
+export default async function main() {
+  await wf.step(wf.forEachFile("**/*.ts", (file) => {}));
+}
+"#,
+    );
+    assert!(error.contains("by name"), "{error}");
+}
+
+#[test]
+fn a_callback_keeps_its_id_through_comments_and_either_module_spelling() {
+    let ids = |source: &str| -> Vec<String> {
+        build("workflow.ts", source)
+            .unwrap()
+            .callbacks
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let plain = ids(r#"
+import { step } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+export default async function main() {
+  await step("Count", () => parse("typescript", "const a = 1").root().text().length);
+}
+"#);
+    let commented = ids(r#"
+import { step } from "codemod:workflow";
+import { parse } from "codemod:ast-grep";
+export default async function main() {
+  await step("Count", () => {
+    // how long is it?
+    return parse("typescript", "const a = 1").root().text().length;
+  });
+}
+"#);
+    let changed = ids(r#"
+import { step } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+export default async function main() {
+  await step("Count", () => parse("typescript", "const a = 2").root().text().length);
+}
+"#);
+    assert_eq!(plain.len(), 1);
+    assert_ne!(plain, changed, "a change in the code is a new id");
+    // The spelling of the modules and a comment are not changes. (Braces
+    // around the body are, so compare the spelling alone.)
+    let other_spelling = ids(r#"
+import { step } from "codemod:workflow";
+import { parse } from "codemod:ast-grep";
+export default async function main() {
+  await step("Count", () => parse("typescript", "const a = 1").root().text().length);
+}
+"#);
+    assert_eq!(plain, other_spelling);
+    let with_comment = ids(r#"
+import { step } from "codemod:workflow";
+import { parse } from "codemod:ast-grep";
+export default async function main() {
+  await step("Count", () => {
+    // how long is it, again?
+    return parse("typescript", "const a = 1").root().text().length;
+  });
+}
+"#);
+    assert_eq!(commented, with_comment);
+}
+
+#[test]
+fn imports_keep_the_order_they_were_written_in() {
+    let built = build(
+        "workflow.ts",
+        r#"
+import "./polyfill.ts";
+import { zeta } from "./zeta.ts";
+import { step } from "codemod/workflow";
+import { alpha } from "./alpha.ts";
+export default async function main() {
+  await step("Use", () => zeta + alpha);
+  return zeta + alpha;
+}
+"#,
+    )
+    .unwrap();
+    let order = |text: &str| -> Vec<usize> {
+        ["polyfill", "zeta.ts", "alpha.ts"]
+            .iter()
+            .filter_map(|name| text.find(name))
+            .collect()
+    };
+    let body = order(&built.main);
+    assert_eq!(body.len(), 3, "{}", built.main);
+    assert!(body.is_sorted(), "{}", built.main);
+    let callback = built.callbacks.values().next().unwrap();
+    let in_callback = order(callback);
+    assert_eq!(in_callback.len(), 2, "{callback}");
+    assert!(in_callback.is_sorted(), "{callback}");
+}
+
+// ------------------------------------------------------------ lifecycle ----
+
+const TWO_STEPS: &str = r#"
+import { step, shell } from "codemod/workflow";
+export default async function main({ target }) {
+  await step("One", shell("echo one"));
+  await step("Two", shell(`test -f ${target}/go`));
+  return "done";
+}
+"#;
+
+fn approving_with(store: Arc<dyn RunStore>) -> Harness {
+    Harness::with(store, Arc::new(NonInteractive { approve_all: true }))
+}
+
+#[test]
+fn a_run_stopped_through_the_store_can_be_resumed() {
+    let store: Arc<dyn RunStore> = Arc::new(MemoryStore::default());
+    let h = approving_with(Arc::clone(&store));
+    let first = h.start(TWO_STEPS, Value::Null);
+    assert_eq!(first.run.status, RunStatus::Failed);
+
+    // A cancel request left behind (the run ended before reading it) must
+    // not cancel the next execution.
+    store.request_cancel(&first.run.id).unwrap();
+    h.write("go", "");
+    let second = h.resume(&first, None);
+    assert_eq!(output(&second).unwrap(), json!("done"));
+    assert!(!store.cancel_requested(&first.run.id).unwrap());
+}
+
+#[test]
+fn a_resume_that_cannot_load_the_workflow_leaves_the_run_as_it_was() {
+    let store: Arc<dyn RunStore> = Arc::new(MemoryStore::default());
+    let h = approving_with(Arc::clone(&store));
+    let first = h.start(TWO_STEPS, Value::Null);
+    let before = store.get_run(&first.run.id).unwrap().unwrap();
+
+    std::fs::write(&first.run.workflow_path, "export default function main( {").unwrap();
+    assert!(matches!(
+        h.engine.resume(&first.run.id),
+        Err(EngineError::Build(_))
+    ));
+    assert_eq!(store.get_run(&first.run.id).unwrap().unwrap(), before);
+    assert!(!store.is_held(&first.run.id).unwrap());
+}
+
+#[test]
+fn a_run_another_executor_holds_cannot_be_resumed_and_is_asked_to_stop() {
+    let store: Arc<dyn RunStore> = Arc::new(MemoryStore::default());
+    let h = approving_with(Arc::clone(&store));
+    let first = h.start(TWO_STEPS, Value::Null);
+
+    let lease = store.acquire(&first.run.id).unwrap().unwrap();
+    assert!(matches!(
+        h.engine.resume(&first.run.id),
+        Err(EngineError::Busy(_))
+    ));
+    assert_eq!(
+        cancel_run(store.as_ref(), &first.run.id).unwrap(),
+        Canceled::Requested
+    );
+    drop(lease);
+    assert!(h.engine.resume(&first.run.id).is_ok());
+}
+
+#[test]
+fn a_run_whose_process_died_is_canceled_directly() {
+    let store: Arc<dyn RunStore> = Arc::new(MemoryStore::default());
+    let h = approving_with(Arc::clone(&store));
+    let first = h.start(TWO_STEPS, Value::Null);
+    // As a killed process leaves it: running on record, held by nobody.
+    let mut record = store.get_run(&first.run.id).unwrap().unwrap();
+    record.reopen().unwrap();
+    store.put_run(&record).unwrap();
+
+    assert_eq!(
+        cancel_run(store.as_ref(), &first.run.id).unwrap(),
+        Canceled::Marked
+    );
+    let record = store.get_run(&first.run.id).unwrap().unwrap();
+    assert_eq!(record.status, RunStatus::Canceled);
+    assert!(!store.cancel_requested(&first.run.id).unwrap());
+}
+
+#[test]
+fn steps_still_running_when_another_fails_finish_and_are_recorded() {
+    let h = approving_with(Arc::new(MemoryStore::default()));
+    let report = h.start(
+        r#"
+import { step, shell } from "codemod/workflow";
+export default async function main({ target }) {
+  await Promise.all([
+    step("Fails", shell("exit 1")),
+    step("Slow", shell(`sleep 0.4 && echo slow > ${target}/slow.txt`)),
+  ]);
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).unwrap_err().contains("step 'Fails' failed"));
+    assert!(h.exists("slow.txt"), "the run waited for the slow step");
+    let slow = report.steps.iter().find(|s| s.label == "Slow").unwrap();
+    assert_eq!(slow.status, StepStatus::Succeeded);
+    // The run's last event comes after every step's.
+    let events = h.events.take();
+    assert!(matches!(events.last(), Some(Event::RunFinished { .. })));
+}
+
+/// Two branches of two steps each. Positions come from the order steps are
+/// issued, which follows the order the first steps finish in; a resume has
+/// to settle the recorded steps in that same order or the second steps swap
+/// positions.
+const TWO_BRANCHES: &str = r#"
+import { step, shell } from "codemod/workflow";
+export default async function main({ target }) {
+  const a = async () => {
+    await step("a1", shell("sleep 0.3"));
+    await step("a2", shell(`echo a2 >> ${target}/log.txt`));
+  };
+  const b = async () => {
+    await step("b1", shell("true"));
+    await step("b2", shell(`test -f ${target}/go && echo b2 >> ${target}/log.txt`));
+  };
+  await Promise.all([a(), b()]);
+  return "done";
+}
+"#;
+
+#[test]
+fn branches_that_ran_side_by_side_resume_without_running_a_step_twice() {
+    let h = approving_with(Arc::new(MemoryStore::default()));
+    let first = h.start(TWO_BRANCHES, Value::Null);
+    assert!(output(&first).unwrap_err().contains("step 'b2' failed"));
+    assert_eq!(h.read("log.txt"), "a2\n");
+
+    h.write("go", "");
+    let second = h.resume(&first, None);
+    assert_eq!(output(&second).unwrap(), json!("done"));
+    assert_eq!(h.read("log.txt"), "a2\nb2\n", "a2 did not run again");
+}
+
+#[test]
+fn a_race_between_steps_replays_with_the_same_winner() {
+    let h = approving_with(Arc::new(MemoryStore::default()));
+    // The step after the race records who won, so the resumed run can be
+    // compared with the first whichever step was faster then.
+    let source = r#"
+import { step, shell } from "codemod/workflow";
+export default async function main({ target }) {
+  const winner = await Promise.race([
+    step("slow", shell("sleep 0.3")).then(() => "slow"),
+    step("fast", shell("true")).then(() => "fast"),
+  ]);
+  await step("note", shell(`echo ${winner} > ${target}/winner.txt`));
+  await step("after", shell(`test -f ${target}/go`));
+  return winner;
+}
+"#;
+    let first = h.start(source, Value::Null);
+    assert!(output(&first).is_err());
+    let winner = h.read("winner.txt").trim().to_string();
+
+    h.write("go", "");
+    let second = h.resume(&first, None);
+    assert_eq!(output(&second).unwrap(), json!(winner));
+}
+
+#[test]
+fn canceling_stops_a_running_command_and_what_it_started() {
+    let h = approving_with(Arc::new(MemoryStore::default()));
+    let stop = h.engine.stop_handle();
+    let workflow = h.workflow(
+        r#"
+import { step, shell } from "codemod/workflow";
+export default async function main({ target }) {
+  // The inner shell is a process the command started.
+  await step("Wait", shell(`sh -c 'sleep 30; echo late > ${target}/late.txt'`));
+}
+"#,
+    );
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        stop.stop();
+    });
+    let started = std::time::Instant::now();
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert_eq!(report.ending, Ending::Canceled);
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the command was stopped"
+    );
+    assert_eq!(report.steps[0].status, StepStatus::Canceled);
+    assert!(!h.exists("late.txt"));
 }

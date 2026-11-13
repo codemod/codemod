@@ -113,7 +113,7 @@ Object fields:
 | `containing` | Only files whose text contains this string |
 | `concurrency` | Files each worker keeps in flight (default `1`). Raise it for async callbacks that wait on the network or `codemod/llm` |
 
-`.gitignore` is respected. A selector is plain data, so you can reuse and refine it: `{ ...sources, containing: "moment" }`.
+Files are selected as `jssg` and `astGrep` select theirs: `.gitignore` is respected, hidden files and directories (`.github/`) are included, and a `language` means the same extensions for all three (`"typescript"` also takes `.js` files, which that parser reads). A selector is plain data, so you can reuse and refine it: `{ ...sources, containing: "moment" }`.
 
 ### The file object
 
@@ -126,7 +126,7 @@ Object fields:
 | `file.rename(path)` | Move the file |
 | `file.delete()` | Remove the file |
 
-Changes are recorded, not written immediately. When every file is done, the step checks for conflicts (for example, two files renamed to the same path) and applies all changes together. If there is a conflict, nothing is written.
+Changes are recorded, not written immediately. When every file is done, the step checks for conflicts and applies all changes together. Nothing is written when two files are renamed to the same path, when a file changed on disk since the step read it (another step or command edited it meanwhile), or when the run was canceled. If writing fails part-way, what was written is put back.
 
 ### The callback
 
@@ -177,7 +177,9 @@ These are build errors, reported with the file, line and column:
 - using a local variable that is reassigned after it is declared;
 - using a function or class declared inside the surrounding function (move it to module level);
 - calling `step()`, `forEachFile` or another task inside the callback;
-- passing a callback by name instead of writing it inline.
+- passing a callback by name instead of writing it inline;
+- calling `forEachFile`, or `step` with a function, in a file the workflow imports: callbacks are only extracted from the workflow file itself;
+- importing `codemod/workflow` as a namespace (`import * as`): import `step`, `forEachFile` and the rest by name.
 
 A local that is not JSON (a `Set`, a `Map`, a class instance) fails when the step starts, naming the variable.
 
@@ -232,7 +234,7 @@ Paths given to `jssg`, `astGrep` and shard functions are relative to the workflo
 | `CODEMOD_STATE_<KEY>` | Each state value, JSON-encoded |
 | `STATE_OUTPUTS` | A file the command can write `key=value` (set) or `key@=value` (append) lines to; they become workflow state |
 
-Shell commands, agents and skill installs are skipped in a dry run.
+Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
 
 ### Coding agents
 
@@ -257,31 +259,41 @@ Its result holds the agent's final answer (`result`), its `sessionId`, `model` a
 | `agent` | Which agent to run. It must be installed |
 | `systemPrompt` | Extra instructions. Agents with an option for them get them there; the others get them in front of the prompt |
 | `model` | A model name the agent understands |
-| `autonomy` | `"full"` (default): the agent edits files and runs commands without asking. `"read-only"`: the agent's read-only or planning mode, where it has one |
+| `autonomy` | `"full"` (default): the agent edits files and runs commands without asking. `"read-only"`: the agent reads and answers only. The step fails before it starts when the agent cannot be kept read-only; see the table below |
 | `timeoutSeconds` | Stop the agent after this long |
+
+When the agent fails, is stopped or runs out of time, the step fails; the step's output then says which session the agent had started and what it had used, when the agent reported them.
 
 Supported agents, by the id `agent` takes:
 
-| Agent | Id | Notes |
-| --- | --- | --- |
-| Claude Code | `claude-code` (or `claude`) | |
-| Codex | `codex` | Runs outside git repositories too |
-| Cursor Agent | `cursor` | |
-| Gemini CLI | `gemini` | Older versions give text only |
-| Antigravity CLI | `antigravity` (or `agy`) | |
-| OpenCode | `opencode` | `model` is `provider/model` |
-| GitHub Copilot CLI | `copilot` | |
-| Amp | `amp` | Picks models by mode, so `model` is ignored |
-| Qwen Code | `qwen-code` (or `qwen`) | |
-| Goose | `goose` | |
-| Factory Droid | `droid` | |
-| Kimi Code | `kimi` | Always runs in Kimi's auto mode |
-| Crush | `crush` | Text output only |
-| OpenClaw | `openclaw` | Reports once, at the end |
-| Aider | `aider` | Text output only; never runs the shell commands it suggests |
-| Kiro CLI | `kiro` | Text output only |
-| Auggie | `auggie` | Text output only; tool permissions come from its settings |
-| Cline | `cline` | Text output only |
+| Agent | Id | Read-only | Notes |
+| --- | --- | --- | --- |
+| Claude Code | `claude-code` (or `claude`) | Yes: plan mode | |
+| Codex | `codex` | Yes: read-only sandbox | Runs outside git repositories too |
+| Cursor Agent | `cursor` | Yes: ask mode | |
+| Gemini CLI | `gemini` | Its defaults | Older versions give text only |
+| Antigravity CLI | `antigravity` (or `agy`) | Its defaults | |
+| OpenCode | `opencode` | Yes: plan agent | `model` is `provider/model` |
+| GitHub Copilot CLI | `copilot` | Its defaults | |
+| Amp | `amp` | No | Picks models by mode, so `model` is ignored |
+| Qwen Code | `qwen-code` (or `qwen`) | Yes: plan mode | |
+| Goose | `goose` | Yes: chat mode | |
+| Factory Droid | `droid` | Its defaults | |
+| Kimi Code | `kimi` | No | Always runs in Kimi's auto mode |
+| Crush | `crush` | No | Text output only; approves every action itself |
+| OpenClaw | `openclaw` | No | Reports once, at the end |
+| Aider | `aider` | Yes: ask mode | Text output only; never runs the shell commands it suggests |
+| Kiro CLI | `kiro` | Its defaults | Text output only |
+| Auggie | `auggie` | No | Text output only; tool permissions come from its settings |
+| Cline | `cline` | Yes: no auto-approval | Text output only |
+
+The **Read-only** column says what `autonomy: "read-only"` does for each agent:
+
+- **Yes**: the agent runs in its own read-only mode.
+- **Its defaults**: the agent runs without the option that lets it act freely. Left to its defaults it asks before it writes a file or runs a command, and with nobody to answer, it does neither. If your own configuration of the agent approves actions in advance, they still run.
+- **No**: the agent cannot be kept from writing. A read-only step that names it fails before the agent starts, and the agent is not offered when you pick one for a read-only step.
+
+Some agents take the prompt on their command line and not on their input: Cursor Agent, Gemini CLI, Antigravity CLI, GitHub Copilot CLI, Qwen Code, Kimi Code, Crush, Aider, Kiro CLI, Auggie and Cline. For these, a prompt (with `systemPrompt`, for those that take it in front of the prompt) larger than 100 KiB fails the step before the agent starts.
 
 Without `agent`, the step uses:
 
@@ -341,6 +353,12 @@ npx codemod workflow cancel --id <run-id>
 ```
 
 Runs are stored under your data directory (`~/Library/Application Support/codemod/runs` on macOS). Set `CODEMOD_RUN_STORE_DIR` to store them elsewhere, or `CODEMOD_RUN_STORE=memory` to keep nothing. A dry run is never saved.
+
+When a run ends early, the steps still running finish first and are recorded, so a resume does not repeat them:
+
+- **A step fails:** the run ends as failed once the steps started alongside it are done.
+- **A step waits for an approval** nobody can give: the run pauses there, also when the workflow catches the error. No step starts after it; resume with `--approve`.
+- **The run is canceled** (Ctrl-C, `workflow cancel`, or the process being terminated): steps stop where they can (a shell command is terminated, file changes not yet written are dropped), and the run can be resumed.
 
 ## Installing codemod in a package
 

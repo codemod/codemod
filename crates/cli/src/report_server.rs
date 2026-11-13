@@ -1,13 +1,13 @@
 use anyhow::Result;
 use butterflow_core::report::{ExecutionReport, ShareLevel};
-use codemod_agents::{Agent, AgentEvent, Autonomy, Run, Stream, Task};
+use codemod_agents::{Adapter, AgentEvent, Autonomy, ReadOnly, Run, Stream, Task};
 use hyper::body::to_bytes;
 use hyper::header::{CONTENT_TYPE, HOST, ORIGIN};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, HeaderMap, Method, Request, Response, Server, StatusCode};
 use std::convert::Infallible;
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -16,20 +16,24 @@ use crate::feedback;
 
 const FEEDBACK_CATEGORY: &str = "codemod-performance";
 const FEEDBACK_AGENT_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long shutting down waits for a drafting agent to be stopped: longer
+/// than the agent's process group gets to end.
+const FEEDBACK_AGENT_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_FEEDBACK_MESSAGE_LEN: usize = 4000;
 const REPORT_SERVER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const REPORT_SERVER_IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 struct ReportServerState {
     last_activity: Mutex<Instant>,
-    active_feedback_jobs: AtomicUsize,
+    /// The cancel flag of each feedback job in progress.
+    feedback_jobs: Mutex<Vec<Arc<AtomicBool>>>,
 }
 
 impl ReportServerState {
     fn new() -> Self {
         Self {
             last_activity: Mutex::new(Instant::now()),
-            active_feedback_jobs: AtomicUsize::new(0),
+            feedback_jobs: Mutex::new(Vec::new()),
         }
     }
 
@@ -46,28 +50,52 @@ impl ReportServerState {
             .unwrap_or_default()
     }
 
-    fn has_active_feedback_jobs(&self) -> bool {
-        self.active_feedback_jobs.load(Ordering::Relaxed) > 0
+    fn feedback_jobs(&self) -> std::sync::MutexGuard<'_, Vec<Arc<AtomicBool>>> {
+        self.feedback_jobs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn feedback_job_guard(self: &Arc<Self>) -> FeedbackJobGuard {
-        self.active_feedback_jobs.fetch_add(1, Ordering::Relaxed);
+    fn has_active_feedback_jobs(&self) -> bool {
+        !self.feedback_jobs().is_empty()
+    }
+
+    fn start_feedback_job(self: &Arc<Self>) -> FeedbackJob {
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.feedback_jobs().push(Arc::clone(&cancel));
         self.touch();
-        FeedbackJobGuard {
+        FeedbackJob {
             state: Arc::clone(self),
+            cancel,
+        }
+    }
+
+    /// Stop the agents drafting feedback, and wait until they are gone or
+    /// [`FEEDBACK_AGENT_STOP_TIMEOUT`] has passed. For shutting down: an
+    /// agent left running would outlive the server.
+    async fn stop_feedback_jobs(&self) {
+        for cancel in self.feedback_jobs().iter() {
+            cancel.store(true, Ordering::SeqCst);
+        }
+        let deadline = Instant::now() + FEEDBACK_AGENT_STOP_TIMEOUT;
+        while self.has_active_feedback_jobs() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 }
 
-struct FeedbackJobGuard {
+/// A feedback job in progress, from its request to the end of its agent's
+/// run. Setting `cancel` stops the agent.
+struct FeedbackJob {
     state: Arc<ReportServerState>,
+    cancel: Arc<AtomicBool>,
 }
 
-impl Drop for FeedbackJobGuard {
+impl Drop for FeedbackJob {
     fn drop(&mut self) {
         self.state
-            .active_feedback_jobs
-            .fetch_sub(1, Ordering::Relaxed);
+            .feedback_jobs()
+            .retain(|cancel| !Arc::ptr_eq(cancel, &self.cancel));
         self.state.touch();
     }
 }
@@ -261,8 +289,11 @@ async fn handle_request(
         },
 
         (&Method::POST, "/api/shutdown") => {
-            tokio::spawn(async {
+            let state = state.clone();
+            tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                // Exiting does not stop a drafting agent: it would be orphaned.
+                state.stop_feedback_jobs().await;
                 std::process::exit(0);
             });
             Response::builder()
@@ -399,10 +430,8 @@ async fn handle_share(req: Request<Body>, report: &ExecutionReport) -> Result<St
 fn handle_feedback_status() -> Result<String> {
     let storage = TokenStorage::new()?;
     let config = storage.load_config()?;
-    let agents: Vec<_> = codemod_agents::agents()
-        .map(|agent| (agent, agent.installed()))
-        .collect();
-    let selected_agent = select_feedback_agent(&agents, None).map(|(agent, _)| {
+    let agents = feedback_agents();
+    let selected_agent = select_feedback_agent(&agents, None).ok().map(|(agent, _)| {
         serde_json::json!({
             "canonical": agent.id(),
             "label": agent.label(),
@@ -415,7 +444,7 @@ fn handle_feedback_status() -> Result<String> {
             serde_json::json!({
                 "canonical": agent.id(),
                 "label": agent.label(),
-                "available": installed.is_some(),
+                "available": installed.is_some() && can_draft_feedback(*agent),
             })
         })
         .collect::<Vec<_>>();
@@ -450,20 +479,17 @@ async fn handle_feedback_agent_submit(
     report: &ExecutionReport,
     state: Arc<ReportServerState>,
 ) -> Result<String> {
-    let _feedback_job = state.feedback_job_guard();
+    let job = state.start_feedback_job();
     let agent_req = parse_feedback_agent_request(req).await?;
 
-    let agents: Vec<_> = codemod_agents::agents()
-        .map(|agent| (agent, agent.installed()))
-        .collect();
-    let (agent, executable) = select_feedback_agent(&agents, agent_req.agent.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("No supported coding agent was found on PATH."))?;
+    let (agent, executable) =
+        select_feedback_agent(&feedback_agents(), agent_req.agent.as_deref())?;
     let canonical = agent.id().to_string();
     let label = agent.label().to_string();
     let prompt = build_feedback_prompt(report);
     let target_path = std::path::PathBuf::from(&report.target_path);
 
-    let draft = run_feedback_agent(agent, executable, &prompt, &target_path).await?;
+    let draft = run_feedback_agent(agent, executable, &prompt, &target_path, job).await?;
     let message = parse_agent_feedback_message(&draft, Some(&target_path))?;
     let body = submit_report_feedback(FEEDBACK_CATEGORY.to_string(), message.clone()).await?;
     let message = format!(
@@ -488,20 +514,16 @@ async fn handle_feedback_agent_stream(
 ) -> Result<Response<Body>> {
     let agent_req = parse_feedback_agent_request(req).await?;
 
-    let agents: Vec<_> = codemod_agents::agents()
-        .map(|agent| (agent, agent.installed()))
-        .collect();
-    let (agent, executable) = select_feedback_agent(&agents, agent_req.agent.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("No supported coding agent was found on PATH."))?;
+    let (agent, executable) =
+        select_feedback_agent(&feedback_agents(), agent_req.agent.as_deref())?;
     let canonical = agent.id().to_string();
     let label = agent.label().to_string();
     let prompt = build_feedback_prompt(&report);
     let target_path = std::path::PathBuf::from(&report.target_path);
 
     let (mut sender, body) = Body::channel();
-    let feedback_job = state.feedback_job_guard();
+    let job = state.start_feedback_job();
     tokio::spawn(async move {
-        let _feedback_job = feedback_job;
         let agent_value = serde_json::json!({
             "canonical": canonical,
             "label": label,
@@ -516,7 +538,8 @@ async fn handle_feedback_agent_stream(
         .await;
 
         let draft =
-            run_feedback_agent_stream(agent, executable, &prompt, &target_path, &mut sender).await;
+            run_feedback_agent_stream(agent, executable, &prompt, &target_path, job, &mut sender)
+                .await;
 
         match draft {
             Ok(draft) => match parse_agent_feedback_message(&draft, Some(&target_path)) {
@@ -631,25 +654,48 @@ fn sanitize_feedback_message(message: &str) -> Result<String> {
     Ok(message)
 }
 
-/// The agent that drafts feedback: the requested one when installed, or
-/// the first installed agent.
+type FeedbackAgent = &'static dyn Adapter;
+
+/// Every supported agent, with its executable when it is installed.
+fn feedback_agents() -> Vec<(FeedbackAgent, Option<std::path::PathBuf>)> {
+    codemod_agents::agents()
+        .map(|agent| (agent, agent.installed()))
+        .collect()
+}
+
+/// Feedback is drafted read-only, in the directory the codemod ran on: only
+/// an agent that can be kept read-only may do it.
+fn can_draft_feedback(agent: FeedbackAgent) -> bool {
+    agent.read_only() != ReadOnly::Unsupported
+}
+
+/// The agent that drafts feedback: the requested one, or the first that is
+/// installed and can be kept read-only.
 fn select_feedback_agent(
-    agents: &[(Agent, Option<std::path::PathBuf>)],
+    agents: &[(FeedbackAgent, Option<std::path::PathBuf>)],
     requested: Option<&str>,
-) -> Option<(Agent, std::path::PathBuf)> {
-    let installed = |agent: &Agent| {
-        agents
+) -> Result<(FeedbackAgent, std::path::PathBuf)> {
+    let Some(requested) = requested.map(str::trim).filter(|value| !value.is_empty()) else {
+        return agents
             .iter()
-            .find(|(candidate, _)| candidate.id() == agent.id())
-            .and_then(|(_, path)| path.clone())
+            .filter(|(agent, _)| can_draft_feedback(*agent))
+            .find_map(|(agent, path)| path.clone().map(|path| (*agent, path)))
+            .ok_or_else(|| anyhow::anyhow!("No supported coding agent was found on PATH."));
     };
-    if let Some(requested) = requested.map(str::trim).filter(|value| !value.is_empty()) {
-        let agent = codemod_agents::find(requested)?;
-        return installed(&agent).map(|path| (agent, path));
+    let agent = codemod_agents::find(requested)
+        .ok_or_else(|| anyhow::anyhow!("'{requested}' is not a supported coding agent."))?;
+    if !can_draft_feedback(agent) {
+        anyhow::bail!(
+            "{} cannot be kept read-only, so it cannot draft feedback. Choose another agent.",
+            agent.label()
+        );
     }
     agents
         .iter()
-        .find_map(|(agent, path)| path.clone().map(|path| (*agent, path)))
+        .find(|(candidate, _)| candidate.id() == agent.id())
+        .and_then(|(_, path)| path.clone())
+        .map(|path| (agent, path))
+        .ok_or_else(|| anyhow::anyhow!("{} was not found on PATH.", agent.label()))
 }
 
 fn build_feedback_prompt(report: &ExecutionReport) -> String {
@@ -705,51 +751,61 @@ Execution context:
 }
 
 /// Ask an agent, read-only, for the feedback draft; returns its answer.
+/// The job lasts as long as the agent runs.
 async fn run_feedback_agent(
-    agent: Agent,
+    agent: FeedbackAgent,
     executable: std::path::PathBuf,
     prompt: &str,
     working_dir: &std::path::Path,
+    job: FeedbackJob,
 ) -> Result<String> {
     let prompt = prompt.to_string();
     let cwd = resolve_feedback_agent_working_dir(working_dir);
-    tokio::task::spawn_blocking(move || draft_with_agent(agent, executable, &prompt, &cwd, |_| {}))
-        .await?
+    tokio::task::spawn_blocking(move || {
+        draft_with_agent(agent, executable, &prompt, &cwd, &job.cancel, |_| {})
+    })
+    .await?
 }
 
-/// Like [`run_feedback_agent`], streaming what the agent does to the report UI.
+/// Like [`run_feedback_agent`], streaming what the agent does to the report
+/// UI. The agent is stopped when the UI is no longer listening.
 async fn run_feedback_agent_stream(
-    agent: Agent,
+    agent: FeedbackAgent,
     executable: std::path::PathBuf,
     prompt: &str,
     working_dir: &std::path::Path,
+    job: FeedbackJob,
     sender: &mut hyper::body::Sender,
 ) -> Result<String> {
     let prompt = prompt.to_string();
     let cwd = resolve_feedback_agent_working_dir(working_dir);
+    let cancel = Arc::clone(&job.cancel);
     let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
     let draft = tokio::task::spawn_blocking(move || {
-        draft_with_agent(agent, executable, &prompt, &cwd, |event| {
+        draft_with_agent(agent, executable, &prompt, &cwd, &job.cancel, |event| {
             let _ = events.send(event);
         })
     });
     while let Some(event) = received.recv().await {
         if let Some(event) = feedback_stream_event(agent, &event) {
-            let _ = send_stream_event(sender, event).await;
+            if send_stream_event(sender, event).await.is_err() {
+                cancel.store(true, Ordering::SeqCst);
+            }
         }
     }
     draft.await?
 }
 
 fn draft_with_agent(
-    agent: Agent,
+    agent: FeedbackAgent,
     executable: std::path::PathBuf,
     prompt: &str,
     cwd: &std::path::Path,
+    cancel: &Arc<AtomicBool>,
     mut on_event: impl FnMut(AgentEvent),
 ) -> Result<String> {
     let outcome = Run {
-        adapter: agent.adapter,
+        adapter: agent,
         executable,
         task: Task {
             prompt,
@@ -758,7 +814,7 @@ fn draft_with_agent(
             cwd,
             autonomy: Autonomy::ReadOnly,
         },
-        cancel: None,
+        cancel: Some(Arc::clone(cancel)),
         timeout: Some(FEEDBACK_AGENT_TIMEOUT),
     }
     .run(&mut on_event)
@@ -770,7 +826,7 @@ fn draft_with_agent(
 }
 
 /// What the report UI shows for one thing the agent did.
-fn feedback_stream_event(agent: Agent, event: &AgentEvent) -> Option<serde_json::Value> {
+fn feedback_stream_event(agent: FeedbackAgent, event: &AgentEvent) -> Option<serde_json::Value> {
     let status = |message: String| serde_json::json!({ "type": "status", "message": message });
     match event {
         AgentEvent::Started { model, .. } => Some(status(match model {
@@ -847,26 +903,22 @@ fn resolve_feedback_agent_working_dir(working_dir: &std::path::Path) -> std::pat
     working_dir.to_path_buf()
 }
 
+/// The feedback message in an agent's answer: the `message` of the JSON
+/// object it was asked for, alone or with text around it, or else the
+/// answer as it is.
 fn parse_agent_feedback_message(
-    output: &str,
+    answer: &str,
     target_path: Option<&std::path::Path>,
 ) -> Result<String> {
-    let text = extract_agent_text(output);
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim()) {
-        if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
-            return sanitize_agent_feedback_message(message, target_path);
-        }
-    }
-
-    if let Some(json_text) = extract_json_object(text.trim()) {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_text) {
-            if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) {
-                return sanitize_agent_feedback_message(message, target_path);
-            }
-        }
-    }
-
-    sanitize_agent_feedback_message(&text, target_path)
+    let answer = answer.trim();
+    let message = [Some(answer), extract_json_object(answer)]
+        .into_iter()
+        .flatten()
+        .find_map(|json| {
+            let value: serde_json::Value = serde_json::from_str(json).ok()?;
+            Some(value.get("message")?.as_str()?.to_string())
+        });
+    sanitize_agent_feedback_message(message.as_deref().unwrap_or(answer), target_path)
 }
 
 fn sanitize_agent_feedback_message(
@@ -907,79 +959,6 @@ fn redact_feedback_paths(message: &str, target_path: Option<&std::path::Path>) -
     }
 
     message.replace(&target, "[target path]")
-}
-
-fn extract_agent_text(output: &str) -> String {
-    let mut collected = String::new();
-    for line in output
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-            collected.push_str(line);
-            collected.push('\n');
-            continue;
-        };
-        collect_agent_text_from_value(&value, &mut collected);
-    }
-
-    if collected.trim().is_empty() {
-        output.to_string()
-    } else {
-        collected
-    }
-}
-
-fn collect_agent_text_from_value(value: &serde_json::Value, collected: &mut String) {
-    if let Some(text) = value
-        .pointer("/event/delta/text")
-        .and_then(serde_json::Value::as_str)
-    {
-        collected.push_str(text);
-    }
-    if let Some(text) = value
-        .pointer("/event/delta/partial_json")
-        .and_then(serde_json::Value::as_str)
-    {
-        collected.push_str(text);
-    }
-    if let Some(text) = value.get("text").and_then(serde_json::Value::as_str) {
-        collected.push_str(text);
-        collected.push('\n');
-    }
-    if let Some(text) = value.get("message").and_then(serde_json::Value::as_str) {
-        collected.push_str(text);
-        collected.push('\n');
-    }
-    if let Some(text) = value
-        .pointer("/item/text")
-        .and_then(serde_json::Value::as_str)
-    {
-        collected.push_str(text);
-        collected.push('\n');
-    }
-    if let Some(text) = value
-        .pointer("/part/text")
-        .and_then(serde_json::Value::as_str)
-    {
-        collected.push_str(text);
-        collected.push('\n');
-    }
-
-    if let Some(content) = value.get("content").and_then(serde_json::Value::as_array) {
-        for item in content {
-            collect_agent_text_from_value(item, collected);
-        }
-    }
-    if let Some(content) = value
-        .pointer("/message/content")
-        .and_then(serde_json::Value::as_array)
-    {
-        for item in content {
-            collect_agent_text_from_value(item, collected);
-        }
-    }
 }
 
 fn extract_json_object(text: &str) -> Option<&str> {
@@ -1065,6 +1044,9 @@ pub async fn serve_report(report: ExecutionReport) -> Result<()> {
             println!("\nReport server shutting down.");
         }
     }
+    // An agent drafting feedback runs on a blocking thread, which the
+    // server's end does not stop.
+    server_state.stop_feedback_jobs().await;
 
     Ok(())
 }
@@ -1078,7 +1060,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    fn agent(id: &str, installed: bool) -> (Agent, Option<PathBuf>) {
+    fn agent(id: &str, installed: bool) -> (FeedbackAgent, Option<PathBuf>) {
         (
             codemod_agents::find(id).unwrap(),
             installed.then(|| PathBuf::from("/bin/agent")),
@@ -1147,22 +1129,105 @@ mod tests {
         assert_eq!(selected.id(), "codex");
     }
 
+    fn selection_error(
+        agents: &[(FeedbackAgent, Option<PathBuf>)],
+        requested: Option<&str>,
+    ) -> String {
+        match select_feedback_agent(agents, requested) {
+            Ok((agent, _)) => panic!("selected {}", agent.id()),
+            Err(error) => error.to_string(),
+        }
+    }
+
     #[test]
     fn requested_agent_must_be_installed() {
         let agents = vec![agent("codex", false), agent("goose", true)];
 
-        assert!(select_feedback_agent(&agents, Some("codex")).is_none());
+        let error = selection_error(&agents, Some("codex"));
+        assert_eq!(error, "Codex was not found on PATH.");
         let (selected, _) = select_feedback_agent(&agents, Some("Goose")).unwrap();
         assert_eq!(selected.id(), "goose");
+        let error = selection_error(&agents, Some("nope"));
+        assert!(error.contains("not a supported coding agent"), "{error}");
     }
 
     #[test]
-    fn agent_message_can_be_extracted_from_codex_json_events() {
-        let output = r#"{"type":"item.completed","item":{"type":"agent_message","text":"{\"message\":\"Changed one file and surfaced missing coverage.\"}"}}"#;
+    fn agents_that_cannot_be_kept_read_only_do_not_draft_feedback() {
+        let agents = vec![
+            agent("kimi", true),
+            agent("amp", true),
+            agent("goose", true),
+        ];
 
-        let message = parse_agent_feedback_message(output, None).expect("parsed message");
+        let (selected, _) = select_feedback_agent(&agents, None).expect("selected agent");
+        assert_eq!(selected.id(), "goose");
 
-        assert_eq!(message, "Changed one file and surfaced missing coverage.");
+        let error = selection_error(&agents, Some("kimi"));
+        assert!(
+            error.contains("Kimi Code cannot be kept read-only"),
+            "{error}"
+        );
+        let error = selection_error(&[agent("kimi", true)], None);
+        assert_eq!(error, "No supported coding agent was found on PATH.");
+    }
+
+    #[test]
+    fn the_feedback_message_is_read_from_the_agents_answer() {
+        let expected = "Changed one file and surfaced missing coverage.";
+        for answer in [
+            r#"{"message":"Changed one file and surfaced missing coverage."}"#,
+            "Here is the feedback:\n{\"message\":\"Changed one file and surfaced missing coverage.\"}\n",
+            "Changed one file and surfaced missing coverage.",
+        ] {
+            let message = parse_agent_feedback_message(answer, None).expect("parsed message");
+            assert_eq!(message, expected, "{answer}");
+        }
+    }
+
+    #[tokio::test]
+    async fn shutting_down_stops_feedback_jobs_and_waits_for_them() {
+        let state = Arc::new(ReportServerState::new());
+        let job = state.start_feedback_job();
+        let cancel = Arc::clone(&job.cancel);
+        assert!(state.has_active_feedback_jobs());
+
+        // The job ends, as an agent run does, once it sees the flag.
+        let running = tokio::task::spawn_blocking(move || {
+            while !job.cancel.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        state.stop_feedback_jobs().await;
+
+        assert!(cancel.load(Ordering::SeqCst));
+        assert!(!state.has_active_feedback_jobs());
+        running.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_canceled_feedback_job_stops_its_agent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("codex");
+        std::fs::write(&executable, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cancel = Arc::new(AtomicBool::new(true));
+
+        let started = Instant::now();
+        let error = draft_with_agent(
+            codemod_agents::find("codex").unwrap(),
+            executable,
+            "prompt",
+            dir.path(),
+            &cancel,
+            |_| {},
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("Codex was stopped"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(20));
     }
 
     #[test]

@@ -91,6 +91,8 @@ const report = await runWorkflow(await import("./workflow.ts"), {
 
 Both hosts run the same orchestrator: `step()`, replay on resume, `until` and `given` work the same way. Tasks the engine owns run in the engine on both: `jssg`, `astGrep`, `shell`, `shard`, `codemod`, `agent` and the git steps, and so do selecting files for `forEachFile` and writing what callbacks change.
 
+A workflow file is checked as the CLI checks it before it runs: a callback that assigns to an outer variable, `fs` in the workflow body, and the other things the CLI refuses are errors here too, so a workflow that passes its tests also runs with the CLI. State, metrics, `codemod/runtime` logs and failures behave the same in steps and callbacks on both.
+
 On the Node.js host:
 
 - **Capabilities** are not enforced for the workflow's own code. They still apply to `jssg` transforms.
@@ -98,6 +100,9 @@ On the Node.js host:
 - **`codemod/llm`** is not available yet.
 - **`codemod(...)` steps** run local packages only; run workflows that use registry packages with the CLI.
 - **`definition()` and `references()`** find nothing in roots that `forEachFile` callbacks parse, as in the CLI.
+- **Callbacks run one at a time**, in this process. The CLI runs `forEachFile` callbacks on several threads, so code that reads and then sets state without `acquireLock` can lose updates there and never here.
+- **The workflow body may wait on anything.** The CLI stops a body that waits on a timer, or on a promise no step will settle.
+- **A run is resumed where it started.** Runs started here are resumed with `runWorkflow(..., { resume })`, and runs the CLI started with `codemod workflow resume`: the two record steps differently.
 - **YAML workflows** do not run here. Run them with the CLI, or convert them with `codemod workflow upgrade`.
 
 Requires Node.js 20.6 or later, or Bun. Node.js runs TypeScript workflow files directly from version 23.6.

@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use clap::Args;
 use tabled::{Table, Tabled};
 
-use crate::workflow_exec::store;
+use crate::workflow_exec::{status_label, store};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -25,7 +25,7 @@ struct StepRow {
 
 /// Show a workflow run and its steps
 pub async fn handler(args: &Command) -> Result<()> {
-    let store = store()?;
+    let store = store();
     let run = store
         .get_run(&args.id)?
         .ok_or_else(|| anyhow!("run '{}' not found", args.id))?;
@@ -37,7 +37,7 @@ pub async fn handler(args: &Command) -> Result<()> {
     }
     println!("Workflow:  {}", run.workflow_path.display());
     println!("Target:    {}", run.target.display());
-    println!("Status:    {}", run.status.as_str());
+    println!("Status:    {}", status_label(store.as_ref(), &run));
     println!("Started:   {}", run.started_at.format("%Y-%m-%d %H:%M:%S"));
     if let Some(ended) = run.ended_at {
         println!(
@@ -62,7 +62,7 @@ pub async fn handler(args: &Command) -> Result<()> {
         .map(|step| StepRow {
             position: step.position,
             label: step.label.clone(),
-            status: format!("{:?}", step.status).to_lowercase(),
+            status: step.status.as_str().to_string(),
             error: step
                 .error
                 .as_deref()

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use codemod_llrt_capabilities::module_builder::supported_runtime_external_modules;
 use rolldown::{BundleOutput, Bundler, BundlerOptions, InputItem, IsExternal, SourceMapType};
 use std::path::{Path, PathBuf};
 
@@ -13,8 +14,6 @@ pub struct RolldownBundlerConfig {
     pub output_path: Option<PathBuf>,
     /// Enable source maps
     pub source_maps: bool,
-    /// Module specifiers that may remain external in the bundle
-    pub external_modules: Vec<String>,
     /// Treat Rolldown unresolved import diagnostics as bundle failures
     pub fail_on_unresolved_imports: bool,
 }
@@ -85,8 +84,10 @@ impl RolldownBundler {
             }]),
             cwd: Some(base_dir.clone()),
             sourcemap: self.config.source_maps.then_some(SourceMapType::File),
-            external: (!self.config.external_modules.is_empty())
-                .then(|| IsExternal::from(self.config.external_modules.clone())),
+            // What the runtime provides stays an import. Left to resolution,
+            // `codemod/ast-grep` would be found in an installed `codemod`
+            // package and its Node.js files bundled.
+            external: Some(IsExternal::from(supported_runtime_external_modules())),
             ..Default::default()
         };
 
@@ -150,7 +151,6 @@ mod tests {
             base_dir: None,
             output_path: None,
             source_maps: false,
-            external_modules: Vec::new(),
             fail_on_unresolved_imports: false,
         };
 
@@ -195,7 +195,6 @@ mod tests {
             base_dir: Some(temp_dir.path().canonicalize().unwrap()),
             output_path: None,
             source_maps: false,
-            external_modules: Vec::new(),
             fail_on_unresolved_imports: false,
         };
 

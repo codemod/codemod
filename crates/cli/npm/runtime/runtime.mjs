@@ -1,34 +1,43 @@
-// `codemod/runtime` in Node.js and Bun: progress and warnings become the
-// step's log lines; failures throw.
+// `codemod/runtime` in Node.js and Bun. Progress and warnings become the
+// step's log lines, written as the CLI writes them; failures throw, and stay
+// reported even when the code catches the error.
 
 import { context } from "./context.mjs";
 
-function format(message, meta) {
-  return meta === undefined ? String(message) : `${message} ${JSON.stringify(meta)}`;
+function text(message, what) {
+  if (typeof message !== "string") throw new TypeError(`${what} expects a message string`);
+  return message;
 }
 
-function log(message, meta) {
+function log(prefix, message, meta) {
   const store = context.getStore();
   if (!store) return;
-  store.run.log(store.step?.position ?? null, format(message, meta));
+  const line = meta === undefined ? message : `${message} ${JSON.stringify(meta)}`;
+  store.run.log(store.step?.position ?? null, `${prefix} ${line}`);
 }
 
 export function progress(message, meta) {
-  log(message, meta);
+  log("[progress]", text(message, "progress()"), meta);
 }
 
 export function warn(message, meta) {
-  log(`warning: ${message}`, meta);
+  log("[warn]", text(message, "warn()"), meta);
 }
 
 export function setCurrentUnit(_unitId, _meta) {}
 
-export function failFile(message, meta) {
-  throw new Error(format(message, meta));
+function fail(message, what) {
+  const step = context.getStore()?.step;
+  if (step) step.failure = text(message, what);
+  throw new Error(text(message, what));
 }
 
-export function failStep(message, meta) {
-  throw new Error(format(message, meta));
+export function failFile(message, _meta) {
+  fail(message, "failFile()");
+}
+
+export function failStep(message, _meta) {
+  fail(message, "failStep()");
 }
 
 export function isCanceled() {

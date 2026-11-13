@@ -7,6 +7,7 @@ pub mod jssg_runner;
 pub mod llm_usage;
 pub mod nested_codemod_run;
 pub(crate) mod nested_codemod_service;
+pub mod package_workflows;
 pub mod registry;
 pub mod registry_link;
 pub mod report;

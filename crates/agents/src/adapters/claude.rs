@@ -12,10 +12,12 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::adapter::{json_line, str_at, Adapter, Autonomy, Launch, Parser, Task, Transcript};
-use crate::event::{AgentEvent, Stream, Usage};
+use crate::adapter::{Adapter, Autonomy, Launch, Parser, ReadOnly, Task};
+use crate::event::{AgentEvent, Usage};
+use crate::parse::{started, str_at, text_of, token_usage, tool_call};
+use crate::transcript::Transcript;
 
-pub struct ClaudeCode;
+pub(crate) struct ClaudeCode;
 
 impl Adapter for ClaudeCode {
     fn id(&self) -> &'static str {
@@ -34,7 +36,7 @@ impl Adapter for ClaudeCode {
         &["claude"]
     }
 
-    fn session_env(&self) -> &'static [&'static str] {
+    fn env_markers(&self) -> &'static [&'static str] {
         &[
             "CLAUDECODE",
             "CLAUDE_CODE_ENTRYPOINT",
@@ -42,8 +44,12 @@ impl Adapter for ClaudeCode {
         ]
     }
 
+    fn read_only(&self) -> ReadOnly {
+        ReadOnly::Enforced
+    }
+
     fn launch(&self, task: &Task<'_>, _executable: &Path) -> Launch {
-        let launch = Launch::default()
+        let launch = Launch::new(ClaudeParser)
             .args(["--print", "--output-format", "stream-json", "--verbose"])
             .option("--model", task.model)
             .option("--append-system-prompt", task.system_prompt);
@@ -53,38 +59,21 @@ impl Adapter for ClaudeCode {
         }
         .stdin(task.prompt)
     }
-
-    fn parser(&self) -> Box<dyn Parser> {
-        Box::new(ClaudeParser)
-    }
 }
 
-#[derive(Default)]
 pub(crate) struct ClaudeParser;
 
 impl Parser for ClaudeParser {
-    fn parse(&mut self, line: &str, transcript: &mut Transcript) -> Vec<AgentEvent> {
-        let Some(event) = json_line(line) else {
-            return vec![AgentEvent::Output {
-                stream: Stream::Stdout,
-                line: line.to_string(),
-            }];
-        };
-        if let Some(session) = str_at(&event, "/session_id") {
+    fn event(&mut self, event: &Value, transcript: &mut Transcript) -> Vec<AgentEvent> {
+        let session = str_at(event, "/session_id");
+        if let Some(session) = session {
             transcript.session(session);
         }
-        match str_at(&event, "/type").unwrap_or_default() {
-            "system" if matches!(str_at(&event, "/subtype"), Some("init" | "session_start")) => {
-                let model = str_at(&event, "/model").map(str::to_string);
-                if let Some(model) = &model {
-                    transcript.model(model.clone());
-                }
-                vec![AgentEvent::Started {
-                    session_id: str_at(&event, "/session_id").map(str::to_string),
-                    model,
-                }]
+        match str_at(event, "/type").unwrap_or_default() {
+            "system" if matches!(str_at(event, "/subtype"), Some("init" | "session_start")) => {
+                vec![started(transcript, session, str_at(event, "/model"))]
             }
-            "assistant" => content(&event)
+            "assistant" => content(event)
                 .iter()
                 .filter_map(|block| match str_at(block, "/type")? {
                     "text" => Some(AgentEvent::Text {
@@ -94,20 +83,20 @@ impl Parser for ClaudeParser {
                     "thinking" => Some(AgentEvent::Thinking {
                         text: str_at(block, "/thinking")?.to_string(),
                     }),
-                    "tool_use" => Some(AgentEvent::ToolCall {
-                        id: str_at(block, "/id").map(str::to_string),
-                        name: str_at(block, "/name").unwrap_or("tool").to_string(),
-                        input: block.get("input").cloned().unwrap_or(Value::Null),
-                    }),
+                    "tool_use" => Some(tool_call(
+                        str_at(block, "/id"),
+                        str_at(block, "/name").unwrap_or("tool"),
+                        block.get("input").cloned().unwrap_or(Value::Null),
+                    )),
                     _ => None,
                 })
                 .collect(),
-            "user" => content(&event)
+            "user" => content(event)
                 .iter()
                 .filter(|block| str_at(block, "/type") == Some("tool_result"))
                 .map(|block| AgentEvent::ToolResult {
                     id: str_at(block, "/tool_use_id").map(str::to_string),
-                    output: tool_output(block.get("content")),
+                    output: block.get("content").map(text_of).unwrap_or_default(),
                     is_error: block
                         .get("is_error")
                         .and_then(Value::as_bool)
@@ -116,27 +105,25 @@ impl Parser for ClaudeParser {
                 .collect(),
             "result" => {
                 transcript.total_usage(Usage {
-                    input_tokens: input_tokens(&event),
-                    output_tokens: event
-                        .pointer("/usage/output_tokens")
-                        .and_then(Value::as_u64),
+                    input_tokens: input_tokens(event),
                     cost_usd: event.get("total_cost_usd").and_then(Value::as_f64),
+                    ..token_usage(event.get("usage"))
                 });
-                let text = str_at(&event, "/result").unwrap_or_default();
+                let text = str_at(event, "/result").unwrap_or_default();
                 let failed = event.get("is_error").and_then(Value::as_bool) == Some(true)
-                    || str_at(&event, "/subtype").is_some_and(|s| s != "success");
+                    || str_at(event, "/subtype").is_some_and(|s| s != "success");
                 if failed {
-                    let message = str_at(&event, "/error/message")
-                        .or_else(|| str_at(&event, "/error"))
+                    let message = str_at(event, "/error/message")
+                        .or_else(|| str_at(event, "/error"))
                         .filter(|message| !message.is_empty())
                         .or(Some(text).filter(|text| !text.is_empty()))
-                        .or_else(|| str_at(&event, "/subtype"))
+                        .or_else(|| str_at(event, "/subtype"))
                         .unwrap_or("error")
                         .to_string();
-                    transcript.fail(message.clone());
+                    transcript.failed(&message);
                     return vec![AgentEvent::Error { message }];
                 }
-                transcript.result(text);
+                transcript.succeeded(Some(text));
                 Vec::new()
             }
             _ => Vec::new(),
@@ -162,17 +149,4 @@ fn input_tokens(event: &Value) -> Option<u64> {
             + count("cache_creation_input_tokens")
             + count("cache_read_input_tokens"),
     )
-}
-
-/// A tool result's content: a string, or text blocks.
-fn tool_output(content: Option<&Value>) -> String {
-    match content {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(blocks)) => blocks
-            .iter()
-            .filter_map(|block| str_at(block, "/text"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
 }

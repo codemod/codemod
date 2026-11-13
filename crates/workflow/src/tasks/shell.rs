@@ -99,9 +99,12 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             .unwrap_or(line);
         events.emit(crate::events::Event::StepLog { position, line });
     });
+    let runner = DirectRunner::with_quiet(true).with_cancel(Arc::clone(&run.cancel));
     let output =
-        block_on(DirectRunner::with_quiet(true).run_command(&command, &env, Some(on_line)))
-            .map_err(|e| TaskError::Failed(e.to_string()))?;
+        block_on(runner.run_command(&command, &env, Some(on_line))).map_err(|e| match e {
+            butterflow_models::Error::Canceled => TaskError::Canceled,
+            other => TaskError::Failed(other.to_string()),
+        })?;
 
     let outputs = std::fs::read_to_string(&state_outputs).unwrap_or_default();
     let state = parse_state_outputs(&outputs, &task.state);

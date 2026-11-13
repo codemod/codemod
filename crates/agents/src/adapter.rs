@@ -2,9 +2,13 @@
 //! and how to read what it prints.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::event::{AgentEvent, Usage};
+use serde_json::Value;
+
+use crate::event::{AgentEvent, Stream};
+use crate::parse::json_line;
+use crate::transcript::Transcript;
 
 /// What to ask an agent.
 #[derive(Debug, Clone)]
@@ -27,28 +31,51 @@ pub enum Autonomy {
     /// Edit files and run commands without asking.
     #[default]
     Full,
-    /// Read and answer only: the agent's read-only or planning mode where it
-    /// has one, otherwise its default permissions.
+    /// Read and answer only. How an agent is held to that is its
+    /// [`Adapter::read_only`]; an agent that cannot be held to it does not run.
     ReadOnly,
 }
 
-/// How to start the agent for a task.
-#[derive(Debug, Clone, Default)]
+/// How an agent is kept from changing anything in a read-only task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadOnly {
+    /// The launch passes the agent's own read-only flag or mode.
+    Enforced,
+    /// Nothing is passed. Left to its defaults the agent asks before it
+    /// writes a file or runs a command, and a headless run cannot answer.
+    /// The person's own configuration of the agent can allow more.
+    AgentDefaults,
+    /// The agent cannot be kept from writing: it does not run read-only tasks.
+    Unsupported,
+}
+
+/// How to start the agent for a task, and how to read what it then prints.
 pub struct Launch {
-    pub args: Vec<OsString>,
-    pub env: Vec<(String, String)>,
+    pub(crate) args: Vec<OsString>,
+    pub(crate) env: Vec<(String, String)>,
     /// Written to the agent's stdin, which is then closed. `None` when the
     /// prompt is in `args`; stdin is then empty.
-    pub stdin: Option<String>,
+    pub(crate) stdin: Option<String>,
+    /// Reads the output format these arguments ask for.
+    pub(crate) parser: Box<dyn Parser>,
 }
 
 impl Launch {
-    pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
+    pub(crate) fn new(parser: impl Parser + 'static) -> Self {
+        Self {
+            args: Vec::new(),
+            env: Vec::new(),
+            stdin: None,
+            parser: Box::new(parser),
+        }
+    }
+
+    pub(crate) fn arg(mut self, arg: impl Into<OsString>) -> Self {
         self.args.push(arg.into());
         self
     }
 
-    pub fn args<I, S>(mut self, args: I) -> Self
+    pub(crate) fn args<I, S>(mut self, args: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<OsString>,
@@ -57,26 +84,40 @@ impl Launch {
         self
     }
 
-    /// `flag value` when `value` is set.
-    pub fn option(self, flag: &str, value: Option<&str>) -> Self {
+    /// `flag value` when `value` is set. A value that starts with `-` is
+    /// joined to its flag, or the agent would read it as another flag.
+    pub(crate) fn option(self, flag: &str, value: Option<&str>) -> Self {
         match value {
+            Some(value) if value.starts_with('-') => self.joined(flag, value),
             Some(value) => self.arg(flag).arg(value),
             None => self,
         }
     }
 
-    pub fn env(mut self, key: &str, value: &str) -> Self {
+    /// `flag=value`: the value cannot be read as a flag, whatever it starts
+    /// with.
+    pub(crate) fn joined(self, flag: &str, value: &str) -> Self {
+        self.arg(format!("{flag}={value}"))
+    }
+
+    /// `-- value`: after `--` nothing is read as a flag.
+    pub(crate) fn positional(self, value: impl Into<OsString>) -> Self {
+        self.arg("--").arg(value)
+    }
+
+    pub(crate) fn env(mut self, key: &str, value: &str) -> Self {
         self.env.push((key.to_string(), value.to_string()));
         self
     }
 
-    pub fn stdin(mut self, text: impl Into<String>) -> Self {
+    pub(crate) fn stdin(mut self, text: impl Into<String>) -> Self {
         self.stdin = Some(text.into());
         self
     }
 }
 
-/// A coding agent.
+/// A coding agent. The adapters are in this crate: get one from
+/// [`crate::find`] or [`crate::agents`].
 pub trait Adapter: Sync {
     /// Stable id: `"claude-code"`, `"codex"`, ...
     fn id(&self) -> &'static str;
@@ -92,162 +133,68 @@ pub trait Adapter: Sync {
     /// Executable names, in order of preference.
     fn executables(&self) -> &'static [&'static str];
 
-    /// Environment variables the agent sets in the processes it starts: when
-    /// one is set, this program runs inside the agent.
-    fn session_env(&self) -> &'static [&'static str] {
+    /// Environment variables the agent sets for the commands it runs. One
+    /// being set means this program runs inside the agent. A run of the
+    /// agent takes them out of the environment it starts the agent in, so
+    /// the agent starts a session of its own, not one inside ours.
+    fn env_markers(&self) -> &'static [&'static str] {
         &[]
     }
 
-    /// The command line for a task. `executable` is the program that will
-    /// run, for adapters that need to look at it.
+    /// Environment variables the agent's editor sets in its terminal. A
+    /// weaker sign than [`Adapter::env_markers`]: a person, or another
+    /// agent, may be what runs there.
+    fn editor_env_markers(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// How a read-only task is kept read-only.
+    fn read_only(&self) -> ReadOnly;
+
+    /// The command line for a task, with the parser for the output it asks
+    /// for. `executable` is the program that will run, for adapters that
+    /// need to look at it. A [`crate::Run`] does not ask for the launch of a
+    /// read-only task when [`Adapter::read_only`] is `Unsupported`.
     fn launch(&self, task: &Task<'_>, executable: &Path) -> Launch;
 
-    /// A fresh reader for one run's stdout.
-    fn parser(&self) -> Box<dyn Parser>;
+    /// Where the agent's executable is, when it is installed.
+    fn installed(&self) -> Option<PathBuf> {
+        self.executables()
+            .iter()
+            .find_map(|name| crate::which::which(name))
+    }
 }
 
 /// Reads an agent's stdout, line by line.
 pub trait Parser: Send {
     /// The events in one line. Facts about the whole run (the final answer,
     /// the session, usage, a failure) go to `transcript`.
-    fn parse(&mut self, line: &str, transcript: &mut Transcript) -> Vec<AgentEvent>;
+    ///
+    /// Unless an agent's output is not JSON lines, implement
+    /// [`Parser::event`] instead: this hands it each line that is a JSON
+    /// object, skips blank lines, and reports any other line as output the
+    /// adapter does not understand.
+    fn parse(&mut self, line: &str, transcript: &mut Transcript) -> Vec<AgentEvent> {
+        if line.trim().is_empty() {
+            return Vec::new();
+        }
+        match json_line(line) {
+            Some(event) => self.event(&event, transcript),
+            None => vec![AgentEvent::Output {
+                stream: Stream::Stdout,
+                line: line.to_string(),
+            }],
+        }
+    }
+
+    /// The events in one JSON object the agent printed.
+    fn event(&mut self, _event: &Value, _transcript: &mut Transcript) -> Vec<AgentEvent> {
+        Vec::new()
+    }
 
     /// The output has ended: events and facts from what was buffered, for
     /// agents that print one report at the end.
     fn finish(&mut self, _transcript: &mut Transcript) -> Vec<AgentEvent> {
         Vec::new()
-    }
-}
-
-/// What a run comes to, as the parser learns it.
-#[derive(Debug, Default)]
-pub struct Transcript {
-    result: Option<String>,
-    session_id: Option<String>,
-    model: Option<String>,
-    usage: Usage,
-    usage_is_total: bool,
-    error: Option<String>,
-    last_text: String,
-    text_open: bool,
-}
-
-impl Transcript {
-    /// The agent's final answer, when it reports one explicitly.
-    pub fn result(&mut self, text: impl Into<String>) {
-        self.result = Some(text.into());
-    }
-
-    pub fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
-    }
-
-    pub fn session(&mut self, id: impl Into<String>) {
-        self.session_id.get_or_insert_with(|| id.into());
-    }
-
-    pub fn model(&mut self, model: impl Into<String>) {
-        self.model.get_or_insert_with(|| model.into());
-    }
-
-    /// Usage for one turn; turns add up.
-    pub fn turn_usage(&mut self, usage: Usage) {
-        if !self.usage_is_total {
-            self.usage.add(&usage);
-        }
-    }
-
-    /// Usage for the whole run; replaces what turns added up to.
-    pub fn total_usage(&mut self, usage: Usage) {
-        self.usage = usage;
-        self.usage_is_total = true;
-    }
-
-    /// The agent reported that the run failed.
-    pub fn fail(&mut self, message: impl Into<String>) {
-        self.error.get_or_insert_with(|| message.into());
-    }
-
-    /// Text the agent wrote: the last text written is the answer unless
-    /// the agent reports one with [`Transcript::result`].
-    pub fn text(&mut self, text: &str, delta: bool) {
-        if delta && self.text_open {
-            self.last_text.push_str(text);
-        } else {
-            self.last_text = text.to_string();
-        }
-        self.text_open = true;
-    }
-
-    /// Something other than text happened: the next text starts over.
-    pub fn close_text(&mut self) {
-        self.text_open = false;
-    }
-
-    pub(crate) fn finish(self) -> Finished {
-        let result = self.result.or_else(|| {
-            let text = self.last_text.trim();
-            (!text.is_empty()).then(|| text.to_string())
-        });
-        Finished {
-            result,
-            session_id: self.session_id,
-            model: self.model,
-            usage: self.usage,
-            error: self.error,
-        }
-    }
-}
-
-pub(crate) struct Finished {
-    pub result: Option<String>,
-    pub session_id: Option<String>,
-    pub model: Option<String>,
-    pub usage: Usage,
-    pub error: Option<String>,
-}
-
-/// The prompt with extra instructions in front, for agents without a flag
-/// for them.
-pub fn with_instructions(prompt: &str, system_prompt: Option<&str>) -> String {
-    match system_prompt.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(instructions) => {
-            format!("<instructions>\n{instructions}\n</instructions>\n\n{prompt}")
-        }
-        None => prompt.to_string(),
-    }
-}
-
-/// The string at a JSON pointer.
-pub fn str_at<'a>(value: &'a serde_json::Value, pointer: &str) -> Option<&'a str> {
-    value.pointer(pointer).and_then(serde_json::Value::as_str)
-}
-
-/// A line as JSON, when it is a JSON object.
-pub fn json_line(line: &str) -> Option<serde_json::Value> {
-    let line = line.trim();
-    if !line.starts_with('{') {
-        return None;
-    }
-    serde_json::from_str(line)
-        .ok()
-        .filter(serde_json::Value::is_object)
-}
-
-/// Reads lines that are not JSON as text: for agents that only print text.
-#[derive(Default)]
-pub struct TextParser {
-    text: String,
-}
-
-impl Parser for TextParser {
-    fn parse(&mut self, line: &str, transcript: &mut Transcript) -> Vec<AgentEvent> {
-        self.text.push_str(line);
-        self.text.push('\n');
-        transcript.result(self.text.trim_end().to_string());
-        vec![AgentEvent::Text {
-            text: format!("{line}\n"),
-            delta: true,
-        }]
     }
 }

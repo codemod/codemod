@@ -204,7 +204,24 @@ function harness(spec, signal) {
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
     child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
+    child.on("error", (error) => {
+      // Aborting stops the CLI; the run then ended as canceled, as it does
+      // when Node.js runs the workflow.
+      if (signal?.aborted) {
+        resolvePromise({
+          status: "canceled",
+          output: null,
+          error: null,
+          awaiting: null,
+          stoppedAt: null,
+          steps: [],
+          logs: [],
+          metrics: {},
+        });
+      } else {
+        reject(error);
+      }
+    });
     child.on("close", (code) => {
       const line = stdout.trim().split("\n").pop();
       if (code === 0 && line) {

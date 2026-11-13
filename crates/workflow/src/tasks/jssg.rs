@@ -1,10 +1,11 @@
 //! `jssg(path, options)`: run a JSSG transform file over the target.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::str::FromStr;
 
-use butterflow_core::jssg_runner::{run_jssg, JssgRunOutcome, JssgRunRequest, SemanticMode};
+use butterflow_core::jssg_runner::{
+    run_jssg, JssgFileChange, JssgRunOutcome, JssgRunRequest, SemanticMode,
+};
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -43,7 +44,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let dry_run = request.dry_run || task.run.dry_run;
     let outcome = execute(task, &request, dry_run)?;
 
-    let planned = plan(task, &outcome)?;
+    let planned = plan(task, &outcome.changes)?;
     let applied = changes::commit(task, &planned, dry_run)?;
     let summary = &task.run.services.summary;
     summary.add_unmodified(outcome.unmodified);
@@ -94,18 +95,7 @@ pub(crate) fn execute(
     };
     params.extend(request.params.clone());
 
-    let base_path = request
-        .base_path
-        .as_deref()
-        .map(|base| {
-            let base = base.trim().trim_start_matches("./");
-            if changes::is_safe_relative(base) {
-                Ok(PathBuf::from(base))
-            } else {
-                Err(format!("basePath '{base}' must stay inside the target"))
-            }
-        })
-        .transpose()?;
+    let base_path = changes::base_path(request.base_path.as_deref())?;
     // File-scope analysis by default, as `codemod jssg run` and `jssg test`
     // have: without it, `node.definition()` and friends find nothing.
     let semantic = match &request.semantic_analysis {
@@ -196,10 +186,15 @@ fn step_logs(task: &TaskContext<'_>) -> butterflow_core::jssg_runner::JssgLogCal
     })
 }
 
-fn plan(task: &TaskContext<'_>, outcome: &JssgRunOutcome) -> Result<Vec<PlannedChange>, String> {
+/// File changes as a plan for `changes::commit`, refusing paths outside the
+/// target.
+pub(crate) fn plan(
+    task: &TaskContext<'_>,
+    changes: &[JssgFileChange],
+) -> Result<Vec<PlannedChange>, String> {
     let target = &task.run.target;
     let mut planned = Vec::new();
-    for change in &outcome.changes {
+    for change in changes {
         let path = relative(target, &change.path).ok_or_else(|| {
             format!(
                 "the transform changed '{}', outside the target",
@@ -217,15 +212,13 @@ fn plan(task: &TaskContext<'_>, outcome: &JssgRunOutcome) -> Result<Vec<PlannedC
                     )
                 })
             })
-            .transpose()?
-            .filter(|to| *to != path);
-        planned.push(PlannedChange {
+            .transpose()?;
+        planned.push(PlannedChange::moved(
             path,
-            original: change.original.clone(),
-            text: change.content.clone(),
+            change.original.clone(),
+            change.content.clone(),
             rename_to,
-            delete: false,
-        });
+        ));
     }
     Ok(planned)
 }

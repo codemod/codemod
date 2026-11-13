@@ -637,7 +637,9 @@ declare module "codemod:workflow" {
     model?: string;
     /**
      * `"full"` (default): edit files and run commands without asking.
-     * `"read-only"`: the agent's read-only or planning mode where it has one.
+     * `"read-only"`: the agent may look but not change anything. Agents that
+     * cannot be held to that (see the agent table in the docs) fail the step
+     * instead of running.
      */
     autonomy?: "full" | "read-only";
     /** Stop the agent after this many seconds. */

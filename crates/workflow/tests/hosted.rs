@@ -2,7 +2,12 @@
 
 mod common;
 
-use codemod_workflow::{Ending, OpenRequest, RunStatus, StepRecord, StepStatus, TestPlan};
+use std::sync::Arc;
+
+use codemod_workflow::interaction::NonInteractive;
+use codemod_workflow::{
+    Ending, MemoryStore, OpenRequest, RunStatus, RunStore, StepRecord, StepStatus, TestPlan,
+};
 use common::Harness;
 use serde_json::{json, Value};
 
@@ -68,14 +73,18 @@ fn a_hosted_run_selects_commits_and_records_steps() {
 
     run.record(&succeeded(0, "Rewrite", committed.clone()), 5)
         .unwrap();
-    let report = h
-        .engine
-        .finish(&run, Ending::Succeeded(json!({ "done": true })))
+    let report = run
+        .finish(Some(Ending::Succeeded(json!({ "done": true }))))
         .unwrap();
     assert_eq!(report.run.status, RunStatus::Succeeded);
     assert_eq!(report.steps.len(), 1);
     assert_eq!(report.steps[0].status, StepStatus::Succeeded);
-    assert!(h.engine.finish(&run, Ending::Canceled).is_err());
+    assert!(run.finish(Some(Ending::Canceled)).is_err());
+    // Nothing more happens in a finished run.
+    assert!(run.record(&succeeded(1, "Late", json!(null)), 0).is_err());
+    assert!(run
+        .run_task(&json!({ "position": 1, "label": "Late", "task": { "kind": "shell", "command": "true" } }).to_string())
+        .is_err());
 }
 
 #[test]
@@ -119,10 +128,7 @@ fn a_hosted_test_run_that_reached_its_until_step_ends_as_stopped() {
     );
     assert_eq!(run.test_plan().unwrap().until.as_deref(), Some("First"));
     run.stop();
-    let report = h
-        .engine
-        .finish(&run, Ending::Succeeded(Value::Null))
-        .unwrap();
+    let report = run.finish(None).unwrap();
     assert_eq!(report.ending, Ending::Stopped("First".into()));
     assert_eq!(report.run.status, RunStatus::Succeeded);
 }
@@ -132,13 +138,83 @@ fn resuming_a_hosted_run_returns_its_history() {
     let h = Harness::new();
     let run = open(&h, None);
     run.record(&succeeded(0, "One", json!(1)), 0).unwrap();
-    let report = h
-        .engine
-        .finish(&run, Ending::Failed("later step failed".into()))
+    let report = run
+        .finish(Some(Ending::Failed("later step failed".into())))
         .unwrap();
     assert_eq!(report.run.status, RunStatus::Failed);
 
     let resumed = h.engine.open_resumed(&report.run.id).unwrap();
     assert_eq!(resumed.history().len(), 1);
     assert_eq!(resumed.history()[0].label, "One");
+}
+
+#[test]
+fn a_file_changed_since_it_was_read_is_not_overwritten() {
+    let h = Harness::new();
+    h.write("a.txt", "two\n");
+    let run = open(&h, None);
+    // The callback saw "one": another step has rewritten the file since.
+    let error = run
+        .commit_files(
+            0,
+            "Edit".into(),
+            json!([{ "path": "a.txt", "original": "one\n", "effects": [{ "op": "write", "text": "three\n" }] }]),
+        )
+        .unwrap_err();
+    assert!(
+        error.contains("changed on disk while this step ran"),
+        "{error}"
+    );
+    assert_eq!(h.read("a.txt"), "two\n");
+}
+
+#[test]
+fn a_commit_that_fails_part_way_is_undone() {
+    let h = Harness::new();
+    h.write("a.txt", "a\n");
+    h.write("b.txt", "b\n");
+    h.write("blocked", "a file where a directory is needed\n");
+    let run = open(&h, None);
+    let error = run
+        .commit_files(
+            0,
+            "Move".into(),
+            json!([
+                { "path": "a.txt", "original": "a\n", "effects": [{ "op": "write", "text": "A\n" }] },
+                { "path": "b.txt", "original": "b\n", "effects": [{ "op": "rename", "to": "blocked/b.txt" }] },
+            ]),
+        )
+        .unwrap_err();
+    assert!(error.contains("blocked"), "{error}");
+    assert_eq!(h.read("a.txt"), "a\n", "the first write was taken back");
+    assert_eq!(h.read("b.txt"), "b\n");
+}
+
+#[test]
+fn a_run_is_resumed_by_the_host_that_started_it() {
+    // Each host identifies callbacks its own way, so step records do not
+    // carry over.
+    let store: Arc<dyn RunStore> = Arc::new(MemoryStore::default());
+    let h = Harness::with(
+        Arc::clone(&store),
+        Arc::new(NonInteractive { approve_all: false }),
+    );
+    let started = h.start(
+        "import { step, shell } from \"codemod/workflow\";\nexport default async function main() { await step(shell(\"exit 1\")); }\n",
+        Value::Null,
+    );
+    let error = match h.engine.open_resumed(&started.run.id) {
+        Err(error) => error.to_string(),
+        Ok(_) => panic!("a run the CLI started was opened by another host"),
+    };
+    assert!(error.contains("started by the codemod CLI"), "{error}");
+
+    let hosted = open(&h, None);
+    let id = hosted.run_id().to_string();
+    hosted.finish(Some(Ending::Failed("x".into()))).unwrap();
+    let error = h.engine.resume(&id).unwrap_err().to_string();
+    assert!(
+        error.contains("started with runWorkflow in Node.js"),
+        "{error}"
+    );
 }

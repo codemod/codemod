@@ -47,7 +47,7 @@ const MAX_DEPTH: usize = 12;
 fn from_env(is_set: impl Fn(&str) -> bool) -> Option<ParentAgent> {
     ADAPTERS.iter().find_map(|adapter| {
         adapter
-            .session_env()
+            .env_markers()
             .iter()
             .find(|key| is_set(key))
             .map(|key| ParentAgent {
@@ -55,6 +55,27 @@ fn from_env(is_set: impl Fn(&str) -> bool) -> Option<ParentAgent> {
                 evidence: Evidence::Environment(key),
             })
     })
+}
+
+/// The agents the environment points at, the surest first: those whose own
+/// variable is set, then those whose editor's variable is, which says only
+/// that this runs in that editor's terminal. For callers that ask which
+/// agent a person works with, not whether one runs this program.
+pub fn agents_in_env(is_set: impl Fn(&str) -> bool) -> Vec<&'static dyn Adapter> {
+    let any_set = |keys: &[&str]| keys.iter().any(|key| is_set(key));
+    let own = ADAPTERS
+        .iter()
+        .filter(|adapter| any_set(adapter.env_markers()));
+    let editor = ADAPTERS
+        .iter()
+        .filter(|adapter| any_set(adapter.editor_env_markers()));
+    let mut found: Vec<&'static dyn Adapter> = Vec::new();
+    for adapter in own.chain(editor) {
+        if !found.iter().any(|seen| seen.id() == adapter.id()) {
+            found.push(*adapter);
+        }
+    }
+    found
 }
 
 /// A process in this one's ancestry.
@@ -148,6 +169,26 @@ mod tests {
         assert_eq!(found.adapter.id(), "codex");
         assert_eq!(found.evidence, Evidence::Environment("CODEX_SANDBOX"));
         assert!(from_env(|_| false).is_none());
+    }
+
+    #[test]
+    fn an_editors_variable_counts_after_any_agents_own() {
+        let ids = |set: &[&str]| -> Vec<&str> {
+            agents_in_env(|key| set.contains(&key))
+                .iter()
+                .map(|agent| agent.id())
+                .collect()
+        };
+        assert_eq!(
+            ids(&["CURSOR_TRACE_ID", "GEMINI_CLI"]),
+            ["gemini", "cursor"]
+        );
+        assert_eq!(ids(&["CURSOR_TRACE_ID", "CURSOR_AGENT"]), ["cursor"]);
+        assert!(ids(&[]).is_empty());
+        assert!(
+            from_env(|key| key == "CURSOR_TRACE_ID").is_none(),
+            "a terminal in the editor is not a session of its agent"
+        );
     }
 
     #[test]

@@ -8,10 +8,12 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::adapter::{str_at, with_instructions, Adapter, Launch, Parser, Task, Transcript};
+use crate::adapter::{Adapter, Launch, Parser, ReadOnly, Task};
 use crate::event::{AgentEvent, Usage};
+use crate::parse::{str_at, with_instructions};
+use crate::transcript::Transcript;
 
-pub struct OpenClaw;
+pub(crate) struct OpenClaw;
 
 impl Adapter for OpenClaw {
     fn id(&self) -> &'static str {
@@ -30,22 +32,22 @@ impl Adapter for OpenClaw {
         &["openclaw"]
     }
 
-    fn session_env(&self) -> &'static [&'static str] {
+    fn env_markers(&self) -> &'static [&'static str] {
         &["OPENCLAW_SHELL", "OPENCLAW_CLI"]
     }
 
+    /// `agent exec` runs with full tool access, its file tools kept to --cwd.
+    fn read_only(&self) -> ReadOnly {
+        ReadOnly::Unsupported
+    }
+
     fn launch(&self, task: &Task<'_>, _executable: &Path) -> Launch {
-        // `agent exec` runs with full tool access, its file tools kept to --cwd.
-        Launch::default()
+        Launch::new(OpenClawParser::default())
             .args(["agent", "exec", "--json", "--message-file", "-"])
             .arg("--cwd")
             .arg(task.cwd)
             .option("--model", task.model)
             .stdin(with_instructions(task.prompt, task.system_prompt))
-    }
-
-    fn parser(&self) -> Box<dyn Parser> {
-        Box::new(OpenClawParser::default())
     }
 }
 
@@ -62,18 +64,17 @@ impl Parser for OpenClawParser {
     }
 
     fn finish(&mut self, transcript: &mut Transcript) -> Vec<AgentEvent> {
+        let text = |text: &str| AgentEvent::Text {
+            text: text.to_string(),
+            delta: false,
+        };
         // The report may be preceded by log lines: read from its first brace.
         let start = self.output.find('{').unwrap_or(0);
         let Ok(report) = serde_json::from_str::<Value>(self.output[start..].trim()) else {
-            let text = self.output.trim();
-            if text.is_empty() {
-                return Vec::new();
-            }
-            transcript.result(text);
-            return vec![AgentEvent::Text {
-                text: text.to_string(),
-                delta: false,
-            }];
+            return match self.output.trim() {
+                "" => Vec::new(),
+                output => vec![text(output)],
+            };
         };
         if let Some(session) = str_at(&report, "/sessionId") {
             transcript.session(session);
@@ -91,18 +92,11 @@ impl Parser for OpenClawParser {
                 .or_else(|| str_at(&report, "/status"))
                 .unwrap_or("error")
                 .to_string();
-            transcript.fail(message.clone());
+            transcript.failed(&message);
             return vec![AgentEvent::Error { message }];
         }
-        match str_at(&report, "/final") {
-            Some(text) => {
-                transcript.result(text);
-                vec![AgentEvent::Text {
-                    text: text.to_string(),
-                    delta: false,
-                }]
-            }
-            None => Vec::new(),
-        }
+        let answer = str_at(&report, "/final");
+        transcript.succeeded(answer);
+        answer.map(text).into_iter().collect()
     }
 }

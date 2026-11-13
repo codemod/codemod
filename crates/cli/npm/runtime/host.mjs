@@ -11,12 +11,20 @@
 
 import "../register.mjs";
 
+import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { addon } from "./addon.mjs";
-import { context, metricsOf, stepScope } from "./context.mjs";
-import { AwaitingApprovalError, CanceledError, StepError, createRuntime } from "./orchestrator.mjs";
+import { context, metricsOf, stateChanges, stepScope } from "./context.mjs";
+import {
+  AwaitingApprovalError,
+  CanceledError,
+  checkJson,
+  createRuntime,
+  describeError,
+  fileHandle,
+} from "./orchestrator.mjs";
 import { callbackId } from "./workflow.mjs";
 
 /**
@@ -29,6 +37,7 @@ import { callbackId } from "./workflow.mjs";
  */
 export async function runWorkflow(workflow, options = {}) {
   const native = addon();
+  checkAddon(native);
   const { path, load } = locate(workflow, options);
   // A workflow that cannot be loaded is not a run: reject.
   const module = await load();
@@ -52,23 +61,48 @@ export async function runWorkflow(workflow, options = {}) {
   });
 
   const flight = inFlight();
-  const runtime = createRuntime(host(run, flight));
+  const runtime = createRuntime(host(run, flight, () => runtime));
+  flight.closed = () => runtime.isClosed();
   const scope = { run, runtime, captureConsole: options.captureConsole ?? false };
   const abort = () => run.cancel();
+  if (options.signal?.aborted) abort();
   options.signal?.addEventListener?.("abort", abort, { once: true });
 
-  let ending;
+  // How the body ended; `null` when it cannot end any more.
+  let body;
   try {
     const input = { params: run.params, target: run.target, dryRun: run.dryRun };
-    const output = await Promise.race([context.run(scope, () => main(input)), flight.stopped]);
-    ending = { status: "succeeded", output: toJson(output) };
+    const ended = context
+      .run(scope, () => main(input))
+      .then((output) => ({ status: "succeeded", detail: toJson(output) }));
+    body = await Promise.race([ended, flight.stalled]);
   } catch (error) {
-    ending = endingOf(error, run);
-  } finally {
-    options.signal?.removeEventListener?.("abort", abort);
+    body = endingOf(error);
   }
-  const report = run.finish(JSON.stringify(ending));
+  // Steps still running finish and are recorded before the run reports;
+  // none starts from here on.
+  runtime.close();
+  await flight.idle();
+  options.signal?.removeEventListener?.("abort", abort);
+  const report = run.finish(JSON.stringify(body));
   return { ...report, events: run.takeEvents() };
+}
+
+let addonChecked = false;
+
+/**
+ * The addon and this package share the orchestrator: one from another
+ * version would record and replay steps differently.
+ */
+function checkAddon(native) {
+  if (addonChecked) return;
+  const shipped = readFileSync(new URL("./orchestrator.mjs", import.meta.url), "utf8");
+  if (!shipped.endsWith(native.orchestratorSource())) {
+    throw new Error(
+      "the codemod native addon is from another version than the codemod package; reinstall codemod so both match (in a checkout, rebuild with `cargo build -p codemod-node`)",
+    );
+  }
+  addonChecked = true;
 }
 
 /**
@@ -102,13 +136,15 @@ function formatLogItem(value) {
 /** Where the workflow is, and how to load it. */
 function locate(workflow, options) {
   if (workflow && typeof workflow === "object" && !isUrl(workflow)) {
-    const path = options.path ?? options.workflowDir;
-    if (!path) {
+    if (!options.path && !options.workflowDir) {
       throw new TypeError(
         "runWorkflow(module, { path }): give the workflow file's path, so relative task paths resolve",
       );
     }
-    const file = resolve(String(path));
+    // The file need not exist: only its directory matters here.
+    const file = options.path
+      ? resolve(String(options.path))
+      : resolve(String(options.workflowDir), "workflow.ts");
     return { path: file, load: async () => workflow };
   }
   const source = isUrl(workflow) ? fileURLToPath(workflow.href) : String(workflow);
@@ -128,13 +164,19 @@ function isUrl(value) {
   return value !== null && typeof value === "object" && typeof value.href === "string";
 }
 
-/** Tracks host work in flight, to end a test run stopped at its `until` step. */
+/**
+ * Tracks steps in flight. `stalled` resolves (with `null`) when the run is
+ * closed and nothing is running: the body may be waiting on steps that will
+ * never start, as after a test's `until` step. `idle()` resolves once nothing
+ * is running.
+ */
 function inFlight() {
   let count = 0;
-  let stopped = false;
-  let finish;
+  let stall;
+  let waiters = [];
   const flight = {
-    stopped: new Promise((resolvePromise) => (finish = resolvePromise)),
+    closed: () => false,
+    stalled: new Promise((resolvePromise) => (stall = resolvePromise)),
     begin() {
       count++;
     },
@@ -142,30 +184,48 @@ function inFlight() {
       count--;
       flight.check();
     },
-    stop() {
-      stopped = true;
-      // Let the until step itself start before checking.
-      queueMicrotask(() => setImmediate(() => flight.check()));
-    },
+    /** Look again once the body has reacted to whatever just happened. */
     check() {
-      if (stopped && count === 0) finish(null);
+      setImmediate(() => {
+        if (count !== 0) return;
+        if (flight.closed()) stall(null);
+        for (const waiter of waiters.splice(0)) waiter();
+      });
+    },
+    idle() {
+      return new Promise((resolvePromise) => {
+        waiters.push(resolvePromise);
+        flight.check();
+      });
     },
   };
   return flight;
 }
 
-function host(run, flight) {
+function host(run, flight, runtime) {
+  // Replayed steps settle one per turn of the event loop, so the body reacts
+  // to each before the next.
+  let replaying = false;
+  const replay = () => {
+    replaying = runtime().replayNext();
+    if (replaying) setImmediate(replay);
+  };
   return {
     history: () => run.history(),
     record: (entry, ms) => run.record(JSON.stringify(entry), ms),
     event: (event) => run.event(JSON.stringify(event)),
-    canceled: () => run.canceled(),
+    canceled: () => run.refusesSteps(),
     now: () => Date.now(),
     advanceClock() {},
     testPlan: () => run.testPlan(),
     stop() {
       run.stop();
-      flight.stop();
+      flight.check();
+    },
+    wake() {
+      if (replaying) return;
+      replaying = true;
+      setImmediate(replay);
     },
     evaluate: (kind, expression, scope) => run.evaluate(kind, expression, JSON.stringify(scope)),
     callbackId,
@@ -203,10 +263,17 @@ async function runInPlace(run, task, fn) {
   const outer = context.getStore();
   if (task.task.kind === "function") {
     const step = stepScope(task.position, task.label, task.state);
-    const value = await context.run({ ...outer, step }, () => fn());
+    let value;
+    try {
+      value = await context.run({ ...outer, step }, () => fn());
+    } finally {
+      // What the step measured counts even when it then fails.
+      flushMetrics(run, step);
+    }
+    // A failure reported with failStep() stands even if the code caught it.
+    if (step.failure !== undefined) throw new Error(step.failure);
     const result = value === undefined ? null : value;
     checkJson(result, "the step's result");
-    flushMetrics(run, step);
     return outcome(result, step);
   }
   if (task.task.kind === "forEachFile") return forEachFile(run, outer, task, fn);
@@ -214,8 +281,8 @@ async function runInPlace(run, task, fn) {
 }
 
 function outcome(result, step) {
-  const state = Object.keys(step.changes).length ? step.changes : undefined;
-  return state ? { result, state } : { result };
+  const state = stateChanges(step);
+  return Object.keys(state).length ? { result, state } : { result };
 }
 
 function flushMetrics(run, step) {
@@ -234,46 +301,30 @@ async function forEachFile(run, outer, task, fn) {
   const outputs = Array.from({ length: total });
   const failures = [];
   const effects = [];
+  const concurrency = selector.concurrency ?? 1;
 
   const one = async (index) => {
     const [path, text] = files[index];
-    const done = [];
-    let open = true;
-    const guard = (name) => {
-      if (!open) throw new Error(`file.${name}() was called after the callback finished`);
-    };
-    const file = Object.freeze({
-      path,
-      text,
-      language: step.language,
-      write(next) {
-        guard("write");
-        if (typeof next !== "string") throw new TypeError("file.write(text) expects a string");
-        done.push({ op: "write", text: next });
-      },
-      rename(to) {
-        guard("rename");
-        if (typeof to !== "string" || to === "") {
-          throw new TypeError("file.rename(path) expects a non-empty path");
-        }
-        done.push({ op: "rename", to });
-      },
-      delete() {
-        guard("delete");
-        done.push({ op: "delete" });
-      },
-    });
+    const { file, effects: done, close } = fileHandle(path, text, step.language);
     try {
+      step.failure = undefined;
       const output = await context.run({ ...outer, step }, () => fn(file));
+      // A failure reported with failFile() stands even if the callback
+      // caught it. With files in flight together it cannot be told whose it
+      // was, as in the CLI.
+      if (step.failure !== undefined && concurrency === 1) {
+        failures.push({ path, error: step.failure });
+        return;
+      }
       if (output !== undefined) {
         checkJson(output, "return value");
         outputs[index] = { output };
       }
       if (done.length) effects.push({ path, original: text, effects: done });
     } catch (error) {
-      failures.push({ path, error: describe(error) });
+      failures.push({ path, error: describeError(error) });
     } finally {
-      open = false;
+      close();
       processed++;
       if (processed === total || processed % every === 0) {
         run.progress(task.position, processed, total);
@@ -281,22 +332,29 @@ async function forEachFile(run, outer, task, fn) {
     }
   };
 
-  const concurrency = selector.concurrency ?? 1;
   let next = 0;
+  let sinceTurn = 0;
   const worker = async () => {
     while (next < total) {
-      if (run.canceled()) throw new CanceledError();
+      // Callbacks that never wait would keep the event loop to themselves:
+      // give it a turn now and then, so a cancel can arrive.
+      if (++sinceTurn >= 64) {
+        sinceTurn = 0;
+        await new Promise((turn) => setImmediate(turn));
+      }
+      if (run.refusesSteps()) throw new CanceledError();
       await one(next++);
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, total) }, worker));
 
+  // Before the commit: a commit that fails must not lose what was measured.
+  const metrics = flushMetrics(run, step);
   effects.sort((a, b) => (a.path < b.path ? -1 : 1));
   const committed = await run.commitFiles(task.position, task.label, JSON.stringify(effects));
   const allFailures = [...failures, ...committed.failures].sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
-  const metrics = flushMetrics(run, step);
   return outcome(
     {
       outputs: outputs.filter(Boolean).map((entry) => entry.output),
@@ -308,61 +366,25 @@ async function forEachFile(run, outer, task, fn) {
   );
 }
 
-function describe(error) {
-  if (!error || typeof error !== "object") return String(error);
-  let message = `${error.name || "Error"}: ${error.message}`;
-  if (
-    error instanceof TypeError &&
-    /extensible|read-only|read only|frozen|non-writable/i.test(error.message)
-  ) {
-    message += " (captured values and step results are frozen; copy one before changing it)";
-  }
-  return message;
-}
-
 // -------------------------------------------------------------- ending ---
 
-function endingOf(error, run) {
+/** How a body that threw ended. */
+function endingOf(error) {
   if (error instanceof CanceledError || error?.name === "CanceledError") {
     return { status: "canceled" };
   }
   if (error instanceof AwaitingApprovalError || error?.name === "AwaitingApprovalError") {
-    return { status: "awaiting-approval", message: error.message };
+    return { status: "awaiting-approval", detail: error.message };
   }
-  if (run.canceled()) return { status: "canceled" };
   const message =
-    error instanceof StepError || error?.name
+    error && typeof error === "object" && "message" in error
       ? `${error.name ?? "Error"}: ${error.message}`
       : String(error);
-  return { status: "failed", error: message };
+  return { status: "failed", detail: message };
 }
 
+/** A value as JSON keeps it; what JSON has no form for (a function) is null. */
 function toJson(value) {
-  if (value === undefined) return null;
-  return JSON.parse(JSON.stringify(value));
-}
-
-function checkJson(value, path, seen = new Set()) {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError(`${path} is ${value}, which is not JSON`);
-    return;
-  }
-  if (typeof value !== "object") {
-    const what = value === undefined ? "undefined" : `a ${typeof value}`;
-    throw new TypeError(`${path} is ${what}, which is not JSON`);
-  }
-  if (seen.has(value)) throw new TypeError(`${path} is a circular reference`);
-  seen.add(value);
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => checkJson(item, `${path}[${index}]`, seen));
-  } else {
-    const proto = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== null) {
-      const name = (value.constructor && value.constructor.name) || "non-plain object";
-      throw new TypeError(`${path} is a ${name}, which is not JSON`);
-    }
-    for (const key of Object.keys(value)) checkJson(value[key], `${path}.${key}`, seen);
-  }
-  seen.delete(value);
+  const text = JSON.stringify(value);
+  return text === undefined ? null : JSON.parse(text);
 }

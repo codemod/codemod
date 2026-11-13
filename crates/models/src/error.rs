@@ -55,6 +55,9 @@ pub enum Error {
     #[error("Command failed with exit code {exit_code}: {output}")]
     ShellCommandFailed { exit_code: i32, output: String },
 
+    #[error("The command was stopped because the run was canceled")]
+    Canceled,
+
     #[error("Shell command failed with exit code {exit_code}")]
     ShellCommandStepFailed {
         command: String,

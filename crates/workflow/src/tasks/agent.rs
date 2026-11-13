@@ -10,10 +10,13 @@
 //! 4. the built-in agent, when an API key is configured.
 //!
 //! Otherwise the prompt is logged as instructions and nothing runs.
+//!
+//! A read-only step does not run an agent that cannot be kept read-only:
+//! naming one fails the step, and it is not offered to pick.
 
 use std::path::{Path, PathBuf};
 
-use codemod_agents::{parent_agent, Agent, Autonomy, Run, Task};
+use codemod_agents::{parent_agent, Adapter, Autonomy, ReadOnly, Run, RunError, Task};
 use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -72,14 +75,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
                 known.join(", ")
             ))
         })?;
-        let executable = agent.installed().ok_or_else(|| {
-            TaskError::Failed(format!(
-                "{} is not installed (looked for {} on PATH)",
-                agent.label(),
-                agent.adapter.executables().join(", ")
-            ))
-        })?;
-        return launch(task, agent, executable, &request, autonomy);
+        return launch(task, agent, &request, autonomy);
     }
 
     if let Some(parent) = parent_agent() {
@@ -94,39 +90,53 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     }
 
     if run.interaction.is_interactive() {
-        let installed = codemod_agents::installed();
         let choices: Vec<AgentChoice> = codemod_agents::agents()
             .map(|agent| AgentChoice {
                 name: agent.id().to_string(),
                 label: agent.label().to_string(),
-                available: installed.iter().any(|(found, _)| found.id() == agent.id()),
+                available: can_run(agent, autonomy) && agent.installed().is_some(),
             })
             .collect();
         if let Some(choice) = run.interaction.choose_agent(&choices) {
-            if let Some((agent, executable)) = installed
-                .into_iter()
-                .find(|(agent, _)| agent.id() == choice)
-            {
-                return launch(task, agent, executable, &request, autonomy);
-            }
+            let agent = codemod_agents::find(&choice)
+                .ok_or_else(|| TaskError::Failed(format!("unknown coding agent '{choice}'")))?;
+            return launch(task, agent, &request, autonomy);
         }
     }
 
     built_in(task, &request)
 }
 
+/// Whether the agent may run a task with this autonomy: a read-only task
+/// needs an agent that can be kept read-only.
+fn can_run(agent: &dyn Adapter, autonomy: Autonomy) -> bool {
+    autonomy == Autonomy::Full || agent.read_only() != ReadOnly::Unsupported
+}
+
 fn launch(
     task: &TaskContext<'_>,
-    agent: Agent,
-    executable: PathBuf,
+    agent: &'static dyn Adapter,
     request: &Request,
     autonomy: Autonomy,
 ) -> TaskResult {
     let run = task.run;
+    if !can_run(agent, autonomy) {
+        let refused = RunError::ReadOnlyUnsupported {
+            agent: agent.label(),
+        };
+        return Err(TaskError::Failed(refused.to_string()));
+    }
+    let executable = agent.installed().ok_or_else(|| {
+        TaskError::Failed(format!(
+            "{} is not installed (looked for {} on PATH)",
+            agent.label(),
+            agent.executables().join(", ")
+        ))
+    })?;
     let cwd = working_dir(&run.target);
     task.log(format!("running {}", agent.label()));
     let outcome = Run {
-        adapter: agent.adapter,
+        adapter: agent,
         executable,
         task: Task {
             prompt: &request.prompt,
@@ -145,9 +155,21 @@ fn launch(
             activity,
         })
     })
-    .map_err(|error| match error {
-        codemod_agents::RunError::Canceled { .. } => TaskError::Canceled,
-        other => TaskError::Failed(other.to_string()),
+    .map_err(|error| {
+        // The step's error is only a message: log the session the agent had
+        // started and what it had used, which would be lost with it.
+        if let Some(partial) = error.partial() {
+            if let Some(session) = &partial.session_id {
+                task.log(format!("{} session: {session}", agent.label()));
+            }
+            if !partial.usage.is_empty() {
+                task.log(format!("usage until then: {}", json!(partial.usage)));
+            }
+        }
+        match error {
+            RunError::Canceled { .. } => TaskError::Canceled,
+            other => TaskError::Failed(other.to_string()),
+        }
     })?;
     let usage = (!outcome.usage.is_empty()).then(|| json!(outcome.usage));
     Ok(TaskOutcome::new(json!({
@@ -202,7 +224,7 @@ fn built_in(task: &TaskContext<'_>, request: &Request) -> TaskResult {
         max_steps: request.max_steps,
         tools: request.tools.clone(),
         prompt: request.prompt.clone(),
-        working_dir: task.run.target.clone(),
+        working_dir: working_dir(&task.run.target),
         llm_protocol: protocol,
     }))
     .map_err(|e| TaskError::Failed(format!("the built-in agent failed: {e}")))?;
@@ -228,4 +250,18 @@ fn instructions(task: &TaskContext<'_>, request: &Request) {
     }
     task.log(request.prompt.clone());
     task.log("[/AI INSTRUCTIONS]");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_read_only_step_runs_only_agents_that_can_be_kept_read_only() {
+        let agent = |name: &str| codemod_agents::find(name).unwrap();
+        assert!(can_run(agent("claude-code"), Autonomy::ReadOnly));
+        assert!(can_run(agent("gemini"), Autonomy::ReadOnly));
+        assert!(!can_run(agent("kimi"), Autonomy::ReadOnly));
+        assert!(can_run(agent("kimi"), Autonomy::Full));
+    }
 }

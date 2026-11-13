@@ -9,11 +9,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use butterflow_core::config::InstallSkillExecutor;
 use butterflow_core::registry::RegistryClient;
 use butterflow_core::structured_log::OutputFormat;
-use butterflow_state::run_store::{store_from_env, RunStore};
+use butterflow_state::run_store::{store_from_env, RunRecord, RunStore};
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_workflow::events::{Event, EventSink};
 use codemod_workflow::interaction::{AgentChoice, Approval, Decision, Interaction, NonInteractive};
@@ -24,6 +24,100 @@ use codemod_workflow::{
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use serde_json::Value;
+
+/// The flags every command that runs or resumes a workflow takes.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct RunFlags {
+    /// Allow fs access
+    #[arg(long)]
+    pub allow_fs: bool,
+
+    /// Allow fetch access
+    #[arg(long)]
+    pub allow_fetch: bool,
+
+    /// Allow child process access
+    #[arg(long)]
+    pub allow_child_process: bool,
+
+    /// No interactive mode
+    #[arg(long)]
+    pub no_interactive: bool,
+
+    /// Coding agent to use for AI steps (e.g. claude, codex, aider)
+    #[arg(long)]
+    pub agent: Option<String>,
+
+    /// Execute install-skill steps when running in non-interactive mode
+    #[arg(long)]
+    pub install_skill: bool,
+
+    /// Output format: "text" (default) or "jsonl" for structured logging
+    #[arg(long, default_value_t = OutputFormat::Text)]
+    pub format: OutputFormat,
+}
+
+impl RunFlags {
+    /// Capabilities granted with `--allow-*` flags.
+    pub fn granted(&self) -> HashSet<LlrtSupportedModules> {
+        [
+            (self.allow_fs, LlrtSupportedModules::Fs),
+            (self.allow_fetch, LlrtSupportedModules::Fetch),
+            (self.allow_child_process, LlrtSupportedModules::ChildProcess),
+        ]
+        .into_iter()
+        .filter_map(|(allowed, module)| allowed.then_some(module))
+        .collect()
+    }
+
+    /// The capabilities a run gets: the flags', and those the package asks
+    /// for (in its codemod.yaml, given or found in `workflow_dir`) that the
+    /// person grants when asked.
+    pub fn capabilities(
+        &self,
+        manifest: Option<crate::utils::manifest::CodemodManifest>,
+        workflow_dir: Option<PathBuf>,
+        dry_run: bool,
+    ) -> HashSet<LlrtSupportedModules> {
+        use crate::utils::resolve_capabilities::{
+            prompt_capabilities, resolve_capabilities, ResolveCapabilitiesArgs,
+        };
+        let requested = resolve_capabilities(
+            ResolveCapabilitiesArgs {
+                allow_fs: self.allow_fs,
+                allow_fetch: self.allow_fetch,
+                allow_child_process: self.allow_child_process,
+            },
+            manifest,
+            workflow_dir,
+        );
+        prompt_capabilities(requested, &self.granted(), self.no_interactive, dry_run)
+    }
+
+    /// Settings for a run with these flags and nothing else special.
+    pub fn settings(
+        &self,
+        capabilities: HashSet<LlrtSupportedModules>,
+        registry: RegistryClient,
+        telemetry: &crate::TelemetrySenderMutex,
+    ) -> ExecSettings {
+        ExecSettings {
+            no_interactive: self.no_interactive,
+            format: self.format,
+            capabilities,
+            agent: self.agent.clone(),
+            registry: Some(registry),
+            // Unattended runs install skills only when asked to.
+            install_skill: (!self.no_interactive || self.install_skill).then(|| {
+                crate::commands::package_skill::create_install_skill_executor(telemetry.clone())
+            }),
+            approve_all: false,
+            managed_git: false,
+            skip_shard_steps: false,
+            nested_observer: None,
+        }
+    }
+}
 
 /// Settings shared by starting and resuming a run.
 pub struct ExecSettings {
@@ -93,15 +187,25 @@ impl std::fmt::Display for WorkflowFailureAlreadyReported {
 impl std::error::Error for WorkflowFailureAlreadyReported {}
 
 /// The run store selected by `CODEMOD_RUN_STORE`.
-pub fn store() -> Result<Arc<dyn RunStore>> {
-    Ok(Arc::from(
-        store_from_env().context("cannot open the run store")?,
-    ))
+pub fn store() -> Arc<dyn RunStore> {
+    Arc::from(store_from_env())
+}
+
+/// A run's status for display. A run whose record says running while
+/// nothing executes it was interrupted: its process was killed.
+pub fn status_label(store: &dyn RunStore, run: &RunRecord) -> String {
+    let interrupted = run.status == RunStatus::Running && !store.is_held(&run.id).unwrap_or(true);
+    if interrupted {
+        "interrupted".to_string()
+    } else {
+        run.status.as_str().to_string()
+    }
 }
 
 pub async fn start(request: ExecRequest) -> Result<ExecOutcome> {
     let workflow = load_workflow(&request.workflow).map_err(|e| anyhow!("{e}"))?;
     let format = request.settings.format;
+    let dry_run = request.dry_run;
     let (engine, renderer, summary) = engine(&request.settings)?;
     let started = Instant::now();
     let report = run_off_thread(engine, move |engine| {
@@ -121,11 +225,28 @@ pub async fn start(request: ExecRequest) -> Result<ExecOutcome> {
         summary,
         duration: started.elapsed(),
     };
-    print_ending(&outcome, format);
+    // A dry run is not saved, so there is nothing to resume.
+    print_ending(&outcome, format, !dry_run);
     Ok(outcome)
 }
 
-pub async fn resume(run_id: &str, settings: ExecSettings) -> Result<ExecOutcome> {
+/// Continue a run with the settings it was started with, plus what
+/// `settings` adds: capabilities granted and git use carry over, so the rest
+/// of the run behaves like its start.
+pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutcome> {
+    let record = store()
+        .get_run(run_id)?
+        .ok_or_else(|| anyhow!("run '{run_id}' not found"))?;
+    settings.capabilities.extend(
+        record
+            .settings
+            .capabilities
+            .iter()
+            .filter_map(|name| name.parse::<LlrtSupportedModules>().ok()),
+    );
+    settings.managed_git |= record.settings.managed_git;
+    settings.agent = settings.agent.or(record.settings.agent);
+
     let format = settings.format;
     let (engine, renderer, summary) = engine(&settings)?;
     let started = Instant::now();
@@ -137,14 +258,14 @@ pub async fn resume(run_id: &str, settings: ExecSettings) -> Result<ExecOutcome>
         summary,
         duration: started.elapsed(),
     };
-    print_ending(&outcome, format);
+    print_ending(&outcome, format, true);
     Ok(outcome)
 }
 
 fn engine(settings: &ExecSettings) -> Result<(Engine, Arc<Renderer>, Arc<Summary>)> {
     let renderer = Arc::new(Renderer::new(settings.format));
     let interaction: Arc<dyn Interaction> = Arc::new(TerminalInteraction {
-        interactive: !settings.no_interactive,
+        interactive: crate::utils::interactive::is_interactive(settings.no_interactive),
         approve_all: settings.approve_all,
         renderer: Arc::clone(&renderer),
         prompt_lock: Mutex::new(()),
@@ -160,25 +281,24 @@ fn engine(settings: &ExecSettings) -> Result<(Engine, Arc<Renderer>, Arc<Summary
         nested_observer: settings.nested_observer.clone(),
         summary: Arc::clone(&summary),
     };
-    let engine = Engine::new(store()?, renderer.clone(), interaction, services);
+    let engine = Engine::new(store(), renderer.clone(), interaction, services);
     Ok((engine, renderer, summary))
 }
 
 /// Run the engine on its own thread (its tasks start their own async
-/// runtimes), stopping it on Ctrl-C.
+/// runtimes), stopping its run when this process is asked to stop.
 async fn run_off_thread<F>(engine: Engine, run: F) -> Result<RunReport>
 where
     F: FnOnce(&Engine) -> Result<RunReport, codemod_workflow::EngineError> + Send + 'static,
 {
-    let cancel = engine.cancel_flag();
+    let stop = engine.stop_handle();
     let (sender, receiver) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
         let _ = sender.send(run(&engine));
     });
     let interrupt = tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            cancel.store(true, Ordering::SeqCst);
-        }
+        stop_requested().await;
+        stop.stop();
     });
     let result = receiver
         .await
@@ -187,32 +307,74 @@ where
     result?.map_err(|e| anyhow!("{e}"))
 }
 
-fn print_ending(outcome: &ExecOutcome, format: OutputFormat) {
+/// Resolves when the process is asked to stop: Ctrl-C, or being terminated
+/// or hung up on (a supervisor, a closed terminal). The run then ends as
+/// canceled and can be resumed, instead of being left marked as running.
+async fn stop_requested() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let (Ok(mut terminate), Ok(mut hangup)) = (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::hangup()),
+        ) else {
+            let _ = tokio::signal::ctrl_c().await;
+            return;
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+            _ = hangup.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+fn print_ending(outcome: &ExecOutcome, format: OutputFormat, resumable: bool) {
     if format == OutputFormat::Jsonl {
         return;
     }
     let run = &outcome.report.run;
+    let hint = |command: String| {
+        if resumable {
+            format!("\n  {command}")
+        } else {
+            String::new()
+        }
+    };
     match &outcome.report.ending {
         Ending::Succeeded(_) | Ending::Stopped(_) => {}
         Ending::AwaitingApproval(message) => {
             eprintln!(
-                "\n{} {message}\n  Resume with: codemod workflow resume --id {} --approve",
+                "\n{} {message}{}",
                 style("Waiting for approval:").yellow().bold(),
-                run.id
+                hint(format!(
+                    "Resume with: codemod workflow resume --id {} --approve",
+                    run.id
+                ))
             );
         }
         Ending::Failed(error) => {
             eprintln!(
-                "\n{} {error}\n  Resume after fixing it with: codemod workflow resume --id {}",
+                "\n{} {error}{}",
                 style("The run failed:").red().bold(),
-                run.id
+                hint(format!(
+                    "Resume after fixing it with: codemod workflow resume --id {}",
+                    run.id
+                ))
             );
         }
         Ending::Canceled => {
             eprintln!(
-                "\n{} Resume with: codemod workflow resume --id {}",
+                "\n{}{}",
                 style("The run was canceled.").yellow().bold(),
-                run.id
+                hint(format!(
+                    "Resume with: codemod workflow resume --id {}",
+                    run.id
+                ))
             );
         }
     }
@@ -375,6 +537,13 @@ impl EventSink for Renderer {
                         style("✗").red(),
                         error.unwrap_or_default()
                     )),
+                    StepStatus::Canceled => {
+                        self.line(format!("{} {label}: canceled", style("■").yellow()))
+                    }
+                    StepStatus::AwaitingApproval => self.line(format!(
+                        "{} {label}: waiting for approval",
+                        style("‖").yellow()
+                    )),
                 }
             }
             Event::RunFinished { status, .. } => {
@@ -402,34 +571,35 @@ impl Interaction for TerminalInteraction {
     }
 
     fn approve(&self, approval: &Approval) -> Decision {
-        if self.approve_all || !self.interactive {
+        let grants_capabilities = matches!(approval, Approval::Capabilities { .. });
+        if !self.interactive || (self.approve_all && !grants_capabilities) {
             return NonInteractive {
                 approve_all: self.approve_all,
             }
             .approve(approval);
         }
         let _guard = self.prompt_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let (question, on_no) = match approval {
-            Approval::Manual { message } => (message.clone(), Decision::Deferred),
-            Approval::ShellCommand { command } => {
-                (format!("Run shell command: {command}?"), Decision::Denied)
+        let question = match approval {
+            Approval::Manual { message } => message.clone(),
+            Approval::ShellCommand { command } => format!("Run shell command: {command}?"),
+            Approval::Capabilities { modules } => {
+                format!("Allow the transform to use {}?", modules.join(", "))
             }
-            Approval::Capabilities { modules } => (
-                format!("Allow the transform to use {}?", modules.join(", ")),
-                Decision::Denied,
-            ),
-            Approval::PullRequest { title, branch } => (
-                format!("Push '{branch}' and open pull request '{title}'?"),
-                Decision::Denied,
-            ),
+            Approval::PullRequest { title, branch } => {
+                format!("Push '{branch}' and open pull request '{title}'?")
+            }
         };
-        let answer = self
-            .renderer
-            .suspend(|| inquire::Confirm::new(&question).with_default(true).prompt());
-        match answer {
-            Ok(true) => Decision::Approved,
-            Ok(false) => on_no,
-            Err(_) => Decision::Deferred,
+        // Enter never approves: every one of these runs or publishes something.
+        let answer = self.renderer.suspend(|| {
+            inquire::Confirm::new(&question)
+                .with_default(false)
+                .prompt()
+        });
+        match (answer, approval) {
+            (Ok(true), _) => Decision::Approved,
+            // A manual approval can be given later; the rest are answered now.
+            (_, Approval::Manual { .. }) => Decision::Deferred,
+            _ => Decision::Denied,
         }
     }
 

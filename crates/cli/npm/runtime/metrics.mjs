@@ -21,6 +21,9 @@ class MetricAtom {
       const value = cardinality[key];
       if (value !== undefined && value !== null) clean[key] = String(value);
     }
+    // A whole amount of at least 0; anything that is not a number counts 1.
+    amount =
+      typeof amount === "number" && Number.isFinite(amount) ? Math.max(0, Math.trunc(amount)) : 1;
     const entryKey = JSON.stringify(clean);
     let entries = scope.metrics.get(this.name);
     if (!entries) scope.metrics.set(this.name, (entries = new Map()));

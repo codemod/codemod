@@ -10,13 +10,13 @@ use std::time::{Duration, Instant};
 type Key = (PathBuf, Vec<String>);
 
 /// Whether `executable <help_args>` prints `flag`.
-pub fn supports_flag(executable: &Path, help_args: &[&str], flag: &str) -> bool {
+pub(crate) fn supports_flag(executable: &Path, help_args: &[&str], flag: &str) -> bool {
     help_text(executable, help_args).contains(flag)
 }
 
 /// What `executable <help_args>` prints (stdout and stderr), or nothing when
 /// it does not answer within a few seconds.
-pub fn help_text(executable: &Path, help_args: &[&str]) -> String {
+pub(crate) fn help_text(executable: &Path, help_args: &[&str]) -> String {
     static CACHE: OnceLock<Mutex<HashMap<Key, String>>> = OnceLock::new();
     let key = (
         executable.to_path_buf(),

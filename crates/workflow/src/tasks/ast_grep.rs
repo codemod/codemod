@@ -1,6 +1,5 @@
 //! `astGrep(path, options)`: apply an ast-grep YAML rule file.
 
-use std::path::PathBuf;
 use std::sync::Mutex;
 
 use butterflow_core::execution::CodemodExecutionConfig;
@@ -30,10 +29,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             rules.display()
         )));
     }
-    let base_path = request
-        .base_path
-        .as_deref()
-        .map(|base| PathBuf::from(base.trim().trim_start_matches("./")));
+    let base_path = changes::base_path(request.base_path.as_deref())?;
 
     let planned = Mutex::new(Vec::<PlannedChange>::new());
     let failures = Mutex::new(Vec::<(String, String)>::new());

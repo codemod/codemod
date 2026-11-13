@@ -61,13 +61,19 @@ export interface HostRunOptions {
   workflowName?: string;
   /**
    * `"memory"` (the default) keeps nothing; `"local"` records the run where
-   * `codemod workflow resume` finds it.
+   * `codemod workflow list` and `status` show it.
    */
   store?: "memory" | "local";
-  /** Continue this run (with `store: "local"`). */
+  /**
+   * Continue this run (with `store: "local"`). A run is resumed by the host
+   * that started it: one started here cannot be resumed with
+   * `codemod workflow resume`, nor one the CLI started here.
+   */
   resume?: string;
   /** The workflow file, when `workflow` is the module itself. */
   path?: string;
+  /** Instead of `path`: the directory relative task paths resolve against. */
+  workflowDir?: string;
   /** Send `console` output of the workflow's code to the report's events. */
   captureConsole?: boolean;
   /** Stops the run. */

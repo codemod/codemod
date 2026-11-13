@@ -36,7 +36,7 @@ pub(crate) fn evaluate(
     expression: &str,
     scope: &str,
 ) -> Result<String, String> {
-    let scope: Scope = serde_json::from_str(scope).map_err(|e| js_error(e.to_string()))?;
+    let scope: Scope = serde_json::from_str(scope).map_err(|e| e.to_string())?;
     let matrix = scope.matrix.as_ref();
     let value = match kind {
         "condition" => {
@@ -63,13 +63,13 @@ pub(crate) fn evaluate(
         .map(Value::String),
         "list" => {
             let items: Vec<String> =
-                serde_json::from_str(expression).map_err(|e| js_error(e.to_string()))?;
+                serde_json::from_str(expression).map_err(|e| e.to_string())?;
             resolve_string_list(&items, &scope.params, &scope.state, matrix, None, None)
                 .map(Value::from)
         }
-        other => return Err(js_error(format!("unknown expression kind '{other}'"))),
+        other => return Err(format!("unknown expression kind '{other}'")),
     }
-    .map_err(|e| js_error(format!("cannot evaluate '{expression}': {e}")))?;
+    .map_err(|e| format!("cannot evaluate '{expression}': {e}"))?;
     Ok(value.to_string())
 }
 
@@ -78,8 +78,4 @@ where
     D: serde::Deserializer<'de>,
 {
     Ok(Option::deserialize(deserializer)?.unwrap_or_default())
-}
-
-fn js_error(message: String) -> String {
-    message
 }

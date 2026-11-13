@@ -343,7 +343,7 @@ impl SgNode {
     }
 
     #[napi]
-    pub fn commit_edits(&self, edits: Vec<Edit>) -> String {
+    pub fn commit_edits(&self, edits: Vec<Edit>) -> Result<String> {
         // On the root, splice into the whole document: the root node's text
         // leaves out leading whitespace and a BOM.
         let is_root = self.node.parent().is_none();
@@ -352,24 +352,17 @@ impl SgNode {
         } else {
             (self.node.text().to_string(), self.node.range().start)
         };
-        if edits.is_empty() {
-            return old;
-        }
-        let mut edits = edits;
-        edits.sort_by_key(|edit| edit.start_pos);
-        let mut text = String::with_capacity(old.len());
-        let mut start = 0;
-        for edit in edits {
-            let at = (edit.start_pos as usize).saturating_sub(offset);
-            if start > at {
-                continue; // overlapping
-            }
-            text.push_str(&old[start..at]);
-            text.push_str(&edit.inserted_text);
-            start = (edit.end_pos as usize).saturating_sub(offset);
-        }
-        text.push_str(&old[start.min(old.len())..]);
-        text
+        let edits = edits
+            .into_iter()
+            .map(|edit| {
+                (
+                    edit.start_pos as usize,
+                    edit.end_pos as usize,
+                    edit.inserted_text,
+                )
+            })
+            .collect();
+        codemod_sandbox::matchers::splice_edits(&old, offset, edits).map_err(Error::from_reason)
     }
 
     #[napi]

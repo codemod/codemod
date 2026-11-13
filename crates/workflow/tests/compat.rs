@@ -105,6 +105,40 @@ nodes:
     assert_eq!(labels, ["Always"]);
 }
 
+/// A node whose only use of the params is handing them to a template.
+#[test]
+fn a_node_that_only_uses_a_template_still_gets_the_params() {
+    let h = Harness::new();
+    h.write("a.txt", "a");
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+templates:
+  - id: greet
+    name: Greet
+    steps:
+      - name: Say it
+        run: echo "hello ${{ params.who }}" >> "$STATE_OUTPUTS.log"; echo "said=${{ params.who }}" >> "$STATE_OUTPUTS"
+nodes:
+  - id: only
+    name: Only
+    steps:
+      - name: Use the template
+        use:
+          template: greet
+          inputs:
+            who: world
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(
+        report.steps[0].state.as_ref().unwrap()["said"],
+        json!("world")
+    );
+}
+
 #[test]
 fn matrix_values_run_once_each() {
     let h = Harness::new();

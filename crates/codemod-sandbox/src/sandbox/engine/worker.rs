@@ -20,19 +20,18 @@ use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
 use rquickjs::{async_with, AsyncContext, AsyncRuntime};
 
 use super::execution_engine::{
-    install_console_bridge, DryRunExecutionFlag, ExecutionModeFlag, FileChange,
+    install_console_bridge, CallbackIsolate, DryRunExecutionFlag, ExecutionModeFlag, FileChange,
     JssgExecutionContext, JssgFileChanges, TargetDirectory,
 };
-use super::quickjs_adapters::{CodemodModuleResolver, QuickJSLoader, QuickJSResolver};
-use crate::ast_grep::{AstGrepModule, DefaultParseLanguage};
-use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
-use crate::metrics::{MetricsContext, MetricsModule};
+use super::pending_files::PendingFiles;
+use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
+use crate::ast_grep::DefaultParseLanguage;
+use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
+use crate::metrics::MetricsContext;
 use crate::sandbox::errors::{ExecutionError, RuntimeError};
 use crate::sandbox::resolvers::ModuleResolver;
-use crate::sandbox::runtime_module::{
-    RuntimeEventCallback, RuntimeFailure, RuntimeHooksContext, RuntimeModule,
-};
-use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
+use crate::sandbox::runtime_module::{RuntimeEventCallback, RuntimeFailure, RuntimeHooksContext};
+use crate::workflow_global::SharedStateContext;
 
 /// How to build a [`Worker`].
 pub struct WorkerOptions<R> {
@@ -74,6 +73,14 @@ fn init_error(message: String) -> ExecutionError {
     }
 }
 
+/// See [`Worker::take_side_effects`].
+pub struct SideEffects {
+    /// A failure reported with `codemod/runtime`'s `failFile` or `failStep`.
+    pub failure: Option<RuntimeFailure>,
+    /// Files changed with `jssgTransform`.
+    pub other_files: Vec<FileChange>,
+}
+
 impl Worker {
     pub async fn new<R: ModuleResolver + 'static>(
         options: WorkerOptions<R>,
@@ -92,25 +99,19 @@ impl Worker {
                 LlrtSupportedModules::Fetch => {
                     module_builder.enable_fetch();
                 }
+                // A dry run changes nothing: no file system, no commands.
                 LlrtSupportedModules::Fs if !options.dry_run => {
                     module_builder.enable_fs();
                 }
-                LlrtSupportedModules::ChildProcess => {
+                LlrtSupportedModules::ChildProcess if !options.dry_run => {
                     module_builder.enable_child_process();
                 }
                 _ => {}
             }
         }
 
-        let (resolver, mut loader, globals) = module_builder.builder.build();
-        loader = loader
-            .with_module("codemod/ast-grep", AstGrepModule)
-            .with_module("codemod/workflow", WorkflowGlobalModule)
-            .with_module("codemod/metrics", MetricsModule)
-            .with_module("codemod/runtime", RuntimeModule);
-        if fetch {
-            loader = loader.with_module("codemod/llm", LlmModule);
-        }
+        let (resolver, loader, globals) = module_builder.builder.build();
+        let (codemod_resolver, loader) = crate::with_codemod_modules!(loader, llm: fetch);
 
         let mut memory_resolver = BuiltinResolver::default();
         let mut memory_loader = BuiltinLoader::default();
@@ -122,7 +123,7 @@ impl Worker {
         runtime
             .set_loader(
                 (
-                    CodemodModuleResolver::offering(fetch),
+                    codemod_resolver,
                     resolver,
                     memory_resolver,
                     QuickJSResolver::new(options.resolver),
@@ -139,7 +140,11 @@ impl Worker {
             options.runtime_event_callback.clone(),
             Some(Arc::clone(&options.cancel)),
         );
-        let file_changes = JssgFileChanges::default();
+        // `jssgTransform` calls in one step build on each other's results.
+        let file_changes = JssgFileChanges {
+            pending: Some(PendingFiles::default()),
+            ..JssgFileChanges::default()
+        };
         let target = options
             .target_directory
             .canonicalize()
@@ -154,6 +159,8 @@ impl Worker {
                 ctx.store_userdata(ExecutionModeFlag { test_mode: false })
                     .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(DryRunExecutionFlag(options.dry_run))
+                    .map_err(|e| fail(format!("{e:?}")))?;
+                ctx.store_userdata(CallbackIsolate)
                     .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(file_changes_for_ctx.clone())
                     .map_err(|e| fail(format!("{e:?}")))?;
@@ -192,14 +199,23 @@ impl Worker {
         })
     }
 
-    /// A failure reported with `codemod:runtime`'s `failFile` or `failStep`
-    /// since the last call.
-    pub fn take_pending_failure(&self) -> Option<RuntimeFailure> {
-        self.hooks.take_pending_failure()
+    /// What the code did since the last call besides returning a value.
+    /// Callers take both together after each call into the worker, so
+    /// neither is left to be blamed on the next call.
+    pub fn take_side_effects(&self) -> SideEffects {
+        SideEffects {
+            failure: self.hooks.take_pending_failure(),
+            other_files: std::mem::take(&mut *self.file_changes.changes.lock().unwrap()),
+        }
     }
 
-    /// Files changed with `jssgTransform` since the last call.
-    pub fn take_secondary_changes(&self) -> Vec<FileChange> {
-        std::mem::take(&mut *self.file_changes.changes.lock().unwrap())
+    /// What `jssgTransform` calls have made of the files they changed, so
+    /// far: `(path, on disk, now)`.
+    pub fn changed_files(&self) -> Vec<(PathBuf, String, String)> {
+        self.file_changes
+            .pending
+            .as_ref()
+            .map(PendingFiles::changed)
+            .unwrap_or_default()
     }
 }

@@ -49,46 +49,87 @@ export function step(labelOrTask, maybeTask) {
   return scope.runtime.step(labelOrTask, maybeTask);
 }
 
+// In a step or callback the state functions behave as in the engine's
+// isolates: values are copied in and out, and what the step leaves different
+// from the state it started with becomes its state changes.
+
 export function getState(key) {
   const scope = current("getState()");
   if (!scope.step) return scope.runtime.getState(key);
   const state = scope.step.state;
-  if (key === undefined) return Object.freeze(Object.fromEntries(state));
-  return state.get(key);
+  if (key === undefined) return structuredClone(Object.fromEntries(state));
+  return state.has(key) ? structuredClone(state.get(key)) : undefined;
 }
 
 export function setState(key, value, persist = true) {
   const scope = current("setState()");
   if (!scope.step) return scope.runtime.setState(key, value);
-  if (value === undefined) return unsetState(key);
-  const copy = JSON.parse(JSON.stringify(value));
-  scope.step.state.set(key, copy);
-  if (persist) scope.step.changes[key] = copy;
+  const step = scope.step;
+  step.state.set(key, stateValue(value));
+  step.removed.delete(key);
+  if (persist) step.unpersisted.delete(key);
+  else step.unpersisted.add(key);
 }
 
 export function unsetState(key) {
   const scope = current("unsetState()");
   if (!scope.step) return scope.runtime.unsetState(key);
   scope.step.state.delete(key);
-  scope.step.changes[key] = null;
+  scope.step.removed.add(key);
+}
+
+/**
+ * A value as state keeps it, the way the engine's isolates convert one:
+ * what is not JSON becomes `null`, and objects keep their own enumerable
+ * properties (so a `Date` or a `Map` becomes `{}`).
+ */
+function stateValue(value) {
+  switch (typeof value) {
+    case "boolean":
+    case "string":
+      return value;
+    case "number":
+      return Number.isFinite(value) ? value : null;
+    case "bigint":
+      return Number(value);
+    case "object":
+      if (value === null) return null;
+      if (Array.isArray(value)) return value.map(stateValue);
+      return Object.fromEntries(Object.keys(value).map((key) => [key, stateValue(value[key])]));
+    default:
+      return null;
+  }
 }
 
 /** Callbacks run on one thread here, so a lock has nothing to wait for. */
-export function acquireLock(_name) {
-  current("acquireLock()");
+export function acquireLock(name) {
+  const scope = current("acquireLock()");
+  if (!scope.step) return scope.runtime.acquireLock(name);
   return () => {};
+}
+
+// Step outputs are kept for the transforms that still set them; nothing in a
+// workflow reads them back but these functions.
+
+export function setStepOutput(name, value) {
+  const scope = current("setStepOutput()");
+  if (!scope.step) return scope.runtime.setStepOutput(name, value);
+  scope.step.outputs.set(name, String(value));
+}
+
+export function getStepOutput(stepId, name) {
+  const scope = current("getStepOutput()");
+  if (!scope.step) return scope.runtime.getStepOutput(stepId, name);
+  return scope.step.outputs.get(name) ?? null;
+}
+
+export function getOrSetStepOutput(stepId, name, value) {
+  const scope = current("getOrSetStepOutput()");
+  if (!scope.step) return scope.runtime.getOrSetStepOutput(stepId, name, value);
+  if (!scope.step.outputs.has(name)) scope.step.outputs.set(name, String(value));
+  return scope.step.outputs.get(name);
 }
 
 export function __evaluate(kind, expression, scope) {
   return current("__evaluate()").runtime.__evaluate(kind, expression, scope);
 }
-
-function unsupported(name) {
-  return () => {
-    throw new Error(`${name}() is not available when Node.js runs the workflow; use setState()`);
-  };
-}
-
-export const setStepOutput = unsupported("setStepOutput");
-export const getStepOutput = unsupported("getStepOutput");
-export const getOrSetStepOutput = unsupported("getOrSetStepOutput");

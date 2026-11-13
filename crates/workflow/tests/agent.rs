@@ -97,4 +97,59 @@ export default async function main() { await step(agent("x", { agent: "nope" }))
     let error = output(&report).unwrap_err();
     assert!(error.contains("unknown coding agent 'nope'"), "{error}");
     assert!(error.contains("claude-code, codex"), "{error}");
+
+    let script = |name: &str, body: String| {
+        let path = bin.path().join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+
+    // An agent that cannot be kept read-only is not started for a read-only step.
+    let launched = bin.path().join("amp-launched");
+    script("amp", format!("touch \"{}\"", launched.display()));
+    let report = h.start(
+        r#"
+import { step, agent } from "codemod/workflow";
+export default async function main() { await step(agent("x", { agent: "amp", autonomy: "read-only" })); }
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("Amp cannot be kept read-only"),
+        "the error says why: {error}"
+    );
+    assert!(!launched.exists(), "Amp was not started");
+
+    // What an agent reported before it failed is logged with the failure.
+    script(
+        "claude",
+        r#"cat > /dev/null
+echo '{"type":"system","subtype":"init","session_id":"s-9","model":"m"}'
+exit 3"#
+            .to_string(),
+    );
+    h.events.take();
+    let report = h.start(
+        r#"
+import { step, agent } from "codemod/workflow";
+export default async function main() { await step(agent("x", { agent: "claude" })); }
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("exited with code 3"), "{error}");
+    let logs: Vec<String> = h
+        .events
+        .take()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::StepLog { line, .. } => Some(line),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        logs.contains(&"Claude Code session: s-9".to_string()),
+        "{logs:?}"
+    );
 }

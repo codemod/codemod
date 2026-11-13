@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args;
 use tabled::{Table, Tabled};
 
-use crate::workflow_exec::store;
+use crate::workflow_exec::{status_label, store};
 
 #[derive(Args, Debug)]
 pub struct Command {
@@ -25,7 +25,8 @@ struct RunRow {
 
 /// List workflow runs, most recent first
 pub async fn handler(args: &Command) -> Result<()> {
-    let runs = store()?.list_runs(args.limit)?;
+    let store = store();
+    let runs = store.list_runs(args.limit)?;
     if runs.is_empty() {
         println!("No workflow runs found.");
         return Ok(());
@@ -39,8 +40,8 @@ pub async fn handler(args: &Command) -> Result<()> {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default()
             }),
+            status: status_label(store.as_ref(), &run),
             id: run.id,
-            status: run.status.as_str().to_string(),
             started_at: run.started_at.format("%Y-%m-%d %H:%M:%S").to_string(),
         })
         .collect();

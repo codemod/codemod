@@ -9,6 +9,15 @@ macro_rules! define_module_enum {
             $( $variant, )*
         }
 
+        impl LlrtSupportedModules {
+            /// The module's name, as `FromStr` reads it.
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $( Self::$variant => $snake, )*
+                }
+            }
+        }
+
         impl std::str::FromStr for LlrtSupportedModules {
             type Err = String;
 

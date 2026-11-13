@@ -2,7 +2,7 @@ use crate::utils::ancestor_search::find_in_ancestors;
 use crate::utils::manifest::CodemodManifest;
 use crate::utils::package_validation::{
     expected_workflow_paths, package_has_authored_skill_layout, package_has_install_skill_steps,
-    validate_package_behavior_structure, validate_skill_behavior, DEFAULT_WORKFLOW_FILE_NAME,
+    validate_package_behavior_structure, validate_skill_behavior,
 };
 use anyhow::{anyhow, Context, Result};
 use butterflow_core::utils;
@@ -186,11 +186,8 @@ fn validate_workflow_file(workflow_path: &Path) -> Result<()> {
 
 fn normalize_non_package_workflow_path(input_path: &Path) -> Result<PathBuf> {
     if input_path.is_dir() {
-        let typescript = input_path.join("workflow.ts");
-        if typescript.is_file() {
-            return Ok(typescript);
-        }
-        return Ok(input_path.join(DEFAULT_WORKFLOW_FILE_NAME));
+        return butterflow_core::package_workflows::locate_workflow(input_path, None)
+            .map_err(|error| anyhow!(error));
     }
 
     if input_path
@@ -208,6 +205,7 @@ fn normalize_non_package_workflow_path(input_path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::package_validation::DEFAULT_WORKFLOW_FILE_NAME;
     use std::fs;
     use tempfile::tempdir;
 

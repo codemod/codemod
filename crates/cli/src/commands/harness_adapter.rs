@@ -621,26 +621,28 @@ pub fn resolve_adapter(harness: Harness) -> AdapterResult<ResolvedAdapter> {
     resolve_adapter_with_runtime(harness, &runtime_paths)
 }
 
-/// Agents export these to the commands they run; the editor-terminal
-/// variable comes last so an agent running inside Cursor's terminal wins.
-const AGENT_ENV_MARKERS: &[(&str, Harness)] = &[
-    ("CLAUDECODE", Harness::Claude),
-    ("CODEX_THREAD_ID", Harness::Codex),
-    ("CODEX_SANDBOX", Harness::Codex),
-    ("CODEX_CI", Harness::Codex),
-    ("CURSOR_AGENT", Harness::Cursor),
-    ("OPENCODE_CLIENT", Harness::Opencode),
-    ("GOOSE_TERMINAL", Harness::Goose),
-    ("ANTIGRAVITY_AGENT", Harness::Antigravity),
-    ("CURSOR_TRACE_ID", Harness::Cursor),
-];
-
+/// The harness of the agent whose variables are in the environment.
+/// `codemod_agents` knows which variables each agent exports to the commands
+/// it runs; an editor's terminal variable counts last, so an agent running
+/// inside Cursor's terminal wins.
 pub(crate) fn detect_harness_from_env(lookup: impl Fn(&str) -> Option<String>) -> Option<Harness> {
-    AGENT_ENV_MARKERS.iter().find_map(|(name, harness)| {
-        lookup(name)
-            .filter(|value| !value.trim().is_empty())
-            .map(|_| *harness)
-    })
+    let is_set = |name: &str| lookup(name).is_some_and(|value| !value.trim().is_empty());
+    codemod_agents::agents_in_env(is_set)
+        .into_iter()
+        .find_map(|agent| harness_for_agent(agent.id()))
+}
+
+/// The harness for a `codemod_agents` agent id, for the agents that have one.
+fn harness_for_agent(id: &str) -> Option<Harness> {
+    match id {
+        "claude-code" => Some(Harness::Claude),
+        "codex" => Some(Harness::Codex),
+        "cursor" => Some(Harness::Cursor),
+        "opencode" => Some(Harness::Opencode),
+        "goose" => Some(Harness::Goose),
+        "antigravity" => Some(Harness::Antigravity),
+        _ => None,
+    }
 }
 
 pub(crate) fn resolve_adapter_with_runtime(
@@ -6231,15 +6233,52 @@ codemod-skill-version: 0.1.0
     fn the_agent_running_the_install_is_detected_from_its_environment() {
         for (variable, expected) in [
             ("CLAUDECODE", Harness::Claude),
+            ("CLAUDE_CODE_ENTRYPOINT", Harness::Claude),
+            ("CLAUDE_CODE_SESSION_ID", Harness::Claude),
             ("CODEX_THREAD_ID", Harness::Codex),
+            ("CODEX_SESSION_ID", Harness::Codex),
+            ("CODEX_SANDBOX", Harness::Codex),
+            ("CODEX_CI", Harness::Codex),
             ("CURSOR_AGENT", Harness::Cursor),
             ("CURSOR_TRACE_ID", Harness::Cursor),
+            ("OPENCODE", Harness::Opencode),
+            ("OPENCODE_SESSION_ID", Harness::Opencode),
             ("OPENCODE_CLIENT", Harness::Opencode),
             ("GOOSE_TERMINAL", Harness::Goose),
+            ("ANTIGRAVITY_AGENT", Harness::Antigravity),
         ] {
             let detected = detect_harness_from_env(|name| (name == variable).then(|| "1".into()));
             assert_eq!(detected, Some(expected), "{variable}");
         }
+    }
+
+    #[test]
+    fn every_harness_is_the_harness_of_a_supported_agent() {
+        let mut harnesses: Vec<&str> = codemod_agents::agents()
+            .filter_map(|agent| harness_for_agent(agent.id()))
+            .map(|harness| harness.as_str())
+            .collect();
+        harnesses.sort_unstable();
+        assert_eq!(
+            harnesses,
+            [
+                "antigravity",
+                "claude",
+                "codex",
+                "cursor",
+                "goose",
+                "opencode"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_agent_without_a_harness_does_not_hide_the_editor_it_runs_in() {
+        let detected = detect_harness_from_env(|name| {
+            matches!(name, "GEMINI_CLI" | "CURSOR_TRACE_ID").then(|| "1".into())
+        });
+
+        assert_eq!(detected, Some(Harness::Cursor));
     }
 
     #[test]

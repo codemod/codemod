@@ -6,11 +6,12 @@
 //!   cargo test -p codemod-agents --test live -- --nocapture
 //! ```
 //!
-//! Each agent answers a question in read-only mode, in an empty directory.
+//! Each agent answers a question in an empty directory, read-only when it
+//! can be kept read-only.
 
 use std::time::Duration;
 
-use codemod_agents::{find, AgentEvent, Autonomy, Run, Task};
+use codemod_agents::{find, AgentEvent, Autonomy, ReadOnly, Run, Task};
 
 #[test]
 fn installed_agents_answer() {
@@ -24,7 +25,9 @@ fn installed_agents_answer() {
             Some((name, model)) => (name, Some(model)),
             None => (entry, None),
         };
-        let agent = find(name).unwrap_or_else(|| panic!("unknown agent {name}"));
+        let Some(agent) = find(name) else {
+            panic!("unknown agent {name}");
+        };
         let Some(executable) = agent.installed() else {
             failures.push(format!("{name}: not installed"));
             continue;
@@ -32,14 +35,17 @@ fn installed_agents_answer() {
         let cwd = tempfile::tempdir().unwrap();
         let mut events = Vec::new();
         let result = Run {
-            adapter: agent.adapter,
+            adapter: agent,
             executable,
             task: Task {
                 prompt: "What is 6 times 7? Reply with the number only.",
                 system_prompt: Some("Answer as briefly as possible."),
                 model,
                 cwd: cwd.path(),
-                autonomy: Autonomy::ReadOnly,
+                autonomy: match agent.read_only() {
+                    ReadOnly::Unsupported => Autonomy::Full,
+                    _ => Autonomy::ReadOnly,
+                },
             },
             cancel: None,
             timeout: Some(Duration::from_secs(300)),

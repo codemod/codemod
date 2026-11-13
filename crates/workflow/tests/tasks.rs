@@ -3,7 +3,9 @@ mod common;
 use std::sync::Arc;
 
 use codemod_workflow::interaction::NonInteractive;
-use codemod_workflow::{Ending, MemoryStore, RunStatus, Services};
+use codemod_workflow::{
+    cancel_run, Canceled, Ending, MemoryStore, RunStatus, Services, StepStatus,
+};
 use common::{output, Harness};
 use serde_json::{json, Value};
 
@@ -98,7 +100,9 @@ fn an_approval_nobody_can_give_pauses_the_run_until_resumed() {
     assert_eq!(first.run.status, RunStatus::AwaitingApproval);
     assert_eq!(first.run.awaiting.as_deref(), Some("Ship it?"));
     assert_eq!(h.read("a.txt"), "a1");
-    assert_eq!(first.steps.len(), 1);
+    // The step that waits is on record, so `status` can name it.
+    assert_eq!(first.steps.len(), 2);
+    assert_eq!(first.steps[1].status, StepStatus::AwaitingApproval);
 
     // Resume with approval, sharing the same store.
     let approver = Harness::with(store, Arc::new(NonInteractive { approve_all: true }));
@@ -112,9 +116,17 @@ fn canceling_a_run_that_waits_for_approval_marks_it_canceled() {
     let h = Harness::new();
     h.write("a.txt", "a");
     let first = h.start(NEEDS_APPROVAL, Value::Null);
-    h.engine.cancel(&first.run.id).unwrap();
+    assert_eq!(
+        cancel_run(h.store.as_ref(), &first.run.id).unwrap(),
+        Canceled::Marked
+    );
     let run = h.store.get_run(&first.run.id).unwrap().unwrap();
     assert_eq!(run.status, RunStatus::Canceled);
+    assert!(run.awaiting.is_none());
+    assert_eq!(
+        cancel_run(h.store.as_ref(), &first.run.id).unwrap(),
+        Canceled::AlreadyFinished(RunStatus::Canceled)
+    );
 }
 
 #[test]
@@ -391,4 +403,175 @@ export default async function main() {
         Value::Null,
     );
     assert_eq!(output(&report).unwrap(), json!([]));
+}
+
+#[test]
+fn an_approval_the_body_swallows_still_pauses_the_run() {
+    let h = Harness::new();
+    h.write("a.txt", "a");
+    let report = h.start(
+        r#"
+import { step, approval, forEachFile } from "codemod/workflow";
+export default async function main() {
+  try {
+    await step(approval("Ship it?"));
+  } catch {}
+  await step(forEachFile("*.txt", (file) => { file.write("shipped"); }));
+  return "done";
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(report.ending, Ending::AwaitingApproval("Ship it?".into()));
+    assert_eq!(h.read("a.txt"), "a", "nothing runs past the gate");
+}
+
+#[test]
+fn ast_grep_refuses_a_base_path_outside_the_target() {
+    let h = Harness::new();
+    h.write("a.ts", "const a = 1;\n");
+    h.bundle_file(
+        "rules.yml",
+        "id: r\nlanguage: typescript\nrule:\n  pattern: const a = 1\nfix: const a = 2\n",
+    );
+    let report = h.start(
+        r#"
+import { step, astGrep } from "codemod/workflow";
+export default async function main() {
+  await step("Scan", astGrep("rules.yml", { basePath: "../elsewhere" }));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("must stay inside the target"), "{error}");
+    assert_eq!(h.read("a.ts"), "const a = 1;\n");
+}
+
+#[test]
+fn renames_are_compared_by_the_file_they_name() {
+    let h = Harness::new();
+    h.write("a.txt", "a");
+    h.write("b.txt", "b");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  // Renaming a file to its own path, spelled differently, changes nothing.
+  const same = await step("Same", forEachFile("a.txt", (file) => { file.rename("./a.txt"); }));
+  return same.changes;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "written": [], "renamed": [], "deleted": [] })
+    );
+
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step("Collide", forEachFile("*.txt", (file) => {
+    file.rename(file.path === "a.txt" ? "./c.txt" : "c.txt");
+  }));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("both renamed to 'c.txt'"), "{error}");
+    assert!(h.exists("a.txt") && h.exists("b.txt") && !h.exists("c.txt"));
+}
+
+#[test]
+fn changes_several_files_make_to_one_file_add_up() {
+    let h = Harness::new();
+    for name in ["a", "b", "c", "d", "e", "f"] {
+        h.write(
+            &format!("src/parts/{name}.ts"),
+            &format!("export const {name} = 1;\n"),
+        );
+    }
+    h.write("src/index.ts", "// exports\n");
+    h.bundle_file(
+        "scripts/transform.ts",
+        r#"
+import { jssgTransform } from "codemod/ast-grep";
+export default async function transform(root: any) {
+  const name = root.filename().split("/").pop().replace(".ts", "");
+  const index = root.filename().replace(`parts/${name}.ts`, "index.ts");
+  await jssgTransform(
+    (other: any) => `${other.root().text()}export * from "./parts/${name}";\n`,
+    index,
+    "typescript",
+  );
+  return null;
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  return step(jssg("./scripts/transform.ts", { include: "src/parts/*.ts" }));
+}
+"#,
+        Value::Null,
+    );
+    let result = output(&report).unwrap();
+    assert_eq!(result["changes"]["written"], json!(["src/index.ts"]));
+    let index = h.read("src/index.ts");
+    for name in ["a", "b", "c", "d", "e", "f"] {
+        assert!(index.contains(&format!("\"./parts/{name}\"")), "{index}");
+    }
+    assert_eq!(index.lines().count(), 7, "{index}");
+}
+
+#[test]
+fn a_function_step_commits_what_it_changes_with_jssg_transform() {
+    let h = Harness::new();
+    h.write("a.ts", "const a = 1;\n");
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  await step("Edit", async () => {
+    await jssgTransform((root) => root.root().text().replace("1", "2"), `${target}/a.ts`, "typescript");
+    await jssgTransform((root) => root.root().text().replace("2", "3"), `${target}/a.ts`, "typescript");
+  });
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("a.ts"), "const a = 3;\n");
+    assert_eq!(h.engine_summary_diffs(), 1);
+}
+
+#[test]
+fn for_each_file_selects_what_jssg_selects() {
+    let h = Harness::new();
+    // Hidden directories are searched, and a language means the same files
+    // for both tasks.
+    h.write(".github/workflows/ci.yml", "on: push\n");
+    h.write("src/a.ts", "export {};\n");
+    h.write("src/b.kt", "fun main() {}\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  const hidden = await step("Hidden", forEachFile(".github/**/*.yml", (file) => file.path));
+  const kotlin = await step("Kotlin", forEachFile({ language: "kotlin" }, (file) => file.path));
+  return { hidden: hidden.outputs, kotlin: kotlin.outputs };
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "hidden": [".github/workflows/ci.yml"], "kotlin": ["src/b.kt"] })
+    );
 }

@@ -12,15 +12,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use butterflow_state::run_store::{RunRecord, StepRecord, StoreError};
+use butterflow_state::run_store::StepRecord;
 use serde_json::{json, Value};
 
-use crate::engine::{Engine, EngineError, RunReport};
+use crate::engine::{Engine, EngineError, Execution, RunReport};
 use crate::events::Event;
-use crate::run::{run_host_task, Ending, HostEvent, RunContext, TestPlan};
+use crate::run::{run_host_task, Ending, RunContext, TestPlan};
 use crate::tasks::for_each_file::{self, FileEffects, Selector};
 use crate::tasks::TaskContext;
-use crate::Summary;
 
 /// The language a `forEachFile` step's files are in, when known, and the
 /// files as `(path, text)` pairs.
@@ -36,76 +35,96 @@ pub struct OpenRequest {
     pub test: Option<TestPlan>,
 }
 
+/// The host of runs opened here, as recorded in a run's settings.
+const NODE_HOST: &str = "node";
+
 /// A run in progress whose body another host runs. Every method may be
 /// called from any thread.
 pub struct HostedRun {
     context: Arc<RunContext>,
-    record: Mutex<Option<RunRecord>>,
+    /// The execution while the run is open; `None` once it has finished.
+    execution: Mutex<Option<Execution>>,
     history: Vec<StepRecord>,
 }
 
 impl Engine {
     /// Start a run whose body the caller runs.
     pub fn open(&self, request: OpenRequest) -> Result<HostedRun, EngineError> {
-        let record = Self::new_record(
+        let execution = self.begin_new(
             &request.workflow,
             &request.target,
             request.params,
             request.name,
-        );
-        let store = self.store_for(request.dry_run, request.test.is_some());
-        store.create_run(&record)?;
-        let context = self.begin(
-            store,
-            &record,
             Default::default(),
             request.dry_run,
             request.test,
-            false,
-        );
-        Ok(HostedRun {
-            context,
-            record: Mutex::new(Some(record)),
-            history: Vec::new(),
-        })
+            NODE_HOST,
+        )?;
+        Ok(HostedRun::new(execution, Vec::new()))
     }
 
     /// Continue a run whose body the caller runs again.
     pub fn open_resumed(&self, run_id: &str) -> Result<HostedRun, EngineError> {
-        let record = self.reopen(run_id)?;
-        let context = self.begin(
-            Arc::clone(self.store()),
-            &record,
-            Default::default(),
-            false,
-            None,
-            true,
-        );
-        let history = context.store.load_steps(&record.id)?;
-        Ok(HostedRun {
-            context,
-            record: Mutex::new(Some(record)),
-            history,
-        })
-    }
-
-    /// Record how a hosted run ended. A run can only finish once.
-    pub fn finish(&self, run: &HostedRun, ending: Ending) -> Result<RunReport, EngineError> {
-        let ending = match (&ending, run.stopped_at()) {
-            (Ending::Succeeded(_) | Ending::Failed(_), Some(label)) => Ending::Stopped(label),
-            _ => ending,
-        };
-        let record = run
-            .record
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-            .ok_or_else(|| EngineError::AlreadyFinished(run.context.run_id.clone()))?;
-        self.conclude(&run.context, record, ending)
+        let record = self
+            .store()
+            .get_run(run_id)?
+            .ok_or_else(|| EngineError::NotFound(run_id.to_string()))?;
+        let execution = self.begin_resumed(record, Default::default(), NODE_HOST)?;
+        let history = execution.context.store.load_steps(run_id)?;
+        Ok(HostedRun::new(execution, history))
     }
 }
 
 impl HostedRun {
+    fn new(execution: Execution, history: Vec<StepRecord>) -> Self {
+        Self {
+            context: Arc::clone(&execution.context),
+            execution: Mutex::new(Some(execution)),
+            history,
+        }
+    }
+
+    /// Record how the run ended, given how its body ended; `None` when the
+    /// body cannot end any more, because the steps it waits for will never
+    /// start. A step that was canceled or waits for an approval decides the
+    /// ending whatever the body did. A run finishes once; if its record
+    /// cannot be saved it stays open, so finishing can be tried again.
+    pub fn finish(&self, body: Option<Ending>) -> Result<RunReport, EngineError> {
+        let mut slot = self.execution.lock().unwrap_or_else(|e| e.into_inner());
+        let mut execution = slot.take().ok_or_else(|| self.finished())?;
+        let body = body.unwrap_or_else(|| crate::run::stalled(&self.context));
+        let ending = self.context.ending(body);
+        match execution.save_ending(&ending) {
+            Ok(steps) => Ok(RunReport {
+                run: execution.record.clone(),
+                ending,
+                steps,
+            }),
+            Err(error) => {
+                *slot = Some(execution);
+                Err(error)
+            }
+        }
+    }
+
+    fn finished(&self) -> EngineError {
+        EngineError::AlreadyFinished(self.context.run_id.clone())
+    }
+
+    /// Fails once the run has finished: nothing more can be done in it.
+    fn open(&self) -> Result<(), EngineError> {
+        let open = self
+            .execution
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some();
+        if open {
+            Ok(())
+        } else {
+            Err(self.finished())
+        }
+    }
+
     pub fn run_id(&self) -> &str {
         &self.context.run_id
     }
@@ -140,36 +159,15 @@ impl HostedRun {
         self.context.test.as_ref()
     }
 
-    pub fn summary(&self) -> &Summary {
-        &self.context.services.summary
-    }
-
     /// Persist one step's outcome and report it.
-    pub fn record(&self, step: &StepRecord, duration_ms: u64) -> Result<(), StoreError> {
-        self.context.store.put_step(&self.context.run_id, step)?;
-        self.context.events.emit(Event::StepFinished {
-            position: step.position,
-            label: step.label.clone(),
-            status: step.status,
-            error: step.error.clone(),
-            duration_ms,
-        });
-        Ok(())
+    pub fn record(&self, step: &StepRecord, duration_ms: u64) -> Result<(), EngineError> {
+        self.open()?;
+        Ok(self.context.record_step(step, duration_ms)?)
     }
 
     /// Report a step started or replayed: `{ type, position, label }`.
-    pub fn event(&self, event: &str) {
-        match serde_json::from_str::<HostEvent>(event) {
-            Ok(HostEvent::StepStarted { position, label }) => self
-                .context
-                .events
-                .emit(Event::StepStarted { position, label }),
-            Ok(HostEvent::StepReplayed { position, label }) => self
-                .context
-                .events
-                .emit(Event::StepReplayed { position, label }),
-            Err(_) => {}
-        }
+    pub fn event(&self, event: &str) -> Result<(), String> {
+        self.context.host_event(event)
     }
 
     /// A line the body or a step wrote; `position` is the step's.
@@ -184,6 +182,12 @@ impl HostedRun {
         self.context.canceled()
     }
 
+    /// Whether a step about to start must not, because the run was canceled.
+    pub fn refuses_steps(&self) -> bool {
+        self.context.refuses_steps()
+    }
+
+    /// Cancel this run.
     pub fn cancel(&self) {
         self.context.cancel.store(true, Ordering::SeqCst);
     }
@@ -191,16 +195,6 @@ impl HostedRun {
     /// The test plan's `until` step has started.
     pub fn stop(&self) {
         self.context.stopped.store(true, Ordering::SeqCst);
-    }
-
-    fn stopped_at(&self) -> Option<String> {
-        if !self.context.stopped.load(Ordering::SeqCst) {
-            return None;
-        }
-        self.context
-            .test
-            .as_ref()
-            .and_then(|plan| plan.until.clone())
     }
 
     /// Evaluate a workflow.yaml `${{ }}` expression; returns JSON.
@@ -212,7 +206,12 @@ impl HostedRun {
     /// orchestrator sends it). Blocks until it finishes. Returns the outcome
     /// as JSON, or the error payload (`{ name, message }`) as JSON.
     pub fn run_task(&self, request: &str) -> Result<String, String> {
-        run_host_task(&self.context, request)
+        self.open().map_err(|e| e.to_string())?;
+        // A task that panics still settles its step, as a failure.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_host_task(&self.context, request)
+        }))
+        .unwrap_or_else(|panic| Err(crate::run::panic_payload(panic)))
     }
 
     /// The files a `forEachFile` selector picks, as `[path, text]` pairs, and
@@ -235,6 +234,7 @@ impl HostedRun {
         label: String,
         files: Value,
     ) -> Result<Value, String> {
+        self.open().map_err(|e| e.to_string())?;
         let files: Vec<FileEffects> =
             serde_json::from_value(files).map_err(|e| format!("bad file effects: {e}"))?;
         let task = TaskContext {
