@@ -1,7 +1,9 @@
 pub mod cancel;
+pub mod harness;
 pub mod list;
 pub mod resume;
 pub mod run;
 pub mod status;
+pub mod test;
 pub mod upgrade;
 pub mod validate;

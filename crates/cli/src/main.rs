@@ -22,6 +22,7 @@ mod report_server;
 mod suitability;
 mod utils;
 mod workflow_exec;
+mod workflow_test;
 use crate::auth::TokenStorage;
 use ascii_art::print_ascii_art;
 use codemod_telemetry::{
@@ -135,6 +136,13 @@ enum WorkflowCommands {
 
     /// Convert workflow.yaml files to workflow.ts
     Upgrade(commands::workflow::upgrade::Command),
+
+    /// Run the workflow on test fixtures and compare the files it leaves
+    Test(commands::workflow::test::Command),
+
+    /// Run one workflow test from a JSON spec on stdin (used by `codemod/testing`)
+    #[command(hide = true)]
+    Harness(commands::workflow::harness::Command),
 }
 
 #[derive(Subcommand, Debug)]
@@ -529,6 +537,12 @@ async fn dispatch_command(cli: &Cli, telemetry_sender: TelemetrySenderMutex) -> 
             }
             WorkflowCommands::Upgrade(args) => {
                 commands::workflow::upgrade::handler(args)?;
+            }
+            WorkflowCommands::Test(args) => {
+                commands::workflow::test::handler(args).await?;
+            }
+            WorkflowCommands::Harness(args) => {
+                commands::workflow::harness::handler(args).await?;
             }
         },
         Some(Commands::Jssg(args)) => match &args.command {

@@ -543,12 +543,62 @@ npx codemod workflow upgrade [PATH] [--keep-yaml] [--dry-run]
 
 In a package directory (the current directory by default), every YAML workflow declared in `codemod.yaml` (or a bare `workflow.yaml`) is converted to a `.ts` file next to it, `codemod.yaml` is updated to point at it, and the YAML file is removed. Features the conversion drops are listed as warnings and marked in the generated file with `// codemod upgrade:` comments.
 
+Run it in a directory that holds several packages, such as a monorepo of recipes, and every package below it is upgraded. Directories that start with `.`, `node_modules`, `target` and `dist` are skipped.
+
+```bash
+npx codemod workflow upgrade .        # every package under the current directory
+```
+
+Transform files and their tests are not changed: `codemod jssg test` keeps working on them as before, and `codemod workflow test` runs the same fixtures through the whole workflow. The generated `workflow.ts` references the `codemod/workflow` types, so `tsc` checks it in any project that depends on `codemod`. If the nearest `package.json` does not, `upgrade` suggests adding it.
+
 <ResponseField name="--keep-yaml" type="boolean">
   Keep the YAML files.
 </ResponseField>
 
 <ResponseField name="--dry-run" type="boolean">
   Print the generated TypeScript instead of writing files.
+</ResponseField>
+
+**`workflow test`**
+
+Run the workflow on each fixture and compare the files it leaves with the fixture's expected output. See [Testing workflows](/community/workflows/testing).
+
+```bash
+npx codemod workflow test [TESTS] [-w <PATH>] [-u] [--filter <TEXT>] [--strictness <LEVEL>]
+```
+
+Each fixture is a directory with `input/` and `expected/` directories, or `input.<ext>` and `expected.<ext>` files, and optionally a `params.json` with the run's parameters. The workflow runs on a temporary copy of each one; nothing is recorded in the run store. Approvals are given and the capabilities `codemod.yaml` declares are granted. The command exits with an error when a fixture fails.
+
+<ResponseField name="TESTS" type="string" default="tests">
+  Directory of fixtures, one per subdirectory.
+</ResponseField>
+
+<ResponseField name="-w, --workflow <PATH>" type="string" default=".">
+  Path to a workflow file or a codemod package directory.
+</ResponseField>
+
+<ResponseField name="--workflow-name <NAME>" type="string">
+  Which workflow to test when `codemod.yaml` declares several.
+</ResponseField>
+
+<ResponseField name="-u, --update" type="boolean">
+  Write each run's files into its fixture's expected output.
+</ResponseField>
+
+<ResponseField name="--filter <TEXT>" type="string">
+  Only run fixtures whose name contains this text.
+</ResponseField>
+
+<ResponseField name="--strictness <LEVEL>" type="string" default="strict">
+  How files are compared: `strict` (text), `cst`, `ast`, or `loose`, as in [`jssg test`](/community/jssg/testing#strictness-levels). Files in languages without a parser are compared as text.
+</ResponseField>
+
+<ResponseField name="--allow-fs, --allow-fetch, --allow-child-process" type="boolean">
+  Grant capabilities on top of those `codemod.yaml` declares.
+</ResponseField>
+
+<ResponseField name="--no-approve" type="boolean">
+  Leave manual approvals unanswered. A run that reaches one waits, and its fixture fails.
 </ResponseField>
 
 **`workflow status`**

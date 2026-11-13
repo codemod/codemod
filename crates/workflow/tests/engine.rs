@@ -174,7 +174,8 @@ export default async function main() {
 }
 
 const MIGRATE_MOMENT: &str = r#"
-import { step, forEachFile, parse } from "codemod:workflow";
+import { step, forEachFile } from "codemod:workflow";
+import { parse } from "codemod:ast-grep";
 
 const LEGACY = "moment";
 

@@ -35,6 +35,13 @@ importers:
       detect-libc:
         specifier: ^2.0.3
         version: 2.0.3
+    devDependencies:
+      '@codemod.com/tsconfig':
+        specifier: workspace:*
+        version: link:../../../packages/tsconfig
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
     optionalDependencies:
       '@codemod.com/cli-darwin-arm64':
         specifier: 0.0.0
@@ -154,12 +161,12 @@ importers:
 
   packages/jssg-utils:
     devDependencies:
-      '@codemod.com/jssg-types':
-        specifier: workspace:*
-        version: link:../jssg-types
       '@codemod.com/tsconfig':
         specifier: workspace:*
         version: link:../tsconfig
+      codemod:
+        specifier: workspace:*
+        version: link:../../crates/cli/npm
       typescript:
         specifier: 'catalog:'
         version: 5.9.3

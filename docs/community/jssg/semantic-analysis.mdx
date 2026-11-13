@@ -196,6 +196,8 @@ Configure semantic analysis mode. Can be:
 - `"file"` — Single-file analysis (default)
 - `"workspace"` — Workspace-wide analysis using the target path
 - `{ mode: "workspace", root: "./path" }` — Workspace-wide with custom root
+
+In `workflow.ts`, the `jssg` task's `semanticAnalysis` option takes the same values, and `"none"` turns analysis off.
 </ParamField>
 
 **Run the workflow:**
@@ -843,7 +845,7 @@ for (const fileRef of refs) {
 <AccordionGroup>
 <Accordion title="Semantic methods return null/empty">
 **Possible causes:**
-- No semantic analysis configured in workflow (add `semantic_analysis: workspace`)
+- Semantic analysis is turned off for the step (`semanticAnalysis: "none"`), or the symbol is in another file and the step uses the default file scope (use `semanticAnalysis: "workspace"`, or `semantic_analysis: workspace` in `workflow.yaml`)
 - The language isn't supported (only JavaScript/TypeScript and Python)
 - The symbol couldn't be resolved (external library, syntax error)
 

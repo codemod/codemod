@@ -1,41 +1,7 @@
-// ---- appended by the build to every extracted forEachFile callback ----
+// ---- appended by the build to every extracted callback or function step ----
 
 let __cb;
 let __lang;
-
-const __EXTENSIONS = {
-  ts: "typescript",
-  mts: "typescript",
-  cts: "typescript",
-  tsx: "tsx",
-  js: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  jsx: "javascript",
-  css: "css",
-  json: "json",
-  html: "html",
-  py: "python",
-  rs: "rust",
-  go: "go",
-  java: "java",
-  yaml: "yaml",
-  yml: "yaml",
-};
-
-function __flowParse(file, language) {
-  if (!file || typeof file.text !== "string" || typeof file.path !== "string") {
-    throw new TypeError("parse(file) expects the file object passed to the callback");
-  }
-  const extension = (file.path.split(".").pop() || "").toLowerCase();
-  const lang = language ?? __lang ?? __EXTENSIONS[extension];
-  if (!lang) {
-    throw new Error(
-      `parse(file): no language for '${file.path}'; pass one, or set 'language' on the selector`,
-    );
-  }
-  return __sgParse(lang, file.text);
-}
 
 function __freeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -87,15 +53,17 @@ export function __init(captures, language) {
   __cb = __make(__freeze(JSON.parse(captures)));
 }
 
-export function __run(path, text) {
+/** Run the callback for one file; never throws. */
+async function __one(path, text) {
   const effects = [];
   let open = true;
   const guard = (name) => {
-    if (!open) throw new Error(`file.${name}() was called after the callback returned`);
+    if (!open) throw new Error(`file.${name}() was called after the callback finished`);
   };
   const file = Object.freeze({
     path,
     text,
+    language: __lang,
     write(next) {
       guard("write");
       if (typeof next !== "string") throw new TypeError("file.write(text) expects a string");
@@ -115,19 +83,38 @@ export function __run(path, text) {
   });
   let output;
   try {
-    output = __cb(file);
+    output = await __cb(file);
+    if (output !== undefined) __checkJson(output, "return value");
   } catch (error) {
-    throw new Error(__describe(error));
+    return { ok: false, error: __describe(error) };
   } finally {
     open = false;
   }
-  if (output && typeof output.then === "function") {
-    throw new Error("forEachFile callbacks must be synchronous");
-  }
-  if (output !== undefined) __checkJson(output, "return value");
-  return JSON.stringify({
+  return {
+    ok: true,
     effects,
     output: output === undefined ? null : output,
     hasOutput: output !== undefined,
-  });
+  };
+}
+
+/** Run the callback for a batch of `[path, text]` pairs, concurrently. */
+export function __runBatch(batch) {
+  return Promise.all(JSON.parse(batch).map(([path, text]) => __one(path, text))).then((outcomes) =>
+    JSON.stringify(outcomes),
+  );
+}
+
+/** Run a function step: call it with no arguments; never throws. */
+export async function __runStep() {
+  try {
+    let result = await __cb();
+    if (result === undefined) result = null;
+    __checkJson(result, "the step's result");
+    return JSON.stringify({ ok: true, result });
+  } catch (error) {
+    const message =
+      error && typeof error === "object" && "message" in error ? error.message : String(error);
+    return JSON.stringify({ ok: false, error: message });
+  }
 }

@@ -106,8 +106,11 @@ pub(crate) fn execute(
             }
         })
         .transpose()?;
+    // File-scope analysis by default, as `codemod jssg run` and `jssg test`
+    // have: without it, `node.definition()` and friends find nothing.
     let semantic = match &request.semantic_analysis {
-        None => SemanticMode::None,
+        None => SemanticMode::File,
+        Some(Value::String(mode)) if mode == "none" => SemanticMode::None,
         Some(Value::String(mode)) if mode == "file" => SemanticMode::File,
         Some(Value::String(mode)) if mode == "workspace" => {
             SemanticMode::Workspace(run.target.clone())
@@ -129,7 +132,7 @@ pub(crate) fn execute(
         },
         Some(other) => {
             return Err(TaskError::Failed(format!(
-                "semanticAnalysis must be 'file', 'workspace' or an object, not {other}"
+                "semanticAnalysis must be 'file', 'workspace', 'none' or an object, not {other}"
             )))
         }
     };

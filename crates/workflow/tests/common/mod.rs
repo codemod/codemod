@@ -8,7 +8,7 @@ use codemod_workflow::events::CollectEvents;
 use codemod_workflow::interaction::{Interaction, NonInteractive};
 use codemod_workflow::{
     load_workflow, Ending, Engine, LoadedWorkflow, MemoryStore, RunReport, RunStore, Services,
-    StartRequest,
+    StartRequest, TestPlan,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -105,6 +105,21 @@ impl Harness {
                 params,
                 name: None,
                 dry_run,
+                test: None,
+            })
+            .unwrap()
+    }
+
+    /// Run as a test, with steps stopped at or stubbed by `plan`.
+    pub fn test(&self, source: &str, plan: TestPlan) -> RunReport {
+        self.engine
+            .start(StartRequest {
+                workflow: self.workflow(source),
+                target: self.target.path().to_path_buf(),
+                params: Value::Null,
+                name: None,
+                dry_run: false,
+                test: Some(plan),
             })
             .unwrap()
     }

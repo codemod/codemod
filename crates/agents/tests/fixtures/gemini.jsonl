@@ -1,0 +1,7 @@
+{"type":"init","timestamp":"2026-11-12T10:00:00.000Z","session_id":"g-123","model":"gemini-3-pro"}
+{"type":"message","timestamp":"2026-11-12T10:00:00.100Z","role":"user","content":"Create hello.txt"}
+{"type":"tool_use","timestamp":"2026-11-12T10:00:01.000Z","tool_name":"write_file","tool_id":"t1","parameters":{"file_path":"hello.txt","content":"hi"}}
+{"type":"tool_result","timestamp":"2026-11-12T10:00:01.200Z","tool_id":"t1","status":"success","output":"Created hello.txt"}
+{"type":"message","timestamp":"2026-11-12T10:00:02.000Z","role":"assistant","content":"DO","delta":true}
+{"type":"message","timestamp":"2026-11-12T10:00:02.100Z","role":"assistant","content":"NE","delta":true}
+{"type":"result","timestamp":"2026-11-12T10:00:02.200Z","status":"success","stats":{"total_tokens":1500,"input_tokens":1400,"output_tokens":100,"duration_ms":2200,"tool_calls":1}}

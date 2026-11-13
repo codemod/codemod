@@ -1,6 +1,6 @@
 pub(crate) mod sg_node;
 mod types;
-mod utils;
+pub(crate) mod utils;
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod wasm_lang;
@@ -37,7 +37,10 @@ use crate::{
     utils::quickjs_utils::maybe_promise,
 };
 use rquickjs::module::{Declarations, Exports, ModuleDef};
-use rquickjs::{prelude::Func, Class, Ctx, Exception, Function, Object, Result, Value};
+use rquickjs::{
+    prelude::{Func, Opt},
+    Class, Ctx, Exception, Function, Object, Result, Value,
+};
 #[cfg(feature = "native")]
 use std::{str::FromStr, sync::Arc};
 
@@ -91,12 +94,178 @@ impl ModuleDef for AstGrepModule {
     }
 }
 
-pub(crate) fn parse_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<'_>> {
-    SgRootRjs::try_new(lang, src, None, None)
-        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
+/// The language `parse(text)` and `parse(file)` use when the call does not
+/// name one. Hosts that know it store this as userdata: a workflow's
+/// `forEachFile` step sets it to the selector's `language`.
+#[derive(Debug, Clone)]
+pub struct DefaultParseLanguage(pub String);
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for DefaultParseLanguage {
+    type Changed<'to> = DefaultParseLanguage;
 }
 
-fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<'_>> {
+/// What a `parse(...)` call asks for, after sorting out its forms.
+struct ParseRequest {
+    language: String,
+    text: String,
+    filename: Option<String>,
+}
+
+/// `parse` accepts:
+///
+/// - `parse(lang, text)`: the original form;
+/// - `parse(text)` and `parse(text, { language })`;
+/// - `parse(file)` and `parse(file, { language })`, where `file` is an
+///   object with `text` and optionally `path` and `language` (a workflow
+///   `forEachFile` file). The root's `filename()` is then the file's path.
+///
+/// Without a language in the call, it comes from the file object, then the
+/// host's [`DefaultParseLanguage`], then the file's extension.
+fn parse_request<'js>(
+    ctx: &Ctx<'js>,
+    source: Value<'js>,
+    second: Option<Value<'js>>,
+) -> Result<ParseRequest> {
+    let language_option = |value: &Value<'js>| -> Result<Option<String>> {
+        match value.as_object() {
+            Some(object) => object.get::<_, Option<String>>("language"),
+            None => Ok(None),
+        }
+    };
+    let default_language = || ctx.userdata::<DefaultParseLanguage>().map(|l| l.0.clone());
+
+    if let Some(text) = source.as_string() {
+        let text = text.to_string()?;
+        if let Some(second) = second.as_ref().and_then(|v| v.as_string()) {
+            // parse(lang, text)
+            return Ok(ParseRequest {
+                language: text,
+                text: second.to_string()?,
+                filename: None,
+            });
+        }
+        let language = match &second {
+            Some(value) => language_option(value)?,
+            None => None,
+        }
+        .or_else(default_language)
+        .ok_or_else(|| {
+            Exception::throw_message(
+                ctx,
+                "parse(text) needs a language: parse(text, { language: \"tsx\" })",
+            )
+        })?;
+        return Ok(ParseRequest {
+            language,
+            text,
+            filename: None,
+        });
+    }
+
+    let Some(object) = source.as_object() else {
+        return Err(Exception::throw_type(
+            ctx,
+            "parse() expects source text or a file object, for example parse(file) or parse(text, { language })",
+        ));
+    };
+    let Some(text) = object.get::<_, Option<String>>("text")? else {
+        return Err(Exception::throw_type(
+            ctx,
+            "parse(file) expects an object with a string `text`, such as the file a forEachFile callback receives",
+        ));
+    };
+    let path: Option<String> = object.get("path")?;
+    let mut language = match &second {
+        Some(value) => language_option(value)?,
+        None => None,
+    };
+    if language.is_none() {
+        language = object.get::<_, Option<String>>("language")?;
+    }
+    let language = language
+        .or_else(default_language)
+        .or_else(|| path.as_deref().and_then(language_from_path))
+        .ok_or_else(|| {
+            Exception::throw_message(
+                ctx,
+                &format!(
+                    "parse(file): no language for '{}'; pass one with parse(file, {{ language }})",
+                    path.as_deref().unwrap_or("<file>")
+                ),
+            )
+        })?;
+    Ok(ParseRequest {
+        language,
+        text,
+        filename: path.map(|path| absolute_filename(ctx, path)),
+    })
+}
+
+#[cfg(feature = "native")]
+fn language_from_path(path: &str) -> Option<String> {
+    use ast_grep_core::Language;
+    CodemodLang::from_path(path).map(|lang| lang.to_string())
+}
+
+#[cfg(not(feature = "native"))]
+fn language_from_path(_path: &str) -> Option<String> {
+    None
+}
+
+/// A relative file path, made absolute against the run's target directory
+/// so `filename()` and semantic lookups see a real path.
+#[cfg(feature = "native")]
+fn absolute_filename(ctx: &Ctx<'_>, path: String) -> String {
+    let relative = std::path::Path::new(&path);
+    if relative.is_absolute() {
+        return path;
+    }
+    match ctx.userdata::<crate::sandbox::engine::execution_engine::TargetDirectory>() {
+        Some(target) => target.0.join(relative).to_string_lossy().into_owned(),
+        None => path,
+    }
+}
+
+#[cfg(not(feature = "native"))]
+fn absolute_filename(_ctx: &Ctx<'_>, path: String) -> String {
+    path
+}
+
+fn parse_with<'js>(
+    ctx: Ctx<'js>,
+    source: Value<'js>,
+    second: Opt<Value<'js>>,
+) -> Result<SgRootRjs<'js>> {
+    let request = parse_request(&ctx, source, second.0)?;
+    #[cfg(feature = "native")]
+    let target_directory = request.filename.as_ref().and_then(|_| {
+        ctx.userdata::<crate::sandbox::engine::execution_engine::TargetDirectory>()
+            .map(|guard| guard.0.clone())
+    });
+    #[cfg(not(feature = "native"))]
+    let target_directory: Option<std::path::PathBuf> = None;
+    SgRootRjs::try_new(
+        request.language,
+        request.text,
+        request.filename,
+        target_directory.as_deref(),
+    )
+    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
+}
+
+pub(crate) fn parse_rjs<'js>(
+    ctx: Ctx<'js>,
+    source: Value<'js>,
+    second: Opt<Value<'js>>,
+) -> Result<SgRootRjs<'js>> {
+    parse_with(ctx, source, second)
+}
+
+fn parse_async_rjs<'js>(
+    ctx: Ctx<'js>,
+    source: Value<'js>,
+    second: Opt<Value<'js>>,
+) -> Result<SgRootRjs<'js>> {
     #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
     {
         if !wasm_lang::WasmLang::is_parser_initialized() {
@@ -104,9 +273,8 @@ fn parse_async_rjs(ctx: Ctx<'_>, lang: String, src: String) -> Result<SgRootRjs<
         }
     }
 
-    // Call the same implementation as parse_rjs since the async setup should be done by now
-    SgRootRjs::try_new(lang, src, None, None)
-        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))
+    // Same as parse: the async setup is done by now.
+    parse_with(ctx, source, second)
 }
 
 #[cfg(feature = "native")]

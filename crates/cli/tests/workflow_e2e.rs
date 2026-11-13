@@ -246,3 +246,100 @@ export default async function main() {
         text(&output)
     );
 }
+
+const TS_WORKFLOW: &str = r#"
+import { jssg, step } from "codemod:workflow";
+export default async function main() {
+  await step("Replace var", jssg("scripts/codemod.ts", { include: ["**/*.ts"] }));
+}
+"#;
+
+#[test]
+fn workflow_test_runs_each_fixture_and_updates_expected_output() {
+    let fixture = Fixture::new();
+    fixture.package_file("workflow.ts", TS_WORKFLOW);
+    fixture.package_file("tests/dirs/input/src/a.ts", "var a = 1;\n");
+    fixture.package_file("tests/dirs/expected/src/a.ts", "let a = 1;\n");
+    fixture.package_file("tests/file/input.ts", "var b = 2;\n");
+    fixture.package_file("tests/file/expected.ts", "var b = 2;\n");
+    let package = fixture.package.path().to_str().unwrap().to_string();
+    let tests = fixture.package.path().join("tests");
+    let tests = tests.to_str().unwrap();
+
+    let output = fixture.codemod(&["workflow", "test", tests, "-w", &package]);
+    assert!(!output.status.success(), "{}", text(&output));
+    let report = text(&output);
+    assert!(report.contains("✓ dirs"), "{report}");
+    assert!(report.contains("✗ file"), "{report}");
+    assert!(report.contains("-var b = 2;\n    +let b = 2;"), "{report}");
+    assert!(report.contains("1 passed, 1 failed"), "{report}");
+    // Fixtures are run on a copy.
+    assert_eq!(
+        fs::read_to_string(fixture.package.path().join("tests/file/input.ts")).unwrap(),
+        "var b = 2;\n"
+    );
+
+    let output = fixture.codemod(&["workflow", "test", tests, "-w", &package, "-u"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        fs::read_to_string(fixture.package.path().join("tests/file/expected.ts")).unwrap(),
+        "let b = 2;\n"
+    );
+
+    let output = fixture.codemod(&["workflow", "test", tests, "-w", &package]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("2 passed"), "{}", text(&output));
+}
+
+#[test]
+fn the_harness_runs_one_test_from_a_spec_on_stdin() {
+    use std::io::Write as _;
+
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { jssg, step } from "codemod:workflow";
+export default async function main() {
+  const found = await step("Find", jssg("scripts/codemod.ts", { include: ["**/*.ts"], dryRun: true }));
+  await step("Replace var", jssg("scripts/codemod.ts", { include: ["**/*.ts"] }));
+  await step("Never", jssg("scripts/missing.ts"));
+  return found;
+}
+"#,
+    );
+    let spec = serde_json::json!({
+        "workflow": fixture.package.path(),
+        "target": fixture.target.path(),
+        "until": "Replace var",
+        "given": { "Find": { "given": true } },
+    });
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codemod"))
+        .args(["workflow", "harness"])
+        .env("DISABLE_ANALYTICS", "true")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(spec.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", text(&output));
+
+    let result: serde_json::Value =
+        serde_json::from_slice(output.stdout.trim_ascii_end()).expect("one JSON line");
+    assert_eq!(result["status"], "stopped");
+    assert_eq!(result["stoppedAt"], "Replace var");
+    assert_eq!(result["steps"][0]["given"], true);
+    assert_eq!(
+        result["steps"][0]["result"],
+        serde_json::json!({ "given": true })
+    );
+    assert_eq!(result["steps"].as_array().unwrap().len(), 2);
+    assert_eq!(fixture.read("src/a.ts"), "let a = 1;\n");
+}

@@ -1,18 +1,15 @@
 use anyhow::Result;
-use butterflow_core::ai_handoff::{discover_installed_agents, AgentOption};
 use butterflow_core::report::{ExecutionReport, ShareLevel};
+use codemod_agents::{Agent, AgentEvent, Autonomy, Run, Stream, Task};
 use hyper::body::to_bytes;
 use hyper::header::{CONTENT_TYPE, HOST, ORIGIN};
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, HeaderMap, Method, Request, Response, Server, StatusCode};
 use std::convert::Infallible;
 use std::net::TcpListener;
-use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
-use tokio::time::{sleep, timeout};
 
 use crate::auth::{OidcClient, TokenStorage};
 use crate::feedback;
@@ -402,21 +399,23 @@ async fn handle_share(req: Request<Body>, report: &ExecutionReport) -> Result<St
 fn handle_feedback_status() -> Result<String> {
     let storage = TokenStorage::new()?;
     let config = storage.load_config()?;
-    let discovered_agents = discover_installed_agents();
-    let selected_agent = select_feedback_agent(&discovered_agents, None).map(|agent| {
+    let agents: Vec<_> = codemod_agents::agents()
+        .map(|agent| (agent, agent.installed()))
+        .collect();
+    let selected_agent = select_feedback_agent(&agents, None).map(|(agent, _)| {
         serde_json::json!({
-            "canonical": agent.canonical,
-            "label": agent.label,
-            "available": agent.is_available(),
+            "canonical": agent.id(),
+            "label": agent.label(),
+            "available": true,
         })
     });
-    let agents = discovered_agents
-        .into_iter()
-        .map(|agent| {
+    let agents = agents
+        .iter()
+        .map(|(agent, installed)| {
             serde_json::json!({
-                "canonical": agent.canonical,
-                "label": agent.label,
-                "available": agent.is_available(),
+                "canonical": agent.id(),
+                "label": agent.label(),
+                "available": installed.is_some(),
             })
         })
         .collect::<Vec<_>>();
@@ -454,19 +453,17 @@ async fn handle_feedback_agent_submit(
     let _feedback_job = state.feedback_job_guard();
     let agent_req = parse_feedback_agent_request(req).await?;
 
-    let agents = discover_installed_agents();
-    let agent = select_feedback_agent(&agents, agent_req.agent.as_deref())
+    let agents: Vec<_> = codemod_agents::agents()
+        .map(|agent| (agent, agent.installed()))
+        .collect();
+    let (agent, executable) = select_feedback_agent(&agents, agent_req.agent.as_deref())
         .ok_or_else(|| anyhow::anyhow!("No supported coding agent was found on PATH."))?;
-    let canonical = agent.canonical.to_string();
-    let label = agent.label.to_string();
-    let executable = agent
-        .executable_path
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("Selected agent is not available on PATH."))?;
+    let canonical = agent.id().to_string();
+    let label = agent.label().to_string();
     let prompt = build_feedback_prompt(report);
     let target_path = std::path::PathBuf::from(&report.target_path);
 
-    let draft = run_feedback_agent(&canonical, &executable, &prompt, &target_path).await?;
+    let draft = run_feedback_agent(agent, executable, &prompt, &target_path).await?;
     let message = parse_agent_feedback_message(&draft, Some(&target_path))?;
     let body = submit_report_feedback(FEEDBACK_CATEGORY.to_string(), message.clone()).await?;
     let message = format!(
@@ -491,15 +488,13 @@ async fn handle_feedback_agent_stream(
 ) -> Result<Response<Body>> {
     let agent_req = parse_feedback_agent_request(req).await?;
 
-    let agents = discover_installed_agents();
-    let agent = select_feedback_agent(&agents, agent_req.agent.as_deref())
+    let agents: Vec<_> = codemod_agents::agents()
+        .map(|agent| (agent, agent.installed()))
+        .collect();
+    let (agent, executable) = select_feedback_agent(&agents, agent_req.agent.as_deref())
         .ok_or_else(|| anyhow::anyhow!("No supported coding agent was found on PATH."))?;
-    let canonical = agent.canonical.to_string();
-    let label = agent.label.to_string();
-    let executable = agent
-        .executable_path
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("Selected agent is not available on PATH."))?;
+    let canonical = agent.id().to_string();
+    let label = agent.label().to_string();
     let prompt = build_feedback_prompt(&report);
     let target_path = std::path::PathBuf::from(&report.target_path);
 
@@ -521,8 +516,7 @@ async fn handle_feedback_agent_stream(
         .await;
 
         let draft =
-            run_feedback_agent_stream(&canonical, &executable, &prompt, &target_path, &mut sender)
-                .await;
+            run_feedback_agent_stream(agent, executable, &prompt, &target_path, &mut sender).await;
 
         match draft {
             Ok(draft) => match parse_agent_feedback_message(&draft, Some(&target_path)) {
@@ -637,22 +631,25 @@ fn sanitize_feedback_message(message: &str) -> Result<String> {
     Ok(message)
 }
 
-fn select_feedback_agent<'a>(
-    agents: &'a [AgentOption],
+/// The agent that drafts feedback: the requested one when installed, or
+/// the first installed agent.
+fn select_feedback_agent(
+    agents: &[(Agent, Option<std::path::PathBuf>)],
     requested: Option<&str>,
-) -> Option<&'a AgentOption> {
-    if let Some(requested) = requested.map(str::trim).filter(|value| !value.is_empty()) {
-        return agents
-            .iter()
-            .find(|agent| agent.canonical == requested && agent.is_available());
-    }
-
-    const PREFERRED: &[&str] = &["claude-code", "codex", "opencode", "goose"];
-    PREFERRED.iter().find_map(|canonical| {
+) -> Option<(Agent, std::path::PathBuf)> {
+    let installed = |agent: &Agent| {
         agents
             .iter()
-            .find(|agent| agent.canonical == *canonical && agent.is_available())
-    })
+            .find(|(candidate, _)| candidate.id() == agent.id())
+            .and_then(|(_, path)| path.clone())
+    };
+    if let Some(requested) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+        let agent = codemod_agents::find(requested)?;
+        return installed(&agent).map(|path| (agent, path));
+    }
+    agents
+        .iter()
+        .find_map(|(agent, path)| path.clone().map(|path| (*agent, path)))
 }
 
 fn build_feedback_prompt(report: &ExecutionReport) -> String {
@@ -707,251 +704,98 @@ Execution context:
     )
 }
 
+/// Ask an agent, read-only, for the feedback draft; returns its answer.
 async fn run_feedback_agent(
-    canonical: &str,
-    executable: &std::path::Path,
+    agent: Agent,
+    executable: std::path::PathBuf,
     prompt: &str,
     working_dir: &std::path::Path,
 ) -> Result<String> {
-    let mut cmd = tokio::process::Command::new(executable);
-    cmd.current_dir(resolve_feedback_agent_working_dir(working_dir));
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    cmd.kill_on_drop(true);
-
-    match canonical {
-        "claude-code" => {
-            cmd.arg("-p")
-                .arg("--output-format")
-                .arg("stream-json")
-                .arg("--verbose")
-                .stdin(Stdio::piped());
-        }
-        "codex" => {
-            cmd.env("RUST_LOG", "error");
-            cmd.arg("e").arg("--json").arg("-").stdin(Stdio::piped());
-        }
-        "opencode" => {
-            cmd.arg("run")
-                .arg("--format")
-                .arg("json")
-                .stdin(Stdio::piped());
-        }
-        "goose" => {
-            cmd.env("GOOSE_MODE", "auto")
-                .arg("run")
-                .arg("--text")
-                .arg(prompt)
-                .stdin(Stdio::null());
-        }
-        other => anyhow::bail!("Agent '{other}' is not supported for report feedback."),
-    }
-
-    let mut child = cmd.spawn()?;
-    if matches!(canonical, "claude-code" | "codex" | "opencode") {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("Agent stdin pipe was not available."))?;
-        stdin.write_all(prompt.as_bytes()).await?;
-        stdin.write_all(b"\n").await?;
-        stdin.shutdown().await?;
-    }
-
-    let output = timeout(FEEDBACK_AGENT_TIMEOUT, child.wait_with_output())
-        .await
-        .map_err(|_| anyhow::anyhow!("Agent feedback drafting timed out."))??;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{stdout}\n{stderr}");
-
-    if !output.status.success() {
-        anyhow::bail!("Agent feedback drafting failed: {}", combined.trim());
-    }
-
-    Ok(combined)
+    let prompt = prompt.to_string();
+    let cwd = resolve_feedback_agent_working_dir(working_dir);
+    tokio::task::spawn_blocking(move || draft_with_agent(agent, executable, &prompt, &cwd, |_| {}))
+        .await?
 }
 
+/// Like [`run_feedback_agent`], streaming what the agent does to the report UI.
 async fn run_feedback_agent_stream(
-    canonical: &str,
-    executable: &std::path::Path,
+    agent: Agent,
+    executable: std::path::PathBuf,
     prompt: &str,
     working_dir: &std::path::Path,
     sender: &mut hyper::body::Sender,
 ) -> Result<String> {
-    let mut cmd = tokio::process::Command::new(executable);
-    cmd.current_dir(resolve_feedback_agent_working_dir(working_dir));
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    cmd.kill_on_drop(true);
-
-    match canonical {
-        "claude-code" => {
-            cmd.arg("-p")
-                .arg("--output-format")
-                .arg("stream-json")
-                .arg("--verbose")
-                .stdin(Stdio::piped());
-        }
-        "codex" => {
-            cmd.env("RUST_LOG", "error");
-            cmd.arg("e").arg("--json").arg("-").stdin(Stdio::piped());
-        }
-        "opencode" => {
-            cmd.arg("run")
-                .arg("--format")
-                .arg("json")
-                .stdin(Stdio::piped());
-        }
-        "goose" => {
-            cmd.env("GOOSE_MODE", "auto")
-                .arg("run")
-                .arg("--text")
-                .arg(prompt)
-                .stdin(Stdio::null());
-        }
-        other => anyhow::bail!("Agent '{other}' is not supported for report feedback."),
-    }
-
-    let mut child = cmd.spawn()?;
-    if matches!(canonical, "claude-code" | "codex" | "opencode") {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("Agent stdin pipe was not available."))?;
-        stdin.write_all(prompt.as_bytes()).await?;
-        stdin.write_all(b"\n").await?;
-        stdin.shutdown().await?;
-    }
-
-    let (line_tx, mut line_rx) = tokio::sync::mpsc::channel::<(String, String)>(64);
-    let stdout_reader = child
-        .stdout
-        .take()
-        .map(|stdout| spawn_agent_stream_reader(stdout, "stdout", line_tx.clone()));
-    let stderr_reader = child
-        .stderr
-        .take()
-        .map(|stderr| spawn_agent_stream_reader(stderr, "stderr", line_tx.clone()));
-    drop(line_tx);
-
-    let mut wait_status = None;
-    let mut lines_closed = false;
-    let mut combined = String::new();
-    let timeout_timer = sleep(FEEDBACK_AGENT_TIMEOUT);
-    tokio::pin!(timeout_timer);
-
-    while wait_status.is_none() || !lines_closed {
-        enum AgentStreamStep {
-            Line(Option<(String, String)>),
-            Exit(std::io::Result<std::process::ExitStatus>),
-            Timeout,
-        }
-
-        let step = if wait_status.is_none() {
-            let wait = child.wait();
-            tokio::pin!(wait);
-            tokio::select! {
-                line = line_rx.recv(), if !lines_closed => AgentStreamStep::Line(line),
-                status = &mut wait => AgentStreamStep::Exit(status),
-                _ = &mut timeout_timer => AgentStreamStep::Timeout,
-            }
-        } else {
-            tokio::select! {
-                line = line_rx.recv(), if !lines_closed => AgentStreamStep::Line(line),
-                _ = &mut timeout_timer => AgentStreamStep::Timeout,
-            }
-        };
-
-        match step {
-            AgentStreamStep::Line(line) => match line {
-                Some((stream, line)) => {
-                    combined.push_str(&line);
-                    combined.push('\n');
-                    for event in feedback_stream_events_for_agent_line(canonical, &stream, &line) {
-                        send_stream_event(sender, event).await?;
-                    }
-                }
-                None => {
-                    lines_closed = true;
-                }
-            },
-            AgentStreamStep::Exit(status) => {
-                wait_status = Some(status?);
-            }
-            AgentStreamStep::Timeout => {
-                let _ = send_stream_event(
-                    sender,
-                    serde_json::json!({
-                        "type": "status",
-                        "message": "Agent feedback drafting timed out; stopping the local agent.",
-                    }),
-                )
-                .await;
-                let _ = child.kill().await;
-                if let Some(reader) = &stdout_reader {
-                    reader.abort();
-                }
-                if let Some(reader) = &stderr_reader {
-                    reader.abort();
-                }
-                anyhow::bail!("Agent feedback drafting timed out.");
-            }
-        }
-
-        while wait_status.is_some() && !lines_closed {
-            match line_rx.try_recv() {
-                Ok((stream, line)) => {
-                    combined.push_str(&line);
-                    combined.push('\n');
-                    for event in feedback_stream_events_for_agent_line(canonical, &stream, &line) {
-                        send_stream_event(sender, event).await?;
-                    }
-                }
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                    break;
-                }
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                    lines_closed = true;
-                    break;
-                }
-            }
+    let prompt = prompt.to_string();
+    let cwd = resolve_feedback_agent_working_dir(working_dir);
+    let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let draft = tokio::task::spawn_blocking(move || {
+        draft_with_agent(agent, executable, &prompt, &cwd, |event| {
+            let _ = events.send(event);
+        })
+    });
+    while let Some(event) = received.recv().await {
+        if let Some(event) = feedback_stream_event(agent, &event) {
+            let _ = send_stream_event(sender, event).await;
         }
     }
-
-    if let Some(reader) = stdout_reader {
-        let _ = reader.await;
-    }
-    if let Some(reader) = stderr_reader {
-        let _ = reader.await;
-    }
-
-    let status = wait_status.ok_or_else(|| anyhow::anyhow!("Agent exited without a status."))?;
-    if !status.success() {
-        anyhow::bail!("Agent feedback drafting failed: {}", combined.trim());
-    }
-
-    Ok(combined)
+    draft.await?
 }
 
-fn spawn_agent_stream_reader<R>(
-    reader: R,
-    stream: &'static str,
-    tx: tokio::sync::mpsc::Sender<(String, String)>,
-) -> tokio::task::JoinHandle<()>
-where
-    R: AsyncRead + Unpin + Send + 'static,
-{
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            if line.trim().is_empty() {
-                continue;
-            }
-            if tx.send((stream.to_string(), line)).await.is_err() {
-                break;
-            }
+fn draft_with_agent(
+    agent: Agent,
+    executable: std::path::PathBuf,
+    prompt: &str,
+    cwd: &std::path::Path,
+    mut on_event: impl FnMut(AgentEvent),
+) -> Result<String> {
+    let outcome = Run {
+        adapter: agent.adapter,
+        executable,
+        task: Task {
+            prompt,
+            system_prompt: None,
+            model: None,
+            cwd,
+            autonomy: Autonomy::ReadOnly,
+        },
+        cancel: None,
+        timeout: Some(FEEDBACK_AGENT_TIMEOUT),
+    }
+    .run(&mut on_event)
+    .map_err(|error| anyhow::anyhow!("Agent feedback drafting failed: {error}"))?;
+    outcome
+        .result
+        .filter(|result| !result.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{} did not answer.", agent.label()))
+}
+
+/// What the report UI shows for one thing the agent did.
+fn feedback_stream_event(agent: Agent, event: &AgentEvent) -> Option<serde_json::Value> {
+    let status = |message: String| serde_json::json!({ "type": "status", "message": message });
+    match event {
+        AgentEvent::Started { model, .. } => Some(status(match model {
+            Some(model) => format!("{} started ({model}).", agent.label()),
+            None => format!("{} started.", agent.label()),
+        })),
+        AgentEvent::ToolCall { name, .. } => Some(status(format!("Using {name}."))),
+        AgentEvent::Text { text, .. } if !text.trim().is_empty() => Some(serde_json::json!({
+            "type": "output",
+            "stream": "stdout",
+            "text": text.trim(),
+        })),
+        AgentEvent::Warning { message } | AgentEvent::Error { message } => {
+            Some(status(message.clone()))
         }
-    })
+        AgentEvent::Output { stream, line } => Some(status(format!(
+            "[{}] {}",
+            match stream {
+                Stream::Stdout => "stdout",
+                Stream::Stderr => "stderr",
+            },
+            truncate_feedback_stream_line(line, 240)
+        ))),
+        _ => None,
+    }
 }
 
 async fn send_stream_event(
@@ -974,118 +818,6 @@ async fn send_stream_error(sender: &mut hyper::body::Sender, error: anyhow::Erro
         }),
     )
     .await
-}
-
-fn feedback_stream_events_for_agent_line(
-    canonical: &str,
-    stream: &str,
-    line: &str,
-) -> Vec<serde_json::Value> {
-    let mut events = Vec::new();
-
-    if let Some(message) = describe_agent_activity_line(canonical, line) {
-        events.push(serde_json::json!({
-            "type": "status",
-            "message": message,
-        }));
-    }
-
-    let text = extract_agent_text(line);
-    let text = text.trim();
-    if !text.is_empty() && text != line.trim() {
-        events.push(serde_json::json!({
-            "type": "output",
-            "stream": stream,
-            "text": text,
-        }));
-    } else if serde_json::from_str::<serde_json::Value>(line).is_err() {
-        events.push(serde_json::json!({
-            "type": "status",
-            "message": format!("[{stream}] {}", truncate_feedback_stream_line(line, 240)),
-        }));
-    }
-
-    events
-}
-
-fn describe_agent_activity_line(canonical: &str, line: &str) -> Option<String> {
-    let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
-    match canonical {
-        "claude-code" => describe_claude_activity(&value),
-        "codex" => describe_codex_activity(&value),
-        "opencode" => describe_opencode_activity(&value),
-        _ => None,
-    }
-}
-
-fn describe_claude_activity(value: &serde_json::Value) -> Option<String> {
-    match value.get("type").and_then(serde_json::Value::as_str) {
-        Some("system")
-            if value.get("subtype").and_then(serde_json::Value::as_str) == Some("init") =>
-        {
-            let model = value
-                .get("model")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("model");
-            Some(format!("Claude Code started ({model})."))
-        }
-        Some("stream_event") => {
-            let event = value.get("event")?;
-            if event.get("type").and_then(serde_json::Value::as_str) == Some("content_block_start")
-            {
-                let block = event.get("content_block")?;
-                if block.get("type").and_then(serde_json::Value::as_str) == Some("tool_use") {
-                    let name = block
-                        .get("name")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("tool");
-                    return Some(format!("Using {name}."));
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-fn describe_codex_activity(value: &serde_json::Value) -> Option<String> {
-    match value.get("type").and_then(serde_json::Value::as_str) {
-        Some("turn.started") => Some("Codex started drafting feedback.".to_string()),
-        Some("turn.completed") => Some("Codex finished drafting feedback.".to_string()),
-        Some("item.started") => {
-            let item = value.get("item")?;
-            match item.get("type").and_then(serde_json::Value::as_str) {
-                Some("command_execution") => {
-                    let command = item
-                        .get("command")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("command");
-                    Some(format!(
-                        "Running read-only command: {}",
-                        truncate_feedback_stream_line(command, 180)
-                    ))
-                }
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-fn describe_opencode_activity(value: &serde_json::Value) -> Option<String> {
-    match value.get("type").and_then(serde_json::Value::as_str) {
-        Some("agent") => value
-            .pointer("/part/name")
-            .or_else(|| value.pointer("/properties/name"))
-            .and_then(serde_json::Value::as_str)
-            .map(|name| format!("OpenCode agent: {name}.")),
-        Some("tool") | Some("tool_use") => value
-            .pointer("/part/tool")
-            .or_else(|| value.pointer("/properties/tool"))
-            .and_then(serde_json::Value::as_str)
-            .map(|tool| format!("Using {tool}.")),
-        _ => None,
-    }
 }
 
 fn truncate_feedback_stream_line(line: &str, max_chars: usize) -> String {
@@ -1346,20 +1078,11 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    fn unavailable_agent(canonical: &'static str, label: &'static str) -> AgentOption {
-        AgentOption {
-            canonical,
-            label,
-            executable_path: None,
-        }
-    }
-
-    fn available_agent(canonical: &'static str, label: &'static str) -> AgentOption {
-        AgentOption {
-            canonical,
-            label,
-            executable_path: Some(PathBuf::from("/bin/agent")),
-        }
+    fn agent(id: &str, installed: bool) -> (Agent, Option<PathBuf>) {
+        (
+            codemod_agents::find(id).unwrap(),
+            installed.then(|| PathBuf::from("/bin/agent")),
+        )
     }
 
     fn sample_report() -> ExecutionReport {
@@ -1412,26 +1135,25 @@ mod tests {
     }
 
     #[test]
-    fn selects_first_supported_available_agent_by_preference() {
+    fn selects_the_first_installed_agent() {
         let agents = vec![
-            unavailable_agent("claude-code", "Claude Code"),
-            available_agent("codex", "Codex"),
-            available_agent("goose", "Goose"),
+            agent("claude-code", false),
+            agent("codex", true),
+            agent("goose", true),
         ];
 
-        let selected = select_feedback_agent(&agents, None).expect("selected agent");
+        let (selected, _) = select_feedback_agent(&agents, None).expect("selected agent");
 
-        assert_eq!(selected.canonical, "codex");
+        assert_eq!(selected.id(), "codex");
     }
 
     #[test]
-    fn requested_agent_must_be_available() {
-        let agents = vec![
-            unavailable_agent("codex", "Codex"),
-            available_agent("goose", "Goose"),
-        ];
+    fn requested_agent_must_be_installed() {
+        let agents = vec![agent("codex", false), agent("goose", true)];
 
         assert!(select_feedback_agent(&agents, Some("codex")).is_none());
+        let (selected, _) = select_feedback_agent(&agents, Some("Goose")).unwrap();
+        assert_eq!(selected.id(), "goose");
     }
 
     #[test]

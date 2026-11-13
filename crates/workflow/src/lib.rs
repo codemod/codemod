@@ -24,6 +24,7 @@ pub mod compat;
 mod engine;
 pub mod events;
 mod expr;
+mod hosted;
 pub mod interaction;
 mod run;
 mod tasks;
@@ -35,7 +36,8 @@ pub use butterflow_state::run_store::{
 pub use engine::{
     is_typescript, load_workflow, Engine, EngineError, LoadedWorkflow, RunReport, StartRequest,
 };
-pub use run::{Ending, RunError};
+pub use hosted::{HostedRun, OpenRequest, SelectedFiles};
+pub use run::{Ending, RunError, TestPlan, ORCHESTRATOR_JS};
 
 /// Services tasks call into, supplied by the host application.
 #[derive(Default)]

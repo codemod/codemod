@@ -33,11 +33,16 @@ pub enum Event {
         position: u64,
         line: String,
     },
-    /// A normalized coding-agent event (message, tool call, status) from an
-    /// `agent(...)` step.
+    /// `console` output from the workflow body.
+    RunLog {
+        line: String,
+    },
+    /// What the coding agent running an `agent(...)` step did.
     StepAgent {
         position: u64,
-        agent: serde_json::Value,
+        /// The agent's id (`"claude-code"`, `"codex"`, ...).
+        agent: String,
+        activity: codemod_agents::AgentEvent,
     },
     StepFinished {
         position: u64,

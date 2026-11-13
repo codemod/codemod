@@ -1,7 +1,7 @@
-import type JS from "@codemod.com/jssg-types/langs/javascript";
-import type TSX from "@codemod.com/jssg-types/langs/tsx";
-import type TS from "@codemod.com/jssg-types/langs/typescript";
-import type { Rule, SgNode } from "@codemod.com/jssg-types/main";
+import type JS from "codemod/langs/javascript";
+import type TSX from "codemod/langs/tsx";
+import type TS from "codemod/langs/typescript";
+import type { Rule, SgNode } from "codemod/main";
 import { stringToExactRegexString } from "../../utils";
 import { getFileStyle } from "./style";
 

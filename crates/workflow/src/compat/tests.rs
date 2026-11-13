@@ -44,24 +44,94 @@ fn every_workflow_yaml_in_the_repo_translates_and_builds() {
 }
 
 #[test]
-fn a_linear_shell_workflow_becomes_a_promise_chain() {
+fn a_linear_shell_workflow_becomes_a_sequence_of_awaits() {
     let text = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../cli/src/templates/shell/workflow.yaml"),
     )
     .unwrap();
     let source = translated(&text).source;
     assert!(
-        source.contains("const setupNodeDone = setupNode(params);"),
-        "{source}"
-    );
-    assert!(
         source.contains(
-            "const transformNodeDone = after([setupNodeDone], () => transformNode(params));"
+            "export default async function main() {\n  await setupNode();\n  await transformNode();\n  await cleanupNode();\n}"
         ),
         "{source}"
     );
     assert!(
         source.contains("await step(\"Initialize\", shell(\"$CODEMOD_PATH/scripts/setup.sh\"));"),
+        "{source}"
+    );
+    for unused in [
+        "after(",
+        "Params",
+        "Matrix",
+        "DEFAULT_PARAMS",
+        "const matrix",
+    ] {
+        assert!(!source.contains(unused), "{unused} in:\n{source}");
+    }
+}
+
+#[test]
+fn a_single_node_workflow_runs_its_steps_from_main() {
+    let source = translated(
+        r#"
+version: "1"
+nodes:
+  - id: apply-transforms
+    name: Apply AST Transformations
+    type: automatic
+    runtime:
+      type: direct
+    steps:
+      - name: Rewrite rmdir
+        js-ast-grep:
+          js_file: src/workflow.ts
+          base_path: .
+          include: ["**/*.js", "**/*.ts"]
+          exclude: ["**/node_modules/**"]
+          language: typescript
+"#,
+    )
+    .source;
+    assert_eq!(
+        source,
+        r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
+/// <reference types="codemod/workflow" />
+import { jssg, step } from "codemod:workflow";
+
+export default async function main() {
+  // Apply AST Transformations
+  await step("Rewrite rmdir", jssg("src/workflow.ts", {
+    include: ["**/*.js", "**/*.ts"],
+    exclude: ["**/node_modules/**"],
+    language: "typescript",
+  }));
+}
+"#
+    );
+}
+
+#[test]
+fn independent_nodes_run_together() {
+    let source = translated(
+        r#"
+version: "1"
+nodes:
+  - id: a
+    name: A
+    steps:
+      - name: One
+        run: echo one
+  - id: b
+    name: B
+    steps:
+      - name: Two
+        run: echo two
+"#,
+    )
+    .source;
+    assert!(
+        source.contains("await Promise.all([aNode(), bNode()]);"),
         "{source}"
     );
 }
@@ -167,7 +237,7 @@ fn the_documented_features_translate_and_build() {
     expect("(getState<any>(\"shards\") ?? []).map((matrix: Matrix, index: number) => applyNodeFor(params, matrix, index))");
     expect("await step(approval(\"Run 'Apply transforms'?\"));");
     expect("const branchName = `codemod-apply-${index}`;");
-    expect("jssg(\"scripts/codemod.ts\", { files: matrix?._meta_files, language: \"tsx\", params, matrix: matrix ?? undefined })");
+    expect("jssg(\"scripts/codemod.ts\", {\n    files: matrix?._meta_files,\n    language: \"tsx\",\n    params,\n    matrix: matrix ?? undefined,\n  })");
     expect("if (params.mode == \"fast\") {");
     expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state: getState() })) {");

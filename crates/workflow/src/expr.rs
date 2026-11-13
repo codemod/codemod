@@ -30,7 +30,7 @@ pub(crate) fn evaluate(
     kind: &str,
     expression: &str,
     scope: &str,
-) -> rquickjs::Result<String> {
+) -> Result<String, String> {
     let scope: Scope = serde_json::from_str(scope).map_err(|e| js_error(e.to_string()))?;
     let matrix = scope.matrix.as_ref();
     let value = match kind {
@@ -59,6 +59,6 @@ pub(crate) fn evaluate(
     Ok(value.to_string())
 }
 
-fn js_error(message: String) -> rquickjs::Error {
-    rquickjs::Error::new_from_js_message("expression", "value", message)
+fn js_error(message: String) -> String {
+    message
 }

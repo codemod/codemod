@@ -162,6 +162,47 @@ export default async function main() {
 }
 
 #[test]
+fn jssg_steps_have_file_scope_semantic_analysis_unless_turned_off() {
+    let h = Harness::new();
+    h.write("src/a.ts", "const value = 1;\nconsole.log(value);\n");
+    h.bundle_file(
+        "scripts/transform.ts",
+        r#"
+export default function transform(root: any) {
+  const use = root.root().find({ rule: { pattern: "console.log($A)" } });
+  const definition = use.getMatch("A").definition();
+  return `// defined: ${definition ? definition.node.text() : "unknown"}\n` + root.root().text();
+}
+"#,
+    );
+    let workflow = |options: &str| {
+        format!(
+            r#"
+import {{ step, jssg }} from "codemod:workflow";
+export default async function main() {{
+  await step(jssg("./scripts/transform.ts", {{ include: "src/**/*.ts"{options} }}));
+}}
+"#
+        )
+    };
+
+    h.start(&workflow(""), Value::Null);
+    assert!(
+        h.read("src/a.ts").starts_with("// defined: value"),
+        "{}",
+        h.read("src/a.ts")
+    );
+
+    h.write("src/a.ts", "const value = 1;\nconsole.log(value);\n");
+    h.start(&workflow(r#", semanticAnalysis: "none""#), Value::Null);
+    assert!(
+        h.read("src/a.ts").starts_with("// defined: unknown"),
+        "{}",
+        h.read("src/a.ts")
+    );
+}
+
+#[test]
 fn ast_grep_steps_apply_rule_fixes() {
     let h = Harness::new();
     h.write("a.js", "var x = 1;\n");

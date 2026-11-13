@@ -17,8 +17,10 @@ mod ast_grep;
 pub(crate) mod changes;
 mod codemod;
 pub(crate) mod for_each_file;
+mod function;
 mod git;
 mod install_skill;
+pub(crate) mod isolate;
 mod jssg;
 mod shard;
 mod shell;
@@ -131,6 +133,7 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         .to_string();
     let result = match kind.as_str() {
         "forEachFile" => for_each_file::run(task, content).map_err(TaskError::from),
+        "function" => function::run(task, content).map_err(TaskError::from),
         "shell" => shell::run(task, parse(content)?),
         "jssg" => jssg::run(task, parse(content)?),
         "astGrep" => ast_grep::run(task, parse(content)?),

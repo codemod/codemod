@@ -8,9 +8,9 @@ import {
   listImports,
   updateImport,
 } from "../src/javascript/exports/imports.ts";
-import type JS from "@codemod.com/jssg-types/langs/javascript";
-import type TS from "@codemod.com/jssg-types/langs/typescript";
-import type TSX from "@codemod.com/jssg-types/langs/tsx";
+import type JS from "codemod/langs/javascript";
+import type TS from "codemod/langs/typescript";
+import type TSX from "codemod/langs/tsx";
 
 type Language = JS | TS | TSX;
 

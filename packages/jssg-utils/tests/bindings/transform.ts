@@ -1,4 +1,4 @@
-import type { Edit } from "@codemod.com/jssg-types/main";
+import type { Edit } from "codemod/main";
 import type { SgRoot } from "codemod:ast-grep";
 import type TSX from "codemod:ast-grep/langs/tsx";
 import {

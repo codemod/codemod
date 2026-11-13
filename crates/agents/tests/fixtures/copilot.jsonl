@@ -1,0 +1,9 @@
+{"id":"e1","timestamp":"2026-11-12T10:00:00Z","type":"session.start","data":{"sessionId":"cp-123"}}
+{"id":"e2","timestamp":"2026-11-12T10:00:01Z","type":"assistant.message_delta","data":{"messageId":"msg-1","deltaContent":"Creating"}}
+{"id":"e3","timestamp":"2026-11-12T10:00:01Z","type":"assistant.message","data":{"messageId":"msg-1","content":"Creating the file.","toolRequests":[{"toolCallId":"tool-1","name":"bash","arguments":{"command":"printf hi > hello.txt"}}]}}
+{"id":"e4","timestamp":"2026-11-12T10:00:02Z","type":"tool.execution_start","data":{"toolCallId":"tool-1","toolName":"bash","arguments":{"command":"printf hi > hello.txt"}}}
+{"id":"e5","timestamp":"2026-11-12T10:00:02Z","type":"tool.execution_complete","data":{"toolCallId":"tool-1","success":true,"result":{"content":"","detailedContent":""}}}
+{"id":"e6","timestamp":"2026-11-12T10:00:03Z","type":"assistant.usage","data":{"model":"gpt-5","inputTokens":800,"outputTokens":20,"cacheReadTokens":0,"cost":1}}
+{"id":"e7","timestamp":"2026-11-12T10:00:03Z","type":"assistant.message","data":{"messageId":"msg-2","content":"DONE","toolRequests":[]}}
+{"id":"e8","timestamp":"2026-11-12T10:00:04Z","type":"session.idle","data":{}}
+{"type":"result","exitCode":0,"usage":{"totalApiDurationMs":12,"sessionDurationMs":34}}

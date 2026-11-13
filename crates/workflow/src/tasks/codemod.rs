@@ -4,6 +4,7 @@
 //! the child.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
@@ -103,6 +104,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             .map(Value::Object)
             .unwrap_or_else(|| run.params.clone()),
         dry_run: run.dry_run,
+        started_at: run.started_at,
         callbacks: workflow.built.callbacks.clone(),
         store: Arc::clone(&run.store),
         events: Arc::new(NestedEvents {
@@ -114,6 +116,8 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         cancel: Arc::clone(&run.cancel),
         commit_lock: Mutex::new(()),
         chain,
+        test: None,
+        stopped: AtomicBool::new(false),
     });
     let observer = run.services.nested_observer.clone();
     if let (Some(observer), Some(nested)) = (&observer, &nested_run) {
@@ -133,6 +137,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             Ending::AwaitingApproval(message) => NestedCodemodRunOutcome::Failed {
                 error_message: format!("waiting for approval: {message}"),
             },
+            Ending::Stopped(_) => NestedCodemodRunOutcome::Succeeded,
         };
         block_on(observer.record(NestedCodemodRunEvent::Completed {
             run: nested,
@@ -148,6 +153,8 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         ))),
         Ending::Canceled => Err(TaskError::Canceled),
         Ending::AwaitingApproval(message) => Err(TaskError::AwaitingApproval(message)),
+        // Nested runs have no test plan.
+        Ending::Stopped(_) => Ok(TaskOutcome::new(json!({ "output": null }))),
     }
 }
 
@@ -192,8 +199,15 @@ impl EventSink for NestedEvents {
                 (StepStatus::Failed, None) => format!("✗ {label}"),
             },
             Event::StepLog { line, .. } => format!("  {line}"),
-            Event::StepAgent { agent, .. } => {
-                self.parent.emit(Event::StepAgent { position, agent });
+            Event::RunLog { line } => line,
+            Event::StepAgent {
+                agent, activity, ..
+            } => {
+                self.parent.emit(Event::StepAgent {
+                    position,
+                    agent,
+                    activity,
+                });
                 return;
             }
             Event::StepProgress {

@@ -26,9 +26,17 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@codemod.com/jssg-types": "workspace:*",
     "@codemod.com/tsconfig": "workspace:*",
+    "codemod": "workspace:*",
     "typescript": "catalog:"
+  },
+  "peerDependencies": {
+    "codemod": "*"
+  },
+  "peerDependenciesMeta": {
+    "codemod": {
+      "optional": true
+    }
   },
   "publishConfig": {
     "access": "public"

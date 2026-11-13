@@ -2,7 +2,7 @@
   "name": "@codemod.com/jssg-types",
   "version": "1.6.3",
   "private": false,
-  "description": "Comprehensive types package for ast-grep integrations and codemod development",
+  "description": "Type declarations for codemod (JSSG transforms and workflow.ts). Mirrors the types that ship with the `codemod` package; new projects can depend on `codemod` instead.",
   "keywords": [
     "ast",
     "ast-grep",
@@ -51,8 +51,9 @@
     "./src"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit --emitDeclarationOnly false && tsc -p type-tests",
-    "pull-llrt-types": "bash scripts/pull-llrt-types.sh"
+    "sync": "node scripts/sync.mjs",
+    "prepack": "node scripts/sync.mjs",
+    "typecheck": "node scripts/sync.mjs && tsc --noEmit --emitDeclarationOnly false"
   },
   "devDependencies": {
     "@codemod.com/tsconfig": "workspace:*",

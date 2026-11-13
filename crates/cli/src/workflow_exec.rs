@@ -74,7 +74,7 @@ impl ExecOutcome {
     /// were already shown while the run progressed.
     pub fn result(&self) -> Result<()> {
         match &self.report.ending {
-            Ending::Succeeded(_) | Ending::AwaitingApproval(_) => Ok(()),
+            Ending::Succeeded(_) | Ending::AwaitingApproval(_) | Ending::Stopped(_) => Ok(()),
             Ending::Failed(_) | Ending::Canceled => Err(WorkflowFailureAlreadyReported.into()),
         }
     }
@@ -111,6 +111,7 @@ pub async fn start(request: ExecRequest) -> Result<ExecOutcome> {
             params: Value::Object(request.params.into_iter().collect()),
             name: request.name,
             dry_run: request.dry_run,
+            test: None,
         })
     })
     .await?;
@@ -192,7 +193,7 @@ fn print_ending(outcome: &ExecOutcome, format: OutputFormat) {
     }
     let run = &outcome.report.run;
     match &outcome.report.ending {
-        Ending::Succeeded(_) => {}
+        Ending::Succeeded(_) | Ending::Stopped(_) => {}
         Ending::AwaitingApproval(message) => {
             eprintln!(
                 "\n{} {message}\n  Resume with: codemod workflow resume --id {} --approve",
@@ -256,8 +257,9 @@ impl Renderer {
 
     fn flush_agent_text(&self, position: u64) {
         let text = self.agent_text.lock().unwrap().remove(&position);
+        // Fragments carry their own line prefixes.
         if let Some(text) = text.filter(|t| !t.trim().is_empty()) {
-            self.line(format!("  {} {}", style("›").cyan(), text.trim_end()));
+            self.line(text.trim_end().to_string());
         }
     }
 
@@ -324,10 +326,17 @@ impl EventSink for Renderer {
                 bar.set_position(processed as u64);
             }
             Event::StepLog { line, .. } => self.line(format!("  {}", style(line).dim())),
-            Event::StepAgent { position, agent } => {
-                let payload = agent.to_string();
-                match crate::agent_log_renderer::render_agent_event_payload_styled(&payload, false)
-                {
+            Event::RunLog { line } => self.line(style(line).dim().to_string()),
+            Event::StepAgent {
+                position, activity, ..
+            } => {
+                let line_open = self
+                    .agent_text
+                    .lock()
+                    .unwrap()
+                    .get(&position)
+                    .is_some_and(|text| !text.is_empty() && !text.ends_with('\n'));
+                match crate::agent_log_renderer::render_agent_activity(&activity, line_open) {
                     Some(crate::agent_log_renderer::RenderedAgentEvent::Line(line)) => {
                         self.flush_agent_text(position);
                         self.line(line);

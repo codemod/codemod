@@ -1,5 +1,5 @@
-import type Xml from "@codemod.com/jssg-types/langs/xml";
-import type { Kinds, Rule, SgNode } from "@codemod.com/jssg-types/main";
+import type Xml from "codemod/langs/xml";
+import type { Kinds, Rule, SgNode } from "codemod/main";
 
 export type XmlNode = SgNode<Xml, Kinds<Xml>>;
 

@@ -1010,15 +1010,14 @@ fn create_shell_project(project_path: &Path, _config: &ProjectConfig) -> Result<
 }
 
 /// package.json and tsconfig.json for a package with TypeScript in it (the
-/// workflow.ts and JSSG scripts), typed by `@codemod.com/jssg-types`.
+/// workflow.ts and JSSG scripts). The package depends on `codemod`: the CLI
+/// its scripts run, which also ships the types.
 fn create_typescript_package_files(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    let package_manager = selected_package_manager(config);
-    let codemod_command = codemod_cli_command_for_package_manager(package_manager);
     let package_json = JS_PACKAGE_JSON_TEMPLATE
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
         .replace("{package_manager}", selected_package_manager_spec(config))
-        .replace("{codemod_command}", codemod_command);
+        .replace("{cli_version}", crate::CLI_VERSION);
     fs::write(project_path.join("package.json"), package_json)?;
     fs::write(project_path.join("tsconfig.json"), JS_TSCONFIG_TEMPLATE)?;
     Ok(())
@@ -1641,7 +1640,11 @@ fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result
 fn print_next_steps(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let codemod_dir_name = get_codemod_dir_name(&config.name);
     let package_manager = selected_package_manager(config);
-    let codemod_command = codemod_cli_command_for_package_manager(package_manager);
+    let codemod_command = if installs_codemod(config) {
+        installed_codemod_command(package_manager)
+    } else {
+        codemod_cli_command_for_package_manager(package_manager)
+    };
 
     println!();
     if config.workspace {
@@ -1823,6 +1826,27 @@ fn selected_package_manager_spec(config: &ProjectConfig) -> &'static str {
     }
 }
 
+/// Whether the project gets a package.json that depends on `codemod`.
+fn installs_codemod(config: &ProjectConfig) -> bool {
+    config.package_behavior.includes_workflow()
+        && matches!(
+            config.project_type,
+            ProjectType::AstGrepJs | ProjectType::Hybrid
+        )
+}
+
+/// The project's own `codemod`, run through its package manager.
+fn installed_codemod_command(package_manager: &str) -> &'static str {
+    match package_manager {
+        "yarn" => "yarn codemod",
+        "pnpm" => "pnpm codemod",
+        "bun" => "bunx codemod",
+        _ => "npx codemod",
+    }
+}
+
+/// `codemod` for someone who has not installed it, such as a user running a
+/// published package.
 fn codemod_cli_command_for_package_manager(package_manager: &str) -> &'static str {
     match package_manager {
         "npm" => "npx codemod@latest",
@@ -2005,7 +2029,7 @@ mod tests {
         let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
         assert!(workflow.contains("language: \"toml\""));
         assert!(
-            workflow.contains("after([shellTransformNodeDone]"),
+            workflow.contains("  await shellSetupNode();\n  await shellTransformNode();\n"),
             "{workflow}"
         );
         assert!(!workflow.contains("apply-yaml"));
@@ -2085,9 +2109,28 @@ mod tests {
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
 
         assert!(package_json.contains("\"packageManager\": \"yarn@4.x\""));
-        assert!(package_json.contains("yarn dlx codemod@latest jssg test"));
+        assert!(package_json.contains("\"test\": \"codemod jssg test"));
+        let package_json: serde_json::Value = serde_json::from_str(&package_json).unwrap();
+        assert_eq!(
+            package_json["dependencies"]["codemod"],
+            format!("^{}", crate::CLI_VERSION)
+        );
+        assert!(package_json["devDependencies"].get("codemod").is_none());
         assert!(readme.contains("yarn test"));
         assert!(!readme.contains("npm test"));
+    }
+
+    #[test]
+    fn local_commands_use_the_installed_codemod() {
+        assert_eq!(installed_codemod_command("npm"), "npx codemod");
+        assert_eq!(installed_codemod_command("pnpm"), "pnpm codemod");
+        assert_eq!(installed_codemod_command("yarn"), "yarn codemod");
+        assert_eq!(installed_codemod_command("bun"), "bunx codemod");
+        // Someone running a published package has not installed it.
+        assert_eq!(
+            codemod_cli_command_for_package_manager("npm"),
+            "npx codemod@latest"
+        );
     }
 
     #[test]
@@ -2176,7 +2219,7 @@ mod tests {
         let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
         codemod_workflow::load_workflow(&project_path.join("workflow.ts"))
             .unwrap_or_else(|e| panic!("generated workflow.ts does not build: {e}\n{workflow}"));
-        assert!(workflow.contains("basePath: \".\""), "{workflow}");
+        assert!(!workflow.contains("basePath"), "{workflow}");
         assert!(workflow.contains("include: ["));
         assert!(workflow.contains("\"**/*.{ts,tsx,mts,cts}\""));
         assert!(workflow.contains("\"**/node_modules/**\""));

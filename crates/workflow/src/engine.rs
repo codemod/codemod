@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::build::{build, BuildError, Built};
 use crate::events::{Event, EventSink};
 use crate::interaction::Interaction;
-use crate::run::{execute, Ending, RunContext, RunError};
+use crate::run::{execute, Ending, RunContext, RunError, TestPlan};
 use crate::Services;
 
 #[derive(Debug, thiserror::Error)]
@@ -60,9 +60,11 @@ pub fn load_workflow(path: &Path) -> Result<LoadedWorkflow, EngineError> {
             .map_err(EngineError::Compat)?
             .source
     };
+    let built = build(&file, &typescript)?;
+    crate::build::check_imports(path, &typescript, &built)?;
     Ok(LoadedWorkflow {
         path: path.to_path_buf(),
-        built: build(&file, &typescript)?,
+        built,
     })
 }
 
@@ -80,6 +82,9 @@ pub struct StartRequest {
     pub name: Option<String>,
     /// Run every step but change nothing on disk and persist nothing.
     pub dry_run: bool,
+    /// Run as a test: steps may be stopped at or stubbed, and nothing is
+    /// persisted (changes on disk are made, in the target the test set up).
+    pub test: Option<TestPlan>,
 }
 
 /// What a run ended as.
@@ -128,44 +133,36 @@ impl Engine {
     }
 
     pub fn start(&self, request: StartRequest) -> Result<RunReport, EngineError> {
-        let record = RunRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: request.name,
-            workflow_path: absolute(&request.workflow.path),
-            target: absolute(&request.target),
-            params: request.params,
-            status: RunStatus::Running,
-            started_at: Utc::now(),
-            ended_at: None,
-            awaiting: None,
-            error: None,
-            output: None,
-        };
-        let store: Arc<dyn RunStore> = if request.dry_run {
-            Arc::new(MemoryStore::default())
-        } else {
-            Arc::clone(&self.store)
-        };
+        let record = Self::new_record(
+            &request.workflow.path,
+            &request.target,
+            request.params,
+            request.name,
+        );
+        let store = self.store_for(request.dry_run, request.test.is_some());
         store.create_run(&record)?;
-        self.drive(store, record, &request.workflow, request.dry_run, false)
+        self.drive(
+            store,
+            record,
+            &request.workflow,
+            request.dry_run,
+            request.test,
+            false,
+        )
     }
 
     /// Continue a run that failed, was canceled, or waits for an approval.
     pub fn resume(&self, run_id: &str) -> Result<RunReport, EngineError> {
-        let mut record = self
-            .store
-            .get_run(run_id)?
-            .ok_or_else(|| EngineError::NotFound(run_id.to_string()))?;
-        if record.status == RunStatus::Succeeded {
-            return Err(EngineError::AlreadyFinished(run_id.to_string()));
-        }
+        let record = self.reopen(run_id)?;
         let workflow = load_workflow(&record.workflow_path)?;
-        record.status = RunStatus::Running;
-        record.ended_at = None;
-        record.awaiting = None;
-        record.error = None;
-        self.store.update_run(&record)?;
-        self.drive(Arc::clone(&self.store), record, &workflow, false, true)
+        self.drive(
+            Arc::clone(&self.store),
+            record,
+            &workflow,
+            false,
+            None,
+            true,
+        )
     }
 
     /// Ask a run, possibly in another process, to stop.
@@ -199,20 +196,43 @@ impl Engine {
     fn drive(
         &self,
         store: Arc<dyn RunStore>,
-        mut record: RunRecord,
+        record: RunRecord,
         workflow: &LoadedWorkflow,
         dry_run: bool,
+        test: Option<TestPlan>,
         resumed: bool,
     ) -> Result<RunReport, EngineError> {
         self.cancel.store(false, Ordering::SeqCst);
         *self.current.lock().unwrap_or_else(|e| e.into_inner()) = Some(record.id.clone());
+        let context = self.begin(
+            store,
+            &record,
+            workflow.built.callbacks.clone(),
+            dry_run,
+            test,
+            resumed,
+        );
+        let ending = execute(&workflow.built, Arc::clone(&context));
+        *self.current.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.conclude(&context, record, ending?)
+    }
+
+    /// Announce a run and set up what its steps share.
+    pub(crate) fn begin(
+        &self,
+        store: Arc<dyn RunStore>,
+        record: &RunRecord,
+        callbacks: std::collections::BTreeMap<String, String>,
+        dry_run: bool,
+        test: Option<TestPlan>,
+        resumed: bool,
+    ) -> Arc<RunContext> {
         self.events.emit(Event::RunStarted {
             run_id: record.id.clone(),
             workflow: record.workflow_path.clone(),
             resumed,
         });
-
-        let context = Arc::new(RunContext {
+        Arc::new(RunContext {
             run_id: record.id.clone(),
             target: record.target.clone(),
             bundle_dir: record
@@ -222,19 +242,28 @@ impl Engine {
                 .unwrap_or_else(|| PathBuf::from(".")),
             params: record.params.clone(),
             dry_run,
-            callbacks: workflow.built.callbacks.clone(),
-            store: Arc::clone(&store),
+            started_at: record.started_at.timestamp_millis(),
+            callbacks,
+            store,
             events: Arc::clone(&self.events),
             interaction: Arc::clone(&self.interaction),
             services: Arc::clone(&self.services),
             cancel: Arc::clone(&self.cancel),
             commit_lock: Mutex::new(()),
             chain: Vec::new(),
-        });
-        let ending = execute(&workflow.built, context);
-        *self.current.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        let ending = ending?;
+            test,
+            stopped: AtomicBool::new(false),
+        })
+    }
 
+    /// Record how a run ended and report it.
+    pub(crate) fn conclude(
+        &self,
+        context: &RunContext,
+        mut record: RunRecord,
+        ending: Ending,
+    ) -> Result<RunReport, EngineError> {
+        let store = &context.store;
         match &ending {
             Ending::Succeeded(output) => {
                 record.status = RunStatus::Succeeded;
@@ -249,6 +278,8 @@ impl Engine {
                 record.status = RunStatus::AwaitingApproval;
                 record.awaiting = Some(message.clone());
             }
+            // Only test runs stop early, and they are never resumed.
+            Ending::Stopped(_) => record.status = RunStatus::Succeeded,
         }
         if record.status.is_finished() {
             record.ended_at = Some(Utc::now());
@@ -265,6 +296,54 @@ impl Engine {
             ending,
             steps,
         })
+    }
+
+    /// The store a new run writes to: none that persists for dry runs and tests.
+    pub(crate) fn store_for(&self, dry_run: bool, test: bool) -> Arc<dyn RunStore> {
+        if dry_run || test {
+            Arc::new(MemoryStore::default())
+        } else {
+            Arc::clone(&self.store)
+        }
+    }
+
+    /// A new run record, not yet stored.
+    pub(crate) fn new_record(
+        workflow_path: &Path,
+        target: &Path,
+        params: Value,
+        name: Option<String>,
+    ) -> RunRecord {
+        RunRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            name,
+            workflow_path: absolute(workflow_path),
+            target: absolute(target),
+            params,
+            status: RunStatus::Running,
+            started_at: Utc::now(),
+            ended_at: None,
+            awaiting: None,
+            error: None,
+            output: None,
+        }
+    }
+
+    /// Load a run to continue it, marked running again.
+    pub(crate) fn reopen(&self, run_id: &str) -> Result<RunRecord, EngineError> {
+        let mut record = self
+            .store
+            .get_run(run_id)?
+            .ok_or_else(|| EngineError::NotFound(run_id.to_string()))?;
+        if record.status == RunStatus::Succeeded {
+            return Err(EngineError::AlreadyFinished(run_id.to_string()));
+        }
+        record.status = RunStatus::Running;
+        record.ended_at = None;
+        record.awaiting = None;
+        record.error = None;
+        self.store.update_run(&record)?;
+        Ok(record)
     }
 }
 

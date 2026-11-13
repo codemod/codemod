@@ -12,7 +12,7 @@ On this page, you will learn what JSSG is and how it works, see a sample codemod
 ### How it works
 
 - A JSSG codemod is a module that `export default`s a function receiving an `SgRoot<L>` (the parsed file) and returning a `string` (modified code) or `null`/`undefined` (no change). Any other return type is a runtime error.
-- The `codemod:ast-grep` built‑in provides parsing and pattern matching. At runtime it exports `parse` and `parseAsync`; `SgRoot` and `SgNode` are TypeScript types from `@codemod.com/jssg-types` that describe the AST API you interact with in the transform.
+- The `codemod:ast-grep` built‑in provides parsing and pattern matching. At runtime it exports `parse` and `parseAsync`; `SgRoot` and `SgNode` are TypeScript types, shipped in the `codemod` package (`codemod/main`, or `@codemod.com/jssg-types/main` in older projects), that describe the AST API you interact with in the transform.
 - You express search conditions as ast-grep rule objects (plain JS), traverse nodes, create edits with `node.replace(...)`, and finalize with `rootNode.commitEdits(edits)`.
 
 <Info>

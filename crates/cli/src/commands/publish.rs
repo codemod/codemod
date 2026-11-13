@@ -930,6 +930,56 @@ nodes:
         assert!(error.to_string().contains("install-skill"));
     }
 
+    #[tokio::test]
+    async fn an_upgraded_workflow_ts_package_bundles_its_transforms() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("workflow.ts", "example");
+        fs::write(
+            temp_dir.path().join("workflow.ts"),
+            r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
+/// <reference types="codemod/workflow" />
+import { jssg, step } from "codemod:workflow";
+
+export default async function main() {
+  await step("Rewrite", jssg("src/workflow.ts", { include: ["**/*.ts"], language: "typescript" }));
+}
+"#,
+        )
+        .unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(
+            temp_dir.path().join("src/helper.ts"),
+            "export const marker = \"bundled-helper\";\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("src/workflow.ts"),
+            "import { marker } from \"./helper.ts\";\nexport default function transform() { return marker; }\n",
+        )
+        .unwrap();
+
+        let files = validate_package_structure(temp_dir.path(), &manifest).unwrap();
+        assert_eq!(files, vec!["src/workflow.ts".to_string()]);
+
+        let bundle = create_package_bundle(temp_dir.path(), &manifest, &files)
+            .await
+            .unwrap();
+        let archive = flate2::read::GzDecoder::new(fs::File::open(&bundle).unwrap());
+        let mut tar = tar::Archive::new(archive);
+        let mut transform = String::new();
+        let mut names = Vec::new();
+        for entry in tar.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let name = entry.path().unwrap().to_string_lossy().into_owned();
+            if name == "src/workflow.ts" {
+                std::io::Read::read_to_string(&mut entry, &mut transform).unwrap();
+            }
+            names.push(name);
+        }
+        assert!(names.contains(&"workflow.ts".to_string()), "{names:?}");
+        assert!(transform.contains("bundled-helper"), "{transform}");
+    }
+
     #[test]
     fn workflow_file_is_required() {
         let temp_dir = tempdir().unwrap();

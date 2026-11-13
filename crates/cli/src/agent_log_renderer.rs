@@ -1,3 +1,4 @@
+use codemod_agents::AgentEvent;
 use console::style;
 use similar::{ChangeTag, TextDiff};
 
@@ -6,104 +7,80 @@ pub(crate) enum RenderedAgentEvent {
     Fragment(String),
 }
 
-pub(crate) fn render_agent_event_payload_styled(
-    payload: &str,
+/// How to show one thing a coding agent did. `line_open` says whether the
+/// previous fragment left a line open.
+pub(crate) fn render_agent_activity(
+    activity: &AgentEvent,
     line_open: bool,
 ) -> Option<RenderedAgentEvent> {
-    let value: serde_json::Value = serde_json::from_str(payload).ok()?;
-    match value.get("event").and_then(serde_json::Value::as_str)? {
-        "message" => {
-            let text = value.get("text").and_then(serde_json::Value::as_str)?;
-            let delta = value
-                .get("delta")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false);
-            if delta {
-                Some(RenderedAgentEvent::Fragment(format_message_fragment(
-                    text, line_open, true,
-                )))
-            } else {
-                Some(RenderedAgentEvent::Line(format!(
-                    "  {} {}",
-                    style("›").cyan(),
-                    text
-                )))
-            }
+    match activity {
+        AgentEvent::Started { model, .. } => Some(RenderedAgentEvent::Line(match model {
+            Some(model) => format!("  {} started {}", style("•").cyan(), style(model).dim()),
+            None => format!("  {} started", style("•").cyan()),
+        })),
+        AgentEvent::Text { text, delta: true } => Some(RenderedAgentEvent::Fragment(
+            format_message_fragment(text, line_open, true),
+        )),
+        AgentEvent::Text { text, delta: false } => {
+            let text = text.trim_end();
+            (!text.is_empty()).then(|| {
+                RenderedAgentEvent::Line(
+                    format_message_fragment(text, false, true)
+                        .trim_end()
+                        .to_string(),
+                )
+            })
         }
-        "tool_call" => {
-            let tool_name = value
-                .get("tool_name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("tool");
-            let params = value
-                .get("tool_params")
+        AgentEvent::Thinking { .. } => None,
+        AgentEvent::ToolCall { name, input, .. } => {
+            let params = Some(input)
+                .filter(|params| !params.is_null())
                 .filter(|params| !params.as_object().is_some_and(|object| object.is_empty()))
                 .map(compact_tool_params)
                 .unwrap_or_default();
             let mut line = if params.is_empty() {
-                format!("  {} {}", style("•").green(), style(tool_name).bold())
+                format!("  {} {}", style("•").green(), style(name).bold())
             } else {
                 format!(
                     "  {} {} {}",
                     style("•").green(),
-                    style(tool_name).bold(),
+                    style(name).bold(),
                     style(params).dim()
                 )
             };
-            if let Some(diff) = value
-                .get("tool_params")
-                .and_then(|params| format_tool_diff(tool_name, params, true))
-            {
+            if let Some(diff) = format_tool_diff(name, input, true) {
                 line.push('\n');
                 line.push_str(&diff);
             }
             Some(RenderedAgentEvent::Line(line))
         }
-        "warning" => {
-            let message = value
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("warning");
+        AgentEvent::ToolResult {
+            output,
+            is_error: true,
+            ..
+        } => {
+            let first = output.lines().next().unwrap_or("the tool failed");
             Some(RenderedAgentEvent::Line(format!(
                 "  {} {}",
                 style("!").yellow(),
-                message
+                style(truncate_tool_value(first, 160)).dim()
             )))
         }
-        "status" => {
-            let status = value
-                .get("status")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("status");
-            let detail = value
-                .get("detail")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            if detail.is_empty() {
-                Some(RenderedAgentEvent::Line(format!(
-                    "  {} {}",
-                    style("•").cyan(),
-                    status
-                )))
-            } else {
-                Some(RenderedAgentEvent::Line(format!(
-                    "  {} {} {}",
-                    style("•").cyan(),
-                    status,
-                    style(detail).dim()
-                )))
-            }
+        AgentEvent::ToolResult { .. } => None,
+        AgentEvent::Warning { message } => Some(RenderedAgentEvent::Line(format!(
+            "  {} {}",
+            style("!").yellow(),
+            message
+        ))),
+        AgentEvent::Error { message } => Some(RenderedAgentEvent::Line(format!(
+            "  {} {}",
+            style("✗").red(),
+            message
+        ))),
+        AgentEvent::Output { line, .. } => {
+            Some(RenderedAgentEvent::Line(format!("  {}", style(line).dim())))
         }
-        "raw" => value
-            .get("line")
-            .and_then(serde_json::Value::as_str)
-            .map(|line| RenderedAgentEvent::Line(line.to_string())),
-        _ => None,
     }
-}
-
-pub(crate) fn render_agent_message_fragment(fragment: &str, already_open: bool) -> String {
-    format_message_fragment(fragment, already_open, true)
 }
 
 fn compact_tool_params(value: &serde_json::Value) -> String {
@@ -142,6 +119,12 @@ fn format_message_fragment(fragment: &str, already_open: bool, styled: bool) -> 
 }
 
 fn format_tool_diff(tool_name: &str, params: &serde_json::Value, styled: bool) -> Option<String> {
+    let tool_name = match tool_name.to_ascii_lowercase().as_str() {
+        "write" => "Write",
+        "edit" => "Edit",
+        "delete" => "Delete",
+        _ => tool_name,
+    };
     if let Some(diff) = params
         .pointer("/metadata/diff")
         .and_then(serde_json::Value::as_str)
@@ -546,17 +529,32 @@ fn truncate_tool_value(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_agent_event_payload_styled, RenderedAgentEvent};
+    use super::{render_agent_activity, RenderedAgentEvent};
+    use codemod_agents::AgentEvent;
+    use serde_json::json;
+
+    fn line(activity: AgentEvent) -> String {
+        match render_agent_activity(&activity, false).expect("rendered") {
+            RenderedAgentEvent::Line(line) => console::strip_ansi_codes(&line).into_owned(),
+            RenderedAgentEvent::Fragment(_) => panic!("expected a line"),
+        }
+    }
 
     #[test]
-    fn delta_messages_render_as_fragments_without_repeating_prefix() {
-        let first = render_agent_event_payload_styled(
-            r#"{"agent":"claude-code","stream":"stdout","event":"message","text":"Ren","delta":true}"#,
+    fn delta_text_renders_as_fragments_without_repeating_prefix() {
+        let first = render_agent_activity(
+            &AgentEvent::Text {
+                text: "Ren".into(),
+                delta: true,
+            },
             false,
         )
         .expect("first fragment");
-        let second = render_agent_event_payload_styled(
-            r#"{"agent":"claude-code","stream":"stdout","event":"message","text":"amed to `calcom`.","delta":true}"#,
+        let second = render_agent_activity(
+            &AgentEvent::Text {
+                text: "amed to `calcom`.".into(),
+                delta: true,
+            },
             true,
         )
         .expect("second fragment");
@@ -569,54 +567,58 @@ mod tests {
 
     #[test]
     fn edit_tool_renders_compact_diff() {
-        let payload = serde_json::json!({
-            "agent": "claude-code",
-            "stream": "stderr",
-            "event": "tool_call",
-            "tool_name": "Edit",
-            "tool_params": {
+        let line = line(AgentEvent::ToolCall {
+            id: None,
+            name: "Edit".into(),
+            input: json!({
                 "file_path": "package.json",
                 "old_string": "\"name\": \"calcom-monorepo\"",
                 "new_string": "\"name\": \"calcom\""
-            }
-        })
-        .to_string();
-
-        let rendered = render_agent_event_payload_styled(&payload, false).expect("rendered");
-        let RenderedAgentEvent::Line(line) = rendered else {
-            panic!("expected line");
-        };
+            }),
+        });
         assert!(line.contains("diff"));
         assert!(line.contains("-\"name\": \"calcom-monorepo\""));
         assert!(line.contains("+\"name\": \"calcom\""));
     }
 
     #[test]
-    fn codex_change_payload_renders_diff() {
-        let payload = serde_json::json!({
-            "agent": "codex",
-            "stream": "stdout",
-            "event": "tool_call",
-            "tool_name": "Edit",
-            "tool_params": {
-                "path": "package.json",
-                "files": 1,
+    fn change_lists_render_diffs_whatever_the_tool_name_case() {
+        let line = line(AgentEvent::ToolCall {
+            id: None,
+            name: "edit".into(),
+            input: json!({
                 "changes": [{
                     "path": "package.json",
                     "kind": "update",
                     "old": "\"name\": \"calcom-monorepo\"",
                     "new": "\"name\": \"calcom\""
                 }]
-            }
-        })
-        .to_string();
-
-        let rendered = render_agent_event_payload_styled(&payload, false).expect("rendered");
-        let RenderedAgentEvent::Line(line) = rendered else {
-            panic!("expected line");
-        };
-        assert!(line.contains("diff"));
-        assert!(line.contains("-\"name\": \"calcom-monorepo\""));
+            }),
+        });
+        assert!(line.contains("diff"), "{line}");
         assert!(line.contains("+\"name\": \"calcom\""));
+    }
+
+    #[test]
+    fn failures_and_errors_render_and_successful_results_do_not() {
+        assert!(line(AgentEvent::ToolResult {
+            id: None,
+            output: "permission denied\nmore".into(),
+            is_error: true,
+        })
+        .contains("permission denied"));
+        assert!(render_agent_activity(
+            &AgentEvent::ToolResult {
+                id: None,
+                output: "ok".into(),
+                is_error: false,
+            },
+            false
+        )
+        .is_none());
+        assert!(line(AgentEvent::Error {
+            message: "rate limited".into()
+        })
+        .contains("rate limited"));
     }
 }

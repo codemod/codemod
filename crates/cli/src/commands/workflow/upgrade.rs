@@ -1,4 +1,8 @@
 //! `codemod workflow upgrade`: convert workflow.yaml files to workflow.ts.
+//!
+//! PATH may be a package (a directory with codemod.yaml or workflow.yaml), a
+//! workflow file, or a directory of packages such as a monorepo: then every
+//! package below it is upgraded.
 
 use std::path::{Path, PathBuf};
 
@@ -38,16 +42,114 @@ pub fn handler(args: &Command) -> Result<()> {
         None => std::env::current_dir()?,
     };
     let (package_dir, conversions) = plan(&path)?;
-    if conversions.is_empty() {
-        println!(
-            "Nothing to upgrade: no workflow.yaml found in {}",
-            package_dir.display()
-        );
+    if !conversions.is_empty() {
+        upgrade_package(&package_dir, &conversions, args)?;
+        if !args.dry_run {
+            println!(
+                "\nCheck the result with: codemod workflow validate -w {}",
+                package_dir.display()
+            );
+            types_hint(&package_dir);
+        }
         return Ok(());
     }
 
-    let mut manifest_text = read_manifest(&package_dir)?;
-    for conversion in &conversions {
+    // Not a package with YAML to convert: look for packages below it.
+    let packages = if path.is_dir() && !is_package(&path) {
+        find_packages(&path)?
+    } else {
+        Vec::new()
+    };
+    let mut upgraded = 0;
+    for package in &packages {
+        let (package_dir, conversions) = plan(package)?;
+        if conversions.is_empty() {
+            continue;
+        }
+        println!("{}", style(relative(&path, &package_dir)).bold());
+        upgrade_package(&package_dir, &conversions, args)?;
+        upgraded += 1;
+    }
+    if upgraded == 0 {
+        println!(
+            "Nothing to upgrade: no workflow.yaml found in {}",
+            path.display()
+        );
+    } else if !args.dry_run {
+        println!(
+            "\nUpgraded {upgraded} package{}. Check each with: codemod workflow validate -w <package>",
+            if upgraded == 1 { "" } else { "s" }
+        );
+        types_hint(&path);
+    }
+    Ok(())
+}
+
+/// The generated files reference `codemod/workflow`, which ships with the
+/// `codemod` package; suggest depending on it when the nearest package.json
+/// does not.
+fn types_hint(dir: &Path) {
+    let manifest = dir
+        .canonicalize()
+        .unwrap_or_else(|_| dir.to_path_buf())
+        .ancestors()
+        .map(|ancestor| ancestor.join("package.json"))
+        .find(|candidate| candidate.is_file());
+    let Some(manifest) = manifest else {
+        return;
+    };
+    let has_codemod = std::fs::read_to_string(&manifest)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .is_some_and(|json| {
+            ["dependencies", "devDependencies"]
+                .iter()
+                .any(|field| json[field].get("codemod").is_some())
+        });
+    if !has_codemod {
+        println!(
+            "{} Add codemod to {}, so its scripts run that CLI and editors get the workflow types: npm install codemod",
+            style("i").cyan(),
+            manifest.display()
+        );
+    }
+}
+
+fn is_package(dir: &Path) -> bool {
+    ["codemod.yaml", "workflow.yaml", "workflow.yml"]
+        .iter()
+        .any(|name| dir.join(name).is_file())
+}
+
+/// Directories below `root` with a codemod.yaml, skipping dependencies,
+/// build output and hidden directories.
+fn find_packages(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut packages = Vec::new();
+    let walker = walkdir::WalkDir::new(root)
+        .min_depth(1)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(|entry| {
+            let name = entry.file_name().to_string_lossy();
+            !(entry.file_type().is_dir()
+                && (name.starts_with('.')
+                    || matches!(name.as_ref(), "node_modules" | "target" | "dist")))
+        });
+    for entry in walker {
+        let entry = entry?;
+        if entry.file_type().is_file() && entry.file_name() == "codemod.yaml" {
+            if let Some(parent) = entry.path().parent() {
+                packages.push(parent.to_path_buf());
+            }
+        }
+    }
+    Ok(packages)
+}
+
+/// Convert one package's workflow files and point its codemod.yaml at them.
+fn upgrade_package(package_dir: &Path, conversions: &[Conversion], args: &Command) -> Result<()> {
+    let mut manifest_text = read_manifest(package_dir)?;
+    for conversion in conversions {
         let translated = translate_file(&conversion.yaml).map_err(|e| anyhow!(e))?;
         if args.dry_run {
             println!(
@@ -75,8 +177,8 @@ pub fn handler(args: &Command) -> Result<()> {
         println!(
             "{} {} -> {}",
             style("✓").green(),
-            relative(&package_dir, &conversion.yaml),
-            relative(&package_dir, &conversion.typescript)
+            relative(package_dir, &conversion.yaml),
+            relative(package_dir, &conversion.typescript)
         );
         for warning in &translated.warnings {
             println!("  {} {warning}", style("!").yellow());
@@ -87,12 +189,6 @@ pub fn handler(args: &Command) -> Result<()> {
         std::fs::write(package_dir.join("codemod.yaml"), text)
             .context("cannot update codemod.yaml")?;
         println!("{} updated codemod.yaml", style("✓").green());
-    }
-    if !args.dry_run {
-        println!(
-            "\nCheck the result with: codemod workflow validate -w {}",
-            package_dir.display()
-        );
     }
     Ok(())
 }
@@ -260,5 +356,41 @@ mod tests {
         let manifest = std::fs::read_to_string(dir.path().join("codemod.yaml")).unwrap();
         assert!(manifest.contains("workflow: workflow.ts"), "{manifest}");
         assert!(codemod_workflow::load_workflow(&dir.path().join("workflow.ts")).is_ok());
+    }
+
+    #[test]
+    fn upgrading_a_directory_of_packages_upgrades_each_one() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["recipes/a", "recipes/b", "node_modules/dep"] {
+            let package = dir.path().join(name);
+            std::fs::create_dir_all(&package).unwrap();
+            std::fs::write(
+                package.join("codemod.yaml"),
+                "schema_version: \"1.0\"\nname: demo\nversion: 0.1.0\ndescription: d\nauthor: a\nworkflow: workflow.yaml\n",
+            )
+            .unwrap();
+            std::fs::write(
+                package.join("workflow.yaml"),
+                "version: \"1\"\nnodes:\n  - id: a\n    name: A\n    steps:\n      - name: Hello\n        run: echo hi\n",
+            )
+            .unwrap();
+        }
+        handler(&Command {
+            path: Some(dir.path().to_path_buf()),
+            keep_yaml: false,
+            dry_run: false,
+        })
+        .unwrap();
+        for name in ["recipes/a", "recipes/b"] {
+            assert!(
+                dir.path().join(name).join("workflow.ts").is_file(),
+                "{name}"
+            );
+            assert!(
+                !dir.path().join(name).join("workflow.yaml").exists(),
+                "{name}"
+            );
+        }
+        assert!(dir.path().join("node_modules/dep/workflow.yaml").exists());
     }
 }

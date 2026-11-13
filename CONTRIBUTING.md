@@ -161,7 +161,7 @@ This monorepo contains the open-source Codemod CLI and core libraries:
 
 ### Shared Packages
 
-- **`packages/jssg-types/`** – TypeScript types for JSSG codemods
+- **`crates/cli/npm/types/`** – TypeScript types for codemods and workflows, shipped in the `codemod` npm package (`packages/jssg-types/` mirrors them as `@codemod.com/jssg-types`)
 - **`packages/jssg-utils/`** – Utility functions for JSSG codemods
 - **`packages/tsconfig/`** – Shared TypeScript configuration
 - **`packages/codemod-utils/`** – Public utilities for codemod authors

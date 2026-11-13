@@ -2,8 +2,11 @@
 //! equivalent TypeScript workflow. `workflow run` uses this in memory;
 //! `codemod workflow upgrade` writes the result next to the YAML.
 //!
-//! - each node becomes an async function; `depends_on` becomes a promise
-//!   graph, so independent nodes still run at the same time;
+//! - a workflow with one plain node becomes a `main` that runs its steps;
+//!   otherwise each node becomes an async function, run in order when the
+//!   nodes form a chain, together when they are independent, and through a
+//!   promise graph for anything else, so independent nodes still run at the
+//!   same time;
 //! - each step becomes `await step("<name>", <task>)`;
 //! - matrix nodes run once per value (`values`, or the array in state for
 //!   `from_state`), concurrently;
@@ -60,8 +63,24 @@ struct Generator {
     imports: BTreeSet<&'static str>,
     uses_after: bool,
     uses_matrix_env: bool,
+    uses_context: bool,
+    /// Tasks get the run's params anyway; pass `params` explicitly only when
+    /// it differs from them (defaults, template inputs).
+    pass_params: bool,
     names: HashMap<String, String>,
     taken: BTreeSet<String>,
+}
+
+/// One node, generated before deciding how `main` runs it.
+struct NodeCode {
+    function: String,
+    /// Doc comment and warnings, without indentation.
+    preamble: String,
+    /// The node's statements, indented for a function body.
+    inner: String,
+    /// Matrix values (`values` or state) when the node runs once per value.
+    matrix: Option<String>,
+    uses_params: bool,
 }
 
 /// Where a list of steps is being generated.
@@ -140,44 +159,13 @@ impl Generator {
                 .collect(),
         );
 
-        let order = topological(&workflow.nodes);
-        let mut main = String::new();
-        let _ = writeln!(
-            main,
-            "export default async function main({{ params: input }}: {{ params: Params }}) {{"
-        );
-        let _ = writeln!(
-            main,
-            "  const params: Params = {{ ...DEFAULT_PARAMS, ...input }};"
-        );
-        let mut started = Vec::new();
-        for node in &order {
-            let function = self.function_name("Node", &node.id);
-            let variable = format!("{function}Done");
-            if node.depends_on.is_empty() {
-                let _ = writeln!(main, "  const {variable} = {function}(params);");
-            } else {
-                self.uses_after = true;
-                let dependencies: Vec<String> = node
-                    .depends_on
-                    .iter()
-                    .map(|id| format!("{}Done", self.function_name("Node", id)))
-                    .collect();
-                let _ = writeln!(
-                    main,
-                    "  const {variable} = after([{}], () => {function}(params));",
-                    dependencies.join(", ")
-                );
-            }
-            started.push(variable);
-        }
-        let _ = writeln!(main, "  await Promise.all([{}]);", started.join(", "));
-        main.push_str("}\n");
-        self.body.push_str(&main);
+        let has_defaults = defaults.as_object().is_some_and(|d| !d.is_empty());
+        self.pass_params = has_defaults || !workflow.templates.is_empty();
 
-        for node in &order {
-            self.node(node);
-        }
+        let order = topological(&workflow.nodes);
+        let nodes: Vec<NodeCode> = order.iter().map(|node| self.node_code(node)).collect();
+
+        let mut templates_text = String::new();
         for template_def in &workflow.templates {
             let name = self.function_name("Template", &template_def.id);
             if !template_def.outputs.is_empty()
@@ -188,13 +176,13 @@ impl Generator {
                     "template '{}': outputs, env and runtime had no effect and are dropped",
                     template_def.id
                 ));
-                self.body.push('\n');
-                self.body.push_str(&note);
+                templates_text.push('\n');
+                templates_text.push_str(&note);
             } else {
-                self.body.push('\n');
+                templates_text.push('\n');
             }
             let _ = writeln!(
-                self.body,
+                templates_text,
                 "/** {} */\nasync function {name}(params: Params, matrix: Matrix) {{",
                 template_def.name
             );
@@ -208,40 +196,147 @@ impl Generator {
                 },
                 &workflow_templates(workflow),
             );
-            self.body.push_str(&steps);
-            self.body.push_str("}\n");
+            templates_text.push_str(&steps);
+            templates_text.push_str("}\n");
         }
 
-        let header = format!(
-            "const DEFAULT_PARAMS: Params = {};\n\n",
-            serde_json::to_string_pretty(&defaults).unwrap_or_else(|_| "{}".into())
-        );
-        self.body.insert_str(0, &header);
+        let uses_params = has_defaults
+            || !workflow.templates.is_empty()
+            || nodes.iter().any(|node| node.uses_params);
+        let mut main = String::new();
+        if has_defaults {
+            self.uses_context = true;
+            main.push_str("export default async function main({ params: input }: WorkflowContext<Params>) {\n");
+            main.push_str("  const params: Params = { ...DEFAULT_PARAMS, ...input };\n");
+        } else if uses_params {
+            self.uses_context = true;
+            main.push_str(
+                "export default async function main({ params }: WorkflowContext<Params>) {\n",
+            );
+        } else {
+            main.push_str("export default async function main() {\n");
+        }
+
+        let call = |node: &NodeCode| {
+            if node.uses_params {
+                format!("{}(params)", node.function)
+            } else {
+                format!("{}()", node.function)
+            }
+        };
+        let single = nodes.len() == 1 && nodes[0].matrix.is_none() && workflow.templates.is_empty();
+        let chain = order.iter().enumerate().all(|(index, node)| match index {
+            0 => node.depends_on.is_empty(),
+            _ => node.depends_on.len() == 1 && node.depends_on[0] == order[index - 1].id,
+        });
+        let independent = order.iter().all(|node| node.depends_on.is_empty());
+        if single {
+            main.push_str(&indent(
+                &nodes[0].preamble.replace("/** ", "// ").replace(" */", ""),
+                "  ",
+            ));
+            main.push_str(&nodes[0].inner);
+        } else if chain {
+            for node in &nodes {
+                let _ = writeln!(main, "  await {};", call(node));
+            }
+        } else if independent {
+            let calls: Vec<String> = nodes.iter().map(&call).collect();
+            let _ = writeln!(main, "  await Promise.all([{}]);", calls.join(", "));
+        } else {
+            let mut started = Vec::new();
+            for (node, code) in order.iter().zip(&nodes) {
+                let variable = format!("{}Done", code.function);
+                if node.depends_on.is_empty() {
+                    let _ = writeln!(main, "  const {variable} = {};", call(code));
+                } else {
+                    self.uses_after = true;
+                    let dependencies: Vec<String> = node
+                        .depends_on
+                        .iter()
+                        .map(|id| format!("{}Done", self.function_name("Node", id)))
+                        .collect();
+                    let _ = writeln!(
+                        main,
+                        "  const {variable} = after([{}], () => {});",
+                        dependencies.join(", "),
+                        call(code)
+                    );
+                }
+                started.push(variable);
+            }
+            let _ = writeln!(main, "  await Promise.all([{}]);", started.join(", "));
+        }
+        main.push_str("}\n");
+        self.body.push_str(&main);
+
+        if !single {
+            for code in &nodes {
+                self.body.push('\n');
+                self.body.push_str(&code.preamble);
+                let (params, pass) = if code.uses_params {
+                    ("params: Params", "params, ")
+                } else {
+                    ("", "")
+                };
+                match &code.matrix {
+                    Some(source) => {
+                        let instance = format!("{}For", code.function);
+                        let _ = writeln!(
+                            self.body,
+                            "async function {}({params}) {{\n  await Promise.all(\n    {source}.map((matrix: Matrix, index: number) => {instance}({pass}matrix, index)),\n  );\n}}\n",
+                            code.function
+                        );
+                        let _ = writeln!(
+                            self.body,
+                            "async function {instance}({pass}matrix: Matrix, index: number) {{",
+                            pass = if code.uses_params {
+                                "params: Params, "
+                            } else {
+                                ""
+                            }
+                        );
+                    }
+                    None => {
+                        let _ =
+                            writeln!(self.body, "async function {}({params}) {{", code.function);
+                    }
+                }
+                self.body.push_str(&code.inner);
+                self.body.push_str("}\n");
+            }
+        }
+        self.body.push_str(&templates_text);
+
+        if has_defaults {
+            let header = format!(
+                "const DEFAULT_PARAMS: Params = {};\n\n",
+                serde_json::to_string_pretty(&defaults).unwrap_or_else(|_| "{}".into())
+            );
+            self.body.insert_str(0, &header);
+        }
     }
 
-    fn node(&mut self, node: &Node) {
+    fn node_code(&mut self, node: &Node) -> NodeCode {
         let function = self.function_name("Node", &node.id);
         let templates = HashMap::new();
+        let mut preamble = String::new();
         if let Some(runtime) = node
             .runtime
             .as_ref()
             .filter(|r| r.r#type != butterflow_models::RuntimeType::Direct)
         {
-            let note = self.warn(format!(
+            preamble.push_str(&self.warn(format!(
                 "node '{}': runtime '{:?}' is not supported; its steps run directly",
                 node.id, runtime.r#type
-            ));
-            self.body.push('\n');
-            self.body.push_str(&note);
-        } else {
-            self.body.push('\n');
+            )));
         }
         let description = node
             .description
             .as_deref()
             .map(|d| format!(": {d}"))
             .unwrap_or_default();
-        let _ = writeln!(self.body, "/** {}{description} */", node.name);
+        let _ = writeln!(preamble, "/** {}{description} */", node.name);
 
         let manual = node.r#type == NodeType::Manual
             || node
@@ -266,31 +361,11 @@ impl Generator {
             .as_ref()
             .is_some_and(|s| s.from_state.is_some());
 
-        let instance = match &matrix_source {
-            Some(source) => {
-                let instance = format!("{function}For");
-                let _ = writeln!(
-                    self.body,
-                    "async function {function}(params: Params) {{\n  await Promise.all(\n    {source}.map((matrix: Matrix, index: number) => {instance}(params, matrix, index)),\n  );\n}}\n"
-                );
-                let _ = writeln!(
-                    self.body,
-                    "async function {instance}(params: Params, matrix: Matrix, index: number) {{"
-                );
-                instance
-            }
-            None => {
-                let _ = writeln!(self.body, "async function {function}(params: Params) {{");
-                self.body.push_str("  const matrix: Matrix = null;\n");
-                function.clone()
-            }
-        };
-        let _ = instance;
-
+        let mut inner = String::new();
         if manual {
             self.import("approval");
             let _ = writeln!(
-                self.body,
+                inner,
                 "  await step(approval({}));",
                 js_string(&format!("Run '{}'?", node.name))
             );
@@ -305,8 +380,8 @@ impl Generator {
                 None if matrix_source.is_some() => format!("`codemod-{}-${{index}}`", node.id),
                 None => js_string(&format!("codemod-{}", node.id)),
             };
-            let _ = writeln!(self.body, "  const branchName = {branch_expr};");
-            self.body.push_str("  await step(branch(branchName));\n");
+            let _ = writeln!(inner, "  const branchName = {branch_expr};");
+            inner.push_str("  await step(branch(branchName));\n");
         }
 
         let steps = self.steps(
@@ -318,13 +393,13 @@ impl Generator {
             },
             &templates,
         );
-        self.body.push_str(&steps);
+        inner.push_str(&steps);
 
         if let Some(pr) = pull_request {
             self.import("commit");
             self.import("pullRequest");
             let title = template(&pr.title);
-            let _ = writeln!(self.body, "  await step(commit({title}));");
+            let _ = writeln!(inner, "  await step(commit({title}));");
             let mut fields = vec![("title", title)];
             if let Some(body) = &pr.body {
                 fields.push(("body", template(body)));
@@ -336,9 +411,19 @@ impl Generator {
                 fields.push(("base", template(base)));
             }
             fields.push(("branch", "branchName".into()));
-            let _ = writeln!(self.body, "  await step(pullRequest({}));", object(&fields));
+            let _ = writeln!(inner, "  await step(pullRequest({}));", object(&fields));
         }
-        self.body.push_str("}\n");
+
+        if matrix_source.is_none() && mentions(&inner, "matrix") {
+            inner.insert_str(0, "  const matrix: Matrix = null;\n");
+        }
+        NodeCode {
+            function,
+            preamble,
+            uses_params: mentions(&inner, "params"),
+            inner,
+            matrix: matrix_source,
+        }
     }
 
     fn steps(
@@ -353,7 +438,12 @@ impl Generator {
             let mut lines = notes;
             match &step.condition {
                 Some(when) => {
-                    let _ = write!(lines, "if ({}) {{\n  {statement}\n", condition(when));
+                    let _ = write!(
+                        lines,
+                        "if ({}) {{\n{}",
+                        condition(when),
+                        indent(&statement, "  ")
+                    );
                     if let Some(commit) = &step.commit {
                         let _ = writeln!(lines, "  {}", self.commit(commit));
                     }
@@ -454,7 +544,7 @@ impl Generator {
                 if let Some(exclude) = &ast_grep.exclude {
                     fields.push(("exclude", string_list(exclude)));
                 }
-                if let Some(base) = &ast_grep.base_path {
+                if let Some(base) = ast_grep.base_path.as_deref().filter(|b| !is_root(b)) {
                     fields.push(("basePath", js_string(base)));
                 }
                 if let Some(threads) = ast_grep.max_threads {
@@ -479,7 +569,11 @@ impl Generator {
                         step.name
                     )));
                 }
-                format!("codemod({}, {{ params }})", js_string(&codemod.source))
+                if self.pass_params {
+                    format!("codemod({}, {{ params }})", js_string(&codemod.source))
+                } else {
+                    format!("codemod({})", js_string(&codemod.source))
+                }
             }
             StepAction::AI(ai) => {
                 self.import("agent");
@@ -611,7 +705,7 @@ impl Generator {
         if let Some(exclude) = &js.exclude {
             fields.push(("exclude", string_list(exclude)));
         }
-        if let Some(base) = &js.base_path {
+        if let Some(base) = js.base_path.as_deref().filter(|b| !is_root(b)) {
             fields.push(("basePath", template(base)));
         }
         if let Some(language) = &js.language {
@@ -648,7 +742,9 @@ impl Generator {
         if js.dry_run == Some(true) {
             fields.push(("dryRun", "true".into()));
         }
-        fields.push(("params", "params".into()));
+        if self.pass_params {
+            fields.push(("params", "params".into()));
+        }
         if scope.matrix {
             fields.push(("matrix", "matrix ?? undefined".into()));
         }
@@ -658,6 +754,7 @@ impl Generator {
     fn finish(self) -> Translated {
         let mut source = String::new();
         source.push_str("// Generated from workflow.yaml by `codemod workflow upgrade`.\n");
+        source.push_str("/// <reference types=\"codemod/workflow\" />\n");
         for warning in &self.warnings {
             let _ = writeln!(source, "// codemod upgrade: {warning}");
         }
@@ -673,12 +770,24 @@ impl Generator {
         imports.sort_by_key(|name| name.trim_start_matches("__"));
         let _ = writeln!(
             source,
-            "import {{ {} }} from \"codemod:workflow\";\n",
+            "import {{ {} }} from \"codemod:workflow\";",
             imports.join(", ")
         );
-        source.push_str(
-            "type Params = Record<string, any>;\ntype Matrix = Record<string, any> | null;\n\n",
-        );
+        if self.uses_context {
+            source.push_str("import type { WorkflowContext } from \"codemod:workflow\";\n");
+        }
+        source.push('\n');
+        let mut aliases = String::new();
+        if mentions(&self.body, "Params") {
+            aliases.push_str("type Params = Record<string, any>;\n");
+        }
+        if mentions(&self.body, "Matrix") || self.uses_matrix_env {
+            aliases.push_str("type Matrix = Record<string, any> | null;\n");
+        }
+        if !aliases.is_empty() {
+            source.push_str(&aliases);
+            source.push('\n');
+        }
         source.push_str(&self.body);
         if self.uses_after {
             source.push_str(
@@ -739,6 +848,35 @@ fn property(key: &str) -> String {
     }
 }
 
+/// Whether `text` uses `word` as an identifier.
+fn mentions(text: &str, word: &str) -> bool {
+    text.match_indices(word).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + word.len()..].chars().next();
+        let boundary =
+            |c: Option<char>| !c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+        boundary(before) && boundary(after) && before != Some('.')
+    })
+}
+
+/// A YAML `base_path` that means the target itself.
+fn is_root(base: &str) -> bool {
+    matches!(base.trim(), "" | "." | "./")
+}
+
+/// Prefix every line with `prefix`.
+fn indent(text: &str, prefix: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            out.push('\n');
+        } else {
+            let _ = writeln!(out, "{prefix}{line}");
+        }
+    }
+    out
+}
+
 fn object(fields: &[(&str, String)]) -> String {
     if fields.is_empty() {
         return "{}".into();
@@ -756,12 +894,26 @@ fn object(fields: &[(&str, String)]) -> String {
     format!("{{ {} }}", parts.join(", "))
 }
 
+/// `call` (an open call such as `jssg("a.ts"`) closed with its options.
+/// Long option objects go on several lines.
 fn with_options(call: String, fields: &[(&str, String)]) -> String {
     if fields.is_empty() {
-        format!("{call})")
-    } else {
-        format!("{call}, {})", object(fields))
+        return format!("{call})");
     }
+    let one_line = format!("{call}, {})", object(fields));
+    if one_line.len() <= 80 {
+        return one_line;
+    }
+    let mut out = format!("{call}, {{\n");
+    for (key, value) in fields {
+        if key == value {
+            let _ = writeln!(out, "  {key},");
+        } else {
+            let _ = writeln!(out, "  {}: {value},", property(key));
+        }
+    }
+    out.push_str("})");
+    out
 }
 
 /// A JSON value as a compact object literal, dropping nulls.

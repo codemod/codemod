@@ -4,12 +4,13 @@ sidebarTitle: "Reference"
 description: "The workflow.ts API: steps, per-file callbacks, tasks, state, and resuming runs."
 ---
 
-A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod:workflow`.
+A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod:workflow`, and what else a workflow can import.
 
 ## Complete example
 
 ```ts workflow.ts
-import { step, forEachFile, parse, jssg, shell, approval } from "codemod:workflow";
+import { step, forEachFile, jssg, shell, approval } from "codemod:workflow";
+import { parse } from "codemod:ast-grep";
 
 const LEGACY = "moment";
 
@@ -48,9 +49,9 @@ A workflow file contains three kinds of code, each with its own rules:
 
 | Where | When it runs | Rule |
 |---|---|---|
-| Workflow body, outside any step | On every run and every resume | Deterministic; no file or network access |
-| Inside a step | Once; its result is recorded | The result must be JSON-serializable |
-| Inside a `forEachFile` callback | Once per file, in parallel, in isolated contexts | Outside variables arrive as frozen copies; changes go through the file object |
+| Workflow body, outside any step | On every run and every resume | Deterministic; see [The workflow body](#the-workflow-body) |
+| Inside a function step, `step(() => ...)` | Once, in its own isolate; its result is recorded | Outside variables arrive as frozen copies; the result must be JSON |
+| Inside a `forEachFile` callback | Once per file, in parallel, in isolates | Outside variables arrive as frozen copies; changes go through the file object |
 
 - **Steps are durable.** Each step's result is saved as soon as the step finishes. If a run fails or is canceled, `codemod workflow resume` replays the finished steps from their saved results and continues from the step that failed.
 - **A step starts when you call `step()`.** `await` waits for it. `Promise.all([step(a), step(b)])` runs two steps at the same time.
@@ -70,20 +71,29 @@ const result = await step("Rename files", forEachFile("src/**/*.less", (file) =>
 - **`task`**: `forEachFile(...)`, one of the [tasks](#tasks), or a function whose result should be computed once and recorded.
 - **Result:** deeply frozen and read-only. Copy it before changing it.
 
+### Function steps
+
+A function step runs once, in its own isolate, and records what it returns. It may be async.
+
 ```ts
+import { readFile } from "fs/promises";
+
 const plan = await step("Plan batches", () =>
   usages.outputs.reduce((batches, path, index) => {
     (batches[index % 4] ??= []).push(path);
     return batches;
   }, [] as string[][]),
 );
+const config = await step("Read config", async () => JSON.parse(await readFile("codemod.config.json", "utf8")));
 ```
 
-The workflow body and function steps have no file system or network access. Use a task such as `shell` for that.
+- Write the function inline, so the build can extract it. Outside variables arrive as frozen copies, with the same rules as [forEachFile callbacks](#using-outside-variables).
+- Inside, `Date`, `Math.random`, `fetch`, `fs` and `child_process` are real, as far as the run allows (`--allow-fs`, `--allow-fetch`, `--allow-child-process`).
+- The result must be JSON. On resume, a finished function step is replayed from its record; if you changed it, the run stops with a `NondeterminismError`.
 
-## `forEachFile(selector, callback)`
+## `forEachFile(selector?, callback)`
 
-Runs `callback` once per selected file and returns a task for `step()`.
+Runs `callback` once per selected file and returns a task for `step()`. Without a selector, it visits the files of the package's `targets.languages` in `codemod.yaml`.
 
 ### Selector
 
@@ -99,8 +109,9 @@ Object fields:
 |---|---|
 | `include` | Glob or globs to select |
 | `exclude` | Glob or globs to skip |
-| `language` | Selects the language's file extensions when `include` is not set, and is the default language for `parse(file)` |
+| `language` | Selects the language's file extensions when `include` is not set, and is the default language for `parse(file)` and `parse(text)` |
 | `containing` | Only files whose text contains this string |
+| `concurrency` | Files each worker keeps in flight (default `1`). Raise it for async callbacks that wait on the network or `codemod:llm` |
 
 `.gitignore` is respected. A selector is plain data, so you can reuse and refine it: `{ ...sources, containing: "moment" }`.
 
@@ -110,6 +121,7 @@ Object fields:
 |---|---|
 | `file.path` | Path relative to the target |
 | `file.text` | Contents when the step started |
+| `file.language` | The selector's `language`, if it has one |
 | `file.write(text)` | Replace the contents |
 | `file.rename(path)` | Move the file |
 | `file.delete()` | Remove the file |
@@ -118,9 +130,26 @@ Changes are recorded, not written immediately. When every file is done, the step
 
 ### The callback
 
+- The callback may be async: `async (file) => { ... }`.
 - Return a value to collect it; returned values become `result.outputs`, in path order. Return nothing to collect nothing.
 - A callback that throws fails only that file; the error appears in `result.failures`.
-- Callbacks must be synchronous.
+- Metrics recorded with [`codemod:metrics`](/community/jssg/metrics) appear in `result.metrics` and in the run's report. Declare the metric at module level and record it in the callback.
+
+```ts
+import { useMetricAtom } from "codemod:metrics";
+
+const rewrites = useMetricAtom("rewrites");
+
+export default async function main() {
+  const result = await step(forEachFile({ language: "tsx", concurrency: 4 }, async (file) => {
+    const root = parse(file);
+    const edits = root.root().findAll({ rule: { pattern: "moment($A)" } }).map((node) => node.replace("dayjs()"));
+    rewrites.increment({ file: file.path }, edits.length);
+    if (edits.length) file.write(root.root().commitEdits(edits));
+  }));
+  result.metrics.rewrites; // [{ cardinality: { file: "src/a.tsx" }, count: 2 }, ...]
+}
+```
 
 ### Result
 
@@ -129,41 +158,63 @@ Changes are recorded, not written immediately. When every file is done, the step
   outputs: unknown[];
   changes: { written: string[]; renamed: { from: string; to: string }[]; deleted: string[] };
   failures: { path: string; error: string }[];
+  metrics: Record<string, { cardinality: Record<string, string>; count: number }[]>;
 }
 ```
 
 ### Using outside variables
 
-A callback runs in its own context, so the build copies in what it needs:
+A callback (or function step) runs in its own isolate, so the build copies in what it needs:
 
-- **Module-level constants, functions and classes** it uses are copied into the callback.
+- **Module-level constants, functions and classes** it uses are copied in.
 - **Local variables of the surrounding function** are passed in as frozen copies when the step starts. They must be JSON values.
-- **Imports** from `codemod:*` modules are available.
+- **Imports** it uses are available: `codemod:ast-grep`, `codemod:metrics`, `codemod:runtime`, Node-style modules (`path`, `fs` with `--allow-fs`, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
+- **State:** `getState`, `setState`, `unsetState` and `acquireLock` from `codemod:workflow` work as in [JSSG transforms](/community/jssg/advanced/workflow). Prefer returning values: outputs are ordered and need no locks.
 
 These are build errors, reported with the file, line and column:
 
 - assigning to a variable declared outside the callback (return a value instead);
 - using a local variable that is reassigned after it is declared;
 - using a function or class declared inside the surrounding function (move it to module level);
-- calling `step()` or another task inside the callback;
+- calling `step()`, `forEachFile` or another task inside the callback;
 - passing a callback by name instead of writing it inline.
 
 A local that is not JSON (a `Set`, a `Map`, a class instance) fails when the step starts, naming the variable.
 
-## `parse(file, language?)`
+## Parsing with `codemod:ast-grep`
 
-Parses the file with [ast-grep](/community/jssg) and returns its root. Only available inside a `forEachFile` callback. The language comes from the argument, then the selector's `language`, then the file extension. Files you only rename are never parsed.
+```ts
+import { parse } from "codemod:ast-grep";
+
+parse(file);                        // a forEachFile file; root.filename() is its path
+parse(file, { language: "tsx" });
+parse(text);                        // in a forEachFile callback whose selector names a language
+parse(text, { language: "tsx" });
+parse("tsx", text);                 // the original JSSG form
+```
+
+`parse` returns the [ast-grep](/community/jssg) root. The language comes from the options, then the file, then the step's selector, then the file extension. Files you only rename are never parsed.
+
+## The workflow body
+
+The body is the code outside steps and callbacks. It runs again on every resume and must issue the same steps each time, so:
+
+- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod:ast-grep`, and npm packages or local files whose imports only reach these.
+- **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod:llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
+- **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
+- **Metrics** can be declared in the body (`useMetricAtom`) but only recorded inside steps and callbacks.
+- **`console.log`** goes to the run's output.
 
 ## Tasks
 
 | Task | What it does |
 |---|---|
-| `jssg(path, options)` | Run a [JSSG](/community/jssg) transform file. Options: `include`, `exclude`, `basePath`, `files`, `language` (default `typescript`), `params`, `matrix`, `capabilities`, `semanticAnalysis`, `threads`, `dryRun`. Result: `{ changes, unmodified, failures }`. |
+| `jssg(path, options)` | Run a [JSSG](/community/jssg) transform file. Options: `include`, `exclude`, `basePath`, `files`, `language` (default `typescript`), `params`, `matrix`, `capabilities`, `semanticAnalysis` (`"file"` by default, as in `jssg run`; also `"workspace"` or `"none"`), `threads`, `dryRun`. Result: `{ changes, unmodified, failures }`. |
 | `astGrep(path, options)` | Apply an ast-grep YAML rule file. Options: `include`, `exclude`, `basePath`, `threads`. |
 | `shell(command, { env, cwd })` | Run a shell command. Result: `{ output }`. |
 | `shard(options)` | Split files into groups. See [Sharding](/community/workflows/sharding). |
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
-| `agent(prompt, options)` | Hand a prompt to a coding agent. Options: `systemPrompt`, `model`, `maxSteps`, `tools`. |
+| `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
 | `installSkill({ package, path, harness, scope, force })` | Install a package's agent skill. |
 | `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
 | `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. These only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped. |
@@ -182,6 +233,64 @@ Paths given to `jssg`, `astGrep` and shard functions are relative to the workflo
 | `STATE_OUTPUTS` | A file the command can write `key=value` (set) or `key@=value` (append) lines to; they become workflow state |
 
 Shell commands, agents and skill installs are skipped in a dry run.
+
+### Coding agents
+
+`agent(prompt, options)` runs a coding agent installed on the machine, without asking it questions, in the run's target directory:
+
+```ts
+const review = await step(
+  "Fix the remaining call sites",
+  agent("Replace the remaining moment() calls in src/ with dayjs().", {
+    agent: "claude-code",
+    model: "sonnet",
+    timeoutSeconds: 600,
+  }),
+);
+console.log(review.result);
+```
+
+Its result holds the agent's final answer (`result`), its `sessionId`, `model` and `usage` (tokens and cost, as far as the agent reports them). What the agent does, such as its messages, tool calls and commands, shows in the run's output as it happens.
+
+| Option | |
+| --- | --- |
+| `agent` | Which agent to run. It must be installed |
+| `systemPrompt` | Extra instructions. Agents with an option for them get them there; the others get them in front of the prompt |
+| `model` | A model name the agent understands |
+| `autonomy` | `"full"` (default): the agent edits files and runs commands without asking. `"read-only"`: the agent's read-only or planning mode, where it has one |
+| `timeoutSeconds` | Stop the agent after this long |
+
+Supported agents, by the id `agent` takes:
+
+| Agent | Id | Notes |
+| --- | --- | --- |
+| Claude Code | `claude-code` (or `claude`) | |
+| Codex | `codex` | Runs outside git repositories too |
+| Cursor Agent | `cursor` | |
+| Gemini CLI | `gemini` | Older versions give text only |
+| Antigravity CLI | `antigravity` (or `agy`) | |
+| OpenCode | `opencode` | `model` is `provider/model` |
+| GitHub Copilot CLI | `copilot` | |
+| Amp | `amp` | Picks models by mode, so `model` is ignored |
+| Qwen Code | `qwen-code` (or `qwen`) | |
+| Goose | `goose` | |
+| Factory Droid | `droid` | |
+| Kimi Code | `kimi` | Always runs in Kimi's auto mode |
+| Crush | `crush` | Text output only |
+| OpenClaw | `openclaw` | Reports once, at the end |
+| Aider | `aider` | Text output only; never runs the shell commands it suggests |
+| Kiro CLI | `kiro` | Text output only |
+| Auggie | `auggie` | Text output only; tool permissions come from its settings |
+| Cline | `cline` | Text output only |
+
+Without `agent`, the step uses:
+
+1. the run's agent: `codemod workflow run --agent codex`, or the `LLM_AGENT` environment variable;
+2. the coding agent the workflow itself runs inside, for example when Claude Code runs `codemod run`. The prompt goes back to it in the step's output, and the step succeeds with `handedOff: true`;
+3. an agent you pick from the installed ones, when the run is interactive;
+4. the built-in agent, when `LLM_API_KEY` is set (with `LLM_PROVIDER`, `LLM_MODEL` and `LLM_BASE_URL`).
+
+Otherwise the prompt is printed as instructions and nothing runs.
 
 ## State
 
@@ -233,20 +342,33 @@ npx codemod workflow cancel --id <run-id>
 
 Runs are stored under your data directory (`~/Library/Application Support/codemod/runs` on macOS). Set `CODEMOD_RUN_STORE_DIR` to store them elsewhere, or `CODEMOD_RUN_STORE=memory` to keep nothing. A dry run is never saved.
 
-## Editor types
+## Installing codemod in a package
 
-Types for `codemod:workflow` ship in `@codemod.com/jssg-types`, the same package that types JSSG transforms. Packages created with `codemod init` are already set up. For an existing package:
+A codemod package can depend on `codemod` like any other tool it runs: package scripts and `npx codemod` then use that CLI, pinned to the version in `package.json`, and editors get its types for `codemod:workflow`, `codemod:ast-grep` and the other `codemod:*` modules, which always match that CLI. Packages created with `codemod init` are already set up. For an existing package:
 
 ```bash
-npm install --save-dev @codemod.com/jssg-types typescript
+npm install codemod
+npm install --save-dev typescript
 ```
+
+```json package.json
+{
+  "type": "module",
+  "scripts": {
+    "test": "codemod jssg test -l typescript ./scripts/codemod.ts",
+    "validate": "codemod workflow validate -w workflow.ts"
+  }
+}
+```
+
+`npm install codemod` adds it under `dependencies`.
 
 ```json tsconfig.json
 {
   "compilerOptions": {
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "types": ["@codemod.com/jssg-types"],
+    "types": ["codemod"],
     "noEmit": true,
     "strict": true,
     "skipLibCheck": true
@@ -254,7 +376,7 @@ npm install --save-dev @codemod.com/jssg-types typescript
 }
 ```
 
-The package also needs `"type": "module"` in its `package.json`. Then `npx tsc` checks `workflow.ts` along with your transforms:
+Then `npx tsc` checks `workflow.ts` along with your transforms. Type-only imports are available as `codemod/main` (the `SgRoot`/`SgNode` types) and `codemod/langs/<language>`; `@codemod.com/jssg-types` still works and mirrors the same declarations.
 
 - Step results are typed and read-only. `forEachFile` collects what the callback returns: returning `file.path` or `undefined` gives `outputs: readonly string[]`.
 - A step result or callback return value that is not JSON is a type error, for example a `Set`, a `Map`, a `Date`, a function, or a `Promise` returned from an `async` callback.

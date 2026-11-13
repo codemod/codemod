@@ -52,7 +52,7 @@ unsafe impl<'js> rquickjs::JsLifetime<'js> for DryRunExecutionFlag {
     type Changed<'to> = DryRunExecutionFlag;
 }
 
-fn install_console_bridge(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+pub(crate) fn install_console_bridge(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
     let console = Object::new(ctx.clone())?;
     console.set("log", Function::new(ctx.clone(), console_log)?)?;
     console.set("info", Function::new(ctx.clone(), console_log)?)?;

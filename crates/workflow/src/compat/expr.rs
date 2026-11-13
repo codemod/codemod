@@ -56,7 +56,8 @@ pub fn string_list(items: &[String]) -> String {
             js_string(&serde_json::to_string(items).expect("strings serialize"))
         )
     } else {
-        serde_json::to_string(items).expect("strings serialize")
+        let items: Vec<String> = items.iter().map(|item| js_string(item)).collect();
+        format!("[{}]", items.join(", "))
     }
 }
 

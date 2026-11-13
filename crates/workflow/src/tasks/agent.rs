@@ -1,35 +1,40 @@
 //! `agent(prompt, options)`: hand a prompt to a coding agent.
 //!
-//! Order, as in the YAML engine: the preferred agent (`--agent` or
-//! `LLM_AGENT`) if installed; hand-off to a parent coding agent when the
-//! workflow runs inside one; an agent the person picks; then the built-in
-//! agent when an API key is configured. Otherwise the prompt is printed as
-//! instructions.
+//! Which agent runs it:
+//!
+//! 1. the one the step names (`agent: "codex"`), or the run's (`--agent`,
+//!    `LLM_AGENT`); it must be installed;
+//! 2. when the workflow itself runs inside a coding agent, that agent: the
+//!    prompt is handed back to it in the step's log, and the step succeeds;
+//! 3. one the person picks, when the run is interactive;
+//! 4. the built-in agent, when an API key is configured.
+//!
+//! Otherwise the prompt is logged as instructions and nothing runs.
 
-use std::io::{BufRead, BufReader};
-use std::process::Stdio;
+use std::path::{Path, PathBuf};
 
-use butterflow_core::ai_agent_stream::{
-    normalize_raw_agent_line, AgentStreamNormalizer, ClaudeStreamNormalizer, CodexStreamNormalizer,
-    NormalizedAgentLine, OpenCodeStreamNormalizer,
-};
-use butterflow_core::ai_handoff::{
-    build_agent_command, detect_parent_coding_agent, discover_installed_agents,
-    find_agent_executable, resolve_agent_name, DetectionConfidence,
-};
+use codemod_agents::{parent_agent, Agent, Autonomy, Run, Task};
 use codemod_ai::execute::{execute_ai_step, ExecuteAiStepConfig};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::{block_on, TaskContext, TaskError, TaskOutcome, TaskResult};
+use crate::events::Event;
 use crate::interaction::AgentChoice;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Request {
     prompt: String,
+    /// The coding agent to run: an id or alias (`claude`, `codex`, ...).
+    agent: Option<String>,
     system_prompt: Option<String>,
     model: Option<String>,
+    /// `"full"` (default) or `"read-only"`.
+    autonomy: Option<String>,
+    /// Stop the agent after this many seconds.
+    timeout_seconds: Option<u64>,
+    // The built-in agent's options.
     max_steps: Option<usize>,
     tools: Option<Vec<String>>,
     endpoint: Option<String>,
@@ -43,54 +48,136 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         task.log("skipped: agents do not run in a dry run");
         return Ok(TaskOutcome::new(json!({ "skipped": true })));
     }
+    let autonomy = match request.autonomy.as_deref() {
+        None | Some("full") => Autonomy::Full,
+        Some("read-only") => Autonomy::ReadOnly,
+        Some(other) => {
+            return Err(TaskError::Failed(format!(
+                "unknown autonomy '{other}'; use \"full\" or \"read-only\""
+            )))
+        }
+    };
 
-    let preferred = run
-        .services
+    let named = request
         .agent
         .clone()
-        .or_else(|| std::env::var("LLM_AGENT").ok());
-    if let Some(name) = preferred {
-        match resolve_agent_name(&name) {
-            Some(canonical) => match find_agent_executable(canonical) {
-                Some(executable) => return launch(task, canonical, &executable, &request),
-                None => task.log(format!(
-                    "agent '{canonical}' is not installed; trying others"
-                )),
-            },
-            None => task.log(format!("unknown agent '{name}'; trying others")),
-        }
+        .or_else(|| run.services.agent.clone())
+        .or_else(|| std::env::var("LLM_AGENT").ok())
+        .filter(|name| !name.trim().is_empty());
+    if let Some(name) = named {
+        let agent = codemod_agents::find(&name).ok_or_else(|| {
+            let known: Vec<&str> = codemod_agents::agents().map(|a| a.id()).collect();
+            TaskError::Failed(format!(
+                "unknown coding agent '{name}'; supported: {}",
+                known.join(", ")
+            ))
+        })?;
+        let executable = agent.installed().ok_or_else(|| {
+            TaskError::Failed(format!(
+                "{} is not installed (looked for {} on PATH)",
+                agent.label(),
+                agent.adapter.executables().join(", ")
+            ))
+        })?;
+        return launch(task, agent, executable, &request, autonomy);
     }
 
-    if detect_parent_coding_agent().confidence == DetectionConfidence::Detected {
+    if let Some(parent) = parent_agent() {
         instructions(task, &request);
-        return Ok(TaskOutcome::new(json!({ "handedOff": true })));
+        task.log(format!(
+            "handed to {}, which runs this workflow",
+            parent.adapter.label()
+        ));
+        return Ok(TaskOutcome::new(
+            json!({ "handedOff": true, "agent": parent.adapter.id() }),
+        ));
     }
 
     if run.interaction.is_interactive() {
-        let installed = discover_installed_agents();
-        let choices: Vec<AgentChoice> = installed
-            .iter()
+        let installed = codemod_agents::installed();
+        let choices: Vec<AgentChoice> = codemod_agents::agents()
             .map(|agent| AgentChoice {
-                name: agent.canonical.to_string(),
-                label: agent.label.to_string(),
-                available: agent.is_available(),
+                name: agent.id().to_string(),
+                label: agent.label().to_string(),
+                available: installed.iter().any(|(found, _)| found.id() == agent.id()),
             })
             .collect();
         if let Some(choice) = run.interaction.choose_agent(&choices) {
-            if let Some(executable) = resolve_agent_name(&choice).and_then(find_agent_executable) {
-                let canonical = resolve_agent_name(&choice).unwrap_or_default();
-                return launch(task, canonical, &executable, &request);
+            if let Some((agent, executable)) = installed
+                .into_iter()
+                .find(|(agent, _)| agent.id() == choice)
+            {
+                return launch(task, agent, executable, &request, autonomy);
             }
         }
     }
 
+    built_in(task, &request)
+}
+
+fn launch(
+    task: &TaskContext<'_>,
+    agent: Agent,
+    executable: PathBuf,
+    request: &Request,
+    autonomy: Autonomy,
+) -> TaskResult {
+    let run = task.run;
+    let cwd = working_dir(&run.target);
+    task.log(format!("running {}", agent.label()));
+    let outcome = Run {
+        adapter: agent.adapter,
+        executable,
+        task: Task {
+            prompt: &request.prompt,
+            system_prompt: request.system_prompt.as_deref(),
+            model: request.model.as_deref(),
+            cwd: &cwd,
+            autonomy,
+        },
+        cancel: Some(std::sync::Arc::clone(&run.cancel)),
+        timeout: request.timeout_seconds.map(std::time::Duration::from_secs),
+    }
+    .run(&mut |activity| {
+        run.events.emit(Event::StepAgent {
+            position: task.position,
+            agent: agent.id().to_string(),
+            activity,
+        })
+    })
+    .map_err(|error| match error {
+        codemod_agents::RunError::Canceled { .. } => TaskError::Canceled,
+        other => TaskError::Failed(other.to_string()),
+    })?;
+    let usage = (!outcome.usage.is_empty()).then(|| json!(outcome.usage));
+    Ok(TaskOutcome::new(json!({
+        "agent": outcome.agent,
+        "result": outcome.result,
+        "sessionId": outcome.session_id,
+        "model": outcome.model,
+        "usage": usage,
+    })))
+}
+
+/// The directory an agent works in: the target, or a file target's directory.
+fn working_dir(target: &Path) -> PathBuf {
+    if target.is_file() {
+        return target
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+    }
+    target.to_path_buf()
+}
+
+fn built_in(task: &TaskContext<'_>, request: &Request) -> TaskResult {
     let Some(api_key) = request
         .api_key
         .clone()
         .or_else(|| std::env::var("LLM_API_KEY").ok())
     else {
-        instructions(task, &request);
-        task.log("no agent available and no LLM_API_KEY set; the prompt above was not run");
+        instructions(task, request);
+        task.log("no coding agent chosen and no LLM_API_KEY set; the prompt above was not run");
         return Ok(TaskOutcome::new(json!({ "handedOff": false })));
     };
     let protocol = request
@@ -115,13 +202,14 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         max_steps: request.max_steps,
         tools: request.tools.clone(),
         prompt: request.prompt.clone(),
-        working_dir: run.target.clone(),
+        working_dir: task.run.target.clone(),
         llm_protocol: protocol,
     }))
-    .map_err(|e| TaskError::Failed(format!("the agent failed: {e}")))?;
-    Ok(TaskOutcome::new(
-        json!({ "data": result.data.unwrap_or(Value::Null) }),
-    ))
+    .map_err(|e| TaskError::Failed(format!("the built-in agent failed: {e}")))?;
+    Ok(TaskOutcome::new(json!({
+        "agent": "built-in",
+        "data": result.data.unwrap_or(Value::Null),
+    })))
 }
 
 fn default_endpoint(protocol: &str) -> &'static str {
@@ -140,88 +228,4 @@ fn instructions(task: &TaskContext<'_>, request: &Request) {
     }
     task.log(request.prompt.clone());
     task.log("[/AI INSTRUCTIONS]");
-}
-
-fn launch(
-    task: &TaskContext<'_>,
-    canonical: &str,
-    executable: &std::path::Path,
-    request: &Request,
-) -> TaskResult {
-    let mut command = build_agent_command(
-        canonical,
-        executable,
-        &request.prompt,
-        request.system_prompt.as_deref(),
-        &task.run.target,
-    )
-    .ok_or_else(|| TaskError::Failed(format!("cannot build a command for agent '{canonical}'")))?;
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if matches!(canonical, "claude-code" | "codex" | "opencode") {
-        command.stdin(Stdio::piped());
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|e| TaskError::Failed(format!("cannot start agent '{canonical}': {e}")))?;
-    drop(child.stdin.take());
-    let stderr = child.stderr.take();
-    let events = std::sync::Arc::clone(&task.run.events);
-    let position = task.position;
-    let agent = canonical.to_string();
-    let stderr_reader = std::thread::spawn(move || {
-        if let Some(stderr) = stderr {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let event = normalize_raw_agent_line(&agent, "stderr", line);
-                if let Ok(event) = serde_json::to_value(&event) {
-                    events.emit(crate::events::Event::StepAgent {
-                        position,
-                        agent: event,
-                    });
-                }
-            }
-        }
-    });
-    if let Some(stdout) = child.stdout.take() {
-        let mut normalizer: Option<Box<dyn AgentStreamNormalizer>> = match canonical {
-            "claude-code" => Some(Box::new(ClaudeStreamNormalizer::default())),
-            "opencode" => Some(Box::new(OpenCodeStreamNormalizer::default())),
-            "codex" => Some(Box::new(CodexStreamNormalizer::default())),
-            _ => None,
-        };
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let normalized = normalizer
-                .as_mut()
-                .and_then(|n| n.normalize_line("stdout", &line));
-            let event = match normalized {
-                Some(NormalizedAgentLine::Event(event)) => event,
-                Some(NormalizedAgentLine::Suppress) => continue,
-                None => normalize_raw_agent_line(canonical, "stdout", line),
-            };
-            if let Ok(event) = serde_json::to_value(&event) {
-                task.run.events.emit(crate::events::Event::StepAgent {
-                    position: task.position,
-                    agent: event,
-                });
-            }
-        }
-    }
-    let _ = stderr_reader.join();
-    let status = child
-        .wait()
-        .map_err(|e| TaskError::Failed(format!("agent '{canonical}' failed: {e}")))?;
-    if !status.success() {
-        return Err(TaskError::Failed(format!(
-            "agent '{canonical}' exited with {status}"
-        )));
-    }
-    Ok(TaskOutcome::new(json!({ "agent": canonical })))
 }

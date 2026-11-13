@@ -1,17 +1,26 @@
 //! Runs a built workflow in one QuickJS context.
 //!
-//! The workflow body runs on the calling thread. Host tasks run on their own
+//! The workflow body runs on the calling thread, with the modules that are
+//! deterministic (pure LLRT modules such as `path` and `url`,
+//! `codemod:ast-grep`, packages and relative files) and replay-safe globals
+//! (`js/body_globals.js`). Steps and `forEachFile` callbacks run in their own
+//! isolates (see `tasks::isolate`). Host tasks run on their own
 //! threads and report back over a channel; the loop below settles their
 //! promises, so steps started together run at the same time. Every step's
 //! outcome goes to the run store as soon as it is known.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use butterflow_state::run_store::{RunStore, StepRecord};
+use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
+use codemod_llrt_capabilities::types::LlrtSupportedModules;
+use codemod_sandbox::sandbox::engine::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
+use codemod_sandbox::sandbox::resolvers::OxcResolver;
+use codemod_sandbox::AstGrepModule;
 use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
 use rquickjs::promise::PromiseState;
 use rquickjs::{CatchResultExt, Context, Ctx, Function, Module, Object, Promise, Runtime, Value};
@@ -25,7 +34,24 @@ use crate::tasks::{self, TaskContext};
 use crate::Services;
 
 const RUNTIME_JS: &str = include_str!("js/workflow.js");
+/// The orchestrator shared with the Node.js host.
+pub const ORCHESTRATOR_JS: &str = include_str!("js/orchestrator.js");
+const ORCHESTRATOR_MODULE: &str = "codemod:workflow/orchestrator";
+const BODY_GLOBALS_JS: &str = include_str!("js/body_globals.js");
+const BODY_METRICS_JS: &str = include_str!("js/body_metrics.js");
 const WORKFLOW_MODULE: &str = "workflow.js";
+
+/// LLRT modules left out of the workflow body: they read the clock, the
+/// environment or the machine, or schedule work. Steps and callbacks have them.
+const BODY_EXCLUDED_MODULES: &[LlrtSupportedModules] = &[
+    LlrtSupportedModules::Console,
+    LlrtSupportedModules::Crypto,
+    LlrtSupportedModules::Os,
+    LlrtSupportedModules::PerfHooks,
+    LlrtSupportedModules::Process,
+    LlrtSupportedModules::Timers,
+    LlrtSupportedModules::Tty,
+];
 const CANCEL_POLL: Duration = Duration::from_millis(250);
 
 /// Everything one run needs, shared with host task threads.
@@ -36,6 +62,9 @@ pub(crate) struct RunContext {
     pub bundle_dir: PathBuf,
     pub params: serde_json::Value,
     pub dry_run: bool,
+    /// When the run started, in milliseconds since the epoch: where the
+    /// workflow body's clock starts.
+    pub started_at: i64,
     pub callbacks: BTreeMap<String, String>,
     pub store: Arc<dyn RunStore>,
     pub events: Arc<dyn EventSink>,
@@ -46,6 +75,21 @@ pub(crate) struct RunContext {
     pub commit_lock: Mutex<()>,
     /// Codemod packages this run is nested in, for cycle detection.
     pub chain: Vec<String>,
+    /// Steps to stop at or to stub, when the run is a test.
+    pub test: Option<TestPlan>,
+    /// Set once the test plan's `until` step has started.
+    pub stopped: AtomicBool,
+}
+
+/// How a test runs a workflow: where to stop, and which steps to skip with a
+/// given result. Steps are matched by label.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct TestPlan {
+    /// Stop after this step: steps the workflow starts after it are not run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    /// Results for steps that should not run, by label.
+    pub given: serde_json::Map<String, serde_json::Value>,
 }
 
 impl RunContext {
@@ -69,6 +113,8 @@ pub enum Ending {
     Canceled,
     /// Stopped at a manual approval nobody could give.
     AwaitingApproval(String),
+    /// A test run stopped after its `until` step (named here).
+    Stopped(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -90,7 +136,7 @@ struct HostRequest {
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-enum HostEvent {
+pub(crate) enum HostEvent {
     StepStarted { position: u64, label: String },
     StepReplayed { position: u64, label: String },
 }
@@ -102,9 +148,29 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
 
     let runtime = Runtime::new().map_err(|e| RunError::Runtime(e.to_string()))?;
     let context = Context::full(&runtime).map_err(|e| RunError::Runtime(e.to_string()))?;
+    let (llrt_resolver, llrt_loader, llrt_globals) =
+        LlrtModuleBuilder::build_with_exclusions(BODY_EXCLUDED_MODULES)
+            .builder
+            .build();
+    let packages = OxcResolver::new(run.bundle_dir.clone(), None)
+        .map_err(|e| RunError::Runtime(format!("cannot resolve imports: {e}")))?;
     runtime.set_loader(
-        BuiltinResolver::default().with_module(FLOW_MODULE),
-        BuiltinLoader::default().with_module(FLOW_MODULE, RUNTIME_JS),
+        (
+            llrt_resolver.add_name("codemod:ast-grep"),
+            BuiltinResolver::default()
+                .with_module(FLOW_MODULE)
+                .with_module(ORCHESTRATOR_MODULE)
+                .with_module("codemod:metrics"),
+            QuickJSResolver::new(Arc::new(packages)),
+        ),
+        (
+            llrt_loader.with_module("codemod:ast-grep", AstGrepModule),
+            BuiltinLoader::default()
+                .with_module(FLOW_MODULE, RUNTIME_JS)
+                .with_module(ORCHESTRATOR_MODULE, ORCHESTRATOR_JS)
+                .with_module("codemod:metrics", BODY_METRICS_JS),
+            QuickJSLoader,
+        ),
     );
     let interrupt = Arc::clone(&run.cancel);
     runtime.set_interrupt_handler(Some(Box::new(move || interrupt.load(Ordering::SeqCst))));
@@ -114,7 +180,9 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
 
     let ending = context.with(|ctx| {
         let started = (|| -> rquickjs::Result<Value<'_>> {
+            llrt_globals.attach(&ctx)?;
             install_host(&ctx, &run, &recorded, &in_flight, &sender)?;
+            ctx.eval::<(), _>(BODY_GLOBALS_JS)?;
             // Load the runtime even when the workflow never imports it.
             Module::import(&ctx, FLOW_MODULE)?.finish::<()>()?;
             let declared = Module::declare(ctx.clone(), WORKFLOW_MODULE, built.main.as_str())?;
@@ -214,13 +282,57 @@ fn install_host<'js>(
         Function::new(ctx.clone(), move || canceler.canceled())?,
     )?;
 
+    object.set(
+        "now",
+        Function::new(ctx.clone(), || chrono::Utc::now().timestamp_millis() as f64)?,
+    )?;
+    let clock = Arc::new(AtomicI64::new(run.started_at));
+    let reader = Arc::clone(&clock);
+    object.set(
+        "clock",
+        Function::new(ctx.clone(), move || reader.load(Ordering::SeqCst) as f64)?,
+    )?;
+    object.set(
+        "advanceClock",
+        Function::new(ctx.clone(), move |ms: f64| {
+            clock.fetch_max(ms as i64, Ordering::SeqCst);
+        })?,
+    )?;
+    let seed = run_seed(&run.run_id);
+    object.set("seed", Function::new(ctx.clone(), move || seed)?)?;
+    let logger = Arc::clone(run);
+    object.set(
+        "log",
+        Function::new(ctx.clone(), move |line: String| {
+            logger.events.emit(Event::RunLog { line });
+        })?,
+    )?;
+
+    let plan = match &run.test {
+        Some(plan) => serde_json::to_string(plan).unwrap_or_else(|_| "null".to_string()),
+        None => "null".to_string(),
+    };
+    object.set(
+        "testPlan",
+        Function::new(ctx.clone(), move || plan.clone())?,
+    )?;
+    let stopper = Arc::clone(run);
+    object.set(
+        "stop",
+        Function::new(ctx.clone(), move || {
+            stopper.stopped.store(true, Ordering::SeqCst);
+        })?,
+    )?;
+
     let evaluator = Arc::clone(run);
     object.set(
         "evaluate",
         Function::new(
             ctx.clone(),
             move |kind: String, expression: String, scope: String| {
-                crate::expr::evaluate(&evaluator, &kind, &expression, &scope)
+                crate::expr::evaluate(&evaluator, &kind, &expression, &scope).map_err(|message| {
+                    rquickjs::Error::new_from_js_message("expression", "value", message)
+                })
             },
         )?,
     )?;
@@ -247,7 +359,15 @@ fn install_host<'js>(
     ctx.globals().set("__workflowHost", object)
 }
 
-fn run_host_task(run: &Arc<RunContext>, request: &str) -> Result<String, String> {
+/// A seed for the workflow body's random numbers: the same for every
+/// execution of one run, different between runs.
+fn run_seed(run_id: &str) -> u32 {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(run_id.as_bytes());
+    u32::from_le_bytes([digest[0], digest[1], digest[2], digest[3]])
+}
+
+pub(crate) fn run_host_task(run: &Arc<RunContext>, request: &str) -> Result<String, String> {
     let request: HostRequest =
         serde_json::from_str(request).map_err(|e| format!("bad task request: {e}"))?;
     let task = TaskContext {
@@ -283,6 +403,9 @@ fn drive<'js>(
                     Some(Err(error)) => return Ending::Failed(error.to_string()),
                     None => Value::new_undefined(ctx.clone()),
                 };
+                if let Some(label) = stopped_at(run) {
+                    return Ending::Stopped(label);
+                }
                 return match to_json(ctx, value) {
                     Ok(value) => Ending::Succeeded(value),
                     Err(error) => Ending::Failed(error),
@@ -295,6 +418,10 @@ fn drive<'js>(
             return Ending::Canceled;
         }
         if in_flight.load(Ordering::SeqCst) == 0 {
+            // Steps after a test's `until` step never settle.
+            if let Some(label) = stopped_at(run) {
+                return Ending::Stopped(label);
+            }
             return Ending::Failed(
                 "the workflow is waiting on a promise that no step will settle".to_string(),
             );
@@ -315,6 +442,13 @@ fn drive<'js>(
             return Ending::Failed(error.to_string());
         }
     }
+}
+
+fn stopped_at(run: &RunContext) -> Option<String> {
+    if !run.stopped.load(Ordering::SeqCst) {
+        return None;
+    }
+    run.test.as_ref().and_then(|plan| plan.until.clone())
 }
 
 /// Classify a rejected workflow promise by the error's `name`.

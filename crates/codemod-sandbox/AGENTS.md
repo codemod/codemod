@@ -11,7 +11,8 @@ integration, WASM/native builds, runtime module declarations, and sandbox packag
 - Keep native and WASM behavior aligned when changing sandbox execution, filesystem abstractions,
   ast-grep bindings, or runtime modules.
 - Capability changes must stay synchronized across Rust capability definitions, TypeScript exports,
-  and `packages/jssg-types` declarations when applicable.
+  and the type declarations in `crates/cli/npm/types` (shipped in the `codemod` npm package)
+  when applicable.
 - Preserve sandbox isolation. Be explicit about filesystem, network, process, and runtime-module
   access.
 - Do not print directly to stdout/stderr from sandbox internals or package glue. Return output,

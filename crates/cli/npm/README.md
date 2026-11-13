@@ -183,6 +183,7 @@ nodes:
 |---------|-------------|
 | `npx codemod workflow run -w <path>` | Run a codemod workflow on your codebase |
 | `npx codemod workflow validate -w <path>` | Validate workflow syntax and structure |
+| `npx codemod workflow test [tests]` | Run the whole workflow on test fixtures and compare the results |
 | `npx codemod workflow resume -i <id>` | Resume a paused workflow |
 | `npx codemod workflow status -i <id>` | Show workflow execution status |
 | `npx codemod workflow list` | List recent workflow runs |
@@ -205,6 +206,61 @@ nodes:
 | `npx codemod cache prune` | Remove old or unused cache entries |
 
 **For detailed options and examples, see the [full CLI reference →](https://docs.codemod.com/community/cli)**
+
+## TypeScript types
+
+A codemod package can depend on `codemod` directly: its scripts and `npx codemod` then run that
+CLI, pinned to your `package.json`, and editors get the matching types for writing codemods and
+workflows, the `codemod:*` modules (`codemod:workflow`, `codemod:ast-grep`, `codemod:metrics`, ...)
+and the per-language node types:
+
+```bash
+npm install codemod
+```
+
+```json
+{ "compilerOptions": { "types": ["codemod"] } }
+```
+
+Type-only imports: `codemod/main` (`SgRoot`, `SgNode`, ...) and `codemod/langs/<language>`.
+`@codemod.com/jssg-types` mirrors the same declarations for existing projects.
+
+## Testing workflows
+
+`codemod/testing` runs workflows from your test runner (`node:test`, Vitest, Bun) on a copy of a
+fixture or on inline files, and compares the files they leave. TypeScript workflows run in the test
+process, so breakpoints, coverage and module mocks work in their code:
+
+```ts
+import { test } from "node:test";
+import { assertTree, fixtures, runWorkflow } from "codemod/testing";
+
+for (const fixture of fixtures("tests")) {
+  test(fixture.name, async () => {
+    const run = await runWorkflow("workflow.ts", { target: fixture.input, params: fixture.params });
+    assertTree(run, fixture.expected);
+  });
+}
+```
+
+`until` stops after one step and `given` replaces a step's result, to test steps on their own. With
+Vitest, add the `codemod/vite` plugin. See
+[Testing workflows](https://docs.codemod.com/community/workflows/testing).
+
+## Running workflows from Node.js
+
+`codemod/host` runs a TypeScript workflow inside your Node.js or Bun process, for scripts and tools
+built on codemods:
+
+```ts
+import { runWorkflow } from "codemod/host";
+
+const report = await runWorkflow("./my-codemod", { target: "./src" });
+```
+
+Capabilities are not enforced on this host: run packages you did not write with the CLI, which runs
+them sandboxed. See
+[Run workflows from Node.js](https://docs.codemod.com/community/workflows/node).
 
 ## Ecosystem & Platform
 

@@ -114,6 +114,13 @@ pub struct StepRecord {
     pub state: Option<BTreeMap<String, Value>>,
     #[serde(default)]
     pub error: Option<String>,
+    /// When a successful step finished, in milliseconds since the epoch.
+    /// The workflow body's clock advances to it, also on replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+    /// The step did not run: a test gave its result.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub given: bool,
 }
 
 /// Storage for runs and their step history.
@@ -380,6 +387,8 @@ mod tests {
             result: Some(Value::from(position)),
             state: None,
             error: None,
+            finished_at: None,
+            given: false,
         }
     }
 

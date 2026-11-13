@@ -5,11 +5,14 @@
   "packageManager": "{package_manager}",
   "type": "module",
   "scripts": {
-    "test": "{codemod_command} jssg test -l typescript ./scripts/codemod.ts",
+    "test": "codemod jssg test -l typescript ./scripts/codemod.ts",
+    "validate": "codemod workflow validate -w workflow.ts",
     "check-types": "tsc --noEmit"
   },
+  "dependencies": {
+    "codemod": "^{cli_version}"
+  },
   "devDependencies": {
-    "@codemod.com/jssg-types": "latest",
     "typescript": "latest"
   }
 }

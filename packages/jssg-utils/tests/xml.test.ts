@@ -1,6 +1,6 @@
 import { ok as assert } from "assert";
 import { parse } from "codemod:ast-grep";
-import type Xml from "@codemod.com/jssg-types/langs/xml";
+import type Xml from "codemod/langs/xml";
 import {
   findElementByKind,
   findElementByTag,
