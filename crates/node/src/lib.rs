@@ -3,7 +3,7 @@
 //! Node runs the workflow body, function steps and `forEachFile` callbacks
 //! itself, with the shared orchestrator; this addon gives it what the engine
 //! owns ([`run::Run`]: the run store, host tasks, file selection and commits)
-//! and the `codemod:ast-grep` API ([`ast`]).
+//! and the `codemod/ast-grep` API ([`ast`]).
 //!
 //! There is no capability sandbox here: code in Node has whatever Node gives
 //! it. Host tasks (`jssg`, `codemod`, ...) still run in the engine, sandboxed

@@ -32,7 +32,7 @@ pub struct Selector {
     pub language: Option<String>,
     pub containing: Option<String>,
     /// Files each worker keeps in flight; more than one only helps callbacks
-    /// that wait (network, `codemod:llm`).
+    /// that wait (network, `codemod/llm`).
     pub concurrency: Option<usize>,
 }
 

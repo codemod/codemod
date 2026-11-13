@@ -12,7 +12,7 @@ The `shard` task splits a large migration into groups of files ("shards"), for e
 2. The workflow runs the transform for every shard, limited to that shard's files.
 
 ```ts workflow.ts
-import { step, shard, jssg, approval, branch, commit, pullRequest, getState, setState } from "codemod:workflow";
+import { step, shard, jssg, approval, branch, commit, pullRequest, getState, setState } from "codemod/workflow";
 
 export default async function main() {
   const shards = await step("Build shards", shard({
@@ -116,8 +116,8 @@ shard({
 ```
 
 ```ts scripts/shard-by-deps.ts
-import { parse } from "codemod:ast-grep";
-import type { ShardInput, ShardResult } from "codemod:workflow";
+import { parse } from "codemod/ast-grep";
+import type { ShardInput, ShardResult } from "codemod/workflow";
 
 export default function shard(input: ShardInput): ShardResult[] {
   const { files, targetDir, previousShards } = input;

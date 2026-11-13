@@ -22,7 +22,7 @@ declare module "codemod:metrics" {
    *
    * @example
    * ```ts
-   * import { useMetricAtom } from "codemod:metrics";
+   * import { useMetricAtom } from "codemod/metrics";
    *
    * const propUsage = useMetricAtom("prop-usage");
    *
@@ -97,7 +97,7 @@ declare module "codemod:metrics" {
    *
    * @example
    * ```ts
-   * import { useMetricAtom } from "codemod:metrics";
+   * import { useMetricAtom } from "codemod/metrics";
    *
    * const propUsage = useMetricAtom("prop-usage");
    * const componentCount = useMetricAtom("component-count");

@@ -15,7 +15,7 @@
 //!
 //! The rest of the module, the workflow body, must stay deterministic: it
 //! runs again on every resume. So imports are sorted into classes
-//! ([`ModuleClass`]). Pure modules (`path`, `url`, `codemod:ast-grep`, ...)
+//! ([`ModuleClass`]). Pure modules (`path`, `url`, `codemod/ast-grep`, ...)
 //! work anywhere; modules that touch files, the network, processes or the
 //! clock only inside a step or callback. Package and relative imports the
 //! body uses are listed in [`Built::body_imports`] for [`check_imports`],
@@ -24,6 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use codemod_sandbox::codemod_modules::codemod_module;
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{
     Argument, Declaration, Expression, ImportDeclarationSpecifier, Statement, VariableDeclaration,
@@ -36,8 +37,15 @@ use oxc::span::{GetSpan, SourceType, Span};
 use oxc::transformer::{TransformOptions, Transformer};
 use sha2::{Digest, Sha256};
 
-/// Specifier of the authoring module.
-pub const FLOW_MODULE: &str = "codemod:workflow";
+/// Specifier of the authoring module. `codemod/workflow`, the older
+/// spelling, names it too; see [`is_flow_module`].
+pub const FLOW_MODULE: &str = "codemod/workflow";
+
+/// Whether a specifier names the authoring module (`codemod/workflow`, or
+/// the older `codemod/workflow`).
+pub fn is_flow_module(specifier: &str) -> bool {
+    codemod_module(specifier) == Some("workflow")
+}
 
 /// Prelude appended to every extracted callback module.
 const CALLBACK_PRELUDE: &str = include_str!("js/callback_prelude.js");
@@ -72,7 +80,7 @@ pub struct BodyImport {
 /// Where code from a module may run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModuleClass {
-    /// `codemod:workflow` itself.
+    /// `codemod/workflow` itself.
     Workflow,
     /// Deterministic: usable in the workflow body.
     Pure,
@@ -98,16 +106,26 @@ const PURE_BUILTINS: &[&str] = &[
 
 /// The class of an import specifier, without looking at the file system.
 pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
-    if specifier == FLOW_MODULE {
-        return Ok(ModuleClass::Workflow);
+    match codemod_module(specifier) {
+        Some("workflow") => return Ok(ModuleClass::Workflow),
+        Some("metrics" | "ast-grep") => return Ok(ModuleClass::Pure),
+        Some(_) => return Ok(ModuleClass::StepsOnly),
+        None => {}
     }
-    if let Some(name) = specifier.strip_prefix("codemod:") {
-        return match name {
-            "metrics" => Ok(ModuleClass::Pure),
-            _ if name == "ast-grep" || name.starts_with("ast-grep/") => Ok(ModuleClass::Pure),
-            "llm" | "runtime" => Ok(ModuleClass::StepsOnly),
-            _ => Err(format!("unknown module '{specifier}'")),
-        };
+    // Type-only language maps: `codemod/ast-grep/langs/java`.
+    if ["codemod/ast-grep/", "codemod/ast-grep/"]
+        .iter()
+        .any(|prefix| specifier.starts_with(prefix))
+    {
+        return Ok(ModuleClass::Pure);
+    }
+    if specifier.starts_with("codemod:") {
+        return Err(format!("unknown module '{specifier}'"));
+    }
+    if let Some(name) = specifier.strip_prefix("codemod/") {
+        return Err(format!(
+            "'{specifier}' is for Node.js, not for workflows: workflows import codemod/workflow, codemod/ast-grep, codemod/metrics, codemod/runtime and codemod/llm ({name} is not one of them)"
+        ));
     }
     let bare = specifier.strip_prefix("node:").unwrap_or(specifier);
     if PURE_BUILTINS.contains(&bare) {
@@ -210,7 +228,7 @@ impl Isolated {
     }
 }
 
-/// `codemod:workflow` functions that work inside an isolate: the JSSG state API.
+/// `codemod/workflow` functions that work inside an isolate: the JSSG state API.
 const ISOLATE_STATE_API: &[&str] = &["getState", "setState", "unsetState", "acquireLock"];
 
 pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
@@ -280,7 +298,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                     if class == ModuleClass::Workflow && imported.as_deref() == Some("parse") {
                         return Err(analysis.error(
                             specifier.span().start,
-                            "parse comes from \"codemod:ast-grep\" now: import { parse } from \"codemod:ast-grep\"".to_string(),
+                            "parse comes from \"codemod/ast-grep\" now: import { parse } from \"codemod/ast-grep\"".to_string(),
                         ));
                     }
                     analysis.imports.insert(
@@ -363,7 +381,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                     continue;
                 };
                 let workflow_function = analysis.imports.get(&symbol).and_then(|import| {
-                    (import.source == FLOW_MODULE)
+                    is_flow_module(&import.source)
                         .then(|| import.imported.clone())
                         .flatten()
                 });
@@ -458,7 +476,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
         callbacks.insert(id, module);
     }
 
-    // Imports the body keeps: codemod:workflow, and others the body itself
+    // Imports the body keeps: codemod/workflow, and others the body itself
     // uses. Those that only extracted code uses are left to its modules.
     let in_extracted = |at: Span| {
         outermost
@@ -673,7 +691,7 @@ impl Analysis<'_> {
     ) -> Result<(), BuildError> {
         let name = self.name(symbol);
         if let Some(import) = self.imports.get(&symbol) {
-            if import.source == FLOW_MODULE
+            if is_flow_module(&import.source)
                 && !import
                     .imported
                     .as_deref()
@@ -908,7 +926,7 @@ fn error_at(file: &str, source: &str, offset: u32, message: String) -> BuildErro
 /// What a workflow module does, read without running it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Inspection {
-    /// `codemod:workflow` functions the module calls, by imported name, in
+    /// `codemod/workflow` functions the module calls, by imported name, in
     /// source order (`step`, `forEachFile`, `jssg`, `installSkill`, ...).
     pub calls: Vec<String>,
     /// `installSkill({ package, path })` calls whose options are literals.
@@ -945,7 +963,7 @@ pub fn inspect(file: &str, source: &str) -> Result<Inspection, BuildError> {
     let mut imported: HashMap<SymbolId, String> = HashMap::new();
     for statement in &program.body {
         if let Statement::ImportDeclaration(import) = statement {
-            if import.source.value != FLOW_MODULE {
+            if !is_flow_module(&import.source.value) {
                 continue;
             }
             for specifier in import.specifiers.iter().flatten() {

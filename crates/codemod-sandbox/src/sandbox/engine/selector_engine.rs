@@ -1,6 +1,6 @@
 use super::codemod_lang::CodemodLang;
 use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
-use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
+use super::quickjs_adapters::{CodemodModuleResolver, QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::AstGrepModule;
 use crate::llm::{LlmModule, LlmRuntimeContext};
 use crate::metrics::{MetricsContext, MetricsModule};
@@ -226,25 +226,20 @@ where
         module_builder.builder.build();
 
     // Add AstGrepModule
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
+    built_in_loader = built_in_loader.with_module("codemod/ast-grep", AstGrepModule);
 
     // Add WorkflowGlobalModule (step outputs)
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
+    built_in_loader = built_in_loader.with_module("codemod/workflow", WorkflowGlobalModule);
 
     // Add MetricsModule (metrics tracking)
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+    built_in_loader = built_in_loader.with_module("codemod/metrics", MetricsModule);
 
     // Selector extraction evaluates the codemod's module graph, so it must
     // expose the same runtime imports as normal codemod execution.
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+    built_in_loader = built_in_loader.with_module("codemod/runtime", RuntimeModule);
 
     if llm_capability_enabled {
-        built_in_resolver = built_in_resolver.add_name("codemod:llm");
-        built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+        built_in_loader = built_in_loader.with_module("codemod/llm", LlmModule);
     }
 
     // Register the curated `fs` / `fs/promises` modules when applicable.
@@ -258,7 +253,11 @@ where
     // Combine resolvers and loaders
     runtime
         .set_loader(
-            (built_in_resolver, module_resolver),
+            (
+                CodemodModuleResolver::offering(llm_capability_enabled),
+                built_in_resolver,
+                module_resolver,
+            ),
             (built_in_loader, module_loader),
         )
         .await;

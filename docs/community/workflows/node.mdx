@@ -63,15 +63,13 @@ The first argument is a workflow file or a package directory. In a package direc
 
 ## Import workflows yourself
 
-Workflows import `codemod:workflow`, `codemod:ast-grep` and other `codemod:*` modules. `codemod/host` and `codemod/testing` teach Node.js and Bun to resolve them. To import a workflow module before any of those is loaded, register the resolver first:
+Workflows import `codemod/workflow`, `codemod/ast-grep`, `codemod/metrics`, `codemod/runtime` and `codemod/llm`. These are exports of the `codemod` package, so Node.js, Bun, Vite and Vitest resolve them like any other import, once the package is installed:
 
 ```ts
-import "codemod/register";
-
 const workflow = await import("./workflow.ts");
 ```
 
-Vite and Vitest resolve modules themselves. Add the `codemod/vite` plugin to their config:
+Code written for older CLI versions imports the same modules as `codemod:workflow`, `codemod:ast-grep`, and so on. The CLI still accepts that spelling. Node.js and Bun need the resolver for it: `codemod/host` and `codemod/testing` register it themselves, and anywhere else, import `codemod/register` first. With Vite and Vitest, add the `codemod/vite` plugin instead:
 
 ```ts vitest.config.ts
 import { defineConfig } from "vitest/config";
@@ -97,7 +95,7 @@ On the Node.js host:
 
 - **Capabilities** are not enforced for the workflow's own code. They still apply to `jssg` transforms.
 - **The workflow body's clock and randomness are real.** The CLI makes `Date.now()` and `Math.random()` in the body give the same answers when a run resumes; Node.js does not. Read them inside steps.
-- **`codemod:llm`** is not available yet.
+- **`codemod/llm`** is not available yet.
 - **`codemod(...)` steps** run local packages only; run workflows that use registry packages with the CLI.
 - **`definition()` and `references()`** find nothing in roots that `forEachFile` callbacks parse, as in the CLI.
 - **YAML workflows** do not run here. Run them with the CLI, or convert them with `codemod workflow upgrade`.

@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { addonPath } from "../runtime/addon.mjs";
 import { assertTree, fixtures, runWorkflow as run } from "../testing/index.mjs";
@@ -24,17 +24,27 @@ const HOSTS = {
   quickjs: { skip: binary ? false : "no codemod binary; run cargo build -p codemod" },
 };
 
+const PACKAGE = fileURLToPath(new URL("..", import.meta.url));
+
+/**
+ * A directory with these files. One holding a workflow also gets this
+ * package installed as `codemod`, as a codemod package's own install would.
+ */
 function scratch(files) {
   const dir = mkdtempSync(join(tmpdir(), "codemod-testing-"));
   for (const [path, text] of Object.entries(files)) {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     writeFileSync(join(dir, path), text);
   }
+  if ("workflow.ts" in files) {
+    mkdirSync(join(dir, "node_modules"), { recursive: true });
+    symlinkSync(PACKAGE, join(dir, "node_modules", "codemod"), "dir");
+  }
   return dir;
 }
 
 const WORKFLOW = `
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main({ params }: { params: { to?: string } }) {
   const found = await step("Find", forEachFile("**/*.ts", (file) => ({ path: file.path })));
   console.log("found", found.outputs.length);
@@ -211,7 +221,7 @@ for (const host of Object.keys(HOSTS)) {
       const path = join(
         scratch({
           "workflow.ts": `
-  import { step } from "codemod:workflow";
+  import { step } from "codemod/workflow";
   export default async function main() {
     await step("Boom", () => { throw new Error("kaput"); });
   }
@@ -253,19 +263,72 @@ for (const host of Object.keys(HOSTS)) {
       assertTree(run, fixture.expected);
     }
   });
+
+  test(
+    `${host}: state set in callbacks reaches later steps and the body`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          "workflow.ts": `
+import { step, forEachFile, getState, setState, unsetState } from "codemod/workflow";
+export default async function main() {
+  setState("seen", []);
+  setState("drop", true);
+  await step("Collect", forEachFile("**/*.ts", (file) => {
+    setState("last", file.path);
+    setState("scratch", 1, false);
+    unsetState("drop");
+  }));
+  const fromStep = await step("Read", () => ({ last: getState("last") ?? null, scratch: getState("scratch") ?? null }));
+  return { last: getState("last"), drop: getState("drop") ?? null, scratch: getState("scratch") ?? null, fromStep };
 }
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
+      assert.equal(result.status, "succeeded", result.error);
+      assert.deepEqual(result.output, {
+        last: "a.ts",
+        drop: null,
+        scratch: null,
+        fromStep: { last: "a.ts", scratch: null },
+      });
+    },
+  );
 
-// ------------------------------------------------------------ node host ---
-
-test(
-  "node: callbacks parse with codemod:ast-grep, and their console output is logged by step",
-  HOSTS.node,
-  async () => {
+  test(`${host}: the older codemod: spelling imports the same modules`, HOSTS[host], async () => {
     const path = join(
       scratch({
         "workflow.ts": `
 import { step, forEachFile } from "codemod:workflow";
 import { parse } from "codemod:ast-grep";
+export default async function main() {
+  const found = await step(forEachFile("**/*.ts", (file) => parse(file).root().findAll("const $A = $B").length));
+  return found.outputs;
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await runWorkflow(path, { target: { "a.ts": "const a = 1;\n" } });
+    assert.equal(result.status, "succeeded", result.error);
+    assert.deepEqual(result.output, [1]);
+  });
+}
+
+// ------------------------------------------------------------ node host ---
+
+test(
+  "node: callbacks parse with codemod/ast-grep, and their console output is logged by step",
+  HOSTS.node,
+  async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
 export default async function main() {
   const found = await step("Consts", forEachFile("**/*.ts", (file) => {
     const names = parse(file).root().findAll("const $A = $B").map((n) => n.getMatch("A")!.text());

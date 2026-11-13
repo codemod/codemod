@@ -1,5 +1,6 @@
 mod ast_grep;
 pub mod capabilities;
+pub mod codemod_modules;
 pub mod llm;
 pub mod metrics;
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]

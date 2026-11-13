@@ -1,4 +1,4 @@
-// The `codemod:workflow` module of the engine's QuickJS context: the shared
+// The `codemod/workflow` module of the engine's QuickJS context: the shared
 // orchestrator (`orchestrator.js`) bound to the host the engine installs as
 // `globalThis.__workflowHost` before this module evaluates:
 //   history(): string                    steps recorded by earlier runs, as JSON

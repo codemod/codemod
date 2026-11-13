@@ -1,9 +1,9 @@
-// Type tests for the workflow.ts API in `codemod:workflow`. Checked with
+// Type tests for the workflow.ts API in `codemod/workflow`. Checked with
 // `pnpm --filter codemod typecheck`; nothing here runs.
 
-import type TS from "codemod:ast-grep/langs/typescript";
-import { parse } from "codemod:ast-grep";
-import { useMetricAtom } from "codemod:metrics";
+import type TS from "codemod/ast-grep/langs/typescript";
+import { parse } from "codemod/ast-grep";
+import { useMetricAtom } from "codemod/metrics";
 import {
   agent,
   approval,
@@ -22,7 +22,7 @@ import {
   step,
   type ShardResult,
   type WorkflowContext,
-} from "codemod:workflow";
+} from "codemod/workflow";
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -183,4 +183,4 @@ export default async function main({
   return { files: found.outputs.length };
 }
 
-import type { Frozen, JsonValue } from "codemod:workflow";
+import type { Frozen, JsonValue } from "codemod/workflow";

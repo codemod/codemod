@@ -144,7 +144,9 @@ node scripts/compat-sweep.mjs --old package/codemod --new target/release/codemod
   --corpus ~/src/codemods --upgrade --out .compat
 ```
 
-`--corpus` is any directory of codemod packages with `tests/` fixtures (repeat it for several). For every fixture, the sweep runs the package's workflow with both CLIs and compares the files left, the run status, the metrics and the transforms' warnings, and checks each against the fixture's `expected/` files. `--upgrade` also converts each package with `codemod workflow upgrade` and checks the `workflow.ts` gives the same result as the `workflow.yaml`. Read `.compat/summary.md` for the differences; each run's output is under `.compat/runs/`.
+`--corpus` is any directory of codemod packages with `tests/` fixtures (repeat it for several). For every fixture, the sweep runs the package's workflow with both CLIs and compares the files left, the run status, the metrics and the transforms' warnings, and checks each against the fixture's `expected/` files. `--upgrade` also converts each package with `codemod workflow upgrade` and checks the `workflow.ts` gives the same result as the `workflow.yaml`. Read `.compat/summary.md` for the differences; each run's output is under `.compat/runs/`. `--filter <text>` and `--exclude <text>` pick fixtures by id, and `--retry .compat/report.json` re-runs only the ones that differed (write it to another `--out`).
+
+Packages need their dependencies installed (`pnpm install` in the package) for fixtures that import them; without them both CLIs fail, and the released one may hang until `--timeout`.
 
 ## Project Structure
 

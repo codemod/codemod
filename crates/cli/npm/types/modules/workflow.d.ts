@@ -29,7 +29,7 @@ declare module "codemod:workflow" {
    *
    * @example
    * ```typescript
-   * import { setStepOutput } from 'codemod:workflow';
+   * import { setStepOutput } from 'codemod/workflow';
    *
    * // In a step with id="build"
    * setStepOutput('build', 'version', '1.2.3');
@@ -55,7 +55,7 @@ declare module "codemod:workflow" {
    *
    * @example
    * ```typescript
-   * import { getStepOutput } from 'codemod:workflow';
+   * import { getStepOutput } from 'codemod/workflow';
    *
    * // Get output from a previous step
    * const version = getStepOutput('build', 'version');
@@ -89,7 +89,7 @@ declare module "codemod:workflow" {
    *
    * @example
    * ```typescript
-   * import { getOrSetStepOutput, setStepOutput } from 'codemod:workflow';
+   * import { getOrSetStepOutput, setStepOutput } from 'codemod/workflow';
    *
    * // Multiple files being processed in parallel
    * async function transform(root: SgRoot<JS>): Promise<string | null> {
@@ -129,7 +129,7 @@ declare module "codemod:workflow" {
    *
    * @example
    * ```typescript
-   * import { setState } from 'codemod:workflow';
+   * import { setState } from 'codemod/workflow';
    *
    * setState("migratedFiles", ["src/App.tsx", "src/utils.ts"]);
    * setState("stats", { totalFiles: 42, modified: 5 });
@@ -146,7 +146,7 @@ declare module "codemod:workflow" {
    *
    * @example
    * ```typescript
-   * import { getState } from 'codemod:workflow';
+   * import { getState } from 'codemod/workflow';
    *
    * const files = getState<string[]>("migratedFiles");
    * if (files) {
@@ -166,7 +166,7 @@ declare module "codemod:workflow" {
    *
    * @example
    * ```typescript
-   * import { unsetState } from 'codemod:workflow';
+   * import { unsetState } from 'codemod/workflow';
    *
    * unsetState("tempData");
    * ```
@@ -184,7 +184,7 @@ declare module "codemod:workflow" {
    *
    * @example
    * ```typescript
-   * import { acquireLock, getState, setState } from 'codemod:workflow';
+   * import { acquireLock, getState, setState } from 'codemod/workflow';
    *
    * // Safely accumulate results from parallel file processing
    * const release = acquireLock("results");
@@ -384,7 +384,7 @@ declare module "codemod:workflow" {
     containing?: string;
     /**
      * Files each worker keeps in flight (default 1). Raise it for async
-     * callbacks that wait on the network or `codemod:llm`.
+     * callbacks that wait on the network or `codemod/llm`.
      */
     concurrency?: number;
   }
@@ -441,7 +441,7 @@ declare module "codemod:workflow" {
     changes: FileChanges;
     /** Files whose callback threw. */
     failures: FileFailure[];
-    /** What callbacks recorded with `codemod:metrics`, by metric name. */
+    /** What callbacks recorded with `codemod/metrics`, by metric name. */
     metrics: Record<string, MetricEntry[]>;
   }
 
@@ -451,12 +451,12 @@ declare module "codemod:workflow" {
    *
    * Write the callback inline. Variables from outside it arrive as frozen
    * copies and must be JSON; assigning to them is a build error. Imports
-   * (`codemod:ast-grep`, `codemod:metrics`, packages, files next to the
+   * (`codemod/ast-grep`, `codemod/metrics`, packages, files next to the
    * workflow) are available inside.
    *
    * @example
    * ```ts
-   * import { parse } from "codemod:ast-grep";
+   * import { parse } from "codemod/ast-grep";
    *
    * const usages = await step(forEachFile({ language: "typescript", containing: "moment" }, (file) => {
    *   const found = parse(file).root().findAll({ rule: { pattern: 'import $X from "moment"' } });

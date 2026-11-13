@@ -1,7 +1,7 @@
-// `codemod/vite`: a Vite (and Vitest) plugin that resolves `codemod:workflow`,
-// `codemod:ast-grep` and the other `codemod:*` modules to this package's
-// Node.js implementations, so tests can import workflows through Vitest,
-// with its transforms and module mocks.
+// `codemod/vite`: a Vite (and Vitest) plugin for code written with the older
+// `codemod:workflow`, `codemod:ast-grep`, ... spelling: it resolves those to
+// this package's `codemod/*` exports. Code that imports `codemod/*` needs no
+// plugin.
 //
 //   // vitest.config.ts
 //   import { defineConfig } from "vitest/config";

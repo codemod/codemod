@@ -1,4 +1,4 @@
-//! The `codemod:ast-grep` API for Node: `SgRoot` and `SgNode`, with the same
+//! The `codemod/ast-grep` API for Node: `SgRoot` and `SgNode`, with the same
 //! methods, matchers and languages as the engine's QuickJS binding
 //! (`codemod-sandbox`'s `sg_node.rs`).
 //!

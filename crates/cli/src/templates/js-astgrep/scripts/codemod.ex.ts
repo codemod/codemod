@@ -1,5 +1,5 @@
-import type { Codemod } from "codemod:ast-grep";
-import type Elixir from "codemod:ast-grep/langs/elixir";
+import type { Codemod } from "codemod/ast-grep";
+import type Elixir from "codemod/ast-grep/langs/elixir";
 
 const codemod: Codemod<Elixir> = async (root) => {
   const rootNode = root.root();

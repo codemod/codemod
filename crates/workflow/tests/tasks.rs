@@ -19,7 +19,7 @@ fn shell_steps_get_the_state_contract_and_write_state() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { step, shell, getState, setState } from "codemod:workflow";
+import { step, shell, getState, setState } from "codemod/workflow";
 export default async function main() {
   setState("greeting", "hi");
   const run = await step(shell(
@@ -53,7 +53,7 @@ fn a_failing_shell_command_fails_the_step() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { step, shell } from "codemod:workflow";
+import { step, shell } from "codemod/workflow";
 export default async function main() { await step("Fail", shell("echo nope && exit 3")); }
 "#,
         Value::Null,
@@ -67,7 +67,7 @@ fn shell_steps_are_skipped_in_a_dry_run() {
     let h = Harness::new();
     let report = h.dry_run(
         r#"
-import { step, shell } from "codemod:workflow";
+import { step, shell } from "codemod/workflow";
 export default async function main() { return step(shell("touch should-not-exist")); }
 "#,
     );
@@ -76,7 +76,7 @@ export default async function main() { return step(shell("touch should-not-exist
 }
 
 const NEEDS_APPROVAL: &str = r#"
-import { step, approval, forEachFile } from "codemod:workflow";
+import { step, approval, forEachFile } from "codemod/workflow";
 export default async function main() {
   await step(forEachFile("*.txt", (file) => { file.write(file.text + "1"); }));
   await step(approval("Ship it?"));
@@ -125,7 +125,7 @@ fn jssg_steps_apply_changes_renames_and_state() {
     h.bundle_file(
         "scripts/transform.ts",
         r#"
-import { setState } from "codemod:workflow";
+import { setState } from "codemod/workflow";
 export default function transform(root: any, options: any) {
   const text = root.root().text();
   if (!text.includes("x")) return null;
@@ -137,7 +137,7 @@ export default function transform(root: any, options: any) {
     );
     let report = h.start(
         r#"
-import { step, jssg, getState } from "codemod:workflow";
+import { step, jssg, getState } from "codemod/workflow";
 export default async function main() {
   const result = await step(jssg("./scripts/transform.ts", { include: "src/**/*.ts" }));
   return { result, touched: getState("touched") };
@@ -169,7 +169,7 @@ fn jssg_transform_logs_become_step_logs_grouped_by_file() {
     h.bundle_file(
         "scripts/transform.ts",
         r#"
-import { warn, setCurrentUnit } from "codemod:runtime";
+import { warn, setCurrentUnit } from "codemod/runtime";
 export default function transform(root: any) {
   const name = root.relativeFilename();
   console.log(`visiting ${name}`);
@@ -181,7 +181,7 @@ export default function transform(root: any) {
     );
     h.start(
         r#"
-import { step, jssg } from "codemod:workflow";
+import { step, jssg } from "codemod/workflow";
 export default async function main() {
   await step("Scan", jssg("./scripts/transform.ts", { include: "src/**/*.ts" }));
 }
@@ -234,7 +234,7 @@ export default function transform(root: any) {
     let workflow = |options: &str| {
         format!(
             r#"
-import {{ step, jssg }} from "codemod:workflow";
+import {{ step, jssg }} from "codemod/workflow";
 export default async function main() {{
   await step(jssg("./scripts/transform.ts", {{ include: "src/**/*.ts"{options} }}));
 }}
@@ -268,7 +268,7 @@ fn ast_grep_steps_apply_rule_fixes() {
     );
     let report = h.start(
         r#"
-import { step, astGrep } from "codemod:workflow";
+import { step, astGrep } from "codemod/workflow";
 export default async function main() { return step(astGrep("rules.yaml")); }
 "#,
         Value::Null,
@@ -288,7 +288,7 @@ fn shard_steps_group_files_and_feed_later_steps() {
     }
     let report = h.start(
         r#"
-import { step, shard } from "codemod:workflow";
+import { step, shard } from "codemod/workflow";
 export default async function main() {
   const shards = await step(shard({
     method: { type: "directory", maxFilesPerShard: 10 },
@@ -312,7 +312,7 @@ fn codemod_steps_run_a_local_package_and_detect_cycles() {
     h.bundle_file(
         "child/workflow.ts",
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main({ params }: any) {
   await step(forEachFile("*.txt", (file) => { file.write(file.text + "!"); }));
   return params.from;
@@ -321,7 +321,7 @@ export default async function main({ params }: any) {
     );
     let report = h.start(
         r#"
-import { step, codemod } from "codemod:workflow";
+import { step, codemod } from "codemod/workflow";
 export default async function main() {
   return step(codemod("./child", { params: { from: "parent" } }));
 }
@@ -334,13 +334,13 @@ export default async function main() {
     h.bundle_file(
         "loop/workflow.ts",
         r#"
-import { step, codemod } from "codemod:workflow";
+import { step, codemod } from "codemod/workflow";
 export default async function main() { return step(codemod("./")); }
 "#,
     );
     let report = h.start(
         r#"
-import { step, codemod } from "codemod:workflow";
+import { step, codemod } from "codemod/workflow";
 export default async function main() { return step(codemod("./loop")); }
 "#,
         Value::Null,
@@ -354,7 +354,7 @@ fn git_steps_are_skipped_unless_managed_git_is_on() {
     let h = approving();
     let report = h.start(
         r#"
-import { step, branch, commit, pullRequest } from "codemod:workflow";
+import { step, branch, commit, pullRequest } from "codemod/workflow";
 export default async function main() {
   return [
     await step(branch("codemod/test")),
@@ -383,7 +383,7 @@ fn shard_steps_can_be_disabled() {
     );
     let report = h.start(
         r#"
-import { step, shard } from "codemod:workflow";
+import { step, shard } from "codemod/workflow";
 export default async function main() {
   return step(shard({ method: { type: "directory", maxFilesPerShard: 1 }, filePattern: "**/*" }));
 }

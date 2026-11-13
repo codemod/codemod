@@ -61,16 +61,13 @@ pub fn string_list(items: &[String]) -> String {
     }
 }
 
-/// An `if:` condition as a TypeScript boolean expression.
+/// An `if:` condition as a TypeScript boolean expression. It always runs
+/// through the YAML engine's evaluator: TypeScript differs from it on
+/// unbound variables, number and string comparisons and truthiness, and a
+/// condition that cannot be evaluated skips its step, as it always has.
 pub fn condition(text: &str) -> String {
     let trimmed = text.trim();
-    let inner = expr_re()
-        .captures(trimmed)
-        .filter(|c| c.get(0).map(|m| m.as_str()) == Some(trimmed))
-        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
-        .unwrap_or_else(|| trimmed.to_string());
-    translate_condition(&inner)
-        .unwrap_or_else(|| format!("evaluate(\"condition\", {}, {SCOPE})", js_string(trimmed)))
+    format!("evaluate(\"condition\", {}, {SCOPE})", js_string(trimmed))
 }
 
 fn escape_template(text: &str) -> String {
@@ -109,71 +106,6 @@ fn is_identifier(text: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Translate a small, safe subset of evalexpr: paths, string and number
-/// literals, booleans, comparison and logical operators, parentheses.
-/// Equality is loose (`==`) because evalexpr compares numeric strings as
-/// numbers.
-fn translate_condition(expression: &str) -> Option<String> {
-    let chars: Vec<char> = expression.chars().collect();
-    let mut out = String::new();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if c.is_whitespace() {
-            out.push(' ');
-            i += 1;
-        } else if c == '"' || c == '\'' {
-            let start = i;
-            i += 1;
-            while i < chars.len() && chars[i] != c {
-                if chars[i] == '\\' {
-                    i += 1;
-                }
-                i += 1;
-            }
-            if i >= chars.len() {
-                return None;
-            }
-            let literal: String = chars[start + 1..i].iter().collect();
-            out.push_str(&js_string(&literal));
-            i += 1;
-        } else if c.is_ascii_digit() {
-            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
-                out.push(chars[i]);
-                i += 1;
-            }
-        } else if c.is_ascii_alphabetic() || c == '_' {
-            let start = i;
-            while i < chars.len()
-                && (chars[i].is_ascii_alphanumeric() || chars[i] == '_' || chars[i] == '.')
-            {
-                i += 1;
-            }
-            let word: String = chars[start..i].iter().collect();
-            match word.as_str() {
-                "true" | "false" => out.push_str(&word),
-                _ => out.push_str(&path(&word)?),
-            }
-        } else {
-            let two: String = chars[i..(i + 2).min(chars.len())].iter().collect();
-            match two.as_str() {
-                "==" | "!=" | "&&" | "||" | "<=" | ">=" => {
-                    out.push_str(&two);
-                    i += 2;
-                }
-                _ => match c {
-                    '!' | '<' | '>' | '(' | ')' | '+' | '-' | '*' | '/' | '%' => {
-                        out.push(c);
-                        i += 1;
-                    }
-                    _ => return None,
-                },
-            }
-        }
-    }
-    Some(out.split_whitespace().collect::<Vec<_>>().join(" "))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,18 +132,12 @@ mod tests {
     }
 
     #[test]
-    fn conditions_translate_or_fall_back() {
+    fn conditions_run_through_the_evaluator() {
         assert_eq!(
             condition("${{ params.mode == \"fast\" }}"),
-            "params.mode == \"fast\""
+            "evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state: getState() })"
         );
-        assert_eq!(
-            condition("state.count > 0 && !params.skip"),
-            "getState<any>(\"count\") > 0 && !params.skip"
-        );
-        assert_eq!(condition("true"), "true");
-        assert!(condition("contains(params.list, \"a\")").starts_with("evaluate(\"condition\""));
-        assert!(condition("task.signature == \"x\"").starts_with("evaluate(\"condition\""));
+        assert!(condition("state.count > 0").starts_with("evaluate(\"condition\""));
     }
 
     #[test]

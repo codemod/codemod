@@ -10,7 +10,7 @@ use common::{output, Harness};
 use serde_json::{json, Value};
 
 const TRANSFORM: &str = r#"
-import { setState, getState, acquireLock } from "codemod:workflow";
+import { setState, getState, acquireLock } from "codemod/workflow";
 export default function transform(root: any, options: any) {
   const text = root.root().text();
   if (!text.includes("OLD")) return null;
@@ -70,6 +70,39 @@ nodes:
     let labels: Vec<&str> = report.steps.iter().map(|s| s.label.as_str()).collect();
     assert_eq!(labels, ["Apply", "Runs when two files changed"]);
     assert_eq!(report.steps[1].state.as_ref().unwrap()["done"], json!(true));
+}
+
+/// The YAML engine skipped a step whose condition could not be evaluated,
+/// such as one reading a parameter left unset (its default is null). Packages
+/// rely on that, so the condition must not be read as true.
+#[test]
+fn a_condition_that_cannot_be_evaluated_skips_its_step() {
+    let h = Harness::new();
+    h.write("a.txt", "a");
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+params:
+  schema:
+    customName:
+      type: string
+      default: null
+nodes:
+  - id: only
+    name: Only
+    steps:
+      - name: Needs a custom name
+        if: params.customName != "null" && params.customName != ""
+        run: exit 1
+      - name: Always
+        run: echo always
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let labels: Vec<&str> = report.steps.iter().map(|s| s.label.as_str()).collect();
+    assert_eq!(labels, ["Always"]);
 }
 
 #[test]

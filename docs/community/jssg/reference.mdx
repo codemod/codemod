@@ -26,21 +26,23 @@ JSSG is a JavaScript runtime similar to Node.js with most Node globals/modules (
 </Info>
 
 Built-in codemod modules:
-- `codemod:ast-grep` — parsing, traversal, pattern matching
-- `codemod:llm` — engine-owned text generation for codemods that declare the `fetch` capability
-- `codemod:workflow` — shared state and workflow integration
-- `codemod:metrics` — metrics collection across files
-- `codemod:runtime` — progress, warning, cancellation, and explicit failure hooks
+- `codemod/ast-grep` — parsing, traversal, pattern matching
+- `codemod/llm` — engine-owned text generation for codemods that declare the `fetch` capability
+- `codemod/workflow` — shared state and workflow integration
+- `codemod/metrics` — metrics collection across files
+- `codemod/runtime` — progress, warning, cancellation, and explicit failure hooks
 
-`codemod:llm` is also supported when you publish a codemod package, so published JSSG codemods can keep importing it without bundling errors.
+These are also exports of the `codemod` npm package, so editors and Node.js resolve them like any other import. Code written for older CLI versions imports them as `codemod:ast-grep`, `codemod:workflow`, and so on; that spelling still works and names the same modules. Code that imports `codemod/*` needs a CLI version that knows the new spelling, which `npx codemod` always fetches.
+
+`codemod/llm` is also supported when you publish a codemod package, so published JSSG codemods can keep importing it without bundling errors.
 
 ## Transform Function
 
 Every JSSG codemod exports a transform function:
 
 ```ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = (root, options) => {
   // Your transformation logic
@@ -51,7 +53,7 @@ export default codemod;
 ```
 
 <Info>
-Types vs values: <code>SgRoot</code> and <code>SgNode</code> are TypeScript types (not runtime values). At runtime, the <code>codemod:ast-grep</code> module provides functions such as <code>parse</code> and <code>parseAsync</code> (see [Parse Helpers](#parse-helpers)).
+Types vs values: <code>SgRoot</code> and <code>SgNode</code> are TypeScript types (not runtime values). At runtime, the <code>codemod/ast-grep</code> module provides functions such as <code>parse</code> and <code>parseAsync</code> (see [Parse Helpers](#parse-helpers)).
 </Info>
 **Return values:**
 - `string` - Modified code (if identical to input, treated as unmodified)
@@ -330,8 +332,8 @@ When a selector is provided, the engine pre‑computes matches; if none are foun
 Here's a complete example that replaces `console.*` calls with `logger.*`:
 
 ```ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = (root) => {
   const rootNode = root.root();
@@ -456,8 +458,8 @@ const imports = rootNode.findAll({
 Leverage TypeScript's type system:
 
 ```ts
-import type { SgNode } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { SgNode } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 // Type-safe node type checking
 function isReactComponent(
@@ -534,7 +536,7 @@ Use parse/parseAsync to sub‑parse embedded languages or strings extracted from
 <ParamField path="parseAsync(lang, src)" type="Promise<SgRoot">Async variant of parse.</ParamField>
 
 ```ts
-import { parse } from "codemod:ast-grep";
+import { parse } from "codemod/ast-grep";
 
 export default function main() {
   const root = parse("tsx", "<div>{fn(value)}</div>");
@@ -549,8 +551,8 @@ export default function main() {
 Use `root.rename()` to rename a file alongside content changes. This is useful for codemods that convert between file formats (e.g., `.less` → `.css`, `.js` → `.ts`, `.cjs` → `.mjs`).
 
 ```ts
-import type { Codemod } from "codemod:ast-grep";
-import type CSS from "codemod:ast-grep/langs/css";
+import type { Codemod } from "codemod/ast-grep";
+import type CSS from "codemod/ast-grep/langs/css";
 
 const codemod: Codemod<CSS> = async (root) => {
   root.rename(root.filename().replace('.less', '.css'));
@@ -582,16 +584,16 @@ Apply a transform function to a secondary file. Reads the file, parses it with t
 </ParamField>
 
 ```ts
-import { jssgTransform } from "codemod:ast-grep";
+import { jssgTransform } from "codemod/ast-grep";
 ```
 
 Use `jssgTransform()` when a change in one file requires a corresponding change in another file. For example, renaming a `.less` file to `.css` while also updating its import path in a `.tsx` file.
 
 ```ts
-import { jssgTransform } from "codemod:ast-grep";
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
-import type CSS from "codemod:ast-grep/langs/css";
+import { jssgTransform } from "codemod/ast-grep";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
+import type CSS from "codemod/ast-grep/langs/css";
 
 // Secondary transform: convert .less → .css
 const lessToCSS: Codemod<CSS> = async (root) => {
@@ -715,8 +717,8 @@ const hooks = rootNode.findAll(createReactHookMatcher());
 Here's a complete example that adds type annotations to Next.js page components:
 
 ```ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = (root) => {
   const rootNode = root.root();
@@ -816,8 +818,8 @@ export default codemod;
 
 ```ts
 // Range‑aware decision: skip very long calls
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = (root) => {
   const node = root.root().find({ rule: { pattern: "longCall($A, $B, $C, $D)" } });
@@ -884,8 +886,8 @@ export default codemod;
     <b>Solution:</b> Ensure proper type imports and annotations:
     <CodeBlock language="ts">
 {`// Always import these types
-import type { SgRoot, SgNode, Edit } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { SgRoot, SgNode, Edit } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 // Use proper type annotations
 function helper(node: SgNode<TSX>): Edit | null {
@@ -932,16 +934,16 @@ function helper(node: SgNode<TSX>): Edit | null {
 </AccordionGroup>
 
 <Info>
-Language kinds and editor IntelliSense are available via [codemod:ast-grep/langs/*](https://github.com/codemod/codemod/tree/main/crates/cli/npm/types/langs). E.g., `import { TSX } from "codemod:ast-grep/langs/tsx"`.
+Language kinds and editor IntelliSense are available via [codemod/ast-grep/langs/*](https://github.com/codemod/codemod/tree/main/crates/cli/npm/types/langs). E.g., `import { TSX } from "codemod/ast-grep/langs/tsx"`.
 </Info>
 
 ## LLM Generation
 
 ```ts
-import generate, { type LlmRequest, type LlmResponse } from "codemod:llm";
+import generate, { type LlmRequest, type LlmResponse } from "codemod/llm";
 ```
 
-Use `codemod:llm` when your codemod needs engine-provided text generation. The engine owns provider credentials, model selection, and usage accounting.
+Use `codemod/llm` when your codemod needs engine-provided text generation. The engine owns provider credentials, model selection, and usage accounting.
 
 ### Types
 
@@ -981,7 +983,7 @@ Use `codemod:llm` when your codemod needs engine-provided text generation. The e
 
 ### Notes
 
-- Your codemod must declare the `fetch` capability before `codemod:llm` can be used.
+- Your codemod must declare the `fetch` capability before `codemod/llm` can be used.
 - Provider credentials and model selection come from the engine, not from your codemod.
 - Provider-reported usage is recorded by the engine automatically.
 
@@ -995,7 +997,7 @@ import runtime, {
   failFile,
   failStep,
   isCanceled,
-} from "codemod:runtime";
+} from "codemod/runtime";
 ```
 
 ### Types
@@ -1034,4 +1036,4 @@ import runtime, {
 
 - Hooks are the preferred way to report semantic failures or progress to workflows and the TUI.
 - Uncaught exceptions still fail the task, but they provide less structured context.
-- `codemod:runtime` requires a runtime version that includes runtime-hook support.
+- `codemod/runtime` requires a runtime version that includes runtime-hook support.

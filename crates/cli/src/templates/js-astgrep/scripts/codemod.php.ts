@@ -1,5 +1,5 @@
-import type { Codemod } from "codemod:ast-grep";
-import type PHP from "codemod:ast-grep/langs/php";
+import type { Codemod } from "codemod/ast-grep";
+import type PHP from "codemod/ast-grep/langs/php";
 
 const codemod: Codemod<PHP> = async (root) => {
   const rootNode = root.root();

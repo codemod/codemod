@@ -39,7 +39,7 @@ impl StepIsolates {
         })
     }
 
-    /// Options for one worker. `console` output and `codemod:runtime`
+    /// Options for one worker. `console` output and `codemod/runtime`
     /// progress become the step's log lines.
     pub fn worker_options(
         &self,

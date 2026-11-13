@@ -1,5 +1,5 @@
 // The workflow orchestrator: step(), replay, test plans and the task
-// builders that make up `codemod:workflow`. It holds no host globals, so the
+// builders that make up `codemod/workflow`. It holds no host globals, so the
 // same code runs in the engine's QuickJS context and in Node.js or Bun.
 //
 // `createRuntime(host)` returns the module's exports for one run. The host:

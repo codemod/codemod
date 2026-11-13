@@ -617,7 +617,7 @@ declare module "codemod:ast-grep" {
    *
    * @example
    * ```ts
-   * import { jssgTransform } from "codemod:ast-grep";
+   * import { jssgTransform } from "codemod/ast-grep";
    *
    * // Apply a transform to a specific file and get the result
    * const result = await jssgTransform(myTransform, "./src/config.ts", "typescript");

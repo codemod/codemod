@@ -1,5 +1,5 @@
-import type { Codemod } from "codemod:ast-grep";
-import type Angular from "codemod:ast-grep/langs/angular";
+import type { Codemod } from "codemod/ast-grep";
+import type Angular from "codemod/ast-grep/langs/angular";
 
 const codemod: Codemod<Angular> = async (root) => {
   const rootNode = root.root();

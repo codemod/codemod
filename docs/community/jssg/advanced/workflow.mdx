@@ -17,8 +17,8 @@ You can access parameters via `options.params`.
 
 <CodeGroup>
 ```ts codemod.ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = async (root, options) => {
   // Access user-configured parameters
@@ -36,7 +36,7 @@ export default codemod;
 ```
 
 ```ts workflow.ts
-import { step, jssg } from "codemod:workflow";
+import { step, jssg } from "codemod/workflow";
 
 export default async function main({ params }: { params: Record<string, string> }) {
   // Run parameters (--param key=value) reach the transform as options.params.
@@ -70,8 +70,8 @@ Matrix values are particularly useful for:
 Access matrix values via `options.matrixValues`:
 
 ```ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";    
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";    
 
 const codemod: Codemod<TSX> = async (root, options) => {
   // Access matrix values passed from the workflow (if matrix strategy is used)
@@ -109,7 +109,7 @@ Prefer checking sharding against a project-relative path (e.g., `path.relative(p
 Pass values with the `matrix` option of the `jssg` task. A common pattern is one `jssg` step per shard:
 
 ```ts workflow.ts
-import { step, shard, jssg } from "codemod:workflow";
+import { step, shard, jssg } from "codemod/workflow";
 
 export default async function main() {
   const shards = await step(shard({ method: { type: "codeowner", maxFilesPerShard: 30 }, filePattern: "**/*.tsx" }));
@@ -129,12 +129,12 @@ export default async function main() {
 
 ## State Management
 
-The `codemod:workflow` module provides shared state that is accessible across all parallel file executions within a step, and can be persisted across workflow steps.
+The `codemod/workflow` module provides shared state that is accessible across all parallel file executions within a step, and can be persisted across workflow steps.
 
 ### API Reference
 
 ```ts
-import { setState, getState, unsetState, acquireLock } from "codemod:workflow";
+import { setState, getState, unsetState, acquireLock } from "codemod/workflow";
 ```
 
 <ParamField path="setState" type="<T>(name: string, value: T, persist?: boolean) => void">
@@ -162,9 +162,9 @@ Do not rebuild a repo-wide index or rewrite a full-repo `setState` payload on ev
 </Warning>
 
 ```ts codemod.ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
-import { setState, getState, acquireLock } from "codemod:workflow";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
+import { setState, getState, acquireLock } from "codemod/workflow";
 
 const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();
@@ -217,11 +217,11 @@ Simple `setState` calls that don't depend on the current value (e.g., `setState(
 
 ### Using State Across Workflow Steps
 
-State set with `persist: true` (the default) is saved when the `jssg` step finishes. Later steps see it: other transforms through `getState`, the workflow itself through `getState` from `codemod:workflow`, and shell commands through `CODEMOD_STATE`. The values are saved with the step, so they come back when a run is resumed.
+State set with `persist: true` (the default) is saved when the `jssg` step finishes. Later steps see it: other transforms through `getState`, the workflow itself through `getState` from `codemod/workflow`, and shell commands through `CODEMOD_STATE`. The values are saved with the step, so they come back when a run is resumed.
 
 <CodeGroup>
 ```ts workflow.ts
-import { step, jssg, shell, getState } from "codemod:workflow";
+import { step, jssg, shell, getState } from "codemod/workflow";
 
 export default async function main() {
   await step("Scan files", jssg("./scripts/scan.ts", { language: "tsx" }));
@@ -231,9 +231,9 @@ export default async function main() {
 ```
 
 ```ts scripts/scan.ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
-import { setState, getState, acquireLock } from "codemod:workflow";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
+import { setState, getState, acquireLock } from "codemod/workflow";
 
 const codemod: Codemod<TSX> = async (root) => {
   // Collect file paths that match criteria
@@ -252,7 +252,7 @@ export default codemod;
 ```
 
 ```ts scripts/process.ts
-import { getState } from "codemod:workflow";
+import { getState } from "codemod/workflow";
 
 // Runs in a later shell step through `codemod jssg exec`.
 const files = getState<string[]>("filesToProcess") ?? [];
@@ -271,10 +271,10 @@ setState("processingQueue", queue, false); // not persisted
 
 ## Runtime Hooks
 
-The `codemod:runtime` module lets a codemod send structured execution signals to the engine without relying on `console.log` parsing.
+The `codemod/runtime` module lets a codemod send structured execution signals to the engine without relying on `console.log` parsing.
 
 ```ts
-import runtime from "codemod:runtime";
+import runtime from "codemod/runtime";
 ```
 
 Use runtime hooks when you want to:
@@ -313,9 +313,9 @@ Use runtime hooks when you want to:
 ### Example: Report progress and fail explicitly
 
 ```ts codemod.ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
-import runtime from "codemod:runtime";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
+import runtime from "codemod/runtime";
 
 const codemod: Codemod<TSX> = async (root) => {
   const relativeFile = root.filename();
@@ -346,6 +346,6 @@ export default codemod;
 - The engine's idle timeout is only a backstop for silent hangs. Hooks are the preferred way to report semantic failures.
 
 <Warning>
-`codemod:runtime` requires a runtime version that supports runtime hooks. If a codemod must run in mixed-version environments, prefer a dynamic import with a clear upgrade error message when the module is unavailable.
+`codemod/runtime` requires a runtime version that supports runtime hooks. If a codemod must run in mixed-version environments, prefer a dynamic import with a clear upgrade error message when the module is unavailable.
 </Warning>
 

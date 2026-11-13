@@ -1,5 +1,5 @@
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type Yaml from "codemod:ast-grep/langs/yaml";
+import type { Codemod, Edit } from "codemod/ast-grep";
+import type Yaml from "codemod/ast-grep/langs/yaml";
 
 const codemod: Codemod<Yaml> = async (root) => {
   const rootNode = root.root();

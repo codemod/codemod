@@ -16,7 +16,7 @@ JSSG sandbox, shared TypeScript packages, semantic-analysis providers, and Mintl
   integration, WASM/native packaging, and runtime module shims.
 - `crates/language-*`, `crates/semantic-factory`, `crates/tree-sitter-loader`: semantic providers,
   provider factory, and parser loading.
-- `crates/cli/npm/types`: the public type declarations (`codemod:*` modules, languages), shipped
+- `crates/cli/npm/types`: the public type declarations (the `codemod/*` modules, also importable as `codemod:*`, and languages), shipped
   in the `codemod` npm package; `packages/jssg-types` mirrors them for existing users.
 - `crates/cli/npm/testing`: `codemod/testing`, helpers for testing workflows. TypeScript workflows
   run in the test process on the Node.js host; with `host: "quickjs"` (and for YAML) they run the
@@ -28,8 +28,8 @@ JSSG sandbox, shared TypeScript packages, semantic-analysis providers, and Mintl
   output for the parsers lives in `crates/agents/tests/fixtures`; `tests/live.rs` runs installed
   agents when `CODEMOD_AGENTS_LIVE` is set.
 - `crates/node`: the native addon (`codemod.node`, napi) behind the Node.js/Bun host: hosted runs
-  over `codemod_workflow::HostedRun` and the `codemod:ast-grep` API. Its JavaScript side is
-  `crates/cli/npm/runtime` (`codemod/host`, the Node.js `codemod:*` modules, `codemod/register`,
+  over `codemod_workflow::HostedRun` and the `codemod/ast-grep` API. Its JavaScript side is
+  `crates/cli/npm/runtime` (`codemod/host`, the Node.js `codemod/*` modules, `codemod/register` for the older `codemod:*` spelling,
   `codemod/vite`). The orchestrator (`crates/workflow/src/js/orchestrator.js`) is shared by both
   hosts; `runtime/orchestrator.mjs` is a generated copy (`pnpm --filter codemod sync-orchestrator`).
 - `packages/jssg-utils`, `packages/tsconfig`: public TypeScript utilities and shared TS config

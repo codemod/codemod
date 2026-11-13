@@ -8,7 +8,7 @@ use common::Harness;
 use serde_json::{json, Map, Value};
 
 const THREE_STEPS: &str = r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   const found = await step("Find files", forEachFile("**/*.ts", (file) => ({ path: file.path })));
   await step("Rewrite", forEachFile("**/*.ts", (file) => {
@@ -51,7 +51,7 @@ fn steps_started_alongside_the_until_step_still_finish() {
 
     let report = h.test(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   const before = step("Before", forEachFile("**/*.ts", () => {}));
   await Promise.all([before, step("Stop here", forEachFile("**/*.ts", () => {}))]);
@@ -115,7 +115,7 @@ fn an_until_step_that_fails_fails_the_run() {
 
     let report = h.test(
         r#"
-import { step } from "codemod:workflow";
+import { step } from "codemod/workflow";
 export default async function main() {
   await step("Boom", () => { throw new Error("no"); });
 }

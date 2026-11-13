@@ -1,5 +1,5 @@
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type Json from "codemod:ast-grep/langs/json";
+import type { Codemod, Edit } from "codemod/ast-grep";
+import type Json from "codemod/ast-grep/langs/json";
 
 const codemod: Codemod<Json> = async (root) => {
   const rootNode = root.root();

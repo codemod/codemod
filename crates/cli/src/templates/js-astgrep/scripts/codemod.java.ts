@@ -1,5 +1,5 @@
-import type { Codemod } from "codemod:ast-grep";
-import type Java from "codemod:ast-grep/langs/java";
+import type { Codemod } from "codemod/ast-grep";
+import type Java from "codemod/ast-grep/langs/java";
 
 const codemod: Codemod<Java> = async (root) => {
   const rootNode = root.root();

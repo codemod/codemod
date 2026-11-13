@@ -1,4 +1,6 @@
-// The `codemod:*` modules and this package's Node.js implementations of them.
+// The older `codemod:*` spelling of the codemod modules, and this package's
+// Node.js implementations they resolve to. `codemod/workflow` and the rest
+// need no mapping: they are this package's own exports.
 
 const MODULES = {
   "codemod:workflow": "./workflow.mjs",
@@ -10,7 +12,7 @@ const MODULES = {
 
 export const CODEMOD_MODULES = Object.keys(MODULES);
 
-/** The URL a `codemod:*` specifier resolves to, or undefined. */
+/** The URL an older `codemod:*` specifier resolves to, or undefined. */
 export function resolveCodemodModule(specifier) {
   const path = MODULES[specifier];
   return path ? new URL(path, import.meta.url).href : undefined;

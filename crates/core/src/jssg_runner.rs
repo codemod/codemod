@@ -58,7 +58,7 @@ pub struct JssgRunRequest {
     pub initial_state: HashMap<String, Value>,
     pub cancel: Option<Arc<AtomicBool>>,
     pub progress: Option<ProgressCallback>,
-    /// Receives what the transform logged (`console`, `codemod:runtime`)
+    /// Receives what the transform logged (`console`, `codemod/runtime`)
     /// for each file, once the file is done, so files never interleave.
     pub on_log: Option<JssgLogCallback>,
 }

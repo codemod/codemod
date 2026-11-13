@@ -39,7 +39,7 @@ nodes:
 becomes:
 
 ```ts workflow.ts
-import { jssg, step } from "codemod:workflow";
+import { jssg, step } from "codemod/workflow";
 
 export default async function main() {
   // Apply AST Transformations
@@ -77,7 +77,7 @@ npm install --save-dev codemod
 | `install-skill` | `installSkill({ ... })` |
 | `matrix` (`values` or `from_state`) | One call per value, run at the same time |
 | `shard` | `shard({ ... })`, its result passed to the steps that use it |
-| `if:` | An `if` statement, or `__evaluate(...)` for expressions with no exact TypeScript form |
+| `if:` | An `if` statement whose condition runs through `__evaluate(...)`, the YAML engine's own evaluator, so it means exactly what it did |
 | `${{ params.name }}` | `params.name` |
 | `${{ state.name }}` | `getState("name")` |
 | `trigger: manual` | `await step(approval("<node name>"))` |
@@ -100,8 +100,9 @@ It reads the same `tests/` fixtures as `codemod jssg test`. See [Testing workflo
 
 Most codemods run exactly as before. These are the differences, for both `workflow.yaml` and `workflow.ts`:
 
+- **Modules are imported as `codemod/workflow`, `codemod/ast-grep`, and so on.** `upgrade` writes the new spelling. Imports of the older `codemod:workflow` spelling, in workflows and in transforms, keep working and name the same modules.
 - **Semantic analysis is on by default for `jssg` steps.** Transforms get file-scope semantic analysis, as they do with `codemod jssg run` and `codemod jssg test`, so `definition()` and `references()` work in workflows too. Before, they returned nothing in workflows. Turn it off with `semantic_analysis: none` (YAML) or `semanticAnalysis: "none"` (TypeScript).
-- **A step `if:` that fails to evaluate fails the step.** Before, the step was skipped without a word.
+- **A step `if:` that fails to evaluate is reported.** The step is still skipped, as before, and the run's log says why.
 - **`runtime: docker` and `runtime: podman` are not supported.** Their steps run directly on the machine.
 - **`state.schema` is accepted but not checked.**
 - **Runs are resumed by id:** `codemod workflow resume --id <run-id>`. A manual node waits as an approval step; resume it with `--approve`. Runs started with an earlier CLI version can't be resumed.

@@ -2,7 +2,7 @@
 //!
 //! The workflow body runs on the calling thread, with the modules that are
 //! deterministic (pure LLRT modules such as `path` and `url`,
-//! `codemod:ast-grep`, packages and relative files) and replay-safe globals
+//! `codemod/ast-grep`, packages and relative files) and replay-safe globals
 //! (`js/body_globals.js`). Steps and `forEachFile` callbacks run in their own
 //! isolates (see `tasks::isolate`). Host tasks run on their own
 //! threads and report back over a channel; the loop below settles their
@@ -18,7 +18,9 @@ use std::time::Duration;
 use butterflow_state::run_store::{RunStore, StepRecord};
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use codemod_sandbox::sandbox::engine::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
+use codemod_sandbox::sandbox::engine::quickjs_adapters::{
+    CodemodModuleResolver, QuickJSLoader, QuickJSResolver,
+};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::AstGrepModule;
 use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
@@ -156,19 +158,18 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
         .map_err(|e| RunError::Runtime(format!("cannot resolve imports: {e}")))?;
     runtime.set_loader(
         (
-            llrt_resolver.add_name("codemod:ast-grep"),
-            BuiltinResolver::default()
-                .with_module(FLOW_MODULE)
-                .with_module(ORCHESTRATOR_MODULE)
-                .with_module("codemod:metrics"),
+            // The body's codemod modules: `codemod/<name>`, or `codemod:<name>`.
+            CodemodModuleResolver::new(&["ast-grep", "workflow", "metrics"]),
+            llrt_resolver,
+            BuiltinResolver::default().with_module(ORCHESTRATOR_MODULE),
             QuickJSResolver::new(Arc::new(packages)),
         ),
         (
-            llrt_loader.with_module("codemod:ast-grep", AstGrepModule),
+            llrt_loader.with_module("codemod/ast-grep", AstGrepModule),
             BuiltinLoader::default()
                 .with_module(FLOW_MODULE, RUNTIME_JS)
                 .with_module(ORCHESTRATOR_MODULE, ORCHESTRATOR_JS)
-                .with_module("codemod:metrics", BODY_METRICS_JS),
+                .with_module("codemod/metrics", BODY_METRICS_JS),
             QuickJSLoader,
         ),
     );

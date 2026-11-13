@@ -96,8 +96,7 @@ nodes:
     assert_eq!(
         source,
         r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
-/// <reference types="codemod/workflow" />
-import { jssg, step } from "codemod:workflow";
+import { jssg, step } from "codemod/workflow";
 
 export default async function main() {
   // Apply AST Transformations
@@ -238,7 +237,7 @@ fn the_documented_features_translate_and_build() {
     expect("await step(approval(\"Run 'Apply transforms'?\"));");
     expect("const branchName = `codemod-apply-${index}`;");
     expect("jssg(\"scripts/codemod.ts\", {\n    files: matrix?._meta_files,\n    language: \"tsx\",\n    params,\n    matrix: matrix ?? undefined,\n  })");
-    expect("if (params.mode == \"fast\") {");
+    expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state: getState() })) {");
     expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state: getState() })) {");
     expect("shell(\"echo fast\", { env: { ...matrixEnv(matrix), CI: \"true\" } })");

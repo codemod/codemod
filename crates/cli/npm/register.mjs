@@ -1,6 +1,7 @@
-// `import "codemod/register"`: lets Node.js and Bun import workflows, which
-// import `codemod:workflow`, `codemod:ast-grep` and the other `codemod:*`
-// modules. Those resolve to this package's Node.js implementations.
+// `import "codemod/register"`: lets Node.js and Bun import code written with
+// the older `codemod:workflow`, `codemod:ast-grep`, ... spelling, mapping it
+// to this package's `codemod/workflow`, `codemod/ast-grep`, ... exports.
+// Code that imports `codemod/*` needs none of this.
 //
 // `codemod/host` and `codemod/testing` register these hooks themselves.
 

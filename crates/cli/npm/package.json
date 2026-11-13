@@ -20,6 +20,9 @@
       "types": "./types/main.d.ts",
       "default": "./runtime/ast-grep.mjs"
     },
+    "./ast-grep/langs/*": {
+      "types": "./types/langs/*.d.ts"
+    },
     "./host": {
       "types": "./runtime/host.d.mts",
       "default": "./runtime/host.mjs"

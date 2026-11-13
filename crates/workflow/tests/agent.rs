@@ -41,7 +41,7 @@ fn agent_steps_run_the_named_coding_agent() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { step, agent } from "codemod:workflow";
+import { step, agent } from "codemod/workflow";
 export default async function main() {
   return step("Migrate", agent("Migrate the tests", { agent: "codex", systemPrompt: "Be careful." }));
 }
@@ -89,7 +89,7 @@ export default async function main() {
     // An agent that is unknown, or not installed, fails the step.
     let report = h.start(
         r#"
-import { step, agent } from "codemod:workflow";
+import { step, agent } from "codemod/workflow";
 export default async function main() { await step(agent("x", { agent: "nope" })); }
 "#,
         Value::Null,

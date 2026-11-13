@@ -1,6 +1,7 @@
 /**
- * A Vite (and Vitest) plugin that resolves the `codemod:*` modules workflows
- * import, so tests can load workflows through Vitest.
+ * A Vite (and Vitest) plugin that resolves the older `codemod:*` spelling of
+ * the codemod modules (`codemod:workflow`) to the `codemod/*` exports. Code
+ * that imports `codemod/*` needs no plugin.
  *
  * ```ts
  * // vitest.config.ts

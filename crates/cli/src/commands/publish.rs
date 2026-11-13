@@ -937,8 +937,7 @@ nodes:
         fs::write(
             temp_dir.path().join("workflow.ts"),
             r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
-/// <reference types="codemod/workflow" />
-import { jssg, step } from "codemod:workflow";
+import { jssg, step } from "codemod/workflow";
 
 export default async function main() {
   await step("Rewrite", jssg("src/workflow.ts", { include: ["**/*.ts"], language: "typescript" }));
@@ -1261,14 +1260,31 @@ export default function transform() {
 import { format } from "node:util";
 import path from "path";
 import { readFile } from "fs/promises";
-import { parse } from "codemod:ast-grep";
+import { parse } from "codemod/ast-grep";
+import { useMetricAtom } from "codemod/metrics";
 import { generate } from "codemod:llm";
 export default function transform() {
-  return [format("%s", "ok"), path.sep, readFile, parse, generate];
+  return [format("%s", "ok"), path.sep, readFile, parse, useMetricAtom, generate];
 }
 "#,
         )
         .unwrap();
+        // With the codemod npm package installed, its Node.js shims must not be
+        // bundled: the CLI provides these modules.
+        let installed = temp_dir.path().join("node_modules/codemod");
+        fs::create_dir_all(installed.join("runtime")).unwrap();
+        fs::write(
+            installed.join("package.json"),
+            r#"{ "name": "codemod", "type": "module", "exports": { "./ast-grep": "./runtime/ast-grep.mjs", "./metrics": "./runtime/metrics.mjs" } }"#,
+        )
+        .unwrap();
+        for shim in ["ast-grep", "metrics"] {
+            fs::write(
+                installed.join(format!("runtime/{shim}.mjs")),
+                "export const NODE_SHIM = true;\n",
+            )
+            .unwrap();
+        }
 
         let bundled = bundle_js_file(temp_dir.path(), "transform.js")
             .await
@@ -1277,7 +1293,9 @@ export default function transform() {
         assert!(bundled.contains("node:util"));
         assert!(bundled.contains("path"));
         assert!(bundled.contains("fs/promises"));
-        assert!(bundled.contains("codemod:ast-grep"));
+        assert!(bundled.contains("codemod/ast-grep"));
+        assert!(bundled.contains("codemod/metrics"));
         assert!(bundled.contains("codemod:llm"));
+        assert!(!bundled.contains("NODE_SHIM"), "{bundled}");
     }
 }

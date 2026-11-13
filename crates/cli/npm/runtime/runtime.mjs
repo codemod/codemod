@@ -1,4 +1,4 @@
-// `codemod:runtime` in Node.js and Bun: progress and warnings become the
+// `codemod/runtime` in Node.js and Bun: progress and warnings become the
 // step's log lines; failures throw.
 
 import { context } from "./context.mjs";

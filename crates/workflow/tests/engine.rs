@@ -21,7 +21,7 @@ fn build_error(source: &str) -> String {
 fn assigning_to_an_outside_variable_is_a_build_error() {
     let error = build_error(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   let count = 0;
   await step(forEachFile("**/*.ts", (file) => { count++; }));
@@ -36,7 +36,7 @@ export default async function main() {
 fn capturing_a_reassigned_local_is_a_build_error() {
     let error = build_error(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   let prefix = "a";
   prefix = "b";
@@ -54,7 +54,7 @@ export default async function main() {
 fn capturing_a_local_function_is_a_build_error() {
     let error = build_error(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   const shout = (s: string) => s.toUpperCase();
   await step(forEachFile("**/*.ts", (file) => { file.write(shout(file.text)); }));
@@ -68,7 +68,7 @@ export default async function main() {
 fn using_a_reassigned_module_binding_is_a_build_error() {
     let error = build_error(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 let suffix = ".js";
 suffix = ".mjs";
 export default async function main() {
@@ -86,7 +86,7 @@ export default async function main() {
 fn starting_a_step_inside_a_callback_is_a_build_error() {
     let error = build_error(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   await step(forEachFile("**/*.ts", (file) => { step(() => 1); }));
 }
@@ -102,7 +102,7 @@ export default async function main() {
 fn a_callback_passed_by_name_is_a_build_error() {
     let error = build_error(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 const touch = (file: any) => file.write(file.text);
 export default async function main() {
   await step(forEachFile("**/*.ts", touch));
@@ -117,7 +117,7 @@ fn module_level_helpers_are_copied_into_the_callback_with_their_dependencies() {
     let built = build(
         "workflow.ts",
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 const MARK = "// migrated";
 const unused = 42;
 function mark(text: string): string { return `${MARK}\n${text}`; }
@@ -148,7 +148,7 @@ fn renames_files_without_parsing_them() {
 
     let report = h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   const moved = await step("Rename LESS files", forEachFile("src/**/*.less", (file) => {
     file.rename(file.path.replace(/\.less$/, ".css"));
@@ -174,8 +174,8 @@ export default async function main() {
 }
 
 const MIGRATE_MOMENT: &str = r#"
-import { step, forEachFile } from "codemod:workflow";
-import { parse } from "codemod:ast-grep";
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
 
 const LEGACY = "moment";
 
@@ -244,7 +244,7 @@ fn a_dry_run_reports_changes_without_writing_or_persisting() {
 }
 
 const TOUCH_THEN_CHECK: &str = r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   await step("Touch", forEachFile("*.txt", (file) => { file.write(file.text + "+"); }));
   await step("Check", () => "ok");
@@ -340,7 +340,7 @@ fn workflow_state_is_shared_and_replayed() {
     let h = Harness::new();
     h.write("a.txt", "a");
     let source = r#"
-import { step, getState, setState } from "codemod:workflow";
+import { step, getState, setState } from "codemod/workflow";
 export default async function main() {
   const files = await step("List", () => ["a.txt"]);
   setState("files", files);
@@ -401,7 +401,7 @@ fn setting_the_cancel_flag_stops_a_running_workflow() {
     let flag = h.engine.cancel_flag();
     let workflow = h.workflow(
         r#"
-import { step } from "codemod:workflow";
+import { step } from "codemod/workflow";
 export default async function main() {
   await step("Spin", () => { while (true) {} });
 }
@@ -423,7 +423,7 @@ fn a_capture_that_is_not_json_fails_when_the_step_starts() {
 
     let report = h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   const seen = new Set(["a.ts"]);
   await step(forEachFile("*.ts", (file) => seen.has(file.path)));
@@ -447,7 +447,7 @@ fn mutating_a_capture_inside_a_callback_fails_that_file() {
 
     let report = h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   const seen: string[] = [];
   return step(forEachFile("*.ts", (file) => { seen.push(file.path); }));
@@ -468,7 +468,7 @@ fn a_step_result_is_frozen_in_the_workflow() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { step } from "codemod:workflow";
+import { step } from "codemod/workflow";
 export default async function main() {
   const result = await step(() => ({ items: [1, 2] }));
   try { result.items.push(3); } catch (e) { return "frozen"; }
@@ -488,7 +488,7 @@ fn steps_started_together_both_run() {
 
     let report = h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   const [txt, md] = await Promise.all([
     step(forEachFile("*.txt", (file) => file.path)),
@@ -511,7 +511,7 @@ fn conflicting_renames_fail_the_step_and_write_nothing() {
 
     let report = h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   await step(forEachFile("*.txt", (file) => { file.rename("same.txt"); }));
 }
@@ -522,4 +522,46 @@ export default async function main() {
     assert!(error.contains("are both renamed to 'same.txt'"), "{error}");
     assert!(h.exists("a.txt"));
     assert!(!h.exists("same.txt"));
+}
+
+#[test]
+fn the_older_codemod_colon_spelling_still_imports_the_same_modules() {
+    let h = Harness::new();
+    h.write("a.ts", "const a = 1;\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod:workflow";
+import { step as slashStep } from "codemod/workflow";
+import { parse } from "codemod:ast-grep";
+export default async function main() {
+  if (step !== slashStep) throw new Error("two workflow modules");
+  const found = await step(forEachFile("**/*.ts", (file) => {
+    return parse("typescript", file.text).root().findAll("const $A = $B").length;
+  }));
+  return found.outputs;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([1]));
+}
+
+#[test]
+fn importing_a_node_only_codemod_export_is_a_build_error() {
+    let h = Harness::new();
+    let error = codemod_workflow::build(
+        "workflow.ts",
+        r#"
+import { runWorkflow } from "codemod/testing";
+export default async function main() { return runWorkflow; }
+"#,
+    )
+    .err()
+    .map(|error| error.to_string())
+    .unwrap_or_default();
+    drop(h);
+    assert!(
+        error.contains("'codemod/testing' is for Node.js"),
+        "{error}"
+    );
 }

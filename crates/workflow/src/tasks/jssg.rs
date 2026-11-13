@@ -173,7 +173,10 @@ pub(crate) fn execute(
 fn step_logs(task: &TaskContext<'_>) -> butterflow_core::jssg_runner::JssgLogCallback {
     let events = std::sync::Arc::clone(&task.run.events);
     let position = task.position;
+    // Files finish on several threads: one file's lines go out together.
+    let together = std::sync::Mutex::new(());
     std::sync::Arc::new(move |logs| {
+        let _together = together.lock().unwrap_or_else(|e| e.into_inner());
         let mut unit: Option<String> = None;
         for log in logs {
             if unit.as_deref() != Some(log.unit.as_str()) {

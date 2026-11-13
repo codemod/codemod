@@ -23,7 +23,7 @@ use super::execution_engine::{
     install_console_bridge, DryRunExecutionFlag, ExecutionModeFlag, FileChange,
     JssgExecutionContext, JssgFileChanges, TargetDirectory,
 };
-use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
+use super::quickjs_adapters::{CodemodModuleResolver, QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::{AstGrepModule, DefaultParseLanguage};
 use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
 use crate::metrics::{MetricsContext, MetricsModule};
@@ -102,20 +102,14 @@ impl Worker {
             }
         }
 
-        let (mut resolver, mut loader, globals) = module_builder.builder.build();
-        resolver = resolver
-            .add_name("codemod:ast-grep")
-            .add_name("codemod:workflow")
-            .add_name("codemod:metrics")
-            .add_name("codemod:runtime");
+        let (resolver, mut loader, globals) = module_builder.builder.build();
         loader = loader
-            .with_module("codemod:ast-grep", AstGrepModule)
-            .with_module("codemod:workflow", WorkflowGlobalModule)
-            .with_module("codemod:metrics", MetricsModule)
-            .with_module("codemod:runtime", RuntimeModule);
+            .with_module("codemod/ast-grep", AstGrepModule)
+            .with_module("codemod/workflow", WorkflowGlobalModule)
+            .with_module("codemod/metrics", MetricsModule)
+            .with_module("codemod/runtime", RuntimeModule);
         if fetch {
-            resolver = resolver.add_name("codemod:llm");
-            loader = loader.with_module("codemod:llm", LlmModule);
+            loader = loader.with_module("codemod/llm", LlmModule);
         }
 
         let mut memory_resolver = BuiltinResolver::default();
@@ -128,6 +122,7 @@ impl Worker {
         runtime
             .set_loader(
                 (
+                    CodemodModuleResolver::offering(fetch),
                     resolver,
                     memory_resolver,
                     QuickJSResolver::new(options.resolver),

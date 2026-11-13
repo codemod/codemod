@@ -4,13 +4,13 @@ sidebarTitle: "Reference"
 description: "The workflow.ts API: steps, per-file callbacks, tasks, state, and resuming runs."
 ---
 
-A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod:workflow`, and what else a workflow can import.
+A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow`, and what else a workflow can import.
 
 ## Complete example
 
 ```ts workflow.ts
-import { step, forEachFile, jssg, shell, approval } from "codemod:workflow";
-import { parse } from "codemod:ast-grep";
+import { step, forEachFile, jssg, shell, approval } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
 
 const LEGACY = "moment";
 
@@ -111,7 +111,7 @@ Object fields:
 | `exclude` | Glob or globs to skip |
 | `language` | Selects the language's file extensions when `include` is not set, and is the default language for `parse(file)` and `parse(text)` |
 | `containing` | Only files whose text contains this string |
-| `concurrency` | Files each worker keeps in flight (default `1`). Raise it for async callbacks that wait on the network or `codemod:llm` |
+| `concurrency` | Files each worker keeps in flight (default `1`). Raise it for async callbacks that wait on the network or `codemod/llm` |
 
 `.gitignore` is respected. A selector is plain data, so you can reuse and refine it: `{ ...sources, containing: "moment" }`.
 
@@ -133,10 +133,10 @@ Changes are recorded, not written immediately. When every file is done, the step
 - The callback may be async: `async (file) => { ... }`.
 - Return a value to collect it; returned values become `result.outputs`, in path order. Return nothing to collect nothing.
 - A callback that throws fails only that file; the error appears in `result.failures`.
-- Metrics recorded with [`codemod:metrics`](/community/jssg/metrics) appear in `result.metrics` and in the run's report. Declare the metric at module level and record it in the callback.
+- Metrics recorded with [`codemod/metrics`](/community/jssg/metrics) appear in `result.metrics` and in the run's report. Declare the metric at module level and record it in the callback.
 
 ```ts
-import { useMetricAtom } from "codemod:metrics";
+import { useMetricAtom } from "codemod/metrics";
 
 const rewrites = useMetricAtom("rewrites");
 
@@ -168,8 +168,8 @@ A callback (or function step) runs in its own isolate, so the build copies in wh
 
 - **Module-level constants, functions and classes** it uses are copied in.
 - **Local variables of the surrounding function** are passed in as frozen copies when the step starts. They must be JSON values.
-- **Imports** it uses are available: `codemod:ast-grep`, `codemod:metrics`, `codemod:runtime`, Node-style modules (`path`, `fs` with `--allow-fs`, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
-- **State:** `getState`, `setState`, `unsetState` and `acquireLock` from `codemod:workflow` work as in [JSSG transforms](/community/jssg/advanced/workflow). Prefer returning values: outputs are ordered and need no locks.
+- **Imports** it uses are available: `codemod/ast-grep`, `codemod/metrics`, `codemod/runtime`, Node-style modules (`path`, `fs` with `--allow-fs`, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
+- **State:** `getState`, `setState`, `unsetState` and `acquireLock` from `codemod/workflow` work as in [JSSG transforms](/community/jssg/advanced/workflow). Prefer returning values: outputs are ordered and need no locks.
 
 These are build errors, reported with the file, line and column:
 
@@ -181,10 +181,10 @@ These are build errors, reported with the file, line and column:
 
 A local that is not JSON (a `Set`, a `Map`, a class instance) fails when the step starts, naming the variable.
 
-## Parsing with `codemod:ast-grep`
+## Parsing with `codemod/ast-grep`
 
 ```ts
-import { parse } from "codemod:ast-grep";
+import { parse } from "codemod/ast-grep";
 
 parse(file);                        // a forEachFile file; root.filename() is its path
 parse(file, { language: "tsx" });
@@ -199,8 +199,8 @@ parse("tsx", text);                 // the original JSSG form
 
 The body is the code outside steps and callbacks. It runs again on every resume and must issue the same steps each time, so:
 
-- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod:ast-grep`, and npm packages or local files whose imports only reach these.
-- **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod:llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
+- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, and npm packages or local files whose imports only reach these.
+- **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
 - **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
 - **Metrics** can be declared in the body (`useMetricAtom`) but only recorded inside steps and callbacks.
 - **`console.log`** goes to the run's output.
@@ -297,7 +297,7 @@ Otherwise the prompt is printed as instructions and nothing runs.
 Workflow state is a set of named JSON values shared by the workflow and the steps it runs.
 
 ```ts
-import { step, shell, getState, setState } from "codemod:workflow";
+import { step, shell, getState, setState } from "codemod/workflow";
 
 setState("target", "react-19");
 await step(shell('echo "version=19" >> "$STATE_OUTPUTS"'));
@@ -306,7 +306,7 @@ getState();          // { target: "react-19", version: 19 }
 ```
 
 - **In the workflow:** `getState(key)` reads a value; `getState()` returns all of them. `setState(key, value)` sets one.
-- **In JSSG transforms:** `setState`, `getState`, `unsetState` and `acquireLock` from `codemod:workflow`. See [Workflow context](/community/jssg/advanced/workflow).
+- **In JSSG transforms:** `setState`, `getState`, `unsetState` and `acquireLock` from `codemod/workflow`. See [Workflow context](/community/jssg/advanced/workflow).
 - **In shell commands:** `CODEMOD_STATE` and `STATE_OUTPUTS`, above.
 
 What a step sets is saved with that step, so it is restored when the step is replayed on resume.
@@ -344,7 +344,7 @@ Runs are stored under your data directory (`~/Library/Application Support/codemo
 
 ## Installing codemod in a package
 
-A codemod package can depend on `codemod` like any other tool it runs: package scripts and `npx codemod` then use that CLI, pinned to the version in `package.json`, and editors get its types for `codemod:workflow`, `codemod:ast-grep` and the other `codemod:*` modules, which always match that CLI. Packages created with `codemod init` are already set up. For an existing package:
+A codemod package can depend on `codemod` like any other tool it runs: package scripts and `npx codemod` then use that CLI, pinned to the version in `package.json`, and editors get its types for `codemod/workflow`, `codemod/ast-grep` and the other `codemod:*` modules, which always match that CLI. Packages created with `codemod init` are already set up. For an existing package:
 
 ```bash
 npm install codemod
@@ -381,7 +381,7 @@ Then `npx tsc` checks `workflow.ts` along with your transforms. Type-only import
 - Step results are typed and read-only. `forEachFile` collects what the callback returns: returning `file.path` or `undefined` gives `outputs: readonly string[]`.
 - A step result or callback return value that is not JSON is a type error, for example a `Set`, a `Map`, a `Date`, a function, or a `Promise` returned from an `async` callback.
 - Type the default export's argument with `WorkflowContext`: `main({ params }: WorkflowContext<{ replacement?: string }>)`.
-- Type `parse` with a language map: `parse<TS>(file)`, where `TS` is imported from `codemod:ast-grep/langs/typescript`.
+- Type `parse` with a language map: `parse<TS>(file)`, where `TS` is imported from `codemod/ast-grep/langs/typescript`.
 
 The callback rules that depend on scope, such as assigning to an outside variable, are checked by `codemod workflow validate`, not by TypeScript.
 

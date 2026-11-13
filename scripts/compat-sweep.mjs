@@ -4,7 +4,7 @@
 //
 //   node scripts/compat-sweep.mjs --old /path/to/released/codemod \
 //     --new target/release/codemod --corpus ~/src/codemods [--corpus ...] \
-//     [--filter <text>] [--jobs 8] [--timeout 180] [--limit 50] [--out .compat] \
+//     [--filter <text>] [--exclude <text>] [--jobs 8] [--timeout 180] [--limit 50] [--out .compat] \
 //     [--upgrade] [--retry <earlier report.json>]
 //
 // For every package (a directory with codemod.yaml) and every fixture under
@@ -66,6 +66,7 @@ const retry = options.retry
     )
   : null;
 const cases = discover(options.corpus, options.filter)
+  .filter((item) => !options.exclude || !item.id.includes(options.exclude))
   .filter((item) => !retry || retry.has(item.id))
   .slice(0, options.limit ?? Infinity);
 process.stderr.write(
@@ -214,15 +215,39 @@ function upgradedPackage(pkg) {
         const run = await exec(options.new, ["workflow", "upgrade", "--dry-run", pkg], 60_000);
         if (run.code !== 0) return { error: run.output.trim().slice(0, 300) };
         const files = run.output.split(/^\/\/ (?=\/)/m).filter((part) => part.trim());
-        if (files.length !== 1) return { error: `upgrade wrote ${files.length} workflows` };
+        // A package may hold more than one workflow; the fixtures run the one
+        // codemod.yaml names.
+        const main = manifestWorkflow(pkg)?.replace(/\.ya?ml$/, ".ts");
+        const file =
+          files.length === 1
+            ? files[0]
+            : files.find(
+                (part) => main && part.slice(0, part.indexOf("\n")).trim() === join(pkg, main),
+              );
+        if (!file) return { error: `upgrade wrote ${files.length} workflows` };
         const workflow = join(pkg, UPGRADED_NAME);
         written.add(workflow);
-        writeFileSync(workflow, files[0].slice(files[0].indexOf("\n") + 1));
+        writeFileSync(workflow, file.slice(file.indexOf("\n") + 1));
         return { workflow };
       })(),
     );
   }
   return upgrades.get(pkg);
+}
+
+/** The workflow a package's codemod.yaml runs by default, if it names one. */
+function manifestWorkflow(pkg) {
+  try {
+    const manifest = readFileSync(join(pkg, "codemod.yaml"), "utf8");
+    const single = manifest.match(/^workflow:\s*["']?([^"'\s#]+)/m)?.[1];
+    if (single) return single;
+    // `workflows:` lists several; the default one, else the first.
+    const entries = (manifest.split(/^workflows:/m)[1] ?? "").split(/^\s*-\s/m).slice(1);
+    const path = (entry) => entry.match(/path:\s*["']?([^"'\s#]+)/)?.[1];
+    return path(entries.find((entry) => /default:\s*true/.test(entry)) ?? entries[0] ?? "");
+  } catch {
+    return undefined;
+  }
 }
 
 async function runCase(binary, item, which, recordId = item.id) {
@@ -606,7 +631,7 @@ function parseArgs(args) {
   }
   if (!parsed.old || !parsed.new || !parsed.corpus.length) {
     process.stderr.write(
-      "usage: node scripts/compat-sweep.mjs --old <codemod> --new <codemod> --corpus <dir> [--corpus <dir>] [--filter <text>] [--jobs N] [--timeout s] [--limit N] [--out dir] [--upgrade | --package-tests] [--retry report.json]\n",
+      "usage: node scripts/compat-sweep.mjs --old <codemod> --new <codemod> --corpus <dir> [--corpus <dir>] [--filter <text>] [--exclude <text>] [--jobs N] [--timeout s] [--limit N] [--out dir] [--upgrade | --package-tests] [--retry report.json]\n",
     );
     process.exit(2);
   }

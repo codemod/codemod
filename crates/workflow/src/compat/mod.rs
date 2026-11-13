@@ -12,6 +12,8 @@
 //!   `from_state`), concurrently;
 //! - `${{ }}` expressions become TypeScript where that is exact, and
 //!   otherwise call `evaluate(...)`, which uses the YAML engine's evaluator;
+//!   `if:` conditions always go through `evaluate(...)`, and one that cannot
+//!   be evaluated skips its step, as in the YAML engine;
 //! - `trigger: manual` becomes an `approval` step; `branch_name`,
 //!   `pull_request` and step `commit` become git steps.
 
@@ -758,7 +760,6 @@ impl Generator {
     fn finish(self) -> Translated {
         let mut source = String::new();
         source.push_str("// Generated from workflow.yaml by `codemod workflow upgrade`.\n");
-        source.push_str("/// <reference types=\"codemod/workflow\" />\n");
         for warning in &self.warnings {
             let _ = writeln!(source, "// codemod upgrade: {}", comment_text(warning));
         }
@@ -774,11 +775,11 @@ impl Generator {
         imports.sort_by_key(|name| name.trim_start_matches("__"));
         let _ = writeln!(
             source,
-            "import {{ {} }} from \"codemod:workflow\";",
+            "import {{ {} }} from \"codemod/workflow\";",
             imports.join(", ")
         );
         if self.uses_context {
-            source.push_str("import type { WorkflowContext } from \"codemod:workflow\";\n");
+            source.push_str("import type { WorkflowContext } from \"codemod/workflow\";\n");
         }
         source.push('\n');
         let mut aliases = String::new();

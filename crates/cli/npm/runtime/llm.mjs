@@ -1,9 +1,9 @@
-// `codemod:llm` is not available when Node.js runs the workflow yet.
+// `codemod/llm` is not available when Node.js runs the workflow yet.
 
 export function generate() {
   return Promise.reject(
     new Error(
-      "codemod:llm is not available when Node.js runs the workflow; run it with the codemod CLI",
+      "codemod/llm is not available when Node.js runs the workflow; run it with the codemod CLI",
     ),
   );
 }

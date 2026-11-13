@@ -88,7 +88,7 @@ capabilities: []
 ```
 
 ```ts workflow.ts expandable
-import { step, jssg, agent } from "codemod:workflow";
+import { step, jssg, agent } from "codemod/workflow";
 
 export default async function main({ params }: { params: { run_ai_step?: string } }) {
   await step(
@@ -114,9 +114,9 @@ Only modify files that still contain inner component definitions.`));
 ```
 
 ```ts scripts/codemod.ts expandable
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type { SgNode } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod, Edit } from "codemod/ast-grep";
+import type { SgNode } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = async (root) => {
   const rootNode = root.root();

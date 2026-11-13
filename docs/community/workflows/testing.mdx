@@ -96,7 +96,9 @@ for (const fixture of fixtures("tests")) {
 node --test tests/workflow.test.ts
 ```
 
-Node.js 23.6 and later run TypeScript test files directly. With Bun, use `bun test`. Vitest needs the `codemod/vite` plugin, so it can resolve the `codemod:*` modules your workflow imports:
+Node.js 23.6 and later run TypeScript test files directly. With Bun, use `bun test`, and with Vitest, `npx vitest`.
+
+If your workflow still imports the older `codemod:workflow` spelling, Vitest needs the `codemod/vite` plugin to resolve it:
 
 ```ts vitest.config.ts
 import { defineConfig } from "vitest/config";
@@ -132,7 +134,7 @@ test("migrates moment imports", async () => {
 Steps are named by their label. `until` stops after the named step: steps the workflow starts after it do not run, and the run ends with status `"stopped"`. `given` replaces a step's result without running it, so a later step can be tested on its own:
 
 ```ts workflow.ts
-import { forEachFile, shell, step } from "codemod:workflow";
+import { forEachFile, shell, step } from "codemod/workflow";
 
 export default async function main() {
   const usages = await step("Find moment imports", forEachFile(/* ... */));

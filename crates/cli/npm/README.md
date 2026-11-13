@@ -104,8 +104,8 @@ Packages can be as simple as a single transformation or as complex as multi-step
 
 ```typescript
 // Example: Replace console.log with logger.info
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = (root) => {
   const rootNode = root.root();
@@ -211,7 +211,7 @@ nodes:
 
 A codemod package can depend on `codemod` directly: its scripts and `npx codemod` then run that
 CLI, pinned to your `package.json`, and editors get the matching types for writing codemods and
-workflows, the `codemod:*` modules (`codemod:workflow`, `codemod:ast-grep`, `codemod:metrics`, ...)
+workflows, the `codemod:*` modules (`codemod/workflow`, `codemod/ast-grep`, `codemod/metrics`, ...)
 and the per-language node types:
 
 ```bash
@@ -243,8 +243,7 @@ for (const fixture of fixtures("tests")) {
 }
 ```
 
-`until` stops after one step and `given` replaces a step's result, to test steps on their own. With
-Vitest, add the `codemod/vite` plugin. See
+`until` stops after one step and `given` replaces a step's result, to test steps on their own. See
 [Testing workflows](https://docs.codemod.com/community/workflows/testing).
 
 ## Running workflows from Node.js

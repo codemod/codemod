@@ -1,4 +1,4 @@
-// `codemod:metrics` in Node.js and Bun. Metrics belong to the step that
+// `codemod/metrics` in Node.js and Bun. Metrics belong to the step that
 // records them: they go into a `forEachFile` step's result and the run's
 // report. The workflow body cannot record them, as in the engine.
 

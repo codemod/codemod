@@ -1,5 +1,5 @@
-import type { Codemod } from "codemod:ast-grep";
-import type Ruby from "codemod:ast-grep/langs/ruby";
+import type { Codemod } from "codemod/ast-grep";
+import type Ruby from "codemod/ast-grep/langs/ruby";
 
 const codemod: Codemod<Ruby> = async (root) => {
   const rootNode = root.root();

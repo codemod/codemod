@@ -6,7 +6,7 @@ description: "Orchestrate automated code transformations at scale with Codemod W
 **Codemod Workflows** run automated code transformations at scale. A workflow is a TypeScript file, `workflow.ts`, that runs **steps**: transforms, scripts, agents and approvals. Every step's result is saved, so a large migration can stop and pick up where it left off.
 
 ```ts workflow.ts
-import { step, forEachFile, jssg, approval, shell } from "codemod:workflow";
+import { step, forEachFile, jssg, approval, shell } from "codemod/workflow";
 
 export default async function main() {
   await step("Rename stylesheets", forEachFile("src/**/*.less", (file) => {
@@ -28,7 +28,7 @@ Steps start when you call `step()`, so `Promise.all` runs steps in parallel.
 
 ### Per-file callbacks
 
-`forEachFile(selector, callback)` runs a callback for every matching file, in parallel. The callback, which may be async, gets a file object it can `write`, `rename` or `delete`, with or without parsing it (`parse(file)` from `codemod:ast-grep`). All changes from a step are applied together after conflict checks.
+`forEachFile(selector, callback)` runs a callback for every matching file, in parallel. The callback, which may be async, gets a file object it can `write`, `rename` or `delete`, with or without parsing it (`parse(file)` from `codemod/ast-grep`). All changes from a step are applied together after conflict checks.
 
 Code inside steps and callbacks runs in its own isolate, with npm packages, files next to the workflow, and file or network access when the run allows it. The rest of the workflow is kept deterministic, so a resumed run takes the same path. See [The workflow body](/community/workflows/reference#the-workflow-body).
 

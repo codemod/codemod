@@ -1,5 +1,5 @@
 // Which run, and which step of it, the code running now belongs to. The
-// `codemod:*` modules are singletons, and runs may overlap (tests in
+// `codemod/*` modules are singletons, and runs may overlap (tests in
 // parallel), so they look the run up here.
 //
 // The store is shared through a global symbol, so it stays one store when a

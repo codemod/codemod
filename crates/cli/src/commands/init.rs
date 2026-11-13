@@ -1192,9 +1192,19 @@ fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     fs::create_dir_all(tests_dir.join("fixtures"))?;
 
     if config.language == "javascript" || config.language == "typescript" {
-        fs::write(tests_dir.join("fixtures").join("input.js"), JS_TEST_INPUT)?;
+        // The fixture extension must match the workflow's include patterns
+        // (see `default_include_patterns`), or the workflow never picks it up.
+        let ext = if config.language == "typescript" {
+            "ts"
+        } else {
+            "js"
+        };
         fs::write(
-            tests_dir.join("fixtures").join("expected.js"),
+            tests_dir.join("fixtures").join(format!("input.{ext}")),
+            JS_TEST_INPUT,
+        )?;
+        fs::write(
+            tests_dir.join("fixtures").join(format!("expected.{ext}")),
             JS_TEST_EXPECTED,
         )?;
     } else if config.language == "python" {
@@ -2279,6 +2289,43 @@ mod tests {
         assert!(project_path.join("tests/fixtures/expected.xml").is_file());
         let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
         assert!(workflow.contains("\"**/*.{xml,csproj,props,targets,config,resx,xaml}\""));
+    }
+
+    #[test]
+    fn create_project_js_fixture_extension_matches_language() {
+        for (language, ext, other_ext) in [("javascript", "js", "ts"), ("typescript", "ts", "js")] {
+            let temp_dir = tempdir().unwrap();
+            let project_path = temp_dir.path().join(format!("{language}-project"));
+
+            let config = ProjectConfig {
+                name: format!("{language}-project"),
+                description: "JS workflow package".to_string(),
+                author: "Codemod Team <team@codemod.com>".to_string(),
+                license: "MIT".to_string(),
+                project_type: ProjectType::AstGrepJs,
+                package_behavior: PackageBehavior::WorkflowOnly,
+                language: language.to_string(),
+                private: false,
+                package_manager: Some("npm".to_string()),
+                git_repository_url: None,
+                github_action: false,
+                workspace: false,
+            };
+
+            create_project(&project_path, &config).unwrap();
+
+            let fixtures = project_path.join("tests/fixtures");
+            assert!(
+                fixtures.join(format!("input.{ext}")).is_file(),
+                "{language}: missing input.{ext}"
+            );
+            assert!(
+                fixtures.join(format!("expected.{ext}")).is_file(),
+                "{language}: missing expected.{ext}"
+            );
+            assert!(!fixtures.join(format!("input.{other_ext}")).exists());
+            assert!(!fixtures.join(format!("expected.{other_ext}")).exists());
+        }
     }
 
     #[test]

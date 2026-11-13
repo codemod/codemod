@@ -172,7 +172,7 @@ fn jsonl_output_has_one_event_per_line() {
 }
 
 const TS_FAILING: &str = r#"
-import { step, jssg } from "codemod:workflow";
+import { step, jssg } from "codemod/workflow";
 export default async function main() {
   await step("Replace var", jssg("scripts/codemod.ts", { include: "src/**/*.ts" }));
   await step("Check", () => { throw new Error("not ready"); });
@@ -210,7 +210,7 @@ fn a_manual_step_waits_until_resumed_with_approval() {
     fixture.package_file(
         "workflow.ts",
         r#"
-import { step, approval, jssg } from "codemod:workflow";
+import { step, approval, jssg } from "codemod/workflow";
 export default async function main() {
   await step(approval("Apply the change?"));
   await step(jssg("scripts/codemod.ts", { include: "src/**/*.ts" }));
@@ -248,7 +248,7 @@ export default async function main() {
 }
 
 const TS_WORKFLOW: &str = r#"
-import { jssg, step } from "codemod:workflow";
+import { jssg, step } from "codemod/workflow";
 export default async function main() {
   await step("Replace var", jssg("scripts/codemod.ts", { include: ["**/*.ts"] }));
 }
@@ -299,7 +299,7 @@ fn the_harness_runs_one_test_from_a_spec_on_stdin() {
     fixture.package_file(
         "workflow.ts",
         r#"
-import { jssg, step } from "codemod:workflow";
+import { jssg, step } from "codemod/workflow";
 export default async function main() {
   const found = await step("Find", jssg("scripts/codemod.ts", { include: ["**/*.ts"], dryRun: true }));
   await step("Replace var", jssg("scripts/codemod.ts", { include: ["**/*.ts"] }));

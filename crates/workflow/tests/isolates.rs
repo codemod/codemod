@@ -27,7 +27,7 @@ fn callbacks_can_be_async_and_run_concurrently() {
     }
     let report = h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export default async function main() {
   return step(forEachFile({ include: "*.txt", concurrency: 4 }, async (file) => {
@@ -53,8 +53,8 @@ fn parse_from_codemod_ast_grep_takes_a_file_or_text() {
     h.write("src/a.ts", "const a = 1;\n");
     let report = h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
-import { parse } from "codemod:ast-grep";
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
 export default async function main() {
   return step(forEachFile({ language: "typescript" }, (file) => {
     const fromFile = parse(file);
@@ -87,8 +87,8 @@ fn parse_text_without_a_language_fails_the_file_with_a_hint() {
     h.write("a.txt", "x");
     let report = h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
-import { parse } from "codemod:ast-grep";
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
 export default async function main() {
   return step(forEachFile("*.txt", (file) => { parse(file.text); }));
 }
@@ -107,9 +107,9 @@ fn metrics_declared_at_module_level_are_recorded_by_callbacks() {
     h.write("b.ts", "foo();");
     let report = h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
-import { parse } from "codemod:ast-grep";
-import { useMetricAtom } from "codemod:metrics";
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+import { useMetricAtom } from "codemod/metrics";
 
 const calls = useMetricAtom("calls");
 
@@ -143,7 +143,7 @@ fn recording_a_metric_in_the_body_is_an_error() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { useMetricAtom } from "codemod:metrics";
+import { useMetricAtom } from "codemod/metrics";
 const calls = useMetricAtom("calls");
 export default async function main() {
   calls.increment();
@@ -165,7 +165,7 @@ fn callbacks_can_set_state_with_the_jssg_api() {
     h.write("b.ts", "");
     let report = h.start(
         r#"
-import { step, forEachFile, getState, setState, acquireLock } from "codemod:workflow";
+import { step, forEachFile, getState, setState, acquireLock } from "codemod/workflow";
 export default async function main() {
   await step(forEachFile({ language: "typescript" }, (file) => {
     const release = acquireLock("seen");
@@ -193,7 +193,7 @@ fn callbacks_can_import_files_next_to_the_workflow() {
     );
     h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 import { shout } from "./lib/shout.ts";
 export default async function main() {
   await step(forEachFile("*.txt", (file) => { file.write(shout(file.text)); }));
@@ -212,7 +212,7 @@ fn without_a_selector_files_come_from_the_package_languages() {
     h.bundle_file("codemod.yaml", "targets:\n  languages: [\"python\"]\n");
     let report = h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   return step(forEachFile((file) => file.path));
 }
@@ -227,7 +227,7 @@ fn without_a_selector_or_package_languages_the_step_fails() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { step, forEachFile } from "codemod:workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
   return step(forEachFile((file) => file.path));
 }
@@ -245,7 +245,7 @@ fn a_function_step_runs_in_an_isolate_with_captures_and_real_modules() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { step } from "codemod:workflow";
+import { step } from "codemod/workflow";
 import path from "path";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export default async function main({ params }: { params: { name: string } }) {
@@ -270,7 +270,7 @@ fn assigning_to_an_outside_variable_in_a_function_step_is_a_build_error() {
     let error = load_error(
         &h,
         r#"
-import { step } from "codemod:workflow";
+import { step } from "codemod/workflow";
 export default async function main() {
   let total = 0;
   await step(() => { total = 1; });
@@ -286,7 +286,7 @@ fn a_function_step_passed_by_name_fails_with_a_hint() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { step } from "codemod:workflow";
+import { step } from "codemod/workflow";
 const compute = () => 1;
 export default async function main() {
   return step(compute);
@@ -303,7 +303,7 @@ fn changing_a_finished_function_step_is_nondeterministic() {
     let h = Harness::new();
     let first = h.start(
         r#"
-import { step } from "codemod:workflow";
+import { step } from "codemod/workflow";
 export default async function main() {
   await step("One", () => 1);
   await step("Two", () => { throw new Error("stop"); });
@@ -316,7 +316,7 @@ export default async function main() {
         &first,
         Some(
             r#"
-import { step } from "codemod:workflow";
+import { step } from "codemod/workflow";
 export default async function main() {
   await step("One", () => 2);
   await step("Two", () => "fixed");
@@ -336,7 +336,7 @@ fn the_body_clock_and_random_numbers_replay_identically() {
     let source = |fixed: bool| {
         format!(
             r#"
-import {{ step }} from "codemod:workflow";
+import {{ step }} from "codemod/workflow";
 export default async function main() {{
   const seed = Math.random();
   const id = crypto.randomUUID();
@@ -420,7 +420,7 @@ fn an_effectful_builtin_used_only_in_a_step_is_left_out_of_the_body() {
     let built = codemod_workflow::build(
         "workflow.ts",
         r#"
-import { step } from "codemod:workflow";
+import { step } from "codemod/workflow";
 import os from "os";
 export default async function main() {
   return step(() => os.platform().length > 0);
@@ -431,7 +431,7 @@ export default async function main() {
     assert!(!built.main.contains("\"os\""), "{}", built.main);
     let report = h.start(
         r#"
-import { step } from "codemod:workflow";
+import { step } from "codemod/workflow";
 import os from "os";
 export default async function main() {
   return step(() => os.platform().length > 0);
@@ -504,7 +504,7 @@ export default async function main() {
     );
     let workflow = h.workflow(
         r#"
-import { step } from "codemod:workflow";
+import { step } from "codemod/workflow";
 import { read } from "reader";
 export default async function main() {
   return step(() => read());
@@ -520,12 +520,12 @@ fn importing_parse_from_codemod_workflow_points_to_codemod_ast_grep() {
     let error = load_error(
         &h,
         r#"
-import { parse } from "codemod:workflow";
+import { parse } from "codemod/workflow";
 export default async function main() {}
 "#,
     );
     assert!(
-        error.contains("import { parse } from \"codemod:ast-grep\""),
+        error.contains("import { parse } from \"codemod/ast-grep\""),
         "{error}"
     );
 }

@@ -1,4 +1,4 @@
-// `codemod:metrics` as the workflow body sees it. Declaring a metric at
+// `codemod/metrics` as the workflow body sees it. Declaring a metric at
 // module level is fine (steps and callbacks get the real module); recording
 // one in the body is not, because the body runs again on every resume.
 

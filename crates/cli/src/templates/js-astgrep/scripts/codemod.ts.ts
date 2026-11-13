@@ -1,7 +1,7 @@
-import type { Codemod } from "codemod:ast-grep";
-import type JS from "codemod:ast-grep/langs/javascript";
-import type TS from "codemod:ast-grep/langs/typescript";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod } from "codemod/ast-grep";
+import type JS from "codemod/ast-grep/langs/javascript";
+import type TS from "codemod/ast-grep/langs/typescript";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 // You can change the language to JS, TS, or TSX depending on your needs. Here we use a union type to support all three.
 // Please note that TSX is different from TS in that it supports JSX syntax and treats type generics differently, so make sure to choose the one that best fits your codebase.
@@ -24,7 +24,9 @@ const codemod: Codemod<JSOrTS> = async (root) => {
   const edits = nodes.map((node) => {
     const varName = node.getMatch("VAR")?.text();
     const value = node.getMatch("VALUE")?.text();
-    return node.replace(`const ${varName} = ${value}`);
+    // The matched declaration includes its trailing semicolon (when present), so keep it.
+    const semicolon = node.text().endsWith(";") ? ";" : "";
+    return node.replace(`const ${varName} = ${value}${semicolon}`);
   });
 
   // Returning null tells the engine nothing changed, so the file is left untouched.

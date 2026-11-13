@@ -1,3 +1,4 @@
+use crate::codemod_modules::{codemod_module, codemod_module_specifier};
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::utils::transpiler;
 use rquickjs::{
@@ -23,6 +24,41 @@ impl<R: ModuleResolver> Resolver for QuickJSResolver<R> {
         match self.resolver.resolve(base, name) {
             Ok(resolved_path) => Ok(resolved_path),
             Err(_) => Err(Error::new_resolving(base, name)),
+        }
+    }
+}
+
+/// Resolves the codemod runtime modules a runtime offers. `codemod/ast-grep`
+/// and the older `codemod:ast-grep` resolve to the same module, which loaders
+/// register under `codemod/ast-grep`.
+pub struct CodemodModuleResolver {
+    modules: Vec<&'static str>,
+}
+
+impl CodemodModuleResolver {
+    /// Offer these modules (names from [`crate::codemod_modules::CODEMOD_MODULES`]).
+    pub fn new(modules: &[&'static str]) -> Self {
+        Self {
+            modules: modules.to_vec(),
+        }
+    }
+
+    /// The modules every transform gets, and `llm` when `llm` is set (it
+    /// makes network requests, so it needs the fetch capability).
+    pub fn offering(llm: bool) -> Self {
+        let mut modules = vec!["ast-grep", "workflow", "metrics", "runtime"];
+        if llm {
+            modules.push("llm");
+        }
+        Self { modules }
+    }
+}
+
+impl Resolver for CodemodModuleResolver {
+    fn resolve(&mut self, _ctx: &Ctx<'_>, base: &str, name: &str) -> Result<String> {
+        match codemod_module(name).filter(|module| self.modules.contains(module)) {
+            Some(module) => Ok(codemod_module_specifier(module)),
+            None => Err(Error::new_resolving(base, name)),
         }
     }
 }

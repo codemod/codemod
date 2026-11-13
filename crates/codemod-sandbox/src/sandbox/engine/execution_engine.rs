@@ -3,7 +3,7 @@ use super::curated_fs::{
     normalize_virtual_absolute_path, CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule,
     FileFetcher,
 };
-use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
+use super::quickjs_adapters::{CodemodModuleResolver, QuickJSLoader, QuickJSResolver};
 use super::transform_helpers::{
     build_transform_options, process_transform_result, ModificationCheck,
 };
@@ -420,27 +420,22 @@ where
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
     // Add AstGrepModule
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
+    built_in_loader = built_in_loader.with_module("codemod/ast-grep", AstGrepModule);
 
     // Add WorkflowGlobalModule (step outputs)
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
+    built_in_loader = built_in_loader.with_module("codemod/workflow", WorkflowGlobalModule);
 
     // Add MetricsModule (metrics tracking)
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+    built_in_loader = built_in_loader.with_module("codemod/metrics", MetricsModule);
 
     // Engine-owned model access can make network requests, so expose it only
     // when the caller explicitly grants the fetch capability.
     if llm_capability_enabled {
-        built_in_resolver = built_in_resolver.add_name("codemod:llm");
-        built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
+        built_in_loader = built_in_loader.with_module("codemod/llm", LlmModule);
     }
 
     // Add RuntimeModule (progress/failure hooks)
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+    built_in_loader = built_in_loader.with_module("codemod/runtime", RuntimeModule);
 
     if curated_fs_target.is_some() {
         built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
@@ -455,7 +450,11 @@ where
     // Combine resolvers and loaders
     runtime
         .set_loader(
-            (built_in_resolver, fs_resolver),
+            (
+                CodemodModuleResolver::offering(llm_capability_enabled),
+                built_in_resolver,
+                fs_resolver,
+            ),
             (built_in_loader, fs_loader),
         )
         .await;
@@ -775,28 +774,28 @@ where
     module_builder.enable_fs();
     module_builder.enable_child_process();
 
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+    let (built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
 
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
+    built_in_loader = built_in_loader.with_module("codemod/ast-grep", AstGrepModule);
 
     // Add WorkflowGlobalModule (step outputs)
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
+    built_in_loader = built_in_loader.with_module("codemod/workflow", WorkflowGlobalModule);
 
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+    built_in_loader = built_in_loader.with_module("codemod/metrics", MetricsModule);
 
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+    built_in_loader = built_in_loader.with_module("codemod/runtime", RuntimeModule);
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
 
     runtime
         .set_loader(
-            (built_in_resolver, fs_resolver),
+            (
+                CodemodModuleResolver::offering(false),
+                built_in_resolver,
+                fs_resolver,
+            ),
             (built_in_loader, fs_loader),
         )
         .await;
@@ -964,17 +963,13 @@ where
     let (mut built_in_resolver, mut built_in_loader, global_attachment) =
         module_builder.builder.build();
 
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
+    built_in_loader = built_in_loader.with_module("codemod/ast-grep", AstGrepModule);
 
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
+    built_in_loader = built_in_loader.with_module("codemod/workflow", WorkflowGlobalModule);
 
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
+    built_in_loader = built_in_loader.with_module("codemod/metrics", MetricsModule);
 
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+    built_in_loader = built_in_loader.with_module("codemod/runtime", RuntimeModule);
 
     if curated_fs_target.is_some() {
         built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
@@ -988,7 +983,11 @@ where
 
     runtime
         .set_loader(
-            (built_in_resolver, fs_resolver),
+            (
+                CodemodModuleResolver::offering(false),
+                built_in_resolver,
+                fs_resolver,
+            ),
             (built_in_loader, fs_loader),
         )
         .await;
@@ -1963,6 +1962,66 @@ function example() {
             3,
             "Should have counted 3 console.log calls"
         );
+    }
+
+    #[tokio::test]
+    async fn codemod_modules_import_as_codemod_slash_and_the_older_colon_spelling() {
+        use crate::metrics::MetricsContext;
+
+        let metrics_ctx = MetricsContext::new();
+        // Both spellings name one module: an atom from each counts into the
+        // same metric, and the module objects are the same.
+        let codemod_content = r#"
+import { useMetricAtom } from "codemod/metrics";
+import * as colon from "codemod:metrics";
+import { parse } from "codemod/ast-grep";
+import { parse as parseColon } from "codemod:ast-grep";
+import { progress } from "codemod/runtime";
+
+export default function transform(root) {
+  if (parse !== parseColon) throw new Error("two ast-grep modules");
+  progress("visiting");
+  useMetricAtom("calls").increment({ via: "slash" });
+  colon.useMetricAtom("calls").increment({ via: "colon" });
+  return parse("javascript", root.root().text().replace("old", "new")).root().text();
+}
+        "#
+        .trim();
+
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "const old = 1;",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: Some(metrics_ctx.clone()),
+            llm_request_handler: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: Path::new("."),
+        };
+
+        match execute_codemod_with_quickjs(options).await {
+            Ok(output) => match output.primary {
+                ExecutionResult::Modified(modified) => {
+                    assert_eq!(modified.content, "const new = 1;")
+                }
+                other => panic!("expected a modified result, got {other:?}"),
+            },
+            Err(e) => panic!("expected success, got {e:?}"),
+        }
+        let calls = metrics_ctx.get_all().remove("calls").unwrap();
+        assert_eq!(calls.len(), 2, "{calls:?}");
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-// `codemod:ast-grep` in Node.js and Bun, backed by the native addon: the same
+// `codemod/ast-grep` in Node.js and Bun, backed by the native addon: the same
 // SgRoot and SgNode methods, matchers and languages as in the engine.
 //
 // Roots parsed here have no semantic provider, as with `parse()` in an engine

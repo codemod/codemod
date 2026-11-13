@@ -7,7 +7,14 @@ use std::collections::HashSet;
 
 use crate::types::LlrtSupportedModules;
 
+/// Every specifier of the codemod runtime modules: `codemod/<name>`, and the
+/// older spelling `codemod:<name>` (see `codemod_sandbox::codemod_modules`).
 pub const CODEMOD_RUNTIME_MODULES: &[&str] = &[
+    "codemod/ast-grep",
+    "codemod/workflow",
+    "codemod/metrics",
+    "codemod/runtime",
+    "codemod/llm",
     "codemod:ast-grep",
     "codemod:workflow",
     "codemod:metrics",
