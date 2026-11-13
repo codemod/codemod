@@ -1,24 +1,31 @@
 //! What steps that run JavaScript in their own isolates share: `forEachFile`
 //! callbacks and function steps both run in sandbox [`Worker`]s with every
 //! `codemod:*` module, the LLRT modules the run's capabilities allow, and
-//! relative or package imports resolved from the workflow's directory.
+//! relative or package imports resolved from the workflow's directory, plus
+//! `codemod:workflow/dependencies` (`registry`, `semver`, the dependency
+//! graph) backed by the run's package registry.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use codemod_deps::Registry;
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::sandbox::runtime_module::{RuntimeEvent, RuntimeEventKind};
-use codemod_sandbox::{MetricsContext, SharedStateContext, WorkerOptions};
+use codemod_sandbox::{MetricsContext, SharedStateContext, Worker, WorkerOptions};
+use rquickjs::async_with;
 use serde_json::Value;
 
 use super::TaskContext;
+use crate::deps_host::{self, DEPENDENCIES_JS, DEPENDENCIES_MODULE};
 use crate::events::Event;
+use crate::run::{SEMVER_JS, SEMVER_MODULE};
 
 /// Shared by every worker of one step.
 pub(crate) struct StepIsolates {
     pub resolver: Arc<OxcResolver>,
     pub metrics: MetricsContext,
     pub shared_state: SharedStateContext,
+    pub registry: Option<Arc<dyn Registry>>,
     initial_state: HashMap<String, Value>,
 }
 
@@ -35,6 +42,7 @@ impl StepIsolates {
             resolver: Arc::new(resolver),
             metrics: MetricsContext::new(),
             shared_state: SharedStateContext::with_initial_state(initial_state.clone()),
+            registry: task.run.services.package_registry.clone(),
             initial_state,
         })
     }
@@ -52,7 +60,10 @@ impl StepIsolates {
         WorkerOptions {
             capabilities: run.services.capabilities.clone(),
             resolver: Arc::clone(&self.resolver),
-            modules: Vec::new(),
+            modules: vec![
+                (SEMVER_MODULE.to_string(), SEMVER_JS.to_string()),
+                (DEPENDENCIES_MODULE.to_string(), DEPENDENCIES_JS.to_string()),
+            ],
             metrics: self.metrics.clone(),
             shared_state: self.shared_state.clone(),
             llm_request_handler: None,
@@ -104,4 +115,20 @@ pub(crate) fn module_name(task: &TaskContext<'_>, id: &str) -> String {
         .join(format!("__{id}.js"))
         .to_string_lossy()
         .into_owned()
+}
+
+/// Start one isolate, with `__dependencyHost` installed for
+/// `codemod:workflow/dependencies`.
+pub(crate) async fn start(
+    options: WorkerOptions<OxcResolver>,
+    registry: Option<Arc<dyn Registry>>,
+) -> Result<Worker, String> {
+    let worker = Worker::new(options)
+        .await
+        .map_err(|e| format!("could not start the step's runtime: {e}"))?;
+    async_with!(worker.context => |ctx| {
+        deps_host::install(&ctx, registry).map_err(|e| e.to_string())
+    })
+    .await?;
+    Ok(worker)
 }

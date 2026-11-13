@@ -392,3 +392,197 @@ export default async function main() {
     );
     assert_eq!(output(&report).unwrap(), json!([]));
 }
+
+const YARN_LOCK: &str = r#"
+"app@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "app@workspace:."
+
+"table@npm:^3.0.0":
+  version: 3.2.5
+  resolution: "table@npm:3.2.5"
+  dependencies:
+    dnd: "npm:^13.0.0"
+
+"dnd@npm:^13.0.0":
+  version: 13.0.0
+  resolution: "dnd@npm:13.0.0"
+  peerDependencies:
+    react: ^16.8.5 || ^17.0.0 || ^18.0.0
+"#;
+
+fn yarn_target(h: &Harness) {
+    h.write("yarn.lock", YARN_LOCK);
+    h.write(
+        "package.json",
+        r#"{ "name": "app", "dependencies": { "table": "^3.0.0" } }"#,
+    );
+}
+
+/// dnd's releases, counting how often the registry is asked.
+#[derive(Default)]
+struct FakeRegistry(std::sync::atomic::AtomicUsize);
+
+impl codemod_deps::Registry for FakeRegistry {
+    fn releases(
+        &self,
+        _: codemod_deps::Ecosystem,
+        names: &[String],
+    ) -> Result<std::collections::BTreeMap<String, Vec<codemod_deps::Release>>, String> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let release = |version: &str, react: &str| codemod_deps::Release {
+            version: version.into(),
+            yanked: false,
+            dependencies: vec![("react".into(), react.into(), codemod_deps::Kind::Peer)],
+        };
+        let dnd = vec![
+            release("13.0.0", "^16.8.5 || ^17.0.0 || ^18.0.0"),
+            release("13.1.0", "^16.8.5 || ^17.0.0 || ^18.0.0"),
+            release("14.0.0", "^18.0.0 || ^19.0.0"),
+        ];
+        Ok(names
+            .iter()
+            .map(|name| {
+                (
+                    name.clone(),
+                    if name == "dnd" {
+                        dnd.clone()
+                    } else {
+                        Vec::new()
+                    },
+                )
+            })
+            .collect())
+    }
+}
+
+fn with_registry(registry: Arc<FakeRegistry>) -> Harness {
+    Harness::with_services(
+        Arc::new(MemoryStore::default()),
+        Arc::new(NonInteractive { approve_all: false }),
+        Services {
+            package_registry: Some(registry),
+            ..Services::default()
+        },
+    )
+}
+
+#[test]
+fn a_dependency_graph_callback_walks_the_targets_lockfiles_through_a_live_handle() {
+    let h = Harness::new();
+    yarn_target(&h);
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod:workflow";
+export default async function main() {
+  return await step(dependencyGraph({}, (g) => g.node("dnd").workspacesReaching().map((r) => r.chain)));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!([["app@0.0.0-use.local", "table@3.2.5", "dnd@13.0.0"]])
+    );
+}
+
+#[test]
+fn node_releases_keep_newer_versions_whose_ranges_accept_the_asked_version() {
+    let h = with_registry(Arc::default());
+    yarn_target(&h);
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod:workflow";
+export default async function main() {
+  return await step(dependencyGraph({}, async (g) => {
+    const releases = await g.node("dnd").releases({ accepting: { react: "19.0.0" }, newerThanMine: true });
+    return releases.map((r) => `${r.version}${r.breaking ? " breaking" : ""}`);
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(["14.0.0 breaking"]));
+}
+
+#[test]
+fn a_resumed_run_replays_a_dependency_graph_step_without_asking_the_registry_again() {
+    let registry = Arc::new(FakeRegistry::default());
+    let h = with_registry(registry.clone());
+    yarn_target(&h);
+    let workflow = |later: &str| {
+        format!(
+            r#"
+import {{ step, dependencyGraph, registry }} from "codemod:workflow";
+export default async function main() {{
+  const dnd = await step(dependencyGraph({{}}, async () => (await registry.npm("dnd")).versions.length));
+  await step("Later", () => {{ {later} }});
+  return dnd;
+}}
+"#
+        )
+    };
+    let failed = h.start(&workflow(r#"throw new Error("not yet");"#), Value::Null);
+    h.resume(&failed, Some(&workflow("return 1;")));
+    assert_eq!(registry.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_for_each_file_callback_can_await_a_registry_lookup() {
+    let h = with_registry(Arc::default());
+    h.write("a.txt", "dnd");
+    let report = h.start(
+        r#"
+import { step, forEachFile, registry } from "codemod:workflow";
+export default async function main() {
+  const found = await step(forEachFile("*.txt", async (file) => (await registry.npm(file.text)).versions.length));
+  return found.outputs;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([3]));
+}
+
+#[test]
+fn a_function_step_can_await_a_registry_lookup() {
+    let h = with_registry(Arc::default());
+    let report = h.start(
+        r#"
+import { step, registry } from "codemod:workflow";
+export default async function main() {
+  return await step("Look up dnd", async () => (await registry.npm("dnd")).versions.length);
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(3));
+}
+
+#[test]
+fn a_registry_lookup_outside_a_step_fails_because_it_would_not_be_recorded() {
+    let h = with_registry(Arc::default());
+    let report = h.start(
+        r#"
+import { registry } from "codemod:workflow";
+export default async function main() { await registry.npm("dnd"); }
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("must run inside a step"), "{error}");
+}
+
+#[test]
+fn a_dependency_graph_step_fails_when_the_target_has_no_lockfile() {
+    let h = Harness::new();
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod:workflow";
+export default async function main() { await step("Deps", dependencyGraph({}, (g) => g.workspaces())); }
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("step 'Deps' failed: no lockfile"), "{error}");
+}

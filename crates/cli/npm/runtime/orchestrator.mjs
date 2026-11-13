@@ -89,6 +89,28 @@ export function createTasks(options = {}) {
     });
   }
 
+  /**
+   * Read the target's lockfiles into one dependency graph and run `callback`
+   * with a live handle on it, in its own isolate. Only what the callback
+   * returns is recorded.
+   */
+  function dependencyGraph(options, callback) {
+    const extracted = callbackOf(callback);
+    if (!extracted || extracted.fn) {
+      throw new TypeError(
+        "dependencyGraph: the callback was not extracted by the build; run the workflow through the codemod-workflow build",
+      );
+    }
+    const { lockfiles, ...rest } = options ?? {};
+    const unknown = Object.keys(rest);
+    if (unknown.length) throw new TypeError(`dependencyGraph: unknown option '${unknown[0]}'`);
+    return Object.freeze({
+      [TASK]: "dependencyGraph",
+      lockfiles: lockfiles === undefined ? undefined : globs(lockfiles, "lockfiles", "dependencyGraph: "),
+      callback: extracted,
+    });
+  }
+
   function hostTask(kind, options) {
     const content = withoutUndefined(options);
     checkJson(content, kind);
@@ -154,6 +176,7 @@ export function createTasks(options = {}) {
     callbackOf,
     __callback,
     forEachFile,
+    dependencyGraph,
     shell,
     jssg,
     astGrep,
@@ -263,6 +286,13 @@ export function createRuntime(host) {
         captures: capturesOf(task.callback),
       };
       fn = task.callback.fn;
+    } else if (task && task[TASK] === "dependencyGraph") {
+      content = withoutUndefined({
+        kind: "dependencyGraph",
+        lockfiles: task.lockfiles,
+        callback: task.callback.id,
+        captures: capturesOf(task.callback),
+      });
     } else if (task && task[TASK] === "host") {
       content = task.content;
     } else {
@@ -408,11 +438,11 @@ function normalizeSelector(selector) {
   return normalized;
 }
 
-function globs(value, field) {
+function globs(value, field, owner = "forEachFile: selector.") {
   if (value === undefined) return [];
   if (typeof value === "string") return [value];
   if (Array.isArray(value) && value.every((item) => typeof item === "string")) return [...value];
-  throw new TypeError(`forEachFile: selector.${field} must be a glob or an array of globs`);
+  throw new TypeError(`${owner}${field} must be a glob or an array of globs`);
 }
 
 function defaultLabel(position, content) {
@@ -432,6 +462,8 @@ function defaultLabel(position, content) {
       return `approval: ${truncate(content.message)}`;
     case "codemod":
       return `codemod ${content.source}`;
+    case "dependencyGraph":
+      return content.lockfiles ? `dependencyGraph ${content.lockfiles.join(", ")}` : "dependencyGraph";
     case "agent":
       return `agent: ${truncate(content.prompt)}`;
     default:

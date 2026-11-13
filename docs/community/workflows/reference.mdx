@@ -216,10 +216,57 @@ The body is the code outside steps and callbacks. It runs again on every resume 
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
 | `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
 | `installSkill({ package, path, harness, scope, force })` | Install a package's agent skill. |
+| `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback` on it. See [Dependencies](#dependencies). Result: what the callback returns. |
 | `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
 | `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. These only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped. |
 
 Paths given to `jssg`, `astGrep` and shard functions are relative to the workflow file.
+
+### Dependencies
+
+`dependencyGraph` reads the target's `yarn.lock` (Yarn 2+), `pnpm-lock.yaml`, `package-lock.json` (v2 and v3) and `Cargo.lock`, with each workspace's `package.json` or `Cargo.toml` for declared ranges and dependency kinds. `lockfiles` limits which lockfiles are read, as a glob or a list of globs relative to the target.
+
+The callback gets the graph itself, not a copy. It runs in its own isolate, like a `forEachFile` callback, may be `async`, and only what it returns is recorded:
+
+```ts
+import { step, dependencyGraph } from "codemod:workflow";
+
+const usesMui = await step(
+  dependencyGraph({ lockfiles: "yarn.lock" }, (g) =>
+    g.dependents("@material-ui/core", { kinds: "prod" })
+      .filter((edge) => edge.from.isWorkspace)
+      .map((edge) => edge.from.workspace),
+  ),
+);
+```
+
+| On the graph | Returns |
+|---|---|
+| `g.workspaces()` | The repository's own packages |
+| `g.nodes(name?)`, `g.node(name, version?)` | Installed packages, each a `name@version` node |
+| `g.dependents(name, { kinds })` | Edges that declare a dependency on `name`, resolved or not (peer edges never resolve) |
+| `g.chains({ from, to, kinds })` | Shortest chains from each `from` node (default: every workspace) to a `to` node |
+| `node.dependencies({ kinds })`, `node.dependents({ kinds })` | Edges out of and into one node |
+| `node.workspacesReaching({ kinds })` | Each workspace that reaches the node, with its chain |
+| `node.releases({ accepting, newerThanMine })` | The package's releases from the registry, each with `breaking` relative to the installed version |
+| `edge.accepts(version)` | Whether the edge's declared range accepts a version: `true`, `false`, or `null` when it cannot tell |
+
+Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`. In a step's result, nodes become `name@version` text and edges `{ from, to, kind, range }`.
+
+### `registry` and `semver`
+
+`registry.npm(name)` and `registry.cargo(name)` resolve to `{ ecosystem, name, versions }`, oldest first, with each release's `dependencies`, `peerDependencies` and `optionalDependencies`. They work inside a function step or a `forEachFile` or `dependencyGraph` callback, so the answer is recorded with the step and a resumed run does not ask again; in the workflow body they reject. Each package is fetched once per run, and lookups started together are fetched together:
+
+```ts
+import { step, registry, semver } from "codemod:workflow";
+
+const ready = await step("Releases accepting React 19", async () => {
+  const { versions } = await registry.npm("react-redux");
+  return versions.filter((r) => semver.satisfies("19.0.0", r.peerDependencies.react ?? "*") === true).map((r) => r.version);
+});
+```
+
+`semver` has `satisfies(version, range)` (`null` for ranges it cannot read, such as `workspace:`), `compare`, `gt`, `lt`, `isBreaking(from, to)` and `isPrerelease`. Pass `{ ecosystem: "cargo" }` for Cargo's rules.
 
 ### Shell commands
 

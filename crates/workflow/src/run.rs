@@ -37,6 +37,9 @@ const RUNTIME_JS: &str = include_str!("js/workflow.js");
 /// The orchestrator shared with the Node.js host.
 pub const ORCHESTRATOR_JS: &str = include_str!("js/orchestrator.js");
 const ORCHESTRATOR_MODULE: &str = "codemod:workflow/orchestrator";
+/// `semver` for the body and isolates; see `js/semver.js`.
+pub(crate) const SEMVER_MODULE: &str = "codemod:workflow/semver";
+pub(crate) const SEMVER_JS: &str = include_str!("js/semver.js");
 const BODY_GLOBALS_JS: &str = include_str!("js/body_globals.js");
 const BODY_METRICS_JS: &str = include_str!("js/body_metrics.js");
 const WORKFLOW_MODULE: &str = "workflow.js";
@@ -160,6 +163,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             BuiltinResolver::default()
                 .with_module(FLOW_MODULE)
                 .with_module(ORCHESTRATOR_MODULE)
+                .with_module(SEMVER_MODULE)
                 .with_module("codemod:metrics"),
             QuickJSResolver::new(Arc::new(packages)),
         ),
@@ -168,6 +172,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             BuiltinLoader::default()
                 .with_module(FLOW_MODULE, RUNTIME_JS)
                 .with_module(ORCHESTRATOR_MODULE, ORCHESTRATOR_JS)
+                .with_module(SEMVER_MODULE, SEMVER_JS)
                 .with_module("codemod:metrics", BODY_METRICS_JS),
             QuickJSLoader,
         ),
@@ -335,6 +340,11 @@ fn install_host<'js>(
                 })
             },
         )?,
+    )?;
+
+    object.set(
+        "semver",
+        Function::new(ctx.clone(), crate::deps_host::semver)?,
     )?;
 
     let starter = Arc::clone(run);

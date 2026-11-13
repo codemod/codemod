@@ -1092,6 +1092,7 @@ dependencies = [
  "chrono",
  "clap",
  "codemod-agents",
+ "codemod-deps",
  "codemod-llrt-capabilities",
  "codemod-mcp",
  "codemod-sandbox",
@@ -1189,6 +1190,22 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-typescript",
  "walkdir",
+]
+
+[[package]]
+name = "codemod-deps"
+version = "1.18.7"
+dependencies = [
+ "futures",
+ "ignore",
+ "node-semver",
+ "reqwest 0.12.23",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "toml",
 ]
 
 [[package]]
@@ -1320,6 +1337,7 @@ dependencies = [
  "chrono",
  "codemod-agents",
  "codemod-ai",
+ "codemod-deps",
  "codemod-llrt-capabilities",
  "codemod-sandbox",
  "ignore",
@@ -4520,6 +4538,19 @@ dependencies = [
  "cfg-if",
  "cfg_aliases 0.2.1",
  "libc",
+]
+
+[[package]]
+name = "node-semver"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b1a233ea5dc37d2cfba31cfc87a5a56cc2a9c04e3672c15d179ca118dae40a7"
+dependencies = [
+ "bytecount",
+ "miette",
+ "nom 7.1.3",
+ "serde",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

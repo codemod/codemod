@@ -7,12 +7,14 @@
 //   canceled(): boolean                  whether the run was asked to stop
 //   start(request: string): id           start a host task; settled via __workflowSettle
 //   evaluate(kind, expression, scope)    evaluate a workflow.yaml `${{ }}` expression
+//   semver(op, ecosystem, a, b): string   compare versions and ranges, as JSON
 //   now(): number                        the real time, for step records
 //   advanceClock(ms: number)             move the body's clock (Date.now()) forward
 //   testPlan(): string                   `{ until, given }` when the run is a test, else "null"
 //   stop()                               the test's `until` step has started
 
 import { createRuntime } from "codemod:workflow/orchestrator";
+import { makeSemver } from "codemod:workflow/semver";
 
 export {
   AwaitingApprovalError,
@@ -63,6 +65,7 @@ export const {
   __callback,
   __evaluate,
   forEachFile,
+  dependencyGraph,
   shell,
   jssg,
   astGrep,
@@ -76,3 +79,24 @@ export const {
   pullRequest,
   step,
 } = runtime;
+
+// `registry` and `semver` in the body. Inside steps and callbacks the build
+// imports them from `codemod:workflow/dependencies` instead, which runs in
+// the isolate.
+
+/** Package releases from npm and crates.io; only inside a step or callback, so the answer is recorded. */
+export const registry = Object.freeze({
+  npm: () => outsideStep("npm"),
+  cargo: () => outsideStep("cargo"),
+});
+
+function outsideStep(ecosystem) {
+  return Promise.reject(
+    new Error(`registry.${ecosystem}(...) must run inside a step, so its answer is recorded`),
+  );
+}
+
+/** Versions and ranges, by npm rules or (with `{ ecosystem: "cargo" }`) Cargo's. */
+export const semver = makeSemver((op, ecosystem, a, b) =>
+  JSON.parse(raw.semver(op, ecosystem, a, b)),
+);

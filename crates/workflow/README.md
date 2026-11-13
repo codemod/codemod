@@ -23,11 +23,12 @@ export default async function main() {
 
 | Path | What it does |
 |---|---|
-| `src/build.rs` | oxc build: extracts `forEachFile` callbacks and function steps, turns outside variables into captures, reports the callback rules and body import rules as build errors; `check_imports` walks the import graphs of packages the body uses; `inspect` reads a module's task calls without running it |
+| `src/build.rs` | oxc build: extracts `forEachFile` and `dependencyGraph` callbacks and function steps, turns outside variables into captures, reports the callback rules and body import rules as build errors; `check_imports` walks the import graphs of packages the body uses; `inspect` reads a module's task calls without running it |
 | `src/run.rs`, `src/js/workflow.js`, `src/js/body_globals.js` | The workflow body in one QuickJS context with pure modules and replay-safe `Date`/`Math.random`; the `codemod:workflow` runtime: `step()`, replay by position and content, state, events, cancellation |
 | `src/tasks/isolate.rs`, `src/tasks/for_each_file.rs`, `src/tasks/function.rs` | Callbacks and function steps on sandbox workers (`codemod_sandbox::Worker`): the JSSG module set, async, imports, metrics and state |
 | `src/engine.rs` | `Engine::start` / `resume` / `cancel` over a `RunStore` (`crates/state`) |
-| `src/tasks/` | Host tasks, each a thin adapter over an existing executor: `forEachFile`, `jssg` (`butterflow_core::jssg_runner`), `astGrep`, `shell`, `shard`, `codemod`, `agent`, `installSkill`, `approval`, `branch` / `commit` / `pullRequest` |
+| `src/tasks/` | Host tasks, each a thin adapter over an existing executor: `forEachFile`, `jssg` (`butterflow_core::jssg_runner`), `astGrep`, `shell`, `shard`, `codemod`, `agent`, `installSkill`, `approval`, `branch` / `commit` / `pullRequest`, and `dependencyGraph` (over the `codemod-deps` crate) |
+| `src/deps_host.rs`, `src/js/dependencies.js`, `src/js/semver.js` | `registry` and `semver`: the module isolates import them from, batching lookups started together; the host side over `Services::package_registry` |
 | `src/tasks/changes.rs` | One commit path for every task that edits files: conflict checks, dry run, diffs |
 | `src/compat/` | workflow.yaml to TypeScript; `${{ }}` expressions become TypeScript or fall back to `evaluate()`, which uses the YAML engine's evaluator |
 | `src/events.rs`, `src/interaction.rs` | What the engine reports, and the questions it asks; the CLI implements both |
@@ -43,6 +44,10 @@ renders events and answers prompts.
 - `codemod:llm` inside JSSG transforms, callbacks and function steps.
 - Creating or changing other files from a `forEachFile` callback (`jssgTransform`, `fs` writes).
 - `jssg()` on the same worker engine as `forEachFile`.
+- `registry` inside JSSG transforms run by the `jssg` task, and `dependencyGraph` and
+  `registry` on the Node.js host.
+- One rate limit for registry requests across the whole run: each batch of
+  lookups is capped, but batches from parallel workers are not.
 - Crash-safe file commits, and conflict checks between steps running in parallel.
 
 ## Run the tests
