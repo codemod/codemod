@@ -16,6 +16,7 @@ mod approval;
 mod ast_grep;
 pub(crate) mod changes;
 mod codemod;
+mod dependency_graph;
 pub(crate) mod for_each_file;
 mod function;
 mod git;
@@ -134,6 +135,7 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
     let result = match kind.as_str() {
         "forEachFile" => for_each_file::run(task, content).map_err(TaskError::from),
         "function" => function::run(task, content).map_err(TaskError::from),
+        "dependencyGraph" => dependency_graph::run(task, content).map_err(TaskError::from),
         "shell" => shell::run(task, parse(content)?),
         "jssg" => jssg::run(task, parse(content)?),
         "astGrep" => ast_grep::run(task, parse(content)?),

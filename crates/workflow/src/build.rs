@@ -198,6 +198,7 @@ struct CallbackParts {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Isolated {
     Callback,
+    GraphCallback,
     FunctionStep,
 }
 
@@ -205,6 +206,7 @@ impl Isolated {
     fn noun(self) -> &'static str {
         match self {
             Isolated::Callback => "forEachFile callback",
+            Isolated::GraphCallback => "dependencyGraph callback",
             Isolated::FunctionStep => "function step",
         }
     }
@@ -212,6 +214,10 @@ impl Isolated {
 
 /// `codemod:workflow` functions that work inside an isolate: the JSSG state API.
 const ISOLATE_STATE_API: &[&str] = &["getState", "setState", "unsetState", "acquireLock"];
+
+/// `codemod:workflow` exports that steps and callbacks import from
+/// `codemod:workflow/dependencies`, which runs in the isolate.
+const ISOLATE_DEPENDENCY_API: &[&str] = &["registry", "semver"];
 
 pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
     let allocator = Allocator::default();
@@ -368,27 +374,36 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                         .flatten()
                 });
                 match workflow_function.as_deref() {
-                    Some("forEachFile") => match call.arguments.last() {
-                        Some(Argument::ArrowFunctionExpression(f)) => {
-                            sites.push((f.span, Isolated::Callback))
-                        }
-                        Some(Argument::FunctionExpression(f)) => {
-                            sites.push((f.span, Isolated::Callback))
-                        }
-                        Some(other) => {
-                            return Err(analysis.error(
+                    Some(task @ ("forEachFile" | "dependencyGraph")) => {
+                        let kind = if task == "forEachFile" {
+                            Isolated::Callback
+                        } else {
+                            Isolated::GraphCallback
+                        };
+                        match call.arguments.last() {
+                            Some(Argument::ArrowFunctionExpression(f)) => {
+                                sites.push((f.span, kind))
+                            }
+                            Some(Argument::FunctionExpression(f)) => sites.push((f.span, kind)),
+                            Some(other) => {
+                                return Err(analysis.error(
                                     other.span().start,
-                                    "forEachFile's callback must be written inline as a function, so the build can extract it".to_string(),
+                                    format!("{task}'s callback must be written inline as a function, so the build can extract it"),
                                 ));
-                        }
-                        None => {
-                            return Err(analysis.error(
-                                call.span.start,
-                                "forEachFile takes a callback, optionally after a selector"
+                            }
+                            None => {
+                                return Err(analysis.error(
+                                    call.span.start,
+                                    if task == "forEachFile" {
+                                        "forEachFile takes a callback, optionally after a selector"
+                                    } else {
+                                        "dependencyGraph takes options and a callback"
+                                    }
                                     .to_string(),
-                            ));
+                                ));
+                            }
                         }
-                    },
+                    }
                     Some("step") => {
                         for argument in call.arguments.iter().take(2) {
                             match argument {
@@ -673,12 +688,15 @@ impl Analysis<'_> {
     ) -> Result<(), BuildError> {
         let name = self.name(symbol);
         if let Some(import) = self.imports.get(&symbol) {
-            if import.source == FLOW_MODULE
-                && !import
-                    .imported
-                    .as_deref()
-                    .is_some_and(|imported| ISOLATE_STATE_API.contains(&imported))
-            {
+            let imported = import.imported.as_deref().unwrap_or_default();
+            if import.source == FLOW_MODULE && ISOLATE_DEPENDENCY_API.contains(&imported) {
+                parts.imports.insert(import.line.replace(
+                    &format!("{FLOW_MODULE:?}"),
+                    &format!("{:?}", crate::deps_host::DEPENDENCIES_MODULE),
+                ));
+                return Ok(());
+            }
+            if import.source == FLOW_MODULE && !ISOLATE_STATE_API.contains(&imported) {
                 return Err(self.error(
                     at.start,
                     format!(

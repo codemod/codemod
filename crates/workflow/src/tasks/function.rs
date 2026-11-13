@@ -9,7 +9,7 @@ use rquickjs::{async_with, CatchResultExt, Function, Module, Promise};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::isolate::{module_name, StepIsolates};
+use super::isolate::{self, module_name, StepIsolates};
 use super::{block_on, TaskContext, TaskOutcome};
 
 #[derive(Deserialize)]
@@ -39,11 +39,10 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     let isolates = StepIsolates::new(task)?;
     let options = isolates.worker_options(task, None);
     let name = module_name(task, &request.callback);
+    let registry = isolates.registry.clone();
 
     let json = block_on(async move {
-        let sandbox = codemod_sandbox::Worker::new(options)
-            .await
-            .map_err(|e| format!("could not start the step's runtime: {e}"))?;
+        let sandbox = isolate::start(options, registry).await?;
         let sandbox = &sandbox;
         async_with!(sandbox.context => |ctx| {
             let run = async {

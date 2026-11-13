@@ -158,6 +158,7 @@ fn engine(settings: &ExecSettings) -> Result<(Engine, Arc<Renderer>, Arc<Summary
         agent: settings.agent.clone(),
         skip_shard_steps: settings.skip_shard_steps,
         nested_observer: settings.nested_observer.clone(),
+        package_registry: Some(Arc::new(codemod_deps::HttpRegistry::new())),
         summary: Arc::clone(&summary),
     };
     let engine = Engine::new(store()?, renderer.clone(), interaction, services);

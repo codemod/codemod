@@ -21,6 +21,7 @@ use codemod_sandbox::MetricsData;
 
 pub mod build;
 pub mod compat;
+mod deps_host;
 mod engine;
 pub mod events;
 mod expr;
@@ -54,6 +55,9 @@ pub struct Services {
     pub agent: Option<String>,
     /// Skip `shard(...)` steps, returning no shards (pro dry runs).
     pub skip_shard_steps: bool,
+    /// Release metadata for `registry.npm(...)` / `registry.cargo(...)`: one
+    /// shared, cached client for the run, or a fake in tests.
+    pub package_registry: Option<Arc<dyn codemod_deps::Registry>>,
     /// Told when a `codemod(...)` step runs a registry package.
     pub nested_observer: Option<Arc<dyn NestedCodemodRunObserver>>,
     /// Diffs, counters and metrics collected while the run progresses.
