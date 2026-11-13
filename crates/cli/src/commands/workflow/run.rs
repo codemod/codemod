@@ -9,6 +9,7 @@ use butterflow_core::utils::generate_execution_id;
 use clap::Args;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_telemetry::send_event::BaseEvent;
+use console::style;
 
 use crate::commands::TelemetrySenderExt;
 use crate::engine::create_registry_client;
@@ -153,6 +154,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .map(str::to_string)
         .unwrap_or_else(|| args.workflow.clone());
 
+    let is_yaml = !codemod_workflow::is_typescript(&workflow_path);
     let registry = create_registry_client(None)?;
     let pro_dependency = dry_run_only_dependency(&workflow_path, &registry).await?;
     if let Some(source) = pro_dependency.as_deref() {
@@ -245,6 +247,8 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         crate::report_server::serve_report(report).await?;
     } else if format == OutputFormat::Text {
         crate::utils::metrics::print_metrics(&metrics);
+    } else {
+        crate::utils::metrics::print_metrics_jsonl(&metrics);
     }
 
     telemetry
@@ -268,5 +272,26 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         )
         .await;
 
+    if format == OutputFormat::Text && is_yaml {
+        upgrade_hint(&workflow_dir);
+    }
     outcome.result()
+}
+
+/// Tell authors of a workflow.yaml how to move to workflow.ts. YAML keeps
+/// working; this only points the way.
+fn upgrade_hint(workflow_dir: &Path) {
+    let dir = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| workflow_dir.strip_prefix(&cwd).ok().map(Path::to_path_buf))
+        .unwrap_or_else(|| workflow_dir.to_path_buf());
+    let command = if dir.as_os_str().is_empty() {
+        "codemod workflow upgrade".to_string()
+    } else {
+        format!("codemod workflow upgrade {}", dir.display())
+    };
+    eprintln!(
+        "\n{} workflow.yaml runs as before. To move this codemod to workflow.ts, run `{command}`.",
+        style("Tip:").cyan().bold()
+    );
 }

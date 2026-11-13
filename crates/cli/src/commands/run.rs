@@ -470,6 +470,8 @@ pub async fn handler(
         crate::report_server::serve_report(report).await?;
     } else if args.format == OutputFormat::Text {
         crate::utils::metrics::print_metrics(&metrics_data);
+    } else {
+        crate::utils::metrics::print_metrics_jsonl(&metrics_data);
     }
 
     if resolved_package.dry_run_only {

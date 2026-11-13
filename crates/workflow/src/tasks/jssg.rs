@@ -163,8 +163,34 @@ pub(crate) fn execute(
         initial_state: task.state.clone().into_iter().collect(),
         cancel: Some(run.cancel.clone()),
         progress: Some(task.walk_progress()),
+        on_log: Some(step_logs(task)),
     })
     .map_err(TaskError::Failed)
+}
+
+/// The transform's logs as step log lines: each unit (`file :: unit`) once,
+/// then its messages.
+fn step_logs(task: &TaskContext<'_>) -> butterflow_core::jssg_runner::JssgLogCallback {
+    let events = std::sync::Arc::clone(&task.run.events);
+    let position = task.position;
+    std::sync::Arc::new(move |logs| {
+        let mut unit: Option<String> = None;
+        for log in logs {
+            if unit.as_deref() != Some(log.unit.as_str()) {
+                events.emit(crate::events::Event::StepLog {
+                    position,
+                    line: log.unit.clone(),
+                });
+                unit = Some(log.unit);
+            }
+            for line in log.line.lines() {
+                events.emit(crate::events::Event::StepLog {
+                    position,
+                    line: format!("  {line}"),
+                });
+            }
+        }
+    })
 }
 
 fn plan(task: &TaskContext<'_>, outcome: &JssgRunOutcome) -> Result<Vec<PlannedChange>, String> {

@@ -44,6 +44,7 @@
                   "community/workflows/reference",
                   "community/workflows/testing",
                   "community/workflows/node",
+                  "community/workflows/migrate",
                   "community/workflows/ai-harness-rig",
                   "community/workflows/sharding",
                   "community/workflows/yaml"

@@ -65,3 +65,6 @@ apps/cli/package/
 .cursor/rules/mintlify.mdc
 .vercel
 .env*.local
+
+# Compatibility sweep output (scripts/compat-sweep.mjs)
+.compat/

@@ -16,6 +16,9 @@ use codemod_sandbox::sandbox::engine::{
 };
 use codemod_sandbox::sandbox::errors::{ExecutionError, RuntimeError};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
+use codemod_sandbox::sandbox::runtime_module::{
+    RuntimeEvent, RuntimeEventCallback, RuntimeEventKind,
+};
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
 use codemod_sandbox::{MetricsContext, MetricsData, SharedStateContext};
 use language_core::SemanticProvider;
@@ -55,7 +58,24 @@ pub struct JssgRunRequest {
     pub initial_state: HashMap<String, Value>,
     pub cancel: Option<Arc<AtomicBool>>,
     pub progress: Option<ProgressCallback>,
+    /// Receives what the transform logged (`console`, `codemod:runtime`)
+    /// for each file, once the file is done, so files never interleave.
+    pub on_log: Option<JssgLogCallback>,
 }
+
+/// What a transform logged while processing one file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JssgLog {
+    /// `<file> :: <unit>`: the file relative to the target, and the unit the
+    /// transform named with `setCurrentUnit` (the file itself until then).
+    pub unit: String,
+    /// The message: console output as written, or `[warn] …` / `[progress] …`
+    /// with the event's metadata.
+    pub line: String,
+    pub warning: bool,
+}
+
+pub type JssgLogCallback = Arc<dyn Fn(Vec<JssgLog>) + Send + Sync>;
 
 /// One file the transform changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +205,30 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             skipped.fetch_add(1, Ordering::SeqCst);
             return;
         };
+        let relative = file_path
+            .strip_prefix(&target)
+            .unwrap_or(file_path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let logs = Arc::new(Mutex::new(Vec::<JssgLog>::new()));
+        let runtime_event_callback = request.on_log.as_ref().map(|_| {
+            let logs = Arc::clone(&logs);
+            let unit = Mutex::new(relative.clone());
+            let relative = relative.clone();
+            let callback: RuntimeEventCallback = Arc::new(move |event: RuntimeEvent| {
+                if event.kind == RuntimeEventKind::SetCurrentUnit {
+                    *unit.lock().unwrap() = format!("{relative} :: {}", event.message);
+                    return;
+                }
+                let current = unit.lock().unwrap().clone();
+                logs.lock().unwrap().push(JssgLog {
+                    unit: current,
+                    line: format_runtime_event(&event),
+                    warning: event.kind == RuntimeEventKind::Warn,
+                });
+            });
+            callback
+        });
         let result = block_on(execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &request.script_path,
             resolver: Arc::clone(&resolver),
@@ -199,12 +243,18 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             metrics_context: Some(metrics.clone()),
             llm_request_handler: None,
             shared_state_context: Some(shared_state.clone()),
-            runtime_event_callback: None,
+            runtime_event_callback,
             cancellation_flag: request.cancel.clone(),
             test_mode: false,
             dry_run: request.dry_run,
             target_directory: &target,
         }));
+        if let Some(on_log) = &request.on_log {
+            let logs = std::mem::take(&mut *logs.lock().unwrap());
+            if !logs.is_empty() {
+                on_log(logs);
+            }
+        }
         match result {
             Ok(CodemodOutput { primary, secondary }) => {
                 match &primary {
@@ -283,6 +333,22 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
         return Err(format!("the transform failed to start: {first}"));
     }
     Ok(outcome)
+}
+
+/// A runtime event as a log line: console output as written, otherwise
+/// `[warn]` / `[progress]` with the event's metadata.
+fn format_runtime_event(event: &RuntimeEvent) -> String {
+    if event.meta.as_deref() == Some("console") {
+        return event.message.clone();
+    }
+    let prefix = match event.kind {
+        RuntimeEventKind::Warn => "[warn]",
+        _ => "[progress]",
+    };
+    match &event.meta {
+        Some(meta) => format!("{prefix} {} {meta}", event.message),
+        None => format!("{prefix} {}", event.message),
+    }
 }
 
 fn is_initialization_failure(error: &ExecutionError) -> bool {

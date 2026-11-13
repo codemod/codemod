@@ -99,7 +99,7 @@ impl Generator {
 
     fn warn(&mut self, message: String) -> String {
         self.warnings.push(message.clone());
-        format!("// codemod upgrade: {message}\n")
+        format!("// codemod upgrade: {}\n", comment_text(&message))
     }
 
     fn function_name(&mut self, kind: &str, id: &str) -> String {
@@ -336,7 +336,11 @@ impl Generator {
             .as_deref()
             .map(|d| format!(": {d}"))
             .unwrap_or_default();
-        let _ = writeln!(preamble, "/** {}{description} */", node.name);
+        let _ = writeln!(
+            preamble,
+            "/** {} */",
+            comment_text(&format!("{}{description}", node.name))
+        );
 
         let manual = node.r#type == NodeType::Manual
             || node
@@ -756,7 +760,7 @@ impl Generator {
         source.push_str("// Generated from workflow.yaml by `codemod workflow upgrade`.\n");
         source.push_str("/// <reference types=\"codemod/workflow\" />\n");
         for warning in &self.warnings {
-            let _ = writeln!(source, "// codemod upgrade: {warning}");
+            let _ = writeln!(source, "// codemod upgrade: {}", comment_text(warning));
         }
         let mut imports: Vec<&str> = self.imports.iter().copied().collect();
         if self.body.contains("evaluate(") {
@@ -939,6 +943,15 @@ fn shard_count(value: &Value) -> String {
         }
         other => other.to_string(),
     }
+}
+
+/// Text that is safe inside a `/* */` or `//` comment: on one line, and
+/// unable to close the comment (`api/**/*.ts` holds a `*/`).
+fn comment_text(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace("*/", "*\\/")
 }
 
 #[cfg(test)]

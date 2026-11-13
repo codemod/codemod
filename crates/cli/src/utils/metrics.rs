@@ -47,6 +47,20 @@ pub fn should_show_report(
         .unwrap_or(false)
 }
 
+/// Print the metrics as one JSONL record (`{"event":"metrics",...}`), for
+/// `--format jsonl` runs, if any metrics were collected.
+pub fn print_metrics_jsonl(metrics: &MetricsData) {
+    if metrics.values().all(|entries| entries.is_empty()) {
+        return;
+    }
+    let record = serde_json::json!({
+        "event": "metrics",
+        "metrics": metrics,
+        "ts": chrono::Utc::now().to_rfc3339(),
+    });
+    println!("{record}");
+}
+
 /// Print metrics report to stdout if any metrics were collected
 pub fn print_metrics(metrics: &MetricsData) {
     let metrics_with_values: Vec<_> = metrics

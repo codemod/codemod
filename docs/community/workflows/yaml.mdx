@@ -11,11 +11,12 @@ description: "The workflow.yaml format, which still runs through a compatibility
 npx codemod workflow upgrade
 ```
 
-In a repository with many packages, run it once at the root to upgrade them all.
+In a repository with many packages, run it once at the root to upgrade them all. See [Migrate from workflow.yaml](/community/workflows/migrate).
 </Warning>
 
 ### What changed in the compatibility layer
 
+- `js-ast-grep` steps get file-scope semantic analysis unless `semantic_analysis: none` is set, as `codemod jssg run` and `codemod jssg test` do.
 - `state.schema` is accepted but not used. State is not validated.
 - `runtime: docker` and `runtime: podman` are not supported; steps run directly.
 - A step `if:` condition that fails to evaluate now fails the step instead of skipping it.

@@ -162,6 +162,62 @@ export default async function main() {
 }
 
 #[test]
+fn jssg_transform_logs_become_step_logs_grouped_by_file() {
+    let h = Harness::new();
+    h.write("src/a.ts", "const a = 1;\n");
+    h.write("src/b.ts", "const b = 2;\n");
+    h.bundle_file(
+        "scripts/transform.ts",
+        r#"
+import { warn, setCurrentUnit } from "codemod:runtime";
+export default function transform(root: any) {
+  const name = root.relativeFilename();
+  console.log(`visiting ${name}`);
+  setCurrentUnit("declarations");
+  warn(`found a const in ${name}`, { file: name });
+  return null;
+}
+"#,
+    );
+    h.start(
+        r#"
+import { step, jssg } from "codemod:workflow";
+export default async function main() {
+  await step("Scan", jssg("./scripts/transform.ts", { include: "src/**/*.ts" }));
+}
+"#,
+        Value::Null,
+    );
+    let lines: Vec<String> = h
+        .events
+        .take()
+        .into_iter()
+        .filter_map(|event| match event {
+            codemod_workflow::events::Event::StepLog { line, .. } => Some(line),
+            _ => None,
+        })
+        .collect();
+    let a = lines
+        .iter()
+        .position(|l| l == "src/a.ts")
+        .expect("src/a.ts header");
+    assert_eq!(
+        lines[a..a + 4],
+        [
+            "src/a.ts",
+            "  visiting src/a.ts",
+            "src/a.ts :: declarations",
+            "  [warn] found a const in src/a.ts {\"file\":\"src/a.ts\"}",
+        ],
+        "{lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|l| l == "src/b.ts :: declarations"),
+        "{lines:#?}"
+    );
+}
+
+#[test]
 fn jssg_steps_have_file_scope_semantic_analysis_unless_turned_off() {
     let h = Harness::new();
     h.write("src/a.ts", "const value = 1;\nconsole.log(value);\n");

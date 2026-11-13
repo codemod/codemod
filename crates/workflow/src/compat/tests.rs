@@ -254,3 +254,36 @@ fn the_documented_features_translate_and_build() {
     assert!(warnings.contains("timeout_ms"), "{warnings}");
     assert!(warnings.contains("args, env and working_dir"), "{warnings}");
 }
+
+#[test]
+fn names_and_descriptions_cannot_break_out_of_comments() {
+    let translated = translated(
+        r#"
+version: "1"
+nodes:
+  - id: api
+    name: "Rewrite app/api/**/*.ts routes"
+    description: |
+      Two lines,
+      and a */ too
+    type: automatic
+    steps:
+      - name: Hoist handlers
+        run: echo hoisted
+  - id: pages
+    name: "Then pages/**/*.tsx"
+    type: automatic
+    depends_on: [api]
+    steps:
+      - name: Wrap pages
+        run: echo wrapped
+"#,
+    );
+    assert!(
+        translated
+            .source
+            .contains("Rewrite app/api/**\\/*.ts routes: Two lines, and a *\\/ too"),
+        "{}",
+        translated.source
+    );
+}
