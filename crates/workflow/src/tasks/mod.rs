@@ -65,6 +65,17 @@ impl TaskContext<'_> {
         });
     }
 
+    /// The files a task could not process, as step log lines: each path,
+    /// then its error.
+    pub fn log_failures<'f>(&self, failures: impl IntoIterator<Item = &'f (String, String)>) {
+        for (path, error) in failures {
+            self.log(path.clone());
+            for line in error.lines() {
+                self.log(format!("  {line}"));
+            }
+        }
+    }
+
     /// A progress callback for `CodemodExecutionConfig` walks.
     pub fn walk_progress(&self) -> butterflow_core::execution::ProgressCallback {
         let events = Arc::clone(&self.run.events);

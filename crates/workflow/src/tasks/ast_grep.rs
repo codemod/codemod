@@ -82,11 +82,13 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
 
     let mut planned = planned.into_inner().unwrap();
     planned.sort_by(|a, b| a.path.cmp(&b.path));
-    let failures = failures.into_inner().unwrap();
+    let mut failures = failures.into_inner().unwrap();
+    failures.sort();
     let applied = changes::commit(task, &planned, run.dry_run)?;
     let summary = &run.services.summary;
     summary.add_unmodified(unmodified.into_inner());
     summary.add_errors(failures.len());
+    task.log_failures(&failures);
     if !failures.is_empty() && planned.is_empty() {
         return Err(TaskError::Failed(format!(
             "ast-grep failed on every file; first error: {}: {}",

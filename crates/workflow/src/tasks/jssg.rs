@@ -54,15 +54,19 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         task.log(warning.clone());
     }
 
-    let failures: Vec<Value> = outcome
+    let failures: Vec<(String, String)> = outcome
         .failures
         .iter()
         .map(|(path, error)| {
-            json!({
-                "path": relative(&task.run.target, path).unwrap_or_else(|| path.display().to_string()),
-                "error": error,
-            })
+            let path =
+                relative(&task.run.target, path).unwrap_or_else(|| path.display().to_string());
+            (path, error.clone())
         })
+        .collect();
+    task.log_failures(&failures);
+    let failures: Vec<Value> = failures
+        .iter()
+        .map(|(path, error)| json!({ "path": path, "error": error }))
         .collect();
     if !outcome.failures.is_empty() && outcome.changes.is_empty() && outcome.unmodified == 0 {
         return Err(TaskError::Failed(format!(

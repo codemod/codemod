@@ -200,15 +200,7 @@ export default async function main() {
 "#,
         Value::Null,
     );
-    let lines: Vec<String> = h
-        .events
-        .take()
-        .into_iter()
-        .filter_map(|event| match event {
-            codemod_workflow::events::Event::StepLog { line, .. } => Some(line),
-            _ => None,
-        })
-        .collect();
+    let lines = step_logs(&h);
     let a = lines
         .iter()
         .position(|l| l == "src/a.ts")
@@ -225,6 +217,96 @@ export default async function main() {
     );
     assert!(
         lines.iter().any(|l| l == "src/b.ts :: declarations"),
+        "{lines:#?}"
+    );
+}
+
+fn step_logs(h: &Harness) -> Vec<String> {
+    h.events
+        .take()
+        .into_iter()
+        .filter_map(|event| match event {
+            codemod_workflow::events::Event::StepLog { line, .. } => Some(line),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn files_a_jssg_transform_fails_on_are_logged_with_their_errors() {
+    let h = Harness::new();
+    h.write("src/a.ts", "const a = 1;\n");
+    h.write("src/b.ts", "const b = 2;\n");
+    h.bundle_file(
+        "scripts/transform.ts",
+        r#"
+export default function transform(root: any) {
+  if (root.relativeFilename().endsWith("a.ts")) throw new Error("cannot handle a");
+  return null;
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  return await step("Scan", jssg("./scripts/transform.ts", { include: "src/**/*.ts" }));
+}
+"#,
+        Value::Null,
+    );
+    let result = output(&report).unwrap();
+    assert_eq!(result["failures"][0]["path"], "src/a.ts");
+    assert_eq!(result["unmodified"], json!(1));
+
+    let lines = step_logs(&h);
+    let a = lines
+        .iter()
+        .position(|l| l == "src/a.ts")
+        .expect("src/a.ts header");
+    assert!(
+        lines[a + 1].starts_with("  ") && lines[a + 1].contains("cannot handle a"),
+        "{lines:#?}"
+    );
+    assert!(!lines.iter().any(|l| l == "src/b.ts"), "{lines:#?}");
+}
+
+#[test]
+fn a_selector_that_cannot_be_read_is_reported_only_when_the_transform_runs() {
+    let h = Harness::new();
+    h.write("src/a.ts", "const a = 1;\n");
+    h.bundle_file(
+        "scripts/transform.ts",
+        r#"
+export function getSelector() { throw new Error("no selector today"); }
+export default function transform() { return null; }
+"#,
+    );
+    let workflow = |include: &str| {
+        format!(
+            r#"
+import {{ step, jssg }} from "codemod/workflow";
+export default async function main() {{
+  return await step("Scan", jssg("./scripts/transform.ts", {{ include: "{include}" }}));
+}}
+"#
+        )
+    };
+
+    // No file to run on: nothing was lost.
+    let report = h.start(&workflow("elsewhere/**/*.ts"), Value::Null);
+    output(&report).unwrap();
+    let lines = step_logs(&h);
+    assert!(!lines.iter().any(|l| l.contains("selector")), "{lines:#?}");
+
+    let report = h.start(&workflow("src/**/*.ts"), Value::Null);
+    assert_eq!(output(&report).unwrap()["unmodified"], json!(1));
+    let lines = step_logs(&h);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("cannot read the transform's selector")
+                && l.contains("no selector today")),
         "{lines:#?}"
     );
 }

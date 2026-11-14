@@ -134,6 +134,7 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     let target = request.target.clone();
 
     let mut outcome = JssgRunOutcome::default();
+    let mut selector_error = None;
     let selector = match block_on(extract_selector_with_quickjs(SelectorEngineOptions {
         script_path: &request.script_path,
         language,
@@ -146,9 +147,7 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             return Err(format!("cannot initialize the transform: {error}"));
         }
         Err(error) => {
-            outcome
-                .warnings
-                .push(format!("cannot read the transform's selector: {error}"));
+            selector_error = Some(error.to_string());
             None
         }
     };
@@ -338,6 +337,15 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     outcome.metrics = metrics.get_all();
 
     outcome.state = shared_state.changes_since(&request.initial_state);
+    // Worth saying only when the transform then ran: with no file to run on
+    // nothing was lost, and when it fails on the files their errors say why.
+    if let Some(error) = selector_error {
+        if !outcome.changes.is_empty() || outcome.unmodified > 0 {
+            outcome
+                .warnings
+                .push(format!("cannot read the transform's selector: {error}"));
+        }
+    }
 
     if abort.load(Ordering::SeqCst) {
         let first = outcome
