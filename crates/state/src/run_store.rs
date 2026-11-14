@@ -170,6 +170,10 @@ pub enum StepStatus {
     Canceled,
     /// The step waits for an approval; it runs again on resume.
     AwaitingApproval,
+    /// The step is waiting, for a time or an event (`sleep`, `waitForEvent`).
+    /// Recorded when the wait begins, so a resume counts the time already
+    /// waited.
+    Waiting,
 }
 
 impl StepStatus {
@@ -179,6 +183,7 @@ impl StepStatus {
             Self::Failed => "failed",
             Self::Canceled => "canceled",
             Self::AwaitingApproval => "awaiting-approval",
+            Self::Waiting => "waiting",
         }
     }
 }
@@ -187,11 +192,12 @@ impl StepStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StepRecord {
-    /// Order in which the workflow issued the step.
+    /// The step's place in the run's list of steps: the order steps were
+    /// first issued in. It stays the step's when a resume runs it again.
     pub position: u64,
     pub label: String,
-    /// Canonical form of the step's task; a finished step whose key changed
-    /// cannot be replayed.
+    /// Canonical form of the step's label and task. A resume takes a step
+    /// for a recorded one when their keys are equal.
     pub key: String,
     pub status: StepStatus,
     #[serde(default)]
@@ -213,6 +219,13 @@ pub struct StepRecord {
     /// The step did not run: a test gave its result.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub given: bool,
+    /// When a `sleep` or `waitForEvent` step began to wait, in milliseconds
+    /// since the epoch. Kept while the wait is interrupted and continued.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+    /// How many times the step ran, when its `retries` made that more than once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u32>,
 }
 
 /// Storage for runs and their step history.
@@ -240,6 +253,22 @@ pub trait RunStore: Send + Sync {
     fn cancel_requested(&self, run_id: &str) -> StoreResult<bool>;
     /// Forget a cancel request, when the run is continued.
     fn clear_cancel(&self, run_id: &str) -> StoreResult<()>;
+
+    /// Leave an event for the run; a `waitForEvent(name)` step takes it.
+    /// Events of one name are taken in the order they were sent.
+    fn send_event(&self, run_id: &str, name: &str, data: &Value) -> StoreResult<()>;
+    /// Take the oldest event of that name left for the run, if there is one.
+    fn take_event(&self, run_id: &str, name: &str) -> StoreResult<Option<Value>>;
+}
+
+/// Whether `name` can name an event: letters, digits, `.`, `_` and `-`, up
+/// to 100 characters. Names end up in file names.
+pub fn valid_event_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 100
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// Held while a run executes; dropping it releases the run.
@@ -273,6 +302,7 @@ struct MemoryRun {
     steps: Vec<StepRecord>,
     cancel: bool,
     held: bool,
+    events: Vec<(String, Value)>,
 }
 
 type MemoryRuns = Arc<Mutex<BTreeMap<String, MemoryRun>>>;
@@ -378,12 +408,27 @@ impl RunStore for MemoryStore {
         });
         Ok(())
     }
+
+    fn send_event(&self, run_id: &str, name: &str, data: &Value) -> StoreResult<()> {
+        self.with_run(run_id, |run| {
+            run.events.push((name.to_string(), data.clone()))
+        })
+    }
+
+    fn take_event(&self, run_id: &str, name: &str) -> StoreResult<Option<Value>> {
+        Ok(self.with(|runs| {
+            let events = &mut runs.get_mut(run_id)?.events;
+            let index = events.iter().position(|(sent, _)| sent == name)?;
+            Some(events.remove(index).1)
+        }))
+    }
 }
 
 // ----------------------------------------------------------------- local ---
 
 /// JSON files on disk: `<root>/<run_id>/run.json` and `steps.json`, a
-/// `cancel` marker, and a `lock` file its executor keeps locked.
+/// `cancel` marker, a `lock` file its executor keeps locked, and one file
+/// per undelivered event under `events/`.
 pub struct LocalStore {
     root: PathBuf,
     write_lock: Mutex<()>,
@@ -573,6 +618,54 @@ impl RunStore for LocalStore {
             Err(source) => Err(StoreError::Io { path, source }),
         }
     }
+
+    fn send_event(&self, run_id: &str, name: &str, data: &Value) -> StoreResult<()> {
+        let dir = self.run_dir(run_id);
+        if !dir.join("run.json").exists() {
+            return Err(StoreError::NotFound(run_id.to_string()));
+        }
+        // Named so that sorting the directory gives the order sent, also
+        // between processes sending at the same moment.
+        static SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sent = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+        let count = SENT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let file = format!("{name}@{sent:020}-{}-{count:06}.json", std::process::id());
+        Self::write_json(&dir.join("events").join(file), data)
+    }
+
+    fn take_event(&self, run_id: &str, name: &str) -> StoreResult<Option<Value>> {
+        let dir = self.run_dir(run_id).join("events");
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(StoreError::Io { path: dir, source }),
+        };
+        let prefix = format!("{name}@");
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension().is_some_and(|e| e == "json")
+                    && path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with(&prefix))
+            })
+            .collect();
+        files.sort();
+        for path in files {
+            // Whoever removes the file has the event; another taker moves on.
+            let Some(data) = Self::read_json::<Value>(&path)? else {
+                continue;
+            };
+            match fs::remove_file(&path) {
+                Ok(()) => return Ok(Some(data)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(source) => return Err(StoreError::Io { path, source }),
+            }
+        }
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -608,6 +701,8 @@ mod tests {
             finished_at: None,
             seq: None,
             given: false,
+            since: None,
+            attempts: None,
         }
     }
 
@@ -655,6 +750,26 @@ mod tests {
         ));
         store.clear_cancel("a").unwrap();
         assert!(!store.cancel_requested("a").unwrap());
+
+        assert!(store.take_event("a", "ready").unwrap().is_none());
+        store.send_event("a", "ready", &Value::from(1)).unwrap();
+        store.send_event("a", "other", &Value::Null).unwrap();
+        store.send_event("a", "ready", &Value::from(2)).unwrap();
+        assert!(store.take_event("b", "ready").unwrap().is_none());
+        assert_eq!(
+            store.take_event("a", "ready").unwrap(),
+            Some(Value::from(1))
+        );
+        assert_eq!(
+            store.take_event("a", "ready").unwrap(),
+            Some(Value::from(2))
+        );
+        assert!(store.take_event("a", "ready").unwrap().is_none());
+        assert_eq!(store.take_event("a", "other").unwrap(), Some(Value::Null));
+        assert!(matches!(
+            store.send_event("missing", "ready", &Value::Null),
+            Err(StoreError::NotFound(_))
+        ));
 
         assert!(!store.is_held("a").unwrap());
         let lease = store.acquire("a").unwrap().expect("nothing holds the run");

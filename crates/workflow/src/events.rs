@@ -44,6 +44,16 @@ pub enum Event {
         agent: String,
         activity: codemod_agents::AgentEvent,
     },
+    /// A step failed and runs again, as its `retries` allow.
+    StepRetrying {
+        position: u64,
+        label: String,
+        /// The attempt that failed, counting from 1.
+        attempt: u32,
+        /// How many attempts the step has in all.
+        attempts: u32,
+        error: String,
+    },
     StepFinished {
         position: u64,
         label: String,

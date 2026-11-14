@@ -398,7 +398,7 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 </ResponseField>
 
 <ResponseField name="--format <text|jsonl>" type="string">
-  `jsonl` prints one JSON object per engine event (`run_started`, `step_started`, `step_progress`, `step_log`, `step_finished`, `run_finished`, ...) on stdout.
+  `jsonl` prints one JSON object per engine event (`run_started`, `step_started`, `step_progress`, `step_log`, `step_retrying`, `step_finished`, `run_finished`, ...) on stdout.
 </ResponseField>
 
 <ResponseField name="-t, --target <PATH>" type="string">
@@ -465,7 +465,7 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 
 **`workflow resume`**
 
-Continue a run that failed, was canceled or interrupted, or is waiting for approval. Steps that already finished are not run again: their recorded results are reused, in the order the steps finished the first time. If you changed the workflow, you may change the step that failed and later ones; changing a step that already finished stops the resume with a `NondeterminismError`.
+Continue a run that failed, was canceled or interrupted, or is waiting for approval. Steps that already finished are not run again: their recorded results are reused, in the order the steps finished the first time. If you changed the workflow, steps you left alone keep their results wherever they now are in the file; a step you added or changed runs, also when it had finished before.
 
 The run continues with what it was started with: its capabilities, `--managed-git` and `--agent` carry over, and flags you pass add to them. A run that another process is still executing cannot be resumed; wait for it or cancel it. A run started with `runWorkflow` in Node.js is resumed there, not here.
 
@@ -641,6 +641,26 @@ npx codemod workflow cancel -i <ID>
 
 <ResponseField name="-i, --id <ID>" type="string" required>
   Workflow run ID.
+</ResponseField>
+
+**`workflow send`**
+
+Send an event to a workflow run. A [`waitForEvent`](/community/workflows/reference#waiting) step waiting for it continues with the event's data. If no step waits for it yet, or the run is not running, the event is kept until a step takes it. A run that has succeeded takes no more events.
+
+```bash
+npx codemod workflow send <EVENT> -i <ID> [--data <JSON>]
+```
+
+<ResponseField name="EVENT" type="string" required>
+  The event's name, as the workflow's `waitForEvent(name)` has it: letters, digits, `.`, `_` or `-`.
+</ResponseField>
+
+<ResponseField name="-i, --id <ID>" type="string" required>
+  Workflow run ID.
+</ResponseField>
+
+<ResponseField name="--data <JSON>" type="string">
+  What the waiting step resolves to, as JSON. (default: `null`)
 </ResponseField>
 
 ### `codemod jssg`

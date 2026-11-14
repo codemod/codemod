@@ -149,7 +149,7 @@ pub(crate) fn commit(
         .commit_lock
         .lock()
         .map_err(|_| "commit lock poisoned".to_string())?;
-    if run.canceled() {
+    if task.canceled() {
         return Err("canceled".to_string());
     }
     check_conflicts(target, &planned)?;

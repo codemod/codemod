@@ -121,24 +121,43 @@ impl DirectRunner {
         {
             use std::os::unix::io::FromRawFd;
 
+            // A command started on another thread while this pipe is being
+            // set up would inherit it and keep it open: this command's
+            // output would not end, and so the command would not be done,
+            // until that one exits. The pipe is closed on exec, and commands
+            // are started one at a time for the moment before that is set.
+            static STARTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let starting = STARTING.lock().unwrap_or_else(|e| e.into_inner());
+
             let mut pipe_fds = [0i32; 2];
             if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } == -1 {
                 return Err(Error::Runtime("Failed to create output pipe".to_string()));
             }
             let read_fd = pipe_fds[0];
             let write_fd = pipe_fds[1];
+            for fd in pipe_fds {
+                unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+            }
             let stdout_file = unsafe { std::fs::File::from_raw_fd(write_fd) };
-            let stderr_file = stdout_file
-                .try_clone()
-                .map_err(|e| Error::Runtime(format!("Failed to clone output pipe: {e}")))?;
+            let stderr_file = stdout_file.try_clone();
 
-            cmd.stdout(Stdio::from(stdout_file))
-                .stderr(Stdio::from(stderr_file));
-
-            let child = cmd
-                .spawn()
-                .map_err(|e| Error::Runtime(format!("Failed to spawn command: {e}")))?;
+            let child = stderr_file
+                .map_err(|e| Error::Runtime(format!("Failed to clone output pipe: {e}")))
+                .and_then(|stderr_file| {
+                    cmd.stdout(Stdio::from(stdout_file))
+                        .stderr(Stdio::from(stderr_file));
+                    cmd.spawn()
+                        .map_err(|e| Error::Runtime(format!("Failed to spawn command: {e}")))
+                });
             drop(cmd);
+            drop(starting);
+            let child = match child {
+                Ok(child) => child,
+                Err(error) => {
+                    unsafe { libc::close(read_fd) };
+                    return Err(error);
+                }
+            };
 
             let quiet = self.quiet;
             let callback = output_callback;

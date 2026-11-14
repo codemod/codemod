@@ -5,10 +5,12 @@
 // `createRuntime(host)` returns the module's exports for one run. The host:
 //   history(): StepRecord[]               steps recorded by earlier runs
 //   record(entry, ms)                     persist one step's outcome
-//   event(event)                          report step started / replayed
+//   event(event)                          report step started / replayed / retrying
 //   canceled(): boolean                   whether a step about to start must not,
 //                                         because the run was asked to stop
-//   start(request): Promise<outcome>      run a task; rejects with { name, message }
+//   start(request): Promise<outcome>      run a task; rejects with { name, message }.
+//                                         `timeoutMs` bounds it; `since` is when a
+//                                         waiting step began to wait
 //   evaluate(kind, expression, scope)     evaluate a workflow.yaml `${{ }}` expression
 //   now(): number                         the real time, for step records
 //   advanceClock(ms)                      move the body's clock forward
@@ -23,13 +25,6 @@
 //                           workflow has nothing left to run, until it is false
 //   close()                 the run is ending: no step starts from here on
 //   isClosed(): boolean     whether steps issued now would never start
-
-export class NondeterminismError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "NondeterminismError";
-  }
-}
 
 export class StepError extends Error {
   constructor(label, cause) {
@@ -141,6 +136,28 @@ export function createTasks(options = {}) {
     return hostTask("approval", { message });
   }
 
+  /** Wait for a time: milliseconds, or a string such as "30s" or "10m". */
+  function sleep(duration) {
+    return hostTask("sleep", { duration: milliseconds(duration, "sleep") });
+  }
+
+  /** Wait for an event sent to the run (`codemod workflow send`). */
+  function waitForEvent(name, options = {}) {
+    if (typeof name !== "string" || !/^[A-Za-z0-9._-]{1,100}$/.test(name)) {
+      throw new TypeError(
+        "waitForEvent: the event name must be 1 to 100 letters, digits, '.', '_' or '-'",
+      );
+    }
+    onlyKeys(options, ["timeout"], "waitForEvent");
+    return hostTask("waitForEvent", {
+      name,
+      timeout:
+        options.timeout === undefined
+          ? undefined
+          : milliseconds(options.timeout, "waitForEvent: timeout"),
+    });
+  }
+
   /** Check out a branch for the following changes (managed git only). */
   function branch(name) {
     return hostTask("branch", { name });
@@ -168,9 +185,64 @@ export function createTasks(options = {}) {
     agent,
     installSkill,
     approval,
+    sleep,
+    waitForEvent,
     branch,
     commit,
     pullRequest,
+  };
+}
+
+/** Tasks that wait: their step records when the wait began. */
+const WAITS = new Set(["sleep", "waitForEvent"]);
+
+function onlyKeys(options, known, what) {
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError(`${what}: options must be an object`);
+  }
+  for (const key of Object.keys(options)) {
+    if (!known.includes(key)) {
+      throw new TypeError(`${what}: unknown option '${key}'; expected ${known.join(", ")}`);
+    }
+  }
+}
+
+const UNITS = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+
+/** A duration in milliseconds, from a number of them or a string such as "30s". */
+export function milliseconds(value, what) {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return Math.round(value);
+  const match = typeof value === "string" && /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)$/.exec(value.trim());
+  if (!match) {
+    throw new TypeError(
+      `${what}: expected milliseconds or a duration such as "500ms", "30s", "10m", "1h" or "2d"`,
+    );
+  }
+  return Math.round(Number(match[1]) * UNITS[match[2]]);
+}
+
+/** A duration in its largest whole unit, as the engine words it. */
+export function describeDuration(ms) {
+  for (const unit of ["h", "m", "s"]) {
+    if (ms >= UNITS[unit] && ms % UNITS[unit] === 0) return `${ms / UNITS[unit]}${unit}`;
+  }
+  return `${ms}ms`;
+}
+
+/** What `step(..., options)` asks for: how often to try, and for how long. */
+function policyOf(options, what) {
+  if (options === undefined) return { attempts: 1, retryDelay: 0, timeout: undefined };
+  onlyKeys(options, ["retries", "retryDelay", "timeout"], what);
+  const { retries = 0, retryDelay = "1s", timeout } = options;
+  if (!Number.isInteger(retries) || retries < 0) {
+    throw new TypeError(`${what}: retries must be a whole number, 0 or more`);
+  }
+  const limit = timeout === undefined ? undefined : milliseconds(timeout, `${what}: timeout`);
+  if (limit === 0) throw new TypeError(`${what}: timeout must be more than 0`);
+  return {
+    attempts: retries + 1,
+    retryDelay: milliseconds(retryDelay, `${what}: retryDelay`),
+    timeout: limit,
   };
 }
 
@@ -178,16 +250,50 @@ export function createRuntime(host) {
   const tasks = createTasks(host);
   const { callbackOf } = tasks;
 
+  // What earlier executions of the run recorded. A step is the one recorded
+  // when it has the same label and content (its key), wherever and whenever
+  // the body issues it: the order steps are issued in depends on how fast
+  // other steps finish, so it cannot say which step is which. Steps that are
+  // the same in both are interchangeable and take the records in turn.
   const recorded = new Map();
+  // Recorded steps that did not finish, for a changed step to take over.
+  const unfinished = new Set();
+  // A step keeps its position for the whole run; new steps go after.
+  let nextPosition = 0;
   // Steps are numbered in the order they finish, across executions of the run.
   let nextSeq = 0;
-  for (const entry of host.history()) {
-    recorded.set(entry.position, entry);
+  for (const entry of [...host.history()].sort((a, b) => a.position - b.position)) {
+    if (!recorded.has(entry.key)) recorded.set(entry.key, []);
+    recorded.get(entry.key).push(entry);
+    if (entry.status !== "succeeded") unfinished.add(entry);
+    nextPosition = Math.max(nextPosition, entry.position + 1);
     if (typeof entry.seq === "number") nextSeq = Math.max(nextSeq, entry.seq + 1);
   }
 
+  /**
+   * The recorded step this one is, or the position of an unfinished step it
+   * replaces: a step with a recorded name but new content is the failed step,
+   * fixed. A finished step is never replaced; its record stays for a step
+   * with its content.
+   */
+  function claim(label, key, content) {
+    const same = recorded.get(key);
+    if (same?.length) {
+      const entry = same.shift();
+      unfinished.delete(entry);
+      return { position: entry.position, entry };
+    }
+    for (const entry of unfinished) {
+      if (entry.label !== (label ?? defaultLabel(entry.position, content))) continue;
+      unfinished.delete(entry);
+      const others = recorded.get(entry.key);
+      others.splice(others.indexOf(entry), 1);
+      return { position: entry.position };
+    }
+    return { position: nextPosition++ };
+  }
+
   const state = new Map();
-  let nextPosition = 0;
 
   // A test run can stop after one step (`until`) and skip steps with a given
   // result (`given`), both matched by label.
@@ -296,16 +402,28 @@ export function createRuntime(host) {
 
   /**
    * Run a task as a durable step. Starts immediately; the returned promise
-   * resolves to the step's frozen result.
+   * resolves to the step's frozen result. `options` may give `retries`,
+   * `retryDelay` and `timeout`; they say how to run the step, not what it
+   * is, so changing them does not make it another step.
    */
-  function step(labelOrTask, maybeTask) {
-    const position = nextPosition++;
-    const [label, task] =
-      typeof labelOrTask === "string" ? [labelOrTask, maybeTask] : [undefined, labelOrTask];
-    return runStep(position, label, task).then(freeze);
+  function step(...args) {
+    const label = typeof args[0] === "string" ? args.shift() : undefined;
+    return runStep(label, args[0], args[1]).then(freeze);
   }
 
-  async function runStep(position, label, task) {
+  /** Wait for a time, as a step: a resumed run waits for what is left. */
+  function sleep(duration) {
+    return step(tasks.sleep(duration));
+  }
+
+  /** Wait for an event sent to the run, as a step; resolves to the event's data. */
+  function waitForEvent(name, options) {
+    return step(tasks.waitForEvent(name, options));
+  }
+
+  async function runStep(label, task, options) {
+    const described = label === undefined ? "step" : `step '${label}'`;
+    const policy = policyOf(options, described);
     // Everything up to the first await runs synchronously inside step(), so
     // captures and state are a snapshot taken when the step is called.
     let content;
@@ -316,7 +434,7 @@ export function createRuntime(host) {
       fn = callback.fn;
     } else if (typeof task === "function") {
       throw new TypeError(
-        `step #${position}: write the function inline, as step(() => ...), so the build can run it in its own isolate`,
+        `${described}: write the function inline, as step(() => ...), so the build can run it in its own isolate`,
       );
     } else if (task && task[TASK] === "forEachFile") {
       content = {
@@ -329,14 +447,13 @@ export function createRuntime(host) {
     } else if (task && task[TASK] === "host") {
       content = task.content;
     } else {
-      throw new TypeError(
-        `step #${position}: expected a task such as forEachFile(...) or a function`,
-      );
+      throw new TypeError(`${described}: expected a task such as forEachFile(...) or a function`);
     }
 
-    const name = label ?? defaultLabel(position, content);
-    const key = canonical(content);
+    const key = canonical([label ?? null, content]);
     if (closed) return new Promise(() => {});
+    const { position, entry: prior } = claim(label, key, content);
+    const name = label ?? defaultLabel(position, content);
     if (plan.until !== undefined && name === plan.until) {
       closed = true;
       host.stop();
@@ -350,13 +467,7 @@ export function createRuntime(host) {
       );
       return JSON.parse(JSON.stringify(result ?? null));
     }
-    const prior = recorded.get(position);
     if (prior && prior.status === "succeeded") {
-      if (prior.key !== key) {
-        throw new NondeterminismError(
-          `step #${position} ('${name}') differs from the recorded run; the workflow changed before this step, so its recorded result cannot be reused`,
-        );
-      }
       return new Promise((resolve) => {
         replaying.push({
           // Steps recorded before finishing order was kept replay in the
@@ -379,30 +490,79 @@ export function createRuntime(host) {
     }
     host.event({ type: "stepStarted", position, label: name });
     const started = host.now();
+    // A wait counts from when it first began, also when it was interrupted
+    // and goes on now, so that is recorded before it starts. One that failed
+    // ran out of time, and starts over.
+    const since = !WAITS.has(content.kind)
+      ? undefined
+      : prior && prior.status !== "failed" && typeof prior.since === "number"
+        ? prior.since
+        : started;
+    if (since !== undefined) {
+      host.record({ position, label: name, key, status: "waiting", since }, 0);
+    }
+    let attempt = 1;
     const record = (entry) =>
-      host.record({ position, label: name, key, seq: nextSeq++, ...entry }, host.now() - started);
-    let result;
-    let changes = null;
-    try {
-      const outcome = await host.start({
-        position,
-        label: name,
-        task: content,
-        state: stateSnapshot(),
-        fn,
-      });
-      result = outcome.result ?? null;
-      changes = outcome.state ?? null;
-    } catch (cause) {
-      const error = asError(cause);
+      host.record(
+        {
+          position,
+          label: name,
+          key,
+          seq: nextSeq++,
+          ...(since !== undefined && { since }),
+          ...(attempt > 1 && { attempts: attempt }),
+          ...entry,
+        },
+        host.now() - started,
+      );
+    const request = {
+      position,
+      label: name,
+      task: content,
+      state: stateSnapshot(),
+      fn,
+      ...(policy.timeout !== undefined && { timeoutMs: policy.timeout }),
+      ...(since !== undefined && { since }),
+    };
+    let outcome;
+    for (;;) {
+      let error;
+      try {
+        outcome = await host.start(request);
+        break;
+      } catch (cause) {
+        error = asError(cause);
+      }
+      // A failed step runs again while it has attempts left and the run is
+      // still going.
+      if (!interruptionOf(error) && attempt < policy.attempts && !closed) {
+        host.event({
+          type: "stepRetrying",
+          position,
+          label: name,
+          attempt,
+          attempts: policy.attempts,
+          error: messageOf(error),
+        });
+        try {
+          if (policy.retryDelay > 0) {
+            await host.start({
+              position,
+              label: name,
+              task: { kind: "sleep", duration: policy.retryDelay },
+              state: {},
+            });
+          }
+          attempt++;
+          continue;
+        } catch (cause) {
+          // Canceled between attempts.
+          error = asError(cause);
+        }
+      }
       // A step that was canceled or waits for an approval runs again when
       // the run is resumed; nothing else starts in this execution.
-      const interrupted =
-        error instanceof CanceledError
-          ? "canceled"
-          : error instanceof AwaitingApprovalError
-            ? "awaiting-approval"
-            : null;
+      const interrupted = interruptionOf(error);
       if (interrupted) {
         closed = true;
         record({ status: interrupted, error: messageOf(error) });
@@ -411,11 +571,19 @@ export function createRuntime(host) {
       record({ status: "failed", error: messageOf(error) });
       throw new StepError(name, error);
     }
+    const result = outcome.result ?? null;
+    const changes = outcome.state ?? null;
     applyState(changes);
     const finishedAt = host.now();
     record({ status: "succeeded", result, state: changes, finishedAt });
     settleClock({ finishedAt });
     return result;
+  }
+
+  function interruptionOf(error) {
+    if (error instanceof CanceledError) return "canceled";
+    if (error instanceof AwaitingApprovalError) return "awaiting-approval";
+    return null;
   }
 
   /** Captured values of an extracted callback; none for callbacks run in place. */
@@ -457,6 +625,8 @@ export function createRuntime(host) {
     getOrSetStepOutput,
     __evaluate,
     step,
+    sleep,
+    waitForEvent,
     replayNext,
     close,
     isClosed,
@@ -530,6 +700,10 @@ function defaultLabel(position, content) {
       return `${content.kind} ${content.path}`;
     case "approval":
       return `approval: ${truncate(content.message)}`;
+    case "sleep":
+      return `sleep ${describeDuration(content.duration)}`;
+    case "waitForEvent":
+      return `wait for ${content.name}`;
     case "codemod":
       return `codemod ${content.source}`;
     case "agent":

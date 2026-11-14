@@ -3,6 +3,7 @@ pub mod harness;
 pub mod list;
 pub mod resume;
 pub mod run;
+pub mod send;
 pub mod status;
 pub mod test;
 pub mod upgrade;

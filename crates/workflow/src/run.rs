@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicUsize, Ordering}
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use butterflow_state::run_store::{Outcome, RunStore, StepRecord, StoreResult};
+use butterflow_state::run_store::{Outcome, RunStore, StepRecord, StepStatus, StoreResult};
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::quickjs_adapters::{
@@ -137,7 +137,9 @@ pub struct TestPlan {
 
 impl RunContext {
     /// The context of a codemod nested in this run's step at `position`: its
-    /// own workflow, params and step history, everything else shared.
+    /// own workflow, params and step history, everything else shared. It
+    /// stops when that step does (`cancel`).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn child(
         &self,
         position: u64,
@@ -146,6 +148,7 @@ impl RunContext {
         callbacks: BTreeMap<String, String>,
         events: Arc<dyn EventSink>,
         identity: String,
+        cancel: Arc<AtomicBool>,
     ) -> Self {
         let mut chain = self.chain.clone();
         chain.push(identity);
@@ -161,7 +164,7 @@ impl RunContext {
             events,
             interaction: Arc::clone(&self.interaction),
             services: Arc::clone(&self.services),
-            cancel: Arc::clone(&self.cancel),
+            cancel,
             commit_lock: Arc::clone(&self.commit_lock),
             chain,
             test: None,
@@ -225,9 +228,13 @@ impl RunContext {
         }
     }
 
-    /// Persist one step's outcome and report it.
+    /// Persist one step's outcome and report it. A step that only began to
+    /// wait has not finished, so that is saved and not reported.
     pub fn record_step(&self, step: &StepRecord, duration_ms: u64) -> StoreResult<()> {
         self.store.put_step(&self.run_id, step)?;
+        if step.status == StepStatus::Waiting {
+            return Ok(());
+        }
         self.events.emit(Event::StepFinished {
             position: step.position,
             label: step.label.clone(),
@@ -239,18 +246,42 @@ impl RunContext {
     }
 
     /// Report what the orchestrator says about a step:
-    /// `{ type: "stepStarted" | "stepReplayed", position, label }`.
+    /// `{ type: "stepStarted" | "stepReplayed", position, label }`, or
+    /// `{ type: "stepRetrying", position, label, attempt, attempts, error }`.
     pub fn host_event(&self, event: &str) -> Result<(), String> {
         #[derive(Deserialize)]
-        #[serde(tag = "type", rename_all = "camelCase")]
+        #[serde(tag = "type")]
         enum HostEvent {
-            StepStarted { position: u64, label: String },
-            StepReplayed { position: u64, label: String },
+            #[serde(rename = "stepStarted")]
+            Started { position: u64, label: String },
+            #[serde(rename = "stepReplayed")]
+            Replayed { position: u64, label: String },
+            #[serde(rename = "stepRetrying")]
+            Retrying {
+                position: u64,
+                label: String,
+                attempt: u32,
+                attempts: u32,
+                error: String,
+            },
         }
         let event = serde_json::from_str(event).map_err(|e| format!("bad step event: {e}"))?;
         self.events.emit(match event {
-            HostEvent::StepStarted { position, label } => Event::StepStarted { position, label },
-            HostEvent::StepReplayed { position, label } => Event::StepReplayed { position, label },
+            HostEvent::Started { position, label } => Event::StepStarted { position, label },
+            HostEvent::Replayed { position, label } => Event::StepReplayed { position, label },
+            HostEvent::Retrying {
+                position,
+                label,
+                attempt,
+                attempts,
+                error,
+            } => Event::StepRetrying {
+                position,
+                label,
+                attempt,
+                attempts,
+                error,
+            },
         });
         Ok(())
     }
@@ -303,12 +334,62 @@ pub enum RunError {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct HostRequest {
     position: u64,
     label: String,
     task: serde_json::Value,
     #[serde(default)]
     state: serde_json::Map<String, serde_json::Value>,
+    /// How long the task may run, from the step's `timeout`.
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    /// When the step began to wait (`sleep`, `waitForEvent`).
+    #[serde(default)]
+    since: Option<i64>,
+}
+
+/// Stops one step's task when its time is up, or when the run is canceled.
+struct StepClock {
+    /// What the task watches instead of the run's flag.
+    cancel: Arc<AtomicBool>,
+    expired: Arc<AtomicBool>,
+    _stop: mpsc::Sender<()>,
+}
+
+impl StepClock {
+    const POLL: Duration = Duration::from_millis(50);
+
+    fn start(run: Arc<AtomicBool>, timeout: Duration) -> Self {
+        let cancel = Arc::new(AtomicBool::new(run.load(Ordering::SeqCst)));
+        let expired = Arc::new(AtomicBool::new(false));
+        let (stop, stopped) = mpsc::channel::<()>();
+        let (flag, late) = (Arc::clone(&cancel), Arc::clone(&expired));
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + timeout;
+            loop {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                match stopped.recv_timeout(left.min(Self::POLL)) {
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    _ => return,
+                }
+                if run.load(Ordering::SeqCst) {
+                    flag.store(true, Ordering::SeqCst);
+                    return;
+                }
+                if std::time::Instant::now() >= deadline {
+                    late.store(true, Ordering::SeqCst);
+                    flag.store(true, Ordering::SeqCst);
+                    return;
+                }
+            }
+        });
+        Self {
+            cancel,
+            expired,
+            _stop: stop,
+        }
+    }
 }
 
 type Settlement = (u32, Result<String, String>);
@@ -530,13 +611,35 @@ fn run_seed(run_id: &str) -> u32 {
 pub(crate) fn run_host_task(run: &Arc<RunContext>, request: &str) -> Result<String, String> {
     let request: HostRequest =
         serde_json::from_str(request).map_err(|e| format!("bad task request: {e}"))?;
+    let clock = request
+        .timeout_ms
+        .map(|ms| StepClock::start(Arc::clone(&run.cancel), Duration::from_millis(ms)));
     let task = TaskContext {
         run,
         position: request.position,
         label: request.label,
         state: request.state,
+        cancel: match &clock {
+            Some(clock) => Arc::clone(&clock.cancel),
+            None => Arc::clone(&run.cancel),
+        },
+        since: request.since,
     };
-    match tasks::dispatch(&task, request.task) {
+    let result = tasks::dispatch(&task, request.task).map_err(|error| {
+        // Stopped by its clock, the task reports a cancel; the run goes on.
+        let timed_out = clock
+            .as_ref()
+            .is_some_and(|clock| clock.expired.load(Ordering::SeqCst));
+        if timed_out && !run.canceled() {
+            tasks::TaskError::Failed(format!(
+                "timed out after {}",
+                tasks::describe_duration(request.timeout_ms.unwrap_or_default())
+            ))
+        } else {
+            error
+        }
+    });
+    match result {
         Ok(outcome) => serde_json::to_string(&outcome).map_err(|e| e.to_string()),
         Err(error) => {
             match &error {

@@ -11,12 +11,7 @@ import { createHash } from "node:crypto";
 import { current } from "./context.mjs";
 import { createTasks } from "./orchestrator.mjs";
 
-export {
-  AwaitingApprovalError,
-  CanceledError,
-  NondeterminismError,
-  StepError,
-} from "./orchestrator.mjs";
+export { AwaitingApprovalError, CanceledError, StepError } from "./orchestrator.mjs";
 
 /** Identifies a callback given as a function, for replay checks. */
 export function callbackId(fn) {
@@ -39,14 +34,27 @@ export const {
   pullRequest,
 } = createTasks({ callbackId });
 
-export function step(labelOrTask, maybeTask) {
-  const scope = current("step()");
+/** The run's orchestrator, for what only the workflow body may call. */
+function body(what) {
+  const scope = current(what);
   if (scope.step) {
     throw new Error(
-      "step() cannot be called inside a step or forEachFile callback; start steps from the workflow body",
+      `${what} cannot be called inside a step or forEachFile callback; call it from the workflow body`,
     );
   }
-  return scope.runtime.step(labelOrTask, maybeTask);
+  return scope.runtime;
+}
+
+export function step(...args) {
+  return body("step()").step(...args);
+}
+
+export function sleep(duration) {
+  return body("sleep()").sleep(duration);
+}
+
+export function waitForEvent(name, options) {
+  return body("waitForEvent()").waitForEvent(name, options);
 }
 
 // In a step or callback the state functions behave as in the engine's

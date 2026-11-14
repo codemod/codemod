@@ -113,7 +113,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
                         files: &files,
                         next: &next,
                         concurrency,
-                        cancel: &run.cancel,
+                        cancel: &task.cancel,
                     };
                     let progress = &progress;
                     scope.spawn(move || worker(job, progress))
@@ -153,7 +153,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         }
     }
 
-    if run.canceled() {
+    if task.canceled() {
         return Err("canceled".to_string());
     }
     let changes = changes::commit(task, &planned, run.dry_run)?;

@@ -38,6 +38,8 @@ pub enum EngineError {
     AlreadyFinished(String),
     #[error("run '{0}' is being executed by another process; wait for it, or stop it with `codemod workflow cancel --id {0}`")]
     Busy(String),
+    #[error("'{0}' cannot name an event: use 1 to 100 letters, digits, '.', '_' or '-'")]
+    EventName(String),
     #[error("run '{run}' was started {started}, and can only be resumed there: {resuming} records steps differently")]
     OtherHost {
         run: String,
@@ -472,6 +474,27 @@ pub fn cancel_run(store: &dyn RunStore, run_id: &str) -> Result<Canceled, Engine
     record.conclude(butterflow_state::run_store::Outcome::Canceled);
     store.put_run(&record)?;
     Ok(Canceled::Marked)
+}
+
+/// Leave an event for a run: a `waitForEvent(name)` step in it takes the
+/// event, now if one is waiting, or when the run gets there or is resumed.
+/// `data` is what that step resolves to.
+pub fn send_event(
+    store: &dyn RunStore,
+    run_id: &str,
+    name: &str,
+    data: &serde_json::Value,
+) -> Result<(), EngineError> {
+    if !butterflow_state::run_store::valid_event_name(name) {
+        return Err(EngineError::EventName(name.to_string()));
+    }
+    let record = store
+        .get_run(run_id)?
+        .ok_or_else(|| EngineError::NotFound(run_id.to_string()))?;
+    if record.status == RunStatus::Succeeded {
+        return Err(EngineError::AlreadyFinished(run_id.to_string()));
+    }
+    Ok(store.send_event(run_id, name, data)?)
 }
 
 fn absolute(path: &Path) -> PathBuf {

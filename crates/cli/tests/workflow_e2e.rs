@@ -205,6 +205,48 @@ fn a_failed_run_is_listed_and_resumes_after_the_fix() {
 }
 
 #[test]
+fn an_event_sent_to_a_run_reaches_the_step_waiting_for_it() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { step, waitForEvent } from "codemod/workflow";
+export default async function main() {
+  const ci = await waitForEvent("ci-finished", { timeout: "300ms" });
+  await step("Report", () => { console.log(`passed: ${ci.passed}`); });
+}
+"#,
+    );
+
+    let output = fixture.run(&[]);
+    assert!(!output.status.success());
+    assert!(
+        text(&output).contains("no 'ci-finished' event came within 300ms"),
+        "{}",
+        text(&output)
+    );
+
+    let id = latest_run_id(&fixture);
+    let refused = fixture.codemod(&["workflow", "send", "ci finished", "--id", &id]);
+    assert!(!refused.status.success());
+    assert!(text(&refused).contains("cannot name an event"));
+    let sent = fixture.codemod(&[
+        "workflow",
+        "send",
+        "ci-finished",
+        "--id",
+        &id,
+        "--data",
+        r#"{"passed":true}"#,
+    ]);
+    assert!(sent.status.success(), "{}", text(&sent));
+
+    let output = fixture.codemod(&["workflow", "resume", "--id", &id, "--no-interactive"]);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(text(&output).contains("passed: true"), "{}", text(&output));
+}
+
+#[test]
 fn a_manual_step_waits_until_resumed_with_approval() {
     let fixture = Fixture::new();
     fixture.package_file(

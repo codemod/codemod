@@ -145,7 +145,7 @@ fn launch(
             cwd: &cwd,
             autonomy,
         },
-        cancel: Some(std::sync::Arc::clone(&run.cancel)),
+        cancel: Some(std::sync::Arc::clone(&task.cancel)),
         timeout: request.timeout_seconds.map(std::time::Duration::from_secs),
     }
     .run(&mut |activity| {

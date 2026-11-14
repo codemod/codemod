@@ -99,7 +99,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             .unwrap_or(line);
         events.emit(crate::events::Event::StepLog { position, line });
     });
-    let runner = DirectRunner::with_quiet(true).with_cancel(Arc::clone(&run.cancel));
+    let runner = DirectRunner::with_quiet(true).with_cancel(Arc::clone(&task.cancel));
     let output =
         block_on(runner.run_command(&command, &env, Some(on_line))).map_err(|e| match e {
             butterflow_models::Error::Canceled => TaskError::Canceled,

@@ -299,7 +299,7 @@ export default async function main() {
 }
 
 #[test]
-fn changing_a_finished_function_step_is_nondeterministic() {
+fn a_finished_function_step_that_changed_runs_again() {
     let h = Harness::new();
     let first = h.start(
         r#"
@@ -318,14 +318,12 @@ export default async function main() {
             r#"
 import { step } from "codemod/workflow";
 export default async function main() {
-  await step("One", () => 2);
-  await step("Two", () => "fixed");
+  return [await step("One", () => 2), await step("Two", () => "fixed")];
 }
 "#,
         ),
     );
-    let error = output(&resumed).unwrap_err();
-    assert!(error.contains("differs from the recorded run"), "{error}");
+    assert_eq!(output(&resumed).unwrap(), json!([2, "fixed"]));
 }
 
 // ------------------------------------------------------------- body ----

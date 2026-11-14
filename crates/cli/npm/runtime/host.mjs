@@ -22,6 +22,7 @@ import {
   CanceledError,
   checkJson,
   createRuntime,
+  describeDuration,
   describeError,
   fileHandle,
 } from "./orchestrator.mjs";
@@ -233,7 +234,7 @@ function host(run, flight, runtime) {
       const { fn, ...task } = request;
       flight.begin();
       try {
-        if (fn) return await runInPlace(run, task, fn);
+        if (fn) return await within(task.timeoutMs, (limit) => runInPlace(run, task, fn, limit));
         try {
           return await run.runTask(JSON.stringify(task));
         } catch (error) {
@@ -259,7 +260,29 @@ function payloadOf(error) {
 
 // ----------------------------------------------------------- in place ---
 
-async function runInPlace(run, task, fn) {
+/**
+ * Run `work` for at most `ms`. JavaScript that is running cannot be stopped
+ * from outside: when the time is up the step fails, `limit.expired` tells
+ * the work to stop where it can, and whatever it still does is discarded.
+ */
+async function within(ms, work) {
+  const limit = { expired: false };
+  if (ms === undefined) return work(limit);
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      limit.expired = true;
+      reject({ name: "Error", message: `timed out after ${describeDuration(ms)}` });
+    }, ms);
+  });
+  try {
+    return await Promise.race([work(limit), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runInPlace(run, task, fn, limit) {
   const outer = context.getStore();
   if (task.task.kind === "function") {
     const step = stepScope(task.position, task.label, task.state);
@@ -276,7 +299,7 @@ async function runInPlace(run, task, fn) {
     checkJson(result, "the step's result");
     return outcome(result, step);
   }
-  if (task.task.kind === "forEachFile") return forEachFile(run, outer, task, fn);
+  if (task.task.kind === "forEachFile") return forEachFile(run, outer, task, fn, limit);
   throw new Error(`cannot run a ${task.task.kind} task in place`);
 }
 
@@ -291,7 +314,7 @@ function flushMetrics(run, step) {
   return metrics;
 }
 
-async function forEachFile(run, outer, task, fn) {
+async function forEachFile(run, outer, task, fn, limit) {
   const { selector } = task.task;
   const { language, files } = await run.selectFiles(JSON.stringify(selector));
   const step = stepScope(task.position, task.label, task.state, language ?? undefined);
@@ -343,10 +366,13 @@ async function forEachFile(run, outer, task, fn) {
         await new Promise((turn) => setImmediate(turn));
       }
       if (run.refusesSteps()) throw new CanceledError();
+      if (limit.expired) return;
       await one(next++);
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, total) }, worker));
+  // Out of time: the step has failed, and nothing it did is written.
+  if (limit.expired) return null;
 
   // Before the commit: a commit that fails must not lose what was measured.
   const metrics = flushMetrics(run, step);

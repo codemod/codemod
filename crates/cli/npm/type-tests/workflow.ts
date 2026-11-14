@@ -19,7 +19,9 @@ import {
   setState,
   shard,
   shell,
+  sleep,
   step,
+  waitForEvent,
   type ShardResult,
   type WorkflowContext,
 } from "codemod/workflow";
@@ -109,6 +111,23 @@ export default async function main({
 
   const nothing = await step(() => {});
   expectType<Equal<typeof nothing, null>>(true);
+
+  // ── how a step is run, and waiting ───────────────────────────────────
+
+  await step("Install", shell("pnpm install"), { retries: 2, retryDelay: "5s", timeout: "10m" });
+  await step(() => 1, { timeout: 500 });
+  // @ts-expect-error not a duration
+  await step(() => 1, { timeout: "soon" });
+  // @ts-expect-error unknown option
+  await step(() => 1, { retry: 1 });
+
+  expectType<Equal<Awaited<ReturnType<typeof sleep>>, null>>(true);
+  await sleep("30s");
+  // @ts-expect-error not a duration
+  await sleep("a while");
+
+  const ci = await waitForEvent<{ passed: boolean }>("ci-finished", { timeout: "1h" });
+  expectType<Equal<typeof ci, { readonly passed: boolean }>>(true);
 
   const fromAsync = await step(async () => 42);
   expectType<Equal<typeof fromAsync, number>>(true);

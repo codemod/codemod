@@ -68,7 +68,7 @@ impl StepIsolates {
                     });
                 }
             })),
-            cancel: Arc::clone(&run.cancel),
+            cancel: Arc::clone(&task.cancel),
             dry_run: run.dry_run,
             target_directory: run.target.clone(),
             default_language,

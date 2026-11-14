@@ -55,9 +55,9 @@ A workflow file contains three kinds of code, each with its own rules:
 
 - **Steps are durable.** Each step's result is saved as soon as the step finishes. If a run fails or is canceled, `codemod workflow resume` replays the finished steps from their saved results and continues from the step that failed.
 - **A step starts when you call `step()`.** `await` waits for it. `Promise.all([step(a), step(b)])` runs two steps at the same time.
-- **Each step is identified by its order and content.** If you change a step that already finished and then resume, the run stops with a `NondeterminismError`, because the recorded result no longer matches. Changing the step that failed is fine; that is how you fix a run.
+- **Each step is identified by its label and content.** On resume, a step is skipped and its saved result reused when a step with the same label and the same content (the task, its options and the outside values it uses) already finished in this run. Every other step runs: the one that failed, a step you added, and a finished step you changed. So you can fix a run by editing the workflow, and where you add or move steps does not matter. Steps with the same label and content take the saved results in the order they are called.
 
-## `step(label?, task)`
+## `step(label?, task, options?)`
 
 Runs a task as a durable step and returns a promise for its result.
 
@@ -69,7 +69,26 @@ const result = await step("Rename files", forEachFile("src/**/*.less", (file) =>
 
 - **`label`** (optional): shown in progress output, `codemod workflow status` and errors. Defaults to a description of the task.
 - **`task`**: `forEachFile(...)`, one of the [tasks](#tasks), or a function whose result should be computed once and recorded.
+- **`options`** (optional): [retries and a timeout](#retries-and-timeouts).
 - **Result:** deeply frozen and read-only. Copy it before changing it.
+
+### Retries and timeouts
+
+```ts
+await step("Install", shell("pnpm install"), { retries: 2, timeout: "10m" });
+```
+
+| Option | Default | |
+|---|---|---|
+| `retries` | `0` | Run the step again when it fails, up to this many more times. The workflow sees only the last failure. |
+| `retryDelay` | `"1s"` | How long to wait before each retry. |
+| `timeout` | none | Stop the step and fail it when one attempt takes longer. A shell command is terminated, and file changes not yet written are dropped. |
+
+Durations are milliseconds or a number with a unit: `"500ms"`, `"30s"`, `"10m"`, `"1h"`, `"2d"`.
+
+- A step that times out fails like any other, so it is retried if it has retries left.
+- These options say how to run a step, not which step it is. Changing them does not make a finished step run again on resume.
+- A canceled step and a step waiting for approval are not retried.
 
 ### Function steps
 
@@ -89,7 +108,7 @@ const config = await step("Read config", async () => JSON.parse(await readFile("
 
 - Write the function inline, so the build can extract it. Outside variables arrive as frozen copies, with the same rules as [forEachFile callbacks](#using-outside-variables).
 - Inside, `Date`, `Math.random`, `fetch`, `fs` and `child_process` are real, as far as the run allows (`--allow-fs`, `--allow-fetch`, `--allow-child-process`).
-- The result must be JSON. On resume, a finished function step is replayed from its record; if you changed it, the run stops with a `NondeterminismError`.
+- The result must be JSON. On resume, a finished function step is replayed from its record; if you changed it, it runs again.
 
 ## `forEachFile(selector?, callback)`
 
@@ -199,7 +218,7 @@ parse("tsx", text);                 // the original JSSG form
 
 ## The workflow body
 
-The body is the code outside steps and callbacks. It runs again on every resume and must issue the same steps each time, so:
+The body is the code outside steps and callbacks. It runs again on every resume, and a step's saved result is reused only when the body calls that same step again, so the body has to come out the same each time:
 
 - **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, and npm packages or local files whose imports only reach these.
 - **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
@@ -341,6 +360,39 @@ export default async function main({ params }: { params: { team?: string } }) {
 - With `--no-interactive`, the run pauses at the approval and exits successfully.
 - Continue a paused run with `codemod workflow resume --id <run-id> --approve`, or pass `--approve` to `workflow run` to approve everything up front.
 
+## Waiting
+
+Both of these are steps: they appear in the run's steps, and a finished wait is not repeated on resume.
+
+```ts
+import { sleep, waitForEvent } from "codemod/workflow";
+
+await step("Open the pull request", pullRequest({ title: "Migrate to v2" }));
+const ci = await waitForEvent<{ passed: boolean }>("ci-finished", { timeout: "1h" });
+if (!ci.passed) {
+  await sleep("5m");
+}
+```
+
+### `sleep(duration)`
+
+Waits for that long. The wait counts from when it began: if the run is interrupted and resumed, it waits only for what is left. A dry run does not wait.
+
+### `waitForEvent(name, { timeout }?)`
+
+Waits until the run is sent an event of that name, and resolves to the event's data (`null` when it has none). Send one from any terminal:
+
+```bash
+npx codemod workflow send ci-finished --id <run-id> --data '{"passed": true}'
+```
+
+- **The run keeps running while it waits.** If its process stops, `codemod workflow resume` goes on waiting.
+- **An event sent early is kept**, also while the run is not running, until a step takes it. Each event is taken by one step; events of one name are taken in the order sent.
+- **`timeout`** fails the step if no event comes in that time, counted from when the wait began. A resume after that waits again, for the full time.
+- **Names** are 1 to 100 letters, digits, `.`, `_` or `-`.
+- **A codemod nested with `codemod(...)`** takes events sent to the run that contains it.
+- **A dry run** is not saved and cannot be sent events, so the step fails there.
+
 ## Runs
 
 Every run is saved, with each step's result, so you can inspect and resume it:
@@ -350,6 +402,7 @@ npx codemod workflow list
 npx codemod workflow status --id <run-id>
 npx codemod workflow resume --id <run-id>
 npx codemod workflow cancel --id <run-id>
+npx codemod workflow send <event> --id <run-id>
 ```
 
 Runs are stored under your data directory (`~/Library/Application Support/codemod/runs` on macOS). Set `CODEMOD_RUN_STORE_DIR` to store them elsewhere, or `CODEMOD_RUN_STORE=memory` to keep nothing. A dry run is never saved.

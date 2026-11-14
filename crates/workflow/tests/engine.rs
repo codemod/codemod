@@ -283,17 +283,55 @@ fn fixing_the_failed_step_and_resuming_replays_the_finished_ones() {
 }
 
 #[test]
-fn changing_a_finished_step_before_resuming_is_a_nondeterminism_error() {
+fn a_finished_step_that_changed_runs_again_on_resume() {
     let h = Harness::new();
     h.write("a.txt", "a");
 
     let first = h.start(&broken_check(), Value::Null);
-    let changed = TOUCH_THEN_CHECK.replace("\"*.txt\"", "\"**/*.txt\"");
+    let changed = TOUCH_THEN_CHECK.replace("+ \"+\"", "+ \"!\"");
     let second = h.resume(&first, Some(&changed));
 
-    let error = output(&second).unwrap_err();
-    assert!(error.contains("NondeterminismError"), "{error}");
-    assert!(error.contains("step #0 ('Touch')"), "{error}");
+    assert!(output(&second).is_ok(), "{:?}", second.ending);
+    assert_eq!(h.read("a.txt"), "a+!");
+    // The failed step kept its place; the changed one was added.
+    let steps: Vec<_> = second
+        .steps
+        .iter()
+        .map(|s| (s.position, s.label.as_str(), s.status))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            (0, "Touch", StepStatus::Succeeded),
+            (1, "Check", StepStatus::Succeeded),
+            (2, "Touch", StepStatus::Succeeded),
+        ]
+    );
+}
+
+#[test]
+fn a_step_added_before_the_failed_one_does_not_disturb_the_finished_ones() {
+    let h = Harness::new();
+    h.write("a.txt", "a");
+
+    let first = h.start(&broken_check(), Value::Null);
+    let with_setup = TOUCH_THEN_CHECK.replace(
+        "  await step(\"Touch\"",
+        "  await step(\"Setup\", () => \"ready\");\n  await step(\"Touch\"",
+    );
+    let second = h.resume(&first, Some(&with_setup));
+
+    assert!(output(&second).is_ok(), "{:?}", second.ending);
+    assert_eq!(h.read("a.txt"), "a+", "Touch did not run again");
+    let events = h.events.take();
+    assert!(events.contains(&Event::StepStarted {
+        position: 2,
+        label: "Setup".into()
+    }));
+    assert!(events.contains(&Event::StepReplayed {
+        position: 0,
+        label: "Touch".into()
+    }));
 }
 
 #[test]
@@ -836,19 +874,41 @@ export default async function main({ target }) {
     assert!(matches!(events.last(), Some(Event::RunFinished { .. })));
 }
 
-/// Two branches of two steps each. Positions come from the order steps are
-/// issued, which follows the order the first steps finish in; a resume has
-/// to settle the recorded steps in that same order or the second steps swap
-/// positions.
+#[test]
+fn a_command_is_done_when_it_exits_whatever_else_is_running() {
+    let h = approving_with(Arc::new(MemoryStore::default()));
+    // "waits" can only succeed if "quick" is reported done while it runs.
+    let report = h.start(
+        r#"
+import { step, shell } from "codemod/workflow";
+export default async function main({ target }) {
+  const quick = step("quick", shell("true")).then(() =>
+    step("mark", shell(`touch ${target}/mark`)),
+  );
+  const waits = step(
+    "waits",
+    shell(`for i in $(seq 100); do test -f ${target}/mark && exit 0; sleep 0.05; done; exit 1`),
+  );
+  await Promise.all([quick, waits]);
+  return "done";
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!("done"));
+}
+
+/// Two branches of two steps each. The order the second steps are issued in
+/// follows the order the first steps finish in.
 const TWO_BRANCHES: &str = r#"
 import { step, shell } from "codemod/workflow";
 export default async function main({ target }) {
   const a = async () => {
-    await step("a1", shell("sleep 0.3"));
+    await step("a1", shell("true"));
     await step("a2", shell(`echo a2 >> ${target}/log.txt`));
   };
   const b = async () => {
-    await step("b1", shell("true"));
+    await step("b1", shell(`for i in $(seq 100); do test -f ${target}/log.txt && exit 0; sleep 0.05; done; exit 1`));
     await step("b2", shell(`test -f ${target}/go && echo b2 >> ${target}/log.txt`));
   };
   await Promise.all([a(), b()]);
@@ -867,6 +927,69 @@ fn branches_that_ran_side_by_side_resume_without_running_a_step_twice() {
     let second = h.resume(&first, None);
     assert_eq!(output(&second).unwrap(), json!("done"));
     assert_eq!(h.read("log.txt"), "a2\nb2\n", "a2 did not run again");
+}
+
+/// One branch handles a failed step while the other is still on its first
+/// step. On resume the failed step runs again, live, and the other branch's
+/// recorded step settles at once, so the steps after them are issued in the
+/// other order than the first time.
+const HANDLED_FAILURE_BESIDE_A_SLOW_BRANCH: &str = r#"
+import { step, shell } from "codemod/workflow";
+export default async function main({ target }) {
+  const a = async () => {
+    try {
+      await step("a1", shell("exit 1"));
+    } catch {
+      await step("fallback", shell(`echo fallback >> ${target}/log.txt`));
+    }
+  };
+  const b = async () => {
+    await step("b1", shell(`for i in $(seq 100); do test -f ${target}/log.txt && exit 0; sleep 0.05; done; exit 1`));
+    await step("b2", shell(`echo b2 >> ${target}/log.txt`));
+  };
+  await Promise.all([a(), b()]);
+  await step("end", shell(`test -f ${target}/go`));
+  return "done";
+}
+"#;
+
+#[test]
+fn a_handled_failure_beside_another_branch_resumes() {
+    let h = approving_with(Arc::new(MemoryStore::default()));
+    let first = h.start(HANDLED_FAILURE_BESIDE_A_SLOW_BRANCH, Value::Null);
+    assert!(output(&first).unwrap_err().contains("step 'end' failed"));
+    assert_eq!(h.read("log.txt"), "fallback\nb2\n");
+
+    h.write("go", "");
+    let second = h.resume(&first, None);
+    assert_eq!(output(&second).unwrap(), json!("done"));
+    assert_eq!(h.read("log.txt"), "fallback\nb2\n", "neither ran again");
+    // Every step is still the one it was.
+    let labels: Vec<_> = second.steps.iter().map(|s| s.label.as_str()).collect();
+    assert_eq!(labels, ["a1", "b1", "fallback", "b2", "end"]);
+}
+
+#[test]
+fn steps_alike_in_label_and_content_take_the_records_in_turn() {
+    let h = approving_with(Arc::new(MemoryStore::default()));
+    let source = r#"
+import { step, shell } from "codemod/workflow";
+export default async function main({ target }) {
+  for (let round = 0; round < 3; round++) {
+    await step("Mark", shell(`echo x >> ${target}/log.txt`));
+  }
+  await step("end", shell(`test -f ${target}/go`));
+  return "done";
+}
+"#;
+    let first = h.start(source, Value::Null);
+    assert!(output(&first).is_err());
+
+    h.write("go", "");
+    let second = h.resume(&first, None);
+    assert_eq!(output(&second).unwrap(), json!("done"));
+    assert_eq!(h.read("log.txt"), "x\nx\nx\n");
+    assert_eq!(second.steps.len(), 4);
 }
 
 #[test]

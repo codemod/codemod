@@ -478,6 +478,16 @@ impl EventSink for Renderer {
                 style("↺").dim(),
                 style("(done earlier)").dim()
             )),
+            Event::StepRetrying {
+                label,
+                attempt,
+                attempts,
+                error,
+                ..
+            } => self.line(format!(
+                "{} {label}: attempt {attempt} of {attempts} failed: {error}",
+                style("↻").yellow()
+            )),
             Event::StepProgress {
                 position,
                 processed,
@@ -544,6 +554,8 @@ impl EventSink for Renderer {
                         "{} {label}: waiting for approval",
                         style("‖").yellow()
                     )),
+                    // Never reported: a step that began to wait has not finished.
+                    StepStatus::Waiting => {}
                 }
             }
             Event::RunFinished { status, .. } => {

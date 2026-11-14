@@ -460,6 +460,57 @@ export default async function main() {
     assert.equal(result.status, "canceled");
     assert.deepEqual(result.files, { "a.ts": "old\n" });
   });
+
+  test(
+    `${host}: steps retry and time out, sleep waits, and given stands in for an event`,
+    HOSTS[host],
+    async () => {
+      const source = `
+import { step, sleep, waitForEvent } from "codemod/workflow";
+export default async function main() {
+  await sleep("50ms");
+  const event = await waitForEvent("go", { timeout: "1m" });
+  try {
+    await step(
+      "Slow",
+      async () => { await new Promise((done) => setTimeout(done, 1500)); },
+      { timeout: 200 },
+    );
+  } catch (error) {
+    console.log((error as Error).message);
+  }
+  await step("Fails", () => { console.log("try"); throw new Error(event.word); }, {
+    retries: 2,
+    retryDelay: 0,
+  });
+}
+`;
+      const started = Date.now();
+      const result = await runWorkflow(join(scratch({ "workflow.ts": source }), "workflow.ts"), {
+        target: {},
+        given: { "wait for go": { word: "no" } },
+      });
+
+      assert.equal(result.status, "failed");
+      assert.match(result.error, /step 'Fails' failed: no/);
+      assert.ok(Date.now() - started >= 50);
+      assert.deepEqual(
+        result.steps.map((s) => [s.label, s.status]),
+        [
+          ["sleep 50ms", "succeeded"],
+          ["wait for go", "succeeded"],
+          ["Slow", "failed"],
+          ["Fails", "failed"],
+        ],
+      );
+      assert.deepEqual(result.logs, [
+        { step: null, line: "step 'Slow' failed: timed out after 200ms" },
+        { step: "Fails", line: "try" },
+        { step: "Fails", line: "try" },
+        { step: "Fails", line: "try" },
+      ]);
+    },
+  );
 }
 
 // ------------------------------------------------------------ node host ---

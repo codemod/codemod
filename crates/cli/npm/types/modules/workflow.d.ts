@@ -316,6 +316,32 @@ declare module "codemod:workflow" {
   }
 
   /**
+   * A length of time: a number of milliseconds, or a number with a unit,
+   * such as `"500ms"`, `"30s"`, `"10m"`, `"1h"` or `"2d"`.
+   */
+  export type Duration = number | `${number}${"ms" | "s" | "m" | "h" | "d"}`;
+
+  /**
+   * How a step is run. These do not identify the step: changing them does
+   * not make a finished step run again on resume.
+   */
+  export interface StepOptions {
+    /**
+     * Runs the step again when it fails, up to this many more times. The
+     * run sees only the last failure. Default: 0.
+     */
+    retries?: number;
+    /** How long to wait before each retry. Default: `"1s"`. */
+    retryDelay?: Duration;
+    /**
+     * Stops the step, and fails it, when one attempt takes longer than
+     * this: commands are terminated and file changes not yet written are
+     * dropped.
+     */
+    timeout?: Duration;
+  }
+
+  /**
    * Runs a task as a durable step and resolves to its frozen result.
    *
    * The step starts when `step()` is called, so `Promise.all` runs steps in
@@ -327,10 +353,15 @@ declare module "codemod:workflow" {
    * const renamed = await step("Rename stylesheets", forEachFile("src/**\/*.less", (file) => {
    *   file.rename(file.path.replace(/\.less$/, ".css"));
    * }));
+   * await step("Install", shell("pnpm install"), { retries: 2, timeout: "10m" });
    * ```
    */
-  export function step<Result>(task: Task<Result>): Promise<Frozen<Result>>;
-  export function step<Result>(label: string, task: Task<Result>): Promise<Frozen<Result>>;
+  export function step<Result>(task: Task<Result>, options?: StepOptions): Promise<Frozen<Result>>;
+  export function step<Result>(
+    label: string,
+    task: Task<Result>,
+    options?: StepOptions,
+  ): Promise<Frozen<Result>>;
   /**
    * Runs a function once, in its own isolate, and records its result, which
    * must be JSON. Write it inline: outside variables arrive as frozen copies,
@@ -339,16 +370,53 @@ declare module "codemod:workflow" {
    */
   export function step<Result>(
     run: () => PromiseLike<Checked<Result>>,
+    options?: StepOptions,
   ): Promise<Frozen<StepValue<Result>>>;
   export function step<Result>(
     label: string,
     run: () => PromiseLike<Checked<Result>>,
+    options?: StepOptions,
   ): Promise<Frozen<StepValue<Result>>>;
-  export function step<Result>(run: () => Checked<Result>): Promise<Frozen<StepValue<Result>>>;
+  export function step<Result>(
+    run: () => Checked<Result>,
+    options?: StepOptions,
+  ): Promise<Frozen<StepValue<Result>>>;
   export function step<Result>(
     label: string,
     run: () => Checked<Result>,
+    options?: StepOptions,
   ): Promise<Frozen<StepValue<Result>>>;
+
+  /**
+   * Waits, as a step. The wait counts from when it began: a run that is
+   * interrupted and resumed waits only for what is left. A dry run does not
+   * wait.
+   *
+   * @example
+   * ```ts
+   * await sleep("30s");
+   * ```
+   */
+  export function sleep(duration: Duration): Promise<null>;
+
+  /**
+   * Waits, as a step, for an event sent to the run with
+   * `codemod workflow send <name> --id <run-id> [--data <json>]`, and
+   * resolves to its data (`null` when none was given). An event sent before
+   * the workflow gets here is kept for it. With `timeout`, the step fails if
+   * no event comes in that time, counted from when the wait began.
+   *
+   * A dry run is not saved and cannot be sent events, so the step fails there.
+   *
+   * @example
+   * ```ts
+   * const ci = await waitForEvent<{ passed: boolean }>("ci-finished", { timeout: "1h" });
+   * ```
+   */
+  export function waitForEvent<Data = JsonValue>(
+    name: string,
+    options?: { timeout?: Duration },
+  ): Promise<Frozen<Data>>;
 
   /**
    * `T`, checked to be JSON: `Result` is inferred from the value, which must
@@ -723,9 +791,6 @@ declare module "codemod:workflow" {
   export function pullRequest(
     options: PullRequestOptions,
   ): Task<Skippable<{ branch: string; url: string | null }>>;
-
-  /** A finished step changed since the run was recorded, so resume cannot reuse its result. */
-  export class NondeterminismError extends Error {}
 
   /** A step failed. */
   export class StepError extends Error {

@@ -37,8 +37,8 @@ pub use butterflow_state::run_store::{
     LocalStore, MemoryStore, RunRecord, RunSettings, RunStatus, RunStore, StepRecord, StepStatus,
 };
 pub use engine::{
-    cancel_run, is_typescript, load_workflow, Canceled, Engine, EngineError, LoadedWorkflow,
-    RunReport, StartRequest, StopHandle,
+    cancel_run, is_typescript, load_workflow, send_event, Canceled, Engine, EngineError,
+    LoadedWorkflow, RunReport, StartRequest, StopHandle,
 };
 pub use hosted::{HostedRun, OpenRequest, SelectedFiles};
 pub use run::{Ending, RunError, TestPlan, ORCHESTRATOR_JS};

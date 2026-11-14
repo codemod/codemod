@@ -14,12 +14,7 @@
 
 import { createRuntime } from "codemod-internal:orchestrator";
 
-export {
-  AwaitingApprovalError,
-  CanceledError,
-  NondeterminismError,
-  StepError,
-} from "codemod-internal:orchestrator";
+export { AwaitingApprovalError, CanceledError, StepError } from "codemod-internal:orchestrator";
 
 const raw = globalThis.__workflowHost;
 const pending = new Map();
@@ -35,8 +30,8 @@ const runtime = createRuntime({
   stop: () => raw.stop(),
   evaluate: (kind, expression, scope) =>
     JSON.parse(raw.evaluate(kind, expression, JSON.stringify(scope))),
-  start({ position, label, task, state }) {
-    const id = raw.start(JSON.stringify({ position, label, task, state }));
+  start({ fn: _, ...request }) {
+    const id = raw.start(JSON.stringify(request));
     return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
   },
 });
@@ -83,4 +78,6 @@ export const {
   commit,
   pullRequest,
   step,
+  sleep,
+  waitForEvent,
 } = runtime;

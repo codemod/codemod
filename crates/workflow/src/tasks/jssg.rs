@@ -151,7 +151,7 @@ pub(crate) fn execute(
         threads: request.threads,
         dry_run,
         initial_state: task.state.clone().into_iter().collect(),
-        cancel: Some(run.cancel.clone()),
+        cancel: Some(task.cancel.clone()),
         progress: Some(task.walk_progress()),
         on_log: Some(step_logs(task)),
     })

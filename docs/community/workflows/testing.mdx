@@ -235,6 +235,7 @@ YAML workflows always run with the CLI.
 - Git steps (`branch`, `commit`, `pullRequest`) do nothing, as in a run without `--managed-git`.
 - Shell steps run for real, in the temporary copy.
 - `agent` steps would call a coding agent: give their result with `given` instead.
+- `waitForEvent` steps have nobody to send their event: give the event's data with `given`, under the label `wait for <name>`. Without it the step waits until its `timeout`, or for as long as your test runner allows. `sleep` steps wait as usual.
 - On the Node.js host, capabilities only apply to `jssg` transforms, which still run in the engine. See [what differs on the Node.js host](/community/workflows/node#how-it-differs-from-the-cli).
 
 `codemod/testing` uses the native addon and the `codemod` CLI that the package installed. To test against other builds, set `CODEMOD_NODE_ADDON` and `CODEMOD_BINARY` to their paths.

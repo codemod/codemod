@@ -2,6 +2,7 @@
 //! over an existing executor.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
@@ -24,6 +25,9 @@ pub(crate) mod isolate;
 mod jssg;
 mod shard;
 mod shell;
+mod wait;
+
+pub(crate) use wait::describe as describe_duration;
 
 /// One task invocation.
 pub(crate) struct TaskContext<'a> {
@@ -33,9 +37,19 @@ pub(crate) struct TaskContext<'a> {
     pub label: String,
     /// Workflow state when the step started.
     pub state: serde_json::Map<String, Value>,
+    /// Set when the task must stop: the run was canceled, or the step ran
+    /// out of time. The run's own flag for a step without a timeout.
+    pub cancel: Arc<AtomicBool>,
+    /// When the step began to wait, for `sleep` and `waitForEvent`, in
+    /// milliseconds since the epoch.
+    pub since: Option<i64>,
 }
 
 impl TaskContext<'_> {
+    pub fn canceled(&self) -> bool {
+        self.cancel.load(Ordering::SeqCst)
+    }
+
     pub fn progress(&self, processed: usize, total: usize) {
         self.run.events.emit(Event::StepProgress {
             position: self.position,
@@ -123,7 +137,7 @@ impl TaskError {
 pub(crate) type TaskResult = Result<TaskOutcome, TaskError>;
 
 pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
-    if task.run.canceled() {
+    if task.canceled() {
         return Err(TaskError::Canceled);
     }
     let kind = content
@@ -142,12 +156,14 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         "agent" => agent::run(task, parse(content)?),
         "installSkill" => install_skill::run(task, content),
         "approval" => approval::run(task, parse(content)?),
+        "sleep" => wait::sleep(task, parse(content)?),
+        "waitForEvent" => wait::for_event(task, parse(content)?),
         "branch" => git::branch(task, parse(content)?),
         "commit" => git::commit(task, parse(content)?),
         "pullRequest" => git::pull_request(task, parse(content)?),
         other => Err(TaskError::Failed(format!("unknown task kind '{other}'"))),
     };
-    if task.run.canceled() && result.is_err() {
+    if task.canceled() && result.is_err() {
         return Err(TaskError::Canceled);
     }
     result

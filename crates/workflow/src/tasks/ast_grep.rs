@@ -56,7 +56,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             capabilities: None,
         };
         config.execute(|path, _| {
-            if !path.is_file() || run.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            if !path.is_file() || task.canceled() {
                 return;
             }
             let display = relative(&run.target, path).unwrap_or_else(|| path.display().to_string());

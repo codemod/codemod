@@ -108,6 +108,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
                 position: task.position,
             }),
             identity,
+            Arc::clone(&task.cancel),
         ),
     );
     let observer = run.services.nested_observer.clone();
@@ -165,6 +166,13 @@ impl EventSink for NestedEvents {
         let line = match event {
             Event::StepStarted { label, .. } => format!("▸ {label}"),
             Event::StepReplayed { label, .. } => format!("↺ {label}"),
+            Event::StepRetrying {
+                label,
+                attempt,
+                attempts,
+                error,
+                ..
+            } => format!("↻ {label}: attempt {attempt} of {attempts} failed: {error}"),
             Event::StepFinished {
                 label,
                 status,
@@ -176,6 +184,8 @@ impl EventSink for NestedEvents {
                 (StepStatus::Failed, None) => format!("✗ {label}"),
                 (StepStatus::Canceled, _) => format!("■ {label}: canceled"),
                 (StepStatus::AwaitingApproval, _) => format!("‖ {label}: waiting for approval"),
+                // Never reported: a step that began to wait has not finished.
+                (StepStatus::Waiting, _) => return,
             },
             Event::StepLog { line, .. } => format!("  {line}"),
             Event::RunLog { line } => line,

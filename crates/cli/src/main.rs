@@ -134,6 +134,9 @@ enum WorkflowCommands {
     /// Cancel a workflow run
     Cancel(commands::workflow::cancel::Command),
 
+    /// Send an event to a workflow run that waits for it
+    Send(commands::workflow::send::Command),
+
     /// Convert workflow.yaml files to workflow.ts
     Upgrade(commands::workflow::upgrade::Command),
 
@@ -534,6 +537,9 @@ async fn dispatch_command(cli: &Cli, telemetry_sender: TelemetrySenderMutex) -> 
             }
             WorkflowCommands::Cancel(args) => {
                 commands::workflow::cancel::handler(args).await?;
+            }
+            WorkflowCommands::Send(args) => {
+                commands::workflow::send::handler(args).await?;
             }
             WorkflowCommands::Upgrade(args) => {
                 commands::workflow::upgrade::handler(args)?;

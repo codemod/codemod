@@ -101,6 +101,8 @@ On the Node.js host:
 - **`codemod(...)` steps** run local packages only; run workflows that use registry packages with the CLI.
 - **`definition()` and `references()`** find nothing in roots that `forEachFile` callbacks parse, as in the CLI.
 - **Callbacks run one at a time**, in this process. The CLI runs `forEachFile` callbacks on several threads, so code that reads and then sets state without `acquireLock` can lose updates there and never here.
+- **A step's `timeout` cannot stop JavaScript that is running.** When a function step or a `forEachFile` callback runs out of time here, the step fails and its file changes are not written, but its code runs on until it returns; code that never waits is not interrupted at all. The CLI stops them. Tasks such as `shell` are stopped on both.
+- **Events are sent with the CLI.** `waitForEvent` works here for runs kept with `store: "local"`; send to them with `codemod workflow send`.
 - **The workflow body may wait on anything.** The CLI stops a body that waits on a timer, or on a promise no step will settle.
 - **A run is resumed where it started.** Runs started here are resumed with `runWorkflow(..., { resume })`, and runs the CLI started with `codemod workflow resume`: the two record steps differently.
 - **YAML workflows** do not run here. Run them with the CLI, or convert them with `codemod workflow upgrade`.
