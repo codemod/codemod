@@ -3,7 +3,7 @@
 //! The workflow body runs on the calling thread, with the modules that are
 //! deterministic (pure LLRT modules such as `path` and `url`,
 //! `codemod/ast-grep`, packages and relative files) and replay-safe globals
-//! (`js/body_globals.js`). Steps and `forEachFile` callbacks run in their own
+//! (`js/body_globals.ts`). Steps and `forEachFile` callbacks run in their own
 //! isolates (see `tasks::isolate`). Host tasks run on their own
 //! threads and report back over a channel; the loop below settles their
 //! promises, so steps started together run at the same time. Every step's
@@ -35,13 +35,8 @@ use crate::interaction::Interaction;
 use crate::tasks::{self, TaskContext};
 use crate::Services;
 
-const RUNTIME_JS: &str = include_str!("js/workflow.js");
-/// The orchestrator shared with the Node.js host.
-pub const ORCHESTRATOR_JS: &str = include_str!("js/orchestrator.js");
 /// Not under `codemod/` or `codemod:`: those names are the public modules.
 pub(crate) const ORCHESTRATOR_MODULE: &str = "codemod-internal:orchestrator";
-const BODY_GLOBALS_JS: &str = include_str!("js/body_globals.js");
-const BODY_METRICS_JS: &str = include_str!("js/body_metrics.js");
 const WORKFLOW_MODULE: &str = "workflow.js";
 
 /// LLRT modules left out of the workflow body: they read the clock, the
@@ -416,9 +411,9 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
         (
             llrt_loader.with_module("codemod/ast-grep", AstGrepModule),
             BuiltinLoader::default()
-                .with_module(FLOW_MODULE, RUNTIME_JS)
-                .with_module(ORCHESTRATOR_MODULE, ORCHESTRATOR_JS)
-                .with_module("codemod/metrics", BODY_METRICS_JS),
+                .with_module(FLOW_MODULE, crate::js::workflow_module())
+                .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator())
+                .with_module("codemod/metrics", crate::js::body_metrics()),
             QuickJSLoader,
         ),
     );
@@ -437,7 +432,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
         let started = (|| -> rquickjs::Result<Value<'_>> {
             llrt_globals.attach(&ctx)?;
             install_host(&ctx, &run, &recorded, &in_flight, &sender)?;
-            ctx.eval::<(), _>(BODY_GLOBALS_JS)?;
+            ctx.eval::<(), _>(crate::js::body_globals())?;
             // Load the runtime even when the workflow never imports it.
             Module::import(&ctx, FLOW_MODULE)?.finish::<()>()?;
             let declared = Module::declare(ctx.clone(), WORKFLOW_MODULE, built.main.as_str())?;

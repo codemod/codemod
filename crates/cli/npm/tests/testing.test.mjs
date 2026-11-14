@@ -554,14 +554,21 @@ test("node: runWorkflow takes the workflow module itself", HOSTS.node, async () 
   assertTree(result, { "a.mts": "new\n" });
 });
 
-test("node: the orchestrator copy matches the engine's", () => {
-  const source = readFileSync(
-    new URL("../../../workflow/src/js/orchestrator.js", import.meta.url),
-    "utf8",
-  );
-  const copy = readFileSync(new URL("../runtime/orchestrator.mjs", import.meta.url), "utf8");
-  assert.ok(
-    copy.endsWith(source),
-    "runtime/orchestrator.mjs is out of date; run pnpm sync-orchestrator",
-  );
+test(
+  "node: this package and the addon were built from the same orchestrator",
+  HOSTS.node,
+  async () => {
+    const { addon } = await import("../runtime/addon.mjs");
+    const { ORCHESTRATOR_VERSION } = await import("../runtime/orchestrator-version.mjs");
+    assert.equal(
+      addon().orchestratorVersion(),
+      ORCHESTRATOR_VERSION,
+      "rebuild both: cargo build -p codemod-node, and pnpm --filter codemod build",
+    );
+  },
+);
+
+test("the built orchestrator has no types left in it", () => {
+  const built = readFileSync(new URL("../runtime/orchestrator.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(built, /^(export )?(interface|type) /m);
 });

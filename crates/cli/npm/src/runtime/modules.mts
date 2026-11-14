@@ -2,7 +2,8 @@
 // Node.js implementations they resolve to. `codemod/workflow` and the rest
 // need no mapping: they are this package's own exports.
 
-const MODULES = {
+// Paths of the built files, next to the built form of this one.
+const MODULES: Readonly<Record<string, string>> = {
   "codemod:workflow": "./workflow.mjs",
   "codemod:ast-grep": "./ast-grep.mjs",
   "codemod:metrics": "./metrics.mjs",
@@ -10,10 +11,10 @@ const MODULES = {
   "codemod:llm": "./llm.mjs",
 };
 
-export const CODEMOD_MODULES = Object.keys(MODULES);
+export const CODEMOD_MODULES: readonly string[] = Object.keys(MODULES);
 
 /** The URL an older `codemod:*` specifier resolves to, or undefined. */
-export function resolveCodemodModule(specifier) {
+export function resolveCodemodModule(specifier: string): string | undefined {
   const path = MODULES[specifier];
   return path ? new URL(path, import.meta.url).href : undefined;
 }

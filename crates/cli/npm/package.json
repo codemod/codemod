@@ -81,16 +81,18 @@
     "vite.mjs"
   ],
   "scripts": {
-    "test": "node --test tests/*.test.js tests/*.test.mjs",
-    "typecheck": "tsc -p types && tsc -p type-tests",
-    "pull-llrt-types": "bash scripts/pull-llrt-types.sh",
-    "sync-orchestrator": "node scripts/sync-orchestrator.mjs"
+    "build": "node scripts/build.mjs",
+    "prepack": "node scripts/build.mjs",
+    "test": "node scripts/build.mjs && node --test tests/*.test.js tests/*.test.mjs",
+    "typecheck": "node scripts/build.mjs && tsc -p ../../workflow/src/js && tsc -p types && tsc -p type-tests",
+    "pull-llrt-types": "bash scripts/pull-llrt-types.sh"
   },
   "dependencies": {
     "detect-libc": "^2.0.3"
   },
   "devDependencies": {
     "@codemod.com/tsconfig": "workspace:*",
+    "@types/node": "^22.16.0",
     "typescript": "catalog:"
   },
   "optionalDependencies": {

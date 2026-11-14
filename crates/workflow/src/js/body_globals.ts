@@ -26,22 +26,30 @@
   };
   Math.random = random;
 
+  // What is replaced below is not in the types this file is checked with
+  // (plain ECMAScript, no DOM and no Node.js), or is replaced by something
+  // smaller than its type, so it is set through this view of the globals.
+  const globals = globalThis as unknown as Record<string, unknown>;
+
   const RealDate = Date;
   const now = () => host.clock();
-  function WorkflowDate(...args) {
+  // Called with `new` it makes a date; called without, a string, as Date does.
+  function WorkflowDate(...args: unknown[]) {
     if (!new.target) return new RealDate(now()).toString();
-    return args.length === 0 ? new RealDate(now()) : new RealDate(...args);
+    return args.length === 0
+      ? new RealDate(now())
+      : new RealDate(...(args as ConstructorParameters<DateConstructor>));
   }
   WorkflowDate.prototype = RealDate.prototype;
   WorkflowDate.now = now;
   WorkflowDate.parse = RealDate.parse;
   WorkflowDate.UTC = RealDate.UTC;
-  globalThis.Date = WorkflowDate;
+  globals.Date = WorkflowDate;
 
   const origin = now();
-  globalThis.performance = Object.freeze({ timeOrigin: origin, now: () => now() - origin });
+  globals.performance = Object.freeze({ timeOrigin: origin, now: () => now() - origin });
 
-  const getRandomValues = (array) => {
+  const getRandomValues = <T extends Uint8Array | Uint16Array | Uint32Array>(array: T): T => {
     const range = 2 ** (8 * (array.BYTES_PER_ELEMENT ?? 1));
     for (let index = 0; index < array.length; index++) {
       array[index] = Math.floor(random() * range);
@@ -50,24 +58,24 @@
   };
   const randomUUID = () => {
     const bytes = getRandomValues(new Uint8Array(16));
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40;
+    bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
     const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   };
-  globalThis.crypto = Object.freeze({ getRandomValues, randomUUID });
+  globals.crypto = Object.freeze({ getRandomValues, randomUUID });
 
-  const insideAStep = (name) =>
+  const insideAStep = (name: string) =>
     function () {
       throw new Error(
         `${name} is not available in the workflow body, which runs again on every resume; use it inside a step or forEachFile callback`,
       );
     };
   for (const name of ["setTimeout", "setInterval", "setImmediate", "fetch"]) {
-    if (!(name in globalThis)) globalThis[name] = insideAStep(name);
+    if (!(name in globals)) globals[name] = insideAStep(name);
   }
 
-  const format = (value) => {
+  const format = (value: unknown) => {
     if (typeof value === "string") return value;
     if (value instanceof Error) return value.stack || `${value.name}: ${value.message}`;
     try {
@@ -76,6 +84,6 @@
       return String(value);
     }
   };
-  const log = (...items) => host.log(items.map(format).join(" "));
-  globalThis.console = Object.freeze({ log, info: log, debug: log, warn: log, error: log });
+  const log = (...items: unknown[]) => host.log(items.map(format).join(" "));
+  globals.console = Object.freeze({ log, info: log, debug: log, warn: log, error: log });
 })();

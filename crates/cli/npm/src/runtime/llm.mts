@@ -1,6 +1,6 @@
 // `codemod/llm` is not available when Node.js runs the workflow yet.
 
-export function generate() {
+export function generate(): Promise<never> {
   return Promise.reject(
     new Error(
       "codemod/llm is not available when Node.js runs the workflow; run it with the codemod CLI",

@@ -24,7 +24,7 @@ export default async function main() {
 | Path | What it does |
 |---|---|
 | `src/build.rs` | oxc build: extracts `forEachFile` callbacks and function steps, turns outside variables into captures, reports the callback rules and body import rules as build errors; `check_imports` walks the import graphs of packages the body uses; `inspect` reads a module's task calls without running it |
-| `src/run.rs`, `src/js/workflow.js`, `src/js/body_globals.js` | The workflow body in one QuickJS context with pure modules and replay-safe `Date`/`Math.random`; the `codemod/workflow` runtime: `step()`, replay by position and content, state, events, cancellation |
+| `src/run.rs`, `src/js.rs`, `src/js/workflow.ts`, `src/js/body_globals.ts` | The workflow body in one QuickJS context with pure modules and replay-safe `Date`/`Math.random`; the `codemod/workflow` runtime: `step()`, replay by position and content, state, events, cancellation |
 | `src/tasks/isolate.rs`, `src/tasks/for_each_file.rs`, `src/tasks/function.rs` | Callbacks and function steps on sandbox workers (`codemod_sandbox::Worker`): the JSSG module set, async, imports, metrics and state |
 | `src/engine.rs` | `Engine::start` / `resume` / `cancel` over a `RunStore` (`crates/state`) |
 | `src/tasks/` | Host tasks, each a thin adapter over an existing executor: `forEachFile`, `jssg` (`butterflow_core::jssg_runner`), `astGrep`, `shell`, `shard`, `codemod`, `agent`, `installSkill`, `approval`, `branch` / `commit` / `pullRequest` |

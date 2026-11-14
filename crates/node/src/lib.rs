@@ -12,11 +12,11 @@
 pub mod ast;
 pub mod run;
 
-/// The orchestrator source the engine runs in QuickJS, so the npm package
-/// can check it ships the same one.
+/// Identifies the orchestrator source this addon's engine was built from,
+/// so the npm package can check it ships the same one.
 #[napi_derive::napi]
-pub fn orchestrator_source() -> String {
-    codemod_workflow::ORCHESTRATOR_JS.to_string()
+pub fn orchestrator_version() -> String {
+    codemod_workflow::orchestrator_version()
 }
 
 /// The workflow file a source names: the file itself, or for a package

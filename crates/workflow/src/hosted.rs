@@ -1,7 +1,7 @@
 //! Runs whose workflow body runs outside the engine: another JavaScript host
 //! (Node.js or Bun, through the `codemod` npm package) runs the body, function
 //! steps and `forEachFile` callbacks with the shared orchestrator
-//! (`js/orchestrator.js`), and calls back here for what the engine owns: the
+//! (`js/orchestrator.ts`), and calls back here for what the engine owns: the
 //! run store, events, host tasks, and selecting and committing files.
 //!
 //! There is no capability sandbox in such a host: the code it runs has

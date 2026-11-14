@@ -1,23 +1,20 @@
 // The `codemod/workflow` module of the engine's QuickJS context: the shared
-// orchestrator (`orchestrator.js`) bound to the host the engine installs as
-// `globalThis.__workflowHost` before this module evaluates:
-//   history(): string                    steps recorded by earlier runs, as JSON
-//   record(entry: string, ms: number)    persist one step's outcome
-//   event(event: string)                 report step started / replayed
-//   canceled(): boolean                  whether a step about to start must not
-//   start(request: string): id           start a host task; settled via __workflowSettle
-//   evaluate(kind, expression, scope)    evaluate a workflow.yaml `${{ }}` expression
-//   now(): number                        the real time, for step records
-//   advanceClock(ms: number)             move the body's clock (Date.now()) forward
-//   testPlan(): string                   `{ until, given }` when the run is a test, else "null"
-//   stop()                               the test's `until` step has started
+// orchestrator (`orchestrator.ts`) bound to the host the engine installs as
+// `globalThis.__workflowHost` before this module evaluates (`RawHost` in
+// `globals.d.ts`). Everything crosses to Rust as JSON text.
 
 import { createRuntime } from "codemod-internal:orchestrator";
+import type { Outcome } from "codemod-internal:orchestrator";
 
 export { AwaitingApprovalError, CanceledError, StepError } from "codemod-internal:orchestrator";
 
 const raw = globalThis.__workflowHost;
-const pending = new Map();
+
+/** Tasks the engine is running, by the id it gave them. */
+const pending = new Map<
+  number,
+  { resolve(outcome: Outcome): void; reject(error: { name: string; message: string }): void }
+>();
 
 const runtime = createRuntime({
   history: () => JSON.parse(raw.history()),
@@ -30,12 +27,15 @@ const runtime = createRuntime({
   stop: () => raw.stop(),
   evaluate: (kind, expression, scope) =>
     JSON.parse(raw.evaluate(kind, expression, JSON.stringify(scope))),
+  // Callbacks are extracted by the build here, so no request carries a function.
   start({ fn: _, ...request }) {
     const id = raw.start(JSON.stringify(request));
     return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
   },
 });
 
+// The engine's loop settles tasks, settles replayed steps and closes the run
+// through these.
 globalThis.__workflowSettle = (id, ok, payload) => {
   const entry = pending.get(id);
   pending.delete(id);
@@ -50,8 +50,6 @@ globalThis.__workflowSettle = (id, ok, payload) => {
     entry.reject({ name: "Error", message: payload });
   }
 };
-
-// The engine's loop settles replayed steps and closes the run through these.
 globalThis.__workflowReplayNext = runtime.replayNext;
 globalThis.__workflowClose = runtime.close;
 

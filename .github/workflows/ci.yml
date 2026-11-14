@@ -14,6 +14,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       js: ${{ steps.filter.outputs.js }}
+      npm_package: ${{ steps.filter.outputs.npm_package }}
       jssg_utils_docs: ${{ steps.filter.outputs.jssg_utils_docs }}
     steps:
       - uses: actions/checkout@v3
@@ -28,6 +29,12 @@ jobs:
             js:
               - 'packages/**'
               - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'crates/cli/npm/**'
+              - 'crates/workflow/src/js/**'
+            npm_package:
+              - 'crates/cli/npm/**'
+              - 'crates/workflow/src/js/**'
               - 'pnpm-lock.yaml'
             jssg_utils_docs:
               - 'packages/jssg-utils/**'
@@ -108,6 +115,27 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm format
+
+  # The engine's and the npm package's runtime code is TypeScript: build the
+  # package and check the types of both, of the public declarations, and of
+  # the type tests. The tests that run workflows need the CLI and the addon,
+  # and are skipped without them.
+  npm-package:
+    name: npm Package
+    needs: changes
+    if: needs.changes.outputs.npm_package == 'true'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v3
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter codemod typecheck
+      - run: pnpm --filter codemod test
 
   jssg-utils-docs:
     name: JSSG Utils Docs

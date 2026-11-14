@@ -335,6 +335,20 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
+      # The package's JavaScript is built from TypeScript and not committed.
+      # Before the versions below are written into package.json, which the
+      # lockfile does not know.
+      - uses: pnpm/action-setup@v6
+
+      - name: Install npm package dependencies
+        run: pnpm install --frozen-lockfile --filter codemod...
+
+      - name: Build npm package
+        run: pnpm --filter codemod build
+
+      - name: Verify npm package build
+        run: test -f crates/cli/npm/runtime/host.mjs && test -f crates/cli/npm/testing/index.d.mts
+
       - name: Download artifacts
         uses: actions/download-artifact@v8
         with:

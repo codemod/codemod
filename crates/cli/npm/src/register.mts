@@ -5,31 +5,53 @@
 //
 // `codemod/host` and `codemod/testing` register these hooks themselves.
 
+/**
+ * `import "codemod/register"` lets Node.js and Bun import code written with
+ * the older `codemod:workflow`, `codemod:ast-grep`, `codemod:metrics`,
+ * `codemod:runtime` and `codemod:llm` spelling: those imports resolve to this
+ * package's `codemod/*` exports. Code that imports `codemod/*` needs none of this.
+ *
+ * @module
+ */
+
 import module from "node:module";
 
-import { CODEMOD_MODULES, resolveCodemodModule } from "./runtime/modules.mjs";
+import { CODEMOD_MODULES, resolveCodemodModule } from "./runtime/modules.mts";
 
 export { resolveCodemodModule };
 
-const REGISTERED = Symbol.for("codemod.register");
+/** What this file uses of Bun's `Bun` global. */
+interface BunLike {
+  plugin(plugin: {
+    name: string;
+    setup(build: {
+      module(specifier: string, load: () => { exports: unknown; loader: "object" }): void;
+    }): void;
+  }): void;
+}
 
-const bunModules =
-  typeof globalThis.Bun !== "undefined" && !globalThis[REGISTERED]
+const REGISTERED = Symbol.for("codemod.register");
+const shared = globalThis as { Bun?: BunLike; [REGISTERED]?: boolean };
+
+const bunModules: [specifier: string, exports: unknown][] =
+  shared.Bun !== undefined && !shared[REGISTERED]
     ? await Promise.all(
-        CODEMOD_MODULES.map(async (specifier) => [
-          specifier,
-          await import(resolveCodemodModule(specifier)),
-        ]),
+        CODEMOD_MODULES.map(
+          async (specifier): Promise<[string, unknown]> => [
+            specifier,
+            await import(resolveCodemodModule(specifier) ?? specifier),
+          ],
+        ),
       )
     : [];
 
-function register() {
-  if (globalThis[REGISTERED]) return;
-  globalThis[REGISTERED] = true;
-  if (typeof globalThis.Bun !== "undefined") {
+function register(): void {
+  if (shared[REGISTERED]) return;
+  shared[REGISTERED] = true;
+  if (shared.Bun !== undefined) {
     // Bun's runtime plugins do not resolve imports of loaded modules through
     // onResolve, but serve virtual modules: back each with the real one.
-    globalThis.Bun.plugin({
+    shared.Bun.plugin({
       name: "codemod",
       setup(build) {
         for (const [specifier, exports] of bunModules) {
@@ -49,6 +71,7 @@ function register() {
     return;
   }
   if (typeof module.register === "function") {
+    // The built hooks file, next to the built form of this one.
     module.register("./runtime/hooks.mjs", import.meta.url);
     return;
   }

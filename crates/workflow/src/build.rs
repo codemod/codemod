@@ -48,7 +48,6 @@ pub fn is_flow_module(specifier: &str) -> bool {
 }
 
 /// Prelude appended to every extracted callback module.
-const CALLBACK_PRELUDE: &str = include_str!("js/callback_prelude.js");
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{file}:{line}:{column}: {message}")]
@@ -489,7 +488,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
             &strip_types(file, &module, false)
                 .map_err(|message| analysis.error(span.start, message))?,
         );
-        module.push_str(CALLBACK_PRELUDE);
+        module.push_str(crate::js::CALLBACK_PRELUDE_TS);
         let module = strip_types(file, &module, true)
             .map_err(|message| analysis.error(span.start, message))?;
         splices.push((
@@ -1001,7 +1000,7 @@ fn module_specifiers(path: &Path, text: &str) -> Vec<String> {
 }
 
 /// Strip TypeScript syntax, keeping comments or not.
-fn strip_types(file: &str, source: &str, comments: bool) -> Result<String, String> {
+pub(crate) fn strip_types(file: &str, source: &str, comments: bool) -> Result<String, String> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
     if let Some(error) = parsed.errors.first() {

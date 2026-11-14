@@ -26,6 +26,7 @@ pub mod events;
 mod expr;
 mod hosted;
 pub mod interaction;
+mod js;
 mod run;
 mod tasks;
 
@@ -41,7 +42,8 @@ pub use engine::{
     LoadedWorkflow, RunReport, StartRequest, StopHandle,
 };
 pub use hosted::{HostedRun, OpenRequest, SelectedFiles};
-pub use run::{Ending, RunError, TestPlan, ORCHESTRATOR_JS};
+pub use js::orchestrator_version;
+pub use run::{Ending, RunError, TestPlan};
 
 /// Services tasks call into, supplied by the host application.
 #[derive(Default)]

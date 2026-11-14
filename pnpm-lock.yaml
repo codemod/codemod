@@ -39,6 +39,9 @@ importers:
       '@codemod.com/tsconfig':
         specifier: workspace:*
         version: link:../../../packages/tsconfig
+      '@types/node':
+        specifier: ^22.16.0
+        version: 22.16.0
       typescript:
         specifier: 'catalog:'
         version: 5.9.3

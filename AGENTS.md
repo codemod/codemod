@@ -29,9 +29,17 @@ JSSG sandbox, shared TypeScript packages, semantic-analysis providers, and Mintl
   agents when `CODEMOD_AGENTS_LIVE` is set.
 - `crates/node`: the native addon (`codemod.node`, napi) behind the Node.js/Bun host: hosted runs
   over `codemod_workflow::HostedRun` and the `codemod/ast-grep` API. Its JavaScript side is
-  `crates/cli/npm/runtime` (`codemod/host`, the Node.js `codemod/*` modules, `codemod/register` for the older `codemod:*` spelling,
-  `codemod/vite`). The orchestrator (`crates/workflow/src/js/orchestrator.js`) is shared by both
-  hosts; `runtime/orchestrator.mjs` is a generated copy (`pnpm --filter codemod sync-orchestrator`).
+  `crates/cli/npm/src` (`codemod/host`, the Node.js `codemod/*` modules, `codemod/testing`,
+  `codemod/register` for the older `codemod:*` spelling, `codemod/vite`).
+- Runtime JavaScript is written in TypeScript that only needs its types removed (no enums,
+  namespaces or parameter properties). The engine's own files are `crates/workflow/src/js/*.ts`:
+  the engine strips their types when it loads them (`crates/workflow/src/js.rs`), so `cargo build`
+  needs no Node.js. The npm package's are `crates/cli/npm/src/**/*.mts`, built by
+  `pnpm --filter codemod build` (tsc) into `runtime/`, `testing/`, `register.*` and `vite.*`,
+  which are not committed. The orchestrator (`crates/workflow/src/js/orchestrator.ts`) is shared
+  by both hosts: the npm build copies it in, and the host checks the addon was built from the
+  same one. After changing it, rebuild both (`cargo build -p codemod-node` and
+  `pnpm --filter codemod build`).
 - `packages/jssg-utils`, `packages/tsconfig`: public TypeScript utilities and shared TS config
   for codemod authors.
 - `docs`: Mintlify docs.
@@ -44,7 +52,8 @@ JSSG sandbox, shared TypeScript packages, semantic-analysis providers, and Mintl
 - Keep changes scoped to the touched domain. Do not mix CLI, engine, docs, package, and semantic
   provider refactors unless the request requires it.
 - Do not edit generated outputs unless the request is specifically about generated artifacts:
-  `dist/`, `target/`, `crates/codemod-sandbox/js/factory.js`,
+  `dist/`, `target/`, `crates/cli/npm/runtime/`, `crates/cli/npm/testing/`,
+  `crates/codemod-sandbox/js/factory.js`,
   `crates/codemod-sandbox/sandbox.wasm`, tree-sitter WASM files, or
   package manager generated folders.
 - When a Rust change affects exported workflow models or schemas, run `cargo xtask schema` and check
@@ -86,6 +95,9 @@ Mintlify beyond a short human Wish overview.
 - Rust lint: `cargo clippy --tests --no-deps -- -D warnings`
 - Rust tests: `cargo test` or `cargo test -p <crate>`
 - Terminal dependency check: `bash ./scripts/check-single-crossterm.sh`
+- Runtime TypeScript (engine and npm package) and public types: `pnpm --filter codemod typecheck`
+- npm package tests, on both hosts (build `codemod` and `codemod-node` first):
+  `pnpm --filter codemod test`
 - TypeScript/JavaScript lint: `pnpm lint`
 - TypeScript/JavaScript format: `pnpm format`
 - JSSG utils tests: `pnpm --filter @jssg/utils test`

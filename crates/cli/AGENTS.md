@@ -29,5 +29,6 @@ commands, workflow subcommands, report UI serving, and terminal UI.
 ## Validation
 
 - CLI crate: `cargo test -p codemod`
-- CLI wrapper: `pnpm --filter codemod test`
+- CLI wrapper: `pnpm --filter codemod test` (builds `crates/cli/npm/src` first), and
+  `pnpm --filter codemod typecheck`
 - Terminal dependency check: `bash ./scripts/check-single-crossterm.sh`

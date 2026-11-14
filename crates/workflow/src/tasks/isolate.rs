@@ -55,7 +55,7 @@ impl StepIsolates {
             // The callback prelude takes its helpers from the orchestrator.
             modules: vec![(
                 crate::run::ORCHESTRATOR_MODULE.to_string(),
-                crate::run::ORCHESTRATOR_JS.to_string(),
+                crate::js::orchestrator().to_string(),
             )],
             metrics: self.metrics.clone(),
             shared_state: self.shared_state.clone(),
