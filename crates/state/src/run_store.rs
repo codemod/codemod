@@ -165,6 +165,9 @@ pub struct AlreadySucceeded;
 #[serde(rename_all = "kebab-case")]
 pub enum StepStatus {
     Succeeded,
+    /// The step finished, but some of its files failed; `error` says how
+    /// many. It counts as finished: a resume reuses its result.
+    Partial,
     Failed,
     /// The run was canceled while the step ran; it runs again on resume.
     Canceled,
@@ -180,6 +183,7 @@ impl StepStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Succeeded => "succeeded",
+            Self::Partial => "partial",
             Self::Failed => "failed",
             Self::Canceled => "canceled",
             Self::AwaitingApproval => "awaiting-approval",
@@ -208,7 +212,7 @@ pub struct StepRecord {
     pub state: Option<BTreeMap<String, Value>>,
     #[serde(default)]
     pub error: Option<String>,
-    /// When a successful step finished, in milliseconds since the epoch.
+    /// When a successful or partial step finished, in milliseconds since the epoch.
     /// The workflow body's clock advances to it, also on replay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<i64>,

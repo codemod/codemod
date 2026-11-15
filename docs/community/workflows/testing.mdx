@@ -205,7 +205,7 @@ YAML workflows always run with the CLI.
 | `output`, `error` | What the workflow returned, or why it failed |
 | `files` | Every file after the run, by path |
 | `changes` | Files the run wrote or created, with their text; `null` for files it removed |
-| `steps`, `step(label)` | Each step's label, status, result and error, and whether it was `given` |
+| `steps`, `step(label)` | Each step's label, status (`"succeeded"`, `"partial"` when some of its files failed, or `"failed"`), result and error, and whether it was `given` |
 | `logs` | Console output, with the label of the step that wrote it (or `null` for the workflow body) |
 | `metrics` | Metrics the transforms recorded |
 | `diff()` | A unified diff of the changes |

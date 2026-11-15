@@ -137,7 +137,11 @@ export type RunStatus = "succeeded" | "failed" | "canceled" | "awaiting-approval
 export interface StepRun {
   readonly position: number;
   readonly label: string;
-  readonly status: "succeeded" | "failed";
+  /**
+   * `"partial"`: the step finished, but some of its files failed; `error`
+   * says how many.
+   */
+  readonly status: "succeeded" | "partial" | "failed";
   readonly result: JsonValue | null;
   readonly error: string | null;
   /** The step did not run: its result came from `given`. */

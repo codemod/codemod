@@ -95,8 +95,7 @@ export default async function main() {
 "#,
         Value::Null,
     );
-    let result = output(&report).unwrap();
-    let error = result["failures"][0]["error"].as_str().unwrap();
+    let error = output(&report).unwrap_err();
     assert!(error.contains("parse(text) needs a language"), "{error}");
 }
 

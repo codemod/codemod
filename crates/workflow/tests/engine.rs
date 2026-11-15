@@ -497,10 +497,12 @@ export default async function main() {
         Value::Null,
     );
 
-    let result = output(&report).unwrap();
-    assert_eq!(result["failures"][0]["path"], "a.ts");
-    let error = result["failures"][0]["error"].as_str().unwrap();
-    assert!(error.contains("TypeError"), "{error}");
+    // The only file failed, so the step did.
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("the callback failed on every file; first error: a.ts: TypeError"),
+        "{error}"
+    );
     assert!(error.contains("are frozen"), "{error}");
 }
 

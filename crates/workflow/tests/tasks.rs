@@ -2,6 +2,7 @@ mod common;
 
 use std::sync::Arc;
 
+use codemod_workflow::events::Event;
 use codemod_workflow::interaction::NonInteractive;
 use codemod_workflow::{
     cancel_run, Canceled, Ending, MemoryStore, RunStatus, Services, StepStatus,
@@ -258,6 +259,11 @@ export default async function main() {
     let result = output(&report).unwrap();
     assert_eq!(result["failures"][0]["path"], "src/a.ts");
     assert_eq!(result["unmodified"], json!(1));
+    assert_eq!(report.steps[0].status, StepStatus::Partial);
+    assert_eq!(
+        report.steps[0].error.as_deref(),
+        Some("1 of 2 files failed")
+    );
 
     let lines = step_logs(&h);
     let a = lines
@@ -791,4 +797,72 @@ export default async function main() {
         output(&report).unwrap(),
         json!({ "hidden": [".github/workflows/ci.yml"], "kotlin": ["src/b.kt"] })
     );
+}
+
+const SOME_FILES_FAIL: &str = r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  const some = await step("Some", forEachFile("*.ts", (file) => {
+    if (file.path === "a.ts") throw new Error("cannot handle a");
+    file.write(file.text.trim() + "x\n");
+  }));
+  await step("Next", () => { throw new Error("not yet"); });
+  return some.failures.map((failure) => failure.path);
+}
+"#;
+
+#[test]
+fn a_for_each_file_step_is_partial_when_some_files_fail() {
+    let h = Harness::new();
+    h.write("a.ts", "a\n");
+    h.write("b.ts", "b\n");
+    let first = h.start(SOME_FILES_FAIL, Value::Null);
+
+    // The step finished with what the other files did, and the run went on.
+    let some = &first.steps[0];
+    assert_eq!(some.status, StepStatus::Partial);
+    assert_eq!(some.error.as_deref(), Some("1 of 2 files failed"));
+    assert_eq!(h.read("b.ts"), "bx\n");
+    assert_eq!(first.steps[1].label, "Next");
+    assert_eq!(first.steps.len(), 2);
+    let events = h.events.take();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::StepFinished { label, status: StepStatus::Partial, error: Some(error), .. }
+            if label == "Some" && error == "1 of 2 files failed"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::StepLog { line, .. } if line == "a.ts"
+    )));
+
+    // A resume reuses the partial step instead of running it again.
+    let second = h.resume(
+        &first,
+        Some(&SOME_FILES_FAIL.replace("throw new Error(\"not yet\");", "")),
+    );
+    assert_eq!(output(&second).unwrap(), json!(["a.ts"]));
+    assert_eq!(h.read("b.ts"), "bx\n");
+}
+
+#[test]
+fn a_for_each_file_step_fails_when_every_file_fails() {
+    let h = Harness::new();
+    h.write("a.ts", "a\n");
+    h.write("b.ts", "b\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step("All", forEachFile("*.ts", (file) => { throw new Error(`cannot handle ${file.path}`); }));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("the callback failed on every file; first error: a.ts:"),
+        "{error}"
+    );
+    assert_eq!(report.steps[0].status, StepStatus::Failed);
 }

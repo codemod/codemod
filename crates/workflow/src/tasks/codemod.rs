@@ -180,6 +180,8 @@ impl EventSink for NestedEvents {
                 ..
             } => match (status, error) {
                 (StepStatus::Succeeded, _) => format!("✓ {label}"),
+                (StepStatus::Partial, Some(error)) => format!("◐ {label}: {error}"),
+                (StepStatus::Partial, None) => format!("◐ {label}"),
                 (StepStatus::Failed, Some(error)) => format!("✗ {label}: {error}"),
                 (StepStatus::Failed, None) => format!("✗ {label}"),
                 (StepStatus::Canceled, _) => format!("■ {label}: canceled"),

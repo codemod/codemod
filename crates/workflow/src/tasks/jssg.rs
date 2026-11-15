@@ -78,12 +78,14 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         )));
     }
     let state = outcome.state.clone();
+    let total = outcome.changes.len() + outcome.unmodified + outcome.failures.len();
     Ok(TaskOutcome::new(json!({
         "changes": applied,
         "unmodified": outcome.unmodified,
         "failures": failures,
     }))
-    .with_state(state))
+    .with_state(state)
+    .with_failures(outcome.failures.len(), total))
 }
 
 /// Run the transform without applying anything.

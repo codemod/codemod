@@ -84,17 +84,20 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     planned.sort_by(|a, b| a.path.cmp(&b.path));
     let mut failures = failures.into_inner().unwrap();
     failures.sort();
-    let applied = changes::commit(task, &planned, run.dry_run)?;
+    let unmodified = unmodified.into_inner();
+    let total = planned.len() + unmodified + failures.len();
     let summary = &run.services.summary;
-    summary.add_unmodified(unmodified.into_inner());
+    summary.add_unmodified(unmodified);
     summary.add_errors(failures.len());
     task.log_failures(&failures);
-    if !failures.is_empty() && planned.is_empty() {
+    if !failures.is_empty() && failures.len() == total {
         return Err(TaskError::Failed(format!(
             "ast-grep failed on every file; first error: {}: {}",
             failures[0].0, failures[0].1
         )));
     }
+    let applied = changes::commit(task, &planned, run.dry_run)?;
+    let failed = failures.len();
     Ok(TaskOutcome::new(json!({
         "changes": applied,
         "matches": matches.into_inner(),
@@ -102,5 +105,6 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             .iter()
             .map(|(path, error)| json!({ "path": path, "error": error }))
             .collect::<Vec<_>>(),
-    })))
+    }))
+    .with_failures(failed, total))
 }

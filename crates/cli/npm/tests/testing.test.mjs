@@ -401,6 +401,9 @@ export default async function main() {
     assert.equal(result.status, "succeeded", result.error);
     assert.deepEqual(result.output.outputs, ["a.ts"]);
     assert.deepEqual(result.output.failures, [{ path: "b.ts", error: "not this one" }]);
+    // Some files failed: the step finished, as partial.
+    assert.equal(result.step("Scan").status, "partial");
+    assert.equal(result.step("Scan").error, "1 of 2 files failed");
     assert.deepEqual(result.output.metrics, {
       seen: [{ cardinality: { count: "3" }, count: 4 }],
     });

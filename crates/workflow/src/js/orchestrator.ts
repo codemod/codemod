@@ -15,7 +15,14 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 
 // ------------------------------------------------------- the run's records ---
 
-export type StepStatus = "succeeded" | "failed" | "canceled" | "awaiting-approval" | "waiting";
+/** `"partial"`: the step finished, but some of its files failed. */
+export type StepStatus =
+  | "succeeded"
+  | "partial"
+  | "failed"
+  | "canceled"
+  | "awaiting-approval"
+  | "waiting";
 
 /**
  * One step as the run store keeps it: `StepRecord` in
@@ -71,6 +78,8 @@ export interface Outcome {
   result?: Json;
   /** State the task set: keys to values, where `null` removes a key. */
   state?: Record<string, Json> | null;
+  /** Set when some of the task's files failed: how many, as a message. */
+  partial?: string;
 }
 
 /** `host.event(event)`: `HostEvent` in `crates/workflow/src/run.rs`. */
@@ -490,7 +499,7 @@ export function createRuntime(host: Host) {
     const same = recorded.get(entry.key) ?? [];
     same.push(entry);
     recorded.set(entry.key, same);
-    if (entry.status !== "succeeded") unfinished.add(entry);
+    if (!finished(entry)) unfinished.add(entry);
     nextPosition = Math.max(nextPosition, entry.position + 1);
     if (typeof entry.seq === "number") nextSeq = Math.max(nextSeq, entry.seq + 1);
   }
@@ -711,7 +720,7 @@ export function createRuntime(host: Host) {
       );
       return JSON.parse(JSON.stringify(result)) as Json;
     }
-    if (prior && prior.status === "succeeded") {
+    if (prior && finished(prior)) {
       return new Promise<Json>((resolve) => {
         replaying.push({
           // Steps recorded before finishing order was kept replay in the
@@ -819,9 +828,19 @@ export function createRuntime(host: Host) {
     const changes = outcome.state ?? null;
     applyState(changes);
     const finishedAt = host.now();
-    record({ status: "succeeded", result, state: changes, finishedAt });
+    // Some files failed: the step finished, and the rest of the run goes on.
+    if (outcome.partial !== undefined) {
+      record({ status: "partial", result, state: changes, finishedAt, error: outcome.partial });
+    } else {
+      record({ status: "succeeded", result, state: changes, finishedAt });
+    }
     settleClock({ finishedAt });
     return result;
+  }
+
+  /** Whether a recorded step finished, so a resume reuses its result. */
+  function finished(entry: StepRecord): boolean {
+    return entry.status === "succeeded" || entry.status === "partial";
   }
 
   function interruptionOf(error: Error): "canceled" | "awaiting-approval" | null {

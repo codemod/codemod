@@ -517,7 +517,10 @@ declare module "codemod:workflow" {
     /** What the callback returned, in path order. Files that returned nothing are left out. */
     outputs: Output[];
     changes: FileChanges;
-    /** Files whose callback threw. */
+    /**
+     * Files whose callback threw. With some, the step is partial; when the
+     * callback throws on every file, the step fails instead.
+     */
     failures: FileFailure[];
     /** What callbacks recorded with `codemod/metrics`, by metric name. */
     metrics: Record<string, MetricEntry[]>;

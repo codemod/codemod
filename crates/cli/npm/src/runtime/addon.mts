@@ -47,7 +47,7 @@ export interface NativeReport {
   steps: {
     position: number;
     label: string;
-    status: "succeeded" | "failed";
+    status: "succeeded" | "partial" | "failed";
     result: Json;
     error: string | null;
     given: boolean;

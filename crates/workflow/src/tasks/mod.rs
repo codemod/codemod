@@ -100,6 +100,10 @@ pub(crate) struct TaskOutcome {
     /// State the task set: keys to values, `null` removes a key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<BTreeMap<String, Value>>,
+    /// Set when some of the task's files failed: how many, as a message. The
+    /// step is then recorded as partial.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partial: Option<String>,
 }
 
 impl TaskOutcome {
@@ -107,7 +111,16 @@ impl TaskOutcome {
         Self {
             result,
             state: None,
+            partial: None,
         }
+    }
+
+    /// Mark the outcome partial when some of the `total` files failed.
+    pub fn with_failures(mut self, failed: usize, total: usize) -> Self {
+        if failed > 0 {
+            self.partial = Some(failed_files(failed, total));
+        }
+        self
     }
 
     pub fn with_state(mut self, state: BTreeMap<String, Value>) -> Self {
@@ -116,6 +129,12 @@ impl TaskOutcome {
         }
         self
     }
+}
+
+/// "2 of 10 files failed", for a partial step.
+pub(crate) fn failed_files(failed: usize, total: usize) -> String {
+    let files = if total == 1 { "file" } else { "files" };
+    format!("{failed} of {total} {files} failed")
 }
 
 /// Why a task did not produce an outcome.

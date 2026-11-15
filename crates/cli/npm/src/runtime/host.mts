@@ -125,7 +125,8 @@ export interface HostRunOptions {
 export interface HostStepReport {
   readonly position: number;
   readonly label: string;
-  readonly status: "succeeded" | "failed";
+  /** `"partial"`: the step finished, but some of its files failed. */
+  readonly status: "succeeded" | "partial" | "failed";
   readonly result: JsonValue | null;
   readonly error: string | null;
   readonly given: boolean;
@@ -566,7 +567,20 @@ async function forEachFile(
   const allFailures = [...failures, ...committed.failures].sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
-  return outcome(
+  // As the CLI does: each file that failed, then its error.
+  for (const { path, error } of allFailures) {
+    run.log(task.position, path);
+    for (const line of error.split("\n")) run.log(task.position, `  ${line}`);
+  }
+  // The step fails when the callback failed on every file, and is partial
+  // when it failed on some.
+  const [first] = allFailures;
+  if (first && allFailures.length === total) {
+    throw new Error(
+      `the callback failed on every file; first error: ${first.path}: ${first.error}`,
+    );
+  }
+  const result = outcome(
     {
       outputs: outputs.flatMap((entry) => (entry ? [entry.output] : [])),
       changes: committed.changes,
@@ -575,6 +589,11 @@ async function forEachFile(
     },
     step,
   );
+  if (!allFailures.length) return result;
+  return {
+    ...result,
+    partial: `${allFailures.length} of ${total} ${total === 1 ? "file" : "files"} failed`,
+  };
 }
 
 // -------------------------------------------------------------- ending ---

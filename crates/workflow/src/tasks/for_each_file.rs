@@ -136,18 +136,18 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     }
 
     let mut outputs = Vec::new();
-    let mut failures = Vec::new();
+    let mut failures: Vec<(String, String)> = Vec::new();
     let mut planned = Vec::new();
     for ((path, original), outcome) in files.into_iter().zip(outcomes) {
         match outcome.unwrap_or_else(|| Err("the file was not processed".to_string())) {
-            Err(error) => failures.push(json!({ "path": path, "error": error })),
+            Err(error) => failures.push((path, error)),
             Ok(outcome) => {
                 if outcome.has_output {
                     outputs.push(outcome.output);
                 }
                 match fold(path.clone(), original, outcome.effects) {
                     Ok(plan) => planned.push(plan),
-                    Err(error) => failures.push(json!({ "path": path, "error": error })),
+                    Err(error) => failures.push((path, error)),
                 }
             }
         }
@@ -156,15 +156,34 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     if task.canceled() {
         return Err("canceled".to_string());
     }
+    task.log_failures(&failures);
+    every_file_failed(&failures, total)?;
     let changes = changes::commit(task, &planned, run.dry_run)?;
     let metrics = isolates.metrics(task);
+    let failed = failures.len();
+    let failures: Vec<Value> = failures
+        .into_iter()
+        .map(|(path, error)| json!({ "path": path, "error": error }))
+        .collect();
     Ok(TaskOutcome::new(json!({
         "outputs": outputs,
         "changes": changes,
         "failures": failures,
         "metrics": metrics,
     }))
-    .with_state(isolates.state_changes()))
+    .with_state(isolates.state_changes())
+    .with_failures(failed, total))
+}
+
+/// A `forEachFile` step fails when its callback failed on every file it
+/// ran on; when only some failed, it is partial.
+pub(crate) fn every_file_failed(failures: &[(String, String)], total: usize) -> Result<(), String> {
+    match failures.first() {
+        Some((path, error)) if failures.len() == total => Err(format!(
+            "the callback failed on every file; first error: {path}: {error}"
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// The files a selector picks in the run's target, with the selector as

@@ -391,6 +391,8 @@ pub struct Renderer {
     /// Streamed agent message text not yet followed by a full line.
     agent_text: Mutex<HashMap<u64, String>>,
     seq: AtomicU64,
+    /// Steps that finished with some of their files failed.
+    partial: AtomicU64,
 }
 
 impl Renderer {
@@ -405,6 +407,7 @@ impl Renderer {
             bars: Mutex::new(HashMap::new()),
             agent_text: Mutex::new(HashMap::new()),
             seq: AtomicU64::new(0),
+            partial: AtomicU64::new(0),
         }
     }
 
@@ -542,6 +545,15 @@ impl EventSink for Renderer {
                         style("✓").green(),
                         style(elapsed).dim()
                     )),
+                    StepStatus::Partial => {
+                        self.partial.fetch_add(1, Ordering::SeqCst);
+                        self.line(format!(
+                            "{} {label}: {} {}",
+                            style("◐").yellow(),
+                            error.unwrap_or_default(),
+                            style(elapsed).dim()
+                        ))
+                    }
                     StepStatus::Failed => self.line(format!(
                         "{} {label}: {}",
                         style("✗").red(),
@@ -560,7 +572,18 @@ impl EventSink for Renderer {
             }
             Event::RunFinished { status, .. } => {
                 if status == RunStatus::Succeeded {
-                    self.line(format!("{}", style("Done").green().bold()));
+                    match self.partial.load(Ordering::SeqCst) {
+                        0 => self.line(format!("{}", style("Done").green().bold())),
+                        steps => self.line(format!(
+                            "{} {}",
+                            style("Done").yellow().bold(),
+                            style(format!(
+                                "(some files failed in {steps} {})",
+                                if steps == 1 { "step" } else { "steps" }
+                            ))
+                            .yellow()
+                        )),
+                    }
                 }
             }
         }
