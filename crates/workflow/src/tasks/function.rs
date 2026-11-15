@@ -44,6 +44,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     let isolates = StepIsolates::new(task)?;
     let options = isolates.worker_options(task, None);
     let name = module_name(task, &request.callback);
+    let workflow_path = task.run.workflow_path.clone();
 
     let (json, failure, changes) = block_on(async move {
         let sandbox = codemod_sandbox::Worker::new(options)
@@ -53,6 +54,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         let json: Result<String, String> = async_with!(sandbox.context => |ctx| {
             let run = async {
                 let declared = Module::declare(ctx.clone(), name.as_str(), module.as_str())?;
+                crate::run::set_import_meta(&declared, &workflow_path)?;
                 let (evaluated, promise) = declared.eval()?;
                 promise.into_future::<()>().await?;
                 let init: Function = evaluated.get("__init")?;

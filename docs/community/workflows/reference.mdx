@@ -269,7 +269,7 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 |---|---|
 | `forEachFile(selector?, jssg(path, options))` | Run a [JSSG](/community/jssg) transform file on the selected files. See [Transforms](#transforms). |
 | `forEachFile(selector?, astGrep(path, options))` | Apply an ast-grep YAML rule file to the selected files. See [Transforms](#transforms). |
-| `shell(command, { env, cwd })` | Run a shell command. Result: `{ output }`. |
+| `shell(command, { env, cwd })`, ``shell`command` `` | Run a shell command. Result: `{ output }`. See [Shell commands](#shell-commands). |
 | `shard(options)` | Split files into groups. See [Sharding](/community/workflows/sharding). |
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
 | `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
@@ -281,11 +281,29 @@ Paths given to `jssg`, `astGrep` and shard functions are relative to the workflo
 
 ### Shell commands
 
+Give `shell` the command as a string, or write it as a tagged template. In a template, each `${}` value is quoted for the shell, so a path with spaces or quotes stays one argument; an array is one argument per item. The rest of the text is taken as written, backslashes included.
+
+```ts
+// A script next to the workflow (src/scripts/setup.sh for src/workflow.ts).
+await step("Setup", shell`${import.meta.dirname}/scripts/setup.sh`);
+
+// Values are quoted: this greps for the whole name, spaces and all.
+await step("Find uses", shell`grep -rn ${params.name} src`);
+
+// Options for a template: shell(options)`command`.
+await step("Build", shell({ cwd: "packages/app" })`npm run build`);
+
+// A plain string runs as written.
+await step("Format", shell("npx prettier --write src"));
+```
+
+`import.meta.dirname` is the directory of the workflow file, `import.meta.filename` the file itself, and `import.meta.url` its `file:` URL, as in Node.js. They hold the same values inside steps and `forEachFile` callbacks, and after the package is published and installed.
+
 `shell` commands get these environment variables:
 
 | Variable | Value |
 |---|---|
-| `CODEMOD_PATH` | The workflow's directory |
+| `CODEMOD_PATH` | The workflow's directory (prefer `import.meta.dirname` in `workflow.ts`) |
 | `CODEMOD_STATE` | A file containing the workflow state as JSON |
 | `CODEMOD_STATE_<KEY>` | Each state value, JSON-encoded |
 | `STATE_OUTPUTS` | A file the command can write `key=value` (set) or `key@=value` (append) lines to; they become workflow state |
@@ -464,7 +482,7 @@ npm install --save-dev typescript
   "type": "module",
   "scripts": {
     "test": "codemod workflow test",
-    "validate": "codemod workflow validate -w workflow.ts"
+    "validate": "codemod workflow validate -w src/workflow.ts"
   }
 }
 ```
@@ -484,7 +502,7 @@ npm install --save-dev typescript
 }
 ```
 
-Then `npx tsc` checks `workflow.ts` along with your transforms. Type-only imports are available as `codemod/main` (the `SgRoot`/`SgNode` types) and `codemod/langs/<language>`; `@codemod.com/jssg-types` still works and mirrors the same declarations.
+Then `npx tsc` checks `workflow.ts` along with your transforms (add `"include": ["src"]` when they are under `src/`, as `codemod init` does). Type-only imports are available as `codemod/main` (the `SgRoot`/`SgNode` types) and `codemod/langs/<language>`; `@codemod.com/jssg-types` still works and mirrors the same declarations.
 
 - Step results are typed and read-only. `forEachFile` collects what the callback returns: returning `file.path` or `undefined` gives `outputs: readonly string[]`.
 - A step result or callback return value that is not JSON is a type error, for example a `Set`, a `Map`, a `Date`, a function, or a `Promise` returned from an `async` callback.
@@ -496,7 +514,7 @@ The callback rules that depend on scope, such as assigning to an outside variabl
 ## Validation
 
 ```bash
-npx codemod workflow validate -w workflow.ts
+npx codemod workflow validate -w src/workflow.ts
 ```
 
 Validation builds the workflow, which reports the callback rules above with their source positions.

@@ -114,6 +114,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
                         next: &next,
                         concurrency,
                         cancel: &task.cancel,
+                        workflow_path: &run.workflow_path,
                     };
                     let progress = &progress;
                     scope.spawn(move || worker(job, progress))
@@ -193,7 +194,7 @@ pub(crate) fn select_files(
     mut selector: Selector,
 ) -> Result<(Selector, Vec<(String, String)>), String> {
     let default_languages = if selector.include.is_empty() && selector.language.is_none() {
-        let languages = package_languages(&run.bundle_dir)?;
+        let languages = package_languages(&run.package_dir)?;
         if languages.is_empty() {
             return Err("forEachFile needs a selector here: give it one (a glob, or { language }), or list the package's languages under `targets.languages` in codemod.yaml".to_string());
         }
@@ -313,6 +314,7 @@ struct Job<'a> {
     next: &'a AtomicUsize,
     concurrency: usize,
     cancel: &'a Arc<AtomicBool>,
+    workflow_path: &'a Path,
 }
 
 fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
@@ -326,6 +328,7 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         next,
         concurrency,
         cancel,
+        workflow_path,
     } = job;
     block_on(async move {
         let sandbox = codemod_sandbox::Worker::new(options)
@@ -335,6 +338,7 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         async_with!(sandbox.context => |ctx| {
             let setup = async {
                 let declared = Module::declare(ctx.clone(), name, module)?;
+                crate::run::set_import_meta(&declared, workflow_path)?;
                 let (evaluated, promise) = declared.eval()?;
                 promise.into_future::<()>().await?;
                 let init: Function = evaluated.get("__init")?;

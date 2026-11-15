@@ -179,6 +179,11 @@ export default async function main({
   const ran = await step(shell("echo hi", { cwd: target, env: { A: "1" } }));
   expectType<Equal<typeof ran.output, string | undefined>>(true);
   if (!ran.skipped) expectType<Equal<typeof ran.output, string>>(true);
+  const tagged = await step(shell`${target}/scripts/setup.sh ${["a b", 1, true]}`);
+  expectType<Equal<typeof tagged, typeof ran>>(true);
+  await step(shell({ cwd: target })`npm run build`);
+  // @ts-expect-error a template takes strings, numbers and booleans
+  void step(shell`echo ${{ not: "a word" }}`);
 
   await step(astGrep("rules/config.yml", { include: ["**/*.ts"] }));
 

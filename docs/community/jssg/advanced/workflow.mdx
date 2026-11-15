@@ -224,7 +224,7 @@ import { step, forEachFile, jssg, shell, getState } from "codemod/workflow";
 export default async function main() {
   await step("Scan files", forEachFile({ language: "tsx" }, jssg("./scripts/scan.ts")));
   const files = getState("filesToProcess") ?? [];
-  await step(`Process ${files.length} files`, shell("codemod jssg exec $CODEMOD_PATH/scripts/process.ts"));
+  await step(`Process ${files.length} files`, shell`codemod jssg exec ${import.meta.dirname}/scripts/process.ts`);
 }
 ```
 

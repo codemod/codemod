@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -36,7 +43,7 @@ function scratch(files) {
     mkdirSync(dirname(join(dir, path)), { recursive: true });
     writeFileSync(join(dir, path), text);
   }
-  if ("workflow.ts" in files) {
+  if (Object.keys(files).some((path) => path.endsWith("workflow.ts"))) {
     mkdirSync(join(dir, "node_modules"), { recursive: true });
     symlinkSync(PACKAGE, join(dir, "node_modules", "codemod"), "dir");
   }
@@ -372,6 +379,28 @@ export default async function main() {
     assert.equal(result.error, "StepError: step 'Boom' failed: no");
     assert.equal(result.ok, false);
   });
+
+  test(
+    `${host}: a workflow in src/ runs its scripts from import.meta.dirname`,
+    HOSTS[host],
+    async () => {
+      const dir = scratch({
+        "codemod.yaml": 'schema_version: "1.0"\nname: p\nversion: 0.1.0\n',
+        "src/scripts/echo.sh": `printf '%s|' "$@"\n`,
+        "src/workflow.ts": `
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  const echoed = await step("Echo", shell\`sh \${import.meta.dirname}/scripts/echo.sh \${"two words"} \${["it's", 3]}\`);
+  return { dirname: import.meta.dirname, output: echoed.output };
+}
+`,
+      });
+      const result = await runWorkflow(join(dir, "src", "workflow.ts"), { target: {} });
+      assert.equal(result.status, "succeeded", result.error);
+      assert.equal(realpathSync(result.output.dirname), realpathSync(join(dir, "src")));
+      assert.match(result.output.output, /two words\|it's\|3\|/);
+    },
+  );
 
   test(`${host}: metrics, runtime logs and reported failures`, HOSTS[host], async () => {
     const path = join(

@@ -866,3 +866,50 @@ export default async function main() {
     );
     assert_eq!(report.steps[0].status, StepStatus::Failed);
 }
+
+#[test]
+fn a_workflow_in_src_finds_its_files_and_its_package() {
+    let h = Harness::new();
+    h.bundle_file(
+        "codemod.yaml",
+        "schema_version: \"1.0\"\nname: p\nversion: 0.1.0\ntargets:\n  languages: [\"python\"]\n",
+    );
+    h.bundle_file("src/scripts/echo.sh", "printf '%s|' \"$@\"\n");
+    h.write("a.py", "x = 1\n");
+    h.write("b.ts", "x\n");
+    let workflow = h.workflow_file(
+        "src/workflow.ts",
+        r#"
+import { step, shell, forEachFile } from "codemod/workflow";
+const here = import.meta.dirname;
+export default async function main() {
+  const echoed = await step(shell`sh ${import.meta.dirname}/scripts/echo.sh ${"two words"} ${["it's", 3]}`);
+  // No selector: the package's languages, from the codemod.yaml above src/.
+  const seen = await step(forEachFile((file) => ({
+    path: file.path,
+    dirname: import.meta.dirname,
+    filename: import.meta.filename,
+  })));
+  return { here, url: import.meta.url, echoed: echoed.output, seen: seen.outputs };
+}
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    let result = output(&report).unwrap();
+
+    let src = std::fs::canonicalize(h.bundle.path().join("src")).unwrap();
+    let src = src.to_string_lossy();
+    assert_eq!(result["here"], json!(src));
+    assert_eq!(result["url"], json!(format!("file://{src}/workflow.ts")));
+    assert!(
+        result["echoed"]
+            .as_str()
+            .unwrap()
+            .contains("two words|it's|3|"),
+        "{result}"
+    );
+    assert_eq!(
+        result["seen"],
+        json!([{ "path": "a.py", "dirname": src, "filename": format!("{src}/workflow.ts") }])
+    );
+}

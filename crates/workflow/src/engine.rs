@@ -389,17 +389,15 @@ impl Engine {
             workflow: record.workflow_path.clone(),
             resumed,
         });
-        let bundle_dir = record
-            .workflow_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+        let bundle_dir = crate::run::workflow_dir(&record.workflow_path);
         let cancel = self.stop.enroll();
         let context = Arc::new(RunContext {
             run_id: record.id.clone(),
             target: record.target.clone(),
             chain: vec![absolute(&bundle_dir).to_string_lossy().into_owned()],
             bundle_dir,
+            workflow_path: record.workflow_path.clone(),
+            package_dir: crate::run::package_dir(&record.workflow_path),
             params: record.params.clone(),
             dry_run,
             started_at: record.started_at.timestamp_millis(),

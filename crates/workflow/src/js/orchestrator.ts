@@ -304,8 +304,38 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     });
   }
 
-  /** Run a shell command. */
-  function shell(command: string, options: object = {}): HostTask {
+  /**
+   * Run a shell command: `shell(command, options?)`, or as a tagged
+   * template, ``shell`grep -r ${pattern} src` ``, where each value is quoted
+   * for the shell. ``shell(options)`...` `` gives the template options.
+   */
+  function shell(command: unknown, ...rest: unknown[]): HostTask | ShellTag {
+    if (isTemplateStrings(command)) return shellTemplate({}, command, rest);
+    if (typeof command === "string") {
+      return hostTask("shell", { ...(rest[0] as object | undefined), command });
+    }
+    if (isRecord(command) && rest.length === 0) {
+      const options = command;
+      return (strings: TemplateStringsArray, ...values: unknown[]) => {
+        if (!isTemplateStrings(strings)) {
+          throw new TypeError("shell(options) is used as a tag: shell(options)`command`");
+        }
+        return shellTemplate(options, strings, values);
+      };
+    }
+    throw new TypeError("shell: expected a command, shell`command`, or shell(options)`command`");
+  }
+
+  function shellTemplate(
+    options: object,
+    strings: TemplateStringsArray,
+    values: unknown[],
+  ): HostTask {
+    // The text as written, backslashes included: it is shell, not JavaScript.
+    let command = strings.raw[0] ?? "";
+    values.forEach((value, index) => {
+      command += shellQuote(value, index) + (strings.raw[index + 1] ?? "");
+    });
     return hostTask("shell", { ...options, command });
   }
 
@@ -478,6 +508,29 @@ interface Replay {
 
 /** What `createRuntime` returns: `codemod/workflow` for one run, and what its host drives. */
 export type Runtime = ReturnType<typeof createRuntime>;
+
+/** A tag made by `shell(options)`. */
+type ShellTag = (strings: TemplateStringsArray, ...values: unknown[]) => HostTask;
+
+function isTemplateStrings(value: unknown): value is TemplateStringsArray {
+  return Array.isArray(value) && Array.isArray((value as { raw?: unknown }).raw);
+}
+
+/**
+ * A value in a `shell` template, quoted for the shell: one word whatever it
+ * holds. An array is one word per item.
+ */
+function shellQuote(value: unknown, index: number): string {
+  if (Array.isArray(value)) return value.map((item) => shellQuote(item, index)).join(" ");
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+    throw new TypeError(
+      `shell: value ${index + 1} in the command is ${value === null ? "null" : typeof value}; give a string, a number, a boolean, or an array of them`,
+    );
+  }
+  const text = String(value);
+  if (/^[\w@%+=:,./-]+$/.test(text)) return text;
+  return `'${text.replaceAll("'", `'\\''`)}'`;
+}
 
 export function createRuntime(host: Host) {
   const tasks = createTasks(host);

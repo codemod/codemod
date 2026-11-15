@@ -1,6 +1,19 @@
 // oxlint-disable triple-slash-reference
 /// <reference path="./metrics.d.ts" />
 
+/**
+ * In a workflow, as in Node.js: where the workflow file is, also inside its
+ * steps and `forEachFile` callbacks.
+ */
+interface ImportMeta {
+  /** The directory the workflow file is in. */
+  dirname: string;
+  /** The workflow file. */
+  filename: string;
+  /** The workflow file, as a `file:` URL. */
+  url: string;
+}
+
 declare module "codemod:workflow" {
   /**
    * Workflow Step Outputs Module
@@ -624,15 +637,39 @@ declare module "codemod:workflow" {
     cwd?: string;
   }
 
+  /** A value in a `shell` template: quoted as one word, or one word per item. */
+  export type ShellValue = string | number | boolean | readonly (string | number | boolean)[];
+
+  export type ShellTask = Task<Skippable<{ output: string }>>;
+
   /**
    * Runs a shell command. It can read the workflow state from `$CODEMOD_STATE`
    * (a JSON file) or `$CODEMOD_STATE_<KEY>`, and set state by writing
    * `key=value` (or `key@=value` to append) lines to `$STATE_OUTPUTS`.
+   *
+   * @example
+   * await step("Install", shell("npm install"));
+   * await step("Setup", shell`${import.meta.dirname}/scripts/setup.sh`);
+   */
+  export function shell(command: string, options?: ShellOptions): ShellTask;
+  /**
+   * Runs a shell command written as a template. Each value is quoted for the
+   * shell, so a path with spaces stays one argument; the text around them is
+   * taken as written, backslashes included.
+   *
+   * @example
+   * await step("Find uses", shell`grep -rn ${name} src`);
+   */
+  export function shell(strings: TemplateStringsArray, ...values: ShellValue[]): ShellTask;
+  /**
+   * Options for a command written as a template.
+   *
+   * @example
+   * await step("Build", shell({ cwd: "packages/app" })`npm run build`);
    */
   export function shell(
-    command: string,
-    options?: ShellOptions,
-  ): Task<Skippable<{ output: string }>>;
+    options: ShellOptions,
+  ): (strings: TemplateStringsArray, ...values: ShellValue[]) => ShellTask;
 
   export type Capability = "fs" | "fetch" | "child_process";
 

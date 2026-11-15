@@ -97,6 +97,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let child = Arc::new(
         run.child(
             task.position,
+            workflow_path.clone(),
             package_dir,
             request
                 .params

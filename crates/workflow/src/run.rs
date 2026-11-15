@@ -10,7 +10,7 @@
 //! outcome goes to the run store as soon as it is known.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -52,12 +52,80 @@ const BODY_EXCLUDED_MODULES: &[LlrtSupportedModules] = &[
 ];
 const CANCEL_POLL: Duration = Duration::from_millis(250);
 
+/// The directory a workflow file is in.
+pub(crate) fn workflow_dir(workflow_path: &Path) -> PathBuf {
+    workflow_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The package a workflow belongs to: the nearest directory with a
+/// `codemod.yaml`, from the workflow's own up, without leaving the
+/// repository it is in. The workflow's directory when there is none.
+pub(crate) fn package_dir(workflow_path: &Path) -> PathBuf {
+    let dir = workflow_dir(workflow_path);
+    let start = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+    for ancestor in start.ancestors() {
+        if ancestor.join("codemod.yaml").is_file() {
+            return ancestor.to_path_buf();
+        }
+        if ancestor.join(".git").exists() {
+            break;
+        }
+    }
+    dir
+}
+
+/// `import.meta.dirname`, `filename` and `url` for the workflow module and
+/// its callbacks: the workflow file's, wherever the code runs.
+pub(crate) fn set_import_meta<T>(
+    module: &Module<'_, T>,
+    workflow_path: &Path,
+) -> rquickjs::Result<()> {
+    let filename =
+        std::fs::canonicalize(workflow_path).unwrap_or_else(|_| workflow_path.to_path_buf());
+    let meta = module.meta()?;
+    meta.set("filename", filename.to_string_lossy().into_owned())?;
+    meta.set(
+        "dirname",
+        workflow_dir(&filename).to_string_lossy().into_owned(),
+    )?;
+    meta.set("url", file_url(&filename))?;
+    Ok(())
+}
+
+/// A `file://` URL for an absolute path.
+fn file_url(path: &Path) -> String {
+    let path = path.to_string_lossy().replace('\\', "/");
+    let mut url = String::from("file://");
+    if !path.starts_with('/') {
+        url.push('/');
+    }
+    for byte in path.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                url.push(byte as char)
+            }
+            _ => url.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    url
+}
+
 /// Everything one run needs, shared with host task threads.
 pub(crate) struct RunContext {
     pub run_id: String,
     pub target: PathBuf,
     /// Directory of the workflow file; relative task paths resolve here.
     pub bundle_dir: PathBuf,
+    /// The workflow file: `import.meta.filename` in the workflow and its
+    /// callbacks.
+    pub workflow_path: PathBuf,
+    /// The package the workflow belongs to, where its `codemod.yaml` is: the
+    /// workflow's directory or one above it (`src/workflow.ts`). The
+    /// package's languages and skill are read from here.
+    pub package_dir: PathBuf,
     pub params: serde_json::Value,
     pub dry_run: bool,
     /// When the run started, in milliseconds since the epoch: where the
@@ -138,7 +206,8 @@ impl RunContext {
     pub(crate) fn child(
         &self,
         position: u64,
-        bundle_dir: PathBuf,
+        workflow_path: PathBuf,
+        package_dir: PathBuf,
         params: serde_json::Value,
         callbacks: BTreeMap<String, String>,
         events: Arc<dyn EventSink>,
@@ -150,7 +219,9 @@ impl RunContext {
         Self {
             run_id: format!("{}~{position}", self.run_id),
             target: self.target.clone(),
-            bundle_dir,
+            bundle_dir: workflow_dir(&workflow_path),
+            workflow_path,
+            package_dir,
             params,
             dry_run: self.dry_run,
             started_at: self.started_at,
@@ -436,6 +507,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             // Load the runtime even when the workflow never imports it.
             Module::import(&ctx, FLOW_MODULE)?.finish::<()>()?;
             let declared = Module::declare(ctx.clone(), WORKFLOW_MODULE, built.main.as_str())?;
+            set_import_meta(&declared, &run.workflow_path)?;
             let (module, promise) = declared.eval()?;
             promise.finish::<()>()?;
             let main: Function = module.get("default")?;

@@ -172,7 +172,7 @@ fn language(task: &TaskContext<'_>, request: &Request) -> Result<String, TaskErr
         return Ok(language.clone());
     }
     if request.package_language {
-        let languages = super::for_each_file::package_languages(&task.run.bundle_dir)?;
+        let languages = super::for_each_file::package_languages(&task.run.package_dir)?;
         match languages.as_slice() {
             [] => {}
             [language] => return Ok(language.clone()),

@@ -1309,6 +1309,27 @@ export default function transform() {
         assert!(!bundled.contains("NODE_SHIM"), "{bundled}");
     }
 
+    /// A bundled workflow still finds its files through `import.meta`: the
+    /// bundle takes the workflow's place, so it is in the same directory.
+    #[tokio::test]
+    async fn a_bundled_workflow_keeps_import_meta() {
+        let package = tempdir().unwrap();
+        let root = package.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("src/workflow.ts"),
+            r#"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  await step("Setup", shell`${import.meta.dirname}/scripts/setup.sh`);
+}
+"#,
+        )
+        .unwrap();
+        let bundled = bundle_js_file(root, "src/workflow.ts").await.unwrap();
+        assert!(bundled.contains("import.meta.dirname"), "{bundled}");
+    }
+
     /// A workflow that imports an npm package must work after publishing,
     /// though `node_modules` is not published: the workflow is bundled, and
     /// the bundle is still a workflow the engine builds and runs.
