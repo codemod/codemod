@@ -73,7 +73,6 @@ version: "0.1.0"
 description: "Move React components defined inside other components to module scope"
 author: "Your Name <you@example.com>"
 license: "MIT"
-workflow: "workflow.yaml"
 
 targets:
   languages: ["tsx"]
@@ -85,6 +84,11 @@ registry:
   visibility: "public"
 
 capabilities: []
+
+workflows:
+  - name: main
+    default: true
+    path: workflow.ts
 ```
 
 ```ts workflow.ts expandable
