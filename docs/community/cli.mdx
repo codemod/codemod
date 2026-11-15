@@ -837,7 +837,7 @@ Initialize a new Codemod package project.
 npx codemod init [PATH] [options]
 ```
 
-In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`. If you select a workflow, you can optionally scaffold an agent skill.
+In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`.
 
 An `ast-grep-js` or `hybrid` package keeps its workflow in `src/workflow.ts`, with its transform there as a [`forEachFile`](/community/workflows/reference#foreachfileselector-callback) callback that parses each file with `parse(file, { language })` and rewrites it. A `hybrid` package also has shell scripts in `src/scripts/`, which the workflow runs as ``shell`${import.meta.dirname}/scripts/setup.sh` ``, and ast-grep rules in `src/rules/`. Its tests are in `tests/workflow.test.ts`, which runs the workflow on each fixture in `tests/fixtures` with `node:test`; the `test` script runs them.
 
@@ -879,15 +879,7 @@ Both workflows use [trusted publishers](/community/publishing#trusted-publishers
   - `codemod-compatibility: skill-package-v1`
   - `codemod-skill-version: 0.1.0`
   
-  Mutually exclusive with `--with-skill` and `--project-type`.
-</ResponseField>
-
-<ResponseField name="--with-skill" type="boolean">
-  Scaffold a workflow + skill package. This keeps executable workflow files, adds an `installSkill` step, and creates authored skill files under `agents/skill/<skill-name>/`.
-
-  The generated authored skill uses `skill-package-v1`, not the built-in `mcs-v1` core skill marker.
-  
-  Mutually exclusive with `--skill`.
+  Mutually exclusive with `--project-type`.
 </ResponseField>
 
 <ResponseField name="--package-manager <PACKAGE_MANAGER>" type="string">

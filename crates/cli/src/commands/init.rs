@@ -30,12 +30,8 @@ pub struct Command {
     project_type: Option<ProjectType>,
 
     /// Scaffold a skill-focused package with an install-skill workflow
-    #[arg(long, conflicts_with = "with_skill")]
+    #[arg(long)]
     skill: bool,
-
-    /// Also scaffold skill behavior alongside workflow files
-    #[arg(long, conflicts_with = "skill")]
-    with_skill: bool,
 
     /// Package manager (required with --no-interactive for workflow packages, i.e. any --project-type, or with --workspace)
     #[arg(long)]
@@ -113,16 +109,15 @@ enum InteractiveCodemodType {
 enum PackageBehavior {
     WorkflowOnly,
     SkillOnly,
-    WorkflowAndSkill,
 }
 
 impl PackageBehavior {
     fn includes_workflow(self) -> bool {
-        matches!(self, Self::WorkflowOnly | Self::WorkflowAndSkill)
+        self == Self::WorkflowOnly
     }
 
     fn includes_skill(self) -> bool {
-        matches!(self, Self::SkillOnly | Self::WorkflowAndSkill)
+        self == Self::SkillOnly
     }
 }
 
@@ -161,18 +156,6 @@ const SKILL_REFERENCES_INDEX_TEMPLATE: &str =
     include_str!("../templates/skill/references/index.md");
 const SKILL_REFERENCES_USAGE_TEMPLATE: &str =
     include_str!("../templates/skill/references/usage.md");
-const INSTALL_SKILL_NODE_TEMPLATE: &str = r#"
-
-  - id: install-package-skill
-    name: Install Package Skill
-    type: automatic
-    steps:
-      - id: install-package-skill
-        name: Install package skill
-        install-skill:
-          package: "{name}"
-          path: "{skill_path}"
-"#;
 
 // Shell project templates
 const SHELL_SETUP_SCRIPT: &str = include_str!("../templates/shell/scripts/setup.sh");
@@ -351,12 +334,7 @@ pub fn handler(args: &Command) -> Result<()> {
     }
 
     let config = if args.no_interactive {
-        let package_behavior = package_behavior_from_flags(args.skill, args.with_skill)?;
-        if package_behavior == PackageBehavior::SkillOnly && args.project_type.is_some() {
-            return Err(anyhow!(
-                "--project-type cannot be used with --skill. Remove --project-type for skill-only scaffolding."
-            ));
-        }
+        let package_behavior = package_behavior_from_flags(args)?;
 
         let project_type = if package_behavior.includes_workflow() {
             let selected_project_type = args
@@ -375,31 +353,11 @@ pub fn handler(args: &Command) -> Result<()> {
             args.package_manager.clone(),
             args.workspace,
         ) {
-            (
-                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
-                ProjectType::AstGrepJs,
-                Some(pm),
-                _,
-            )
-            | (
-                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
-                ProjectType::Hybrid,
-                Some(pm),
-                _,
-            )
+            (PackageBehavior::WorkflowOnly, ProjectType::AstGrepJs, Some(pm), _)
+            | (PackageBehavior::WorkflowOnly, ProjectType::Hybrid, Some(pm), _)
             | (_, _, Some(pm), true) => Some(pm),
-            (
-                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
-                ProjectType::AstGrepJs,
-                None,
-                _,
-            )
-            | (
-                PackageBehavior::WorkflowOnly | PackageBehavior::WorkflowAndSkill,
-                ProjectType::Hybrid,
-                None,
-                _,
-            ) => {
+            (PackageBehavior::WorkflowOnly, ProjectType::AstGrepJs, None, _)
+            | (PackageBehavior::WorkflowOnly, ProjectType::Hybrid, None, _) => {
                 return Err(anyhow!(
                     "--package-manager is required for workflow packages (any --project-type, including legacy shell/ast-grep-yaml)"
                 ));
@@ -520,13 +478,16 @@ fn normalize_project_type(selected: ProjectType) -> ProjectType {
     }
 }
 
-fn package_behavior_from_flags(skill: bool, with_skill: bool) -> Result<PackageBehavior> {
-    match (skill, with_skill) {
-        (true, true) => Err(anyhow!("--skill and --with-skill cannot be used together")),
-        (true, false) => Ok(PackageBehavior::SkillOnly),
-        (false, true) => Ok(PackageBehavior::WorkflowAndSkill),
-        (false, false) => Ok(PackageBehavior::WorkflowOnly),
+fn package_behavior_from_flags(args: &Command) -> Result<PackageBehavior> {
+    if !args.skill {
+        return Ok(PackageBehavior::WorkflowOnly);
     }
+    if args.project_type.is_some() {
+        return Err(anyhow!(
+            "--project-type cannot be used with --skill. Remove --project-type for skill-only scaffolding."
+        ));
+    }
+    Ok(PackageBehavior::SkillOnly)
 }
 
 fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig> {
@@ -537,60 +498,21 @@ fn interactive_setup(project_name: &str, args: &Command) -> Result<ProjectConfig
     );
     println!();
 
-    let (project_type, package_behavior) = if args.skill || args.with_skill {
-        let package_behavior = package_behavior_from_flags(args.skill, args.with_skill)?;
-        if package_behavior == PackageBehavior::SkillOnly && args.project_type.is_some() {
-            return Err(anyhow!(
-                "--project-type cannot be used with --skill. Remove --project-type for skill-only scaffolding."
-            ));
-        }
-        let project_type = if package_behavior.includes_workflow() {
-            if let Some(pt) = &args.project_type {
-                normalize_project_type(pt.clone())
-            } else {
-                select_project_type()?
-            }
-        } else {
-            ProjectType::AstGrepJs
-        };
-        (project_type, package_behavior)
+    let (project_type, package_behavior) = if args.skill {
+        (ProjectType::AstGrepJs, package_behavior_from_flags(args)?)
     } else if let Some(pt) = &args.project_type {
-        let project_type = normalize_project_type(pt.clone());
-        let with_skill = Confirm::new("Would you like to add an agent skill?")
-            .with_default(false)
-            .prompt()?;
-        let package_behavior = if with_skill {
-            PackageBehavior::WorkflowAndSkill
-        } else {
-            PackageBehavior::WorkflowOnly
-        };
-        (project_type, package_behavior)
+        (
+            normalize_project_type(pt.clone()),
+            PackageBehavior::WorkflowOnly,
+        )
     } else {
         match select_interactive_codemod_type()? {
             InteractiveCodemodType::AgentSkill => {
                 (ProjectType::AstGrepJs, PackageBehavior::SkillOnly)
             }
-            InteractiveCodemodType::Jssg => {
-                let with_skill = Confirm::new("Would you like to add an agent skill?")
-                    .with_default(false)
-                    .prompt()?;
-                let package_behavior = if with_skill {
-                    PackageBehavior::WorkflowAndSkill
-                } else {
-                    PackageBehavior::WorkflowOnly
-                };
-                (ProjectType::AstGrepJs, package_behavior)
-            }
+            InteractiveCodemodType::Jssg => (ProjectType::AstGrepJs, PackageBehavior::WorkflowOnly),
             InteractiveCodemodType::MultiStepWorkflow => {
-                let with_skill = Confirm::new("Would you like to add an agent skill?")
-                    .with_default(false)
-                    .prompt()?;
-                let package_behavior = if with_skill {
-                    PackageBehavior::WorkflowAndSkill
-                } else {
-                    PackageBehavior::WorkflowOnly
-                };
-                (ProjectType::Hybrid, package_behavior)
+                (ProjectType::Hybrid, PackageBehavior::WorkflowOnly)
             }
         }
     };
@@ -744,22 +666,6 @@ fn select_interactive_codemod_type() -> Result<InteractiveCodemodType> {
     }
 }
 
-fn select_project_type() -> Result<ProjectType> {
-    let options = vec![
-        "jssg codemod (covers most use cases)",
-        "multi-step workflow (shell command, YAML & jssg)",
-    ];
-
-    let selection =
-        Select::new("What type of codemod would you like to create?", options).prompt()?;
-
-    match selection {
-        "jssg codemod (covers most use cases)" => Ok(ProjectType::AstGrepJs),
-        "multi-step workflow (shell command, YAML & jssg)" => Ok(ProjectType::Hybrid),
-        _ => Ok(ProjectType::AstGrepJs), // Default fallback
-    }
-}
-
 fn select_language() -> Result<String> {
     let options = vec![
         "JavaScript/TypeScript",
@@ -888,7 +794,6 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 
 fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let default_skill_path = expected_authored_skill_relative_file(&config.name);
-    let install_skill = config.package_behavior == PackageBehavior::WorkflowAndSkill;
     let workflow = match (config.package_behavior, &config.project_type) {
         (PackageBehavior::SkillOnly, _) => workflow_typescript(
             &SKILL_WORKFLOW_TEMPLATE
@@ -921,14 +826,6 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
                         .to_string(),
                 );
             }
-            if install_skill {
-                imports.push("installSkill");
-                after.push(format!(
-                    "await step(\"Install package skill\", installSkill({{ package: {}, path: {} }}));",
-                    serde_json::to_string(&config.name)?,
-                    serde_json::to_string(&default_skill_path)?,
-                ));
-            }
             with_steps(
                 callback_workflow_template(&config.language),
                 &imports,
@@ -941,15 +838,7 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
                 ProjectType::Shell => SHELL_WORKFLOW_TEMPLATE,
                 _ => ASTGREP_YAML_WORKFLOW_TEMPLATE,
             };
-            let mut yaml = template.replace("{language}", &config.language);
-            if install_skill {
-                yaml.push_str(
-                    &INSTALL_SKILL_NODE_TEMPLATE
-                        .replace("{name}", &config.name)
-                        .replace("{skill_path}", &default_skill_path),
-                );
-            }
-            workflow_typescript(&yaml)?
+            workflow_typescript(&template.replace("{language}", &config.language))?
         }
     };
 
@@ -1288,27 +1177,13 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         README_TEMPLATE
     };
 
-    let mut readme_content = template
+    let readme_content = template
         .replace("{name}", &config.name)
         .replace("{description}", &config.description)
         .replace("{language}", &config.language)
         .replace("{test_command}", &test_command)
         .replace("{license}", &config.license)
         .replace("{workflow}", workflow_file(config));
-
-    if config.package_behavior == PackageBehavior::WorkflowAndSkill {
-        readme_content.push_str(&format!(
-            r#"
-## Skill Installation
-
-```bash
-{} {}
-```
-"#,
-            codemod_cli_command_for_package_manager(package_manager),
-            config.name
-        ));
-    }
 
     fs::write(project_path.join("README.md"), readme_content)?;
     Ok(())
@@ -1972,46 +1847,6 @@ mod tests {
     }
 
     #[test]
-    fn create_project_with_skill_generates_workflow_and_skill_assets() {
-        let temp_dir = tempdir().unwrap();
-        let project_path = temp_dir.path().join("hybrid-project");
-
-        let config = ProjectConfig {
-            name: "@codemod/hybrid-project".to_string(),
-            description: "Hybrid package".to_string(),
-            author: "Codemod Team <team@codemod.com>".to_string(),
-            license: "MIT".to_string(),
-            project_type: ProjectType::AstGrepJs,
-            package_behavior: PackageBehavior::WorkflowAndSkill,
-            language: "typescript".to_string(),
-            private: false,
-            package_manager: Some("npm".to_string()),
-            git_repository_url: None,
-            github_action: false,
-            workspace: false,
-        };
-
-        create_project(&project_path, &config).unwrap();
-        let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
-        let skill_root = project_path
-            .join(AGENTS_SKILL_ROOT_RELATIVE_PATH)
-            .join("hybrid-project");
-        let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
-
-        assert!(project_path.join("src/workflow.ts").is_file());
-        assert!(skill_root.join("SKILL.md").is_file());
-        assert!(skill_root.join("references/index.md").is_file());
-        assert!(manifest.contains("workflows:"));
-        assert!(manifest.contains("path: src/workflow.ts"));
-        let workflow = fs::read_to_string(project_path.join("src/workflow.ts")).unwrap();
-        assert!(workflow.contains("installSkill({"));
-        assert!(workflow.contains("package: \"@codemod/hybrid-project\""));
-        assert!(workflow.contains("path: \"./agents/skill/hybrid-project/SKILL.md\""));
-        assert!(readme.contains("## Skill Installation"));
-        assert!(readme.contains("npx codemod@latest @codemod/hybrid-project"));
-    }
-
-    #[test]
     fn create_project_preserves_selected_package_manager_in_generated_commands() {
         let temp_dir = tempdir().unwrap();
         let project_path = temp_dir.path().join("yarn-project");
@@ -2067,12 +1902,12 @@ mod tests {
         let workspace_path = temp_dir.path().join("workspace");
 
         let config = ProjectConfig {
-            name: "sample-workflow-skill".to_string(),
-            description: "Workflow + skill package".to_string(),
+            name: "sample-skill".to_string(),
+            description: "Skill package".to_string(),
             author: "Codemod Team <team@codemod.com>".to_string(),
             license: "MIT".to_string(),
             project_type: ProjectType::AstGrepJs,
-            package_behavior: PackageBehavior::WorkflowAndSkill,
+            package_behavior: PackageBehavior::SkillOnly,
             language: "typescript".to_string(),
             private: false,
             package_manager: Some("npm".to_string()),
@@ -2193,7 +2028,7 @@ mod tests {
                     author: "Codemod Team <team@codemod.com>".to_string(),
                     license: "MIT".to_string(),
                     project_type: project_type.clone(),
-                    package_behavior: PackageBehavior::WorkflowAndSkill,
+                    package_behavior: PackageBehavior::WorkflowOnly,
                     language: language.to_string(),
                     private: false,
                     package_manager: Some("npm".to_string()),
@@ -2221,10 +2056,6 @@ mod tests {
                 );
                 assert!(
                     workflow.contains("forEachFile(files, (file) => {"),
-                    "{workflow}"
-                );
-                assert!(
-                    workflow.contains("installSkill({ package: \"project\""),
                     "{workflow}"
                 );
                 assert!(!project_path.join("scripts").exists());
@@ -2276,9 +2107,7 @@ mod tests {
                         );
                     }
                     assert!(
-                        workflow
-                            .contains("import { astGrep, forEachFile, installSkill, shell, step }")
-                            || !rules,
+                        workflow.contains("import { astGrep, forEachFile, shell, step }") || !rules,
                         "{workflow}"
                     );
                 }
@@ -2407,26 +2236,6 @@ mod tests {
         assert_eq!(package_manager_test_command("bun"), "bun run test");
         assert_eq!(package_manager_test_command("npm"), "npm test");
         assert_eq!(package_manager_test_command("unknown"), "npm test");
-    }
-
-    #[test]
-    fn package_behavior_flags_map_skill_modes() {
-        assert_eq!(
-            package_behavior_from_flags(false, false).unwrap(),
-            PackageBehavior::WorkflowOnly
-        );
-        assert_eq!(
-            package_behavior_from_flags(false, true).unwrap(),
-            PackageBehavior::WorkflowAndSkill
-        );
-        assert_eq!(
-            package_behavior_from_flags(true, false).unwrap(),
-            PackageBehavior::SkillOnly
-        );
-        assert!(
-            package_behavior_from_flags(true, true).is_err(),
-            "--skill + --with-skill should be rejected"
-        );
     }
 
     #[test]

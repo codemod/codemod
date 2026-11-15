@@ -74,7 +74,7 @@ Codemod packages use a workflow-first model and can be:
 - **Skill-only**: the workflow has `installSkill` steps and no executable steps, with authored skill files under `agents/skill/<skill-name>/`.
 - **Workflow + skill**: the workflow has both executable and `installSkill` steps, with authored skill files under `agents/skill/<skill-name>/`.
 
-Use `codemod init` to scaffold a workflow package, `codemod init --skill` for a skill package, or `codemod init --with-skill` for a package that ships both. Skill-only scaffolds cannot also set `--project-type`.
+Use `codemod init` to scaffold a workflow package or `codemod init --skill` for a skill package. To ship both, add an `installSkill` step and the skill files to a workflow package yourself. Skill-only scaffolds cannot also set `--project-type`.
 
 `codemod publish` and `codemod workflow validate -w <package-root>` validate the package shape automatically: workflow packages run workflow checks, skill packages run skill structure/frontmatter/reference checks, and combined packages run both.
 

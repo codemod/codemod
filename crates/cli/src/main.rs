@@ -896,27 +896,9 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_init_with_skill_flag() {
-        let parse_result = Cli::try_parse_from([
-            "codemod",
-            "init",
-            "my-with-skill",
-            "--no-interactive",
-            "--project-type",
-            "ast-grep-js",
-            "--with-skill",
-            "--language",
-            "typescript",
-            "--description",
-            "With skill package",
-            "--author",
-            "Author <author@example.com>",
-            "--license",
-            "MIT",
-            "--package-manager",
-            "npm",
-        ]);
-        assert!(parse_result.is_ok());
+    fn parser_rejects_init_with_skill_flag() {
+        let parse_result = Cli::try_parse_from(["codemod", "init", "my-codemod", "--with-skill"]);
+        assert!(parse_result.is_err());
     }
 
     #[test]
