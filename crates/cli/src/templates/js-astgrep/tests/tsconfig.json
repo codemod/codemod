@@ -1,0 +1,11 @@
+{
+  // The tests run in Node.js, so they get Node's types; the workflow in src/
+  // does not, since the codemod CLI runs it without Node's APIs.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["codemod", "node"]
+  },
+  "include": ["."],
+  // Fixtures are sample input for the workflow, not code to check.
+  "exclude": ["fixtures"]
+}

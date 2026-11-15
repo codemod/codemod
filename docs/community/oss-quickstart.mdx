@@ -256,13 +256,13 @@ Validate the workflow schema:
 npx codemod workflow validate -w src/workflow.ts
 ```
 
-Run the workflow against your input/expected fixtures:
+Run the tests, which run the workflow against your input/expected fixtures:
 
 ```bash
-npx codemod workflow test
+npm test
 ```
 
-Tests use fixtures in the `tests/` directory. You can use simple `input.*`/`expected.*` file pairs or `input/` + `expected/` directory snapshots when your codemod creates or deletes files. If MCP generated test fixtures, they will run automatically.
+The tests are in `tests/workflow.test.ts`: it runs the workflow on each fixture in `tests/fixtures` and compares the files it leaves with the expected ones. A fixture is a directory with simple `input.*`/`expected.*` file pairs, or `input/` + `expected/` directory snapshots when your codemod creates or deletes files. Fixtures you add there, including ones MCP generates, are picked up by the test file.
 
 For test structure, CI integration, and debugging strategies, see [Testing workflows](/community/workflows/testing).
 

@@ -474,14 +474,14 @@ A codemod package can depend on `codemod` like any other tool it runs: package s
 
 ```bash
 npm install codemod
-npm install --save-dev typescript
+npm install --save-dev typescript @types/node
 ```
 
 ```json package.json
 {
   "type": "module",
   "scripts": {
-    "test": "codemod workflow test",
+    "test": "node --test \"tests/**/*.test.ts\"",
     "validate": "codemod workflow validate -w src/workflow.ts"
   }
 }
@@ -502,7 +502,7 @@ npm install --save-dev typescript
 }
 ```
 
-Then `npx tsc` checks `workflow.ts` along with your transforms (add `"include": ["src"]` when they are under `src/`, as `codemod init` does). Type-only imports are available as `codemod/main` (the `SgRoot`/`SgNode` types) and `codemod/langs/<language>`; `@codemod.com/jssg-types` still works and mirrors the same declarations.
+Then `npx tsc` checks `workflow.ts` along with your transforms (add `"include": ["src"]` when they are under `src/`, as `codemod init` does). The tests run in Node.js, so they get Node's types from a `tests/tsconfig.json` of their own that extends this one with `"types": ["codemod", "node"]`; the workflow keeps only `codemod`'s, since the CLI runs it without Node's APIs. Type-only imports are available as `codemod/main` (the `SgRoot`/`SgNode` types) and `codemod/langs/<language>`; `@codemod.com/jssg-types` still works and mirrors the same declarations.
 
 - Step results are typed and read-only. `forEachFile` collects what the callback returns: returning `file.path` or `undefined` gives `outputs: readonly string[]`.
 - A step result or callback return value that is not JSON is a type error, for example a `Set`, a `Map`, a `Date`, a function, or a `Promise` returned from an `async` callback.

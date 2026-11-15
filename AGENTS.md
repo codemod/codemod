@@ -18,10 +18,10 @@ JSSG sandbox, shared TypeScript packages, semantic-analysis providers, and Mintl
   provider factory, and parser loading.
 - `crates/cli/npm/types`: the public type declarations (the `codemod/*` modules, also importable as `codemod:*`, and languages), shipped
   in the `codemod` npm package; `packages/jssg-types` mirrors them for existing users.
-- `crates/cli/npm/testing`: `codemod/testing`, helpers for testing workflows. TypeScript workflows
-  run in the test process on the Node.js host; with `host: "quickjs"` (and for YAML) they run the
-  CLI's hidden `workflow harness` command (`crates/cli/src/workflow_test.rs`), which
-  `codemod workflow test` also uses.
+- `crates/cli/npm/testing`: `codemod/testing`, helpers for testing workflows from a test file
+  (`codemod init` scaffolds `tests/workflow.test.ts` with `node:test`). TypeScript workflows run in
+  the test process on the Node.js host; with `host: "quickjs"` (and for YAML) they run the CLI's
+  hidden `workflow harness` command (`crates/cli/src/workflow_test.rs`).
 - `crates/agents`: coding-agent adapters (Claude Code, Codex, Cursor, Gemini, OpenCode, ...): how to
   launch each headlessly, normalize its streamed output into `AgentEvent`s, and detect running
   inside one. Used by `agent(...)` workflow steps and the report server's feedback drafts. Recorded

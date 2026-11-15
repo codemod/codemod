@@ -504,8 +504,8 @@ function codemodBinary(): string {
 /**
  * The fixtures in a directory: each subdirectory with `input/` and
  * `expected/` directories, or `input.<ext>` and `expected.<ext>` files (the
- * layouts `codemod jssg test` and `codemod workflow test` read), and
- * optionally `params.json`. Groups of fixtures may be nested.
+ * layouts `codemod jssg test` reads), and optionally `params.json`. Groups of
+ * fixtures may be nested.
  */
 export function fixtures(dir: PathLike): Fixture[] {
   const root = toPath(dir);

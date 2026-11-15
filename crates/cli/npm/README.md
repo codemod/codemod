@@ -183,7 +183,6 @@ nodes:
 |---------|-------------|
 | `npx codemod workflow run -w <path>` | Run a codemod workflow on your codebase |
 | `npx codemod workflow validate -w <path>` | Validate workflow syntax and structure |
-| `npx codemod workflow test [tests]` | Run the whole workflow on test fixtures and compare the results |
 | `npx codemod workflow resume -i <id>` | Resume a paused workflow |
 | `npx codemod workflow status -i <id>` | Show workflow execution status |
 | `npx codemod workflow list` | List recent workflow runs |

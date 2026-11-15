@@ -5,6 +5,5 @@ pub mod resume;
 pub mod run;
 pub mod send;
 pub mod status;
-pub mod test;
 pub mod upgrade;
 pub mod validate;

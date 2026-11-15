@@ -208,6 +208,8 @@ fn callback_workflow_template(language: &str) -> &'static str {
     }
 }
 const JS_TSCONFIG_TEMPLATE: &str = include_str!("../templates/js-astgrep/tsconfig.json");
+const WORKFLOW_TEST_TEMPLATE: &str = include_str!("../templates/js-astgrep/tests/workflow.test.ts");
+const TESTS_TSCONFIG_TEMPLATE: &str = include_str!("../templates/js-astgrep/tests/tsconfig.json");
 
 // fixtures
 const JS_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.js");
@@ -1231,9 +1233,18 @@ fn hybrid_expected(language: &str) -> Option<&'static str> {
     })
 }
 
+/// The package's tests: `tests/workflow.test.ts`, which runs the workflow on
+/// each case under `tests/fixtures` with `node:test` and `codemod/testing`,
+/// and a starter case, `tests/fixtures/basic`.
 fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    let fixtures = project_path.join("tests").join("fixtures");
-    fs::create_dir_all(&fixtures)?;
+    let tests = project_path.join("tests");
+    let case = tests.join("fixtures").join(STARTER_FIXTURE);
+    fs::create_dir_all(&case)?;
+    fs::write(
+        tests.join("workflow.test.ts"),
+        WORKFLOW_TEST_TEMPLATE.replace("{name}", &config.name),
+    )?;
+    fs::write(tests.join("tsconfig.json"), TESTS_TSCONFIG_TEMPLATE)?;
     let Some((ext, input, expected)) = js_fixture(&config.language) else {
         return Ok(());
     };
@@ -1241,10 +1252,13 @@ fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         ProjectType::Hybrid => hybrid_expected(&config.language).unwrap_or(expected),
         _ => expected,
     };
-    fs::write(fixtures.join(format!("input.{ext}")), input)?;
-    fs::write(fixtures.join(format!("expected.{ext}")), expected)?;
+    fs::write(case.join(format!("input.{ext}")), input)?;
+    fs::write(case.join(format!("expected.{ext}")), expected)?;
     Ok(())
 }
+
+/// The directory of the starter test case, under `tests/fixtures`.
+const STARTER_FIXTURE: &str = "basic";
 
 fn create_gitignore(project_path: &Path) -> Result<()> {
     fs::write(project_path.join(".gitignore"), GITIGNORE_TEMPLATE)?;
@@ -1949,8 +1963,12 @@ mod tests {
         assert!(!project_path.join("scripts").exists());
         assert!(!project_path.join("workflow.ts").exists());
         assert!(!project_path.join("src/rules/config.yml").exists());
-        assert!(project_path.join("tests/fixtures/input.toml").is_file());
-        assert!(project_path.join("tests/fixtures/expected.toml").is_file());
+        assert!(project_path
+            .join("tests/fixtures/basic/input.toml")
+            .is_file());
+        assert!(project_path
+            .join("tests/fixtures/basic/expected.toml")
+            .is_file());
     }
 
     #[test]
@@ -2019,7 +2037,7 @@ mod tests {
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
 
         assert!(package_json.contains("\"packageManager\": \"yarn@4.x\""));
-        assert!(package_json.contains("\"test\": \"codemod workflow test\""));
+        assert!(package_json.contains("\"test\": \"node --test \\\"tests/**/*.test.ts\\\"\""));
         let package_json: serde_json::Value = serde_json::from_str(&package_json).unwrap();
         assert_eq!(
             package_json["dependencies"]["codemod"],
@@ -2223,9 +2241,10 @@ mod tests {
                     "{language}: {workflow}"
                 );
                 let (ext, _, js_expected) = js_fixture(language).unwrap();
-                let expected =
-                    fs::read_to_string(project_path.join(format!("tests/fixtures/expected.{ext}")))
-                        .unwrap();
+                let expected = fs::read_to_string(
+                    project_path.join(format!("tests/fixtures/basic/expected.{ext}")),
+                )
+                .unwrap();
                 match project_type {
                     ProjectType::Hybrid => assert_eq!(
                         expected,
@@ -2290,10 +2309,58 @@ mod tests {
         create_project(&project_path, &config).unwrap();
 
         assert!(!project_path.join("scripts").exists());
-        assert!(project_path.join("tests/fixtures/input.xml").is_file());
-        assert!(project_path.join("tests/fixtures/expected.xml").is_file());
+        assert!(project_path
+            .join("tests/fixtures/basic/input.xml")
+            .is_file());
+        assert!(project_path
+            .join("tests/fixtures/basic/expected.xml")
+            .is_file());
         let workflow = fs::read_to_string(project_path.join("src/workflow.ts")).unwrap();
         assert!(workflow.contains("\"**/*.{xml,csproj,props,targets,config,resx,xaml}\""));
+    }
+
+    #[test]
+    fn create_project_writes_an_explicit_node_test_file() {
+        for project_type in [ProjectType::AstGrepJs, ProjectType::Hybrid] {
+            let temp_dir = tempdir().unwrap();
+            let project_path = temp_dir.path().join("tested");
+            let config = ProjectConfig {
+                name: "tested".to_string(),
+                description: "A tested package".to_string(),
+                author: "Codemod Team <team@codemod.com>".to_string(),
+                license: "MIT".to_string(),
+                project_type,
+                package_behavior: PackageBehavior::WorkflowOnly,
+                language: "typescript".to_string(),
+                private: false,
+                package_manager: Some("npm".to_string()),
+                git_repository_url: None,
+                github_action: false,
+                workspace: false,
+            };
+
+            create_project(&project_path, &config).unwrap();
+
+            let test_file =
+                fs::read_to_string(project_path.join("tests/workflow.test.ts")).unwrap();
+            assert!(test_file.contains("from \"node:test\""), "{test_file}");
+            assert!(test_file.contains("describe(\"tested\""), "{test_file}");
+            assert!(
+                test_file.contains("new URL(\"../src/workflow.ts\""),
+                "{test_file}"
+            );
+            assert!(project_path.join("tests/tsconfig.json").is_file());
+            assert!(project_path.join("tests/fixtures/basic/input.ts").is_file());
+            let package_json: serde_json::Value = serde_json::from_str(
+                &fs::read_to_string(project_path.join("package.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                package_json["scripts"]["test"],
+                "node --test \"tests/**/*.test.ts\""
+            );
+            assert!(package_json["devDependencies"]["@types/node"].is_string());
+        }
     }
 
     #[test]
@@ -2319,7 +2386,7 @@ mod tests {
 
             create_project(&project_path, &config).unwrap();
 
-            let fixtures = project_path.join("tests/fixtures");
+            let fixtures = project_path.join("tests/fixtures/basic");
             assert!(
                 fixtures.join(format!("input.{ext}")).is_file(),
                 "{language}: missing input.{ext}"

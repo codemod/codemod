@@ -85,13 +85,29 @@ Fields that never had an effect, such as `codemod.args` or template `outputs`, a
 
 ## Check the converted codemod
 
-Run your fixtures through the whole workflow:
+Run your fixtures through the whole workflow from a test file, `tests/workflow.test.ts`:
 
-```bash
-npx codemod workflow test
+```ts tests/workflow.test.ts
+import { describe, test } from "node:test";
+import { assertTree, fixtures, runWorkflow } from "codemod/testing";
+
+const workflow = new URL("../workflow.ts", import.meta.url);
+
+describe("my-codemod", () => {
+  for (const fixture of fixtures(new URL("./fixtures", import.meta.url))) {
+    test(fixture.name, async () => {
+      const run = await runWorkflow(workflow, { target: fixture.input, params: fixture.params });
+      assertTree(run, fixture.expected);
+    });
+  }
+});
 ```
 
-It reads the same `tests/` fixtures as `codemod jssg test`. See [Testing workflows](/community/workflows/testing).
+```bash
+node --test "tests/**/*.test.ts"
+```
+
+`fixtures` reads the same layouts as `codemod jssg test`; point it at the directory that holds your fixtures. See [Testing workflows](/community/workflows/testing).
 
 ## What behaves differently
 

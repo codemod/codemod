@@ -1,22 +1,80 @@
 ---
 title: "Testing workflows"
 sidebarTitle: "Testing"
-description: "Run the whole workflow on fixtures and compare the files it leaves, from the CLI or from any test runner."
+description: "Test what a package does: run the whole workflow on fixtures from a test file, and compare the files it leaves."
 ---
 
-`codemod jssg test` tests one transform file. To test what a package actually does, including inline `forEachFile` callbacks, function steps, how the steps fit together, shell steps and renames, run the whole workflow on fixtures:
+A package's tests are a test file you can read and change: `tests/workflow.test.ts`. It runs the whole workflow on fixtures with `codemod/testing`, so it covers what the package actually does: inline `forEachFile` callbacks, function steps, how the steps fit together, shell steps and renames. (`codemod jssg test` tests one transform file on its own.)
 
-- `codemod workflow test` runs every fixture and needs no test code.
-- `codemod/testing` gives you the same runs from your own tests, with `node:test`, Vitest or Bun. You can also stop after one step or replace a step's result. TypeScript workflows run in your test process, so breakpoints, coverage and module mocks work in the workflow's own code.
+`codemod init` scaffolds the test file, a starter fixture, and a `test` script that runs them with Node.js's built-in test runner:
 
-Both run the workflow on a temporary copy of each fixture, so fixtures are never changed. Nothing is recorded in the run store.
+```plaintext
+my-codemod/
+  src/workflow.ts
+  tests/
+    workflow.test.ts
+    tsconfig.json          # Node.js types for the tests
+    fixtures/
+      basic/
+        input.ts
+        expected.ts
+  package.json             # "test": "node --test \"tests/**/*.test.ts\""
+```
+
+## The test file
+
+```ts tests/workflow.test.ts
+import { describe, test } from "node:test";
+import { assertTree, fixtures, runWorkflow } from "codemod/testing";
+
+const workflow = new URL("../src/workflow.ts", import.meta.url);
+
+describe("my-codemod", () => {
+  for (const fixture of fixtures(new URL("./fixtures", import.meta.url))) {
+    test(fixture.name, async () => {
+      const run = await runWorkflow(workflow, {
+        target: fixture.input,
+        params: fixture.params,
+      });
+      assertTree(run, fixture.expected);
+    });
+  }
+});
+```
+
+- `fixtures(dir)` lists the cases in `tests/fixtures`, one test each.
+- `runWorkflow` copies a case's input into a temporary directory and runs the workflow there, so fixtures are never changed. Nothing is recorded in the run store.
+- `assertTree` compares the files the run left with the case's expected output, and fails with a diff.
+
+Run the tests:
+
+```bash
+npm test
+```
+
+```plaintext
+▶ my-codemod
+  ✔ basic (41ms)
+  ✖ renames-default-export (38ms)
+    AssertionError: src/b.ts differs from the expected output
+
+    --- expected/src/b.ts
+    +++ actual/src/b.ts
+    @@ -1,2 +1,2 @@
+    -var a = 1;
+    +let a = 1;
+```
+
+The test file is yours: add `test(...)` blocks next to the fixture loop for cases that need [inline files](#write-files-inline), [one step on its own](#test-one-step) or [mocks](#mock-a-workflows-imports).
+
+Node.js runs TypeScript test files directly from version 22.18, which the scaffolded `package.json` requires. With Bun, run `bun test`; with Vitest, `npx vitest`.
 
 ## Fixtures
 
-A fixture is a directory with either an `input/` and an `expected/` directory, or an `input.<ext>` and an `expected.<ext>` file. These are the layouts `codemod jssg test` reads, so existing fixtures work as they are.
+A fixture is a directory under `tests/fixtures` with either an `input/` and an `expected/` directory, or an `input.<ext>` and an `expected.<ext>` file. These are the layouts `codemod jssg test` reads, so existing fixtures work as they are.
 
 ```plaintext
-tests/
+tests/fixtures/
   renames-default-export/
     input/
       src/a.ts
@@ -25,78 +83,34 @@ tests/
       src/a.ts
       src/b.mts          # the workflow renamed it
     params.json          # optional: the run's parameters
-  single-file/
+  basic/
     input.ts
     expected.ts
 ```
 
 - **Directory fixtures** compare every file: changed files, files the workflow created, and files it removed.
 - **Single-file fixtures** expect the run to leave exactly one file, and compare it with `expected.<ext>`, whatever its name.
-- `tests` itself may hold `input/` and `expected/`, and fixtures may be grouped in subdirectories.
+- Fixtures may be grouped in subdirectories; a fixture's name is its path under `tests/fixtures`.
 
 <Warning>
   The workflow selects files by its own rules. A single-file fixture is named `input.<ext>`, so a step that only selects `**/package.json` never sees it. Use a directory fixture with the real file names for such steps.
 </Warning>
 
-## Run the fixtures from the CLI
+## Update expected files
+
+After a change you meant to make, write each run's files into its fixture's expected output:
 
 ```bash
-npx codemod workflow test
+CODEMOD_UPDATE_FIXTURES=1 npm test
 ```
 
-This runs the workflow in the current package on every fixture in `tests/` and prints a diff for each file that differs:
+Review the changes to `tests/fixtures` before you commit them.
 
-```plaintext
-✓ renames-default-export (0.2s)
-✗ single-file (0.1s)
-    input.ts differs:
-    --- expected
-    +++ actual
-    @@ -1,2 +1,2 @@
-    -var a = 1;
-    +let a = 1;
+## More from `codemod/testing`
 
-1 passed, 1 failed
-```
+`codemod/testing` ships with the `codemod` package, which `codemod init` adds as a dependency. Paths given to it are resolved against the current directory; pass a URL, as the test file does, to resolve them against the test file. The first argument to `runWorkflow` is a workflow file or a package directory.
 
-After a change you meant to make, update the expected files from the runs:
-
-```bash
-npx codemod workflow test -u
-```
-
-See [`workflow test`](/community/cli#codemod-workflow) for every option, including `--strictness` (compare syntax trees instead of text) and `--filter`.
-
-## Test from your own test runner
-
-`codemod/testing` ships with the `codemod` package, which `codemod init` adds as a dependency:
-
-```bash
-npm install codemod
-```
-
-Run each fixture as its own test:
-
-```ts tests/workflow.test.ts
-import { test } from "node:test";
-import { assertTree, fixtures, runWorkflow } from "codemod/testing";
-
-for (const fixture of fixtures("tests")) {
-  test(fixture.name, async () => {
-    const run = await runWorkflow("workflow.ts", {
-      target: fixture.input,
-      params: fixture.params,
-    });
-    assertTree(run, fixture.expected);
-  });
-}
-```
-
-```bash
-node --test tests/workflow.test.ts
-```
-
-Node.js 23.6 and later run TypeScript test files directly. With Bun, use `bun test`, and with Vitest, `npx vitest`.
+`assertTree` throws an `AssertionError` with the diff in its message and `actual` and `expected` set, so every runner reports it.
 
 If your workflow still imports the older `codemod:workflow` spelling, Vitest needs the `codemod/vite` plugin to resolve it:
 
@@ -105,14 +119,6 @@ import { defineConfig } from "vitest/config";
 import codemod from "codemod/vite";
 
 export default defineConfig({ plugins: [codemod()] });
-```
-
-Paths are resolved against the current directory. To resolve them against the test file, pass a URL: `new URL("../workflow.ts", import.meta.url)`. The first argument is a workflow file or a package directory.
-
-`assertTree` throws an `AssertionError` with the diff in its message and `actual` and `expected` set, so every runner reports it. To update the expected files from the runs, set `CODEMOD_UPDATE_FIXTURES=1`:
-
-```bash
-CODEMOD_UPDATE_FIXTURES=1 node --test tests/workflow.test.ts
 ```
 
 ### Write files inline
@@ -186,7 +192,7 @@ test("uses the mocked lookup", async () => {
 
 ### Where the workflow runs
 
-`codemod/testing` runs TypeScript workflows in your test process, on [the Node.js host](/community/workflows/node). The CLI, `codemod workflow test` included, runs them in the engine's own sandboxed runtime. The two run the same orchestrator and the same tasks, but a workflow can rely on something only one of them has. For example, Node.js lets any code read files, while the CLI's runtime only grants the capabilities `codemod.yaml` declares.
+`codemod/testing` runs TypeScript workflows in your test process, on [the Node.js host](/community/workflows/node). The CLI runs them in the engine's own sandboxed runtime. The two run the same orchestrator and the same tasks, but a workflow can rely on something only one of them has. For example, Node.js lets any code read files, while the CLI's runtime only grants the capabilities `codemod.yaml` declares.
 
 To test against the runtime `codemod run` uses, pass `host: "quickjs"`:
 

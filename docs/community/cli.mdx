@@ -555,7 +555,7 @@ Run it in a directory that holds several packages, such as a monorepo of recipes
 npx codemod workflow upgrade .        # every package under the current directory
 ```
 
-Transform files and their tests are not changed: `codemod jssg test` keeps working on them as before, and `codemod workflow test` runs the same fixtures through the whole workflow. The generated `workflow.ts` references the `codemod/workflow` types, so `tsc` checks it in any project that depends on `codemod`. If the nearest `package.json` does not, `upgrade` suggests adding it.
+Transform files and their tests are not changed: `codemod jssg test` keeps working on them as before. To run fixtures through the whole workflow, add a [test file](/community/workflows/testing). The generated `workflow.ts` references the `codemod/workflow` types, so `tsc` checks it in any project that depends on `codemod`. If the nearest `package.json` does not, `upgrade` suggests adding it.
 
 <ResponseField name="--keep-yaml" type="boolean">
   Keep the YAML files.
@@ -565,39 +565,6 @@ Transform files and their tests are not changed: `codemod jssg test` keeps worki
   Print the generated TypeScript instead of writing files.
 </ResponseField>
 
-**`workflow test`**
-
-Run the workflow on each fixture and compare the files it leaves with the fixture's expected output. See [Testing workflows](/community/workflows/testing).
-
-```bash
-npx codemod workflow test [TESTS] [-w <PATH>] [-u] [--filter <TEXT>] [--strictness <LEVEL>]
-```
-
-Each fixture is a directory with `input/` and `expected/` directories, or `input.<ext>` and `expected.<ext>` files, and optionally a `params.json` with the run's parameters. The workflow runs on a temporary copy of each one; nothing is recorded in the run store. Approvals are given and the capabilities `codemod.yaml` declares are granted. The command exits with an error when a fixture fails.
-
-<ResponseField name="TESTS" type="string" default="tests">
-  Directory of fixtures, one per subdirectory.
-</ResponseField>
-
-<ResponseField name="-w, --workflow <PATH>" type="string" default=".">
-  Path to a workflow file or a codemod package directory.
-</ResponseField>
-
-<ResponseField name="--workflow-name <NAME>" type="string">
-  Which workflow to test when `codemod.yaml` declares several.
-</ResponseField>
-
-<ResponseField name="-u, --update" type="boolean">
-  Write each run's files into its fixture's expected output.
-</ResponseField>
-
-<ResponseField name="--filter <TEXT>" type="string">
-  Only run fixtures whose name contains this text.
-</ResponseField>
-
-<ResponseField name="--strictness <LEVEL>" type="string" default="strict">
-  How files are compared: `strict` (text), `cst`, `ast`, or `loose`, as in [`jssg test`](/community/jssg/testing#strictness-levels). Files in languages without a parser are compared as text.
-</ResponseField>
 
 <ResponseField name="--allow-fs, --allow-fetch, --allow-child-process" type="boolean">
   Grant capabilities on top of those `codemod.yaml` declares.
@@ -872,7 +839,7 @@ npx codemod init [PATH] [options]
 
 In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`. If you select a workflow, you can optionally scaffold an agent skill.
 
-An `ast-grep-js` or `hybrid` package keeps its workflow in `src/workflow.ts`, with its transform there as a [`forEachFile`](/community/workflows/reference#foreachfileselector-callback) callback that parses each file with `parse(file, { language })` and rewrites it. A `hybrid` package also has shell scripts in `src/scripts/`, which the workflow runs as ``shell`${import.meta.dirname}/scripts/setup.sh` ``, and ast-grep rules in `src/rules/`. Its `test` script runs `codemod workflow test` on the fixtures in `tests/`.
+An `ast-grep-js` or `hybrid` package keeps its workflow in `src/workflow.ts`, with its transform there as a [`forEachFile`](/community/workflows/reference#foreachfileselector-callback) callback that parses each file with `parse(file, { language })` and rewrites it. A `hybrid` package also has shell scripts in `src/scripts/`, which the workflow runs as ``shell`${import.meta.dirname}/scripts/setup.sh` ``, and ast-grep rules in `src/rules/`. Its tests are in `tests/workflow.test.ts`, which runs the workflow on each fixture in `tests/fixtures` with `node:test`; the `test` script runs them.
 
 You'll also be prompted to create a GitHub Actions publishing workflow. This generates `.github/workflows/publish.yml`:
 
