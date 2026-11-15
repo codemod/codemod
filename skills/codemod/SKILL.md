@@ -55,7 +55,7 @@ For mining / Insights metrics packages, Insights loads the `js-ast-grep` script 
 
 ## Authoring rules
 
-- Keep transforms AST-first. Parser-backed formats (JavaScript, TypeScript, TSX, Python, Rust, Go, Java, HTML, XML, CSS, Kotlin, Angular templates, C#, C, C++, PHP, Ruby, Elixir, JSON, YAML, TOML) use a `js-ast-grep` step: AST queries select the nodes, `node.replace(...)` edits them, `root.root().commitEdits(...)` applies the edits.
+- Keep transforms AST-first. Parser-backed formats (JavaScript, TypeScript, TSX, Python, Rust, Go, Java, HTML, XML, CSS, Kotlin, C#, C, C++, PHP, Ruby, Elixir, JSON, YAML, TOML) use a `js-ast-grep` step: AST queries select the nodes, `node.replace(...)` edits them, `root.root().commitEdits(...)` applies the edits.
 - Do not use regex, line splitting, whole-file `.replace(...)`, or Python, shell, or Node `fs` rewrites for those formats, and do not use JSSG only as a file walker around such rewrites. Do not add a shell step to reach a related file when JSSG can make that hop. Use raw text only for unsupported plain-text formats, document the fallback, and cover it with fixtures.
 - Run `npx codemod ai dump-ast` before broadening heuristics and `npx codemod ai node-types` when node kinds or fields are unclear. Use semantic, binding-aware checks when symbol origin matters.
 - Keep one granular transform or one exact `from -> to` migration per package unless the request is clearly open-ended or multi-hop.

@@ -195,7 +195,6 @@ fn callback_workflow_template(language: &str) -> &'static str {
         "xml" => include_str!("../templates/js-astgrep/workflows/xml.ts"),
         "css" => include_str!("../templates/js-astgrep/workflows/css.ts"),
         "kotlin" => include_str!("../templates/js-astgrep/workflows/kotlin.ts"),
-        "angular" => include_str!("../templates/js-astgrep/workflows/angular.ts"),
         "csharp" => include_str!("../templates/js-astgrep/workflows/csharp.ts"),
         "cpp" => include_str!("../templates/js-astgrep/workflows/cpp.ts"),
         "c" => include_str!("../templates/js-astgrep/workflows/c.ts"),
@@ -233,10 +232,6 @@ const CSS_TEST_EXPECTED: &str = include_str!("../templates/js-astgrep/tests/fixt
 const KOTLIN_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.kt");
 const KOTLIN_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.kt");
-const ANGULAR_TEST_INPUT: &str =
-    include_str!("../templates/js-astgrep/tests/fixtures/input.angular.html");
-const ANGULAR_TEST_EXPECTED: &str =
-    include_str!("../templates/js-astgrep/tests/fixtures/expected.angular.html");
 const CSHARP_TEST_INPUT: &str = include_str!("../templates/js-astgrep/tests/fixtures/input.cs");
 const CSHARP_TEST_EXPECTED: &str =
     include_str!("../templates/js-astgrep/tests/fixtures/expected.cs");
@@ -279,8 +274,6 @@ const ASTGREP_PATTERNS_FOR_CSS: &str =
     include_str!("../templates/astgrep-yaml/rules/config.css.yml");
 const ASTGREP_PATTERNS_FOR_KOTLIN: &str =
     include_str!("../templates/astgrep-yaml/rules/config.kt.yml");
-const ASTGREP_PATTERNS_FOR_ANGULAR: &str =
-    include_str!("../templates/astgrep-yaml/rules/config.angular.yml");
 const ASTGREP_PATTERNS_FOR_CSHARP: &str =
     include_str!("../templates/astgrep-yaml/rules/config.cs.yml");
 const ASTGREP_PATTERNS_FOR_CPP: &str =
@@ -776,7 +769,6 @@ fn select_language() -> Result<String> {
         "XML",
         "CSS",
         "Kotlin",
-        "Angular",
         "C#",
         "C++",
         "C",
@@ -801,7 +793,6 @@ fn select_language() -> Result<String> {
         "XML" => "xml",
         "CSS" => "css",
         "Kotlin" => "kotlin",
-        "Angular" => "angular",
         "C#" => "csharp",
         "C++" => "cpp",
         "C" => "c",
@@ -963,9 +954,9 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 }
 
 /// Languages whose hybrid packages have no ast-grep rule step: ast-grep's
-/// YAML rules support neither.
+/// YAML rules do not support them.
 fn hybrid_without_rules(language: &str) -> bool {
-    matches!(language, "toml" | "angular")
+    language == "toml"
 }
 
 /// A callback workflow template with more steps before and after its own,
@@ -1081,7 +1072,6 @@ fn create_astgrep_yaml_project(project_path: &Path, config: &ProjectConfig) -> R
         "xml" => ASTGREP_PATTERNS_FOR_XML,
         "css" => ASTGREP_PATTERNS_FOR_CSS,
         "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
-        "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
         "csharp" => ASTGREP_PATTERNS_FOR_CSHARP,
         "cpp" => ASTGREP_PATTERNS_FOR_CPP,
         "c" => ASTGREP_PATTERNS_FOR_C,
@@ -1112,7 +1102,7 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
     fs::write(scripts_dir.join("transform.sh"), SHELL_TRANSFORM_SCRIPT)?;
     fs::write(scripts_dir.join("cleanup.sh"), SHELL_CLEANUP_SCRIPT)?;
 
-    // ast-grep rule files cannot target TOML or Angular templates.
+    // ast-grep rule files cannot target TOML.
     if !hybrid_without_rules(&config.language) {
         let rules_dir = project_path.join("rules");
         fs::create_dir_all(&rules_dir)?;
@@ -1127,7 +1117,6 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
             "xml" => ASTGREP_PATTERNS_FOR_XML,
             "css" => ASTGREP_PATTERNS_FOR_CSS,
             "kotlin" => ASTGREP_PATTERNS_FOR_KOTLIN,
-            "angular" => ASTGREP_PATTERNS_FOR_ANGULAR,
             "csharp" => ASTGREP_PATTERNS_FOR_CSHARP,
             "cpp" => ASTGREP_PATTERNS_FOR_CPP,
             "c" => ASTGREP_PATTERNS_FOR_C,
@@ -1192,7 +1181,6 @@ fn js_fixture(language: &str) -> Option<(&'static str, &'static str, &'static st
         "html" => ("html", HTML_TEST_INPUT, HTML_TEST_EXPECTED),
         "css" => ("css", CSS_TEST_INPUT, CSS_TEST_EXPECTED),
         "kotlin" => ("kt", KOTLIN_TEST_INPUT, KOTLIN_TEST_EXPECTED),
-        "angular" => ("html", ANGULAR_TEST_INPUT, ANGULAR_TEST_EXPECTED),
         "json" => ("json", JSON_TEST_INPUT, JSON_TEST_EXPECTED),
         "yaml" => ("yaml", YAML_TEST_INPUT, YAML_TEST_EXPECTED),
         "toml" => ("toml", TOML_TEST_INPUT, TOML_TEST_EXPECTED),
@@ -1212,6 +1200,7 @@ fn hybrid_expected(language: &str) -> Option<&'static str> {
         "java" => include_str!("../templates/hybrid/tests/fixtures/expected.java"),
         "html" => include_str!("../templates/hybrid/tests/fixtures/expected.html"),
         "css" => include_str!("../templates/hybrid/tests/fixtures/expected.css"),
+        "c" => include_str!("../templates/hybrid/tests/fixtures/expected.c"),
         "yaml" => include_str!("../templates/hybrid/tests/fixtures/expected.yaml"),
         _ => return None,
     })
@@ -2139,7 +2128,6 @@ mod tests {
             "xml",
             "css",
             "kotlin",
-            "angular",
             "csharp",
             "cpp",
             "c",

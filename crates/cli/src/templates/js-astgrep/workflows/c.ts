@@ -9,19 +9,24 @@ const files = {
 };
 
 export default async function main() {
-  await step("Replace console logging with logger", forEachFile(files, (file) => {
+  await step("Bound sprintf calls", forEachFile(files, (file) => {
     const sgRoot = parse<C>(file, { language: "c" });
     const rootNode = sgRoot.root();
 
-    const nodes = rootNode.findAll({
-      rule: {
-        any: [{ pattern: "console.log($ARG)" }, { pattern: "console.debug($ARG)" }],
-      },
+    // sprintf(buffer, format, ...) can write past the end of buffer.
+    const calls = rootNode.findAll({
+      rule: { pattern: "sprintf($BUF, $$$ARGS)" },
     });
 
-    const edits = nodes.map((node) => {
-      const arg = node.getMatch("ARG")?.text();
-      return node.replace(`logger.log(${arg})`);
+    // snprintf(buffer, sizeof(buffer), format, ...) cannot.
+    const edits = calls.map((node) => {
+      const buffer = node.getMatch("BUF")?.text();
+      const args = node
+        .getMultipleMatches("ARGS")
+        .filter((arg) => arg.isNamed())
+        .map((arg) => arg.text())
+        .join(", ");
+      return node.replace(`snprintf(${buffer}, sizeof(${buffer}), ${args})`);
     });
 
     if (edits.length === 0) return;
