@@ -25,6 +25,9 @@ pub(crate) struct Request {
     /// Process exactly these files (relative to the target).
     pub files: Option<Vec<String>>,
     pub language: Option<String>,
+    /// Without `language`, use the package's (`forEachFile(jssg(...))`).
+    #[serde(default)]
+    pub package_language: bool,
     /// Merged over the run's params; reaches the transform as `options.params`.
     #[serde(default)]
     pub params: serde_json::Map<String, Value>,
@@ -141,10 +144,7 @@ pub(crate) fn execute(
             .files
             .as_ref()
             .map(|files| files.iter().map(|file| run.target.join(file)).collect()),
-        language: request
-            .language
-            .clone()
-            .unwrap_or_else(|| "typescript".into()),
+        language: language(task, request)?,
         params,
         matrix: request
             .matrix
@@ -160,6 +160,29 @@ pub(crate) fn execute(
         on_log: Some(step_logs(task)),
     })
     .map_err(TaskError::Failed)
+}
+
+/// The language the transform's files are parsed as, which also selects
+/// them when the step names no files: the step's, or TypeScript. In
+/// `forEachFile(jssg(...))` the package's own language comes before that.
+fn language(task: &TaskContext<'_>, request: &Request) -> Result<String, TaskError> {
+    if let Some(language) = &request.language {
+        return Ok(language.clone());
+    }
+    if request.package_language {
+        let languages = super::for_each_file::package_languages(&task.run.bundle_dir)?;
+        match languages.as_slice() {
+            [] => {}
+            [language] => return Ok(language.clone()),
+            several => {
+                return Err(TaskError::Failed(format!(
+                    "forEachFile(jssg(...)) needs a language here, because codemod.yaml lists several ({}): give one, as forEachFile({{ language }}, jssg(...))",
+                    several.join(", ")
+                )))
+            }
+        }
+    }
+    Ok("typescript".into())
 }
 
 /// The transform's logs as step log lines: each unit (`file :: unit`) once,

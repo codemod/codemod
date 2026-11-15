@@ -410,6 +410,18 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                         Some(Argument::FunctionExpression(f)) => {
                             sites.push((f.span, Isolated::Callback))
                         }
+                        // `jssg(...)` or `astGrep(...)`, or a variable holding one.
+                        Some(Argument::CallExpression(_)) => {}
+                        Some(Argument::Identifier(id))
+                            if !scoping
+                                .get_reference(id.reference_id())
+                                .symbol_id()
+                                .is_some_and(|symbol| {
+                                    scoping
+                                        .symbol_flags(symbol)
+                                        .intersects(SymbolFlags::Function | SymbolFlags::Class)
+                                        || analysis.function_valued.contains(&symbol)
+                                }) => {}
                         Some(other) => {
                             return Err(analysis.error(
                                     other.span().start,
@@ -419,7 +431,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                         None => {
                             return Err(analysis.error(
                                 call.span.start,
-                                "forEachFile takes a callback, optionally after a selector"
+                                "forEachFile takes a callback, jssg(...) or astGrep(...), optionally after a selector"
                                     .to_string(),
                             ));
                         }
@@ -937,7 +949,9 @@ fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
                 Argument::ArrowFunctionExpression(_) | Argument::FunctionExpression(_)
             )
         });
-        if called == "forEachFile" || given_function {
+        // A transform (`forEachFile(jssg(...))`) has no callback to extract.
+        let given_call = matches!(call.arguments.last(), Some(Argument::CallExpression(_)));
+        if (called == "forEachFile" && !given_call) || given_function {
             return Some(if called == "step" {
                 "step()"
             } else {

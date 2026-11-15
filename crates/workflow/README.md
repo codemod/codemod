@@ -15,7 +15,7 @@ export default async function main() {
       return found.length ? file.path : undefined;
     }),
   );
-  await step(jssg("./scripts/codemod.ts", { files: usages.outputs }));
+  await step(forEachFile(jssg("./scripts/codemod.ts", { files: usages.outputs })));
 }
 ```
 

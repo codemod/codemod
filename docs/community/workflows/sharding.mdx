@@ -12,7 +12,7 @@ The `shard` task splits a large migration into groups of files ("shards"), for e
 2. The workflow runs the transform for every shard, limited to that shard's files.
 
 ```ts workflow.ts
-import { step, shard, jssg, approval, branch, commit, pullRequest, getState, setState } from "codemod/workflow";
+import { step, shard, forEachFile, jssg, approval, branch, commit, pullRequest, getState, setState } from "codemod/workflow";
 
 export default async function main() {
   const shards = await step("Build shards", shard({
@@ -26,10 +26,10 @@ export default async function main() {
   await Promise.all(shards.map(async (current, index) => {
     await step(approval(`Migrate ${current.name}?`));
     await step(branch(`codemod-migrate-${index}`));
-    await step(`Migrate ${current.name}`, jssg("scripts/codemod.ts", {
-      language: "tsx",
-      files: current._meta_files,
-    }));
+    await step(`Migrate ${current.name}`, forEachFile(
+      { language: "tsx" },
+      jssg("scripts/codemod.ts", { files: current._meta_files }),
+    ));
     await step(commit(`refactor: migrate ${current.name}`));
     await step(pullRequest({ title: `refactor: migrate ${current.name}` }));
   }));

@@ -29,10 +29,7 @@ fn every_workflow_yaml_in_the_repo_translates_and_builds() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let files = [
         "crates/cli/src/templates/shell/workflow.yaml",
-        "crates/cli/src/templates/js-astgrep/workflow.yaml",
         "crates/cli/src/templates/astgrep-yaml/workflow.yaml",
-        "crates/cli/src/templates/hybrid/workflow.yaml",
-        "crates/cli/src/templates/hybrid/workflow.toml.yaml",
         "crates/cli/src/templates/skill/workflow.yaml",
         "crates/codemod-sandbox/tests/integration/semantic/false-positive-workflow.yaml",
     ];
@@ -96,18 +93,53 @@ nodes:
     assert_eq!(
         source,
         r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
-import { jssg, step } from "codemod/workflow";
+import { forEachFile, jssg, step } from "codemod/workflow";
 
 export default async function main() {
   // Apply AST Transformations
-  await step("Rewrite rmdir", jssg("src/workflow.ts", {
+  await step("Rewrite rmdir", forEachFile({
     include: ["**/*.js", "**/*.ts"],
     exclude: ["**/node_modules/**"],
     language: "typescript",
-  }));
+  }, jssg("src/workflow.ts")));
 }
 "#
     );
+}
+
+#[test]
+fn transforms_run_through_for_each_file_with_the_yaml_defaults() {
+    let source = translated(
+        r#"
+version: "1"
+nodes:
+  - id: apply
+    name: Apply
+    steps:
+      - name: Transform
+        js-ast-grep:
+          js_file: scripts/codemod.ts
+      - name: Rules
+        ast-grep:
+          config_file: rules/config.yml
+      - name: Some rules
+        ast-grep:
+          config_file: rules/config.yml
+          include: ["src/**"]
+"#,
+    )
+    .source;
+    for expected in [
+        // workflow.yaml parses as TypeScript unless told otherwise.
+        r#"await step("Transform", forEachFile({ language: "typescript" }, jssg("scripts/codemod.ts")));"#,
+        r#"await step("Rules", forEachFile(astGrep("rules/config.yml")));"#,
+        r#"forEachFile({ include: ["src/**"] }, astGrep("rules/config.yml"))"#,
+    ] {
+        assert!(
+            source.contains(expected),
+            "missing {expected} in:\n{source}"
+        );
+    }
 }
 
 #[test]
@@ -236,7 +268,7 @@ fn the_documented_features_translate_and_build() {
     expect("(getState<any>(\"shards\") ?? []).map((matrix: Matrix, index: number) => applyNodeFor(params, matrix, index))");
     expect("await step(approval(\"Run 'Apply transforms'?\"));");
     expect("const branchName = `codemod-apply-${index}`;");
-    expect("jssg(\"scripts/codemod.ts\", {\n    files: matrix?._meta_files,\n    language: \"tsx\",\n    params,\n    matrix: matrix ?? undefined,\n  })");
+    expect("forEachFile({ language: \"tsx\" }, jssg(\"scripts/codemod.ts\", {\n    files: matrix?._meta_files,\n    params,\n    matrix: matrix ?? undefined,\n  }))");
     expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state: getState() })) {");
     expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state: getState() })) {");

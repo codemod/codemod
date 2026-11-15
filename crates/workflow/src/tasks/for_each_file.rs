@@ -174,7 +174,11 @@ pub(crate) fn select_files(
     mut selector: Selector,
 ) -> Result<(Selector, Vec<(String, String)>), String> {
     let default_languages = if selector.include.is_empty() && selector.language.is_none() {
-        package_languages(&run.bundle_dir)?
+        let languages = package_languages(&run.bundle_dir)?;
+        if languages.is_empty() {
+            return Err("forEachFile needs a selector here: give it one (a glob, or { language }), or list the package's languages under `targets.languages` in codemod.yaml".to_string());
+        }
+        languages
     } else {
         Vec::new()
     };
@@ -213,19 +217,17 @@ pub(crate) fn commit_effects(
     Ok((changes, failures))
 }
 
-/// The package's `targets.languages` from `codemod.yaml`, which select the
-/// files when a `forEachFile` call gives no selector.
-fn package_languages(bundle_dir: &Path) -> Result<Vec<String>, String> {
-    let missing = || {
-        "forEachFile needs a selector here: give it one (a glob, or { language }), or list the package's languages under `targets.languages` in codemod.yaml".to_string()
-    };
+/// The package's `targets.languages` from `codemod.yaml`: the default for a
+/// `forEachFile` call that names no files or language. Empty without a
+/// manifest, or when it lists none.
+pub(crate) fn package_languages(bundle_dir: &Path) -> Result<Vec<String>, String> {
     let manifest = bundle_dir.join("codemod.yaml");
     let Ok(text) = fs::read_to_string(&manifest) else {
-        return Err(missing());
+        return Ok(Vec::new());
     };
     let manifest: serde_yaml::Value =
         serde_yaml::from_str(&text).map_err(|e| format!("{}: {e}", manifest.display()))?;
-    let languages: Vec<String> = manifest
+    Ok(manifest
         .get("targets")
         .and_then(|targets| targets.get("languages"))
         .and_then(|languages| languages.as_sequence())
@@ -235,11 +237,7 @@ fn package_languages(bundle_dir: &Path) -> Result<Vec<String>, String> {
                 .filter_map(|language| language.as_str().map(str::to_string))
                 .collect()
         })
-        .unwrap_or_default();
-    if languages.is_empty() {
-        return Err(missing());
-    }
-    Ok(languages)
+        .unwrap_or_default())
 }
 
 /// Select files: globs and `.gitignore` first (as `jssg` and `astGrep`

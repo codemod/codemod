@@ -36,15 +36,14 @@ export default codemod;
 ```
 
 ```ts workflow.ts
-import { step, jssg } from "codemod/workflow";
+import { step, forEachFile, jssg } from "codemod/workflow";
 
 export default async function main({ params }: { params: Record<string, string> }) {
   // Run parameters (--param key=value) reach the transform as options.params.
   // Values passed in `params` here are merged over them.
-  await step(jssg("./codemod.ts", {
-    language: "tsx",
+  await step(forEachFile({ language: "tsx" }, jssg("./codemod.ts", {
     params: { library: params.library ?? "next-intl", prSize: "50" },
-  }));
+  })));
 }
 ```
 </CodeGroup>
@@ -109,16 +108,15 @@ Prefer checking sharding against a project-relative path (e.g., `path.relative(p
 Pass values with the `matrix` option of the `jssg` task. A common pattern is one `jssg` step per shard:
 
 ```ts workflow.ts
-import { step, shard, jssg } from "codemod/workflow";
+import { step, shard, forEachFile, jssg } from "codemod/workflow";
 
 export default async function main() {
   const shards = await step(shard({ method: { type: "codeowner", maxFilesPerShard: 30 }, filePattern: "**/*.tsx" }));
   await Promise.all(shards.map((current) =>
-    step(`Migrate ${current.name}`, jssg("./codemod.ts", {
-      language: "tsx",
+    step(`Migrate ${current.name}`, forEachFile({ language: "tsx" }, jssg("./codemod.ts", {
       files: current._meta_files,
       matrix: { team: current.team, shardId: current.name },
-    })),
+    }))),
   ));
 }
 ```
@@ -221,10 +219,10 @@ State set with `persist: true` (the default) is saved when the `jssg` step finis
 
 <CodeGroup>
 ```ts workflow.ts
-import { step, jssg, shell, getState } from "codemod/workflow";
+import { step, forEachFile, jssg, shell, getState } from "codemod/workflow";
 
 export default async function main() {
-  await step("Scan files", jssg("./scripts/scan.ts", { language: "tsx" }));
+  await step("Scan files", forEachFile({ language: "tsx" }, jssg("./scripts/scan.ts")));
   const files = getState("filesToProcess") ?? [];
   await step(`Process ${files.length} files`, shell("codemod jssg exec $CODEMOD_PATH/scripts/process.ts"));
 }

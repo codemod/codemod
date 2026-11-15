@@ -532,6 +532,7 @@ impl Generator {
                 }
             }
             StepAction::AstGrep(ast_grep) => {
+                self.import("forEachFile");
                 self.import("astGrep");
                 if ast_grep.allow_dirty.is_some() {
                     notes.push_str(&self.warn(format!(
@@ -539,32 +540,48 @@ impl Generator {
                         step.name
                     )));
                 }
-                let mut fields = Vec::new();
+                let mut selector = Vec::new();
                 match &ast_grep.include {
-                    Some(include) => fields.push(("include", string_list(include))),
+                    Some(include) => selector.push(("include", string_list(include))),
                     None if scope.meta_files => {
-                        fields.push(("include", "matrix?._meta_files".into()))
+                        selector.push(("include", "matrix?._meta_files".into()))
                     }
                     None => {}
                 }
                 if let Some(exclude) = &ast_grep.exclude {
-                    fields.push(("exclude", string_list(exclude)));
+                    selector.push(("exclude", string_list(exclude)));
                 }
+                let mut fields = Vec::new();
                 if let Some(base) = ast_grep.base_path.as_deref().filter(|b| !is_root(b)) {
                     fields.push(("basePath", js_string(base)));
                 }
                 if let Some(threads) = ast_grep.max_threads {
                     fields.push(("threads", threads.to_string()));
                 }
-                with_options(
-                    format!("astGrep({}", js_string(&ast_grep.config_file)),
-                    &fields,
+                for_each_file(
+                    &selector,
+                    with_options(
+                        format!("astGrep({}", js_string(&ast_grep.config_file)),
+                        &fields,
+                    ),
                 )
             }
             StepAction::JSAstGrep(js) => {
+                self.import("forEachFile");
                 self.import("jssg");
-                let fields = self.jssg_fields(js, scope);
-                with_options(format!("jssg({}", js_string(&js.js_file)), &fields)
+                // Which files, and in which language, is the selector's part.
+                let (mut selector, fields): (Vec<_>, Vec<_>) = self
+                    .jssg_fields(js, scope)
+                    .into_iter()
+                    .partition(|(key, _)| matches!(*key, "include" | "exclude" | "language"));
+                if js.language.is_none() {
+                    // workflow.yaml's default, where forEachFile's is the package's.
+                    selector.push(("language", js_string("typescript")));
+                }
+                for_each_file(
+                    &selector,
+                    with_options(format!("jssg({}", js_string(&js.js_file)), &fields),
+                )
             }
             StepAction::Codemod(codemod) => {
                 self.import("codemod");
@@ -921,6 +938,24 @@ fn with_options(call: String, fields: &[(&str, String)]) -> String {
         }
     }
     out.push_str("})");
+    out
+}
+
+/// `forEachFile(selector, transform)`.
+fn for_each_file(selector: &[(&str, String)], transform: String) -> String {
+    if selector.is_empty() {
+        return format!("forEachFile({transform})");
+    }
+    // The selector stays on one line when it fits there with the call it is for.
+    let one_line = format!("forEachFile({}, {transform})", object(selector));
+    if one_line.lines().next().is_some_and(|line| line.len() <= 80) {
+        return one_line;
+    }
+    let mut out = String::from("forEachFile({\n");
+    for (key, value) in selector {
+        let _ = writeln!(out, "  {}: {value},", property(key));
+    }
+    let _ = write!(out, "}}, {transform})");
     out
 }
 

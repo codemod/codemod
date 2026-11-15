@@ -157,6 +157,25 @@ export default async function main({
   // @ts-expect-error unknown capability
   jssg("./scripts/codemod.ts", { capabilities: ["network"] });
 
+  // A transform is run on the files `forEachFile` selects.
+  const migrated = await step(forEachFile(jssg("./scripts/codemod.ts")));
+  expectType<Equal<typeof migrated.unmodified, number>>(true);
+  await step(
+    forEachFile(
+      { include: "src/**/*.tsx", exclude: "**/*.test.tsx", language: "tsx" },
+      jssg("./scripts/codemod.ts", { params: { strict: true } }),
+    ),
+  );
+  const ruled = await step(forEachFile(["src/**/*.ts"], astGrep("rules/config.yml")));
+  expectType<Equal<typeof ruled.matches, number>>(true);
+  await step(forEachFile(astGrep("rules/config.yml")));
+  // @ts-expect-error `containing` is for callbacks
+  forEachFile({ containing: "moment" }, jssg("./scripts/codemod.ts"));
+  // @ts-expect-error the rules name their languages
+  forEachFile({ language: "tsx" }, astGrep("rules/config.yml"));
+  // @ts-expect-error only jssg and astGrep are transforms
+  forEachFile(shell("echo hi"));
+
   const ran = await step(shell("echo hi", { cwd: target, env: { A: "1" } }));
   expectType<Equal<typeof ran.output, string | undefined>>(true);
   if (!ran.skipped) expectType<Equal<typeof ran.output, string>>(true);

@@ -39,18 +39,15 @@ nodes:
 becomes:
 
 ```ts workflow.ts
-import { jssg, step } from "codemod/workflow";
+import { forEachFile, jssg, step } from "codemod/workflow";
 
 export default async function main() {
   // Apply AST Transformations
-  await step(
-    "Replace deprecated header fields",
-    jssg("scripts/codemod.ts", {
-      include: ["**/*.ts", "**/*.js"],
-      exclude: ["**/node_modules/**"],
-      language: "typescript",
-    }),
-  );
+  await step("Replace deprecated header fields", forEachFile({
+    include: ["**/*.ts", "**/*.js"],
+    exclude: ["**/node_modules/**"],
+    language: "typescript",
+  }, jssg("scripts/codemod.ts")));
 }
 ```
 
@@ -69,8 +66,8 @@ npm install --save-dev codemod
 | A node | An `async` function. A workflow with one plain node runs its steps in `main` |
 | `depends_on` | Functions called in order; independent nodes run at the same time |
 | A step | `await step("<step name>", <task>)` |
-| `js-ast-grep` | `jssg(path, { include, exclude, language, ... })` |
-| `ast-grep` | `astGrep(configFile, { ... })` |
+| `js-ast-grep` | `forEachFile({ include, exclude, language }, jssg(path, { ... }))` |
+| `ast-grep` | `forEachFile({ include, exclude }, astGrep(configFile, { ... }))` |
 | `run` | `shell(command, { env })` |
 | `codemod` | `codemod(source, { params })` |
 | `ai` | `agent(prompt, { ... })` |

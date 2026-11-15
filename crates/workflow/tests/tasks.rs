@@ -633,6 +633,141 @@ export default async function main({ target }) {
     assert_eq!(h.engine_summary_diffs(), 1);
 }
 
+/// A transform that writes how its file was parsed over the file.
+const MARK: &str = r#"
+export default function transform(root: any, options: any) {
+  return `${options.language}: ${root.root().text()}`;
+}
+"#;
+
+#[test]
+fn for_each_file_runs_a_jssg_transform_on_the_files_its_selector_picks() {
+    let h = Harness::new();
+    h.write("src/a.ts", "a\n");
+    h.write("src/skip.ts", "skip\n");
+    h.write("lib/b.ts", "b\n");
+    h.bundle_file("scripts/mark.ts", MARK);
+    let report = h.start(
+        r#"
+import { step, forEachFile, jssg } from "codemod/workflow";
+export default async function main() {
+  const selector = { include: "src/**/*.ts", exclude: "**/skip.ts", language: "tsx" };
+  const one = await step("Selected", forEachFile(selector, jssg("scripts/mark.ts")));
+  const transform = jssg("scripts/mark.ts", { include: "lib/**", language: "typescript" });
+  const two = await step("Its own", forEachFile(transform));
+  return [one.changes.written, two.changes.written];
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!([["src/a.ts"], ["lib/b.ts"]])
+    );
+    assert_eq!(h.read("src/a.ts"), "Tsx: a\n");
+    assert_eq!(h.read("src/skip.ts"), "skip\n");
+    assert_eq!(h.read("lib/b.ts"), "TypeScript: b\n");
+}
+
+#[test]
+fn for_each_file_gives_a_jssg_transform_the_package_language() {
+    let h = Harness::new();
+    h.write("a.py", "a\n");
+    h.write("b.ts", "b\n");
+    h.bundle_file("scripts/mark.ts", MARK);
+    let workflow = r#"
+import { step, forEachFile, jssg } from "codemod/workflow";
+export default async function main() {
+  return (await step(forEachFile(jssg("scripts/mark.ts")))).changes.written;
+}
+"#;
+    // No manifest: TypeScript, as `jssg` on its own.
+    assert_eq!(
+        output(&h.start(workflow, Value::Null)).unwrap(),
+        json!(["b.ts"])
+    );
+
+    h.bundle_file("codemod.yaml", "targets:\n  languages: [python]\n");
+    assert_eq!(
+        output(&h.start(workflow, Value::Null)).unwrap(),
+        json!(["a.py"])
+    );
+    assert_eq!(h.read("a.py"), "Python: a\n");
+
+    h.bundle_file(
+        "codemod.yaml",
+        "targets:\n  languages: [python, typescript]\n",
+    );
+    let error = output(&h.start(workflow, Value::Null)).unwrap_err();
+    assert!(
+        error.contains("codemod.yaml lists several (python, typescript)"),
+        "{error}"
+    );
+}
+
+#[test]
+fn for_each_file_applies_ast_grep_rules_to_the_files_its_selector_picks() {
+    let h = Harness::new();
+    h.write("src/a.js", "var x = 1;\n");
+    h.write("lib/b.js", "var y = 2;\n");
+    h.bundle_file(
+        "rules.yaml",
+        "id: no-var\nlanguage: javascript\nrule:\n  pattern: var $A = $B\nfix: let $A = $B;\n",
+    );
+    let report = h.start(
+        r#"
+import { step, forEachFile, astGrep } from "codemod/workflow";
+export default async function main() {
+  const some = await step("Some", forEachFile("src/**", astGrep("rules.yaml")));
+  const all = await step("All", forEachFile(astGrep("rules.yaml")));
+  return [some.changes.written, all.changes.written];
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!([["src/a.js"], ["lib/b.js"]])
+    );
+    assert_eq!(h.read("src/a.js"), "let x = 1;\n");
+}
+
+#[test]
+fn for_each_file_refuses_what_a_transform_cannot_take() {
+    let h = Harness::new();
+    h.bundle_file(
+        "rules.yaml",
+        "id: r\nlanguage: javascript\nrule:\n  pattern: a\n",
+    );
+    let failed = |call: &str| {
+        let source = format!(
+            "import {{ step, forEachFile, jssg, astGrep, shell }} from \"codemod/workflow\";\nexport default async function main() {{ await step({call}); }}\n"
+        );
+        output(&h.start(&source, Value::Null)).unwrap_err()
+    };
+    for (call, message) in [
+        (
+            r#"forEachFile({ include: "a/**" }, jssg("t.ts", { include: "b/**" }))"#,
+            "'include' is given twice, in the selector and in jssg(...)",
+        ),
+        (
+            r#"forEachFile({ containing: "x" }, jssg("t.ts"))"#,
+            "selector.containing is for callbacks, not for jssg(...)",
+        ),
+        (
+            r#"forEachFile({ language: "tsx" }, astGrep("rules.yaml"))"#,
+            "the rules of astGrep(...) name their languages",
+        ),
+        (
+            r#"forEachFile(shell("true"))"#,
+            "forEachFile takes a callback written inline as a function, jssg(...) or astGrep(...)",
+        ),
+    ] {
+        let error = failed(call);
+        assert!(error.contains(message), "{call}: {error}");
+    }
+}
+
 #[test]
 fn for_each_file_selects_what_jssg_selects() {
     let h = Harness::new();

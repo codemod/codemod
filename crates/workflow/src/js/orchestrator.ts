@@ -223,15 +223,22 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     return null;
   }
 
-  function forEachFile(selector: unknown, callback?: unknown): ForEachFileTask {
-    if (callback === undefined && callbackOf(selector)) {
+  /**
+   * Run a callback, or a `jssg(...)` or `astGrep(...)` transform, on every
+   * selected file.
+   */
+  function forEachFile(selector: unknown, callback?: unknown): ForEachFileTask | HostTask {
+    if (callback === undefined && (callbackOf(selector) || isTask(selector))) {
       callback = selector;
       selector = undefined;
     }
+    if (isTask(callback)) return transformFiles(selector, callback);
     const extracted = callbackOf(callback);
     if (!extracted) {
       throw new TypeError(
-        "forEachFile: the callback was not extracted by the build; run the workflow through the codemod-workflow build",
+        typeof callback === "function"
+          ? "forEachFile: the callback was not extracted by the build; run the workflow through the codemod-workflow build"
+          : "forEachFile takes a callback written inline as a function, jssg(...) or astGrep(...)",
       );
     }
     return Object.freeze({
@@ -239,6 +246,44 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
       selector: normalizeSelector(selector),
       callback: extracted,
     });
+  }
+
+  /**
+   * `forEachFile(selector, jssg(...))`: the transform's task, on the files
+   * the selector picks. The selector's fields become the transform's.
+   */
+  function transformFiles(selector: unknown, transform: Task): HostTask {
+    const kind = transform[TASK] === "host" ? transform.content.kind : "";
+    if (transform[TASK] !== "host" || (kind !== "jssg" && kind !== "astGrep")) {
+      throw new TypeError(
+        "forEachFile takes a callback written inline as a function, jssg(...) or astGrep(...)",
+      );
+    }
+    const { include, exclude, language, containing, concurrency } = normalizeSelector(selector);
+    if (containing !== undefined || concurrency !== undefined) {
+      const field = containing !== undefined ? "containing" : "concurrency";
+      throw new TypeError(`forEachFile: selector.${field} is for callbacks, not for ${kind}(...)`);
+    }
+    if (language !== undefined && kind === "astGrep") {
+      throw new TypeError(
+        "forEachFile: the rules of astGrep(...) name their languages; select files with globs",
+      );
+    }
+    const selected: Record<string, unknown> = {};
+    if (include.length) selected.include = include;
+    if (exclude.length) selected.exclude = exclude;
+    if (language !== undefined) selected.language = language;
+    for (const field of Object.keys(selected)) {
+      if (field in transform.content) {
+        throw new TypeError(
+          `forEachFile: '${field}' is given twice, in the selector and in ${kind}(...)`,
+        );
+      }
+    }
+    const content: TaskContent = { ...transform.content, ...selected };
+    // Without a language, the package's (codemod.yaml), as for callbacks.
+    if (kind === "jssg" && content.language === undefined) content.packageLanguage = true;
+    return Object.freeze({ [TASK]: "host" as const, content });
   }
 
   function hostTask(kind: string, options: unknown): HostTask {

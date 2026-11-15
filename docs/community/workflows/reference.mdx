@@ -31,7 +31,7 @@ export default async function main({ params }: { params: { replacement: string }
   }));
 
   // Run an existing JSSG transform, then the formatter.
-  await step("Apply transform", jssg("./scripts/codemod.ts", { include: "src/**/*.ts" }));
+  await step("Apply transform", forEachFile("src/**/*.ts", jssg("./scripts/codemod.ts")));
   await step(approval("Run the formatter?"));
   await step("Format", shell("npx prettier --write src"));
 }
@@ -113,6 +113,8 @@ const config = await step("Read config", async () => JSON.parse(await readFile("
 ## `forEachFile(selector?, callback)`
 
 Runs `callback` once per selected file and returns a task for `step()`. Without a selector, it visits the files of the package's `targets.languages` in `codemod.yaml`.
+
+In place of the callback it takes a [transform](#transforms): `jssg(path)` or `astGrep(path)`.
 
 ### Selector
 
@@ -197,10 +199,43 @@ These are build errors, reported with the file, line and column:
 - using a function or class declared inside the surrounding function (move it to module level);
 - calling `step()`, `forEachFile` or another task inside the callback;
 - passing a callback by name instead of writing it inline;
-- calling `forEachFile`, or `step` with a function, in a file the workflow imports: callbacks are only extracted from the workflow file itself;
+- calling `forEachFile` with a callback, or `step` with a function, in a file the workflow imports: callbacks are only extracted from the workflow file itself;
 - importing `codemod/workflow` as a namespace (`import * as`): import `step`, `forEachFile` and the rest by name.
 
 A local that is not JSON (a `Set`, a `Map`, a class instance) fails when the step starts, naming the variable.
+
+## Transforms
+
+A transform is per-file work kept in its own file. `forEachFile` runs it on the files its selector picks:
+
+```ts
+// A JSSG transform, on the package's languages (`targets.languages` in codemod.yaml).
+await step("Migrate imports", forEachFile(jssg("./scripts/codemod.ts")));
+
+// The same, on chosen files, with options for the transform.
+await step("Migrate components", forEachFile(
+  { include: "src/**/*.tsx", exclude: "**/*.test.tsx", language: "tsx" },
+  jssg("./scripts/components.ts", { params: { strict: true } }),
+));
+
+// ast-grep rules.
+await step("Apply rules", forEachFile("src/**/*.ts", astGrep("./rules/config.yml")));
+```
+
+| Transform | What it is |
+|---|---|
+| `jssg(path, options?)` | A [JSSG](/community/jssg) transform file. Options: `params`, `matrix`, `capabilities`, `semanticAnalysis` (`"file"` by default, as in `jssg run`; also `"workspace"` or `"none"`), `threads`, `dryRun`, `basePath`, `files`. Result: `{ changes, unmodified, failures }`. |
+| `astGrep(path, options?)` | An ast-grep YAML rule file. Options: `basePath`, `threads`. Result: `{ changes, matches, failures }`. |
+
+Paths are relative to the workflow file.
+
+The selector is a glob, a list of globs, or an object with `include`, `exclude` and, for `jssg`, `language`:
+
+- **`jssg`:** `language` is the language the files are parsed as, and without `include` it selects that language's files. Without a `language`, the package's is used (`targets.languages` in `codemod.yaml`); a package that lists none gets `typescript`, and one that lists several must name one.
+- **`astGrep`:** without `include`, the rules run on the files of their own languages.
+- `containing` and `concurrency` are for callbacks. A JSSG transform narrows its own files with [`getSelector`](/community/jssg/reference).
+
+`jssg` and `astGrep` also take `include`, `exclude` and (`jssg`) `language` as options, and are tasks themselves: `step(jssg(path, { include, language }))` runs on the files its options select, with `typescript` as the default language. Inside `forEachFile`, give each of these fields in one place.
 
 ## Parsing with `codemod/ast-grep`
 
@@ -230,8 +265,8 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 
 | Task | What it does |
 |---|---|
-| `jssg(path, options)` | Run a [JSSG](/community/jssg) transform file. Options: `include`, `exclude`, `basePath`, `files`, `language` (default `typescript`), `params`, `matrix`, `capabilities`, `semanticAnalysis` (`"file"` by default, as in `jssg run`; also `"workspace"` or `"none"`), `threads`, `dryRun`. Result: `{ changes, unmodified, failures }`. |
-| `astGrep(path, options)` | Apply an ast-grep YAML rule file. Options: `include`, `exclude`, `basePath`, `threads`. |
+| `forEachFile(selector?, jssg(path, options))` | Run a [JSSG](/community/jssg) transform file on the selected files. See [Transforms](#transforms). |
+| `forEachFile(selector?, astGrep(path, options))` | Apply an ast-grep YAML rule file to the selected files. See [Transforms](#transforms). |
 | `shell(command, { env, cwd })` | Run a shell command. Result: `{ output }`. |
 | `shard(options)` | Split files into groups. See [Sharding](/community/workflows/sharding). |
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
@@ -426,7 +461,7 @@ npm install --save-dev typescript
 {
   "type": "module",
   "scripts": {
-    "test": "codemod jssg test -l typescript ./scripts/codemod.ts",
+    "test": "codemod workflow test",
     "validate": "codemod workflow validate -w workflow.ts"
   }
 }

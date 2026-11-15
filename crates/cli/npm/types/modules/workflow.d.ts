@@ -300,9 +300,19 @@ declare module "codemod:workflow" {
 
   const taskResult: unique symbol;
 
-  /** Work for `step()` to run, made by `forEachFile` or a task such as `jssg`. */
+  /** Work for `step()` to run, made by `forEachFile` or a task such as `shell`. */
   export interface Task<Result> {
     readonly [taskResult]: Result;
+  }
+
+  const transformResult: unique symbol;
+
+  /**
+   * A transform for single files, made by `jssg` or `astGrep`. Give it to
+   * `forEachFile` to say which files it runs on.
+   */
+  export interface Transform<Result> extends Task<Result> {
+    readonly [transformResult]: Result;
   }
 
   /** What the workflow's default export receives. */
@@ -550,6 +560,47 @@ declare module "codemod:workflow" {
   ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
 
   /**
+   * Which files `forEachFile` runs a `jssg` transform on: a glob, a list of
+   * globs, or an object. `language` is the language the files are parsed as
+   * and, without `include`, selects that language's file extensions. Without
+   * a `language`, the package's is used (`targets.languages` in codemod.yaml,
+   * when it lists one), and otherwise `typescript`.
+   */
+  export type JssgSelector = Globs | { include?: Globs; exclude?: Globs; language?: string };
+
+  /**
+   * Which files `forEachFile` applies `astGrep` rules to: a glob, a list of
+   * globs, or an object. Without `include`, the files of the rules' languages.
+   */
+  export type AstGrepSelector = Globs | { include?: Globs; exclude?: Globs };
+
+  /**
+   * Runs a JSSG transform, or applies an ast-grep rule file, on every
+   * selected file. The selector's fields stand for the same options of
+   * `jssg` and `astGrep`, so give each in one place.
+   *
+   * @example
+   * ```ts
+   * await step("Migrate imports", forEachFile(jssg("scripts/codemod.ts")));
+   * await step("Apply rules", forEachFile("src/**\/*.ts", astGrep("rules/config.yml")));
+   * await step("Migrate components", forEachFile(
+   *   { include: "src/**\/*.tsx", exclude: "**\/*.test.tsx", language: "tsx" },
+   *   jssg("scripts/components.ts", { params: { strict: true } }),
+   * ));
+   * ```
+   */
+  export function forEachFile(transform: Transform<JssgResult>): Task<JssgResult>;
+  export function forEachFile(
+    selector: JssgSelector,
+    transform: Transform<JssgResult>,
+  ): Task<JssgResult>;
+  export function forEachFile(transform: Transform<AstGrepResult>): Task<AstGrepResult>;
+  export function forEachFile(
+    selector: AstGrepSelector,
+    transform: Transform<AstGrepResult>,
+  ): Task<AstGrepResult>;
+
+  /**
    * Returns the whole workflow state as a frozen object.
    * (With a key, see the `getState(name)` overload above.)
    */
@@ -617,8 +668,12 @@ declare module "codemod:workflow" {
     failures: FileFailure[];
   }
 
-  /** Runs a JSSG transform file. `path` is relative to the workflow file. */
-  export function jssg(path: string, options?: JssgOptions): Task<JssgResult>;
+  /**
+   * A JSSG transform file; `path` is relative to the workflow file. Run it
+   * with `forEachFile(selector, jssg(path))`, which says which files it is
+   * for. As a step on its own it runs on the files its options select.
+   */
+  export function jssg(path: string, options?: JssgOptions): Transform<JssgResult>;
 
   export interface AstGrepOptions {
     include?: Globs;
@@ -633,8 +688,13 @@ declare module "codemod:workflow" {
     failures: FileFailure[];
   }
 
-  /** Applies an ast-grep YAML rule file. `path` is relative to the workflow file. */
-  export function astGrep(path: string, options?: AstGrepOptions): Task<AstGrepResult>;
+  /**
+   * An ast-grep YAML rule file; `path` is relative to the workflow file.
+   * Apply it with `forEachFile(selector, astGrep(path))`, which says which
+   * files it is for. As a step on its own it runs on the files its options
+   * select.
+   */
+  export function astGrep(path: string, options?: AstGrepOptions): Transform<AstGrepResult>;
 
   export type ShardMethod =
     | {
