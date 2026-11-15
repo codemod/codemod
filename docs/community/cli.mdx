@@ -872,7 +872,7 @@ npx codemod init [PATH] [options]
 
 In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`. If you select a workflow, you can optionally scaffold an agent skill.
 
-An `ast-grep-js` or `hybrid` package keeps its transform in `workflow.ts`, as a [`forEachFile`](/community/workflows/reference#foreachfileselector-callback) callback that parses each file with `parse(file, { language })` and rewrites it. Its `test` script runs `codemod workflow test` on the fixtures in `tests/`.
+An `ast-grep-js` or `hybrid` package keeps its workflow in `src/workflow.ts`, with its transform there as a [`forEachFile`](/community/workflows/reference#foreachfileselector-callback) callback that parses each file with `parse(file, { language })` and rewrites it. A `hybrid` package also has shell scripts in `src/scripts/`, which the workflow runs as ``shell`${import.meta.dirname}/scripts/setup.sh` ``, and ast-grep rules in `src/rules/`. Its `test` script runs `codemod workflow test` on the fixtures in `tests/`.
 
 You'll also be prompted to create a GitHub Actions publishing workflow. This generates `.github/workflows/publish.yml`:
 

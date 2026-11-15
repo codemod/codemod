@@ -7,6 +7,7 @@ use std::path::{Component, Path, PathBuf};
 /// workflow.
 pub const DEFAULT_WORKFLOW_FILES: &[&str] = &[
     "workflow.ts",
+    "src/workflow.ts",
     "workflow.yaml",
     "workflow.yml",
     "workflow.json",

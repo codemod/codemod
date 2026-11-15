@@ -293,7 +293,7 @@ impl PackageValidationHandler {
         let workflow_resolution = workflow_path_for_package(&package_root);
         let workflow_path = workflow_resolution.path.clone();
         let files = collect_file_presence(&package_root, &workflow_path);
-        let package_kind = infer_validation_package_kind(&package_root, &files);
+        let package_kind = infer_validation_package_kind(&package_root, &workflow_path, &files);
         let workflow_valid = validate_workflow_at_path(&workflow_path).is_ok();
         let transform_path = transform_file(&package_root, &workflow_path);
         let transform_name = transform_path
@@ -544,17 +544,27 @@ fn collect_file_presence(package_root: &Path, workflow_path: &Path) -> PackageFi
 
 fn infer_validation_package_kind(
     package_root: &Path,
+    workflow_path: &Path,
     files: &PackageFilePresence,
 ) -> ValidationPackageKind {
-    let has_rules = package_root.join("rules").is_dir();
-    let has_shell_scripts = package_root.join("scripts/transform.sh").is_file();
+    // Rules and scripts are at the package root, or next to the workflow
+    // (`src/workflow.ts` with `src/rules/` and `src/scripts/`).
+    let workflow_dir = workflow_path.parent().unwrap_or(package_root);
+    let dirs = [package_root, workflow_dir];
+    let has_rules = dirs.iter().any(|dir| dir.join("rules").is_dir());
+    let has_shell_scripts = dirs
+        .iter()
+        .any(|dir| dir.join("scripts/transform.sh").is_file());
     let has_authored_skill = package_root.join("agents/skill").is_dir();
+    // A TypeScript package's workflow.ts can hold the transform itself.
+    let has_transform =
+        files.scripts_codemod_ts || (files.package_json && is_typescript_workflow(workflow_path));
 
-    if has_rules && (files.scripts_codemod_ts || has_shell_scripts) {
+    if has_rules && (has_transform || has_shell_scripts) {
         return ValidationPackageKind::Hybrid;
     }
 
-    if files.scripts_codemod_ts {
+    if has_transform {
         return ValidationPackageKind::Jssg;
     }
 
@@ -577,13 +587,13 @@ fn infer_validation_package_kind(
     ValidationPackageKind::Unknown
 }
 
-/// `workflow.ts` when the package has one, otherwise `workflow.yaml`.
+/// `workflow.ts` (or `src/workflow.ts`) when the package has one, otherwise
+/// `workflow.yaml`.
 fn default_workflow_file(package_root: &Path) -> &'static str {
-    if package_root.join("workflow.ts").is_file() {
-        "workflow.ts"
-    } else {
-        "workflow.yaml"
-    }
+    ["workflow.ts", "src/workflow.ts"]
+        .into_iter()
+        .find(|file| package_root.join(file).is_file())
+        .unwrap_or("workflow.yaml")
 }
 
 fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
@@ -1242,6 +1252,40 @@ mod tests {
         assert!(response.generic_readme_detected);
         assert!(response.test_cases.starter_fixtures_detected);
         assert!(!response.ready);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_package_with_its_workflow_rules_and_scripts_in_src_is_recognized() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("src/rules")).unwrap();
+        fs::create_dir_all(dir.join("src/scripts")).unwrap();
+        fs::create_dir_all(dir.join("agents/skill/p")).unwrap();
+        fs::write(
+            dir.join("src/workflow.ts"),
+            "export default async function main() {}\n",
+        )
+        .unwrap();
+        fs::write(dir.join("src/scripts/transform.sh"), "").unwrap();
+        fs::write(dir.join("package.json"), "{}\n").unwrap();
+
+        // Found without codemod.yaml naming it.
+        let workflow = workflow_path_for_package(&dir).path;
+        assert_eq!(workflow, dir.join("src/workflow.ts"));
+        let files = collect_file_presence(&dir, &workflow);
+        assert_eq!(
+            infer_validation_package_kind(&dir, &workflow, &files),
+            ValidationPackageKind::Hybrid
+        );
+
+        // Without rules, the workflow holds the transform: a JSSG package,
+        // though it also has a skill.
+        fs::remove_dir_all(dir.join("src/rules")).unwrap();
+        fs::remove_dir_all(dir.join("src/scripts")).unwrap();
+        assert_eq!(
+            infer_validation_package_kind(&dir, &workflow, &files),
+            ValidationPackageKind::Jssg
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

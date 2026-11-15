@@ -877,7 +877,8 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             "{visibility}",
             if config.private { "private" } else { "public" },
         )
-        .replace("{repository}", &repository_line);
+        .replace("{repository}", &repository_line)
+        .replace("{workflow}", workflow_file(config));
 
     fs::write(project_path.join("codemod.yaml"), manifest_content)?;
     Ok(())
@@ -899,21 +900,22 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
             if config.project_type == ProjectType::Hybrid {
                 imports.push("shell");
                 before.push(
-                    r#"await step("Setup", shell("$CODEMOD_PATH/scripts/setup.sh"));"#.to_string(),
+                    r#"await step("Setup", shell`${import.meta.dirname}/scripts/setup.sh`);"#
+                        .to_string(),
                 );
                 before.push(
-                    r#"await step("Transform", shell("$CODEMOD_PATH/scripts/transform.sh"));"#
+                    r#"await step("Transform", shell`${import.meta.dirname}/scripts/transform.sh`);"#
                         .to_string(),
                 );
                 if !hybrid_without_rules(&config.language) {
                     imports.push("astGrep");
                     before.push(
-                        r#"await step("Apply ast-grep rules", forEachFile(astGrep("rules/config.yml")));"#
+                        r#"await step("Apply ast-grep rules", forEachFile(astGrep("./rules/config.yml")));"#
                             .to_string(),
                     );
                 }
                 after.push(
-                    r#"await step("Cleanup", shell("$CODEMOD_PATH/scripts/cleanup.sh"));"#
+                    r#"await step("Cleanup", shell`${import.meta.dirname}/scripts/cleanup.sh`);"#
                         .to_string(),
                 );
             }
@@ -949,7 +951,32 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         }
     };
 
-    fs::write(project_path.join("workflow.ts"), workflow)?;
+    let path = project_path.join(workflow_file(config));
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::write(path, workflow)?;
+    Ok(())
+}
+
+/// Where a new package's workflow goes, relative to the package. A package
+/// with TypeScript keeps it, and the files it uses, under `src/`.
+fn workflow_file(config: &ProjectConfig) -> &'static str {
+    match (config.package_behavior, &config.project_type) {
+        (PackageBehavior::SkillOnly, _) => "workflow.ts",
+        (_, ProjectType::AstGrepJs | ProjectType::Hybrid) => "src/workflow.ts",
+        _ => "workflow.ts",
+    }
+}
+
+/// Write a script the workflow runs directly.
+fn write_executable(path: &Path, contents: &str) -> Result<()> {
+    fs::write(path, contents)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    }
     Ok(())
 }
 
@@ -1093,18 +1120,16 @@ fn create_astgrep_yaml_project(project_path: &Path, config: &ProjectConfig) -> R
 }
 
 fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    // Create scripts directory
-    let scripts_dir = project_path.join("scripts");
+    // The workflow (src/workflow.ts) runs these from its own directory.
+    let scripts_dir = project_path.join("src").join("scripts");
     fs::create_dir_all(&scripts_dir)?;
-
-    // Copy shell scripts
-    fs::write(scripts_dir.join("setup.sh"), SHELL_SETUP_SCRIPT)?;
-    fs::write(scripts_dir.join("transform.sh"), SHELL_TRANSFORM_SCRIPT)?;
-    fs::write(scripts_dir.join("cleanup.sh"), SHELL_CLEANUP_SCRIPT)?;
+    write_executable(&scripts_dir.join("setup.sh"), SHELL_SETUP_SCRIPT)?;
+    write_executable(&scripts_dir.join("transform.sh"), SHELL_TRANSFORM_SCRIPT)?;
+    write_executable(&scripts_dir.join("cleanup.sh"), SHELL_CLEANUP_SCRIPT)?;
 
     // ast-grep rule files cannot target TOML.
     if !hybrid_without_rules(&config.language) {
-        let rules_dir = project_path.join("rules");
+        let rules_dir = project_path.join("src").join("rules");
         fs::create_dir_all(&rules_dir)?;
 
         let config_file = match config.language.as_str() {
@@ -1254,7 +1279,8 @@ fn create_readme(project_path: &Path, config: &ProjectConfig) -> Result<()> {
         .replace("{description}", &config.description)
         .replace("{language}", &config.language)
         .replace("{test_command}", &test_command)
-        .replace("{license}", &config.license);
+        .replace("{license}", &config.license)
+        .replace("{workflow}", workflow_file(config));
 
     if config.package_behavior == PackageBehavior::WorkflowAndSkill {
         readme_content.push_str(&format!(
@@ -1443,7 +1469,7 @@ fn run_post_init_commands(project_path: &Path, config: &ProjectConfig) -> Result
             if config.project_type == ProjectType::Hybrid {
                 println!("{} Making scripts executable...", style("⏳").yellow());
 
-                let scripts_dir = project_path.join("scripts");
+                let scripts_dir = project_path.join("src").join("scripts");
                 if let Ok(entries) = fs::read_dir(&scripts_dir) {
                     for entry in entries.flatten() {
                         let path = entry.path();
@@ -1875,14 +1901,14 @@ mod tests {
         create_manifest(&project_path, &config).unwrap();
         let manifest = fs::read_to_string(project_path.join("codemod.yaml")).unwrap();
 
-        // The init template now scaffolds the multi-workflow `workflows:`
-        // shape with a single `main` entry pointing at `workflow.yaml`.
+        // The `workflows:` shape, with a single `main` entry pointing at
+        // the workflow under src/.
         assert!(manifest.contains("workflows:"));
         assert!(manifest.contains("name: main"));
-        assert!(manifest.contains("path: workflow.ts"));
+        assert!(manifest.contains("path: src/workflow.ts"));
         assert!(manifest.contains("default: true"));
         assert!(manifest.contains("capabilities: []"));
-        assert!(manifest.contains("Keep this aligned with the files matched in workflow.ts."));
+        assert!(manifest.contains("Keep this aligned with the files matched in src/workflow.ts."));
     }
 
     #[test]
@@ -1907,21 +1933,22 @@ mod tests {
 
         create_project(&project_path, &config).unwrap();
 
-        let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
+        let workflow = fs::read_to_string(project_path.join("src/workflow.ts")).unwrap();
         assert!(
             workflow.contains("parse<Toml>(file, { language: \"toml\" })"),
             "{workflow}"
         );
         assert!(
             workflow.contains(
-                "export default async function main() {\n  await step(\"Setup\", shell(\"$CODEMOD_PATH/scripts/setup.sh\"));\n  await step(\"Transform\", shell(\"$CODEMOD_PATH/scripts/transform.sh\"));\n  await step(\"Pin the package manager\""
+                "export default async function main() {\n  await step(\"Setup\", shell`${import.meta.dirname}/scripts/setup.sh`);\n  await step(\"Transform\", shell`${import.meta.dirname}/scripts/transform.sh`);\n  await step(\"Pin the package manager\""
             ),
             "{workflow}"
         );
         assert!(!workflow.contains("astGrep"), "{workflow}");
-        assert!(!project_path.join("scripts/codemod.ts").exists());
-
-        assert!(!project_path.join("rules/config.yml").exists());
+        assert!(project_path.join("src/scripts/setup.sh").is_file());
+        assert!(!project_path.join("scripts").exists());
+        assert!(!project_path.join("workflow.ts").exists());
+        assert!(!project_path.join("src/rules/config.yml").exists());
         assert!(project_path.join("tests/fixtures/input.toml").is_file());
         assert!(project_path.join("tests/fixtures/expected.toml").is_file());
     }
@@ -1953,12 +1980,12 @@ mod tests {
             .join("hybrid-project");
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
 
-        assert!(project_path.join("workflow.ts").is_file());
+        assert!(project_path.join("src/workflow.ts").is_file());
         assert!(skill_root.join("SKILL.md").is_file());
         assert!(skill_root.join("references/index.md").is_file());
         assert!(manifest.contains("workflows:"));
-        assert!(manifest.contains("path: workflow.ts"));
-        let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
+        assert!(manifest.contains("path: src/workflow.ts"));
+        let workflow = fs::read_to_string(project_path.join("src/workflow.ts")).unwrap();
         assert!(workflow.contains("installSkill({"));
         assert!(workflow.contains("package: \"@codemod/hybrid-project\""));
         assert!(workflow.contains("path: \"./agents/skill/hybrid-project/SKILL.md\""));
@@ -2096,11 +2123,11 @@ mod tests {
         assert!(readme
             .contains("Document the exact migration this codemod performs before publishing."));
         assert!(readme.contains("pnpm test"));
-        assert!(readme.contains("codemod workflow validate -w workflow.ts"));
+        assert!(readme.contains("codemod workflow validate -w src/workflow.ts"));
         assert!(!readme.contains("Converting `var` declarations to `const`/`let`"));
 
-        let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
-        codemod_workflow::load_workflow(&project_path.join("workflow.ts"))
+        let workflow = fs::read_to_string(project_path.join("src/workflow.ts")).unwrap();
+        codemod_workflow::load_workflow(&project_path.join("src/workflow.ts"))
             .unwrap_or_else(|e| panic!("generated workflow.ts does not build: {e}\n{workflow}"));
         assert!(!workflow.contains("basePath"), "{workflow}");
         assert!(workflow.contains("include: ["));
@@ -2158,7 +2185,9 @@ mod tests {
                 };
                 create_project(&project_path, &config).unwrap();
 
-                let path = project_path.join("workflow.ts");
+                // The workflow and the files it uses are under src/.
+                assert!(!project_path.join("workflow.ts").exists());
+                let path = project_path.join("src/workflow.ts");
                 let workflow = fs::read_to_string(&path).unwrap();
                 codemod_workflow::load_workflow(&path).unwrap_or_else(|e| {
                     panic!("{language} {project_type:?}: does not build: {e}\n{workflow}")
@@ -2180,10 +2209,11 @@ mod tests {
                     workflow.contains("installSkill({ package: \"project\""),
                     "{workflow}"
                 );
-                assert!(!project_path.join("scripts/codemod.ts").exists());
+                assert!(!project_path.join("scripts").exists());
+                assert!(!project_path.join("rules").exists());
                 let rules = project_type == ProjectType::Hybrid && !hybrid_without_rules(language);
                 assert_eq!(
-                    project_path.join("rules/config.yml").is_file(),
+                    project_path.join("src/rules/config.yml").is_file(),
                     rules,
                     "{language}"
                 );
@@ -2209,6 +2239,23 @@ mod tests {
                     let own = workflow.find("forEachFile(files").unwrap();
                     let cleanup = workflow.find("await step(\"Cleanup\"").unwrap();
                     assert!(setup < own && own < cleanup, "{workflow}");
+                    assert!(
+                        workflow.contains("shell`${import.meta.dirname}/scripts/setup.sh`"),
+                        "{workflow}"
+                    );
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let mode = fs::metadata(project_path.join("src/scripts/setup.sh"))
+                            .unwrap()
+                            .permissions()
+                            .mode();
+                        assert_eq!(
+                            mode & 0o111,
+                            0o111,
+                            "{language}: setup.sh is not executable"
+                        );
+                    }
                     assert!(
                         workflow
                             .contains("import { astGrep, forEachFile, installSkill, shell, step }")
@@ -2245,7 +2292,7 @@ mod tests {
         assert!(!project_path.join("scripts").exists());
         assert!(project_path.join("tests/fixtures/input.xml").is_file());
         assert!(project_path.join("tests/fixtures/expected.xml").is_file());
-        let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
+        let workflow = fs::read_to_string(project_path.join("src/workflow.ts")).unwrap();
         assert!(workflow.contains("\"**/*.{xml,csproj,props,targets,config,resx,xaml}\""));
     }
 

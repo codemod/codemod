@@ -548,9 +548,11 @@ fn workflow_paths_with_manifest_hint(
             .map(|r| r.path)
             .collect())
     } else {
-        let typescript = package_path.join("workflow.ts");
-        if typescript.is_file() {
-            return Ok(vec![typescript]);
+        for typescript in ["workflow.ts", "src/workflow.ts"] {
+            let typescript = package_path.join(typescript);
+            if typescript.is_file() {
+                return Ok(vec![typescript]);
+            }
         }
         Ok(vec![package_path.join(DEFAULT_WORKFLOW_FILE_NAME)])
     }

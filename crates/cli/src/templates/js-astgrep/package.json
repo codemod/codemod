@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "codemod workflow test",
-    "validate": "codemod workflow validate -w workflow.ts",
+    "validate": "codemod workflow validate -w src/workflow.ts",
     "check-types": "tsc --noEmit"
   },
   "dependencies": {

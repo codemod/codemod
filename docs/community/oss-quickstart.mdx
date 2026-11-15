@@ -50,9 +50,12 @@ You will end up with a [Codemod package](/community/package-structure):
 <Tree>
   <Tree.Folder name="my-codemod" defaultOpen>
     <Tree.File name="codemod.yaml" />
-    <Tree.File name="workflow.ts" />
-    <Tree.Folder name="scripts" defaultOpen>
-      <Tree.File name="codemod.ts" />
+    <Tree.File name="package.json" />
+    <Tree.Folder name="src" defaultOpen>
+      <Tree.File name="workflow.ts" />
+      <Tree.Folder name="scripts" defaultOpen>
+        <Tree.File name="codemod.ts" />
+      </Tree.Folder>
     </Tree.Folder>
     <Tree.Folder name="tests" defaultOpen>
       <Tree.Folder name="fixtures" defaultOpen>
@@ -88,16 +91,16 @@ capabilities: []
 workflows:
   - name: main
     default: true
-    path: workflow.ts
+    path: src/workflow.ts
 ```
 
-```ts workflow.ts expandable
+```ts src/workflow.ts expandable
 import { step, forEachFile, jssg, agent } from "codemod/workflow";
 
 export default async function main({ params }: { params: { run_ai_step?: string } }) {
   await step(
     "Move inner components to module scope",
-    forEachFile({ language: "tsx" }, jssg("scripts/codemod.ts")),
+    forEachFile({ language: "tsx" }, jssg("./scripts/codemod.ts")),
   );
 
   if (params.run_ai_step === "true") {
@@ -117,7 +120,7 @@ Only modify files that still contain inner component definitions.`));
 }
 ```
 
-```ts scripts/codemod.ts expandable
+```ts src/scripts/codemod.ts expandable
 import type { Codemod, Edit } from "codemod/ast-grep";
 import type { SgNode } from "codemod/ast-grep";
 import type TSX from "codemod/ast-grep/langs/tsx";
@@ -250,7 +253,7 @@ From your scaffolded codemod package directory, validate the workflow and run th
 Validate the workflow schema:
 
 ```bash
-npx codemod workflow validate -w workflow.ts
+npx codemod workflow validate -w src/workflow.ts
 ```
 
 Run the workflow against your input/expected fixtures:

@@ -32,13 +32,16 @@ npx codemod init
 <Tree>
   <Tree.Folder name="my-codemod-package" defaultOpen>
     <Tree.File name="codemod.yaml" />
-    <Tree.File name="workflow.ts" />
     <Tree.File name="package.json" />
-    <Tree.Folder name="scripts" defaultOpen>
-      <Tree.File name="codemod.ts" />
-    </Tree.Folder>
-    <Tree.Folder name="rules" defaultOpen>
-      <Tree.File name="config.yml" />
+    <Tree.File name="tsconfig.json" />
+    <Tree.Folder name="src" defaultOpen>
+      <Tree.File name="workflow.ts" />
+      <Tree.Folder name="scripts" defaultOpen>
+        <Tree.File name="setup.sh" />
+      </Tree.Folder>
+      <Tree.Folder name="rules" defaultOpen>
+        <Tree.File name="config.yml" />
+      </Tree.Folder>
     </Tree.Folder>
     <Tree.Folder name="tests" defaultOpen>
       <Tree.Folder name="basic-transform" defaultOpen>
@@ -51,15 +54,15 @@ npx codemod init
 
 | File/Folder | Purpose |
 |-------------|---------|
-| `codemod.yaml` | Package metadata (name, version, author, etc.) |
-| `workflow.ts` | [Workflow definition](/community/workflows/reference). A transform can live here, in a `forEachFile` callback; `codemod init` writes it that way. Packages may still use a legacy [`workflow.yaml`](/community/workflows/yaml). |
+| `codemod.yaml` | Package metadata (name, version, author, etc.). `workflows` points at `src/workflow.ts`. |
 | `package.json` | The `codemod` dependency (CLI and types) and the package's scripts: `test` runs `codemod workflow test` |
-| `scripts/` | Transform files ([JSSG](/community/jssg)) the workflow runs with `forEachFile(jssg(...))`, and shell scripts |
-| `rules/` | YAML ast-grep rule definitions |
+| `src/workflow.ts` | [Workflow definition](/community/workflows/reference). A transform can live here, in a `forEachFile` callback; `codemod init` writes it that way. Packages may still use a legacy [`workflow.yaml`](/community/workflows/yaml) at the package root. |
+| `src/scripts/` | Shell scripts the workflow runs, as ``shell`${import.meta.dirname}/scripts/setup.sh` ``, and transform files ([JSSG](/community/jssg)) it runs with `forEachFile(jssg("./scripts/codemod.ts"))` |
+| `src/rules/` | YAML ast-grep rule definitions, run with `forEachFile(astGrep("./rules/config.yml"))` |
 | `tests/` | Test fixtures with `input.*`/`expected.*` pairs or `input/` + `expected/` directory snapshots |
 
 <Info>
-The `scripts/` and `rules/` folders are conventional, not required—use any paths you prefer as long as you reference them correctly in your workflow.
+The `src/scripts/` and `src/rules/` folders are conventional, not required. Paths in the workflow are relative to the workflow file, and `import.meta.dirname` is its directory, so keep the files it uses next to it. A `workflow.ts` at the package root also works.
 
 Detection-only **mining** packages still use this layout. The JSSG step returns `null`, emits [metrics](/community/jssg/metrics), and proves behavior with `metrics.json` fixtures next to `input`/`expected`. Insights discovers metrics from each selected step’s `js-ast-grep` script in the published package (not from a separate package-entry file).
 </Info>
@@ -131,7 +134,7 @@ license: "MIT"
 # Pick exactly one of `workflow` (single-workflow) or `workflows` (multi-workflow).
 workflows:
   - name: main
-    path: workflow.ts
+    path: src/workflow.ts
     default: true
     description: "Run the full migration in one pass"
   - name: sharded
@@ -232,7 +235,7 @@ Example:
 ```yaml
 workflows:
   - name: main
-    path: workflow.ts
+    path: src/workflow.ts
     default: true
   - name: sharded
     path: workflows/sharded.yaml

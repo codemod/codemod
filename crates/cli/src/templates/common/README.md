@@ -9,7 +9,7 @@
 codemod run {name}
 
 # Or run locally
-codemod workflow run -w workflow.ts
+codemod workflow run -w {workflow}
 ```
 
 ## Usage
@@ -27,7 +27,7 @@ Document the exact migration this codemod performs before publishing. At minimum
 {test_command}
 
 # Validate the workflow
-codemod workflow validate -w workflow.ts
+codemod workflow validate -w {workflow}
 
 # Publish to registry
 codemod login
