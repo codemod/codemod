@@ -129,6 +129,8 @@ test("migrates moment imports", async () => {
 });
 ```
 
+`installSkill` steps are skipped in test runs, as in a dry run: a test does not install skills into the coding agents on your machine.
+
 ### Test one step
 
 Steps are named by their label. `until` stops after the named step: steps the workflow starts after it do not run, and the run ends with status `"stopped"`. `given` replaces a step's result without running it, so a later step can be tested on its own:

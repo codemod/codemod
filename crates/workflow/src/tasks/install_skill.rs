@@ -15,6 +15,12 @@ pub(crate) fn run(task: &TaskContext<'_>, content: Value) -> TaskResult {
         task.log("skipped: skills are not installed in a dry run");
         return Ok(TaskOutcome::new(json!({ "skipped": true })));
     }
+    // A test runs the workflow on fixtures; it must not install skills into
+    // the coding agents on the machine.
+    if run.test.is_some() {
+        task.log("skipped: skills are not installed in a test run");
+        return Ok(TaskOutcome::new(json!({ "skipped": true })));
+    }
     let Some(executor) = run.services.install_skill.clone() else {
         return Err(TaskError::Failed(
             "installing skills is not available in this environment".into(),
@@ -24,7 +30,7 @@ pub(crate) fn run(task: &TaskContext<'_>, content: Value) -> TaskResult {
         install_skill,
         no_interactive: !run.interaction.is_interactive(),
         quiet: true,
-        bundle_path: Some(run.bundle_dir.clone()),
+        bundle_path: Some(run.package_dir.clone()),
         target_path: run.target.clone(),
         env: child_env(task),
         output_format: OutputFormat::Text,

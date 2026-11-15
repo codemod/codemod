@@ -135,3 +135,21 @@ fn test_runs_are_not_persisted() {
 
     assert!(h.store.list_runs(10).unwrap().is_empty());
 }
+
+#[test]
+fn a_test_run_skips_installing_skills() {
+    let h = Harness::new();
+    let report = h.test(
+        r#"
+import { step, installSkill } from "codemod/workflow";
+export default async function main() {
+  return await step("Install package skill", installSkill({ package: "p", path: "./agents/skill/p/SKILL.md" }));
+}
+"#,
+        plan(None, Value::Null),
+    );
+    match &report.ending {
+        Ending::Succeeded(output) => assert_eq!(output, &json!({ "skipped": true })),
+        other => panic!("{other:?}"),
+    }
+}
