@@ -680,7 +680,7 @@ jssg is the **primary transformation engine** for Codemod. These commands let yo
 - ❌ Production deployments → use `codemod workflow` for orchestration
 
 <Tip>
-  For production, run your jssg transform from a workflow with the `jssg` task. See [Workflow Reference: Tasks](/community/workflows/reference#tasks).
+  For production, run your jssg transform from a workflow with `forEachFile(jssg(...))`. See [Workflow Reference: Transforms](/community/workflows/reference#transforms).
 </Tip>
 
 **Learn more**: [jssg documentation](/community/jssg)
@@ -872,6 +872,8 @@ npx codemod init [PATH] [options]
 
 In interactive mode, `codemod init` prompts you to choose between a `jssg codemod`, `multi-step workflow`, or `agent skill codemod`. If you select a workflow, you can optionally scaffold an agent skill.
 
+An `ast-grep-js` or `hybrid` package keeps its transform in `workflow.ts`, as a [`forEachFile`](/community/workflows/reference#foreachfileselector-callback) callback that parses each file with `parse(file, { language })` and rewrites it. Its `test` script runs `codemod workflow test` on the fixtures in `tests/`.
+
 You'll also be prompted to create a GitHub Actions publishing workflow. This generates `.github/workflows/publish.yml`:
 
 - **Single codemod repo**: Triggers on `v*` tags (e.g., `v1.0.0`)
@@ -914,7 +916,7 @@ Both workflows use [trusted publishers](/community/publishing#trusted-publishers
 </ResponseField>
 
 <ResponseField name="--with-skill" type="boolean">
-  Scaffold a workflow + skill package. This keeps executable workflow files, appends an `install-skill` node, and creates authored skill files under `agents/skill/<skill-name>/`.
+  Scaffold a workflow + skill package. This keeps executable workflow files, adds an `installSkill` step, and creates authored skill files under `agents/skill/<skill-name>/`.
 
   The generated authored skill uses `skill-package-v1`, not the built-in `mcs-v1` core skill marker.
   

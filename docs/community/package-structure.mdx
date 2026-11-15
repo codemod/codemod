@@ -33,6 +33,7 @@ npx codemod init
   <Tree.Folder name="my-codemod-package" defaultOpen>
     <Tree.File name="codemod.yaml" />
     <Tree.File name="workflow.ts" />
+    <Tree.File name="package.json" />
     <Tree.Folder name="scripts" defaultOpen>
       <Tree.File name="codemod.ts" />
     </Tree.Folder>
@@ -51,8 +52,9 @@ npx codemod init
 | File/Folder | Purpose |
 |-------------|---------|
 | `codemod.yaml` | Package metadata (name, version, author, etc.) |
-| `workflow.ts` | [Workflow definition](/community/workflows/reference). Packages may still use a legacy [`workflow.yaml`](/community/workflows/yaml). |
-| `scripts/` | JavaScript/TypeScript codemods ([JSSG](/community/jssg)) |
+| `workflow.ts` | [Workflow definition](/community/workflows/reference). A transform can live here, in a `forEachFile` callback; `codemod init` writes it that way. Packages may still use a legacy [`workflow.yaml`](/community/workflows/yaml). |
+| `package.json` | The `codemod` dependency (CLI and types) and the package's scripts: `test` runs `codemod workflow test` |
+| `scripts/` | Transform files ([JSSG](/community/jssg)) the workflow runs with `forEachFile(jssg(...))`, and shell scripts |
 | `rules/` | YAML ast-grep rule definitions |
 | `tests/` | Test fixtures with `input.*`/`expected.*` pairs or `input/` + `expected/` directory snapshots |
 

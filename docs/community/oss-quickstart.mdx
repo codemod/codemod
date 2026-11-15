@@ -50,7 +50,7 @@ You will end up with a [Codemod package](/community/package-structure):
 <Tree>
   <Tree.Folder name="my-codemod" defaultOpen>
     <Tree.File name="codemod.yaml" />
-    <Tree.File name="workflow.yaml" />
+    <Tree.File name="workflow.ts" />
     <Tree.Folder name="scripts" defaultOpen>
       <Tree.File name="codemod.ts" />
     </Tree.Folder>
@@ -88,12 +88,12 @@ capabilities: []
 ```
 
 ```ts workflow.ts expandable
-import { step, jssg, agent } from "codemod/workflow";
+import { step, forEachFile, jssg, agent } from "codemod/workflow";
 
 export default async function main({ params }: { params: { run_ai_step?: string } }) {
   await step(
     "Move inner components to module scope",
-    jssg("scripts/codemod.ts", { language: "tsx" }),
+    forEachFile({ language: "tsx" }, jssg("scripts/codemod.ts")),
   );
 
   if (params.run_ai_step === "true") {
@@ -246,18 +246,18 @@ From your scaffolded codemod package directory, validate the workflow and run th
 Validate the workflow schema:
 
 ```bash
-npx codemod workflow validate -w workflow.yaml
+npx codemod workflow validate -w workflow.ts
 ```
 
-Run tests against your input/expected fixtures:
+Run the workflow against your input/expected fixtures:
 
 ```bash
-npx codemod jssg test -l tsx ./scripts/codemod.ts
+npx codemod workflow test
 ```
 
 Tests use fixtures in the `tests/` directory. You can use simple `input.*`/`expected.*` file pairs or `input/` + `expected/` directory snapshots when your codemod creates or deletes files. If MCP generated test fixtures, they will run automatically.
 
-For test structure, CI integration, and debugging strategies, see [Testing](/community/jssg/testing).
+For test structure, CI integration, and debugging strategies, see [Testing workflows](/community/workflows/testing).
 
 ## 4. Run your codemod
 

@@ -36,6 +36,6 @@ transform:
     convert:
       toCase: camelCase
       source: $SAFEVARSEP
-fix: |
+fix: |-
   val $SAFEVAR = $VAR ?: return $DEFAULT
   $BODY

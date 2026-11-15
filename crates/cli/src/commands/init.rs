@@ -145,11 +145,8 @@ struct ProjectConfig {
 const CODEMOD_TEMPLATE: &str = include_str!("../templates/codemod.yaml");
 const SKILL_CODEMOD_TEMPLATE: &str = include_str!("../templates/skill/codemod.yaml");
 const SHELL_WORKFLOW_TEMPLATE: &str = include_str!("../templates/shell/workflow.yaml");
-const JS_ASTGREP_WORKFLOW_TEMPLATE: &str = include_str!("../templates/js-astgrep/workflow.yaml");
 const ASTGREP_YAML_WORKFLOW_TEMPLATE: &str =
     include_str!("../templates/astgrep-yaml/workflow.yaml");
-const HYBRID_WORKFLOW_TEMPLATE: &str = include_str!("../templates/hybrid/workflow.yaml");
-const HYBRID_TOML_WORKFLOW_TEMPLATE: &str = include_str!("../templates/hybrid/workflow.toml.yaml");
 const SKILL_WORKFLOW_TEMPLATE: &str = include_str!("../templates/skill/workflow.yaml");
 const GITIGNORE_TEMPLATE: &str = include_str!("../templates/common/.gitignore");
 const README_TEMPLATE: &str = include_str!("../templates/common/README.md");
@@ -184,42 +181,33 @@ const SHELL_CLEANUP_SCRIPT: &str = include_str!("../templates/shell/scripts/clea
 
 // JS ast-grep project templates
 const JS_PACKAGE_JSON_TEMPLATE: &str = include_str!("../templates/js-astgrep/package.json");
-const JS_APPLY_SCRIPT_FOR_JAVASCRIPT: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.ts.ts");
-const JS_APPLY_SCRIPT_FOR_PYTHON: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.py.ts");
-const JS_APPLY_SCRIPT_FOR_RUST: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.rs.ts");
-const JS_APPLY_SCRIPT_FOR_GO: &str = include_str!("../templates/js-astgrep/scripts/codemod.go.ts");
-const JS_APPLY_SCRIPT_FOR_JAVA: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.java.ts");
-const JS_APPLY_SCRIPT_FOR_HTML: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.html.ts");
-const JS_APPLY_SCRIPT_FOR_XML: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.xml.ts");
-const JS_APPLY_SCRIPT_FOR_CSS: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.css.ts");
-const JS_APPLY_SCRIPT_FOR_KOTLIN: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.kt.ts");
-const JS_APPLY_SCRIPT_FOR_ANGULAR: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.angular.ts");
-const JS_APPLY_SCRIPT_FOR_CSHARP: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.cs.ts");
-const JS_APPLY_SCRIPT_FOR_CPP: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.cpp.ts");
-const JS_APPLY_SCRIPT_FOR_C: &str = include_str!("../templates/js-astgrep/scripts/codemod.c.ts");
-const JS_APPLY_SCRIPT_FOR_PHP: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.php.ts");
-const JS_APPLY_SCRIPT_FOR_RUBY: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.rb.ts");
-const JS_APPLY_SCRIPT_FOR_ELIXIR: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.ex.ts");
-const JS_APPLY_SCRIPT_FOR_JSON: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.json.ts");
-const JS_APPLY_SCRIPT_FOR_YAML: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.yaml.ts");
-const JS_APPLY_SCRIPT_FOR_TOML: &str =
-    include_str!("../templates/js-astgrep/scripts/codemod.toml.ts");
+
+/// The workflow.ts of a JSSG package, by language: a `forEachFile` callback
+/// that parses each file and rewrites it.
+fn callback_workflow_template(language: &str) -> &'static str {
+    match language {
+        "typescript" => include_str!("../templates/js-astgrep/workflows/typescript.ts"),
+        "python" => include_str!("../templates/js-astgrep/workflows/python.ts"),
+        "rust" => include_str!("../templates/js-astgrep/workflows/rust.ts"),
+        "go" => include_str!("../templates/js-astgrep/workflows/go.ts"),
+        "java" => include_str!("../templates/js-astgrep/workflows/java.ts"),
+        "html" => include_str!("../templates/js-astgrep/workflows/html.ts"),
+        "xml" => include_str!("../templates/js-astgrep/workflows/xml.ts"),
+        "css" => include_str!("../templates/js-astgrep/workflows/css.ts"),
+        "kotlin" => include_str!("../templates/js-astgrep/workflows/kotlin.ts"),
+        "angular" => include_str!("../templates/js-astgrep/workflows/angular.ts"),
+        "csharp" => include_str!("../templates/js-astgrep/workflows/csharp.ts"),
+        "cpp" => include_str!("../templates/js-astgrep/workflows/cpp.ts"),
+        "c" => include_str!("../templates/js-astgrep/workflows/c.ts"),
+        "php" => include_str!("../templates/js-astgrep/workflows/php.ts"),
+        "ruby" => include_str!("../templates/js-astgrep/workflows/ruby.ts"),
+        "elixir" => include_str!("../templates/js-astgrep/workflows/elixir.ts"),
+        "json" => include_str!("../templates/js-astgrep/workflows/json.ts"),
+        "yaml" => include_str!("../templates/js-astgrep/workflows/yaml.ts"),
+        "toml" => include_str!("../templates/js-astgrep/workflows/toml.ts"),
+        _ => include_str!("../templates/js-astgrep/workflows/javascript.ts"),
+    }
+}
 const JS_TSCONFIG_TEMPLATE: &str = include_str!("../templates/js-astgrep/tsconfig.json");
 
 // fixtures
@@ -906,45 +894,126 @@ fn create_manifest(project_path: &Path, config: &ProjectConfig) -> Result<()> {
 
 fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
     let default_skill_path = expected_authored_skill_relative_file(&config.name);
-    let mut workflow_content = if config.package_behavior == PackageBehavior::SkillOnly {
-        SKILL_WORKFLOW_TEMPLATE
-            .replace("{name}", &config.name)
-            .replace("{skill_path}", &default_skill_path)
-    } else {
-        let template = if config.project_type == ProjectType::Hybrid && config.language == "toml" {
-            HYBRID_TOML_WORKFLOW_TEMPLATE
-        } else {
-            match config.project_type {
-                ProjectType::Shell => SHELL_WORKFLOW_TEMPLATE,
-                ProjectType::AstGrepJs => JS_ASTGREP_WORKFLOW_TEMPLATE,
-                ProjectType::AstGrepYaml => ASTGREP_YAML_WORKFLOW_TEMPLATE,
-                ProjectType::Hybrid => HYBRID_WORKFLOW_TEMPLATE,
-            }
-        };
-
-        template.replace("{language}", &config.language).replace(
-            "{include_patterns}",
-            &default_include_patterns(&config.language),
-        )
-    };
-
-    if config.package_behavior == PackageBehavior::WorkflowAndSkill {
-        workflow_content.push_str(
-            &INSTALL_SKILL_NODE_TEMPLATE
+    let install_skill = config.package_behavior == PackageBehavior::WorkflowAndSkill;
+    let workflow = match (config.package_behavior, &config.project_type) {
+        (PackageBehavior::SkillOnly, _) => workflow_typescript(
+            &SKILL_WORKFLOW_TEMPLATE
                 .replace("{name}", &config.name)
                 .replace("{skill_path}", &default_skill_path),
-        );
-    }
+        )?,
+        (_, ProjectType::AstGrepJs | ProjectType::Hybrid) => {
+            let mut before = Vec::new();
+            let mut after = Vec::new();
+            let mut imports = Vec::new();
+            if config.project_type == ProjectType::Hybrid {
+                imports.push("shell");
+                before.push(
+                    r#"await step("Setup", shell("$CODEMOD_PATH/scripts/setup.sh"));"#.to_string(),
+                );
+                before.push(
+                    r#"await step("Transform", shell("$CODEMOD_PATH/scripts/transform.sh"));"#
+                        .to_string(),
+                );
+                if !hybrid_without_rules(&config.language) {
+                    imports.push("astGrep");
+                    before.push(
+                        r#"await step("Apply ast-grep rules", forEachFile(astGrep("rules/config.yml")));"#
+                            .to_string(),
+                    );
+                }
+                after.push(
+                    r#"await step("Cleanup", shell("$CODEMOD_PATH/scripts/cleanup.sh"));"#
+                        .to_string(),
+                );
+            }
+            if install_skill {
+                imports.push("installSkill");
+                after.push(format!(
+                    "await step(\"Install package skill\", installSkill({{ package: {}, path: {} }}));",
+                    serde_json::to_string(&config.name)?,
+                    serde_json::to_string(&default_skill_path)?,
+                ));
+            }
+            with_steps(
+                callback_workflow_template(&config.language),
+                &imports,
+                &before,
+                &after,
+            )?
+        }
+        (_, project_type) => {
+            let template = match project_type {
+                ProjectType::Shell => SHELL_WORKFLOW_TEMPLATE,
+                _ => ASTGREP_YAML_WORKFLOW_TEMPLATE,
+            };
+            let mut yaml = template.replace("{language}", &config.language);
+            if install_skill {
+                yaml.push_str(
+                    &INSTALL_SKILL_NODE_TEMPLATE
+                        .replace("{name}", &config.name)
+                        .replace("{skill_path}", &default_skill_path),
+                );
+            }
+            workflow_typescript(&yaml)?
+        }
+    };
 
-    fs::write(
-        project_path.join("workflow.ts"),
-        workflow_typescript(&workflow_content)?,
-    )?;
+    fs::write(project_path.join("workflow.ts"), workflow)?;
     Ok(())
 }
 
-/// The init templates are written as workflow.yaml; new packages get the
-/// equivalent workflow.ts.
+/// Languages whose hybrid packages have no ast-grep rule step: ast-grep's
+/// YAML rules support neither.
+fn hybrid_without_rules(language: &str) -> bool {
+    matches!(language, "toml" | "angular")
+}
+
+/// A callback workflow template with more steps before and after its own,
+/// and the `codemod/workflow` imports they use.
+fn with_steps(
+    template: &str,
+    imports: &[&str],
+    before: &[String],
+    after: &[String],
+) -> Result<String> {
+    const MAIN: &str = "export default async function main() {\n";
+    const IMPORT: &str = " } from \"codemod/workflow\";\n";
+    let main = template
+        .find(MAIN)
+        .context("workflow template has no main function")?
+        + MAIN.len();
+    let end = template
+        .rfind("}\n")
+        .filter(|&end| end >= main)
+        .context("workflow template does not end with main")?;
+    let import_end = template
+        .find(IMPORT)
+        .context("workflow template does not import codemod/workflow")?;
+    let import_start = template[..import_end]
+        .rfind("import { ")
+        .context("workflow template does not import codemod/workflow")?
+        + "import { ".len();
+
+    let mut names: Vec<&str> = template[import_start..import_end].split(", ").collect();
+    names.extend_from_slice(imports);
+    names.sort_unstable();
+    names.dedup();
+    let lines =
+        |steps: &[String]| -> String { steps.iter().map(|step| format!("  {step}\n")).collect() };
+    Ok(format!(
+        "{}{}{}{}{}{}{}",
+        &template[..import_start],
+        names.join(", "),
+        &template[import_end..main],
+        lines(before),
+        &template[main..end],
+        lines(after),
+        &template[end..],
+    ))
+}
+
+/// The shell, ast-grep and skill templates are written as workflow.yaml;
+/// new packages get the equivalent workflow.ts.
 fn workflow_typescript(yaml: &str) -> Result<String> {
     let workflow: butterflow_models::Workflow =
         serde_yaml::from_str(yaml).context("invalid workflow template")?;
@@ -958,38 +1027,6 @@ fn workflow_typescript(yaml: &str) -> Result<String> {
         .trim_start()
         .to_string()
         + "\n")
-}
-
-fn default_include_patterns(language: &str) -> String {
-    let patterns: &[&str] = match language {
-        "javascript" => &["**/*.{js,jsx,mjs,cjs}"],
-        "typescript" => &["**/*.{ts,tsx,mts,cts}"],
-        "python" => &["**/*.py"],
-        "rust" => &["**/*.rs"],
-        "go" => &["**/*.go"],
-        "java" => &["**/*.java"],
-        "html" => &["**/*.html"],
-        "xml" => &["**/*.{xml,csproj,props,targets,config,resx,xaml}"],
-        "css" => &["**/*.css"],
-        "kotlin" => &["**/*.kt"],
-        "angular" => &["**/*.html"],
-        "csharp" => &["**/*.cs"],
-        "cpp" => &["**/*.{cpp,cc,cxx,hpp,hh,hxx}"],
-        "c" => &["**/*.{c,h}"],
-        "php" => &["**/*.php"],
-        "ruby" => &["**/*.rb"],
-        "elixir" => &["**/*.{ex,exs}"],
-        "json" => &["**/*.json"],
-        "yaml" => &["**/*.{yaml,yml}"],
-        "toml" => &["**/*.toml"],
-        _ => &["**/*"],
-    };
-
-    patterns
-        .iter()
-        .map(|pattern| format!("            - \"{pattern}\""))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn create_shell_project(project_path: &Path, _config: &ProjectConfig) -> Result<()> {
@@ -1024,39 +1061,9 @@ fn create_typescript_package_files(project_path: &Path, config: &ProjectConfig) 
 }
 
 fn create_js_astgrep_project(project_path: &Path, config: &ProjectConfig) -> Result<()> {
+    // The transform is the forEachFile callback in workflow.ts.
     create_typescript_package_files(project_path, config)?;
-
-    // Create scripts directory
-    let scripts_dir = project_path.join("scripts");
-    fs::create_dir_all(&scripts_dir)?;
-
-    let codemod_script = match config.language.as_str() {
-        "javascript" | "typescript" => JS_APPLY_SCRIPT_FOR_JAVASCRIPT.to_string(),
-        "python" => JS_APPLY_SCRIPT_FOR_PYTHON.to_string(),
-        "rust" => JS_APPLY_SCRIPT_FOR_RUST.to_string(),
-        "go" => JS_APPLY_SCRIPT_FOR_GO.to_string(),
-        "java" => JS_APPLY_SCRIPT_FOR_JAVA.to_string(),
-        "html" => JS_APPLY_SCRIPT_FOR_HTML.to_string(),
-        "xml" => JS_APPLY_SCRIPT_FOR_XML.to_string(),
-        "css" => JS_APPLY_SCRIPT_FOR_CSS.to_string(),
-        "kotlin" => JS_APPLY_SCRIPT_FOR_KOTLIN.to_string(),
-        "angular" => JS_APPLY_SCRIPT_FOR_ANGULAR.to_string(),
-        "csharp" => JS_APPLY_SCRIPT_FOR_CSHARP.to_string(),
-        "cpp" => JS_APPLY_SCRIPT_FOR_CPP.to_string(),
-        "c" => JS_APPLY_SCRIPT_FOR_C.to_string(),
-        "php" => JS_APPLY_SCRIPT_FOR_PHP.to_string(),
-        "ruby" => JS_APPLY_SCRIPT_FOR_RUBY.to_string(),
-        "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR.to_string(),
-        "json" => JS_APPLY_SCRIPT_FOR_JSON.to_string(),
-        "yaml" => JS_APPLY_SCRIPT_FOR_YAML.to_string(),
-        "toml" => JS_APPLY_SCRIPT_FOR_TOML.to_string(),
-        _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT.to_string(),
-    };
-    fs::write(scripts_dir.join("codemod.ts"), codemod_script.as_str())?;
-
-    // Create tests
     create_js_tests(project_path, config)?;
-
     Ok(())
 }
 
@@ -1105,32 +1112,8 @@ fn create_hybrid_project(project_path: &Path, config: &ProjectConfig) -> Result<
     fs::write(scripts_dir.join("transform.sh"), SHELL_TRANSFORM_SCRIPT)?;
     fs::write(scripts_dir.join("cleanup.sh"), SHELL_CLEANUP_SCRIPT)?;
 
-    // Copy jssg codemod script
-    let codemod_script = match config.language.as_str() {
-        "javascript" | "typescript" => JS_APPLY_SCRIPT_FOR_JAVASCRIPT,
-        "python" => JS_APPLY_SCRIPT_FOR_PYTHON,
-        "rust" => JS_APPLY_SCRIPT_FOR_RUST,
-        "go" => JS_APPLY_SCRIPT_FOR_GO,
-        "java" => JS_APPLY_SCRIPT_FOR_JAVA,
-        "html" => JS_APPLY_SCRIPT_FOR_HTML,
-        "xml" => JS_APPLY_SCRIPT_FOR_XML,
-        "css" => JS_APPLY_SCRIPT_FOR_CSS,
-        "kotlin" => JS_APPLY_SCRIPT_FOR_KOTLIN,
-        "angular" => JS_APPLY_SCRIPT_FOR_ANGULAR,
-        "csharp" => JS_APPLY_SCRIPT_FOR_CSHARP,
-        "cpp" => JS_APPLY_SCRIPT_FOR_CPP,
-        "c" => JS_APPLY_SCRIPT_FOR_C,
-        "php" => JS_APPLY_SCRIPT_FOR_PHP,
-        "ruby" => JS_APPLY_SCRIPT_FOR_RUBY,
-        "elixir" => JS_APPLY_SCRIPT_FOR_ELIXIR,
-        "json" => JS_APPLY_SCRIPT_FOR_JSON,
-        "yaml" => JS_APPLY_SCRIPT_FOR_YAML,
-        "toml" => JS_APPLY_SCRIPT_FOR_TOML,
-        _ => JS_APPLY_SCRIPT_FOR_JAVASCRIPT,
-    };
-    fs::write(scripts_dir.join("codemod.ts"), codemod_script)?;
-
-    if config.language != "toml" {
+    // ast-grep rule files cannot target TOML or Angular templates.
+    if !hybrid_without_rules(&config.language) {
         let rules_dir = project_path.join("rules");
         fs::create_dir_all(&rules_dir)?;
 
@@ -1187,166 +1170,65 @@ fn create_skill_project(project_path: &Path, config: &ProjectConfig) -> Result<(
     Ok(())
 }
 
+/// The starter fixture for a language: its file extension, input, and the
+/// output a JSSG package's workflow leaves.
+fn js_fixture(language: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    // The extension must match the files the workflow selects
+    // (`templates/js-astgrep/workflows/*.ts`), or it never picks it up.
+    Some(match language {
+        "javascript" => ("js", JS_TEST_INPUT, JS_TEST_EXPECTED),
+        "typescript" => ("ts", JS_TEST_INPUT, JS_TEST_EXPECTED),
+        "python" => ("py", PYTHON_TEST_INPUT, PYTHON_TEST_EXPECTED),
+        "rust" => ("rs", RUST_TEST_INPUT, RUST_TEST_EXPECTED),
+        "go" => ("go", GO_TEST_INPUT, GO_TEST_EXPECTED),
+        "java" => ("java", JAVA_TEST_INPUT, JAVA_TEST_EXPECTED),
+        "xml" => ("xml", XML_TEST_INPUT, XML_TEST_EXPECTED),
+        "csharp" => ("cs", CSHARP_TEST_INPUT, CSHARP_TEST_EXPECTED),
+        "cpp" => ("cpp", CPP_TEST_INPUT, CPP_TEST_EXPECTED),
+        "c" => ("c", C_TEST_INPUT, C_TEST_EXPECTED),
+        "php" => ("php", PHP_TEST_INPUT, PHP_TEST_EXPECTED),
+        "ruby" => ("rb", RUBY_TEST_INPUT, RUBY_TEST_EXPECTED),
+        "elixir" => ("ex", ELIXIR_TEST_INPUT, ELIXIR_TEST_EXPECTED),
+        "html" => ("html", HTML_TEST_INPUT, HTML_TEST_EXPECTED),
+        "css" => ("css", CSS_TEST_INPUT, CSS_TEST_EXPECTED),
+        "kotlin" => ("kt", KOTLIN_TEST_INPUT, KOTLIN_TEST_EXPECTED),
+        "angular" => ("html", ANGULAR_TEST_INPUT, ANGULAR_TEST_EXPECTED),
+        "json" => ("json", JSON_TEST_INPUT, JSON_TEST_EXPECTED),
+        "yaml" => ("yaml", YAML_TEST_INPUT, YAML_TEST_EXPECTED),
+        "toml" => ("toml", TOML_TEST_INPUT, TOML_TEST_EXPECTED),
+        _ => return None,
+    })
+}
+
+/// What a hybrid package's whole workflow leaves of the starter fixture: its
+/// shell steps and ast-grep rules run before the JSSG transform.
+fn hybrid_expected(language: &str) -> Option<&'static str> {
+    // Only where the rules change the outcome; elsewhere it is the JSSG
+    // package's.
+    Some(match language {
+        "typescript" => include_str!("../templates/hybrid/tests/fixtures/expected.ts"),
+        "rust" => include_str!("../templates/hybrid/tests/fixtures/expected.rs"),
+        "go" => include_str!("../templates/hybrid/tests/fixtures/expected.go"),
+        "java" => include_str!("../templates/hybrid/tests/fixtures/expected.java"),
+        "html" => include_str!("../templates/hybrid/tests/fixtures/expected.html"),
+        "css" => include_str!("../templates/hybrid/tests/fixtures/expected.css"),
+        "yaml" => include_str!("../templates/hybrid/tests/fixtures/expected.yaml"),
+        _ => return None,
+    })
+}
+
 fn create_js_tests(project_path: &Path, config: &ProjectConfig) -> Result<()> {
-    let tests_dir = project_path.join("tests");
-    fs::create_dir_all(tests_dir.join("fixtures"))?;
-
-    if config.language == "javascript" || config.language == "typescript" {
-        // The fixture extension must match the workflow's include patterns
-        // (see `default_include_patterns`), or the workflow never picks it up.
-        let ext = if config.language == "typescript" {
-            "ts"
-        } else {
-            "js"
-        };
-        fs::write(
-            tests_dir.join("fixtures").join(format!("input.{ext}")),
-            JS_TEST_INPUT,
-        )?;
-        fs::write(
-            tests_dir.join("fixtures").join(format!("expected.{ext}")),
-            JS_TEST_EXPECTED,
-        )?;
-    } else if config.language == "python" {
-        fs::write(
-            tests_dir.join("fixtures").join("input.py"),
-            PYTHON_TEST_INPUT,
-        )?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.py"),
-            PYTHON_TEST_EXPECTED,
-        )?;
-    } else if config.language == "rust" {
-        fs::write(tests_dir.join("fixtures").join("input.rs"), RUST_TEST_INPUT)?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.rs"),
-            RUST_TEST_EXPECTED,
-        )?;
-    } else if config.language == "go" {
-        fs::write(tests_dir.join("fixtures").join("input.go"), GO_TEST_INPUT)?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.go"),
-            GO_TEST_EXPECTED,
-        )?;
-    } else if config.language == "java" {
-        fs::write(
-            tests_dir.join("fixtures").join("input.java"),
-            JAVA_TEST_INPUT,
-        )?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.java"),
-            JAVA_TEST_EXPECTED,
-        )?;
-    } else if config.language == "xml" {
-        fs::write(tests_dir.join("fixtures").join("input.xml"), XML_TEST_INPUT)?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.xml"),
-            XML_TEST_EXPECTED,
-        )?;
-    } else if config.language == "csharp" {
-        fs::write(
-            tests_dir.join("fixtures").join("input.cs"),
-            CSHARP_TEST_INPUT,
-        )?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.cs"),
-            CSHARP_TEST_EXPECTED,
-        )?;
-    } else if config.language == "cpp" {
-        fs::write(tests_dir.join("fixtures").join("input.cpp"), CPP_TEST_INPUT)?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.cpp"),
-            CPP_TEST_EXPECTED,
-        )?;
-    } else if config.language == "c" {
-        fs::write(tests_dir.join("fixtures").join("input.c"), C_TEST_INPUT)?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.c"),
-            C_TEST_EXPECTED,
-        )?;
-    } else if config.language == "php" {
-        fs::write(tests_dir.join("fixtures").join("input.php"), PHP_TEST_INPUT)?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.php"),
-            PHP_TEST_EXPECTED,
-        )?;
-    } else if config.language == "ruby" {
-        fs::write(tests_dir.join("fixtures").join("input.rb"), RUBY_TEST_INPUT)?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.rb"),
-            RUBY_TEST_EXPECTED,
-        )?;
-    } else if config.language == "elixir" {
-        fs::write(
-            tests_dir.join("fixtures").join("input.ex"),
-            ELIXIR_TEST_INPUT,
-        )?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.ex"),
-            ELIXIR_TEST_EXPECTED,
-        )?;
-    } else if config.language == "html" {
-        fs::write(
-            tests_dir.join("fixtures").join("input.html"),
-            HTML_TEST_INPUT,
-        )?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.html"),
-            HTML_TEST_EXPECTED,
-        )?;
-    } else if config.language == "css" {
-        fs::write(tests_dir.join("fixtures").join("input.css"), CSS_TEST_INPUT)?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.css"),
-            CSS_TEST_EXPECTED,
-        )?;
-    } else if config.language == "kotlin" {
-        fs::write(
-            tests_dir.join("fixtures").join("input.kt"),
-            KOTLIN_TEST_INPUT,
-        )?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.kt"),
-            KOTLIN_TEST_EXPECTED,
-        )?;
-    } else if config.language == "angular" {
-        fs::write(
-            tests_dir.join("fixtures").join("input-angular.ts"),
-            ANGULAR_TEST_INPUT,
-        )?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected-angular.ts"),
-            ANGULAR_TEST_EXPECTED,
-        )?;
-    } else if config.language == "json" {
-        fs::write(
-            tests_dir.join("fixtures").join("input.json"),
-            JSON_TEST_INPUT,
-        )?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.json"),
-            JSON_TEST_EXPECTED,
-        )?;
-    } else if config.language == "yaml" {
-        fs::write(
-            tests_dir.join("fixtures").join("input.yaml"),
-            YAML_TEST_INPUT,
-        )?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.yaml"),
-            YAML_TEST_EXPECTED,
-        )?;
-    } else if config.language == "toml" {
-        fs::write(
-            tests_dir.join("fixtures").join("input.toml"),
-            TOML_TEST_INPUT,
-        )?;
-        fs::write(
-            tests_dir.join("fixtures").join("expected.toml"),
-            TOML_TEST_EXPECTED,
-        )?;
-    }
-
+    let fixtures = project_path.join("tests").join("fixtures");
+    fs::create_dir_all(&fixtures)?;
+    let Some((ext, input, expected)) = js_fixture(&config.language) else {
+        return Ok(());
+    };
+    let expected = match config.project_type {
+        ProjectType::Hybrid => hybrid_expected(&config.language).unwrap_or(expected),
+        _ => expected,
+    };
+    fs::write(fixtures.join(format!("input.{ext}")), input)?;
+    fs::write(fixtures.join(format!("expected.{ext}")), expected)?;
     Ok(())
 }
 
@@ -2037,16 +1919,18 @@ mod tests {
         create_project(&project_path, &config).unwrap();
 
         let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();
-        assert!(workflow.contains("language: \"toml\""));
         assert!(
-            workflow.contains("  await shellSetupNode();\n  await shellTransformNode();\n"),
+            workflow.contains("parse<Toml>(file, { language: \"toml\" })"),
             "{workflow}"
         );
-        assert!(!workflow.contains("apply-yaml"));
-        assert!(!workflow.contains("astGrep("));
-
-        let codemod_script = fs::read_to_string(project_path.join("scripts/codemod.ts")).unwrap();
-        assert!(codemod_script.contains("langs/toml"));
+        assert!(
+            workflow.contains(
+                "export default async function main() {\n  await step(\"Setup\", shell(\"$CODEMOD_PATH/scripts/setup.sh\"));\n  await step(\"Transform\", shell(\"$CODEMOD_PATH/scripts/transform.sh\"));\n  await step(\"Pin the package manager\""
+            ),
+            "{workflow}"
+        );
+        assert!(!workflow.contains("astGrep"), "{workflow}");
+        assert!(!project_path.join("scripts/codemod.ts").exists());
 
         assert!(!project_path.join("rules/config.yml").exists());
         assert!(project_path.join("tests/fixtures/input.toml").is_file());
@@ -2119,7 +2003,7 @@ mod tests {
         let readme = fs::read_to_string(project_path.join("README.md")).unwrap();
 
         assert!(package_json.contains("\"packageManager\": \"yarn@4.x\""));
-        assert!(package_json.contains("\"test\": \"codemod jssg test"));
+        assert!(package_json.contains("\"test\": \"codemod workflow test\""));
         let package_json: serde_json::Value = serde_json::from_str(&package_json).unwrap();
         assert_eq!(
             package_json["dependencies"]["codemod"],
@@ -2243,23 +2127,109 @@ mod tests {
     }
 
     #[test]
-    fn default_include_patterns_match_language_family() {
-        assert_eq!(
-            default_include_patterns("typescript"),
-            "            - \"**/*.{ts,tsx,mts,cts}\""
-        );
-        assert_eq!(
-            default_include_patterns("javascript"),
-            "            - \"**/*.{js,jsx,mjs,cjs}\""
-        );
-        assert_eq!(
-            default_include_patterns("yaml"),
-            "            - \"**/*.{yaml,yml}\""
-        );
-        assert_eq!(
-            default_include_patterns("xml"),
-            "            - \"**/*.{xml,csproj,props,targets,config,resx,xaml}\""
-        );
+    fn every_language_gets_a_callback_workflow_that_builds() {
+        let languages = [
+            "javascript",
+            "typescript",
+            "python",
+            "rust",
+            "go",
+            "java",
+            "html",
+            "xml",
+            "css",
+            "kotlin",
+            "angular",
+            "csharp",
+            "cpp",
+            "c",
+            "php",
+            "ruby",
+            "elixir",
+            "json",
+            "yaml",
+            "toml",
+        ];
+        for language in languages {
+            for project_type in [ProjectType::AstGrepJs, ProjectType::Hybrid] {
+                let temp_dir = tempdir().unwrap();
+                let project_path = temp_dir.path().join("project");
+                let config = ProjectConfig {
+                    name: "project".to_string(),
+                    description: "Workflow package".to_string(),
+                    author: "Codemod Team <team@codemod.com>".to_string(),
+                    license: "MIT".to_string(),
+                    project_type: project_type.clone(),
+                    package_behavior: PackageBehavior::WorkflowAndSkill,
+                    language: language.to_string(),
+                    private: false,
+                    package_manager: Some("npm".to_string()),
+                    git_repository_url: None,
+                    github_action: false,
+                    workspace: false,
+                };
+                create_project(&project_path, &config).unwrap();
+
+                let path = project_path.join("workflow.ts");
+                let workflow = fs::read_to_string(&path).unwrap();
+                codemod_workflow::load_workflow(&path).unwrap_or_else(|e| {
+                    panic!("{language} {project_type:?}: does not build: {e}\n{workflow}")
+                });
+                let parse_language = if language == "javascript" || language == "typescript" {
+                    language
+                } else {
+                    &format!("{language}\"")
+                };
+                assert!(
+                    workflow.contains(&format!("(file, {{ language: \"{parse_language}")),
+                    "{language}: {workflow}"
+                );
+                assert!(
+                    workflow.contains("forEachFile(files, (file) => {"),
+                    "{workflow}"
+                );
+                assert!(
+                    workflow.contains("installSkill({ package: \"project\""),
+                    "{workflow}"
+                );
+                assert!(!project_path.join("scripts/codemod.ts").exists());
+                let rules = project_type == ProjectType::Hybrid && !hybrid_without_rules(language);
+                assert_eq!(
+                    project_path.join("rules/config.yml").is_file(),
+                    rules,
+                    "{language}"
+                );
+                assert_eq!(
+                    workflow.contains("astGrep("),
+                    rules,
+                    "{language}: {workflow}"
+                );
+                let (ext, _, js_expected) = js_fixture(language).unwrap();
+                let expected =
+                    fs::read_to_string(project_path.join(format!("tests/fixtures/expected.{ext}")))
+                        .unwrap();
+                match project_type {
+                    ProjectType::Hybrid => assert_eq!(
+                        expected,
+                        hybrid_expected(language).unwrap_or(js_expected),
+                        "{language}"
+                    ),
+                    _ => assert_eq!(expected, js_expected, "{language}"),
+                }
+                if project_type == ProjectType::Hybrid {
+                    let setup = workflow.find("await step(\"Setup\"").unwrap();
+                    let own = workflow.find("forEachFile(files").unwrap();
+                    let cleanup = workflow.find("await step(\"Cleanup\"").unwrap();
+                    assert!(setup < own && own < cleanup, "{workflow}");
+                    assert!(
+                        workflow
+                            .contains("import { astGrep, forEachFile, installSkill, shell, step }")
+                            || !rules,
+                        "{workflow}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -2284,7 +2254,7 @@ mod tests {
 
         create_project(&project_path, &config).unwrap();
 
-        assert!(project_path.join("scripts/codemod.ts").is_file());
+        assert!(!project_path.join("scripts").exists());
         assert!(project_path.join("tests/fixtures/input.xml").is_file());
         assert!(project_path.join("tests/fixtures/expected.xml").is_file());
         let workflow = fs::read_to_string(project_path.join("workflow.ts")).unwrap();

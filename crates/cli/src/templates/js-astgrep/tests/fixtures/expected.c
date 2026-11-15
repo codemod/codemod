@@ -2,16 +2,16 @@
 // click diff tab to see rewrite.
 
 function tryAstGrep() {
-  logger.log('matched in metavar!')
+    logger.log('matched in metavar!')
 }
-
+  
 const multiLineExpression =
   console
-   .log({
-     also: 'matched',
-     multi: 'line',
-     expression: 'console.log("you can\'t trick me!")',
-   })
+    .log({
+      also: 'matched',
+      multi: 'line',
+      expression: 'console.log("you can\'t trick me!")',
+    })
 
 if (true) {
   const notThis = 'console.log("not me")'

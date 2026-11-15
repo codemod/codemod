@@ -15,9 +15,9 @@ private:
 
 int main() {
     // These raw pointer allocations will be transformed
-    auto widget = std::make_unique<Widget>();
+    auto widget = std::make_unique<Widget>(42);
     std::vector<int> numbers(10);
-    auto message = std::make_unique<std::string>();
+    auto message = std::make_unique<std::string>("Hello");
     
     // Usage patterns
     widget->getValue();
@@ -28,7 +28,7 @@ int main() {
     auto smart_widget = std::make_unique<Widget>(100);
     
     // Complex allocation
-    auto complex = std::make_unique<Widget>();
+    auto complex = std::make_unique<Widget>(widget->getValue() + 10);
     
     // Manual cleanup (will need to be removed)
     // Automatic cleanup with smart pointers
