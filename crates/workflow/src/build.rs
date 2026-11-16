@@ -785,6 +785,11 @@ pub fn check_imports(file: &Path, source: &str, built: &Built) -> Result<(), Bui
         return Ok(());
     }
     let name = file.display().to_string();
+    // The resolver joins a relative importer onto its base directory, which
+    // would repeat the workflow's directory: resolve from the absolute path.
+    let file = std::path::absolute(file)
+        .map_err(|e| error_at(&name, source, 0, format!("cannot resolve imports: {e}")))?;
+    let importer = file.to_string_lossy().to_string();
     let base_dir = file
         .parent()
         .map(Path::to_path_buf)
@@ -799,7 +804,7 @@ pub fn check_imports(file: &Path, source: &str, built: &Built) -> Result<(), Bui
     for import in &built.body_imports {
         let at = |message: String| error_at(&name, source, import.offset, message);
         let resolved = resolver
-            .resolve(&name, &import.source)
+            .resolve(&importer, &import.source)
             .map_err(|e| at(format!("cannot resolve '{}': {e}", import.source)))?;
         let chain = walk.effectful(Path::new(&resolved)).map_err(at)?;
         if let Some(chain) = chain {

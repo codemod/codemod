@@ -665,6 +665,27 @@ export const rewrite = () => step(forEachFile("**/*.ts", (file) => { file.write(
 }
 
 #[test]
+fn a_workflow_loaded_by_a_relative_path_resolves_imports_from_its_own_directory() {
+    let bundle = tempfile::tempdir_in(".").unwrap();
+    std::fs::create_dir(bundle.path().join("src")).unwrap();
+    std::fs::write(
+        bundle.path().join("src/helper.ts"),
+        "export const answer = 42;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        bundle.path().join("src/workflow.ts"),
+        "import { answer } from \"./helper.ts\";\nexport default async function main() { return answer; }\n",
+    )
+    .unwrap();
+
+    // Loaded the way the CLI is given it: relative to the working directory, e.g. `.tmpXXXX/src/workflow.ts`.
+    let relative = std::path::Path::new(bundle.path().file_name().unwrap()).join("src/workflow.ts");
+
+    assert!(codemod_workflow::load_workflow(&relative).is_ok());
+}
+
+#[test]
 fn importing_the_workflow_module_as_a_namespace_is_a_build_error() {
     let error = build_error(
         r#"
