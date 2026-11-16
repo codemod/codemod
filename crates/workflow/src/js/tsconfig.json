@@ -10,7 +10,8 @@
     "moduleDetection": "force",
     "allowImportingTsExtensions": true,
     "paths": {
-      "codemod-internal:orchestrator": ["./orchestrator.ts"]
+      "codemod-internal:orchestrator": ["./orchestrator.ts"],
+      "codemod-internal:semver": ["./semver.ts"]
     },
     "noEmit": true,
     "strict": true,

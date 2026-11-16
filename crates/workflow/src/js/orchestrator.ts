@@ -197,7 +197,13 @@ export interface HostTask {
   readonly content: TaskContent;
 }
 
-export type Task = ForEachFileTask | HostTask;
+export interface DependencyGraphTask {
+  readonly [TASK]: "dependencyGraph";
+  readonly lockfiles: string[] | undefined;
+  readonly callback: Extracted;
+}
+
+export type Task = ForEachFileTask | DependencyGraphTask | HostTask;
 
 /** A length of time: milliseconds, or a string such as "30s" or "10m". */
 export type Duration = number | string;
@@ -293,6 +299,29 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     // Without a language, the package's (codemod.yaml), as for callbacks.
     if (kind === "jssg" && content.language === undefined) content.packageLanguage = true;
     return Object.freeze({ [TASK]: "host" as const, content });
+  }
+
+  /**
+   * Read the target's lockfiles into one dependency graph and run `callback`
+   * with a live handle on it, in its own isolate. Only what the callback
+   * returns is recorded.
+   */
+  function dependencyGraph(options: unknown, callback: unknown): DependencyGraphTask {
+    const extracted = callbackOf(callback);
+    if (!extracted || extracted.fn) {
+      throw new TypeError(
+        "dependencyGraph: the callback was not extracted by the build; run the workflow through the codemod-workflow build",
+      );
+    }
+    const { lockfiles, ...rest } = isRecord(options) ? options : {};
+    const unknown = Object.keys(rest);
+    if (unknown.length) throw new TypeError(`dependencyGraph: unknown option '${unknown[0]}'`);
+    return Object.freeze({
+      [TASK]: "dependencyGraph" as const,
+      lockfiles:
+        lockfiles === undefined ? undefined : globs(lockfiles, "lockfiles", "dependencyGraph: "),
+      callback: extracted,
+    });
   }
 
   function hostTask(kind: string, options: unknown): HostTask {
@@ -415,6 +444,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     callbackOf,
     __callback,
     forEachFile,
+    dependencyGraph,
     shell,
     jssg,
     astGrep,
@@ -750,6 +780,13 @@ export function createRuntime(host: Host) {
         captures: capturesOf(task.callback),
       };
       fn = task.callback.fn;
+    } else if (isTask(task) && task[TASK] === "dependencyGraph") {
+      content = withoutUndefined({
+        kind: "dependencyGraph",
+        lockfiles: task.lockfiles,
+        callback: task.callback.id,
+        captures: capturesOf(task.callback),
+      }) as TaskContent;
     } else if (isTask(task) && task[TASK] === "host") {
       content = task.content;
     } else {
@@ -1000,11 +1037,11 @@ function normalizeSelector(selector: unknown): Selector {
   return normalized;
 }
 
-function globs(value: unknown, field: string): string[] {
+function globs(value: unknown, field: string, owner = "forEachFile: selector."): string[] {
   if (value === undefined) return [];
   if (typeof value === "string") return [value];
   if (Array.isArray(value) && value.every((item) => typeof item === "string")) return [...value];
-  throw new TypeError(`forEachFile: selector.${field} must be a glob or an array of globs`);
+  throw new TypeError(`${owner}${field} must be a glob or an array of globs`);
 }
 
 function defaultLabel(position: number, content: TaskContent): string {
@@ -1028,6 +1065,10 @@ function defaultLabel(position: number, content: TaskContent): string {
       return `wait for ${String(content.name)}`;
     case "codemod":
       return `codemod ${String(content.source)}`;
+    case "dependencyGraph": {
+      const lockfiles = content.lockfiles as string[] | undefined;
+      return lockfiles ? `dependencyGraph ${lockfiles.join(", ")}` : "dependencyGraph";
+    }
     case "agent":
       return `agent: ${truncate(content.prompt)}`;
     default:
