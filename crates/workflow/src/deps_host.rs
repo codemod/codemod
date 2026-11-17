@@ -51,7 +51,7 @@ pub(crate) fn semver(
     let value = match op.as_str() {
         "satisfies" => serde_json::json!(versions::satisfies(ecosystem, &b, &a)),
         "compare" => serde_json::json!(versions::compare(ecosystem, &a, &b) as i8),
-        "breaking" => serde_json::json!(versions::is_breaking(&a, &b)),
+        "breaking" => serde_json::json!(versions::is_breaking(ecosystem, &a, &b)),
         "prerelease" => serde_json::json!(versions::is_prerelease(ecosystem, &a)),
         _ => serde_json::Value::Null,
     };

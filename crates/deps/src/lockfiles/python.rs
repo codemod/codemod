@@ -119,25 +119,9 @@ pub fn poetry(text: &str, read: ReadFile) -> Result<Graph, String> {
 
     for (package, from) in packages.iter().zip(ids) {
         for (name, value) in table(package.get("dependencies")) {
-            // One constraint, or several split by environment markers.
-            let constraints = match value {
-                Value::Array(list) => list,
-                value => vec![value],
-            };
-            let optional = constraints
-                .iter()
-                .all(|c| c.get("optional").and_then(Value::as_bool) == Some(true));
-            let range = constraints
-                .iter()
-                .map(|c| {
-                    c.as_str()
-                        .or_else(|| c.get("version")?.as_str())
-                        .unwrap_or(ANY)
-                })
-                .collect::<Vec<_>>()
-                .join(" || ");
+            let (range, optional) = poetry_constraint(&value);
             let name = normalize(&name);
-            let to = resolve(&graph, &by_name, &name, None);
+            let to = resolve_in_range(&graph, &by_name, &name, &range);
             let kind = if optional { Kind::Optional } else { Kind::Prod };
             graph.edge(from, to, &name, Some(range), kind);
         }
@@ -160,7 +144,7 @@ pub fn poetry(text: &str, read: ReadFile) -> Result<Graph, String> {
             ".",
         );
         for (name, range, kind) in pyproject_dependencies(&manifest) {
-            let to = resolve(&graph, &by_name, &name, None);
+            let to = resolve_in_range(&graph, &by_name, &name, &range);
             graph.edge(root, to, &name, Some(range), kind);
         }
     }
@@ -297,16 +281,52 @@ fn pyproject_dependencies(manifest: &Value) -> Vec<(String, String, Kind)> {
             if name == "python" {
                 continue;
             }
-            let optional = value.get("optional").and_then(Value::as_bool) == Some(true);
-            let range = value
-                .as_str()
-                .or_else(|| value.get("version")?.as_str())
-                .unwrap_or(ANY);
+            let (range, optional) = poetry_constraint(&value);
             let kind = if optional { Kind::Optional } else { kind };
-            out.push((normalize(&name), range.to_string(), kind));
+            out.push((normalize(&name), range, kind));
         }
     }
     out
+}
+
+/// A Poetry dependency's range and whether it is optional. The value is one
+/// constraint, or a list of them split by environment markers.
+fn poetry_constraint(value: &Value) -> (String, bool) {
+    let constraints = match value {
+        Value::Array(list) => list.as_slice(),
+        value => std::slice::from_ref(value),
+    };
+    let optional = constraints
+        .iter()
+        .all(|c| c.get("optional").and_then(Value::as_bool) == Some(true));
+    let range = constraints
+        .iter()
+        .map(|c| {
+            c.as_str()
+                .or_else(|| c.get("version")?.as_str())
+                .unwrap_or(ANY)
+        })
+        .collect::<Vec<_>>()
+        .join(" || ");
+    (range, optional)
+}
+
+/// The installed package a dependency on `name` with `range` resolves to:
+/// the first one the range allows, otherwise the first.
+fn resolve_in_range(
+    graph: &Graph,
+    by_name: &HashMap<String, Vec<usize>>,
+    name: &str,
+    range: &str,
+) -> Option<usize> {
+    let candidates = by_name.get(name)?;
+    candidates
+        .iter()
+        .find(|&&id| {
+            crate::semver::satisfies(Ecosystem::Pypi, range, &graph.nodes[id].version) == Some(true)
+        })
+        .or(candidates.first())
+        .copied()
 }
 
 /// The installed package a dependency on `name` resolves to: the one with

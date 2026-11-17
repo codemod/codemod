@@ -316,18 +316,18 @@ pub fn pypi_releases(document: &str) -> Result<Vec<Release>, String> {
         .get("releases")
         .and_then(|r| r.as_object())
         .ok_or("not a project document")?;
+    // A version whose files were all deleted has nothing to install.
     Ok(releases
         .iter()
-        .map(|(version, files)| {
-            let files = files.as_array().map(Vec::as_slice).unwrap_or_default();
-            Release {
+        .filter_map(|(version, files)| {
+            let files = files.as_array().filter(|files| !files.is_empty())?;
+            Some(Release {
                 version: version.clone(),
-                yanked: !files.is_empty()
-                    && files
-                        .iter()
-                        .all(|file| file["yanked"].as_bool() == Some(true)),
+                yanked: files
+                    .iter()
+                    .all(|file| file["yanked"].as_bool() == Some(true)),
                 dependencies: Vec::new(),
-            }
+            })
         })
         .collect())
 }

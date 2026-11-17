@@ -63,15 +63,23 @@ pub fn compare(ecosystem: Ecosystem, a: &str, b: &str) -> Ordering {
 
 /// Whether going from `from` to `to` is a breaking change under caret rules:
 /// the left-most non-zero component changes (so 0.29 to 0.30 is breaking).
-pub fn is_breaking(from: &str, to: &str) -> bool {
-    fn breaking_part(version: &str) -> Vec<&str> {
-        let parts: Vec<&str> = version.split(['.', '-', '+']).take(3).collect();
-        match parts.iter().position(|part| *part != "0") {
+pub fn is_breaking(ecosystem: Ecosystem, from: &str, to: &str) -> bool {
+    fn breaking_part<T: PartialEq + Copy>(parts: &[T], zero: T) -> Vec<T> {
+        let parts = &parts[..parts.len().min(3)];
+        match parts.iter().position(|part| *part != zero) {
             Some(index) => parts[..=index].to_vec(),
-            None => parts,
+            None => parts.to_vec(),
         }
     }
-    breaking_part(from) != breaking_part(to)
+    if matches!(ecosystem, Ecosystem::Pypi) {
+        // Compare release numbers, so 1.0rc1 to 1.0 is not breaking.
+        if let Some((from, to)) = pypi::version(from).zip(pypi::version(to)) {
+            return from.epoch() != to.epoch()
+                || breaking_part(from.release(), 0) != breaking_part(to.release(), 0);
+        }
+    }
+    let split = |version| -> Vec<&str> { str::split(version, ['.', '-', '+']).collect() };
+    breaking_part(&split(from), "0") != breaking_part(&split(to), "0")
 }
 
 mod pypi {
@@ -110,16 +118,16 @@ mod pypi {
             return Some(Vec::new());
         }
         if let Some(lower) = clause.strip_prefix('^') {
-            let parts = numbers(lower)?;
-            let at = parts.iter().position(|&p| p != 0);
-            return Some(between(lower, &parts, at.unwrap_or(parts.len() - 1)));
+            let release = version(lower)?.release().to_vec();
+            let at = release.iter().position(|&p| p != 0);
+            return between(lower, &release, at.unwrap_or(release.len() - 1));
         }
         if let Some(lower) = clause
             .strip_prefix('~')
             .filter(|rest| !rest.starts_with('='))
         {
-            let parts = numbers(lower)?;
-            return Some(between(lower, &parts, usize::from(parts.len() > 1)));
+            let release = version(lower)?.release().to_vec();
+            return between(lower, &release, usize::from(release.len() > 1));
         }
         if clause.starts_with(|c: char| c.is_ascii_digit()) {
             return Some(vec![format!("=={clause}")]);
@@ -127,14 +135,18 @@ mod pypi {
         Some(vec![clause.to_string()])
     }
 
-    fn numbers(version: &str) -> Option<Vec<u64>> {
-        version.split('.').map(|part| part.parse().ok()).collect()
-    }
-
-    /// `>=lower` and below `lower` with the part at `at` raised by one.
-    fn between(lower: &str, parts: &[u64], at: usize) -> Vec<String> {
-        let mut upper: Vec<String> = parts[..at].iter().map(u64::to_string).collect();
-        upper.push((parts[at] + 1).to_string());
-        vec![format!(">={lower}"), format!("<{}", upper.join("."))]
+    /// `>=lower` and below `lower`'s release with the number at `at` raised
+    /// by one, in `lower`'s epoch; `None` when that number cannot be raised.
+    fn between(lower: &str, release: &[u64], at: usize) -> Option<Vec<String>> {
+        let mut upper: Vec<String> = release[..at].iter().map(u64::to_string).collect();
+        upper.push(release[at].checked_add(1)?.to_string());
+        let epoch = match version(lower)?.epoch() {
+            0 => String::new(),
+            epoch => format!("{epoch}!"),
+        };
+        Some(vec![
+            format!(">={lower}"),
+            format!("<{epoch}{}", upper.join(".")),
+        ])
     }
 }

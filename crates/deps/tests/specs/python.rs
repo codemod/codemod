@@ -241,3 +241,96 @@ fn a_pypi_release_is_yanked_only_when_every_file_is() {
         [("1.0".to_string(), false), ("1.1".to_string(), true)]
     );
 }
+
+#[test]
+fn poetry_carets_and_tildes_take_prerelease_and_epoch_versions() {
+    use codemod_deps::semver::satisfies;
+    let check = |range, version| satisfies(Ecosystem::Pypi, range, version);
+    assert_eq!(
+        [
+            check("^1.2rc1", "1.3"),
+            check("~1.2rc1", "1.3"),
+            check("^1!1.2", "1!1.9"),
+            check("^1!1.2", "1.9"),
+        ],
+        [Some(true), Some(false), Some(true), Some(false)]
+    );
+}
+
+#[test]
+fn a_poetry_bound_too_large_to_raise_cannot_be_read() {
+    use codemod_deps::semver::satisfies;
+    assert_eq!(
+        satisfies(Ecosystem::Pypi, "^18446744073709551615", "1.0"),
+        None
+    );
+}
+
+#[test]
+fn a_python_prerelease_reaching_its_release_is_not_breaking() {
+    use codemod_deps::semver::is_breaking;
+    assert_eq!(
+        [
+            is_breaking(Ecosystem::Pypi, "0.1rc1", "0.1"),
+            is_breaking(Ecosystem::Pypi, "0.1", "0.2"),
+            is_breaking(Ecosystem::Pypi, "1.9", "2.0rc1"),
+        ],
+        [false, true, true]
+    );
+}
+
+#[test]
+fn a_poetry_dependency_resolves_to_the_locked_version_its_range_allows() {
+    let lock = r#"
+[[package]]
+name = "app-lib"
+version = "1.0"
+dependencies = { foo = ">=2" }
+
+[[package]]
+name = "foo"
+version = "1.0"
+
+[[package]]
+name = "foo"
+version = "2.0"
+"#;
+    let walk = Walk::new(lockfiles::poetry(lock, &|_| None).unwrap());
+    assert_eq!(
+        described(&walk, walk.declaring("foo", &[])),
+        ["app-lib@1.0 prod foo@2.0 >=2"]
+    );
+}
+
+#[test]
+fn a_pyproject_dependency_split_by_markers_keeps_every_range() {
+    let pyproject = r#"
+[tool.poetry]
+name = "app"
+version = "1.0.0"
+
+[tool.poetry.dependencies]
+foo = [{ version = "^1", python = "<3.10" }, { version = "^2", python = ">=3.10" }]
+"#;
+    let lock = "[[package]]\nname = \"foo\"\nversion = \"2.1\"\n";
+    let graph = lockfiles::poetry(lock, &|path| {
+        (path == "pyproject.toml").then(|| pyproject.to_string())
+    })
+    .unwrap();
+    assert_eq!(
+        workspace_dependencies(graph, &[]),
+        ["app@1.0.0 prod foo@2.1 ^1 || ^2"]
+    );
+}
+
+#[test]
+fn a_pypi_version_with_no_files_is_not_a_release() {
+    use codemod_deps::registry::pypi_releases;
+    let document = r#"{ "releases": { "1.0": [{ "yanked": false }], "9.0": [] } }"#;
+    let versions: Vec<_> = pypi_releases(document)
+        .unwrap()
+        .into_iter()
+        .map(|release| release.version)
+        .collect();
+    assert_eq!(versions, ["1.0"]);
+}
