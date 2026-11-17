@@ -1,7 +1,7 @@
 //! `package-lock.json` v2 and v3: the `packages` map keyed by install path.
 //! Keys without `node_modules/` are workspaces (`""` is the root); a
-//! dependency resolves the way Node does, from the nearest `node_modules`
-//! up. Grepkon's parser read the same map but kept names only.
+//! dependency resolves the way Node does, from the `node_modules` of each
+//! directory up to the root. Grepkon's parser read the same map but kept names only.
 
 use std::collections::HashMap;
 
@@ -74,12 +74,7 @@ pub fn parse(text: &str) -> Result<Graph, String> {
             if base.is_empty() {
                 return None;
             }
-            base = match base.rfind("/node_modules/") {
-                Some(at) => base[..at].to_string(),
-                None if base.starts_with("node_modules/") => String::new(),
-                // A workspace looks in its own node_modules, then the root's.
-                None => String::new(),
-            };
+            base = parent_dir(&base);
         }
     };
 
@@ -97,4 +92,16 @@ pub fn parse(text: &str) -> Result<Graph, String> {
         }
     }
     Ok(graph)
+}
+
+/// The next directory Node looks in from `dir`: its parent, skipping
+/// `node_modules` directories themselves.
+fn parent_dir(dir: &str) -> String {
+    let mut dir = dir;
+    loop {
+        dir = dir.rsplit_once('/').map_or("", |(parent, _)| parent);
+        if !(dir == "node_modules" || dir.ends_with("/node_modules")) {
+            return dir.to_string();
+        }
+    }
 }

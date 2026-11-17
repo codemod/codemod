@@ -1141,9 +1141,10 @@ export default async function main({ target }) {
 }
 
 #[test]
-fn a_dependency_graph_lists_lockfiles_it_could_not_read() {
+fn a_dependency_graph_reads_only_root_lockfiles_and_lists_ones_it_could_not_read() {
     let h = Harness::new();
     yarn_target(&h);
+    h.write("pnpm-lock.yaml", "lockfileVersion: [\n");
     h.write(
         "examples/old/yarn.lock",
         "# yarn lockfile v1\n\na@^1:\n  version \"1.0.0\"\n",
@@ -1152,17 +1153,14 @@ fn a_dependency_graph_lists_lockfiles_it_could_not_read() {
         r#"
 import { step, dependencyGraph } from "codemod/workflow";
 export default async function main() {
-  return await step(dependencyGraph({}, (g) => ({ read: g.lockfiles, skipped: g.skipped })));
+  return await step(dependencyGraph({}, (g) => ({ read: g.lockfiles, skipped: g.skipped.map((s) => s.lockfile) })));
 }
 "#,
         Value::Null,
     );
     assert_eq!(
         output(&report).unwrap(),
-        json!({
-            "read": ["yarn.lock"],
-            "skipped": [{ "lockfile": "examples/old/yarn.lock", "error": "Yarn v1 lockfiles are not read yet" }]
-        })
+        json!({ "read": ["yarn.lock"], "skipped": ["pnpm-lock.yaml"] })
     );
 }
 

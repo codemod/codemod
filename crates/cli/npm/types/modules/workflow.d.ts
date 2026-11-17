@@ -490,8 +490,8 @@ declare module "codemod:workflow" {
     readonly lockfiles: readonly string[];
     /**
      * Lockfiles found but not read, with why. Without a `lockfiles` option,
-     * one that cannot be read (a Yarn v1 lockfile in an example, say) is
-     * left out instead of failing the step.
+     * a root lockfile that cannot be read is left out instead of failing the
+     * step.
      */
     readonly skipped: readonly { readonly lockfile: string; readonly error: string }[];
     /** The repository's own packages. */
@@ -512,7 +512,8 @@ declare module "codemod:workflow" {
 
   /**
    * Reads the target's lockfiles (yarn.lock, pnpm-lock.yaml, package-lock.json,
-   * Cargo.lock; default: any of them) into a graph and runs `callback` on it in
+   * Cargo.lock; default: those at the target's root, so nested ones need a
+   * `lockfiles` glob) into a graph and runs `callback` on it in
    * its own isolate, where it may await `registry` lookups. Nodes and edges in
    * the result are recorded as `name@version` text and `RecordedEdge`.
    *
