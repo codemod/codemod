@@ -1,5 +1,7 @@
 # Workflow v2 lab
 
+Handoff and current status: [../HANDOFF.md](../HANDOFF.md).
+
 Three real workflows on the TypeScript engine (#2411), a local dashboard over
 their runs, and what they showed was missing ([PRIMITIVES.md](PRIMITIVES.md)).
 
