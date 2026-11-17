@@ -299,14 +299,14 @@ const usesMui = await step(
 |---|---|
 | `g.workspaces()` | The repository's own packages |
 | `g.nodes(name?)`, `g.node(name, version?)` | Installed packages, each a `name@version` node |
-| `g.dependents(name, { kinds })` | Edges that declare a dependency on `name`, resolved or not (peer edges never resolve) |
+| `g.dependents(name, { kinds })` | Edges that declare a dependency on `name`, resolved or not (peer edges resolve only in pnpm lockfiles) |
 | `g.chains({ from, to, kinds })` | Shortest chains from each `from` node (default: every workspace) to a `to` node |
 | `node.dependencies({ kinds })`, `node.dependents({ kinds })` | Edges out of and into one node |
 | `node.workspacesReaching({ kinds })` | Each workspace that reaches the node, with its chain |
 | `node.releases({ accepting, newerThanMine })` | The package's releases from the registry, each with `breaking` relative to the installed version |
 | `edge.accepts(version)` | Whether the edge's declared range accepts a version: `true`, `false`, or `null` when it cannot tell |
 
-Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`. In a step's result, nodes become `name@version` text and edges `{ from, to, kind, range }`.
+Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`. Only pnpm records which copy of a peer a package was installed with, so peer edges have a `to` only in pnpm lockfiles; a pnpm package that names a dependency both as a dependency and as a peer gets a `peer` edge. In a step's result, nodes become `name@version` text and edges `{ from, to, kind, range }`.
 
 ### `registry` and `semver`
 

@@ -449,7 +449,7 @@ declare module "codemod:workflow" {
   /** One declared dependency. */
   export interface DependencyEdge {
     readonly from: PackageNode;
-    /** The installed node; null for peer edges and ranges the lockfile does not resolve. */
+    /** The installed node; null when the lockfile does not resolve the edge, which for peer edges is every format but pnpm. */
     readonly to: PackageNode | null;
     readonly name: string;
     /** Declared range; null when the lockfile keeps none (third-party crates in Cargo.lock). */
@@ -500,7 +500,7 @@ declare module "codemod:workflow" {
     nodes(name?: string): PackageNode[];
     /** One node by name, and by version when several are installed. */
     node(name: string, version?: string): PackageNode | undefined;
-    /** Edges that declare a dependency on `name`, resolved or not (peer edges never resolve). */
+    /** Edges that declare a dependency on `name`, resolved or not (peer edges resolve only in pnpm lockfiles). */
     dependents(name: string, options?: KindsOption): DependencyEdge[];
     /** Shortest chains from each `from` node (default: every workspace) to any `to` node. */
     chains(options: {

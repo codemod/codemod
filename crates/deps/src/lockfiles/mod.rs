@@ -62,16 +62,18 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
         })
         .collect();
     found.sort();
-    let nested = !found.is_empty();
+    let first_found = found.first().cloned();
     found.retain(|path| match only {
         [] => !path.contains('/'),
         globs => globs.iter().any(|glob| glob_match(glob, path)),
     });
     if found.is_empty() {
-        let hint = if only.is_empty() && nested {
-            "; name nested ones with a glob such as **/yarn.lock"
-        } else {
-            ""
+        let hint = match first_found {
+            Some(path) if only.is_empty() => {
+                let file = path.rsplit('/').next().unwrap_or(&path);
+                format!("; name nested ones with a glob such as **/{file}")
+            }
+            _ => String::new(),
         };
         return Err(format!(
             "no lockfile ({}) at {}{hint}",

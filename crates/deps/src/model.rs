@@ -76,8 +76,8 @@ pub struct Node {
 #[derive(Debug, Clone)]
 pub struct Edge {
     pub from: usize,
-    /// The installed target; peer edges and ranges the lockfile does not
-    /// resolve have none.
+    /// The installed target; none when the lockfile does not resolve the
+    /// edge, which for peer edges is every format but pnpm.
     pub to: Option<usize>,
     pub name: String,
     /// Declared range. Cargo.lock keeps none for third-party crates.

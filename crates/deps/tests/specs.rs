@@ -290,10 +290,10 @@ fn only_root_lockfiles_are_read_when_none_were_named() {
 }
 
 #[test]
-fn nested_lockfiles_alone_point_to_a_glob() {
+fn nested_lockfiles_alone_point_to_a_glob_for_the_lockfile_found() {
     let dir = repository(&[("packages/web/package-lock.json", PACKAGE_LOCK)]);
     let error = lockfiles::load(dir.path(), &[]).unwrap_err();
-    assert!(error.contains("**/yarn.lock"), "{error}");
+    assert!(error.contains("**/package-lock.json"), "{error}");
 }
 
 #[test]

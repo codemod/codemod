@@ -1,6 +1,6 @@
 //! `pnpm-lock.yaml`, v6 to v9. Importers are the workspaces; v9 keeps
-//! resolved edges in `snapshots` (keys carry a `(peer)` suffix) and declared
-//! ranges and peers in `packages`; v6 keeps both in `packages`.
+//! resolved edges in `snapshots` (keys carry a `(peer)` suffix) and peers in
+//! `packages`; v6 keeps both in `packages`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -130,10 +130,12 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
         }
     }
 
-    // v9: resolved edges in snapshots, declared ranges in packages.
-    // v6: `packages` holds resolved versions only, so the range stays unknown.
-    // Both list the peers a copy was installed with among its dependencies:
-    // those become resolved peer edges, with the peer's declared range.
+    // v9: resolved edges in snapshots; v6: in packages. pnpm writes no
+    // declared ranges for a package's dependencies (v9 `packages` entries
+    // carry only peers), so ranges stay unknown unless an entry lists them.
+    // Both list the peers a copy was installed with among its dependencies,
+    // and a dependency the package also names as a peer looks the same: both
+    // become resolved peer edges, with the peer's declared range.
     let mut resolved_peers: HashSet<(usize, String)> = HashSet::new();
     let resolved_edges = if snapshots.is_empty() {
         &packages
