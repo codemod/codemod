@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::model::{Graph, Kind};
+use crate::model::{Ecosystem, Graph, Kind};
 
 pub struct Walk {
     pub graph: Graph,
@@ -12,6 +12,7 @@ pub struct Walk {
     into: Vec<Vec<usize>>,
     named: HashMap<String, Vec<usize>>,
     by_name: HashMap<String, Vec<usize>>,
+    ecosystems: Vec<Ecosystem>,
 }
 
 impl Walk {
@@ -30,7 +31,11 @@ impl Walk {
         for (id, node) in graph.nodes.iter().enumerate() {
             by_name.entry(node.name.clone()).or_default().push(id);
         }
+        let mut ecosystems: Vec<Ecosystem> = graph.nodes.iter().map(|n| n.ecosystem).collect();
+        ecosystems.sort_unstable();
+        ecosystems.dedup();
         Self {
+            ecosystems,
             graph,
             out,
             into,
@@ -40,8 +45,8 @@ impl Walk {
     }
 
     /// Every node named `name`, one per installed version and workspace.
-    pub fn nodes_named(&self, name: &str) -> &[usize] {
-        self.by_name.get(name).map_or(&[], Vec::as_slice)
+    pub fn nodes_named(&self, name: &str) -> Vec<usize> {
+        self.lookup(&self.by_name, name, |id| self.graph.nodes[id].ecosystem)
     }
 
     pub fn workspaces(&self) -> Vec<usize> {
@@ -63,7 +68,36 @@ impl Walk {
 
     /// Edges that declare a dependency on `name`, resolved or not.
     pub fn declaring(&self, name: &str, kinds: &[Kind]) -> Vec<usize> {
-        self.filter(self.named.get(name).map_or(&[], Vec::as_slice), kinds)
+        let edges = self.lookup(&self.named, name, |edge| {
+            self.graph.nodes[self.graph.edges[edge].from].ecosystem
+        });
+        self.filter(&edges, kinds)
+    }
+
+    /// Entries stored under `name` as each ecosystem in the graph spells it,
+    /// so `PyYAML` finds the PyPI package stored as `pyyaml`.
+    fn lookup(
+        &self,
+        map: &HashMap<String, Vec<usize>>,
+        name: &str,
+        ecosystem_of: impl Fn(usize) -> Ecosystem,
+    ) -> Vec<usize> {
+        let mut found: Vec<usize> = self
+            .ecosystems
+            .iter()
+            .flat_map(|&ecosystem| {
+                let entries = map.get(ecosystem.package_name(name).as_ref());
+                let ecosystem_of = &ecosystem_of;
+                entries
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(move |&entry| ecosystem_of(entry) == ecosystem)
+            })
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        found
     }
 
     /// The shortest chain from each start to any target, following installed

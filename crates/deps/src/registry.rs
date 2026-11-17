@@ -4,6 +4,7 @@
 //! without asking again.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -129,7 +130,7 @@ impl Registry for HttpRegistry {
 }
 
 /// A package's releases as a workflow sees them: oldest first, with
-/// dependencies grouped by kind.
+/// dependencies grouped by kind where the registry lists them (PyPI does not).
 pub fn describe(ecosystem: Ecosystem, name: &str, releases: &[Release]) -> serde_json::Value {
     let mut sorted: Vec<&Release> = releases.iter().collect();
     sorted.sort_by(|a, b| compare(ecosystem, &a.version, &b.version));
@@ -137,6 +138,7 @@ pub fn describe(ecosystem: Ecosystem, name: &str, releases: &[Release]) -> serde
         .into_iter()
         .map(|release| {
             let mut groups = serde_json::Map::new();
+            let listed = !matches!(ecosystem, Ecosystem::Pypi);
             for (field, kind) in [
                 ("dependencies", Kind::Prod),
                 ("peerDependencies", Kind::Peer),
@@ -150,7 +152,7 @@ pub fn describe(ecosystem: Ecosystem, name: &str, releases: &[Release]) -> serde
                     .filter(|(_, _, k)| *k == kind)
                     .map(|(name, range, _)| (name.clone(), range.clone().into()))
                     .collect();
-                if !group.is_empty() || kind != Kind::Build && kind != Kind::Dev {
+                if listed && (!group.is_empty() || kind != Kind::Build && kind != Kind::Dev) {
                     groups.insert(field.into(), group.into());
                 }
             }
@@ -309,6 +311,7 @@ pub fn crate_releases(index: &str) -> Result<Vec<Release>, String> {
 
 /// Releases from PyPI's JSON API. A release is yanked when every file of
 /// it is. PyPI lists dependencies only per file, so releases carry none.
+/// Versions are normalized as lockfiles write them (`2.0.0.RC1` is `2.0.0rc1`).
 pub fn pypi_releases(document: &str) -> Result<Vec<Release>, String> {
     let doc: serde_json::Value =
         serde_json::from_str(document).map_err(|e| format!("not a project document: {e}"))?;
@@ -321,8 +324,9 @@ pub fn pypi_releases(document: &str) -> Result<Vec<Release>, String> {
         .iter()
         .filter_map(|(version, files)| {
             let files = files.as_array().filter(|files| !files.is_empty())?;
+            let normalized = pep440_rs::Version::from_str(version).map(|v| v.to_string());
             Some(Release {
-                version: version.clone(),
+                version: normalized.unwrap_or_else(|_| version.clone()),
                 yanked: files
                     .iter()
                     .all(|file| file["yanked"].as_bool() == Some(true)),

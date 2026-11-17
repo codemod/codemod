@@ -25,6 +25,7 @@ declare module "codemod:deps" {
     /**
      * This package's releases from the registry, oldest first, each with
      * `breaking` relative to this node's version. Yanked releases are dropped.
+     * PyPI releases have no dependency groups.
      */
     releases(options?: {
       /** `{ react: "19.0.0" }` keeps releases whose ranges on react accept 19.0.0. Not for pypi packages. */
@@ -42,7 +43,7 @@ declare module "codemod:deps" {
     /** The installed node; null when the lockfile does not resolve the edge, which for peer edges is every format but pnpm. */
     readonly to: PackageNode | null;
     readonly name: string;
-    /** Declared range; null when the lockfile keeps none (third-party crates in Cargo.lock). */
+    /** Declared range; null when the lockfile keeps none (third-party crates in Cargo.lock) or the dependency comes from git, a URL or a path. */
     readonly range: string | null;
     readonly kind: DependencyKind;
     /** Whether the declared range accepts `version`; null when it cannot tell. */
@@ -134,11 +135,14 @@ declare module "codemod:deps" {
     devDependencies?: Record<string, string>;
   }
 
-  export interface PackageReleases {
+  /** A release from a registry that lists no dependencies per release (PyPI lists them per file). */
+  export type ReleaseVersion = Pick<Release, "version" | "yanked" | "prerelease">;
+
+  export interface PackageReleases<R = Release> {
     ecosystem: Ecosystem;
     name: string;
     /** Oldest first. Empty when the registry does not know the package. */
-    versions: Release[];
+    versions: R[];
   }
 
   /**
@@ -150,8 +154,8 @@ declare module "codemod:deps" {
   export const registry: {
     npm(name: string): Promise<PackageReleases>;
     cargo(name: string): Promise<PackageReleases>;
-    /** Releases carry no dependencies: PyPI lists them per file, not per release. */
-    pypi(name: string): Promise<PackageReleases>;
+    /** Versions are normalized (`2.0.0.RC1` is `2.0.0rc1`), as lockfiles write them. */
+    pypi(name: string): Promise<PackageReleases<ReleaseVersion>>;
   };
 
   type EcosystemOption = { ecosystem?: Ecosystem };

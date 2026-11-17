@@ -128,7 +128,7 @@ fn install_graph(ctx: &Ctx<'_>, walk: Arc<Walk>) -> rquickjs::Result<()> {
         Function::new(ctx.clone(), move |which: String, name: String| {
             let ids: Vec<usize> = match which.as_str() {
                 "workspaces" => graph.workspaces(),
-                "named" => graph.nodes_named(&name).to_vec(),
+                "named" => graph.nodes_named(&name),
                 _ => (0..graph.graph.nodes.len()).collect(),
             };
             Value::Array(ids.into_iter().map(|id| node_json(&graph, id)).collect()).to_string()

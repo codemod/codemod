@@ -22,6 +22,15 @@ impl Ecosystem {
         }
     }
 
+    /// A package name as the ecosystem's registry compares it: PyPI ignores
+    /// case and treats `-`, `_` and `.` alike (PEP 503).
+    pub fn package_name(self, name: &str) -> std::borrow::Cow<'_, str> {
+        match self {
+            Self::Pypi => crate::lockfiles::python::normalize(name).into(),
+            Self::Npm | Self::Cargo => name.into(),
+        }
+    }
+
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "npm" => Some(Self::Npm),
@@ -83,7 +92,8 @@ pub struct Edge {
     /// edge, which for peer edges is every format but pnpm.
     pub to: Option<usize>,
     pub name: String,
-    /// Declared range. Cargo.lock keeps none for third-party crates.
+    /// Declared range. Cargo.lock keeps none for third-party crates, and a
+    /// dependency from git, a URL or a path has none.
     pub range: Option<String>,
     pub kind: Kind,
 }

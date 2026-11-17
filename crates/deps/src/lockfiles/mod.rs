@@ -16,7 +16,7 @@ use crate::model::{Graph, Kind, Skipped};
 mod cargo;
 mod npm;
 mod pnpm;
-mod python;
+pub(crate) mod python;
 mod yarn;
 
 pub use cargo::{parse as cargo, Manifests as CargoManifests};

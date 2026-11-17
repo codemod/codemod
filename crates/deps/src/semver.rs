@@ -44,21 +44,22 @@ pub fn is_prerelease(ecosystem: Ecosystem, version: &str) -> bool {
     }
 }
 
+/// A total order: versions the ecosystem can read sort by its rules, and
+/// any it cannot (PyPI still lists pre-PEP 440 ones) sort before them by text.
 pub fn compare(ecosystem: Ecosystem, a: &str, b: &str) -> Ordering {
-    let ordered = match ecosystem {
-        Ecosystem::Npm => node_semver::Version::parse(a)
-            .ok()
-            .zip(node_semver::Version::parse(b).ok())
-            .map(|(a, b)| a.cmp(&b)),
-        Ecosystem::Cargo => semver::Version::parse(a)
-            .ok()
-            .zip(semver::Version::parse(b).ok())
-            .map(|(a, b)| a.cmp(&b)),
-        Ecosystem::Pypi => pypi::version(a)
-            .zip(pypi::version(b))
-            .map(|(a, b)| a.cmp(&b)),
-    };
-    ordered.unwrap_or_else(|| a.cmp(b))
+    fn by<T: Ord>(a: &str, b: &str, parse: impl Fn(&str) -> Option<T>) -> Ordering {
+        match (parse(a), parse(b)) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (None, Some(_)) => Ordering::Less,
+            (Some(_), None) => Ordering::Greater,
+            (None, None) => a.cmp(b),
+        }
+    }
+    match ecosystem {
+        Ecosystem::Npm => by(a, b, |v| node_semver::Version::parse(v).ok()),
+        Ecosystem::Cargo => by(a, b, |v| semver::Version::parse(v).ok()),
+        Ecosystem::Pypi => by(a, b, pypi::version),
+    }
 }
 
 /// Whether going from `from` to `to` is a breaking change under caret rules:
@@ -73,9 +74,15 @@ pub fn is_breaking(ecosystem: Ecosystem, from: &str, to: &str) -> bool {
     }
     if matches!(ecosystem, Ecosystem::Pypi) {
         // Compare release numbers, so 1.0rc1 to 1.0 is not breaking.
+        // Padded to three numbers, so 0.0 to 0.0.0 is not breaking.
+        let release = |version: &pep440_rs::Version| {
+            let mut release = version.release().to_vec();
+            release.resize(release.len().max(3), 0);
+            release
+        };
         if let Some((from, to)) = pypi::version(from).zip(pypi::version(to)) {
             return from.epoch() != to.epoch()
-                || breaking_part(from.release(), 0) != breaking_part(to.release(), 0);
+                || breaking_part(&release(&from), 0) != breaking_part(&release(&to), 0);
         }
     }
     let split = |version| -> Vec<&str> { str::split(version, ['.', '-', '+']).collect() };
@@ -92,14 +99,14 @@ mod pypi {
     }
 
     /// A PEP 440 specifier set, or a Poetry constraint: alternatives joined
-    /// by `||`, each a comma-separated list of clauses that must all hold.
+    /// by `||` or `|`, each a list of clauses that must all hold, separated by
+    /// commas or, in Poetry, by spaces (`>=1.2 <2.0`).
     pub(super) fn satisfies(range: &str, version: &str) -> Option<bool> {
         let version = self::version(version)?;
-        let mut any = false;
-        for alternative in range.split("||") {
+        let mut any = range.trim().is_empty();
+        for alternative in range.split('|').filter(|a| !a.trim().is_empty()) {
             let mut all = true;
-            for clause in alternative.split(',') {
-                let clause: String = clause.split_whitespace().collect();
+            for clause in clauses(alternative) {
                 for specifier in specifiers(&clause)? {
                     all &= VersionSpecifier::from_str(&specifier)
                         .ok()?
@@ -109,6 +116,30 @@ mod pypi {
             any |= all;
         }
         Some(any)
+    }
+
+    /// An alternative's clauses, each with its spaces removed: a word that
+    /// is only an operator (`>= 1.2`) joins the word after it.
+    fn clauses(alternative: &str) -> Vec<String> {
+        let mut clauses: Vec<String> = Vec::new();
+        let mut operator = String::new();
+        for word in alternative
+            .split([',', ' ', '\t'])
+            .filter(|w| !w.is_empty())
+        {
+            if word
+                .chars()
+                .all(|c| matches!(c, '<' | '>' | '=' | '!' | '~' | '^'))
+            {
+                operator.push_str(word);
+            } else {
+                clauses.push(std::mem::take(&mut operator) + word);
+            }
+        }
+        if !operator.is_empty() {
+            clauses.push(operator);
+        }
+        clauses
     }
 
     /// One clause as PEP 440 specifiers: Poetry's `^1.2` is `>=1.2,<2`,
