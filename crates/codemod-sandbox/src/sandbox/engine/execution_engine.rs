@@ -16,7 +16,6 @@ use crate::sandbox::runtime_module::{
     RuntimeEvent, RuntimeEventCallback, RuntimeEventKind, RuntimeHooksContext,
 };
 use crate::utils::quickjs_utils::maybe_promise;
-use crate::workflow_global::SharedStateContext;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
@@ -252,8 +251,6 @@ pub struct JssgExecutionOptions<'a, R> {
     pub metrics_context: Option<MetricsContext>,
     /// Optional engine-owned LLM request handler exposed through codemod:llm
     pub llm_request_handler: Option<LlmRequestHandler>,
-    /// Optional shared state context for cross-thread state communication
-    pub shared_state_context: Option<SharedStateContext>,
     /// Optional runtime event callback for codemod:runtime hook emissions
     pub runtime_event_callback: Option<RuntimeEventCallback>,
     /// Optional cancellation flag exposed to codemod:runtime.isCanceled()
@@ -470,7 +467,6 @@ where
             .then(|| options.llm_request_handler.clone())
             .flatten(),
     );
-    let shared_state_context = options.shared_state_context.clone();
     let runtime_hooks_context = RuntimeHooksContext::new(
         options.runtime_event_callback.clone(),
         options.cancellation_flag.clone(),
@@ -535,12 +531,6 @@ where
             },
         })?;
 
-        // Always store a SharedStateContext so codemod:workflow functions work
-        ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: format!("Failed to store SharedStateContext: {:?}", e),
-            },
-        })?;
 
         ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -738,8 +728,6 @@ pub struct SimpleJsExecutionOptions<'a, R> {
     pub resolver: Arc<R>,
     /// Optional metrics context for tracking metrics across execution
     pub metrics_context: Option<MetricsContext>,
-    /// Optional shared state context for cross-thread state communication
-    pub shared_state_context: Option<SharedStateContext>,
 }
 
 /// Execute a standalone JavaScript file with QuickJS (like node script.js)
@@ -796,7 +784,6 @@ where
         })?;
 
     let metrics_context = options.metrics_context.clone();
-    let shared_state_context = options.shared_state_context.clone();
     let runtime_hooks_context = RuntimeHooksContext::default();
 
     // Execute JavaScript code
@@ -809,12 +796,6 @@ where
             })?;
         }
 
-        // Always store a SharedStateContext so codemod:workflow functions work
-        ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: format!("Failed to store SharedStateContext: {:?}", e),
-            },
-        })?;
 
         ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -981,12 +962,6 @@ where
     let runtime_hooks_context = RuntimeHooksContext::default();
 
     async_with!(context => |ctx| {
-        // Store a default SharedStateContext so codemod:workflow functions work
-        ctx.store_userdata(SharedStateContext::default()).map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: format!("Failed to store SharedStateContext: {:?}", e),
-            },
-        })?;
 
         ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -1190,7 +1165,6 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1265,7 +1239,6 @@ export default async function transform() {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: Some(handler),
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1336,7 +1309,6 @@ export default async function transform() {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: Some(handler),
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1412,7 +1384,6 @@ export default function transform(root, options) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1483,7 +1454,6 @@ export default function transform() {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1528,7 +1498,6 @@ export default function transform(root, options) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1592,7 +1561,6 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1646,7 +1614,6 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1700,7 +1667,6 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1746,7 +1712,6 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1797,7 +1762,6 @@ function example() {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1891,7 +1855,6 @@ function example() {
             semantic_provider: None,
             metrics_context: Some(metrics_ctx.clone()),
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -1952,7 +1915,6 @@ function example() {
             semantic_provider: None,
             metrics_context: Some(crate::metrics::MetricsContext::new()),
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -2007,7 +1969,6 @@ export default function transform() { return null; }"#;
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -2056,7 +2017,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -2113,7 +2073,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: Some(runtime_event_callback),
             cancellation_flag: None,
             test_mode: false,
@@ -2162,7 +2121,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -2211,7 +2169,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -2260,7 +2217,6 @@ export default async function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
@@ -2379,7 +2335,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,

@@ -405,8 +405,6 @@ struct HostRequest {
     position: u64,
     label: String,
     task: serde_json::Value,
-    #[serde(default)]
-    state: serde_json::Map<String, serde_json::Value>,
     /// How long the task may run, from the step's `timeout`.
     #[serde(default)]
     timeout_ms: Option<u64>,
@@ -684,7 +682,6 @@ pub(crate) fn run_host_task(run: &Arc<RunContext>, request: &str) -> Result<Stri
         run,
         position: request.position,
         label: request.label,
-        state: request.state,
         cancel: match &clock {
             Some(clock) => Arc::clone(&clock.cancel),
             None => Arc::clone(&run.cancel),

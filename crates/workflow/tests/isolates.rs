@@ -113,48 +113,35 @@ export default async function main() {}
 }
 
 #[test]
-fn callbacks_can_set_state_with_the_jssg_api() {
+fn importing_a_removed_state_function_says_what_replaced_it() {
     let h = Harness::new();
-    h.write("a.ts", "");
-    h.write("b.ts", "");
-    let report = h.start(
+    let error = load_error(
+        &h,
         r#"
-import { step, forEachFile, getState, setState, acquireLock } from "codemod/workflow";
-export default async function main() {
-  const seen = await step(forEachFile({ language: "typescript" }, (file) => {
-    const release = acquireLock("seen");
-    try {
-      setState("seen", [...(getState("seen") ?? []), file.path].sort());
-    } finally {
-      release();
-    }
-  }));
-  return seen.state.seen;
-}
+import { setState } from "codemod/workflow";
+export default async function main() { setState("x", 1); }
 "#,
-        Value::Null,
     );
-    assert_eq!(output(&report).unwrap(), json!(["a.ts", "b.ts"]));
+    assert!(error.contains("'setState' was removed"), "{error}");
 }
 
 #[test]
-fn callbacks_read_the_steps_state_option() {
+fn callbacks_take_values_by_capture_and_hand_back_what_they_found() {
     let h = Harness::new();
-    h.write("a.ts", "");
+    h.write("a.ts", "react-19");
+    h.write("b.ts", "react-18");
     let report = h.start(
         r#"
-import { step, forEachFile, getState } from "codemod/workflow";
+import { step, forEachFile } from "codemod/workflow";
 export default async function main() {
-  const read = await step(
-    forEachFile({ language: "typescript" }, () => getState("target")),
-    { state: { target: "react-19" } },
-  );
-  return read.outputs;
+  const target = "react-19";
+  const found = await step(forEachFile({ language: "typescript" }, (file) => file.text === target ? file.path : null));
+  return found.outputs.filter(Boolean);
 }
 "#,
         Value::Null,
     );
-    assert_eq!(output(&report).unwrap(), json!(["react-19"]));
+    assert_eq!(output(&report).unwrap(), json!(["a.ts"]));
 }
 
 #[test]

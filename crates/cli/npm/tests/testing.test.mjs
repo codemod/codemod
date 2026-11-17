@@ -271,34 +271,6 @@ for (const host of Object.keys(HOSTS)) {
     }
   });
 
-  test(`${host}: state set in callbacks comes back on the step's result`, HOSTS[host], async () => {
-    const path = join(
-      scratch({
-        "workflow.ts": `
-import { step, forEachFile, getState, setState, unsetState } from "codemod/workflow";
-export default async function main() {
-  const collected = await step("Collect", forEachFile("**/*.ts", (file) => {
-    setState("last", file.path);
-    setState("scratch", 1, false);
-    unsetState("drop");
-  }), { state: { drop: true } });
-  const fromStep = await step("Read", () => ({ last: getState("last") ?? null }), {
-    state: { last: collected.state.last },
-  });
-  return { state: collected.state, fromStep };
-}
-`,
-      }),
-      "workflow.ts",
-    );
-    const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
-    assert.equal(result.status, "succeeded", result.error);
-    assert.deepEqual(result.output, {
-      state: { last: "a.ts", drop: null },
-      fromStep: { last: "a.ts" },
-    });
-  });
-
   test(`${host}: the older codemod: spelling imports the same modules`, HOSTS[host], async () => {
     const path = join(
       scratch({
@@ -320,38 +292,7 @@ export default async function main() {
 
   // What follows used to differ between the hosts.
 
-  test(`${host}: state in a step is copied in and out, as JSON keeps it`, HOSTS[host], async () => {
-    const path = join(
-      scratch({
-        "workflow.ts": `
-import { step, getState, setState } from "codemod/workflow";
-export default async function main() {
-  const edited = await step("Edit", () => {
-    const seen = getState("seen");
-    seen.push("b");
-    setState("seen", seen);
-    const kept = { n: 1 };
-    setState("kept", kept);
-    kept.n = 2;
-    setState("odd", { at: new Date(0), missing: undefined, big: Number.NaN });
-    setState("same", 1);
-    return { keys: Object.keys(getState()).sort() };
-  }, { state: { seen: ["a"], same: 1 } });
-  return edited;
-}
-`,
-      }),
-      "workflow.ts",
-    );
-    const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
-    assert.equal(result.status, "succeeded", result.error);
-    assert.deepEqual(result.output, {
-      keys: ["kept", "odd", "same", "seen"],
-      state: { seen: ["a", "b"], kept: { n: 1 }, odd: { at: {}, missing: null, big: null } },
-    });
-  });
-
-  test(`${host}: the workflow body cannot use workflow state`, HOSTS[host], async () => {
+  test(`${host}: workflows have no state functions`, HOSTS[host], async () => {
     const path = join(
       scratch({
         "workflow.ts": `
@@ -363,9 +304,11 @@ export default async function main() {
       }),
       "workflow.ts",
     );
-    const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
-    assert.equal(result.status, "failed");
-    assert.match(result.error, /getState\(\) is not available in the workflow body/);
+    // The engine says what replaced it; Node.js only that the export is gone.
+    await assert.rejects(
+      runWorkflow(path, { target: { "a.ts": "a\n" } }),
+      /'getState' was removed|export named 'getState'/,
+    );
   });
 
   test(`${host}: a failing until step fails the run`, HOSTS[host], async () => {
@@ -460,29 +403,21 @@ export default async function main() {
     await assert.rejects(runWorkflow(path, { target: { "a.ts": "a\n" } }), /assigns to 'count'/);
   });
 
-  test(
-    `${host}: the body's lock and step outputs are there, and a function result is null`,
-    HOSTS[host],
-    async () => {
-      const path = join(
-        scratch({
-          "workflow.ts": `
-import { acquireLock, getOrSetStepOutput, getStepOutput, setStepOutput } from "codemod/workflow";
+  test(`${host}: a function in the body's result becomes null`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
 export default async function main() {
-  const release = acquireLock("x");
-  release();
-  setStepOutput("a", "1");
-  return [getStepOutput("", "a"), getOrSetStepOutput("", "b", "2"), () => 1];
+  return [1, () => 1];
 }
 `,
-        }),
-        "workflow.ts",
-      );
-      const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
-      assert.equal(result.status, "succeeded", result.error);
-      assert.deepEqual(result.output, ["1", "2", null]);
-    },
-  );
+      }),
+      "workflow.ts",
+    );
+    const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
+    assert.equal(result.status, "succeeded", result.error);
+    assert.deepEqual(result.output, [1, null]);
+  });
 
   test(`${host}: an aborted run ends as canceled`, HOSTS[host], async () => {
     const result = await runWorkflow(workflow(), {

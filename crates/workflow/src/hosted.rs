@@ -202,7 +202,7 @@ impl HostedRun {
         crate::expr::evaluate(&self.context, kind, expression, scope)
     }
 
-    /// Run a host task (`{ position, label, task, state }`, as the
+    /// Run a host task (`{ position, label, task }`, as the
     /// orchestrator sends it). Blocks until it finishes. Returns the outcome
     /// as JSON, or the error payload (`{ name, message }`) as JSON.
     pub fn run_task(&self, request: &str) -> Result<String, String> {
@@ -241,7 +241,6 @@ impl HostedRun {
             run: &self.context,
             position,
             label,
-            state: Default::default(),
             cancel: Arc::clone(&self.context.cancel),
             since: None,
         };

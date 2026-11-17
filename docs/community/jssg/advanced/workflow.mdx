@@ -1,9 +1,9 @@
 ---
 title: "Workflow Context"
-description: "Parameters, matrix values, shared state, and runtime hooks for JSSG steps."
+description: "Parameters, matrix values, passing values between steps, and runtime hooks for JSSG steps."
 ---
 
-Wire a transform into a workflow: user parameters, matrix sharding values, cross-file state, and structured runtime signals.
+Wire a transform into a workflow: user parameters, matrix sharding values, values handed between steps, and structured runtime signals.
 
 ## Parameters and Configuration
 
@@ -125,151 +125,59 @@ export default async function main() {
 **Parameters vs matrix values**: `options.params` holds run parameters, while `options.matrixValues` holds the values passed with `matrix`. In `workflow.yaml`, matrix values come from a node's matrix strategy; see the [workflow.yaml reference](/community/workflows/yaml).
 </Note>
 
-## State Management
+## Passing Values Between Steps
 
-The `codemod/workflow` module provides shared state that is accessible across all parallel file executions within a step, and can be persisted across workflow steps.
+Workflows have no shared state. A transform gets values through `options.params` and reports what it found by returning it; a later step gets those values as its own `params`.
 
-### API Reference
-
-```ts
-import { setState, getState, unsetState, acquireLock } from "codemod/workflow";
-```
-
-<ParamField path="setState" type="<T>(name: string, value: T, persist?: boolean) => void">
-  Sets a named state value. Values are stored as native JavaScript objects (no manual JSON serialization needed). When `persist` is `true` (the default), the value is saved at the end of the execution batch and available to subsequent workflow steps.
-</ParamField>
-
-<ParamField path="getState" type="<T>(name: string) => T | undefined">
-  Gets a named state value, or `undefined` if it doesn't exist.
-</ParamField>
-
-<ParamField path="unsetState" type="(name: string) => void">
-  Removes a named state value. If the key was persisted, a removal is propagated to persistent storage.
-</ParamField>
-
-<ParamField path="acquireLock" type="(name: string) => () => void">
-  Acquires a named mutex lock. Returns a `release` function that **must** be called when done. While held, other threads' `getState`, `setState`, and `unsetState` calls on the same key block until released.
-</ParamField>
-
-### Basic Usage
-
-State is shared across all files processed in parallel within a single step:
-
-<Warning>
-Do not rebuild a repo-wide index or rewrite a full-repo `setState` payload on every file. Each file runs in a fresh QuickJS runtime (module caches reset), and `getState` clones the entire JSON value. Build once under `acquireLock`, store a built sentinel plus small per-file shards, then look up. See [Performant codemods](/community/jssg/advanced/performance#performant-codemods).
-</Warning>
-
-```ts codemod.ts
-import type { Codemod } from "codemod/ast-grep";
-import type TSX from "codemod/ast-grep/langs/tsx";
-import { setState, getState, acquireLock } from "codemod/workflow";
-
-const codemod: Codemod<TSX> = async (root) => {
-  const rootNode = root.root();
-  const imports = rootNode.findAll({ rule: { kind: "import_statement" } });
-
-  // Safely accumulate results across parallel file executions
-  const release = acquireLock("results");
-  try {
-    const results = getState<string[]>("importedFiles") ?? [];
-    results.push(root.filename());
-    setState("importedFiles", results);
-  } finally {
-    release();
-  }
-
-  return null;
-};
-
-export default codemod;
-```
-
-### When to Use Locks
-
-Use `acquireLock` when you need to read-modify-write shared state from parallel threads. Without it, concurrent `getState` → `setState` sequences can overwrite each other:
-
-```ts
-// Without lock — RACE CONDITION:
-// Thread A reads count=0, Thread B reads count=0,
-// both write count=1 instead of count=2
-const count = getState<number>("count") ?? 0;
-setState("count", count + 1);
-
-// With lock — SAFE:
-const release = acquireLock("count");
-try {
-  const count = getState<number>("count") ?? 0;
-  setState("count", count + 1);
-} finally {
-  release();
-}
-```
-
-<Warning>
-Always call `release()` in a `finally` block. Failing to release a lock will block all other threads waiting on that key.
-</Warning>
+| Need | Use |
+|---|---|
+| Give a transform a value | `jssg(path, { params: { ... } })`, read with `options.params` |
+| Count or label what a transform saw | Return `{ edit, data }`; the step's `result.data` adds the rows up |
+| Collect a value from every file | A `forEachFile` callback that returns it; the step's `result.outputs` lists them in path order |
+| A shell command's values | Lines written to `$CODEMOD_OUTPUT`; the step's `result.values` |
 
 <Info>
-Simple `setState` calls that don't depend on the current value (e.g., `setState("status", "done")`) don't need locking — they are individually atomic.
+`getState`, `setState`, `unsetState` and `acquireLock` were removed from `codemod/workflow`. Importing them is a build error that names what replaced them.
 </Info>
 
-### Using State Across Workflow Steps
+### Collect, then apply
 
-State lives for one step: every file of the step shares it. What the transform set with `persist: true` (the default) comes back on the step's result as `result.state` when the step finishes, and is saved with the step, so it comes back when a run is resumed. To hand it to a later step, pass it as that step's `state` option: its transforms read it with `getState`, and shell commands through `CODEMOD_STATE`.
+A step that needs something found across the repository runs after a step that finds it. Files are processed in parallel, so a value gathered and read inside one step depends on file order; two steps do not.
 
 <CodeGroup>
 ```ts workflow.ts
-import { step, forEachFile, jssg, shell } from "codemod/workflow";
+import { step, forEachFile, jssg } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
 
 export default async function main() {
-  const scan = await step("Scan files", forEachFile({ language: "tsx" }, jssg("./scripts/scan.ts")));
-  const files = (scan.state?.filesToProcess as string[] | undefined) ?? [];
-  await step(
-    `Process ${files.length} files`,
-    shell`codemod jssg exec ${import.meta.dirname}/scripts/process.ts`,
-    { state: { filesToProcess: files } },
-  );
+  // Pass 1: every file returns the components it exports.
+  const scan = await step("Find exported components", forEachFile({ language: "tsx" }, (file) =>
+    parse(file).root().findAll("export function $NAME($$$) { $$$ }").map((m) => m.getMatch("NAME")!.text()),
+  ));
+  const components = scan.outputs.flat();
+
+  // Pass 2: the transform gets the list as a parameter.
+  await step("Update imports", forEachFile({ language: "tsx" }, jssg("./scripts/update-imports.ts", {
+    params: { components },
+  })));
 }
 ```
 
-```ts scripts/scan.ts
+```ts scripts/update-imports.ts
 import type { Codemod } from "codemod/ast-grep";
 import type TSX from "codemod/ast-grep/langs/tsx";
-import { setState, getState, acquireLock } from "codemod/workflow";
 
-const codemod: Codemod<TSX> = async (root) => {
-  // Collect file paths that match criteria
-  const release = acquireLock("files");
-  try {
-    const files = getState<string[]>("filesToProcess") ?? [];
-    files.push(root.filename());
-    setState("filesToProcess", files); // persisted by default
-  } finally {
-    release();
-  }
-  return null;
+const codemod: Codemod<TSX> = async (root, options) => {
+  const components = new Set(options.params.components as string[]);
+  // ... rewrite imports of `components`
+  return { edit: null, data: { checked: [{ file: root.filename() }] } };
 };
 
 export default codemod;
 ```
-
-```ts scripts/process.ts
-import { getState } from "codemod/workflow";
-
-// Runs in a later shell step through `codemod jssg exec`.
-const files = getState<string[]>("filesToProcess") ?? [];
-console.log(`Processing ${files.length} files`);
-```
 </CodeGroup>
 
-### Transient State
-
-Pass `persist: false` to keep a value out of `result.state` (useful for in-memory coordination between the step's files):
-
-```ts
-setState("processingQueue", queue, false); // not persisted
-```
-
+The first pass parses each file once more than a single pass would. In exchange, the second pass sees the complete list on every file, whatever order files run in.
 
 ## Runtime Hooks
 

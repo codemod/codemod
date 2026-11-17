@@ -171,7 +171,6 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         "changes": changes,
         "failures": failures,
     }))
-    .with_state(isolates.state_changes())
     .with_failures(failed, total))
 }
 

@@ -210,21 +210,19 @@ export default async function main({
   const pr = await step(pullRequest({ title: "Migrate", draft: true }));
   expectType<Equal<typeof pr.url, string | null | undefined>>(true);
 
-  // ── state ────────────────────────────────────────────────────────────
+  // ── values between steps ─────────────────────────────────────────────
 
-  // A step's transforms read its `state` option; what they set comes back
-  // on its result.
-  const detected = await step(shell("./detect.sh"), { state: { target: "react-19" } });
-  expectType<Equal<typeof detected.state, StateChanges | undefined>>(true);
-  const fed = await step(jssg("scripts/codemod.ts"), { state: { ...detected.state } });
-  expectType<Equal<(typeof fed.state & {})["anything"], JsonValue>>(true);
-  // @ts-expect-error state is JSON
-  void step(shell("true"), { state: { when: new Date() } });
+  // A shell step returns values; a later step gets them as params.
+  const detected = await step(shell("./detect.sh"));
+  expectType<Equal<(typeof detected.values & {})["anything"], JsonValue>>(true);
+  await step(jssg("scripts/codemod.ts", { params: { ...detected.values } }));
+  // @ts-expect-error steps take no state
+  void step(shell("true"), { state: { target: "react-19" } });
 
   return { files: found.outputs.length };
 }
 
-import type { Frozen, JsonValue, StateChanges } from "codemod/workflow";
+import type { Frozen, JsonValue } from "codemod/workflow";
 
 // A transform returns its edit and rows to count.
 export const counts: Codemod<TS> = async (root) => ({

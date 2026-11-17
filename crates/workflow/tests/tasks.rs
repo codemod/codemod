@@ -18,36 +18,24 @@ fn approving() -> Harness {
 }
 
 #[test]
-fn shell_steps_read_the_state_option_and_return_state_outputs() {
+fn a_shell_steps_output_lines_come_back_as_values() {
     let h = Harness::new();
     let report = h.start(
         r#"
 import { step, shell } from "codemod/workflow";
 export default async function main() {
   const run = await step(shell(
-    'echo "seen=$(cat "$CODEMOD_STATE")" && echo "count=2" >> "$STATE_OUTPUTS" && echo "items@=\"a\"" >> "$STATE_OUTPUTS" && echo "$CODEMOD_STATE_GREETING $EXTRA"',
-    { env: { EXTRA: "there" } },
-  ), { state: { greeting: "hi" } });
-  return { output: run.output, count: run.state.count, items: run.state.items };
+    'echo "count=2" >> "$CODEMOD_OUTPUT" && echo "items@=\"a\"" >> "$CODEMOD_OUTPUT" && echo "$GREETING"',
+    { env: { GREETING: "hi" } },
+  ));
+  return run;
 }
 "#,
         Value::Null,
     );
     let result = output(&report).unwrap();
-    assert!(
-        result["output"]
-            .as_str()
-            .unwrap()
-            .contains(r#"seen={"greeting":"hi"}"#),
-        "{result}"
-    );
-    assert!(
-        result["output"].as_str().unwrap().contains("\"hi\" there"),
-        "{result}"
-    );
-    assert_eq!(result["count"], json!(2));
-    assert_eq!(result["items"], json!(["a"]));
-    assert_eq!(report.steps[0].state.as_ref().unwrap()["count"], json!(2));
+    assert_eq!(result["output"].as_str().unwrap().trim(), "hi");
+    assert_eq!(result["values"], json!({ "count": 2, "items": ["a"] }));
 }
 
 #[test]
@@ -130,18 +118,16 @@ fn canceling_a_run_that_waits_for_approval_marks_it_canceled() {
 }
 
 #[test]
-fn jssg_steps_apply_changes_renames_and_state() {
+fn jssg_steps_apply_changes_and_renames() {
     let h = Harness::new();
     h.write("src/a.ts", "const x = 1;\n");
     h.write("src/b.ts", "const y = 2;\n");
     h.bundle_file(
         "scripts/transform.ts",
         r#"
-import { setState } from "codemod/workflow";
 export default function transform(root: any, options: any) {
   const text = root.root().text();
   if (!text.includes("x")) return null;
-  setState("touched", root.filename());
   root.rename(root.filename().replace("a.ts", "renamed.ts"));
   return text.replace("1", options.params.value);
 }
@@ -152,7 +138,7 @@ export default function transform(root: any, options: any) {
 import { step, jssg } from "codemod/workflow";
 export default async function main() {
   const result = await step(jssg("./scripts/transform.ts", { include: "src/**/*.ts" }));
-  return { result, touched: result.state.touched };
+  return { result };
 }
 "#,
         json!({ "value": "42" }),
@@ -166,10 +152,6 @@ export default async function main() {
         json!([{ "from": "src/a.ts", "to": "src/renamed.ts" }])
     );
     assert_eq!(result["result"]["unmodified"], json!(1));
-    assert!(
-        result["touched"].as_str().unwrap().ends_with("a.ts"),
-        "{result}"
-    );
     assert_eq!(h.engine_summary_diffs(), 1);
 }
 

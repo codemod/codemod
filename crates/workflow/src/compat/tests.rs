@@ -54,7 +54,7 @@ fn a_linear_shell_workflow_becomes_a_sequence_of_awaits() {
         "{source}"
     );
     assert!(
-        source.contains("update(state, await step(\"Initialize\", shell(\"$CODEMOD_PATH/scripts/setup.sh\"), { state }));"),
+        source.contains(r#"Object.assign(state, (await step("Initialize", shell("export STATE_OUTPUTS=\"$CODEMOD_OUTPUT\"; $CODEMOD_PATH/scripts/setup.sh", { env: { ...stateEnv(state) } }))).values);"#),
         "{source}"
     );
     for unused in [
@@ -272,7 +272,7 @@ fn the_documented_features_translate_and_build() {
     expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state })) {");
     expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state })) {");
-    expect("shell(\"echo fast\", { env: { ...matrixEnv(matrix), CI: \"true\" } })");
+    expect("shell(\"export STATE_OUTPUTS=\\\"$CODEMOD_OUTPUT\\\"; echo fast\", { env: { ...stateEnv(state), ...matrixEnv(matrix), CI: \"true\" } })");
     expect("await lintFixTemplate({ ...params, ...{\"target_glob\":\"src/**\"} }, matrix, state);");
     expect("await step(pullRequest({ title: `refactor: migrate ${matrix?.name}`, draft: true, branch: branchName }));");
     expect("agent(`Summarize ${matrix?.team}`)");
@@ -326,15 +326,7 @@ fn source_of(yaml: &str) -> String {
 }
 
 #[test]
-fn translated_workflows_never_import_the_state_functions() {
-    let source = source_of(FEATURES);
-    for name in ["getState", "setState", "unsetState"] {
-        assert!(!source.contains(name), "{name} in:\n{source}");
-    }
-}
-
-#[test]
-fn a_step_that_can_write_state_passes_it_and_applies_its_result() {
+fn a_shell_step_gets_state_as_variables_and_its_values_are_copied_into_it() {
     let source = source_of(
         r#"
 version: "1"
@@ -349,13 +341,10 @@ nodes:
 "#,
     );
     assert!(
-        source.contains(r#"update(state, await step("Version", shell("echo \"version=19\" >> \"$STATE_OUTPUTS\""), { state }));"#),
+        source.contains(r#"Object.assign(state, (await step("Version", shell("export STATE_OUTPUTS=\"$CODEMOD_OUTPUT\"; echo \"version=19\" >> \"$STATE_OUTPUTS\"", { env: { ...stateEnv(state) } }))).values);"#),
         "{source}"
     );
-    assert!(
-        source.contains("shell(`echo ${state.version}`)"),
-        "{source}"
-    );
+    assert!(source.contains("echo ${state.version}`"), "{source}");
 }
 
 #[test]
@@ -382,9 +371,32 @@ nodes:
 "#,
     );
     assert!(
-        source.contains(r#"update(state, await step("Count", shell("#)
-            && source.contains("), { state }));"),
+        source.contains(r#"Object.assign(state, (await step("Count", shell("#),
         "{source}"
+    );
+}
+
+#[test]
+fn a_transform_in_a_workflow_that_reads_state_is_flagged() {
+    let result = translated(
+        r#"
+version: "1"
+nodes:
+  - id: scan
+    name: Scan
+    steps:
+      - name: Collect
+        js-ast-grep:
+          js_file: scripts/collect.ts
+      - name: Report
+        run: echo ${{ state.found }}
+"#,
+    );
+    assert!(
+        result.warnings.iter().any(|w| w
+            .starts_with("step 'Collect': a transform can no longer read or set workflow state")),
+        "{:?}",
+        result.warnings
     );
 }
 

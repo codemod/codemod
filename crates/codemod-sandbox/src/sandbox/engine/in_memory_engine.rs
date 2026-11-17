@@ -12,7 +12,6 @@ use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver};
 use crate::sandbox::runtime_module::RuntimeHooksContext;
 use crate::utils::quickjs_utils::maybe_promise;
-use crate::workflow_global::SharedStateContext;
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::tree_sitter::StrDoc;
@@ -100,8 +99,6 @@ pub struct InMemoryExecutionOptions<'a, R> {
     pub metrics_context: Option<MetricsContext>,
     /// Optional engine-owned LLM request handler exposed through codemod:llm
     pub llm_request_handler: Option<LlmRequestHandler>,
-    /// Optional shared state context for cross-thread state communication
-    pub shared_state_context: Option<SharedStateContext>,
     /// Optional cooperative cancellation flag. When set, the QuickJS
     /// interrupt handler stops execution as soon as cancellation is observed.
     pub cancellation_flag: Option<Arc<AtomicBool>>,
@@ -255,7 +252,6 @@ where
     // Capture metrics context and shared state context for use inside async block
     let metrics_context = options.metrics_context.clone();
     let llm_runtime_context = LlmRuntimeContext::new(options.llm_request_handler.clone());
-    let shared_state_context = options.shared_state_context.clone();
     let runtime_hooks_context = RuntimeHooksContext::new(None, options.cancellation_flag.clone());
     let process_sandbox = options.process_sandbox.clone();
     let fs_sandbox = options.fs_sandbox.clone();
@@ -277,12 +273,6 @@ where
             },
         })?;
 
-        // Always store a SharedStateContext so codemod:workflow functions work
-        ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: format!("Failed to store SharedStateContext: {:?}", e),
-            },
-        })?;
 
         ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -557,7 +547,6 @@ mod tests {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -618,7 +607,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: Some(50), // 50ms timeout for faster test
             memory_limit: None,
@@ -665,7 +653,6 @@ export default async function transform() {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: Some(50),
             memory_limit: None,
@@ -716,7 +703,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: Some(cancellation_flag),
             timeout_ms: Some(5_000),
             memory_limit: None,
@@ -768,7 +754,6 @@ export default async function transform() {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: Some(cancellation_flag),
             timeout_ms: Some(5_000),
             memory_limit: None,
@@ -778,60 +763,6 @@ export default async function transform() {
 
         trigger.join().unwrap();
         assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(matches!(
-            result,
-            Err(ExecutionError::Runtime {
-                source: RuntimeError::ExecutionCancelled,
-            })
-        ));
-    }
-
-    #[test]
-    fn test_execute_codemod_sync_maps_cancelled_workflow_wait_to_cancellation() {
-        let codemod_content = r#"
-import { getState } from "codemod:workflow";
-
-export default function transform(root) {
-  getState("blocked-state");
-  return root.root().text();
-}
-        "#
-        .trim();
-        let shared_state = SharedStateContext::new();
-        let guard = shared_state.acquire_lock("blocked-state");
-        let cancellation_flag = Arc::new(AtomicBool::new(false));
-        let execution_cancellation_flag = Arc::clone(&cancellation_flag);
-
-        let runner = std::thread::spawn(move || {
-            let content = "const x = 1;";
-            execute_codemod_sync(InMemoryExecutionOptions::<InMemoryResolver> {
-                codemod_source: codemod_content,
-                language: js_lang(),
-                ast: AstGrep::new(content, js_lang()),
-                original_sha256: Some(compute_sha256(content)),
-                resolver: None,
-                selector_config: None,
-                params: None,
-                matrix_values: None,
-                file_path: None,
-                target_directory: ".",
-                semantic_provider: None,
-                metrics_context: None,
-                llm_request_handler: None,
-                shared_state_context: Some(shared_state),
-                cancellation_flag: Some(execution_cancellation_flag),
-                timeout_ms: Some(5_000),
-                memory_limit: None,
-                process_sandbox: None,
-                fs_sandbox: None,
-            })
-        });
-
-        std::thread::sleep(Duration::from_millis(25));
-        cancellation_flag.store(true, Ordering::SeqCst);
-        let result = runner.join().unwrap();
-        guard.release();
-
         assert!(matches!(
             result,
             Err(ExecutionError::Runtime {
@@ -880,7 +811,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1030,7 +960,6 @@ export default function transform(root, options) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1106,7 +1035,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1185,7 +1113,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1263,7 +1190,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1342,7 +1268,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1443,7 +1368,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1811,7 +1735,6 @@ export default function transform(root) {
                 semantic_provider: None,
                 metrics_context: None,
                 llm_request_handler: None,
-                shared_state_context: None,
                 cancellation_flag: None,
                 timeout_ms: None,
                 memory_limit: None,
@@ -1884,7 +1807,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -1994,7 +1916,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -2087,7 +2008,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -2157,7 +2077,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,
@@ -2197,7 +2116,6 @@ export default function transform(root) {
             semantic_provider: None,
             metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             cancellation_flag: None,
             timeout_ms: None,
             memory_limit: None,

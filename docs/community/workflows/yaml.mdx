@@ -760,7 +760,9 @@ State updates must be valid JSON if not primitive. Updates are applied only if t
 When you run a nested `codemod:` step, its child steps share the parent workflow
 run's persisted state. Each child step reads that state before evaluating its `if`
 condition and executing its action, so later steps can use earlier steps' persisted
-updates, including values written with `setState` in JSSG transforms.
+updates written to `$STATE_OUTPUTS` by shell steps. JSSG transforms cannot read or
+set workflow state; `codemod workflow upgrade` flags each transform step in a workflow
+that uses state.
 
 ---
 

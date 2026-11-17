@@ -310,29 +310,6 @@ fn a_finished_step_that_changed_runs_again_on_resume() {
 }
 
 #[test]
-fn resume_reruns_a_step_whose_only_change_is_its_state_option() {
-    let h = Harness::new();
-    h.write("a.txt", "a");
-    let source = r#"
-import { step, forEachFile, getState } from "codemod/workflow";
-export default async function main() {
-  await step("Touch", forEachFile("*.txt", (file) => { file.write(file.text + getState("mark")); }), { state: { mark: "+" } });
-  await step("Check", () => { throw new Error("stop"); });
-}
-"#;
-    let first = h.start(source, Value::Null);
-    assert!(output(&first).is_err());
-
-    let changed = source
-        .replace("mark: \"+\"", "mark: \"!\"")
-        .replace("throw new Error(\"stop\");", "return 1;");
-    let second = h.resume(&first, Some(&changed));
-
-    assert!(output(&second).is_ok(), "{:?}", second.ending);
-    assert_eq!(h.read("a.txt"), "a+!");
-}
-
-#[test]
 fn a_step_added_before_the_failed_one_does_not_disturb_the_finished_ones() {
     let h = Harness::new();
     h.write("a.txt", "a");
@@ -400,42 +377,17 @@ export default async function main({ params }: { params: { name: string } }) {
 }
 
 #[test]
-fn a_steps_state_comes_back_on_its_replayed_result() {
-    let h = Harness::new();
-    h.write("a.txt", "a");
-    let source = r#"
-import { step, forEachFile, setState } from "codemod/workflow";
-export default async function main() {
-  const listed = await step("List", forEachFile("*.txt", (file) => { setState("files", [file.path]); }));
-  await step("Check", () => { throw new Error("stop"); });
-  return listed.state;
-}
-"#;
-    let first = h.start(source, Value::Null);
-    assert!(output(&first).is_err());
-
-    let second = h.resume(
-        &first,
-        Some(&source.replace("throw new Error(\"stop\");", "return 1;")),
-    );
-    assert_eq!(output(&second).unwrap(), json!({ "files": ["a.txt"] }));
-}
-
-#[test]
-fn the_workflow_body_cannot_use_workflow_state() {
+fn a_step_given_a_state_option_fails() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { setState } from "codemod/workflow";
-export default async function main() { setState("x", 1); }
+import { step } from "codemod/workflow";
+export default async function main() { await step("Old", () => 1, { state: { x: 1 } } as any); }
 "#,
         Value::Null,
     );
     let error = output(&report).unwrap_err();
-    assert!(
-        error.contains("setState() is not available in the workflow body"),
-        "{error}"
-    );
+    assert!(error.contains("steps take no `state`"), "{error}");
 }
 
 #[test]

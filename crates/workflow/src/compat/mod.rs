@@ -10,10 +10,12 @@
 //! - each step becomes `await step("<name>", <task>)`;
 //! - matrix nodes run once per value (`values`, or the array in state for
 //!   `from_state`), concurrently;
-//! - workflow state is a plain object local to the run, `state`: steps that
-//!   can read it (shell, jssg) get it as their `state` option, and what they
-//!   set comes back on their result and is applied with `update(state, ...)`.
-//!   The engine keeps no workflow state of its own;
+//! - workflow state is a plain object local to the run, `state`. A shell
+//!   step gets it as `CODEMOD_STATE_<KEY>` variables, and the lines it writes
+//!   to `$STATE_OUTPUTS` come back on its result as `values`, which are
+//!   copied into `state`. The engine has no workflow state; a jssg transform
+//!   can neither read nor set it, so the YAML engine's `getState`/`setState`
+//!   in a transform cannot be translated;
 //! - `${{ }}` expressions become TypeScript where that is exact, and
 //!   otherwise call `evaluate(...)`, which uses the YAML engine's evaluator;
 //!   `if:` conditions always go through `evaluate(...)`, and one that cannot
@@ -70,10 +72,10 @@ struct Generator {
     uses_after: bool,
     uses_matrix_env: bool,
     uses_context: bool,
-    /// Shell and jssg steps pass `state` and apply what they set: the
-    /// workflow reads state, or has more than one step that could write it.
+    /// Shell steps get state as variables and copy what they set into it:
+    /// the workflow reads state, or has more than one step that could set it.
     plumb_state: bool,
-    uses_update: bool,
+    uses_state_env: bool,
     /// Tasks get the run's params anyway; pass `params` explicitly only when
     /// it differs from them (defaults, template inputs).
     pass_params: bool,
@@ -118,7 +120,7 @@ fn declared(names: &[&str]) -> Vec<String> {
 
 /// Whether translated steps must carry state from one to the next: the
 /// workflow reads it (`state.` in an expression, `from_state`), or more than
-/// one step could set it (shell, jssg, shard), so a later one may read it.
+/// one step could set it (shell, shard), so a later one may read it.
 /// A template's steps count once for each time it is used.
 fn plumbs_state(workflow: &Workflow) -> bool {
     let text = serde_json::to_string(workflow).unwrap_or_default();
@@ -141,7 +143,7 @@ fn writers(steps: &[Step], workflow: &Workflow, depth: usize) -> usize {
     steps
         .iter()
         .map(|step| match &step.action {
-            StepAction::RunScript(_) | StepAction::JSAstGrep(_) | StepAction::Shard(_) => 1,
+            StepAction::RunScript(_) | StepAction::Shard(_) => 1,
             // A template that uses itself is an error elsewhere; stop here.
             StepAction::UseTemplate(_) if depth > 8 => 0,
             StepAction::UseTemplate(used) => workflow
@@ -585,6 +587,10 @@ impl Generator {
                     .collect();
                 env.sort();
                 let mut entries: Vec<String> = Vec::new();
+                if self.plumb_state {
+                    self.uses_state_env = true;
+                    entries.push("...stateEnv(state)".into());
+                }
                 if scope.matrix {
                     self.uses_matrix_env = true;
                     entries.push("...matrixEnv(matrix)".into());
@@ -593,14 +599,19 @@ impl Generator {
                     env.iter()
                         .map(|(k, v)| format!("{}: {}", property(k), js_string(v))),
                 );
-                if entries.is_empty() {
-                    format!("shell({})", template(command))
+                // The YAML engine's name for the file of `key=value` lines.
+                // Without it, a write to "$STATE_OUTPUTS" fails the command.
+                let command = if self.plumb_state || command.contains("STATE_OUTPUTS") {
+                    template(&format!(
+                        "export STATE_OUTPUTS=\"$CODEMOD_OUTPUT\"; {command}"
+                    ))
                 } else {
-                    format!(
-                        "shell({}, {{ env: {{ {} }} }})",
-                        template(command),
-                        entries.join(", ")
-                    )
+                    template(command)
+                };
+                if entries.is_empty() {
+                    format!("shell({command})")
+                } else {
+                    format!("shell({command}, {{ env: {{ {} }} }})", entries.join(", "))
                 }
             }
             StepAction::AstGrep(ast_grep) => {
@@ -641,6 +652,12 @@ impl Generator {
             StepAction::JSAstGrep(js) => {
                 self.import("forEachFile");
                 self.import("jssg");
+                if self.plumb_state {
+                    notes.push_str(&self.warn(format!(
+                        "step '{}': a transform can no longer read or set workflow state; if its script calls getState or setState, give it values through `params` and return what it finds as `data`",
+                        step.name
+                    )));
+                }
                 // Which files, and in which language, is the selector's part.
                 let (mut selector, fields): (Vec<_>, Vec<_>) = self
                     .jssg_fields(js, scope)
@@ -779,15 +796,10 @@ impl Generator {
                 return (notes, statement);
             }
         };
-        let reads_state = matches!(
-            step.action,
-            StepAction::RunScript(_) | StepAction::JSAstGrep(_)
-        );
-        if reads_state && self.plumb_state {
-            self.uses_update = true;
+        if self.plumb_state && matches!(step.action, StepAction::RunScript(_)) {
             return (
                 notes,
-                format!("update(state, await step({name}, {task}, {{ state }}));"),
+                format!("Object.assign(state, (await step({name}, {task})).values);"),
             );
         }
         (notes, format!("await step({name}, {task});"))
@@ -890,9 +902,9 @@ impl Generator {
                 "\nfunction after(dependencies: Promise<unknown>[], run: () => Promise<unknown>) {\n  return Promise.all(dependencies).then(run);\n}\n",
             );
         }
-        if self.uses_update {
+        if self.uses_state_env {
             source.push_str(
-                "\n/** Apply what a step set to the workflow's state; `null` removes a key. */\nfunction update(state: State, result: { readonly state?: Readonly<Record<string, unknown>> }) {\n  for (const [key, value] of Object.entries(result.state ?? {})) {\n    if (value === null) delete state[key];\n    else state[key] = value;\n  }\n}\n",
+                "\n/** State as `CODEMOD_STATE_<KEY>` variables, JSON-encoded as before. */\nfunction stateEnv(state: State): Record<string, string> {\n  return Object.fromEntries(\n    Object.entries(state).map(([key, value]) => [`CODEMOD_STATE_${key.toUpperCase()}`, JSON.stringify(value)]),\n  );\n}\n",
             );
         }
         if self.uses_matrix_env {

@@ -49,9 +49,9 @@ Code inside steps and callbacks runs in its own isolate, with npm packages, file
 | `approval` | Wait for a person before continuing |
 | `branch`, `commit`, `pullRequest` | Git automation for managed runs |
 
-### State and parameters
+### Values and parameters
 
-Steps hand values to each other as data: a step's result (including `result.state`, what its transforms set) goes into the next step's options. Parameters passed with `--param key=value` reach the workflow as `params`.
+Workflows have no shared state. Steps hand values to each other as data: a step's result (a function's return value, a transform's `data`, a shell command's `values`) goes into the next step's options. Parameters passed with `--param key=value` reach the workflow as `params`.
 
 ### workflow.yaml
 

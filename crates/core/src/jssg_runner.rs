@@ -20,7 +20,7 @@ use codemod_sandbox::sandbox::runtime_module::{
     RuntimeEvent, RuntimeEventCallback, RuntimeEventKind,
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use codemod_sandbox::{MetricsContext, MetricsData, SharedStateContext};
+use codemod_sandbox::{MetricsContext, MetricsData};
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
 use serde_json::Value;
@@ -54,8 +54,6 @@ pub struct JssgRunRequest {
     pub threads: Option<usize>,
     /// Passed to the transform as `options.dryRun`.
     pub dry_run: bool,
-    /// Seeds `getState` in the transform.
-    pub initial_state: HashMap<String, Value>,
     pub cancel: Option<Arc<AtomicBool>>,
     pub progress: Option<ProgressCallback>,
     /// Receives what the transform logged (`console`, `codemod/runtime`)
@@ -94,8 +92,6 @@ pub struct JssgRunOutcome {
     pub skipped: usize,
     /// Files the transform's selector matched.
     pub matched: Vec<PathBuf>,
-    /// State the transform set; `Value::Null` marks a removed key.
-    pub state: BTreeMap<String, Value>,
     pub metrics: MetricsData,
     pub warnings: Vec<String>,
 }
@@ -181,7 +177,6 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     };
 
     let metrics = MetricsContext::new();
-    let shared_state = SharedStateContext::with_initial_state(request.initial_state.clone());
     // Every file's text goes through here, so a file changed more than once
     // (by its own transform, and by other files' `jssgTransform` calls) ends
     // up with all of the changes.
@@ -245,7 +240,6 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             semantic_provider: semantic.clone(),
             metrics_context: Some(metrics.clone()),
             llm_request_handler: None,
-            shared_state_context: Some(shared_state.clone()),
             runtime_event_callback,
             cancellation_flag: request.cancel.clone(),
             test_mode: false,
@@ -336,7 +330,6 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     outcome.skipped = skipped.load(Ordering::SeqCst);
     outcome.metrics = metrics.get_all();
 
-    outcome.state = shared_state.changes_since(&request.initial_state);
     // Worth saying only when the transform then ran: with no file to run on
     // nothing was lost, and when it fails on the files their errors say why.
     if let Some(error) = selector_error {

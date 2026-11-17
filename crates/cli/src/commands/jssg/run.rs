@@ -18,7 +18,7 @@ use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use codemod_sandbox::{MetricsContext, SharedStateContext};
+use codemod_sandbox::MetricsContext;
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use log::{debug, error, warn};
@@ -88,7 +88,8 @@ pub struct Command {
     #[arg(long)]
     pub report: bool,
 
-    /// Show verbose output (e.g. shared state after execution)
+    /// Has no effect: workflows no longer keep state to print. Kept so
+    /// existing commands still parse.
     #[arg(long, short)]
     pub verbose: bool,
 }
@@ -106,8 +107,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let dirty_check = dirty_git_check::dirty_check(args.no_interactive);
     dirty_check(&target_directory, args.allow_dirty, None)?;
-
-    std::env::set_var("CODEMOD_STEP_ID", "jssg");
 
     // Create a new metrics context for this execution run
     let metrics_context = MetricsContext::new();
@@ -203,9 +202,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .parse()
         .unwrap_or_else(|_| panic!("Invalid language: {}", args.language));
-    let shared_state_context = SharedStateContext::new();
     let metrics_context_clone = metrics_context.clone();
-    let shared_state_context_clone = shared_state_context.clone();
     let runtime_event_output = super::RuntimeEventOutput::stdout();
 
     // Create diff config for dry-run mode
@@ -257,7 +254,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 semantic_provider: semantic_provider.clone(),
                 metrics_context: Some(metrics_context_clone.clone()),
                 llm_request_handler: None,
-                shared_state_context: Some(shared_state_context_clone.clone()),
                 runtime_event_callback: Some(runtime_event_callback),
                 cancellation_flag: None,
                 test_mode: false,
@@ -409,16 +405,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .unwrap_or_default();
     if !collected_errors.is_empty() {
         return Err(anyhow::anyhow!("{}", collected_errors.join("\n\n")));
-    }
-
-    if args.verbose {
-        let state = shared_state_context.get_persistable();
-        if !state.is_empty() {
-            println!("\nState:");
-            for (key, value) in &state {
-                println!("  {key}: {value}");
-            }
-        }
     }
 
     let collected_diffs = diff_collector

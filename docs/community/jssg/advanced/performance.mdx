@@ -27,8 +27,8 @@ Is a no-op (return null) also slow?
     |                     -> CLI: test a shared language step
     |                     -> Insights mining: keep one js_file (see below)
     |
-    +-- NO --> Does each file redo repo-wide I/O (list/parse/setState)?
-    |             -> YES: you are O(n²). Build once under a lock, then look up.
+    +-- NO --> Does each file redo repo-wide I/O (list/parse other files)?
+    |             -> YES: you are O(n²). Build the index in an earlier step.
     |
     +-- else --> Analysis itself is expensive
                   |
@@ -43,7 +43,7 @@ Is a no-op (return null) also slow?
                   |
                   +--> Is analysis project-wide (set-diff, indexes)?
                           -> eligibility checks first
-                          -> complete amortize-once index with small per-file reads
+                          -> an earlier step builds the index; pass it as params
 ```
 
 ### Local vs project-wide
@@ -51,11 +51,11 @@ Is a no-op (return null) also slow?
 | Finding | Fast shape |
 |---------|------------|
 | Local to this file | Token gate or `getSelector` → targeted `find`/`findAll` → edit or `increment` |
-| Repo-wide set-diff (declared unused, unused export, packwerk) | Under `acquireLock`, build the **complete** index once, store a built sentinel plus **small per-file shards** (or emit everything in the builder and mark done), then each later file reads only its own O(1)-sized entry |
+| Repo-wide set-diff (declared unused, unused export, packwerk) | Two steps: a `forEachFile` callback returns each file's declarations and uses, the workflow builds the **complete** index from `result.outputs`, and the transform step gets the part it needs as `params` |
 
-Do **not** `readdir` or `parse()` other files on every invocation. Do **not** `getState` a single repo-sized blob on every file: `getState` clones and reconstitutes the full JSON value, so a large shared index is still quadratic. Distinguish “not built yet” (`undefined`) from “built empty” so workers do not rebuild forever.
+Do **not** `readdir` or `parse()` other files on every invocation. Keep what you pass as `params` to what the transform looks up: it is copied into every file's run.
 
-For set-diff, a **complete** index built once is correct. A partial/lazy index that grows as files are visited will edit or emit from incomplete sets.
+For set-diff, a **complete** index built before the transform runs is correct. An index that grows as files are visited would edit or emit from incomplete sets, which is why workflows have no shared state to build one in.
 
 ### Token gates must discriminate
 
@@ -65,7 +65,7 @@ A prefilter that still matches most of the repo is a parse tax. Prefer syntax-sh
 
 Insights binds each dashboard query to one workflow step and loads that step’s `js-ast-grep` script from the published package. Data names must be visible in that script as literal keys of the returned `data` object, not only in a different package file or helper import. This is the selected step’s script, not necessarily the package entry. For mining, return `{ edit: null, data }`.
 
-CLI workflows may use multiple JSSG steps or a shared language step so one parse serves several analyses. That does not apply to Insights: keep the returned data in the bound step’s script, with a once-built sharded index when analysis is project-wide.
+CLI workflows may use multiple JSSG steps or a shared language step so one parse serves several analyses. That does not apply to Insights: keep the returned data in the bound step’s script. Insights runs that one step on its own, so a project-wide analysis that needs an index from an earlier step cannot be mined there; return per-file rows and let the dashboard query aggregate them.
 
 See [Returning data](/community/jssg/metrics) for the `{ edit, data }` result.
 

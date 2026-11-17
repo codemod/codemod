@@ -36,8 +36,6 @@ export interface StepRecord {
   key: string;
   status: StepStatus;
   result?: Json;
-  /** State the step set: keys to values, where `null` removes a key. */
-  state?: Record<string, Json> | null;
   error?: string | null;
   /** When a successful step finished, in milliseconds since the epoch. */
   finishedAt?: number | null;
@@ -63,8 +61,6 @@ export interface StartRequest {
   position: number;
   label: string;
   task: TaskContent;
-  /** The state the step's transforms start from: its `state` option. */
-  state: Record<string, Json>;
   /** The step's function, on hosts that run callbacks in place. */
   fn?: Callback;
   /** How long the task may run, from the step's `timeout`. */
@@ -76,8 +72,6 @@ export interface StartRequest {
 /** What a task resolves to: `TaskOutcome` in `crates/workflow/src/tasks/mod.rs`. */
 export interface Outcome {
   result?: Json;
-  /** State the task set: keys to values, where `null` removes a key. */
-  state?: Record<string, Json> | null;
   /** Set when some of the task's files failed: how many, as a message. */
   partial?: string;
 }
@@ -207,8 +201,6 @@ export interface StepOptions {
   retries?: number;
   retryDelay?: Duration;
   timeout?: Duration;
-  /** What the step's transforms read with `getState()`; shell commands as `$CODEMOD_STATE`. */
-  state?: Record<string, Json>;
 }
 
 /**
@@ -476,8 +468,6 @@ export function describeDuration(ms: number): string {
 
 /** How often to try a step, and for how long. */
 interface Policy {
-  /** A copy of the `state` option, taken when the step is called. */
-  state: Record<string, Json>;
   attempts: number;
   /** Milliseconds between attempts. */
   retryDelay: number;
@@ -487,20 +477,20 @@ interface Policy {
 
 /** What `step(..., options)` asks for. */
 function policyOf(options: unknown, what: string): Policy {
-  if (options === undefined) return { state: {}, attempts: 1, retryDelay: 0, timeout: undefined };
-  onlyKeys(options, ["retries", "retryDelay", "timeout", "state"], what);
-  const { retries = 0, retryDelay = "1s", timeout, state = {} } = options as StepOptions;
-  if (!isRecord(state) || Array.isArray(state)) {
-    throw new TypeError(`${what}: state must be an object`);
+  if (options === undefined) return { attempts: 1, retryDelay: 0, timeout: undefined };
+  if (isRecord(options) && "state" in options) {
+    throw new TypeError(
+      `${what}: steps take no \`state\`: give values to the task itself (a function step's variables, jssg \`params\`, shell \`env\`) and read what it found from its result`,
+    );
   }
-  checkJson(state, `${what}: state`);
+  onlyKeys(options, ["retries", "retryDelay", "timeout"], what);
+  const { retries = 0, retryDelay = "1s", timeout } = options as StepOptions;
   if (!Number.isInteger(retries) || retries < 0) {
     throw new TypeError(`${what}: retries must be a whole number, 0 or more`);
   }
   const limit = timeout === undefined ? undefined : milliseconds(timeout, `${what}: timeout`);
   if (limit === 0) throw new TypeError(`${what}: timeout must be more than 0`);
   return {
-    state: JSON.parse(JSON.stringify(state)) as Record<string, Json>,
     attempts: retries + 1,
     retryDelay: milliseconds(retryDelay, `${what}: retryDelay`),
     timeout: limit,
@@ -639,50 +629,6 @@ export function createRuntime(host: Host) {
     if (typeof entry.finishedAt === "number") host.advanceClock(entry.finishedAt);
   }
 
-  // ---------------------------------------------------------------- state ---
-
-  // The body has no workflow state: a step's transforms start from its
-  // `state` option, and what they set comes back on its result as
-  // `result.state`. The state functions still work inside transforms,
-  // callbacks and function steps, scoped to that one step.
-  function notInBody(name: string): () => never {
-    return () => {
-      throw new Error(
-        `${name}() is not available in the workflow body: pass values to a step with its \`state\` option, and read what it set from its result's \`state\``,
-      );
-    };
-  }
-  const getState = notInBody("getState");
-  const setState = notInBody("setState");
-  const unsetState = notInBody("unsetState");
-
-  // The body runs on one thread, so a lock has nothing to wait for.
-  function acquireLock(_name: string): () => void {
-    return () => {};
-  }
-
-  // Step outputs are kept for the transforms that still set them; nothing in
-  // a workflow reads them back but these functions.
-  const stepOutputs = new Map<string, string>();
-  const outputKey = (stepId: string, name: string) => JSON.stringify([stepId, name]);
-
-  function setStepOutput(name: string, value: unknown): void {
-    stepOutputs.set(outputKey("", name), String(value));
-  }
-
-  function getStepOutput(stepId: string, name: string): string | null {
-    return stepOutputs.get(outputKey(stepId, name)) ?? null;
-  }
-
-  function getOrSetStepOutput(stepId: string, name: string, value: unknown): string {
-    const key = outputKey(stepId, name);
-    const existing = stepOutputs.get(key);
-    if (existing !== undefined) return existing;
-    const text = String(value);
-    stepOutputs.set(key, text);
-    return text;
-  }
-
   /** Evaluate a workflow.yaml `${{ }}` expression; used by translated workflows. */
   function __evaluate(kind: string, expression: string, scope: unknown): unknown {
     return host.evaluate(kind, expression, scope);
@@ -720,7 +666,7 @@ export function createRuntime(host: Host) {
     const described = label === undefined ? "step" : `step '${label}'`;
     const policy = policyOf(options, described);
     // Everything up to the first await runs synchronously inside step(), so
-    // captures and state are a snapshot taken when the step is called.
+    // captures are a snapshot taken when the step is called.
     let content: TaskContent;
     let fn: Callback | undefined;
     const callback = callbackOf(task);
@@ -745,14 +691,7 @@ export function createRuntime(host: Host) {
       throw new TypeError(`${described}: expected a task such as forEachFile(...) or a function`);
     }
 
-    // A step's starting state is part of what it does, so changing it runs
-    // the step again on resume. Steps without state keep their old key, so
-    // runs recorded before state existed still replay.
-    const key = canonical(
-      Object.keys(policy.state).length === 0
-        ? [label ?? null, content]
-        : [label ?? null, content, policy.state],
-    );
+    const key = canonical([label ?? null, content]);
     if (closed) return new Promise<Json>(() => {});
     const { position, entry: prior } = claim(label, key, content);
     const name = label ?? defaultLabel(position, content);
@@ -778,7 +717,7 @@ export function createRuntime(host: Host) {
           settle() {
             settleClock(prior);
             host.event({ type: "stepReplayed", position, label: name });
-            resolve(withState(prior.result ?? null, prior.state, name));
+            resolve(prior.result ?? null);
           },
         });
         host.wake?.();
@@ -820,7 +759,6 @@ export function createRuntime(host: Host) {
       position,
       label: name,
       task: content,
-      state: policy.state,
       fn,
       ...(policy.timeout !== undefined && { timeoutMs: policy.timeout }),
       ...(since !== undefined && { since }),
@@ -851,7 +789,6 @@ export function createRuntime(host: Host) {
               position,
               label: name,
               task: { kind: "sleep", duration: policy.retryDelay },
-              state: {},
             });
           }
           attempt++;
@@ -873,23 +810,15 @@ export function createRuntime(host: Host) {
       throw new StepError(name, error);
     }
     const result = outcome.result ?? null;
-    const changes = outcome.state ?? null;
-    let returned: Json;
-    try {
-      returned = withState(result, changes, name);
-    } catch (error) {
-      record({ status: "failed", error: messageOf(error) });
-      throw new StepError(name, asError(error));
-    }
     const finishedAt = host.now();
     // Some files failed: the step finished, and the rest of the run goes on.
     if (outcome.partial !== undefined) {
-      record({ status: "partial", result, state: changes, finishedAt, error: outcome.partial });
+      record({ status: "partial", result, finishedAt, error: outcome.partial });
     } else {
-      record({ status: "succeeded", result, state: changes, finishedAt });
+      record({ status: "succeeded", result, finishedAt });
     }
     settleClock({ finishedAt });
-    return returned;
+    return result;
   }
 
   /** Whether a recorded step finished, so a resume reuses its result. */
@@ -933,13 +862,6 @@ export function createRuntime(host: Host) {
   const { callbackOf: _, ...builders } = tasks;
   return {
     ...builders,
-    getState,
-    setState,
-    unsetState,
-    acquireLock,
-    setStepOutput,
-    getStepOutput,
-    getOrSetStepOutput,
     __evaluate,
     step,
     sleep,
@@ -1138,30 +1060,6 @@ export function fileHandle(
       open = false;
     },
   };
-}
-
-/**
- * A step's result with the state its transforms set (`null` for a key they
- * removed) as its `state`. A step that set none returns its result as is.
- */
-function withState(
-  result: Json,
-  changes: Record<string, Json> | null | undefined,
-  step: string,
-): Json {
-  if (!changes || Object.keys(changes).length === 0) return result;
-  if (result === null) return { state: changes };
-  if (!isRecord(result) || Array.isArray(result)) {
-    throw new TypeError(
-      `step '${step}' set state but returned a ${Array.isArray(result) ? "list" : typeof result}; return an object, or return the value instead of setting state`,
-    );
-  }
-  if ("state" in result) {
-    throw new TypeError(
-      `step '${step}' set state and its result already has a \`state\`; return the value instead of setting state`,
-    );
-  }
-  return { ...result, state: changes };
 }
 
 function messageOf(error: unknown): string {
