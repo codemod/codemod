@@ -131,18 +131,17 @@ the open PR heads. Each branch's top commit only adds `HANDOFF.md`.
 
 ## 3. Solid migration assistant (`devagrawal09/solid-migration-assistant`)
 
-**Still local only.** The push was refused because that repo isn't attached to these sessions. Each
-branch is saved as a git bundle at `/mnt/project-files/solid-migration-assistant/branches/`
-(`handoff-sma-*.bundle`), with its doc in `/mnt/project-files/handoff/`. To publish one:
-`git fetch <bundle> <branch>:<branch>` in a clone of the repo, then push.
+Pushed to `devagrawal09/solid-migration-assistant`, each with `HANDOFF.md` at the root, authored as
+Dev, no PRs. Still local only: the draft "untracked read" rule at
+`/mnt/project-files/handoff/sma-untracked-read-draft/` (described in the `sma-solid-2-stable` doc).
 
 | Branch | Head | State | Doc |
 |---|---|---|---|
-| `handoff/sma-quick-release` | `64a2f55` | Solid 2.0.0 stable retarget plus review fixes; candidate for 0.4.0 | `sma-quick-release.md` |
-| `handoff/sma-solid-2-stable` | `09ae626` | Quick release plus 7 new rules, pnpm catalogs, progress line | `sma-solid-2-stable.md` |
-| `handoff/sma-port-off-state` | `ccd6242` | Prototype without workflow state; waits on #2491 being published | `sma-port-off-state.md` |
+| [`handoff/sma-quick-release`](https://github.com/devagrawal09/solid-migration-assistant/blob/handoff/sma-quick-release/HANDOFF.md) | `64a2f55` | Solid 2.0.0 stable retarget plus review fixes; candidate for 0.4.0 | on branch |
+| [`handoff/sma-solid-2-stable`](https://github.com/devagrawal09/solid-migration-assistant/blob/handoff/sma-solid-2-stable/HANDOFF.md) | `09ae626` | Quick release plus 7 new rules, pnpm catalogs, progress line | on branch |
+| [`handoff/sma-port-off-state`](https://github.com/devagrawal09/solid-migration-assistant/blob/handoff/sma-port-off-state/HANDOFF.md) | `ccd6242` | Prototype without workflow state; waits on #2491 being published | on branch |
 
-- **Decision for Dev:** attach the repo so these can be pushed; which build ships as 0.4.0 (recommended:
+- **Decision for Dev:** which build ships as 0.4.0 (recommended:
   quick release now, stable branch as 0.5.0 after an independent review of its 7 rules); 1.0.0 on
   stable day or stay on 0.x. Publishing needs Dev's yes.
 
@@ -214,7 +213,7 @@ branch is saved as a git bundle at `/mnt/project-files/solid-migration-assistant
 
 | What | Why |
 |---|---|
-| Solid migration assistant branches | Repo not attached; bundles are in the shared folder (section 3) |
+| Draft "untracked read" rule for the migration assistant | Not finished; described in the `sma-solid-2-stable` doc |
 | Agent run transcripts and diffs (`agent-vs-sma/runs/*`), react-to-solid t3code diffs | Large (5 MB transcripts, multi-MB diffs of third-party apps); kept in the shared folder |
 | User uploads, loose screenshots | Not work product |
 | Bundles for `cdmd-5022`, `v2-no-state`, `v2-returned-data`, the TS orchestration QuickJS branch | Contents already merged or on GitHub (#2456, #2489, #2411's branch) |
