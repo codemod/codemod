@@ -159,14 +159,14 @@ declare module "codemod:deps" {
   };
 
   type EcosystemOption = { ecosystem?: Ecosystem };
-  /** Version comparison with npm rules, Cargo's with `{ ecosystem: "cargo" }`, or PEP 440 with `{ ecosystem: "pypi" }`. */
+  /** Version comparison with npm rules, Cargo's with `{ ecosystem: "cargo" }`, PEP 440 with `{ ecosystem: "pypi" }`, or Go modules' with `{ ecosystem: "go" }`. */
   export const semver: {
     /** true, false, or null when the range cannot be read (`workspace:`, `git:` ...). */
     satisfies(version: string, range: string, options?: EcosystemOption): boolean | null;
     compare(a: string, b: string, options?: EcosystemOption): -1 | 0 | 1;
     gt(a: string, b: string, options?: EcosystemOption): boolean;
     lt(a: string, b: string, options?: EcosystemOption): boolean;
-    /** Whether `from` to `to` changes the left-most non-zero component (0.29 to 0.30 is breaking). */
+    /** Whether `from` to `to` changes the left-most non-zero component (0.29 to 0.30 is breaking); for go, only a major change. */
     isBreaking(from: string, to: string, options?: EcosystemOption): boolean;
     isPrerelease(version: string, options?: EcosystemOption): boolean;
   };

@@ -99,7 +99,7 @@ export const registry = Object.freeze({
   go: (name: string) => lookup("go", name),
 });
 
-/** Versions and ranges, by npm rules, Cargo's (`{ ecosystem: "cargo" }`) or PEP 440 (`{ ecosystem: "pypi" }`). */
+/** Versions and ranges, by npm rules, Cargo's (`{ ecosystem: "cargo" }`), PEP 440 (`{ ecosystem: "pypi" }`) or Go's (`{ ecosystem: "go" }`). */
 export const semver = makeSemver((op, ecosystem, a, b) =>
   JSON.parse(host().semver(op, ecosystem, a, b)),
 );

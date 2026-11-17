@@ -327,7 +327,7 @@ const ready = await step("Releases accepting React 19", async () => {
 });
 ```
 
-`semver` has `satisfies(version, range)` (`null` for ranges it cannot read, such as `workspace:`), `compare`, `gt`, `lt`, `isBreaking(from, to)` and `isPrerelease`. Pass `{ ecosystem: "cargo" }` for Cargo's rules, or `{ ecosystem: "pypi" }` for PEP 440, which also reads Poetry's `^1.2`, `~1.2` and `||`.
+`semver` has `satisfies(version, range)` (`null` for ranges it cannot read, such as `workspace:`), `compare`, `gt`, `lt`, `isBreaking(from, to)` and `isPrerelease`. Pass `{ ecosystem: "cargo" }` for Cargo's rules, or `{ ecosystem: "pypi" }` for PEP 440, which also reads Poetry's `^1.2`, `~1.2` and `||`. With `{ ecosystem: "go" }`, versions keep their `v` (`v1.2.3`, pseudo-versions such as `v0.0.0-20240101000000-abcdef123456`, and `+incompatible`), a range is the minimum version a `go.mod` requires, which any version at or above it on the same module path satisfies (v0, v1 and `+incompatible` versions share the path without a `/vN` suffix), and only a major change is breaking.
 
 ### Shell commands
 

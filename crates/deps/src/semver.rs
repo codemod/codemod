@@ -1,6 +1,7 @@
 //! Version ranges per ecosystem: npm ranges follow node-semver, Cargo
 //! requirements follow Cargo's rules (`"1.2"` means `^1.2`), and Python
-//! versions follow PEP 440, with Poetry's `^`, `~` and `||` read too.
+//! versions follow PEP 440, with Poetry's `^`, `~` and `||` read too. A Go
+//! range is the minimum version a go.mod requires.
 
 use std::cmp::Ordering;
 
@@ -33,7 +34,7 @@ pub fn satisfies(ecosystem: Ecosystem, range: &str, version: &str) -> Option<boo
             Some(range.matches(&semver::Version::parse(version).ok()?))
         }
         Ecosystem::Pypi => pypi::satisfies(range, version),
-        Ecosystem::Go => None,
+        Ecosystem::Go => go::satisfies(range, version),
     }
 }
 
@@ -42,7 +43,7 @@ pub fn is_prerelease(ecosystem: Ecosystem, version: &str) -> bool {
         Ecosystem::Npm => node_semver::Version::parse(version).map_or(true, |v| v.is_prerelease()),
         Ecosystem::Cargo => semver::Version::parse(version).map_or(true, |v| !v.pre.is_empty()),
         Ecosystem::Pypi => pypi::version(version).is_none_or(|v| v.any_prerelease()),
-        Ecosystem::Go => false,
+        Ecosystem::Go => go::version(version).is_none_or(|v| !v.pre.is_empty()),
     }
 }
 
@@ -61,12 +62,13 @@ pub fn compare(ecosystem: Ecosystem, a: &str, b: &str) -> Ordering {
         Ecosystem::Npm => by(a, b, |v| node_semver::Version::parse(v).ok()),
         Ecosystem::Cargo => by(a, b, |v| semver::Version::parse(v).ok()),
         Ecosystem::Pypi => by(a, b, pypi::version),
-        Ecosystem::Go => a.cmp(b),
+        Ecosystem::Go => by(a, b, go::version),
     }
 }
 
 /// Whether going from `from` to `to` is a breaking change under caret rules:
 /// the left-most non-zero component changes (so 0.29 to 0.30 is breaking).
+/// A Go version keeps its `v`, so for Go only a major change is breaking.
 pub fn is_breaking(ecosystem: Ecosystem, from: &str, to: &str) -> bool {
     fn breaking_part<T: PartialEq + Copy>(parts: &[T], zero: T) -> Vec<T> {
         let parts = &parts[..parts.len().min(3)];
@@ -182,5 +184,22 @@ mod pypi {
             format!(">={lower}"),
             format!("<{epoch}{}", upper.join(".")),
         ])
+    }
+}
+
+mod go {
+    /// A Go module version: `v` and semver, pseudo-versions and
+    /// `+incompatible` included.
+    pub(super) fn version(text: &str) -> Option<semver::Version> {
+        semver::Version::parse(text.strip_prefix('v')?).ok()
+    }
+
+    /// Minimal version selection may pick any version at or above the
+    /// required one on the same module path. v0, v1 and `+incompatible`
+    /// versions share the path without a `/vN` suffix.
+    pub(super) fn satisfies(range: &str, version: &str) -> Option<bool> {
+        let (minimum, version) = (self::version(range.trim())?, self::version(version)?);
+        let path = |v: &semver::Version| (v.major >= 2 && v.build.is_empty()).then_some(v.major);
+        Some(path(&minimum) == path(&version) && version.cmp_precedence(&minimum).is_ge())
     }
 }

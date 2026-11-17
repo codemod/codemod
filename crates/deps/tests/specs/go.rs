@@ -126,3 +126,50 @@ fn a_go_mod_without_a_module_directive_cannot_be_read() {
         "no module directive"
     );
 }
+
+#[test]
+fn a_go_requirement_accepts_any_version_at_or_above_it_on_the_same_module_path() {
+    use codemod_deps::semver::satisfies;
+    let check = |range, version| satisfies(Ecosystem::Go, range, version);
+    assert_eq!(
+        [
+            check("v1.4.0", "v1.10.0"),
+            check("v1.4.0", "v1.3.9"),
+            check("v0.9.0", "v1.0.0"),
+            check("v1.4.0", "v2.0.0"),
+            check("v17.0.0+incompatible", "v20.10.7+incompatible"),
+        ],
+        [Some(true), Some(false), Some(true), Some(false), Some(true)]
+    );
+}
+
+#[test]
+fn a_go_pseudo_version_sorts_before_the_release_it_precedes() {
+    use codemod_deps::semver::compare;
+    assert!(compare(
+        Ecosystem::Go,
+        "v1.2.4-0.20240101000000-abcdef123456",
+        "v1.2.4"
+    )
+    .is_lt());
+}
+
+#[test]
+fn a_string_that_is_not_a_go_version_sorts_before_every_version() {
+    use codemod_deps::semver::compare;
+    let mut versions = ["v1.10.0", "master", "v1.2.0", "latest"];
+    versions.sort_by(|a, b| compare(Ecosystem::Go, a, b));
+    assert_eq!(versions, ["latest", "master", "v1.2.0", "v1.10.0"]);
+}
+
+#[test]
+fn only_a_major_change_breaks_a_go_module() {
+    use codemod_deps::semver::is_breaking;
+    assert_eq!(
+        [
+            is_breaking(Ecosystem::Go, "v0.29.0", "v0.30.0"),
+            is_breaking(Ecosystem::Go, "v1.9.0", "v2.0.0")
+        ],
+        [false, true]
+    );
+}
