@@ -12,6 +12,7 @@ publish = false
 futures = { workspace = true }
 ignore = { workspace = true }
 node-semver = "2"
+pep440_rs = { version = "0.7", default-features = false }
 reqwest = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

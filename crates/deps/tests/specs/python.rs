@@ -202,3 +202,24 @@ fn a_poetry_lock_is_read_with_the_pyproject_beside_it() {
         .collect();
     assert_eq!(roots, ["app@1.0.0"]);
 }
+
+#[test]
+fn poetry_carets_tildes_and_alternatives_read_as_pep_440_ranges() {
+    use codemod_deps::semver::satisfies;
+    let check = |range, version| satisfies(Ecosystem::Pypi, range, version);
+    assert_eq!(
+        [
+            check("^8", "9.0"),
+            check("~1.2", "1.2.9"),
+            check(">=1.5.6,<1.5.7 || >1.5.7", "1.5.7"),
+            check("~=5.1", "5.2.19"),
+        ],
+        [Some(false), Some(true), Some(false), Some(true)]
+    );
+}
+
+#[test]
+fn a_python_range_that_is_not_pep_440_cannot_be_read() {
+    use codemod_deps::semver::satisfies;
+    assert_eq!(satisfies(Ecosystem::Pypi, "latest", "1.0"), None);
+}

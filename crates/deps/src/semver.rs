@@ -1,5 +1,6 @@
 //! Version ranges per ecosystem: npm ranges follow node-semver, Cargo
-//! requirements follow Cargo's rules (`"1.2"` means `^1.2`).
+//! requirements follow Cargo's rules (`"1.2"` means `^1.2`), and Python
+//! versions follow PEP 440, with Poetry's `^`, `~` and `||` read too.
 
 use std::cmp::Ordering;
 
@@ -31,7 +32,7 @@ pub fn satisfies(ecosystem: Ecosystem, range: &str, version: &str) -> Option<boo
             let range = semver::VersionReq::parse(range).ok()?;
             Some(range.matches(&semver::Version::parse(version).ok()?))
         }
-        Ecosystem::Pypi => None,
+        Ecosystem::Pypi => pypi::satisfies(range, version),
     }
 }
 
@@ -39,7 +40,7 @@ pub fn is_prerelease(ecosystem: Ecosystem, version: &str) -> bool {
     match ecosystem {
         Ecosystem::Npm => node_semver::Version::parse(version).map_or(true, |v| v.is_prerelease()),
         Ecosystem::Cargo => semver::Version::parse(version).map_or(true, |v| !v.pre.is_empty()),
-        Ecosystem::Pypi => false,
+        Ecosystem::Pypi => pypi::version(version).is_none_or(|v| v.any_prerelease()),
     }
 }
 
@@ -53,7 +54,9 @@ pub fn compare(ecosystem: Ecosystem, a: &str, b: &str) -> Ordering {
             .ok()
             .zip(semver::Version::parse(b).ok())
             .map(|(a, b)| a.cmp(&b)),
-        Ecosystem::Pypi => None,
+        Ecosystem::Pypi => pypi::version(a)
+            .zip(pypi::version(b))
+            .map(|(a, b)| a.cmp(&b)),
     };
     ordered.unwrap_or_else(|| a.cmp(b))
 }
@@ -69,4 +72,69 @@ pub fn is_breaking(from: &str, to: &str) -> bool {
         }
     }
     breaking_part(from) != breaking_part(to)
+}
+
+mod pypi {
+    use std::str::FromStr;
+
+    use pep440_rs::{Version, VersionSpecifier};
+
+    pub(super) fn version(text: &str) -> Option<Version> {
+        Version::from_str(text).ok()
+    }
+
+    /// A PEP 440 specifier set, or a Poetry constraint: alternatives joined
+    /// by `||`, each a comma-separated list of clauses that must all hold.
+    pub(super) fn satisfies(range: &str, version: &str) -> Option<bool> {
+        let version = self::version(version)?;
+        let mut any = false;
+        for alternative in range.split("||") {
+            let mut all = true;
+            for clause in alternative.split(',') {
+                let clause: String = clause.split_whitespace().collect();
+                for specifier in specifiers(&clause)? {
+                    all &= VersionSpecifier::from_str(&specifier)
+                        .ok()?
+                        .contains(&version);
+                }
+            }
+            any |= all;
+        }
+        Some(any)
+    }
+
+    /// One clause as PEP 440 specifiers: Poetry's `^1.2` is `>=1.2,<2`,
+    /// `~1.2` is `>=1.2,<1.3`, and a bare `1.2` is `==1.2`.
+    fn specifiers(clause: &str) -> Option<Vec<String>> {
+        if clause.is_empty() || clause == "*" {
+            return Some(Vec::new());
+        }
+        if let Some(lower) = clause.strip_prefix('^') {
+            let parts = numbers(lower)?;
+            let at = parts.iter().position(|&p| p != 0);
+            return Some(between(lower, &parts, at.unwrap_or(parts.len() - 1)));
+        }
+        if let Some(lower) = clause
+            .strip_prefix('~')
+            .filter(|rest| !rest.starts_with('='))
+        {
+            let parts = numbers(lower)?;
+            return Some(between(lower, &parts, usize::from(parts.len() > 1)));
+        }
+        if clause.starts_with(|c: char| c.is_ascii_digit()) {
+            return Some(vec![format!("=={clause}")]);
+        }
+        Some(vec![clause.to_string()])
+    }
+
+    fn numbers(version: &str) -> Option<Vec<u64>> {
+        version.split('.').map(|part| part.parse().ok()).collect()
+    }
+
+    /// `>=lower` and below `lower` with the part at `at` raised by one.
+    fn between(lower: &str, parts: &[u64], at: usize) -> Vec<String> {
+        let mut upper: Vec<String> = parts[..at].iter().map(u64::to_string).collect();
+        upper.push((parts[at] + 1).to_string());
+        vec![format!(">={lower}"), format!("<{}", upper.join("."))]
+    }
 }
