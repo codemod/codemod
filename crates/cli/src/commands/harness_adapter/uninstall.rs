@@ -1,7 +1,7 @@
 //! `codemod ai uninstall`: removes what `codemod ai` installed for one agent
 //! and scope, and leaves anything that doesn't look like Codemod's own.
 
-use super::doctor::installed_setups;
+use super::doctor::{installed_setups, read_mcp_launch};
 use super::*;
 use std::collections::BTreeMap;
 
@@ -24,7 +24,6 @@ pub struct KeptItem {
 enum PendingChange {
     Write(String),
     DeleteFile,
-    DeleteDir,
 }
 
 #[derive(Debug)]
@@ -56,9 +55,12 @@ impl UninstallPlan {
         self.changes.insert(path, PendingChange::DeleteFile);
     }
 
-    fn remove_dir(&mut self, what: &str, path: PathBuf) {
-        self.record(what, &path);
-        self.changes.insert(path, PendingChange::DeleteDir);
+    /// Removes `files`, reported as one item at `shown`.
+    fn remove_files(&mut self, what: &str, shown: &Path, files: Vec<PathBuf>) {
+        self.record(what, shown);
+        for file in files {
+            self.changes.insert(file, PendingChange::DeleteFile);
+        }
     }
 
     /// Writes the edited file, or deletes it when the edit leaves nothing of
@@ -100,13 +102,11 @@ impl UninstallPlan {
         for (path, change) in &self.changes {
             match change {
                 PendingChange::Write(content) => {
-                    fs::write(path, content).map_err(|error| failed(path, error))?
+                    write_replacing(path, content).map_err(|error| failed(path, error))?
                 }
-                PendingChange::DeleteFile if path.exists() => {
+                // `symlink_metadata` so a dangling symlink is removed too.
+                PendingChange::DeleteFile if path.symlink_metadata().is_ok() => {
                     fs::remove_file(path).map_err(|error| failed(path, error))?
-                }
-                PendingChange::DeleteDir if path.exists() => {
-                    fs::remove_dir_all(path).map_err(|error| failed(path, error))?
                 }
                 _ => {}
             }
@@ -116,6 +116,18 @@ impl UninstallPlan {
         }
         Ok(())
     }
+}
+
+/// Writes beside the file and renames over it, so a crash never leaves a
+/// half-written config such as `~/.claude.json`.
+fn write_replacing(path: &Path, content: &str) -> std::io::Result<()> {
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(".codemod-uninstall");
+    let temp = PathBuf::from(temp);
+    fs::write(&temp, content)?;
+    fs::rename(&temp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temp);
+    })
 }
 
 /// Folders such as `.cursor/commands` exist only because install created
@@ -135,9 +147,8 @@ pub fn plan_uninstall(harness: Harness, scope: InstallScope) -> AdapterResult<Un
 /// The agents with Codemod set up at `scope`, for `--harness auto`.
 pub fn installed_harnesses(scope: InstallScope) -> AdapterResult<Vec<Harness>> {
     let runtime_paths = RuntimePaths::current()?;
-    Ok(installed_setups(&runtime_paths)
+    Ok(installed_setups(&runtime_paths, Some(scope))
         .into_iter()
-        .filter(|(_, setup_scope)| *setup_scope == scope)
         .map(|(harness, _)| harness)
         .collect())
 }
@@ -163,30 +174,27 @@ pub(crate) fn plan_uninstall_with_runtime(
         changes: BTreeMap::new(),
         scope_root,
     };
-    let other_setups = installed_setups(runtime_paths)
+    let other_setups = installed_setups(runtime_paths, Some(scope))
         .into_iter()
-        .filter(|&(other, other_scope)| other_scope == scope && other != harness)
+        .filter(|&(other, _)| other != harness)
         .collect::<Vec<_>>();
 
     plan_skill(&mut plan, &other_setups, runtime_paths)?;
     plan_command(&mut plan, runtime_paths)?;
     if harness_supports_mcp(harness) {
         let config_path = mcp_config_path_for_harness(harness, scope, runtime_paths)?;
-        plan_mcp_entry(&mut plan, config_path, |_| true);
+        plan_mcp_entry(&mut plan, config_path);
     }
     if (harness, scope) == (Harness::Claude, InstallScope::User) {
         // Earlier releases wrote the Claude user server to `~/.mcp.json`.
         if let Some(home) = &runtime_paths.home_dir {
-            plan_mcp_entry(&mut plan, home.join(".mcp.json"), launches_codemod);
+            plan_mcp_entry(&mut plan, home.join(".mcp.json"));
         }
     }
     plan_discovery_hints(&mut plan, &other_setups, runtime_paths)?;
     plan_periodic_update(&mut plan, runtime_paths)?;
 
-    let codemod_root = harness_root_for_scope(harness, scope, runtime_paths)?.join("codemod");
-    if codemod_root.is_dir() {
-        plan.remove_dir("Codemod install record and update runner", codemod_root);
-    }
+    plan_install_record(&mut plan, runtime_paths)?;
     Ok(plan)
 }
 
@@ -200,18 +208,24 @@ fn shared_with(
         .map(|&(harness, _)| harness)
 }
 
-/// A skill `codemod ai` installs: its label, folder name and the marker its
-/// SKILL.md carries.
-const INSTALLED_SKILLS: [(&str, &str, &str); 2] = [
+/// A skill `codemod ai` installs: its label, folder name, the marker its
+/// SKILL.md carries and the files install writes into the folder.
+const INSTALLED_SKILLS: [(&str, &str, &str, &[&str]); 2] = [
     (
         "Codemod skill",
         MCS_SKILL_DIR_NAME,
         MCS_COMPATIBILITY_MARKER,
+        &[SKILL_FILE_NAME],
     ),
     (
         "sdk-migration skill",
         SDK_MIGRATION_SKILL_DIR_NAME,
         "codemod-compatibility: skill-package-v1",
+        &[
+            SKILL_FILE_NAME,
+            "commands/sdk-migration.md",
+            "agents/openai.yaml",
+        ],
     ),
 ];
 
@@ -220,7 +234,7 @@ fn plan_skill(
     other_setups: &[(Harness, InstallScope)],
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<()> {
-    for (what, dir_name, marker) in INSTALLED_SKILLS {
+    for (what, dir_name, marker, files) in INSTALLED_SKILLS {
         let skill_dir =
             skills_root_for_harness(plan.harness, plan.scope, runtime_paths)?.join(dir_name);
         let Some(content) = plan.read(&skill_dir.join(SKILL_FILE_NAME)) else {
@@ -230,9 +244,11 @@ fn plan_skill(
             plan.keep(what, &skill_dir, "it isn't the skill Codemod installs");
             continue;
         }
+        // The skills folder can be a symlink to another agent's, so compare
+        // the folders on disk, not the paths.
         let shared = shared_with(other_setups, |harness, scope| {
             skills_root_for_harness(harness, scope, runtime_paths)
-                .is_ok_and(|root| root.join(dir_name) == skill_dir)
+                .is_ok_and(|root| same_existing_path(&root.join(dir_name), &skill_dir))
         });
         match shared {
             Some(other) => plan.keep(
@@ -240,28 +256,111 @@ fn plan_skill(
                 &skill_dir,
                 format!("{} uses it too", other.display_name()),
             ),
-            None => plan.remove_dir(what, skill_dir),
+            None => {
+                let ours = files.iter().map(|file| skill_dir.join(file)).collect();
+                remove_codemod_files(plan, what, &skill_dir, ours);
+            }
         }
     }
     Ok(())
 }
 
-/// A slash command `codemod ai` installs: its label, file name, the text it
-/// installs and a line every version of that text carries.
-const INSTALLED_COMMANDS: [(&str, &str, &str, &str); 2] = [
-    (
-        "/codemod command",
-        MCS_COMMAND_NAME,
-        MCS_COMMAND_MD,
-        "installed `codemod` skill",
-    ),
+/// Removes the files and folders Codemod wrote inside `dir`, a folder it
+/// created, and keeps `dir` when the user put anything else in it.
+fn remove_codemod_files(plan: &mut UninstallPlan, what: &str, dir: &Path, ours: Vec<PathBuf>) {
+    let theirs = files_under(dir)
+        .iter()
+        .any(|file| !ours.iter().any(|own| file.starts_with(own)));
+    let files = ours
+        .iter()
+        .flat_map(|own| {
+            if own.is_dir() {
+                files_under(own)
+            } else {
+                vec![own.clone()]
+            }
+        })
+        .filter(|file| file.is_file())
+        .collect::<Vec<_>>();
+    if files.is_empty() {
+        return;
+    }
+    plan.remove_files(what, dir, files);
+    if theirs {
+        plan.keep(what, dir, "it has files you added, so they stay");
+    }
+}
+
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
+fn plan_install_record(
+    plan: &mut UninstallPlan,
+    runtime_paths: &RuntimePaths,
+) -> AdapterResult<()> {
+    let harness_root = harness_root_for_scope(plan.harness, plan.scope, runtime_paths)?;
+    let ours = [
+        CODEMOD_MANAGED_STATE_RELATIVE_PATH,
+        CODEMOD_PERIODIC_UPDATE_RELATIVE_DIR,
+    ]
+    .map(|relative| harness_root.join(relative))
+    .to_vec();
+    remove_codemod_files(
+        plan,
+        "Codemod install record and update runner",
+        &harness_root.join("codemod"),
+        ours,
+    );
+    Ok(())
+}
+
+/// A slash command `codemod ai` installs: its label, file name and text.
+const INSTALLED_COMMANDS: [(&str, &str, &str); 2] = [
+    ("/codemod command", MCS_COMMAND_NAME, MCS_COMMAND_MD),
     (
         "/sdk-migration command",
         SDK_MIGRATION_SKILL_COMPONENT_ID,
         SDK_MIGRATION_COMMAND_MD,
-        "installed `sdk-migration` skill",
     ),
 ];
+
+/// A file is unchanged since install when it matches the fingerprint the
+/// install record kept for it, which also covers text from older releases.
+fn unchanged_since_install(
+    plan: &UninstallPlan,
+    path: &Path,
+    runtime_paths: &RuntimePaths,
+) -> bool {
+    let Some(fingerprint) = content_fingerprint(path) else {
+        return false;
+    };
+    managed_state_path_for_harness(plan.harness, plan.scope, runtime_paths)
+        .ok()
+        .and_then(|state_path| {
+            read_managed_install_state_if_present(&state_path)
+                .ok()
+                .flatten()
+        })
+        .is_some_and(|state| {
+            state.components.iter().any(|component| {
+                Path::new(&component.path) == path
+                    && component.fingerprint.as_deref() == Some(fingerprint.as_str())
+            })
+        })
+}
 
 fn plan_command(plan: &mut UninstallPlan, runtime_paths: &RuntimePaths) -> AdapterResult<()> {
     if plan.harness == Harness::Goose {
@@ -272,7 +371,7 @@ fn plan_command(plan: &mut UninstallPlan, runtime_paths: &RuntimePaths) -> Adapt
         }
         return Ok(());
     }
-    for (what, command_name, installed_text, signature) in INSTALLED_COMMANDS {
+    for (what, command_name, installed_text) in INSTALLED_COMMANDS {
         let Some(path) = mcs_command_entrypoint_path_for_harness(
             plan.harness,
             plan.scope,
@@ -283,7 +382,10 @@ fn plan_command(plan: &mut UninstallPlan, runtime_paths: &RuntimePaths) -> Adapt
             continue;
         };
         match plan.read(&path) {
-            Some(content) if content == installed_text || content.contains(signature) => {
+            Some(content)
+                if content == installed_text
+                    || unchanged_since_install(plan, &path, runtime_paths) =>
+            {
                 plan.remove_file(what, path)
             }
             Some(_) => plan.keep(what, &path, "it was edited"),
@@ -337,43 +439,39 @@ fn plan_goose_command(plan: &mut UninstallPlan, recipe_path: PathBuf, config_pat
     }
 }
 
-/// An MCP entry whose launcher runs the Codemod CLI.
-fn launches_codemod(entry: &Value) -> bool {
-    let mentions_codemod = |text: &str| {
-        text == CODEMOD_CLI_COMMAND
-            || text.starts_with("codemod@")
-            || Path::new(text).file_stem() == Some(CODEMOD_CLI_COMMAND.as_ref())
-    };
-    entry
-        .get("command")
-        .and_then(Value::as_str)
-        .into_iter()
-        .chain(
-            entry
-                .get("args")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str),
-        )
-        .any(mentions_codemod)
+/// Whether an MCP command line runs the Codemod CLI, directly or via npx.
+fn launches_codemod(command: &[String]) -> bool {
+    command.iter().any(|part| {
+        part == CODEMOD_CLI_COMMAND
+            || part.starts_with("codemod@")
+            || Path::new(part).file_stem() == Some(CODEMOD_CLI_COMMAND.as_ref())
+    })
 }
 
-fn plan_mcp_entry(
-    plan: &mut UninstallPlan,
-    config_path: PathBuf,
-    should_remove: impl Fn(&Value) -> bool,
-) {
+fn plan_mcp_entry(plan: &mut UninstallPlan, config_path: PathBuf) {
     const WHAT: &str = "Codemod MCP server";
     let Some(content) = plan.read(&config_path) else {
         return;
     };
+    match read_mcp_launch(plan.harness, &content) {
+        Ok(Some(launch)) if launches_codemod(&launch.command) => {}
+        Ok(Some(launch)) => {
+            let command = launch.command.join(" ");
+            let reason = format!("its `codemod` server runs `{command}`, not Codemod");
+            return plan.keep(WHAT, &config_path, reason);
+        }
+        Ok(None) => return,
+        Err(problem) => {
+            let reason = format!("the file {problem}, so it was left as is");
+            return plan.keep(WHAT, &config_path, reason);
+        }
+    }
     let edited = match plan.harness {
         Harness::Codex => remove_toml_mcp_entry(&content),
         Harness::Opencode => remove_opencode_mcp_entry(&content),
         _ => {
             let is_claude_state = config_path.file_name() == Some(".claude.json".as_ref());
-            remove_json_mcp_entry(&content, !is_claude_state, &should_remove)
+            remove_json_mcp_entry(&content, !is_claude_state)
         }
     };
     match edited {
@@ -390,11 +488,7 @@ fn plan_mcp_entry(
 /// `Ok(None)`: nothing to remove. `Ok(Some(None))`: delete the file.
 type FileEdit = Result<Option<Option<String>>, String>;
 
-fn remove_json_mcp_entry(
-    content: &str,
-    delete_when_empty: bool,
-    should_remove: impl Fn(&Value) -> bool,
-) -> FileEdit {
+fn remove_json_mcp_entry(content: &str, delete_when_empty: bool) -> FileEdit {
     let mut config: Value =
         serde_json::from_str(content).map_err(|_| "isn't valid JSON".to_string())?;
     let Some(root) = config.as_object_mut() else {
@@ -403,10 +497,9 @@ fn remove_json_mcp_entry(
     let Some(servers) = root.get_mut("mcpServers").and_then(Value::as_object_mut) else {
         return Ok(None);
     };
-    if !servers.get(MCP_SERVER_NAME).is_some_and(&should_remove) {
+    if servers.remove(MCP_SERVER_NAME).is_none() {
         return Ok(None);
     }
-    servers.remove(MCP_SERVER_NAME);
     if servers.is_empty() {
         root.remove("mcpServers");
     }
@@ -506,16 +599,21 @@ fn plan_discovery_hints(
         let Some(content) = plan.read(&guide) else {
             continue;
         };
+        if !content.contains(SKILL_DISCOVERY_SECTION_BEGIN) {
+            continue;
+        }
         let Some(edited) = remove_managed_block(
             &content,
             SKILL_DISCOVERY_SECTION_BEGIN,
             SKILL_DISCOVERY_SECTION_END,
         ) else {
+            let reason = "its end marker is missing, so remove the Codemod section by hand";
+            plan.keep(WHAT, &guide, reason.to_string());
             continue;
         };
         let shared = shared_with(other_setups, |harness, scope| {
             discovery_guide_paths_with_runtime(harness, scope, runtime_paths)
-                .is_ok_and(|paths| paths.contains(&guide))
+                .is_ok_and(|paths| paths.iter().any(|path| same_existing_path(path, &guide)))
         });
         match shared {
             Some(other) => plan.keep(
@@ -806,6 +904,97 @@ mod tests {
         fs::write(&config, "{ \"mcpServers\": { \"codemod\": ").unwrap();
         let plan = uninstall(Harness::Cursor, InstallScope::Project, &runtime_paths);
         assert_eq!(kept_paths(&plan), vec![config]);
+    }
+
+    fn codemod_skill_dir(harness: Harness, runtime_paths: &RuntimePaths) -> PathBuf {
+        skills_root_for_harness(harness, InstallScope::Project, runtime_paths)
+            .unwrap()
+            .join(MCS_SKILL_DIR_NAME)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn uninstall_keeps_a_skill_another_agent_reaches_through_a_symlinked_skills_folder() {
+        let (runtime_paths, _temp) = runtime_paths_with_temp_roots();
+        full_install(Harness::Cursor, InstallScope::Project, &runtime_paths);
+        let cursor_skills =
+            skills_root_for_harness(Harness::Cursor, InstallScope::Project, &runtime_paths)
+                .unwrap();
+        let claude_skills =
+            skills_root_for_harness(Harness::Claude, InstallScope::Project, &runtime_paths)
+                .unwrap();
+        fs::create_dir_all(claude_skills.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&cursor_skills, &claude_skills).unwrap();
+        full_install(Harness::Claude, InstallScope::Project, &runtime_paths);
+        uninstall(Harness::Claude, InstallScope::Project, &runtime_paths);
+        assert!(codemod_skill_dir(Harness::Cursor, &runtime_paths)
+            .join(SKILL_FILE_NAME)
+            .is_file());
+    }
+
+    #[test]
+    fn uninstall_keeps_a_codemod_command_the_user_added_notes_to() {
+        let (runtime_paths, _temp) = runtime_paths_with_temp_roots();
+        full_install(Harness::Cursor, InstallScope::Project, &runtime_paths);
+        let command = mcs_command_entrypoint_path_for_harness(
+            Harness::Cursor,
+            InstallScope::Project,
+            MCS_COMMAND_NAME,
+            &runtime_paths,
+        )
+        .unwrap()
+        .unwrap();
+        let mut content = fs::read_to_string(&command).unwrap();
+        content.push_str("\nAlso run the linter afterwards.\n");
+        fs::write(&command, &content).unwrap();
+        uninstall(Harness::Cursor, InstallScope::Project, &runtime_paths);
+        assert_eq!(fs::read_to_string(&command).unwrap(), content);
+    }
+
+    #[test]
+    fn uninstall_keeps_files_the_user_added_to_codemods_folders() {
+        let (runtime_paths, _temp) = runtime_paths_with_temp_roots();
+        full_install(Harness::Claude, InstallScope::Project, &runtime_paths);
+        let in_skill = codemod_skill_dir(Harness::Claude, &runtime_paths).join("my-notes.md");
+        let in_record = runtime_paths.cwd.join(".claude/codemod/mine/notes.md");
+        for file in [&in_skill, &in_record] {
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, "mine\n").unwrap();
+        }
+        uninstall(Harness::Claude, InstallScope::Project, &runtime_paths);
+        assert!(in_skill.is_file() && in_record.is_file());
+    }
+
+    #[test]
+    fn uninstall_keeps_a_codemod_mcp_server_that_runs_something_else() {
+        let (runtime_paths, _temp) = runtime_paths_with_temp_roots();
+        let config = runtime_paths.cwd.join(".mcp.json");
+        let own = r#"{"mcpServers":{"codemod":{"command":"my-own-thing"}}}"#;
+        fs::write(&config, own).unwrap();
+        uninstall(Harness::Claude, InstallScope::Project, &runtime_paths);
+        assert_eq!(fs::read_to_string(&config).unwrap(), own);
+    }
+
+    #[test]
+    fn uninstall_reports_a_codemod_section_whose_end_marker_was_deleted() {
+        let (runtime_paths, _temp) = runtime_paths_with_temp_roots();
+        full_install(Harness::Cursor, InstallScope::Project, &runtime_paths);
+        let guide = runtime_paths.cwd.join(AGENTS_GUIDE_FILE_NAME);
+        let content = fs::read_to_string(&guide).unwrap();
+        fs::write(&guide, content.replace(SKILL_DISCOVERY_SECTION_END, "")).unwrap();
+        let plan = uninstall(Harness::Cursor, InstallScope::Project, &runtime_paths);
+        assert_eq!(kept_paths(&plan), vec![guide]);
+    }
+
+    #[test]
+    fn uninstall_for_all_projects_finds_the_setup_when_run_from_the_home_folder() {
+        let (mut runtime_paths, _temp) = runtime_paths_with_temp_roots();
+        runtime_paths.cwd = runtime_paths.home_dir.clone().unwrap();
+        full_install(Harness::Claude, InstallScope::User, &runtime_paths);
+        assert_eq!(
+            installed_setups(&runtime_paths, Some(InstallScope::User)),
+            vec![(Harness::Claude, InstallScope::User)]
+        );
     }
 
     #[test]

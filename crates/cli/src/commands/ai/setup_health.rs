@@ -197,8 +197,11 @@ pub async fn handle_uninstall(command: &UninstallCommand) -> Result<()> {
         }
         harness => harness,
     };
-    let plan = plan_uninstall(harness, scope)
-        .unwrap_or_else(|error| exit_adapter_error(error, command.format));
+    let make_plan = || {
+        plan_uninstall(harness, scope)
+            .unwrap_or_else(|error| exit_adapter_error(error, command.format))
+    };
+    let mut plan = make_plan();
 
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let mut needs_yes = false;
@@ -214,6 +217,10 @@ pub async fn handle_uninstall(command: &UninstallCommand) -> Result<()> {
         false
     };
     if applied {
+        // The agent may have rewritten its config while the prompt was up
+        // (Claude Code does with `~/.claude.json`), so plan again from what
+        // is on disk now.
+        plan = make_plan();
         plan.apply()
             .unwrap_or_else(|error| exit_adapter_error(error, command.format));
     }

@@ -63,10 +63,19 @@ pub fn doctor(options: &DoctorOptions) -> AdapterResult<Vec<DoctorReport>> {
     doctor_with_runtime(options, &RuntimePaths::current()?)
 }
 
-/// Agent setups with Codemod installed, project scope first.
-pub(crate) fn installed_setups(runtime_paths: &RuntimePaths) -> Vec<(Harness, InstallScope)> {
+/// Agent setups with Codemod installed, project scope first. Run from the
+/// home folder, both scopes are the same files: a setup is listed once,
+/// unless `only` asks for one scope.
+pub(crate) fn installed_setups(
+    runtime_paths: &RuntimePaths,
+    only: Option<InstallScope>,
+) -> Vec<(Harness, InstallScope)> {
+    let scopes = match only {
+        Some(scope) => vec![scope],
+        None => vec![InstallScope::Project, InstallScope::User],
+    };
     let mut setups = Vec::new();
-    for scope in [InstallScope::Project, InstallScope::User] {
+    for scope in scopes {
         for harness in SETUP_HARNESSES {
             if setup_exists(harness, scope, runtime_paths)
                 && !setups.iter().any(|&(other_harness, other_scope)| {
@@ -150,12 +159,9 @@ fn doctor_with_runtime(
         Some(scope) => vec![scope],
         None => vec![InstallScope::Project, InstallScope::User],
     };
-    let mut targets = installed_setups(runtime_paths)
+    let mut targets = installed_setups(runtime_paths, options.scope)
         .into_iter()
-        .filter(|(harness, scope)| {
-            (options.harness == Harness::Auto || *harness == options.harness)
-                && scopes.contains(scope)
-        })
+        .filter(|(harness, _)| options.harness == Harness::Auto || *harness == options.harness)
         .collect::<Vec<_>>();
     if targets.is_empty() && options.harness != Harness::Auto {
         targets.push((options.harness, scopes[0]));
@@ -319,12 +325,15 @@ fn check_command(
 
 /// The command line an agent runs to start the Codemod MCP server.
 #[derive(Debug, Eq, PartialEq)]
-struct McpLaunch {
-    command: Vec<String>,
+pub(super) struct McpLaunch {
+    pub(super) command: Vec<String>,
     disabled: bool,
 }
 
-fn read_mcp_launch(harness: Harness, content: &str) -> Result<Option<McpLaunch>, String> {
+pub(super) fn read_mcp_launch(
+    harness: Harness,
+    content: &str,
+) -> Result<Option<McpLaunch>, String> {
     match harness {
         Harness::Codex => {
             let document = content
@@ -475,11 +484,23 @@ fn find_program(program: &str, runtime_paths: &RuntimePaths) -> Option<PathBuf> 
         return path.is_file().then_some(path);
     }
     let extensions: &[&str] = if cfg!(windows) {
-        &["", ".exe", ".cmd", ".bat"]
+        WINDOWS_PROGRAM_EXTENSIONS
     } else {
         &[""]
     };
-    std::env::split_paths(runtime_paths.path_env.as_ref()?)
+    find_program_in(program, runtime_paths.path_env.as_ref()?, extensions)
+}
+
+/// Node puts both a shell script `npx` and `npx.cmd` in its folder, and
+/// Windows can only start the second, so the bare name comes last.
+const WINDOWS_PROGRAM_EXTENSIONS: &[&str] = &[".exe", ".cmd", ".bat", ""];
+
+fn find_program_in(
+    program: &str,
+    path_env: &std::ffi::OsStr,
+    extensions: &[&str],
+) -> Option<PathBuf> {
+    std::env::split_paths(path_env)
         .flat_map(|dir| {
             extensions
                 .iter()
@@ -862,9 +883,23 @@ echo '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"search"},{"name":"run"
     }
 
     #[test]
+    fn windows_lookup_picks_npx_cmd_over_the_shell_script_next_to_it() {
+        let (_runtime_paths, temp) = runtime_paths_with_temp_roots();
+        let node = temp.path().join("node");
+        fs::create_dir_all(&node).unwrap();
+        for name in ["npx", "npx.cmd"] {
+            fs::write(node.join(name), "").unwrap();
+        }
+        assert_eq!(
+            find_program_in("npx", node.as_os_str(), WINDOWS_PROGRAM_EXTENSIONS),
+            Some(node.join("npx.cmd"))
+        );
+    }
+
+    #[test]
     fn finds_no_setup_in_a_project_codemod_was_never_installed_in() {
         let (runtime_paths, _temp) = runtime_paths_with_temp_roots();
-        assert!(installed_setups(&runtime_paths).is_empty());
+        assert!(installed_setups(&runtime_paths, None).is_empty());
     }
 
     #[test]
@@ -873,7 +908,7 @@ echo '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"search"},{"name":"run"
         full_install(Harness::Cursor, InstallScope::Project, &runtime_paths);
         full_install(Harness::Codex, InstallScope::User, &runtime_paths);
         assert_eq!(
-            installed_setups(&runtime_paths),
+            installed_setups(&runtime_paths, None),
             vec![
                 (Harness::Cursor, InstallScope::Project),
                 (Harness::Codex, InstallScope::User)
