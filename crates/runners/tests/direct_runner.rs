@@ -53,6 +53,20 @@ async fn keeps_the_end_of_output_that_is_too_long() {
     assert!(output.stdout.ends_with("line\nlast\n"));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn keeps_the_end_of_a_single_line_that_is_too_long() {
+    let output = run("head -c 2000000 /dev/zero | tr '\\0' a; echo b")
+        .await
+        .unwrap();
+    assert!(output.cut);
+    assert_eq!(
+        output.stdout.len(),
+        butterflow_runners::direct_runner::KEPT_OUTPUT
+    );
+    assert!(output.stdout.ends_with("aab\n"));
+}
+
 // cmd's echo prints the quotes it is given; sh's removes them. Either way the
 // quoted string has to reach the shell as written (#1883).
 #[tokio::test]

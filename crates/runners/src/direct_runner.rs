@@ -255,6 +255,19 @@ fn collect(
             kept -= lines.pop_front().map_or(0, |line| line.len() + 1);
             cut = true;
         }
+        // A single line longer than the limit keeps its end, cut at a
+        // character boundary.
+        if kept > KEPT_OUTPUT {
+            if let Some(line) = lines.back_mut() {
+                let mut start = line.len() + 1 - KEPT_OUTPUT;
+                while !line.is_char_boundary(start) {
+                    start += 1;
+                }
+                line.drain(..start);
+                kept = line.len() + 1;
+                cut = true;
+            }
+        }
     }
     let mut text = String::with_capacity(kept);
     for line in lines {
