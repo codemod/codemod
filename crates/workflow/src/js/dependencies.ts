@@ -96,6 +96,7 @@ export const registry = Object.freeze({
   npm: (name: string) => lookup("npm", name),
   cargo: (name: string) => lookup("cargo", name),
   pypi: (name: string) => lookup("pypi", name),
+  go: (name: string) => lookup("go", name),
 });
 
 /** Versions and ranges, by npm rules, Cargo's (`{ ecosystem: "cargo" }`) or PEP 440 (`{ ecosystem: "pypi" }`). */
