@@ -359,6 +359,36 @@ nodes:
 }
 
 #[test]
+fn a_template_that_can_write_state_carries_it_when_used_twice() {
+    let source = source_of(
+        r#"
+version: "1"
+templates:
+  - id: bump
+    name: Bump
+    steps:
+      - name: Count
+        run: echo "count=1" >> "$STATE_OUTPUTS"
+nodes:
+  - id: twice
+    name: Twice
+    steps:
+      - name: First
+        use:
+          template: bump
+      - name: Second
+        use:
+          template: bump
+"#,
+    );
+    assert!(
+        source.contains(r#"update(state, await step("Count", shell("#)
+            && source.contains("), { state }));"),
+        "{source}"
+    );
+}
+
+#[test]
 fn a_workflow_with_one_step_and_no_state_reads_stays_plain() {
     let source = source_of(
         r#"

@@ -119,6 +119,7 @@ fn declared(names: &[&str]) -> Vec<String> {
 /// Whether translated steps must carry state from one to the next: the
 /// workflow reads it (`state.` in an expression, `from_state`), or more than
 /// one step could set it (shell, jssg, shard), so a later one may read it.
+/// A template's steps count once for each time it is used.
 fn plumbs_state(workflow: &Workflow) -> bool {
     let text = serde_json::to_string(workflow).unwrap_or_default();
     let reads = text.contains("state.")
@@ -127,20 +128,30 @@ fn plumbs_state(workflow: &Workflow) -> bool {
                 .as_ref()
                 .is_some_and(|s| s.from_state.is_some())
         });
-    let steps = workflow
+    let writers: usize = workflow
         .nodes
         .iter()
-        .flat_map(|node| &node.steps)
-        .chain(workflow.templates.iter().flat_map(|t| &t.steps));
-    let writers = steps
-        .filter(|step| {
-            matches!(
-                step.action,
-                StepAction::RunScript(_) | StepAction::JSAstGrep(_) | StepAction::Shard(_)
-            )
-        })
-        .count();
+        .map(|node| writers(&node.steps, workflow, 0))
+        .sum();
     reads || writers > 1
+}
+
+/// How many steps among these could set state, following template uses.
+fn writers(steps: &[Step], workflow: &Workflow, depth: usize) -> usize {
+    steps
+        .iter()
+        .map(|step| match &step.action {
+            StepAction::RunScript(_) | StepAction::JSAstGrep(_) | StepAction::Shard(_) => 1,
+            // A template that uses itself is an error elsewhere; stop here.
+            StepAction::UseTemplate(_) if depth > 8 => 0,
+            StepAction::UseTemplate(used) => workflow
+                .templates
+                .iter()
+                .find(|template| template.id == used.template)
+                .map_or(0, |template| writers(&template.steps, workflow, depth + 1)),
+            _ => 0,
+        })
+        .sum()
 }
 
 /// Where a list of steps is being generated.
