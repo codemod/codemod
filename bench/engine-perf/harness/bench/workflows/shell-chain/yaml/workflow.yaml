@@ -1,0 +1,27 @@
+# Synthetic: ten sequential shell steps that do nothing (`true`). Measures per-step engine overhead.
+version: "1"
+nodes:
+  - id: chain
+    name: Shell chain
+    type: automatic
+    steps:
+      - name: step-1
+        run: "true"
+      - name: step-2
+        run: "true"
+      - name: step-3
+        run: "true"
+      - name: step-4
+        run: "true"
+      - name: step-5
+        run: "true"
+      - name: step-6
+        run: "true"
+      - name: step-7
+        run: "true"
+      - name: step-8
+        run: "true"
+      - name: step-9
+        run: "true"
+      - name: step-10
+        run: "true"

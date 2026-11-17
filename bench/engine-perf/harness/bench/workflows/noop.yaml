@@ -1,0 +1,8 @@
+version: "1"
+nodes:
+  - id: noop
+    name: No-op
+    type: automatic
+    steps:
+      - name: "echo"
+        run: "true"

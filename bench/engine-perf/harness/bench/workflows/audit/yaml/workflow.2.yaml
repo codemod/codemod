@@ -1,0 +1,24 @@
+# Dev's jssg-audit detection pack (14 read-only codemods) as one workflow:
+# one node per codemod, no depends_on, so the engine runs them in parallel.
+version: "1"
+nodes:
+  - id: click-on-non-interactive
+    name: Detect click-on-non-interactive
+    type: automatic
+    steps:
+      - name: "Count click-on-non-interactive findings"
+        js-ast-grep:
+          js_file: codemods/click-on-non-interactive/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: db-query-in-loop
+    name: Detect db-query-in-loop
+    type: automatic
+    steps:
+      - name: "Count db-query-in-loop findings"
+        js-ast-grep:
+          js_file: codemods/db-query-in-loop/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]

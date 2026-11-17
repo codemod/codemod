@@ -1,0 +1,15 @@
+version: "1"
+nodes:
+  - id: isolation
+    name: Module state across files
+    type: automatic
+    runtime:
+      type: direct
+    steps:
+      - name: Stamp each file with the module counter
+        js-ast-grep:
+          js_file: src/transform.ts
+          base_path: .
+          include: ["**/*.ts", "**/*.tsx"]
+          exclude: ["**/node_modules/**"]
+          language: typescript

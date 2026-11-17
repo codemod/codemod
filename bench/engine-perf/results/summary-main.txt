@@ -1,0 +1,121 @@
+
+util-is on taxonomy  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  ts                         0.11  3.04x     0.3       33  3 0
+  all4                       0.13  2.65x     0.3       46  3 0
+  pool                       0.16  2.18x     0.3       46  3 0
+  mem+rules                  0.33  1.06x     1.0       48  3 0
+  mem+kinds                  0.33  1.05x     1.0       47  3 0
+  mo                         0.35  1.00x     1.1       48  3 0
+  mem                        0.36  0.97x     1.1       47  3 0
+  v1                         2.02  0.17x     1.1       38  3 0
+
+util-is on excalidraw  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                       0.85  2.51x     2.9       60  3 0
+  ts                         1.04  2.03x     3.7       74  3 0
+  pool                       1.11  1.91x     3.5       73  3 0
+  mem+rules                  1.86  1.14x     6.7       64  3 0
+  mem                        2.04  1.04x     7.3       63  3 0
+  mo                         2.13  1.00x     7.2       72  3 0
+  mem+kinds                  2.17  0.98x     7.1       62  3 0
+  v1                         4.02  0.53x     7.5       52  3 0
+
+util-is on calcom  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                       3.58  3.31x    11.1      226  2 0
+  ts                         4.00  2.97x    14.3      267  2 0
+  pool                       4.66  2.54x    15.5      250  2 0
+  mem+rules                 10.90  1.09x    38.8      226  2 0
+  mem+kinds                 11.58  1.02x    42.0      224  2 0
+  mem                       11.76  1.01x    42.3      225  2 0
+  mo                        11.86  1.00x    42.6      245  2 0
+  v1                        14.12  0.84x    45.2      212  2 0
+
+react-19 on taxonomy  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                       0.50  3.40x     1.1       50  3 0
+  ts                         0.63  2.73x     2.0       39  3 0
+  pool                       0.81  2.10x     2.2       50  3 0
+  mem+rules                  1.40  1.22x     4.6       52  3 0
+  mem+kinds                  1.67  1.02x     5.8       52  3 0
+  mem                        1.68  1.01x     5.7       52  3 0
+  mo                         1.71  1.00x     5.7       52  3 0
+  v1                         2.23  0.77x     6.0       42  3 0
+
+react-19 on excalidraw  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                       6.71  2.08x    23.2       89  3 0
+  pool                       8.35  1.67x    29.1       98  3 0
+  ts                         8.59  1.63x    28.8      117  3 0
+  mem+rules                 12.16  1.15x    44.2       90  3 0
+  mem+kinds                 13.45  1.04x    49.2       91  3 0
+  mem                       13.62  1.03x    50.2       94  3 0
+  mo                        13.97  1.00x    51.6      102  3 0
+  v1                        16.31  0.86x    53.6       81  3 0
+
+react-19 on calcom  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                      26.03  2.78x    83.6      412  2 0
+  ts                        33.23  2.18x   120.6      726  2 0
+  pool                      35.89  2.02x   125.3      502  2 0
+  mem+rules                 61.40  1.18x   228.3      661  2 0
+  mem                       71.94  1.01x   269.1      731  2 0
+  mo                        72.47  1.00x   272.1      794  2 0
+  mem+kinds                 72.58  1.00x   271.7      496  2 0
+  v1                        80.35  0.90x   280.8      578  2 0
+
+debarrel on taxonomy  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  ts                         0.19  3.54x     0.5       40  3 0
+  all4                       0.21  3.14x     0.5       52  3 0
+  pool                       0.23  2.94x     0.5       51  3 0
+  mem+rules                  0.61  1.11x     2.0       54  3 0
+  mem+kinds                  0.61  1.10x     2.0       54  3 0
+  mem                        0.64  1.05x     2.1       53  3 0
+  mo                         0.68  1.00x     2.0       54  3 0
+  v1                         2.01  0.34x     2.1       45  3 0
+
+debarrel on excalidraw  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                       8.62  1.27x    31.6      122  3 0
+  pool                       8.77  1.25x    31.4      129  3 0
+  ts                         8.86  1.23x    32.2      136  3 0
+  mem+rules                 10.69  1.02x    40.0      123  3 0
+  mem                       10.92  1.00x    40.2      123  3 0
+  mo                        10.92  1.00x    40.3      132  3 0
+  mem+kinds                 11.11  0.98x    40.1      123  3 0
+  v1                        12.33  0.89x    40.6      112  3 0
+
+debarrel on calcom  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                      18.74  1.84x    67.2      296  2 0
+  ts                        19.17  1.80x    70.0      330  2 0
+  pool                      19.43  1.78x    69.1      322  2 0
+  mem                       33.32  1.04x   126.6      295  2 0
+  mem+rules                 33.33  1.04x   125.9      294  2 0
+  mem+kinds                 33.57  1.03x   125.3      296  2 0
+  mo                        34.54  1.00x   129.4      316  2 0
+  v1                        36.34  0.95x   132.4      284  2 0
+
+audit on taxonomy  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  ts                         0.30  6.23x     1.0       39  3 0
+  all4                       0.64  2.90x     1.1       81  3 0
+  pool                       0.74  2.52x     1.4       86  3 0
+  mem                        1.79  1.04x     4.5       83  3 0
+  mem+kinds                  1.80  1.03x     4.5       84  3 0
+  mo                         1.86  1.00x     4.6       87  3 0
+  mem+rules                  1.97  0.94x     4.3       83  3 0
+  v1                         2.01  0.93x     4.6       37  3 0
+
+audit on excalidraw  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  ts                         5.07  2.76x    18.5      137  3 0
+  all4                       7.57  1.84x    20.1      277  3 0
+  pool                       8.10  1.72x    21.5      446  3 0
+  mem+rules                 13.54  1.03x    39.1      273  3 0
+  mem+kinds                 13.93  1.00x    40.3      272  3 0
+  mo                        13.96  1.00x    41.0      437  3 0
+  mem                       13.96  1.00x    40.0      275  3 0
+  v1                        15.36  0.91x    38.7       73  3 0

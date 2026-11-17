@@ -1,0 +1,120 @@
+reading file "ht-mo-audit2.gz" - please wait, this might take some time...
+Debuggee command was: /home/user/eb/bin/mo/codemod workflow run -w /home/user/eb/bench/workflows/audit/yaml/workflow.2.yaml --no-interactive --disable-analytics --allow-fs -t /home/user/eb/data/repos/calcom
+finished reading file, now analyzing data:
+
+PEAK MEMORY CONSUMERS
+71.97M peak memory consumed over 203765 calls from
+_RNvXs4_NtCscdodAO9FK5_5alloc6stringNtB5_6StringNtNtCs4NRVxsYgnAr_4core5clone5Clone5clone
+  in /home/user/eb/bin/mo/codemod
+35.98M consumed over 10130 calls from:
+    _RNvMNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine13pending_filesNtB2_12PendingFiles4take
+      in /home/user/eb/bin/mo/codemod
+    _RNCNvNtCsdg89SfpO3Km_15butterflow_core11jssg_runner8run_jssgs0_0B5_
+      in /home/user/eb/bin/mo/codemod
+    _RNCNCINvMNtCsdg89SfpO3Km_15butterflow_core9executionNtB7_22CodemodExecutionConfig34execute_with_task_id_before_finishNCNvNtB9_11jssg_runner8run_jssgs0_0NCINvB6_20execute_with_task_idB1R_E0Es0_00B9_
+      in /home/user/eb/bin/mo/codemod
+    _RNvXsc_NtCs8ZKap0UsaCl_6ignore4walkNtB5_12FnVisitorImpNtB5_15ParallelVisitor5visit
+      in /home/user/eb/bin/mo/codemod
+    _RNvMsg_NtCs8ZKap0UsaCl_6ignore4walkNtB5_6Worker3run
+      in /home/user/eb/bin/mo/codemod
+    _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceNCNCNCNvMsd_NtCs8ZKap0UsaCl_6ignore4walkNtB1j_12WalkParallel5visit0s_00uEB1l_
+      in /home/user/eb/bin/mo/codemod
+    _RNSNvYNCINvNtNtCs2AWtUsOyxgP_3std6thread9lifecycle15spawn_uncheckedNCNCNCNvMsd_NtCs8ZKap0UsaCl_6ignore4walkNtB1f_12WalkParallel5visit0s_00uEs_0INtNtNtCs4NRVxsYgnAr_4core3ops8function6FnOnceuE9call_once6vtableB1h_
+      in /home/user/eb/bin/mo/codemod
+    _RNvNvMs0_NtNtNtCs2AWtUsOyxgP_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /home/user/eb/bin/mo/codemod
+    start_thread
+      at ./nptl/pthread_create.c:447
+      in /lib/x86_64-linux-gnu/libc.so.6
+    __clone3
+      at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+      in /lib/x86_64-linux-gnu/libc.so.6
+35.98M consumed over 10130 calls from:
+    _RNvMNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine13pending_filesNtB2_12PendingFiles4take
+      in /home/user/eb/bin/mo/codemod
+    _RNCNvNtCsdg89SfpO3Km_15butterflow_core11jssg_runner8run_jssgs0_0B5_
+      in /home/user/eb/bin/mo/codemod
+    _RNCNCINvMNtCsdg89SfpO3Km_15butterflow_core9executionNtB7_22CodemodExecutionConfig34execute_with_task_id_before_finishNCNvNtB9_11jssg_runner8run_jssgs0_0NCINvB6_20execute_with_task_idB1R_E0Es0_00B9_
+      in /home/user/eb/bin/mo/codemod
+    _RNvXsc_NtCs8ZKap0UsaCl_6ignore4walkNtB5_12FnVisitorImpNtB5_15ParallelVisitor5visit
+      in /home/user/eb/bin/mo/codemod
+    _RNvMsg_NtCs8ZKap0UsaCl_6ignore4walkNtB5_6Worker3run
+      in /home/user/eb/bin/mo/codemod
+    _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceNCNCNCNvMsd_NtCs8ZKap0UsaCl_6ignore4walkNtB1j_12WalkParallel5visit0s_00uEB1l_
+      in /home/user/eb/bin/mo/codemod
+    _RNSNvYNCINvNtNtCs2AWtUsOyxgP_3std6thread9lifecycle15spawn_uncheckedNCNCNCNvMsd_NtCs8ZKap0UsaCl_6ignore4walkNtB1f_12WalkParallel5visit0s_00uEs_0INtNtNtCs4NRVxsYgnAr_4core3ops8function6FnOnceuE9call_once6vtableB1h_
+      in /home/user/eb/bin/mo/codemod
+    _RNvNvMs0_NtNtNtCs2AWtUsOyxgP_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /home/user/eb/bin/mo/codemod
+    start_thread
+      at ./nptl/pthread_create.c:447
+      in /lib/x86_64-linux-gnu/libc.so.6
+    __clone3
+      at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+      in /lib/x86_64-linux-gnu/libc.so.6
+2.91K consumed over 360 calls from:
+    _RNvXsa_NtCscdodAO9FK5_5alloc3vecINtB5_3VecNtNtCs8ZKap0UsaCl_6ignore9gitignore4GlobENtNtCs4NRVxsYgnAr_4core5clone5Clone5cloneBI_
+      in /home/user/eb/bin/mo/codemod
+    _RNvMs0_NtCs8ZKap0UsaCl_6ignore9gitignoreNtB5_16GitignoreBuilder5build
+      in /home/user/eb/bin/mo/codemod
+    _RINvNtCs8ZKap0UsaCl_6ignore3dir16create_gitignoreReEB4_
+      in /home/user/eb/bin/mo/codemod
+    _RNvMs_NtCs8ZKap0UsaCl_6ignore3dirNtB4_6Ignore14add_child_path
+      in /home/user/eb/bin/mo/codemod
+    _RINvMs_NtCs8ZKap0UsaCl_6ignore3dirNtB5_6Ignore9add_childRNtNtCs2AWtUsOyxgP_3std4path4PathEB7_
+      in /home/user/eb/bin/mo/codemod
+    _RNvMsg_NtCs8ZKap0UsaCl_6ignore4walkNtB5_6Worker3run
+      in /home/user/eb/bin/mo/codemod
+    _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceNCNCNCNvMsd_NtCs8ZKap0UsaCl_6ignore4walkNtB1j_12WalkParallel5visit0s_00uEB1l_
+      in /home/user/eb/bin/mo/codemod
+    _RNSNvYNCINvNtNtCs2AWtUsOyxgP_3std6thread9lifecycle15spawn_uncheckedNCNCNCNvMsd_NtCs8ZKap0UsaCl_6ignore4walkNtB1f_12WalkParallel5visit0s_00uEs_0INtNtNtCs4NRVxsYgnAr_4core3ops8function6FnOnceuE9call_once6vtableB1h_
+      in /home/user/eb/bin/mo/codemod
+    _RNvNvMs0_NtNtNtCs2AWtUsOyxgP_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /home/user/eb/bin/mo/codemod
+    start_thread
+      at ./nptl/pthread_create.c:447
+      in /lib/x86_64-linux-gnu/libc.so.6
+    __clone3
+      at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+      in /lib/x86_64-linux-gnu/libc.so.6
+2.70K consumed over 360 calls from:
+    _RNvXsa_NtCscdodAO9FK5_5alloc3vecINtB5_3VecNtNtCs8ZKap0UsaCl_6ignore9gitignore4GlobENtNtCs4NRVxsYgnAr_4core5clone5Clone5cloneBI_
+      in /home/user/eb/bin/mo/codemod
+    _RNvMs0_NtCs8ZKap0UsaCl_6ignore9gitignoreNtB5_16GitignoreBuilder5build
+      in /home/user/eb/bin/mo/codemod
+    _RINvNtCs8ZKap0UsaCl_6ignore3dir16create_gitignoreReEB4_
+      in /home/user/eb/bin/mo/codemod
+    _RNvMs_NtCs8ZKap0UsaCl_6ignore3dirNtB4_6Ignore14add_child_path
+      in /home/user/eb/bin/mo/codemod
+    _RINvMs_NtCs8ZKap0UsaCl_6ignore3dirNtB5_6Ignore9add_childRNtNtCs2AWtUsOyxgP_3std4path4PathEB7_
+      in /home/user/eb/bin/mo/codemod
+    _RNvMsg_NtCs8ZKap0UsaCl_6ignore4walkNtB5_6Worker3run
+      in /home/user/eb/bin/mo/codemod
+    _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceNCNCNCNvMsd_NtCs8ZKap0UsaCl_6ignore4walkNtB1j_12WalkParallel5visit0s_00uEB1l_
+      in /home/user/eb/bin/mo/codemod
+    _RNSNvYNCINvNtNtCs2AWtUsOyxgP_3std6thread9lifecycle15spawn_uncheckedNCNCNCNvMsd_NtCs8ZKap0UsaCl_6ignore4walkNtB1f_12WalkParallel5visit0s_00uEs_0INtNtNtCs4NRVxsYgnAr_4core3ops8function6FnOnceuE9call_once6vtableB1h_
+      in /home/user/eb/bin/mo/codemod
+    _RNvNvMs0_NtNtNtCs2AWtUsOyxgP_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /home/user/eb/bin/mo/codemod
+    start_thread
+      at ./nptl/pthread_create.c:447
+      in /lib/x86_64-linux-gnu/libc.so.6
+    __clone3
+      at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+      in /lib/x86_64-linux-gnu/libc.so.6
+  and 2.02K from 58 other places
+
+1.44M peak memory consumed over 39483957 calls from
+js_malloc_rt
+  in /home/user/eb/bin/mo/codemod
+185.69K consumed over 40528 calls from:
+    JS_NewStringLen
+      in /home/user/eb/bin/mo/codemod
+    _RNvXs2_NtNtNtCshAYsVKs23jR_13rquickjs_core5value7convert4intoReNtB7_6IntoJs7into_js
+      in /home/user/eb/bin/mo/codemod
+    _RNvXs0_NtNtNtCshAYsVKs23jR_13rquickjs_core5value7convert4intoNtNtCscdodAO9FK5_5alloc6string6StringNtB7_6IntoJs7into_js
+      in /home/user/eb/bin/mo/codemod
+    _RINvXsk_NtNtCshAYsVKs23jR_13rquickjs_core5value6objectNtB6_6ObjectINtNtB8_7convert14FromIteratorJsTNtNtCscdodAO9FK5_5alloc6string6StringB1z_EE12from_iter_jsINtNtNtNtCs2AWtUsOyxgP_3std11collections4hash3map8IntoIterB1z_B1z_EECs1T8U9FZK9ES_12llrt_process
+      in /home/user/eb/bin/mo/codemod
+    _RNvXsV_NtNtNtCshAYsVKs23jR_13rquickjs_core5value7convert4intoINtNtNtNtCs2AWtUsOyxgP_3std11collections4hash3map7HashMapNtNtCscdodAO9FK5_5alloc6string6StringB1S_ENtB7_6IntoJs7into_jsCs1T8U9FZK9ES_12llrt_process
+      in /home/user/eb/bin/mo/codemod

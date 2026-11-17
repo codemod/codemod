@@ -1,0 +1,80 @@
+88.13% 0.02%    _RINvMs2_NtNtCs2AWtUsOyxgP_3std6thread5localINtB6_8LocalKeyNtNtNtCshAzhe09k4Xx_5tokio4task5local9LocalDataE4withNCINvMs2_BW_NtBW_8LocalSet4withINtNtNtCs4NRVxsYgnAr_4core4task4poll4PollINtNtB2n_6result6ResultNtNtNtNtCs
+87.99% 0.00%    _RINvMNtNtNtCshAzhe09k4Xx_5tokio7runtime7context6scopedINtB3_6ScopedNtNtB7_9scheduler7ContextE3setNCINvMs6_NtB15_14current_threadNtB1G_9CoreGuard5enterNCINvB1C_8block_onINtNtCs4NRVxsYgnAr_4core3pin3PinQNCINvMs2_NtNtB9
+87.99% 0.00%    _RNvXs_NtNtCs4NRVxsYgnAr_4core6future6futureINtNtB8_3pin3PinQNCINvMs2_NtNtCshAzhe09k4Xx_5tokio4task5localNtB15_8LocalSet9run_untilNCNvMs6_NtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine16execution_engineNtB2b_19P
+87.92% 0.02%    _RINvMNtNtCshAzhe09k4Xx_5tokio7runtime7runtimeNtB3_7Runtime8block_onNCINvMs2_NtNtB7_4task5localNtB1c_8LocalSet9run_untilNCNvMs6_NtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine16execution_engineNtB21_19PersistentT
+87.18% 0.00%    _RNCNvNtCsdg89SfpO3Km_15butterflow_core11jssg_runner8run_jssgs0_0B5_ - -
+86.85% 0.00%    _RINvMs2_NtNtCs2AWtUsOyxgP_3std6thread5localINtB6_8LocalKeyNtNtNtCshAzhe09k4Xx_5tokio7runtime7runtime7RuntimeE4withNCINvNtCsdg89SfpO3Km_15butterflow_core11jssg_runner8block_onNCNvMs6_NtNtNtCs4zG6bNMulpw_15codemod_sand
+85.70% 0.00%    _RNvMsg_NtCs8ZKap0UsaCl_6ignore4walkNtB5_6Worker3run - -
+85.58% 0.02%    _RNCNCINvMNtCsdg89SfpO3Km_15butterflow_core9executionNtB7_22CodemodExecutionConfig34execute_with_task_id_before_finishNCNvNtB9_11jssg_runner8run_jssgs0_0NCINvB6_20execute_with_task_idB1R_E0Es0_00B9_ - -
+85.49% 0.00%    _RNvXsc_NtCs8ZKap0UsaCl_6ignore4walkNtB5_12FnVisitorImpNtB5_15ParallelVisitor5visit - -
+84.85% 0.00%    _RINvNtNtCs2AWtUsOyxgP_3std3sys9backtrace28___rust_begin_short_backtraceNCNCNCNvMsd_NtCs8ZKap0UsaCl_6ignore4walkNtB1j_12WalkParallel5visit0s_00uEB1l_ - -
+84.59% 0.00%    _RNSNvYNCINvNtNtCs2AWtUsOyxgP_3std6thread9lifecycle15spawn_uncheckedNCNCNCNvMsd_NtCs8ZKap0UsaCl_6ignore4walkNtB1f_12WalkParallel5visit0s_00uEs_0INtNtNtCs4NRVxsYgnAr_4core3ops8function6FnOnceuE9call_once6vtableB1h_ - -
+84.24% 0.00%    start_thread - -
+84.22% 0.00%    _RNvNvMs0_NtNtNtCs2AWtUsOyxgP_3std3sys6thread4unixNtB7_6Thread3new12thread_start - -
+83.95% 0.00%    clone3 - -
+72.20% 0.00%    _RNCNCNCNvMs6_NtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine16execution_engineNtBb_19PersistentTransform8run_file0s_00Csdg89SfpO3Km_15butterflow_core - -
+72.14% 0.02%    _RNvXs0_NtNtNtCshAYsVKs23jR_13rquickjs_core7context5async6futureINtB5_10WithFutureNCNCNvMs6_NtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine16execution_engineNtB1r_19PersistentTransform8run_file0s_0INtNtCs4NRVxsYg
+71.44% 0.41%    JS_CallInternal - -
+71.21% 0.00%    js_async_function_call - -
+71.19% 0.00%    js_async_function_resume - -
+71.05% 0.00%    JS_Call - -
+71.05% 0.00%    _RINvMNtNtNtCshAYsVKs23jR_13rquickjs_core5value8function4argsNtB3_4Args5applyNtB7_5ValueECsdg89SfpO3Km_15butterflow_core - -
+71.03% 0.00%    _RINvMNtNtCshAYsVKs23jR_13rquickjs_core5value8functionNtB3_8Function4callTNtNtNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep7sg_node9SgRootRjsNtB5_5ValueEB2b_ECsdg89SfpO3Km_15butterflow_core - -
+68.23% 0.04%    _RINvMNtNtCshAYsVKs23jR_13rquickjs_core5class3ffiNtB3_6VTable9call_implNtNtNtNtB7_5value8function3ffi12RustFunctionECs4zG6bNMulpw_15codemod_sandbox - -
+68.23% 0.02%    _RINvMsf_NtCshAYsVKs23jR_13rquickjs_core6resultNtNtNtB8_7context3ctx3Ctx12handle_panicINtNtNtCs4NRVxsYgnAr_4core5panic11unwind_safe16AssertUnwindSafeNCINvMNtNtB8_5class3ffiNtB2s_6VTable9call_implNtNtNtNtB8_5value8func
+68.23% 0.00%    _RNvNtNtCshAYsVKs23jR_13rquickjs_core5class3ffi4call - -
+68.23% 0.00%    _RNvXs1_NtNtNtCshAYsVKs23jR_13rquickjs_core5value8function3ffiNtB5_12RustFunctionNtNtBb_5class7JsClass4call - -
+54.61% 0.00%    _RNvXNtNtNtCshAYsVKs23jR_13rquickjs_core5value8function3ffiNCINvMB4_NtB4_8Function3newTINtNtB4_5types4ThisINtNtNtB8_5class4cell11OwnedBorrowNtNtNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep7sg_node9SgNodeRjsEENtB6_5Value
+54.61% 0.00%    _RNvXsQ_NtNtNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep7sg_node26___impl_methods_SgNodeRjs__NtB5_15___impl_find_allINtNtNtCshAYsVKs23jR_13rquickjs_core5value8function10IntoJsFuncTINtNtB1Q_5types4ThisINtNtNtB1U_5class4c
+54.54% 0.00%    _RNvMs6_NtNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep7sg_nodeNtB5_9SgNodeRjs8find_all - -
+40.00% 0.00%    _RNvXNtNtCscdodAO9FK5_5alloc3vec21spec_from_iter_nestedINtB4_3VecNtNtNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep7sg_node9SgNodeRjsEINtB2_18SpecFromIterNestedB10_INtNtNtNtCs4NRVxsYgnAr_4core4iter8adapters3map3MapINtNtB2
+39.93% 0.10%    _RINvXs0_NtNtNtCs4NRVxsYgnAr_4core4iter8adapters3mapINtB6_3MapNtNtNtCs74YV3WgHxff_13ast_grep_core11tree_sitter9traversal5TsPreNCNvMs2_NtB13_4nodeINtB27_4NodeINtB11_6StrDocNtNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbo
+29.82% 0.68%    _RINvYRNtNtNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep5utils12JsMatcherRjsNtNtCs74YV3WgHxff_13ast_grep_core7matcher10MatcherExt10match_nodeINtNtB1c_11tree_sitter6StrDocNtNtNtNtBa_7sandbox6engine12codemod_lang11CodemodL
+29.26% 2.41%    ts_parser_parse - -
+29.26% 0.00%    ts_parser_parse_with_options - -
+28.13% 0.56%    _RINvMs_NtCsjEO8tlSIdCq_15ast_grep_config9rule_coreNtB5_8RuleCore8do_matchINtNtCs74YV3WgHxff_13ast_grep_core11tree_sitter6StrDocNtNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine12codemod_lang11CodemodLangEEB29_ -
+25.84% 2.08%    _RINvXs2_NtCsjEO8tlSIdCq_15ast_grep_config4ruleNtB6_4RuleNtNtCs74YV3WgHxff_13ast_grep_core7matcher7Matcher19match_node_with_envINtNtBW_11tree_sitter6StrDocNtNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine12codemo
+18.50% 0.10%    _RINvMs4_NtNtCsjEO8tlSIdCq_15ast_grep_config4rule7stop_byNtB6_6StopBy4findNCINvXs_NtB8_15relational_ruleNtB1h_6InsideNtNtCs74YV3WgHxff_13ast_grep_core7matcher7Matcher19match_node_with_envINtNtB1U_11tree_sitter6StrDocN
+16.13% 0.02%    _RNvMNtCs74YV3WgHxff_13ast_grep_core11tree_sitterINtB2_6StrDocNtNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine12codemod_lang11CodemodLangE7try_newCsdg89SfpO3Km_15butterflow_core - -
+16.09% 0.14%    _RINvNtCsjEO8tlSIdCq_15ast_grep_config4rule16deserialize_ruleNtNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine12codemod_lang11CodemodLangEB14_ - -
+16.09% 0.00%    _RINvMs2_NtNtCs2AWtUsOyxgP_3std6thread5localINtB6_8LocalKeyINtNtCs4NRVxsYgnAr_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapNtCs22ak3epeBAe_11tree_sitter8LanguageNtB2d_6ParserEEE4withNCINvNtCs74YV3WgHxff
+15.93% 0.00%    0xffffffffffffffff - -
+15.21% 0.08%    _RNvMsi_Cs22ak3epeBAe_11tree_sitterNtB5_4Node6parent - -
+15.12% 1.75%    ts_node_parent - -
+14.59% 8.28%    ts_node_child_with_descendant - -
+13.93% 0.00%    _RNvNtNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep5utils15convert_matcher - -
+12.08% 0.00%    _RNvNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep10parse_with.llvm.664900786821706654 - -
+12.08% 0.00%    _RNvXNtNtNtCshAYsVKs23jR_13rquickjs_core5value8function3ffiNCINvMB4_NtB4_8Function3newTNtNtNtB8_7context3ctx3CtxNtB6_5ValueINtNtB4_5types3OptB1L_EENvNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep9parse_rjsE0NtB2_8RustFunc
+12.08% 0.00%    _RNvXsg_NtNtNtCshAYsVKs23jR_13rquickjs_core5value8function9into_funcNvNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep15parse_async_rjsINtB7_10IntoJsFuncTNtNtNtBb_7context3ctx3CtxNtB9_5ValueINtNtB7_5types3OptB2K_EEE4callB17
+11.68% 0.00%    _RINvMs3_NtCs74YV3WgHxff_13ast_grep_core11tree_sitterINtNtB8_4node4RootINtB6_6StrDocNtNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine12codemod_lang11CodemodLangEE3newNtNtCscdodAO9FK5_5alloc6string6StringEB1r_ - -
+11.68% 0.00%    _RNvMNtCs74YV3WgHxff_13ast_grep_core11tree_sitterINtB2_6StrDocNtNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine12codemod_lang11CodemodLangE7try_newB15_ - -
+11.68% 0.00%    _RNvMs_NtNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep7sg_nodeNtB4_9SgRootRjs7try_new - -
+11.66% 0.00%    _RINvMs2_NtNtCs2AWtUsOyxgP_3std6thread5localINtB6_8LocalKeyINtNtCs4NRVxsYgnAr_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapNtCs22ak3epeBAe_11tree_sitter8LanguageNtB2d_6ParserEEE4withNCINvNtCs74YV3WgHxff
+11.25% 0.00%    _RNvNtNtCs4zG6bNMulpw_15codemod_sandbox8ast_grep5utils12rule_matcher - -
+10.74% 0.02%    _RNvMs3_NtNtCslW6wM4ndFBX_5regex5regex6stringNtB5_5Regex3new - -
+10.74% 0.02%    _RNvMs_NtCslW6wM4ndFBX_5regex8buildersNtB4_7Builder16build_one_string - -
+10.69% 0.14%    _RNvMsj_NtNtCs3ypzygEpaqm_14regex_automata4meta5regexNtB5_7Builder5build - -
+10.28% 1.24%    ts_parser__lex - -
+10.04% 0.00%    _RNvMNtNtCs74YV3WgHxff_13ast_grep_core7matcher4textNtB2_12RegexMatcher7try_new - -
+10.01% 0.39%    _RNvXs6_NtNtCs74YV3WgHxff_13ast_grep_core11tree_sitter9traversalNtB5_5TsPreNtNtNtNtCs4NRVxsYgnAr_4core4iter6traits8iterator8Iterator4next - -
+9.79% 0.00%    _RINvMNtCsjEO8tlSIdCq_15ast_grep_config9rule_coreNtB3_20SerializableRuleCore21get_matcher_with_hintNtNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine12codemod_lang11CodemodLangEB1G_ - -
+9.66% 0.04%    _RNCINvNtCsjEO8tlSIdCq_15ast_grep_config4rule25deserialze_composite_ruleNtNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine12codemod_lang11CodemodLangE0B1f_ - -
+9.07% 0.06%    _RNvNtNtCs3ypzygEpaqm_14regex_automata4meta8strategy3new - -
+8.47% 0.04%    _RINvNtCsjEO8tlSIdCq_15ast_grep_config4rule27deserialize_relational_ruleNtNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine12codemod_lang11CodemodLangEB1f_ - -
+7.54% 0.04%    _RINvMs0_NtNtCsjEO8tlSIdCq_15ast_grep_config4rule15relational_ruleNtB6_3Has7try_newNtNtNtNtCs4zG6bNMulpw_15codemod_sandbox7sandbox6engine12codemod_lang11CodemodLangEB1q_ - -
+6.68% 0.02%    _RNvMsa_NtNtCs3ypzygEpaqm_14regex_automata4meta8wrappersNtB5_3DFA3new - -
+6.59% 0.00%    __GI___libc_malloc (inlined) - -
+6.55% 0.16%    _RNvMs_NtNtCs3ypzygEpaqm_14regex_automata3dfa5denseNtB4_7Builder14build_from_nfa - -
+6.10% 0.45%    _RNvMNtNtCs3ypzygEpaqm_14regex_automata3dfa11determinizeNtB2_6Config3run - -
+6.00% 0.06%    ts_tree_cursor_goto_next_sibling - -
+5.69% 2.97%    stack__iter - -
+5.30% 3.17%    ts_lex - -
+4.35% 2.41%    _int_malloc - -
+4.35% 0.10%    ts_tree_cursor_goto_first_child - -
+4.24% 4.06%    ts_tree_cursor_goto_first_child_internal - -
+4.14% 4.14%    ts_node_start_point - -
+3.98% 0.00%    __GI___libc_free (inlined) - -
+3.89% 3.89%    ts_tree_cursor_goto_sibling_internal.constprop.0 - -
+3.69% 3.69%    malloc - -
+3.44% 2.64%    ts_subtree_release - -
+3.40% 3.38%    ts_language_table_entry - -
