@@ -275,7 +275,9 @@ Paths given to `jssg`, `astGrep` and shard functions are relative to the workflo
 
 ### Dependencies
 
-`dependencyGraph`, `registry` and `semver` come from `codemod/deps`. `dependencyGraph` reads the target's `yarn.lock` (Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` (v2 and v3), `Cargo.lock`, `uv.lock`, `poetry.lock` and `Pipfile.lock`, with each workspace's `package.json`, `Cargo.toml`, `pyproject.toml` or `Pipfile` for declared ranges and dependency kinds. Yarn 1 lockfiles, `npm-shrinkwrap.json`, and bun and Go lockfiles are not read.
+`dependencyGraph`, `registry` and `semver` come from `codemod/deps`. `dependencyGraph` reads the target's `yarn.lock` (Yarn 1 and 2+), `pnpm-lock.yaml` (lockfile 5 and later), `package-lock.json` and `npm-shrinkwrap.json` (v1 to v3), `bun.lock`, `Cargo.lock`, `uv.lock`, `poetry.lock` and `Pipfile.lock`, with each workspace's `package.json`, `Cargo.toml`, `pyproject.toml` or `Pipfile` for declared ranges and dependency kinds. Go lockfiles are not read, and neither is the binary `bun.lockb`: it is listed in `g.skipped` with the command that writes `bun.lock` instead, unless a `bun.lock` sits beside it.
+
+A Yarn 1 lockfile does not list workspaces, so they are the directories the root `package.json`'s `workspaces` globs name. A `package-lock.json` v1 does not say which of a package's dependencies are optional, so they are all `prod`, and its root's ranges and kinds come from `package.json`.
 
 Python packages have the ecosystem `pypi`, and their names are normalized as PyPI does, so `Typing_Extensions` is `typing-extensions`. Lookups by name accept any spelling PyPI accepts, so `graph.node("PyYAML")` finds `pyyaml`. A git, URL or path dependency has no range. `Pipfile.lock` keeps no dependencies between packages, so only the packages the `Pipfile` names are reached from the project.
 

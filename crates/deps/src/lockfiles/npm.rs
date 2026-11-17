@@ -1,21 +1,29 @@
-//! `package-lock.json` v2 and v3: the `packages` map keyed by install path.
-//! Keys without `node_modules/` are workspaces (`""` is the root); a
-//! dependency resolves the way Node does, from the `node_modules` of each
-//! directory up to the root. Grepkon's parser read the same map but kept names only.
+//! `package-lock.json` and `npm-shrinkwrap.json`. v2 and v3 have the
+//! `packages` map keyed by install path. Keys without `node_modules/` are
+//! workspaces (`""` is the root); a dependency resolves the way Node does,
+//! from the `node_modules` of each directory up to the root. Grepkon's
+//! parser read the same map but kept names only. v1 nests the same tree
+//! under `dependencies` and is turned into that map first.
 
 use std::collections::HashMap;
 
 use serde_json::Value;
 
-use super::npm_sections;
+use serde_json::Map;
+
+use super::{npm_sections, split_name_version, ReadFile};
 use crate::model::{Ecosystem, Graph, Kind};
 
-pub fn parse(text: &str) -> Result<Graph, String> {
+pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
     let doc: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    let packages = doc
-        .get("packages")
-        .and_then(Value::as_object)
-        .ok_or("only lockfileVersion 2 and 3 (with a `packages` map) are read")?;
+    let v1;
+    let packages = match doc.get("packages").and_then(Value::as_object) {
+        Some(packages) => packages,
+        None => {
+            v1 = v1_packages(&doc, read);
+            &v1
+        }
+    };
     let mut graph = Graph::from_lockfile("package-lock.json");
 
     let mut by_path: HashMap<&str, usize> = HashMap::new();
@@ -92,6 +100,62 @@ pub fn parse(text: &str) -> Result<Graph, String> {
         }
     }
     Ok(graph)
+}
+
+/// lockfileVersion 1 as a v2 `packages` map. Each package lists its ranges
+/// in `requires` without saying which are optional, so they are all
+/// `dependencies`; the root's ranges and kinds come from package.json.
+fn v1_packages(doc: &Value, read: ReadFile) -> Map<String, Value> {
+    let root = read("package.json")
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| {
+            let field = |key: &str| doc.get(key).cloned().unwrap_or_default();
+            serde_json::json!({ "name": field("name"), "version": field("version") })
+        });
+    let mut packages = Map::from_iter([(String::new(), root)]);
+    nest(&mut packages, "", doc);
+    packages
+}
+
+fn nest(packages: &mut Map<String, Value>, parent: &str, entry: &Value) {
+    for (folder, child) in entry
+        .get("dependencies")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        let path = if parent.is_empty() {
+            format!("node_modules/{folder}")
+        } else {
+            format!("{parent}/node_modules/{folder}")
+        };
+        let version = child
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut package = Map::new();
+        package.insert(
+            "dependencies".into(),
+            child.get("requires").cloned().unwrap_or_default(),
+        );
+        if let Some(dir) = version.strip_prefix("file:") {
+            // A local directory, linked like a v2 workspace.
+            let link = serde_json::json!({ "resolved": dir, "link": true });
+            packages.insert(path.clone(), link);
+            package.insert("name".into(), folder.as_str().into());
+            packages.insert(dir.to_string(), package.into());
+        } else {
+            // An alias (`npm:bar@1.2.3`) installs `bar` in the folder `foo`.
+            let (name, version) = version
+                .strip_prefix("npm:")
+                .and_then(split_name_version)
+                .unwrap_or((folder, version));
+            package.insert("name".into(), name.into());
+            package.insert("version".into(), version.into());
+            packages.insert(path.clone(), package.into());
+        }
+        nest(packages, &path, child);
+    }
 }
 
 /// The next directory Node looks in from `dir`: its parent, skipping

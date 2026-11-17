@@ -37,9 +37,11 @@ __metadata:
 const APP_PACKAGE_JSON: &str = r#"{ "name": "app", "dependencies": { "table": "^3.0.0" }, "devDependencies": { "dnd": "^13.0.0" }, "peerDependencies": { "react": "^18.0.0" } }"#;
 
 fn yarn_app() -> Graph {
-    lockfiles::yarn(YARN_LOCK, &|path| {
-        (path == "package.json").then(|| APP_PACKAGE_JSON.to_string())
-    })
+    lockfiles::yarn(
+        YARN_LOCK,
+        &|path| (path == "package.json").then(|| APP_PACKAGE_JSON.to_string()),
+        &[],
+    )
     .unwrap()
 }
 
@@ -113,16 +115,6 @@ fn edges_declaring_a_package_include_unresolved_peer_ranges() {
 }
 
 #[test]
-fn a_yarn_v1_lockfile_is_reported_as_not_read() {
-    let error = lockfiles::yarn(
-        "# yarn lockfile v1\n\na@^1:\n  version \"1.0.0\"\n",
-        &|_| None,
-    )
-    .unwrap_err();
-    assert_eq!(error, "Yarn v1 lockfiles are not read yet");
-}
-
-#[test]
 fn pnpm_snapshots_with_peer_suffixes_are_one_package_version_with_its_declared_range() {
     let lock = r#"
 lockfileVersion: '9.0'
@@ -171,7 +163,7 @@ fn package_lock_resolves_a_nested_copy_before_the_hoisted_one() {
         "node_modules/b": { "version": "2.1.0" }
       }
     }"#;
-    let walk = Walk::new(lockfiles::package_lock(lock).unwrap());
+    let walk = Walk::new(lockfiles::package_lock(lock, &|_| None).unwrap());
     let a = walk.nodes_named("a")[0];
     assert_eq!(
         described(&walk, walk.dependencies(a, &[])),
@@ -247,34 +239,37 @@ fn repository(files: &[(&str, &str)]) -> tempfile::TempDir {
     dir
 }
 
-const YARN_V1: &str = "# yarn lockfile v1\n\na@^1:\n  version \"1.0.0\"\n";
+const BUN_LOCKB: &str = "#!/usr/bin/env bun\nbun-lockfile-format-v0\n";
 
 #[test]
 fn a_lockfile_that_cannot_be_read_is_skipped_when_none_were_named() {
-    let dir = repository(&[("package-lock.json", PACKAGE_LOCK), ("yarn.lock", YARN_V1)]);
+    let dir = repository(&[
+        ("package-lock.json", PACKAGE_LOCK),
+        ("bun.lockb", BUN_LOCKB),
+    ]);
     let graph = lockfiles::load(dir.path(), &[]).unwrap();
     assert_eq!(graph.lockfiles, vec!["package-lock.json".to_string()]);
     assert_eq!(graph.skipped.len(), 1);
-    assert_eq!(graph.skipped[0].lockfile, "yarn.lock");
-    assert_eq!(graph.skipped[0].error, "Yarn v1 lockfiles are not read yet");
+    assert_eq!(graph.skipped[0].lockfile, "bun.lockb");
+    assert!(graph.skipped[0].error.contains("--save-text-lockfile"));
 }
 
 #[test]
 fn a_named_lockfile_that_cannot_be_read_fails() {
     let dir = repository(&[
         ("package-lock.json", PACKAGE_LOCK),
-        ("examples/old/yarn.lock", YARN_V1),
+        ("examples/old/bun.lockb", BUN_LOCKB),
     ]);
-    let error = lockfiles::load(dir.path(), &["examples/**/yarn.lock".to_string()]).unwrap_err();
-    assert!(error.contains("Yarn v1"), "{error}");
+    let error = lockfiles::load(dir.path(), &["examples/**/bun.lockb".to_string()]).unwrap_err();
+    assert!(error.contains("bun.lockb is binary"), "{error}");
 }
 
 #[test]
 fn loading_fails_when_no_lockfile_can_be_read() {
-    let dir = repository(&[("yarn.lock", YARN_V1)]);
+    let dir = repository(&[("bun.lockb", BUN_LOCKB)]);
     let error = lockfiles::load(dir.path(), &[]).unwrap_err();
     assert!(error.contains("no lockfile could be read"), "{error}");
-    assert!(error.contains("yarn.lock: Yarn v1"), "{error}");
+    assert!(error.contains("bun.lockb: bun.lockb is binary"), "{error}");
 }
 
 #[test]
@@ -282,7 +277,7 @@ fn only_root_lockfiles_are_read_when_none_were_named() {
     let dir = repository(&[
         ("package-lock.json", PACKAGE_LOCK),
         ("packages/web/package-lock.json", PACKAGE_LOCK),
-        ("examples/old/yarn.lock", YARN_V1),
+        ("examples/old/bun.lockb", BUN_LOCKB),
     ]);
     let graph = lockfiles::load(dir.path(), &[]).unwrap();
     assert_eq!(graph.lockfiles, vec!["package-lock.json".to_string()]);
@@ -375,7 +370,7 @@ fn an_aliased_npm_install_is_the_package_it_aliases() {
         "node_modules/foo": { "name": "bar", "version": "1.2.0" }
       }
     }"#;
-    let walk = Walk::new(lockfiles::package_lock(lock).unwrap());
+    let walk = Walk::new(lockfiles::package_lock(lock, &|_| None).unwrap());
     assert_eq!(walk.nodes_named("bar").len(), 1);
     assert!(walk.nodes_named("foo").is_empty());
 }
@@ -463,7 +458,7 @@ fn package_lock_looks_in_every_ancestor_directory_before_the_root() {
         "node_modules/x": { "version": "1.0.0" }
       }
     }"#;
-    let graph = lockfiles::package_lock(lock).unwrap();
+    let graph = lockfiles::package_lock(lock, &|_| None).unwrap();
     assert_eq!(
         chains_to(graph, "x", &[]),
         ["app@0.0.0-use.local > x@2.0.0"]
@@ -498,5 +493,7 @@ snapshots:
     );
 }
 
+#[path = "specs/javascript.rs"]
+mod javascript;
 #[path = "specs/python.rs"]
 mod python;

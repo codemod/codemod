@@ -8,28 +8,30 @@
 //! dependency an edge, so depth and "first parent" can be derived instead
 //! of stored.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::model::{Graph, Kind, Skipped};
 
+mod bun;
 mod cargo;
 mod npm;
 mod pnpm;
 pub(crate) mod python;
 mod yarn;
 
+pub use bun::parse as bun;
 pub use cargo::{parse as cargo, Manifests as CargoManifests};
 pub use npm::parse as package_lock;
 pub use pnpm::parse as pnpm;
 pub use python::{pipfile, poetry, uv};
-pub use yarn::parse as yarn;
+pub use yarn::{parse as yarn, workspaces as yarn_workspaces};
 
 /// Reads a file relative to the lockfile's directory.
 pub type ReadFile<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 /// Lockfiles this crate reads, by file name.
-pub const LOCKFILES: [&str; 7] = [
+pub const LOCKFILES: [&str; 10] = [
     "yarn.lock",
     "pnpm-lock.yaml",
     "package-lock.json",
@@ -37,6 +39,9 @@ pub const LOCKFILES: [&str; 7] = [
     "uv.lock",
     "poetry.lock",
     "Pipfile.lock",
+    "npm-shrinkwrap.json",
+    "bun.lock",
+    "bun.lockb",
 ];
 
 /// The lockfiles at `root`, merged into one graph. `only` instead keeps
@@ -67,6 +72,18 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
         })
         .collect();
     found.sort();
+    // bun leaves bun.lockb beside the bun.lock that replaces it.
+    // npm ignores package-lock.json when npm-shrinkwrap.json sits beside it.
+    let replaced: HashSet<String> = found
+        .iter()
+        .flat_map(|path| {
+            let shrinkwrap = path
+                .strip_suffix("npm-shrinkwrap.json")
+                .map(|dir| format!("{dir}package-lock.json"));
+            std::iter::once(format!("{path}b")).chain(shrinkwrap)
+        })
+        .collect();
+    found.retain(|path| !replaced.contains(path));
     let first_found = found.first().cloned();
     found.retain(|path| match only {
         [] => !path.contains('/'),
@@ -95,14 +112,25 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
         let base = root.join(dir);
         let read = |path: &str| std::fs::read_to_string(base.join(path)).ok();
         let parsed = read(file)
-            .ok_or_else(|| "cannot read the file".to_string())
+            .ok_or_else(|| match file {
+                "bun.lockb" => bun::LOCKB.to_string(),
+                _ => "cannot read the file".to_string(),
+            })
             .and_then(|text| match file {
-                "yarn.lock" => yarn(&text, &read),
+                "yarn.lock" if yarn::is_v1(&text) => yarn(&text, &read, &yarn_workspaces(&base)),
+                "yarn.lock" => yarn(&text, &read, &[]),
                 "pnpm-lock.yaml" => pnpm(&text, &read),
-                "package-lock.json" => package_lock(&text),
+                "package-lock.json" => package_lock(&text, &read),
                 "uv.lock" => uv(&text),
                 "poetry.lock" => poetry(&text, &read),
                 "Pipfile.lock" => pipfile(&text, &read),
+                "npm-shrinkwrap.json" => package_lock(&text, &read).map(|mut graph| {
+                    graph.lockfiles = vec![file.to_string()];
+                    graph
+                }),
+                "bun.lock" => bun(&text, &read),
+                // Not text in practice; read_to_string fails first.
+                "bun.lockb" => Err(bun::LOCKB.to_string()),
                 _ => cargo(&text, &CargoManifests::find(&base)),
             });
         match parsed {

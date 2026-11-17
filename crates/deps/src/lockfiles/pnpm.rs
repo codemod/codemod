@@ -1,6 +1,7 @@
-//! `pnpm-lock.yaml`, v6 to v9. Importers are the workspaces; v9 keeps
+//! `pnpm-lock.yaml`, v5 to v9. Importers are the workspaces; v9 keeps
 //! resolved edges in `snapshots` (keys carry a `(peer)` suffix) and peers in
-//! `packages`; v6 keeps both in `packages`.
+//! `packages`; v5 and v6 keep both in `packages`. v5 keys are `/name/1.2.3`
+//! with a `_peer@1.0.0` suffix instead of `/name@1.2.3(peer@1.0.0)`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -45,6 +46,16 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
             importers.insert(Value::String(".".into()), Value::Mapping(root));
         }
     }
+    let v5 = doc
+        .get("lockfileVersion")
+        .and_then(yaml_string)
+        .and_then(|version| version.parse::<f64>().ok())
+        .is_some_and(|version| version < 6.0);
+    let name_version: fn(&str) -> Option<(&str, &str)> = if v5 {
+        v5_name_version
+    } else {
+        split_name_version
+    };
     let snapshots = mapping("snapshots");
     let packages = mapping("packages");
 
@@ -69,7 +80,7 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
         .chain(packages.keys())
         .filter_map(yaml_string)
     {
-        if let Some((name, version)) = split_name_version(&key) {
+        if let Some((name, version)) = name_version(&key) {
             graph.node(Ecosystem::Npm, name, version);
         }
     }
@@ -77,6 +88,14 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
     let target = |graph: &Graph, from_dir: &str, name: &str, version: &str| -> Option<usize> {
         if let Some(link) = version.strip_prefix("link:") {
             return workspaces.get(&join(from_dir, link)).copied();
+        }
+        if v5 {
+            // An alias resolves to "/realname/version".
+            return match version.strip_prefix('/') {
+                Some(_) => v5_name_version(version),
+                None => Some((name, version.split('_').next().unwrap_or(version))),
+            }
+            .and_then(|(name, version)| graph.find(Ecosystem::Npm, name, version));
         }
         let version = version.split('(').next().unwrap_or(version);
         // An alias resolves to "realname@version".
@@ -144,7 +163,7 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
     };
     for (key, entry) in resolved_edges {
         let key = yaml_string(key).unwrap_or_default();
-        let Some((name, version)) = split_name_version(&key) else {
+        let Some((name, version)) = name_version(&key) else {
             continue;
         };
         let Some(from) = graph.find(Ecosystem::Npm, name, version) else {
@@ -195,8 +214,7 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
     }
     for (key, entry) in &packages {
         let key = yaml_string(key).unwrap_or_default();
-        let Some(from) =
-            split_name_version(&key).and_then(|(n, v)| graph.find(Ecosystem::Npm, n, v))
+        let Some(from) = name_version(&key).and_then(|(n, v)| graph.find(Ecosystem::Npm, n, v))
         else {
             continue;
         };
@@ -207,6 +225,20 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
         }
     }
     Ok(graph)
+}
+
+/// `/@scope/name/1.2.3_peer@1.0.0` into name and version. Keys without the
+/// leading `/` are git or tarball sources, which v5 keeps no version for.
+fn v5_name_version(key: &str) -> Option<(&str, &str)> {
+    let key = key.strip_prefix('/')?;
+    let scope = if key.starts_with('@') {
+        key.find('/')? + 1
+    } else {
+        0
+    };
+    let at = scope + key[scope..].find('/')?;
+    let version = key[at + 1..].split('_').next()?;
+    (!version.is_empty()).then(|| (&key[..at], version))
 }
 
 fn manifest(dir: &str) -> String {
