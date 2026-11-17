@@ -11,6 +11,7 @@ pub enum Ecosystem {
     Npm,
     Cargo,
     Pypi,
+    Packagist,
 }
 
 impl Ecosystem {
@@ -19,14 +20,16 @@ impl Ecosystem {
             Self::Npm => "npm",
             Self::Cargo => "cargo",
             Self::Pypi => "pypi",
+            Self::Packagist => "packagist",
         }
     }
 
     /// A package name as the ecosystem's registry compares it: PyPI ignores
-    /// case and treats `-`, `_` and `.` alike (PEP 503).
+    /// case and treats `-`, `_` and `.` alike (PEP 503); Packagist ignores case.
     pub fn package_name(self, name: &str) -> std::borrow::Cow<'_, str> {
         match self {
             Self::Pypi => crate::lockfiles::python::normalize(name).into(),
+            Self::Packagist => name.to_lowercase().into(),
             Self::Npm | Self::Cargo => name.into(),
         }
     }
@@ -36,6 +39,7 @@ impl Ecosystem {
             "npm" => Some(Self::Npm),
             "cargo" => Some(Self::Cargo),
             "pypi" => Some(Self::Pypi),
+            "packagist" => Some(Self::Packagist),
             _ => None,
         }
     }

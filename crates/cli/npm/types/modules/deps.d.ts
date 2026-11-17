@@ -4,7 +4,7 @@
 declare module "codemod:deps" {
   import type { Globs, Task } from "codemod:workflow";
 
-  export type Ecosystem = "npm" | "cargo" | "pypi";
+  export type Ecosystem = "npm" | "cargo" | "pypi" | "packagist";
   export type DependencyKind = "prod" | "dev" | "peer" | "optional" | "build";
   export type KindsOption = { kinds?: DependencyKind | readonly DependencyKind[] };
 
@@ -103,7 +103,7 @@ declare module "codemod:deps" {
 
   /**
    * Reads the target's lockfiles (yarn.lock, pnpm-lock.yaml, package-lock.json,
-   * Cargo.lock, uv.lock, poetry.lock, Pipfile.lock; default: those at the
+   * Cargo.lock, uv.lock, poetry.lock, Pipfile.lock, composer.lock; default: those at the
    * target's root, so nested ones need a `lockfiles` glob) into a graph and runs `callback` on it in
    * its own isolate, where it may await `registry` lookups. Nodes and edges in
    * the result are recorded as `name@version` text and `RecordedEdge`.
