@@ -91,11 +91,12 @@ function flush(): void {
   }
 }
 
-/** Package releases from npm, crates.io and PyPI, oldest first. */
+/** Package releases from npm, crates.io, PyPI and Maven Central, oldest first. */
 export const registry = Object.freeze({
   npm: (name: string) => lookup("npm", name),
   cargo: (name: string) => lookup("cargo", name),
   pypi: (name: string) => lookup("pypi", name),
+  maven: (name: string) => lookup("maven", name),
 });
 
 /** Versions and ranges, by npm rules, Cargo's (`{ ecosystem: "cargo" }`) PEP 440 (`{ ecosystem: "pypi" }`) or Maven's (`{ ecosystem: "maven" }`). */
@@ -255,6 +256,11 @@ export function __graph() {
       if (accepting && this.ecosystem === "pypi") {
         throw new TypeError(
           "accepting cannot filter PyPI releases: PyPI lists no dependencies per release",
+        );
+      }
+      if (accepting && this.ecosystem === "maven") {
+        throw new TypeError(
+          "accepting cannot filter Maven releases: maven-metadata.xml lists no dependencies",
         );
       }
       const found = await registry[this.ecosystem](this.name);

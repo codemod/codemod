@@ -35,7 +35,7 @@ pub trait Registry: Send + Sync {
 }
 
 /// npm (abbreviated packuments), crates.io (sparse index) and PyPI (JSON
-/// API) over HTTPS,
+/// API) and Maven Central (`maven-metadata.xml`) over HTTPS,
 /// kept for the life of the value. Concurrent asks for the same package
 /// share one request, and at most [`CONCURRENT_REQUESTS`] run at once across
 /// every ask, however many steps and workers ask together.
@@ -130,7 +130,8 @@ impl Registry for HttpRegistry {
 }
 
 /// A package's releases as a workflow sees them: oldest first, with
-/// dependencies grouped by kind where the registry lists them (PyPI does not).
+/// dependencies grouped by kind where the registry lists them (PyPI and Maven
+/// Central do not).
 pub fn describe(ecosystem: Ecosystem, name: &str, releases: &[Release]) -> serde_json::Value {
     let mut sorted: Vec<&Release> = releases.iter().collect();
     sorted.sort_by(|a, b| compare(ecosystem, &a.version, &b.version));
@@ -138,7 +139,7 @@ pub fn describe(ecosystem: Ecosystem, name: &str, releases: &[Release]) -> serde
         .into_iter()
         .map(|release| {
             let mut groups = serde_json::Map::new();
-            let listed = !matches!(ecosystem, Ecosystem::Pypi);
+            let listed = !matches!(ecosystem, Ecosystem::Pypi | Ecosystem::Maven);
             for (field, kind) in [
                 ("dependencies", Kind::Prod),
                 ("peerDependencies", Kind::Peer),
@@ -180,9 +181,6 @@ async fn fetch_all(
     names: &[String],
     requests: &tokio::sync::Semaphore,
 ) -> Result<Vec<(String, Vec<Release>)>, String> {
-    if ecosystem == Ecosystem::Maven {
-        return Err("Maven release lookups are not supported yet".into());
-    }
     let client = reqwest::Client::builder()
         .user_agent("codemod-workflow")
         .timeout(std::time::Duration::from_secs(30))
@@ -204,7 +202,13 @@ async fn fetch_all(
                     format!("https://pypi.org/pypi/{name}/json"),
                     "application/json",
                 ),
-                Ecosystem::Maven => unreachable!("rejected above"),
+                Ecosystem::Maven => (
+                    format!(
+                        "https://repo1.maven.org/maven2/{}/maven-metadata.xml",
+                        maven_path(name)?
+                    ),
+                    "application/xml",
+                ),
             };
             let _permit = requests.acquire().await.map_err(|e| e.to_string())?;
             let response = client
@@ -228,7 +232,7 @@ async fn fetch_all(
                 Ecosystem::Npm => npm_releases(&text),
                 Ecosystem::Cargo => crate_releases(&text),
                 Ecosystem::Pypi => pypi_releases(&text),
-                Ecosystem::Maven => unreachable!("rejected above"),
+                Ecosystem::Maven => maven_releases(&text),
             }
             .map_err(|e| format!("{url}: {e}"))?;
             Ok((name.clone(), releases))
@@ -337,6 +341,41 @@ pub fn pypi_releases(document: &str) -> Result<Vec<Release>, String> {
                     .all(|file| file["yanked"].as_bool() == Some(true)),
                 dependencies: Vec::new(),
             })
+        })
+        .collect())
+}
+
+/// `group:artifact` as Maven Central's path, `com/google/guava/guava`.
+fn maven_path(name: &str) -> Result<String, String> {
+    let (group, artifact) = name
+        .split_once(':')
+        .ok_or_else(|| format!("{name}: a Maven package is named group:artifact"))?;
+    Ok(format!("{}/{artifact}", group.replace('.', "/")))
+}
+
+/// Releases from a Maven repository's `maven-metadata.xml`, as listed under
+/// `<versioning><versions>`. Maven has no yanks, and releases carry no
+/// dependencies: those are in each release's POM.
+pub fn maven_releases(document: &str) -> Result<Vec<Release>, String> {
+    if !document.contains("<metadata") {
+        return Err("not a maven-metadata.xml document".into());
+    }
+    let versions = match document.split_once("<versions>") {
+        Some((_, rest)) => {
+            rest.split_once("</versions>")
+                .ok_or("maven-metadata.xml has an unclosed <versions>")?
+                .0
+        }
+        None => "",
+    };
+    Ok(versions
+        .split("<version>")
+        .skip(1)
+        .filter_map(|chunk| chunk.split_once("</version>"))
+        .map(|(version, _)| Release {
+            version: version.trim().to_string(),
+            yanked: false,
+            dependencies: Vec::new(),
         })
         .collect())
 }

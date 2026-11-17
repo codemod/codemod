@@ -190,3 +190,28 @@ fn a_maven_upgrade_is_breaking_when_its_leftmost_non_zero_part_changes() {
         [true, true, false]
     );
 }
+
+#[test]
+fn maven_metadata_releases_are_the_versions_under_versioning() {
+    use codemod_deps::registry::maven_releases;
+    let document = r#"<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>com.google.guava</groupId>
+  <artifactId>failureaccess</artifactId>
+  <version>1.0</version>
+  <versioning>
+    <latest>1.0.2</latest>
+    <release>1.0.2</release>
+    <versions>
+      <version>1.0.1</version>
+      <version>1.0.2</version>
+    </versions>
+  </versioning>
+</metadata>"#;
+    let versions: Vec<_> = maven_releases(document)
+        .unwrap()
+        .into_iter()
+        .map(|release| release.version)
+        .collect();
+    assert_eq!(versions, ["1.0.1", "1.0.2"]);
+}
