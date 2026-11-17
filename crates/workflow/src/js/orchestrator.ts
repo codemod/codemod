@@ -745,7 +745,14 @@ export function createRuntime(host: Host) {
       throw new TypeError(`${described}: expected a task such as forEachFile(...) or a function`);
     }
 
-    const key = canonical([label ?? null, content]);
+    // A step's starting state is part of what it does, so changing it runs
+    // the step again on resume. Steps without state keep their old key, so
+    // runs recorded before state existed still replay.
+    const key = canonical(
+      Object.keys(policy.state).length === 0
+        ? [label ?? null, content]
+        : [label ?? null, content, policy.state],
+    );
     if (closed) return new Promise<Json>(() => {});
     const { position, entry: prior } = claim(label, key, content);
     const name = label ?? defaultLabel(position, content);

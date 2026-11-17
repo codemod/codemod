@@ -310,6 +310,29 @@ fn a_finished_step_that_changed_runs_again_on_resume() {
 }
 
 #[test]
+fn resume_reruns_a_step_whose_only_change_is_its_state_option() {
+    let h = Harness::new();
+    h.write("a.txt", "a");
+    let source = r#"
+import { step, forEachFile, getState } from "codemod/workflow";
+export default async function main() {
+  await step("Touch", forEachFile("*.txt", (file) => { file.write(file.text + getState("mark")); }), { state: { mark: "+" } });
+  await step("Check", () => { throw new Error("stop"); });
+}
+"#;
+    let first = h.start(source, Value::Null);
+    assert!(output(&first).is_err());
+
+    let changed = source
+        .replace("mark: \"+\"", "mark: \"!\"")
+        .replace("throw new Error(\"stop\");", "return 1;");
+    let second = h.resume(&first, Some(&changed));
+
+    assert!(output(&second).is_ok(), "{:?}", second.ending);
+    assert_eq!(h.read("a.txt"), "a+!");
+}
+
+#[test]
 fn a_step_added_before_the_failed_one_does_not_disturb_the_finished_ones() {
     let h = Harness::new();
     h.write("a.txt", "a");
