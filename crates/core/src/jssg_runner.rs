@@ -12,7 +12,7 @@ use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::sandbox::engine::{
     codemod_lang::CodemodLang, execution_engine::execute_codemod_with_quickjs,
     extract_selector_with_quickjs, CodemodOutput, ExecutionResult, JssgExecutionOptions,
-    PendingFiles, SelectorEngineOptions,
+    PendingFiles, PersistentTransform, PersistentTransformOptions, SelectorEngineOptions,
 };
 use codemod_sandbox::sandbox::errors::{ExecutionError, RuntimeError};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
@@ -103,6 +103,20 @@ thread_local! {
         .expect("tokio runtime");
 }
 
+thread_local! {
+    /// This thread's transform runtime for the step it is running, by step.
+    static WORKER: std::cell::RefCell<Option<(u64, Option<std::rc::Rc<PersistentTransform>>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+static NEXT_STEP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Whether transforms run in one long-lived runtime per thread
+/// (`CODEMOD_JSSG_REUSE_RUNTIME=0` turns it off).
+fn reuse_runtime() -> bool {
+    std::env::var("CODEMOD_JSSG_REUSE_RUNTIME").map_or(true, |value| value != "0")
+}
+
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
     RUNTIME.with(|runtime| tokio::task::LocalSet::new().block_on(runtime, future))
 }
@@ -188,6 +202,8 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     let skipped = AtomicUsize::new(0);
     let abort = AtomicBool::new(false);
 
+    let step_id = NEXT_STEP.fetch_add(1, Ordering::SeqCst);
+    let reuse = reuse_runtime();
     let walk = config.execute(|file_path, _| {
         if !file_path.is_file() || abort.load(Ordering::SeqCst) {
             return;
@@ -227,7 +243,43 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             });
             callback
         });
-        let result = block_on(execute_codemod_with_quickjs(JssgExecutionOptions {
+        let worker = reuse.then(|| {
+            WORKER.with(|slot| {
+                let mut slot = slot.borrow_mut();
+                if !matches!(&*slot, Some((id, _)) if *id == step_id) {
+                    // A runtime that cannot load the transform falls back to
+                    // a fresh runtime per file, which reports the error.
+                    let made = block_on(PersistentTransform::new(PersistentTransformOptions {
+                        script_path: request.script_path.clone(),
+                        resolver: Arc::clone(&resolver),
+                        language,
+                        params: Some(request.params.clone()),
+                        matrix_values: request.matrix.clone(),
+                        capabilities: request.capabilities.clone(),
+                        metrics_context: Some(metrics.clone()),
+                        llm_request_handler: None,
+                        cancellation_flag: request.cancel.clone(),
+                        test_mode: false,
+                        dry_run: request.dry_run,
+                        target_directory: target.clone(),
+                        pending_files: Some(pending.clone()),
+                    }))
+                    .ok()
+                    .map(std::rc::Rc::new);
+                    *slot = Some((step_id, made));
+                }
+                slot.as_ref().and_then(|(_, worker)| worker.clone())
+            })
+        }).flatten();
+        let result = match worker {
+            Some(worker) => block_on(worker.run_file(
+                file_path,
+                &content,
+                selector.clone(),
+                semantic.clone(),
+                runtime_event_callback,
+            )),
+            None => block_on(execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &request.script_path,
             resolver: Arc::clone(&resolver),
             language,
@@ -246,7 +298,8 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             dry_run: request.dry_run,
             target_directory: &target,
             pending_files: Some(pending.clone()),
-        }));
+        })),
+        };
         if let Some(on_log) = &request.on_log {
             let logs = std::mem::take(&mut *logs.lock().unwrap());
             if !logs.is_empty() {
@@ -298,6 +351,9 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             }
         }
     });
+    // Walker threads end with the walk; a step given explicit files runs
+    // them on this thread, which outlives the step.
+    WORKER.with(|slot| slot.borrow_mut().take());
     walk.map_err(|e| e.to_string())?;
 
     let mut renames = renames.into_inner().unwrap();

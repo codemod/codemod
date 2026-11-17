@@ -2487,3 +2487,308 @@ export default function transform(root) {
         }
     }
 }
+
+/// What a [`PersistentTransform`] keeps for every file it runs.
+pub struct PersistentTransformOptions<R> {
+    pub script_path: PathBuf,
+    pub resolver: Arc<R>,
+    pub language: CodemodLang,
+    pub params: Option<HashMap<String, serde_json::Value>>,
+    pub matrix_values: Option<HashMap<String, serde_json::Value>>,
+    pub capabilities: Option<HashSet<LlrtSupportedModules>>,
+    pub metrics_context: Option<MetricsContext>,
+    pub llm_request_handler: Option<LlmRequestHandler>,
+    pub cancellation_flag: Option<Arc<AtomicBool>>,
+    pub test_mode: bool,
+    pub dry_run: bool,
+    pub target_directory: PathBuf,
+    pub pending_files: Option<super::PendingFiles>,
+}
+
+/// One QuickJS runtime with the transform module evaluated once, reused for
+/// every file a thread runs. [`execute_codemod_with_quickjs`] builds the
+/// runtime, the built-in modules and the transform again for each file.
+///
+/// Module-level state in the transform is shared by the files one runtime
+/// runs, as in a long-lived worker.
+pub struct PersistentTransform {
+    // Dropped before the context and runtime it points into.
+    execute: rquickjs::Persistent<Function<'static>>,
+    context: AsyncContext,
+    runtime: AsyncRuntime,
+    language: CodemodLang,
+    params: HashMap<String, serde_json::Value>,
+    matrix_values: Option<HashMap<String, serde_json::Value>>,
+    dry_run: bool,
+    cancellation_flag: Option<Arc<AtomicBool>>,
+    pending_files: Option<super::PendingFiles>,
+    canonical_target_directory: PathBuf,
+    curated_fs_target: Option<String>,
+    files_run: std::cell::Cell<u32>,
+}
+
+impl PersistentTransform {
+    pub async fn new<R>(options: PersistentTransformOptions<R>) -> Result<Self, ExecutionError>
+    where
+        R: ModuleResolver + 'static,
+    {
+        let init = |message: String| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed { message },
+        };
+        let script_name = options
+            .script_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("main.js")
+            .to_string();
+        let js_code = format!(
+            include_str!("scripts/main_script.js.txt"),
+            script_name = script_name
+        );
+        let runtime =
+            AsyncRuntime::new().map_err(|e| init(format!("Failed to create AsyncRuntime: {e}")))?;
+        let canonical_target_directory = options
+            .target_directory
+            .canonicalize()
+            .unwrap_or_else(|_| options.target_directory.clone());
+
+        let mut fs_capability_enabled = false;
+        let llm_capability_enabled = options
+            .capabilities
+            .as_ref()
+            .is_some_and(|capabilities| capabilities.contains(&LlrtSupportedModules::Fetch));
+        let mut module_builder = LlrtModuleBuilder::build();
+        if let Some(capabilities) = &options.capabilities {
+            for capability in capabilities {
+                match capability {
+                    LlrtSupportedModules::Fetch => {
+                        module_builder.enable_fetch();
+                    }
+                    LlrtSupportedModules::Fs if !options.dry_run => {
+                        module_builder.enable_fs();
+                        fs_capability_enabled = true;
+                    }
+                    LlrtSupportedModules::Fs => {}
+                    LlrtSupportedModules::ChildProcess => {
+                        module_builder.enable_child_process();
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let curated_fs_target = if !fs_capability_enabled {
+            Some(canonical_target_directory.to_string_lossy().into_owned())
+        } else {
+            None
+        };
+        let (mut built_in_resolver, built_in_loader, global_attachment) =
+            module_builder.builder.build();
+        let (codemod_resolver, mut built_in_loader) =
+            crate::with_codemod_modules!(built_in_loader, llm: llm_capability_enabled);
+        if curated_fs_target.is_some() {
+            built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
+            built_in_loader = built_in_loader
+                .with_module("fs", CuratedFsModule)
+                .with_module("fs/promises", CuratedFsPromisesModule);
+        }
+        let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
+        runtime
+            .set_loader(
+                (codemod_resolver, built_in_resolver, fs_resolver),
+                (built_in_loader, QuickJSLoader),
+            )
+            .await;
+        let context = AsyncContext::full(&runtime)
+            .await
+            .map_err(|e| init(format!("Failed to create AsyncContext: {e}")))?;
+
+        let llm_runtime_context = LlmRuntimeContext::new(
+            llm_capability_enabled
+                .then(|| options.llm_request_handler.clone())
+                .flatten(),
+        );
+        let test_mode = options.test_mode;
+        let dry_run = options.dry_run;
+        let metrics_context = options.metrics_context.clone();
+        let target_directory = canonical_target_directory.clone();
+        let physical_fs_target = if dry_run { None } else { curated_fs_target.clone() };
+        let cancellation_flag = options.cancellation_flag.clone();
+        let execute = async_with!(context => |ctx| {
+            let store = |result: Result<(), String>| result.map_err(|message| init(message));
+            store(ctx.store_userdata(ExecutionModeFlag { test_mode }).map(|_| ()).map_err(|e| format!("{e:?}")))?;
+            store(ctx.store_userdata(DryRunExecutionFlag(dry_run)).map(|_| ()).map_err(|e| format!("{e:?}")))?;
+            store(ctx.store_userdata(TargetDirectory(target_directory.clone())).map(|_| ()).map_err(|e| format!("{e:?}")))?;
+            if let Some(metrics_ctx) = &metrics_context {
+                store(ctx.store_userdata(metrics_ctx.clone()).map(|_| ()).map_err(|e| format!("{e:?}")))?;
+            }
+            store(ctx.store_userdata(llm_runtime_context.clone()).map(|_| ()).map_err(|e| format!("{e:?}")))?;
+            // Hooks without a log sink while the module loads; each file
+            // stores its own.
+            let hooks = RuntimeHooksContext::new(None, cancellation_flag.clone());
+            store(ctx.store_userdata(hooks.clone()).map(|_| ()).map_err(|e| format!("{e:?}")))?;
+            if let Some(target_dir) = physical_fs_target.clone() {
+                let physical_root: vfs::VfsPath = vfs::PhysicalFS::new(std::path::PathBuf::from("/")).into();
+                let cfg = CuratedFsConfig::new(target_dir.clone(), physical_root)
+                    .with_physical_target_dir(std::path::PathBuf::from(&target_dir));
+                store(ctx.store_userdata(cfg).map(|_| ()).map_err(|e| format!("{e:?}")))?;
+            }
+            global_attachment
+                .attach(&ctx)
+                .map_err(|e| init(format!("Failed to attach global modules: {e}")))?;
+            install_console_bridge(&ctx)
+                .map_err(|e| init(format!("Failed to attach console bridge: {e}")))?;
+
+            let module = Module::declare(ctx.clone(), "__codemod_entry.js", js_code)
+                .catch(&ctx)
+                .map_err(|e| init(format!("Failed to declare module: {e}")))?;
+            let (evaluated, eval_value) = module
+                .eval()
+                .catch(&ctx)
+                .map_err(|e| map_transform_execution_error(&hooks, e))?;
+            maybe_promise(eval_value.into())
+                .await
+                .catch(&ctx)
+                .map_err(|e| map_transform_execution_error(&hooks, e))?;
+            while ctx.execute_pending_job() {}
+            let namespace = evaluated
+                .namespace()
+                .catch(&ctx)
+                .map_err(|e| init(e.to_string()))?;
+            let func = namespace
+                .get::<_, Function>("executeCodemod")
+                .catch(&ctx)
+                .map_err(|e| init(e.to_string()))?;
+            Ok::<_, ExecutionError>(rquickjs::Persistent::save(&ctx, func))
+        })
+        .await?;
+
+        Ok(Self {
+            execute,
+            context,
+            runtime,
+            language: options.language,
+            params: options.params.unwrap_or_default(),
+            matrix_values: options.matrix_values,
+            dry_run,
+            cancellation_flag: options.cancellation_flag,
+            pending_files: options.pending_files,
+            canonical_target_directory,
+            curated_fs_target,
+            files_run: std::cell::Cell::new(0),
+        })
+    }
+
+    /// Runs the transform on one file, as [`execute_codemod_with_quickjs`]
+    /// does with the same options.
+    pub async fn run_file(
+        &self,
+        file_path: &Path,
+        content: &str,
+        selector_config: Option<Arc<RuleConfig<CodemodLang>>>,
+        semantic_provider: Option<Arc<dyn SemanticProvider>>,
+        runtime_event_callback: Option<RuntimeEventCallback>,
+    ) -> Result<CodemodOutput, ExecutionError> {
+        let init = |message: String| ExecutionError::Runtime {
+            source: crate::sandbox::errors::RuntimeError::InitializationFailed { message },
+        };
+        let ast_grep = AstGrep::new(content, self.language);
+        let hooks = RuntimeHooksContext::new(runtime_event_callback, self.cancellation_flag.clone());
+        let jssg_file_changes = JssgFileChanges {
+            pending: self.pending_files.clone(),
+            ..JssgFileChanges::default()
+        };
+        let execute = self.execute.clone();
+        let output = async_with!(self.context => |ctx| {
+            ctx.store_userdata(hooks.clone()).map_err(|e| init(format!("{e:?}")))?;
+            ctx.store_userdata(jssg_file_changes.clone()).map_err(|e| init(format!("{e:?}")))?;
+            ctx.store_userdata(JssgExecutionContext {
+                params: self.params.clone(),
+                matrix_values: self.matrix_values.clone(),
+            }).map_err(|e| init(format!("{e:?}")))?;
+            if self.dry_run {
+                if let Some(target_dir) = self.curated_fs_target.clone() {
+                    let target_path = std::path::PathBuf::from(&target_dir);
+                    let memory_root: vfs::VfsPath = vfs::MemoryFS::new().into();
+                    seed_dry_run_current_file(&memory_root, &target_path, file_path, content);
+                    let cfg = CuratedFsConfig::new(target_dir.clone(), memory_root).with_fetcher(
+                        Arc::new(DryRunDiskFetcher { target_directory: target_path }),
+                    );
+                    ctx.store_userdata(cfg).map_err(|e| init(format!("{e:?}")))?;
+                }
+            }
+            let func = execute.restore(&ctx).map_err(|e| init(e.to_string()))?;
+            let file_path_str = file_path
+                .canonicalize()
+                .unwrap_or_else(|_| file_path.to_path_buf())
+                .to_string_lossy()
+                .to_string();
+            let target_directory = self.canonical_target_directory.clone();
+            let parsed_content = SgRootRjs::try_new_with_semantic(
+                ast_grep,
+                Some(file_path_str.clone()),
+                semantic_provider,
+                Some(file_path_str),
+                Some(target_directory.as_path()),
+            )
+            .map_err(|e| init(e.to_string()))?;
+            let sg_root_inner = Arc::clone(&parsed_content.inner);
+            let matches: Option<Vec<SgNodeRjs<'_>>> = if let Some(selector_config) = &selector_config {
+                let root_node = parsed_content.root(ctx.clone()).map_err(|e| init(e.to_string()))?;
+                let ast_matches: Vec<_> = root_node
+                    .inner_node
+                    .dfs()
+                    .filter_map(|node| selector_config.matcher.match_node(node))
+                    .collect();
+                if ast_matches.is_empty() {
+                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![] });
+                }
+                Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
+                    root: Arc::clone(&parsed_content.inner),
+                    inner_node: node_match,
+                    _phantom: PhantomData,
+                }).collect())
+            } else {
+                None
+            };
+            let language_str = self.language.to_string();
+            let target_dir_str = target_directory.to_string_lossy().into_owned();
+            let run_options_qjs = build_transform_options(
+                &ctx,
+                self.params.clone(),
+                &language_str,
+                self.matrix_values.clone(),
+                matches,
+                self.dry_run,
+                &target_dir_str,
+            )?;
+            let result_obj_promise = func
+                .call((parsed_content, run_options_qjs))
+                .catch(&ctx)
+                .map_err(|e| map_transform_execution_error(&hooks, e))?;
+            let result_obj = maybe_promise(result_obj_promise)
+                .await
+                .catch(&ctx)
+                .map_err(|e| map_transform_execution_error(&hooks, e))?;
+            let primary = process_transform_result(
+                &result_obj,
+                &sg_root_inner,
+                ModificationCheck::StringEquality { original_content: content },
+            )?;
+            let secondary = jssg_file_changes
+                .changes
+                .lock()
+                .map(|guard| guard.clone())
+                .unwrap_or_default();
+            Ok::<_, ExecutionError>(CodemodOutput { primary, secondary })
+        })
+        .await;
+        // Trees and nodes from earlier files are freed by reference counts;
+        // a collection now and then frees the cycles.
+        let run = self.files_run.get() + 1;
+        self.files_run.set(run);
+        if run % 64 == 0 {
+            self.runtime.run_gc().await;
+        }
+        output
+    }
+}
