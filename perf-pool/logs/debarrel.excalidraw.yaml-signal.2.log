@@ -1,0 +1,102 @@
+Workflow started e0a5c3c4-07a9-4eac-b3e2-a0be314d6507
+⏺ Debarrel: rewrite imports and clean up barrels
+
+dev-docs/src/theme/ReactLiveScope/index.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/excalidraw__excalidraw/dev-docs/src/theme/ReactLiveScope/index.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+dev-docs/src/components/Highlight.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/excalidraw__excalidraw/dev-docs/src/components/Highlight.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+dev-docs/src/components/Homepage/index.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/excalidraw__excalidraw/dev-docs/src/components/Homepage/index.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+Workflow completed in 9.0s
+
+Metrics:
+  barrel_import:
+    filePath=packages/element/src/index.ts, importer=packages/element/tests/linearElementEditor.test.tsx: 4
+    importer=packages/excalidraw/components/PasteChartDialog.tsx, filePath=packages/excalidraw/charts/index.ts: 2
+    filePath=packages/common/src/index.ts, importer=packages/common/src/queue.ts: 2
+    filePath=packages/excalidraw/charts/index.ts, importer=packages/excalidraw/charts.test.ts: 2
+    filePath=packages/excalidraw/scene/index.ts, importer=packages/excalidraw/tests/scrollConstraints.test.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/element/tests/align.test.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/components/HelpDialog.tsx: 1
+    importer=packages/excalidraw/components/App.tsx, filePath=packages/excalidraw/components/canvases/index.tsx: 1
+    filePath=packages/excalidraw/fonts/index.ts, importer=packages/excalidraw/components/FontPicker/FontPickerList.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/components/Stats/stats.test.tsx: 1
+    importer=packages/excalidraw/components/App.bucketFill.ts, filePath=packages/excalidraw/actions/index.ts: 1
+    filePath=packages/excalidraw/fonts/index.ts, importer=packages/excalidraw/scene/export.ts: 1
+    importer=packages/excalidraw/types.ts, filePath=packages/excalidraw/charts/index.ts: 1
+    importer=packages/excalidraw/components/FontPicker/FontPicker.tsx, filePath=packages/excalidraw/fonts/index.ts: 1
+    filePath=packages/excalidraw/scene/index.ts, importer=packages/excalidraw/tests/fitToContent.test.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/components/Actions.tsx: 1
+    importer=packages/excalidraw/components/App.tsx, filePath=packages/excalidraw/fonts/index.ts: 1
+    importer=packages/excalidraw/components/UnlockPopup.tsx, filePath=packages/excalidraw/actions/index.ts: 1
+    filePath=packages/excalidraw/scene/index.ts, importer=packages/excalidraw/components/MobileMenu.tsx: 1
+    filePath=packages/excalidraw/index.tsx, importer=excalidraw-app/components/AppWelcomeScreen.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/tests/drawShape.test.tsx: 1
+    importer=packages/excalidraw/components/main-menu/DefaultItems.tsx, filePath=packages/excalidraw/actions/index.ts: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/wysiwyg/textWysiwyg.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/components/App.clipboard.ts: 1
+    importer=packages/excalidraw/components/App.drawshape.ts, filePath=packages/excalidraw/actions/index.ts: 1
+    filePath=packages/excalidraw/index.tsx, importer=packages/excalidraw/components/hoc/withInternalFallback.test.tsx: 1
+    importer=packages/excalidraw/components/LayerUI.tsx, filePath=packages/excalidraw/scene/index.ts: 1
+    filePath=packages/excalidraw/scene/index.ts, importer=packages/excalidraw/tests/wheel.test.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/components/ActiveConfirmDialog.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/tests/stickyNotes.test.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/tests/history.test.tsx: 1
+    filePath=packages/excalidraw/scene/index.ts, importer=packages/excalidraw/tests/renderOverrides.test.tsx: 1
+    filePath=packages/excalidraw/index.tsx, importer=packages/excalidraw/tests/interactivity.test.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/element/tests/distribute.test.tsx: 1
+    importer=excalidraw-app/components/AppMainMenu.tsx, filePath=packages/excalidraw/index.tsx: 1
+    importer=packages/excalidraw/components/App.wheel.ts, filePath=packages/excalidraw/scene/index.ts: 1
+    importer=packages/element/tests/zindex.test.tsx, filePath=packages/excalidraw/actions/index.ts: 1
+    importer=packages/excalidraw/components/App.clipboard.ts, filePath=packages/excalidraw/charts/index.ts: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/tests/flip.test.tsx: 1
+    filePath=packages/excalidraw/fonts/index.ts, importer=packages/excalidraw/actions/actionProperties.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/element/tests/elbowArrow.test.tsx: 1
+    filePath=packages/excalidraw/index.tsx, importer=excalidraw-app/components/AppFooter.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/components/CommandPalette/CommandPalette.tsx: 1
+    importer=packages/excalidraw/components/Sidebar/Sidebar.test.tsx, filePath=packages/excalidraw/index.tsx: 1
+    importer=packages/excalidraw/actions/actionCanvas.tsx, filePath=packages/excalidraw/scene/index.ts: 1
+    filePath=packages/excalidraw/index.tsx, importer=packages/excalidraw/components/DefaultSidebar.test.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/components/LayerUI.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/wysiwyg/textWysiwyg.test.tsx: 1
+    importer=packages/excalidraw/tests/charts.test.tsx, filePath=packages/excalidraw/charts/index.ts: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/element/tests/cropElement.test.tsx: 1
+    importer=packages/excalidraw/components/App.tsx, filePath=packages/excalidraw/data/index.ts: 1
+    importer=packages/excalidraw/components/TTDDialog/hooks/useTextGeneration.ts, filePath=packages/excalidraw/components/TTDDialog/Chat/index.ts: 1
+    filePath=packages/excalidraw/components/TTDDialog/Chat/index.ts, importer=packages/excalidraw/components/TTDDialog/TextToDiagram.tsx: 1
+    filePath=packages/excalidraw/data/index.ts, importer=packages/excalidraw/actions/actionExport.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/components/footer/Footer.tsx: 1
+    importer=packages/excalidraw/tests/onDuplicate.test.tsx, filePath=packages/excalidraw/actions/index.ts: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/element/tests/duplicate.test.tsx: 1
+    filePath=packages/excalidraw/scene/index.ts, importer=packages/excalidraw/components/Stats/CanvasGrid.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/components/OverwriteConfirm/OverwriteConfirmActions.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/components/App.tsx: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/tests/elementLocking.test.tsx: 1
+    importer=packages/excalidraw/components/welcome-screen/WelcomeScreen.Center.tsx, filePath=packages/excalidraw/actions/index.ts: 1
+    filePath=packages/excalidraw/scene/index.ts, importer=packages/excalidraw/components/App.tsx: 1
+    filePath=packages/excalidraw/scene/index.ts, importer=packages/excalidraw/viewport.ts: 1
+    filePath=packages/excalidraw/scene/index.ts, importer=packages/excalidraw/data/restore.ts: 1
+    filePath=packages/excalidraw/actions/index.ts, importer=packages/excalidraw/components/App.selectionTool.ts: 1
+    importer=packages/excalidraw/tests/excalidraw.test.tsx, filePath=packages/excalidraw/index.tsx: 1
+    filePath=packages/element/src/index.ts, importer=packages/element/src/store.ts: 1
+    importer=packages/excalidraw/data/blob.ts, filePath=packages/excalidraw/scene/index.ts: 1

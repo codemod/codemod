@@ -1,0 +1,1067 @@
+Workflow started e0290eac-fa78-48f8-a761-313817788a31
+⏺ Debarrel: rewrite imports and clean up barrels
+
+test/ThemeProviderSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ThemeProviderSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ColSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ColSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FigureSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FigureSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ToastHeaderSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ToastHeaderSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/TabContentSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/TabContentSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FeedbackSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FeedbackSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/DropdownToggleSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/DropdownToggleSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/DropdownSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/DropdownSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/MediaSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/MediaSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/getting-started/theming.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/getting-started/theming.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/index.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/index.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/OverlayTriggerSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/OverlayTriggerSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/layout/grid.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/layout/grid.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ModalSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ModalSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/layout/media.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/layout/media.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/InputGroupSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/InputGroupSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/utilities/react-overlays.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/utilities/react-overlays.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FormTextSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FormTextSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/utilities/responsive-embed.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/utilities/responsive-embed.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/overlays.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/overlays.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/DropdownButtonSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/DropdownButtonSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/modal.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/modal.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/table.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/table.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ListGroupSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ListGroupSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/progress.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/progress.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/forms.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/forms.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/TabContainerSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/TabContainerSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/input-group.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/input-group.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/CloseButton.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/CloseButton.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/figures.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/figures.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FormControlFeedbackSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FormControlFeedbackSpec.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/tabs.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/tabs.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/navbar.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/navbar.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ModalTitleSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ModalTitleSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/jumbotron.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/jumbotron.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/pagination.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/pagination.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/pages/components/images.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/pages/components/images.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/NavSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/NavSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/usePopperMarginModifiersSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/usePopperMarginModifiersSpec.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/BadgeSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/BadgeSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/AccordionSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/AccordionSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/DropdownMenuSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/DropdownMenuSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/TableSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/TableSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FormGroupSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FormGroupSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/SpinnerSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/SpinnerSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FormCheckSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FormCheckSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ButtonGroupSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ButtonGroupSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ListGroupItemSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ListGroupItemSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/DropdownItemSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/DropdownItemSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ProgressBarSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ProgressBarSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FormFileSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FormFileSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/CollapseSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/CollapseSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/BreadcrumbSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/BreadcrumbSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/CardImgSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/CardImgSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FormLabelSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FormLabelSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/PageItemSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/PageItemSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/NavbarSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/NavbarSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ToastSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ToastSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/AlertSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/AlertSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FigureCaptionSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FigureCaptionSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/CardSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/CardSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/NavItemSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/NavItemSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/TabsSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/TabsSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ModalBodySpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ModalBodySpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ModalHeaderSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ModalHeaderSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ImageSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ImageSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/BreadcrumbItemSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/BreadcrumbItemSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ButtonSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ButtonSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/CarouselCaptionSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/CarouselCaptionSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/NavbarBrandSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/NavbarBrandSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/SplitButtonSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/SplitButtonSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ToastBodySpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ToastBodySpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FormSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FormSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/CarouselSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/CarouselSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/TooltipSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/TooltipSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/PaginationSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/PaginationSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/NavbarToggleSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/NavbarToggleSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/PopoverSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/PopoverSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/RowSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/RowSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ModalFooterSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ModalFooterSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/NavDropdownSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/NavDropdownSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/SafeAnchorSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/SafeAnchorSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/JumbotronSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/JumbotronSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ContainerSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ContainerSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/server/ModalSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/server/ModalSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FadeSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FadeSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/MediaBodySpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/MediaBodySpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/AccordionToggleSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/AccordionToggleSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ToggleButtonGroupSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ToggleButtonGroupSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/FormControlSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/FormControlSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/NavLinkSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/NavLinkSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ButtonToolbarSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ButtonToolbarSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/ResponsiveEmbedSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/ResponsiveEmbedSpec.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+test/TabSpec.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/TabSpec.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/withLayout.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/withLayout.js': Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/seo.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/seo.js': Unexpected token
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/layouts/index.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/layouts/index.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/layouts/ApiLayout.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/layouts/ApiLayout.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/Heading.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/Heading.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/DocsAlert.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/DocsAlert.js': Unexpected
+    [31m│[0m token
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/Anchor.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/Anchor.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/PropTable.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/PropTable.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/PageHeader.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/PageHeader.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/Main.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/Main.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/SideNav.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/SideNav.js': Unexpected token
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/Callout.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/Callout.js': Unexpected token
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/Sonnet.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/Sonnet.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/CodeBlock.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/CodeBlock.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/LinkedHeading.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/LinkedHeading.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/PageFooter.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/PageFooter.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/BrowserGlobalsCodeBlock.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/BrowserGlobalsCodeBlock.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/LinkToSource.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/LinkToSource.js': Unexpected
+    [31m│[0m token
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/CarbonAds.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/CarbonAds.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/PlaceholderImage.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/PlaceholderImage.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/ImportApi.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/ImportApi.js': Unexpected
+    [31m│[0m token
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/CssCodeBlock.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/CssCodeBlock.js': Unexpected
+    [31m│[0m JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/Announce.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/Announce.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/ComponentApi.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/ComponentApi.js': Unexpected
+    [31m│[0m token
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/NavMain.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/NavMain.js': Unexpected token
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/DocLink.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/DocLink.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/Toc.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/Toc.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/ReactPlayground.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/ReactPlayground.js':
+    [31m│[0m Unexpected JSX expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:89:34)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+
+www/src/components/AriaAbbr.js
+  [31mcodemod::cli::error[0m
+  
+    [31m×[0m Runtime error JavaScript execution failed: Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/AriaAbbr.js': Unexpected JSX
+    [31m│[0m expression
+    [31m│[0m     at codemod (/home/user/bench-data/src/codemod__useful-codemods/codemods/debarrel/scripts/codemod.ts:122:32)
+    [31m│[0m     at executeCodemod (__codemod_entry.js:8:22)
+    [31m│[0m 
+Workflow completed in 1.8s
+
+Metrics:
+  barrel_import:
+    filePath=src/index.tsx, importer=tests/simple-types-test.tsx: 1

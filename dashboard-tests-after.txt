@@ -1,0 +1,40 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/dashboard.test.ts > executableIr > describes an operation as its id, name, kind and input
+ ✓ tests/dashboard.test.ts > executableIr > describes an operation that needs input as taking flow input
+ ✓ tests/dashboard.test.ts > executableIr > describes a jssg invocation with its id and target
+ ✓ tests/dashboard.test.ts > executableIr > describes a dynamic node as opaque
+ ✓ tests/dashboard.test.ts > executableIr > describes sequence and parallel in order
+ ✓ tests/dashboard.test.ts > RunMonitor projection > attributes runtime commands to the dynamic node that issued them
+ ✓ tests/dashboard.test.ts > RunMonitor projection > never carries a command's env, input, or output
+ ✓ tests/dashboard.test.ts > RunMonitor projection > projects a command's lifecycle as scheduled, admitted, released, completed, finished
+ ✓ tests/dashboard.test.ts > RunMonitor projection > projects a scheduled command as its id, runnable and kind, and a finish as replayed or not
+ ✓ tests/dashboard.test.ts > RunMonitor projection > keeps a failure's message and phase but not its output
+ ✓ tests/dashboard.test.ts > RunMonitor snapshot of a live run > shows the running command and the one waiting for capacity
+ ✓ tests/dashboard.test.ts > RunMonitor snapshot of a live run > records when each command was scheduled and started
+ ✓ tests/dashboard.test.ts > RunMonitor snapshot of a live run > admits the queued command when capacity frees up
+ ✓ tests/dashboard.test.ts > RunMonitor snapshot of a live run > records a failed run's error and finish time
+ ✓ tests/dashboard.test.ts > RunMonitor snapshot of a live run > numbers envelopes 1, 2, 3, ... under one run id, and the snapshot has the last
+ ✓ tests/dashboard.test.ts > RunMonitor snapshot of a live run > puts the state after each event on its envelope, so a client needs no reducer
+ ✓ tests/dashboard.test.ts > RunMonitor and history > marks commands a dynamic body issued as not part of the static plan
+ ✓ tests/dashboard.test.ts > RunMonitor and history > shows a replayed run's commands as replayed against the static plan
+ ✓ tests/dashboard.test.ts > RunMonitor status > is paused while the scheduler is paused
+ ✓ tests/dashboard.test.ts > RunMonitor status > keeps a finished run's status through a later pause or failure
+ ✓ tests/dashboard.test.ts > RunMonitor status > records a cancellation once
+ ✓ tests/dashboard.test.ts > RunMonitor status > drops a command from the queue when it is cancelled before admission
+ ✓ tests/dashboard.test.ts > RunMonitor buffer and subscribers > returns what came after seq 3 while it is still buffered
+ ✓ tests/dashboard.test.ts > RunMonitor buffer and subscribers > returns what came after seq 4 while it is still buffered
+ ✓ tests/dashboard.test.ts > RunMonitor buffer and subscribers > returns what came after seq 6 while it is still buffered
+ ✓ tests/dashboard.test.ts > RunMonitor buffer and subscribers > returns what came after seq 99 while it is still buffered
+ ✓ tests/dashboard.test.ts > RunMonitor buffer and subscribers > returns undefined after seq 0, which fell out of the buffer
+ ✓ tests/dashboard.test.ts > RunMonitor buffer and subscribers > returns undefined after seq 2, which fell out of the buffer
+ ✓ tests/dashboard.test.ts > RunMonitor buffer and subscribers > rejects a buffer size that is not a positive integer
+ ✓ tests/dashboard.test.ts > RunMonitor buffer and subscribers > keeps delivering to other subscribers when one throws
+ ✓ tests/dashboard.test.ts > RunMonitor buffer and subscribers > stops delivering to a subscriber once it unsubscribes
+
+ Test Files  1 passed (1)
+      Tests  31 passed (31)
+   Start at  02:35:29
+   Duration  877ms (transform 380ms, setup 0ms, collect 506ms, tests 25ms, environment 0ms, prepare 77ms)
+

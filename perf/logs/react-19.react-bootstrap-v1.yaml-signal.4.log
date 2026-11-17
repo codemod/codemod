@@ -1,0 +1,33 @@
+Workflow started 25e3e817-7d97-45d7-a6ce-d213ce4f1cc1
+⏺ Replace ReactDOM.render with createRoot
+
+Bundled codemods
+  Running ../pkgs/replace-reactdom-render
+⏺ Replace string refs with callback refs
+
+Bundled codemods
+  Running ../pkgs/replace-string-ref
+⏺ Migrate act from react-dom/test-utils to react
+
+Bundled codemods
+  Running ../pkgs/replace-act-import
+⏺ Replace useFormState with useActionState
+
+Bundled codemods
+  Running ../pkgs/replace-use-form-state
+⏺ Convert PropTypes to TypeScript props
+
+Bundled codemods
+  Running ../pkgs/prop-types-typescript
+Workflow completed in 5.7s
+
+Metrics:
+  prop-types-typescript-conversions:
+    file=/home/user/bench-data/repos/react-bootstrap-v1/src/Tab.tsx, component=Tab: 1
+    component=ThemeProvider, file=/home/user/bench-data/repos/react-bootstrap-v1/src/ThemeProvider.tsx: 1
+    file=/home/user/bench-data/repos/react-bootstrap-v1/www/src/seo.js, component=SEO: 1
+    file=/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/PropTable.js, component=PropTable: 1
+    file=/home/user/bench-data/repos/react-bootstrap-v1/www/src/components/CodeBlock.js, component=CodeBlock: 1
+  reactdom-render-replacements:
+    file=/home/user/bench-data/repos/react-bootstrap-v1/test/OverlayTriggerSpec.js, pattern=ReactDOM.unmountComponentAtNode: 1
+    pattern=ReactDOM.unmountComponentAtNode, file=/home/user/bench-data/repos/react-bootstrap-v1/test/DropdownSpec.js: 1

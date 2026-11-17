@@ -1,0 +1,29 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/jssg.test.ts > a successful batch > sends every selected file in one batch
+ ✓ tests/jssg.test.ts > a successful batch > selects the files of the operation's language family
+ ✓ tests/jssg.test.ts > a successful batch > sends the target root, the artifact source, and the input with the batch
+ ✓ tests/jssg.test.ts > a successful batch > commits the edits of selected files and leaves the others untouched
+ ✓ tests/jssg.test.ts > executeJssgCommand > selects files matching both the repository-relative definition globs and the target's globs
+ ✓ tests/jssg.test.ts > executeJssgCommand > commits edits relative to the target root
+ ✓ tests/jssg.test.ts > executeJssgCommand > fails in the transform phase, changing nothing, when the batch fails
+ ✓ tests/jssg.test.ts > executeJssgCommand > fails in the transform phase, changing nothing, when an edit renames outside the root
+ ✓ tests/jssg.test.ts > executeJssgCommand > fails in the transform phase, changing nothing, when an edit targets an absolute path
+ ✓ tests/jssg.test.ts > executeJssgCommand > fails in the stage phase, changing nothing, when two edits rename onto one path
+ ✓ tests/jssg.test.ts > executeJssgCommand > fails in the stage phase, changing nothing, when one source is renamed twice
+ ✓ tests/jssg.test.ts > executeJssgCommand > fails in the stage phase, changing nothing, when a renamed-away path is written
+ ✓ tests/jssg.test.ts > executeJssgCommand > fails in the stage phase, changing nothing, when a rename lands on an existing file
+ ✓ tests/jssg.test.ts > executeJssgCommand > rejects an edit that escapes through a symlink before writing
+ ✓ tests/jssg.test.ts > executeJssgCommand > renames a file: writes the destination and removes the source
+ ✓ tests/jssg.test.ts > executeJssgCommand > writes a secondary edit to a new path, creating its directories
+ ✓ tests/jssg.test.ts > executeJssgCommand > skips a file that is not UTF-8
+ ✓ tests/jssg.test.ts > executeJssgCommand > fails in the select phase when the target root does not exist
+ ✓ tests/jssg.test.ts > executeJssgCommand > fails in the select phase, without dispatching, when the target root escapes through a symlink
+ ✓ tests/jssg.test.ts > executeJssgCommand > reports cancelled in the transform phase and changes nothing when aborted mid-batch
+
+ Test Files  1 passed (1)
+      Tests  20 passed | 1 skipped (21)
+   Start at  02:47:44
+   Duration  704ms (transform 294ms, setup 0ms, collect 394ms, tests 44ms, environment 0ms, prepare 61ms)
+

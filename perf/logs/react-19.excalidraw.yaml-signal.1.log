@@ -1,0 +1,22 @@
+Workflow started 07a34313-338a-4743-a294-c0f4de264b53
+⏺ Replace ReactDOM.render with createRoot
+
+Bundled codemods
+  Running ../pkgs/replace-reactdom-render
+⏺ Replace string refs with callback refs
+
+Bundled codemods
+  Running ../pkgs/replace-string-ref
+⏺ Migrate act from react-dom/test-utils to react
+
+Bundled codemods
+  Running ../pkgs/replace-act-import
+⏺ Replace useFormState with useActionState
+
+Bundled codemods
+  Running ../pkgs/replace-use-form-state
+⏺ Convert PropTypes to TypeScript props
+
+Bundled codemods
+  Running ../pkgs/prop-types-typescript
+Workflow completed in 12.1s

@@ -1,0 +1,20 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/agent-runner.test.ts > agent steps through the codemod-agent runner > starts the runner in the target with the allowlisted environment and the key on stdin
+ ✓ tests/agent-runner.test.ts > agent steps through the codemod-agent runner > gives external backends no LLM settings or secret, and refuses explicit credentials
+ ✓ tests/agent-runner.test.ts > agent steps through the codemod-agent runner > refuses before starting anything: no runner, bad timeout, abort
+ ✓ tests/agent-runner.test.ts > agent steps through the codemod-agent runner > is unknown when a builtin agent is aborted after spawn, and kills the runner's process tree 1274ms
+ ✓ tests/agent-runner.test.ts > agent steps through the codemod-agent runner > is unknown when a claude-code agent is aborted after spawn, and kills the runner's process tree 1997ms
+ ✓ tests/agent-runner.test.ts > agent steps through the codemod-agent runner > is unknown when a codex agent is aborted after spawn, and kills the runner's process tree 2001ms
+ ✓ tests/agent-runner.test.ts > agent steps through the codemod-agent runner > times external agents out on the host clock, killing the process tree 2993ms
+ ✓ tests/agent-runner.test.ts > agent steps through the codemod-agent runner > treats a garbage runner as unknown, since the agent may have changed files
+ ✓ tests/agent-runner.test.ts > agent steps through the codemod-agent runner > treats a other-command runner as unknown, since the agent may have changed files
+ ✓ tests/agent-runner.test.ts > agent steps through the codemod-agent runner > treats a silent runner as unknown, since the agent may have changed files
+ ✓ tests/agent-runner.test.ts > agent steps through the codemod-agent runner > records the agent's completion and replays it without a runner
+
+ Test Files  1 passed (1)
+      Tests  11 passed (11)
+   Start at  02:36:29
+   Duration  9.43s (transform 354ms, setup 0ms, collect 485ms, tests 8.63s, environment 0ms, prepare 78ms)
+

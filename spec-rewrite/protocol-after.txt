@@ -1,0 +1,83 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts agent-claude-code-request.json at the current protocol version
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts agent-codex-request.json at the current protocol version
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts agent-request.json at the current protocol version
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts assessment-request.json at the current protocol version
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts jssg-request.json at the current protocol version
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts jssg-target-request.json at the current protocol version
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts shell-request.json at the current protocol version
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts and round-trips assessment-completion.json
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts and round-trips cancelled-completion.json
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts and round-trips failed-completion.json
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts and round-trips succeeded-completion.json
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > accepts and round-trips unknown-completion.json
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > serializes a shell runnable as the shell request fixture
+ ✓ tests/protocol.test.ts > operation requests > accepts a request with a target root context
+ ✓ tests/protocol.test.ts > operation requests > accepts a request with an empty context
+ ✓ tests/protocol.test.ts > operation requests > accepts a request with a batch of safe relative files and the artifact source
+ ✓ tests/protocol.test.ts > operation requests > rejects a request with a blank target root
+ ✓ tests/protocol.test.ts > operation requests > rejects a request with the removed script root
+ ✓ tests/protocol.test.ts > operation requests > rejects a request with an artifact with extra fields
+ ✓ tests/protocol.test.ts > operation requests > rejects a request with an artifact without source
+ ✓ tests/protocol.test.ts > operation requests > rejects a request with an unknown context field
+ ✓ tests/protocol.test.ts > operation requests > rejects a request with a non-object context
+ ✓ tests/protocol.test.ts > operation requests > rejects a request with a context field on the envelope
+ ✓ tests/protocol.test.ts > operation requests > rejects a request with an absolute batch path
+ ✓ tests/protocol.test.ts > operation requests > rejects a request with an unknown batch file field
+ ✓ tests/protocol.test.ts > operations > accepts a jssg operation with a transform reference
+ ✓ tests/protocol.test.ts > operations > accepts a target root with '..' inside a name
+ ✓ tests/protocol.test.ts > operations > accepts file-mode semantic analysis
+ ✓ tests/protocol.test.ts > operations > rejects an operation with no transform
+ ✓ tests/protocol.test.ts > operations > rejects an operation with a transform path instead of a reference
+ ✓ tests/protocol.test.ts > operations > rejects an operation with a transform without a hash
+ ✓ tests/protocol.test.ts > operations > rejects an operation with a transform with an empty name
+ ✓ tests/protocol.test.ts > operations > rejects an operation with a transform hash of 63 digits
+ ✓ tests/protocol.test.ts > operations > rejects an operation with an uppercase transform hash
+ ✓ tests/protocol.test.ts > operations > rejects an operation with a transform carrying its source
+ ✓ tests/protocol.test.ts > operations > rejects an operation with the removed script field
+ ✓ tests/protocol.test.ts > operations > rejects an operation with a root on file-mode semantic analysis
+ ✓ tests/protocol.test.ts > operations > rejects an operation with the removed exec kind
+ ✓ tests/protocol.test.ts > operations > rejects an operation with a target on a shell operation
+ ✓ tests/protocol.test.ts > operations > rejects "/abs/x.ts" as a target root or a workspace analysis root
+ ✓ tests/protocol.test.ts > operations > rejects "\\\\server\\x.ts" as a target root or a workspace analysis root
+ ✓ tests/protocol.test.ts > operations > rejects "C:\\x.ts" as a target root or a workspace analysis root
+ ✓ tests/protocol.test.ts > operations > rejects "c:/x.ts" as a target root or a workspace analysis root
+ ✓ tests/protocol.test.ts > operations > rejects "../x.ts" as a target root or a workspace analysis root
+ ✓ tests/protocol.test.ts > operations > rejects " " as a target root or a workspace analysis root
+ ✓ tests/protocol.test.ts > operations > accepts a selector with a rule, alone and on a jssg operation
+ ✓ tests/protocol.test.ts > operations > accepts a selector with a rule with constraints and utils, alone and on a jssg operation
+ ✓ tests/protocol.test.ts > operations > rejects a selector with no rule, alone and on a jssg operation
+ ✓ tests/protocol.test.ts > operations > rejects a selector with an empty rule, alone and on a jssg operation
+ ✓ tests/protocol.test.ts > operations > rejects a selector with a string rule, alone and on a jssg operation
+ ✓ tests/protocol.test.ts > operations > rejects a selector with an id, alone and on a jssg operation
+ ✓ tests/protocol.test.ts > operations > rejects a selector with a language, alone and on a jssg operation
+ ✓ tests/protocol.test.ts > operations > rejects a selector with a fix, alone and on a jssg operation
+ ✓ tests/protocol.test.ts > operations > rejects a selector with non-JSON data, alone and on a jssg operation
+ ✓ tests/protocol.test.ts > operations > rejects a selector with a non-object, alone and on a jssg operation
+ ✓ tests/protocol.test.ts > batch file outcomes > accepts an edit that renames within the repository
+ ✓ tests/protocol.test.ts > batch file outcomes > accepts a file output and no edits
+ ✓ tests/protocol.test.ts > batch file outcomes > rejects a rename out of the repository
+ ✓ tests/protocol.test.ts > batch file outcomes > rejects an absolute edit path
+ ✓ tests/protocol.test.ts > batch file outcomes > rejects an unknown edit field
+ ✓ tests/protocol.test.ts > batch file outcomes > rejects an unknown file field
+ ✓ tests/protocol.test.ts > batch file outcomes > rejects a parent-relative file path
+ ✓ tests/protocol.test.ts > batch file outcomes > rejects an object instead of a list
+ ✓ tests/protocol.test.ts > operation completions > accepts a failure with structured error details
+ ✓ tests/protocol.test.ts > operation completions > rejects a completion with an unknown protocol version
+ ✓ tests/protocol.test.ts > operation completions > rejects a completion with an unknown status
+ ✓ tests/protocol.test.ts > operation completions > rejects a completion with an unknown error field
+ ✓ tests/protocol.test.ts > operation completions > rejects a completion with an unknown envelope field
+ ✓ tests/protocol.test.ts > operation completions > rejects a completion with a succeeded status but no output
+ ✓ tests/protocol.test.ts > operation completions > rejects a completion with a succeeded status and an error
+ ✓ tests/protocol.test.ts > operation completions > rejects a completion with a failed status but no error
+ ✓ tests/protocol.test.ts > operation completions > rejects a completion with a non-integer exit code
+ ✓ tests/protocol.test.ts > operation completions > throws when parsing text that is not JSON
+ ✓ tests/protocol.test.ts > operation completions > throws when parsing JSON that is not a completion
+
+ Test Files  1 passed (1)
+      Tests  74 passed (74)
+   Start at  02:47:49
+   Duration  672ms (transform 289ms, setup 0ms, collect 401ms, tests 14ms, environment 0ms, prepare 59ms)
+

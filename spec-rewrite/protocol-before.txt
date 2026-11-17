@@ -1,0 +1,45 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > every fixture is valid and round-trips
+ ✓ tests/protocol.test.ts > protocol fixtures shared with crates/orchestration-agent > shell runnables produce the fixture request shape
+ ✓ tests/protocol.test.ts > strict validation > request with a strict request context
+ ✓ tests/protocol.test.ts > strict validation > request with an empty context
+ ✓ tests/protocol.test.ts > strict validation > request with a batch of safe relative files and the artifact source
+ ✓ tests/protocol.test.ts > strict validation > request with a blank target root
+ ✓ tests/protocol.test.ts > strict validation > request with the removed script root
+ ✓ tests/protocol.test.ts > strict validation > request with an artifact with extra fields
+ ✓ tests/protocol.test.ts > strict validation > request with an artifact without source
+ ✓ tests/protocol.test.ts > strict validation > request with an unknown context field
+ ✓ tests/protocol.test.ts > strict validation > request with a non-object context
+ ✓ tests/protocol.test.ts > strict validation > request with a context field on the envelope
+ ✓ tests/protocol.test.ts > strict validation > request with an absolute batch path
+ ✓ tests/protocol.test.ts > strict validation > request with an unknown batch file field
+ ✓ tests/protocol.test.ts > strict validation > requires a well-formed transform reference and safe relative roots on the wire
+ ✓ tests/protocol.test.ts > strict validation > selector with a rule
+ ✓ tests/protocol.test.ts > strict validation > selector with a rule with constraints and utils
+ ✓ tests/protocol.test.ts > strict validation > selector with no rule
+ ✓ tests/protocol.test.ts > strict validation > selector with an empty rule
+ ✓ tests/protocol.test.ts > strict validation > selector with a string rule
+ ✓ tests/protocol.test.ts > strict validation > selector with an id
+ ✓ tests/protocol.test.ts > strict validation > selector with a language
+ ✓ tests/protocol.test.ts > strict validation > selector with a fix
+ ✓ tests/protocol.test.ts > strict validation > selector with non-JSON data
+ ✓ tests/protocol.test.ts > strict validation > selector with a non-object
+ ✓ tests/protocol.test.ts > strict validation > validates batch outcomes including every returned path
+ ✓ tests/protocol.test.ts > strict validation > completion with an unknown protocol version
+ ✓ tests/protocol.test.ts > strict validation > completion with an unknown status
+ ✓ tests/protocol.test.ts > strict validation > completion with structured error details
+ ✓ tests/protocol.test.ts > strict validation > completion with an unknown error field
+ ✓ tests/protocol.test.ts > strict validation > completion with an unknown envelope field
+ ✓ tests/protocol.test.ts > strict validation > completion with success without output
+ ✓ tests/protocol.test.ts > strict validation > completion with success with an error
+ ✓ tests/protocol.test.ts > strict validation > completion with failure without an error
+ ✓ tests/protocol.test.ts > strict validation > completion with a non-integer exit code
+ ✓ tests/protocol.test.ts > strict validation > reports invalid completion text
+
+ Test Files  1 passed (1)
+      Tests  36 passed (36)
+   Start at  02:36:24
+   Duration  749ms (transform 345ms, setup 0ms, collect 451ms, tests 9ms, environment 0ms, prepare 68ms)
+

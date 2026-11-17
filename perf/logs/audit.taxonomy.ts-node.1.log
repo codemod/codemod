@@ -1,0 +1,63 @@
+[
+  [],
+  [],
+  [],
+  [],
+  [],
+  [],
+  [],
+  [
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ]
+  ],
+  [],
+  [],
+  [],
+  [],
+  [],
+  []
+]

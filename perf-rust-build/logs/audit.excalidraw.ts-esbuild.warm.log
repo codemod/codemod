@@ -1,0 +1,458 @@
+[
+  [
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "li"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ]
+  ],
+  [],
+  [
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ]
+  ],
+  [],
+  [
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      },
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      },
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ]
+  ],
+  [],
+  [],
+  [
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "index-in-expression"
+        }
+      }
+    ]
+  ],
+  [],
+  [
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "11+"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "0"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "0"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "0"
+        }
+      }
+    ]
+  ],
+  [],
+  [],
+  [
+    [
+      {
+        "metric": "unsanitized-inner-html",
+        "dims": {
+          "source": "variable"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "unstable-context-value",
+        "dims": {
+          "shape": "object",
+          "via": "inline",
+          "wraps": "inline-tree"
+        }
+      }
+    ]
+  ]
+]

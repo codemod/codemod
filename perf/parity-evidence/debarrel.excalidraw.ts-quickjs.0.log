@@ -1,0 +1,10 @@
+command 'debarrel' failed: JSSG failed for 'dev-docs/src/components/Highlight.js': Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/excalidraw__excalidraw/dev-docs/src/components/Highlight.js': Unexpected JSX expression
+    at codemod (jssg-artifact:de3d214c298ff24de6c43ac684c0b25a7366bde4af2b2c213d03aa941ac3c33b/debarrel.jssg.js:1351:32)
+    at <anonymous> (codemod-workflow-bundle.mjs:3959:54)
+    at exclusive (codemod-workflow-bundle.mjs:3937:14)
+    at call (codemod-workflow-bundle.mjs:3956:43)
+    at <anonymous> (codemod-workflow-bundle.mjs:3892:36)
+    at next (native)
+    at fulfilled (codemod-workflow-bundle.mjs:35:29)
+    at call (native)
+    at <anonymous> (codemod-workflow-bundle.mjs:3722:24)

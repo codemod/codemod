@@ -1,0 +1,1784 @@
+From c3e63fc2f4b7c5521a5af269fd40f6c55ee9a91b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 00:38:29 +0000
+Subject: [PATCH] feat(orchestration): transform worker pool and per-file error
+ skip
+
+Before: every jssg step ran its transforms one file at a time on one
+thread, so heavy codemods took about twice as long as the YAML engine;
+one bad file failed the whole step; and the node runtime kept every
+parsed tree of a step alive until it ended (1.2 GB on debarrel).
+
+After: batches of 64 files or more run on a pool of worker threads in
+both runtimes (node: worker_threads over the shared BatchPlan; quickjs:
+one QuickJS context per thread in the host), sized by
+CODEMOD_JSSG_WORKERS or the core count capped at 4. A file whose
+transform throws or returns an invalid result is skipped and reported on
+stderr, as the YAML engine does; `onFileError: "fail"` restores the old
+behaviour. The node runtime yields to the event loop before each
+transform so addon finalizers run and trees are freed as it goes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/jssg-napi/src/batch.rs                 |  44 ++-
+ crates/jssg-napi/src/lib.rs                   |  61 +++-
+ crates/orchestration-quickjs-host/src/jssg.rs | 101 ++++--
+ crates/orchestration-quickjs-host/src/lib.rs  |   3 +
+ .../orchestration-quickjs-host/src/native.rs  |  15 +-
+ crates/orchestration-quickjs-host/src/pool.rs | 303 ++++++++++++++++++
+ packages/jssg-napi/index.d.ts                 |  10 +-
+ packages/jssg-napi/index.js                   |   4 +
+ packages/jssg-napi/package.json               |   4 +
+ packages/jssg-napi/pool.d.ts                  |  20 ++
+ packages/jssg-napi/pool.js                    | 105 ++++++
+ packages/jssg-napi/worker.js                  |  74 +++++
+ .../orchestration/src/authoring/runnable.ts   |   4 +
+ packages/orchestration/src/core/protocol.ts   |  15 +-
+ .../orchestration/src/execution/jssg-batch.ts | 104 ++++--
+ packages/orchestration/src/execution/jssg.ts  |  14 +-
+ .../src/host/quickjs/dispatch.ts              |  27 +-
+ .../orchestration/src/host/quickjs/native.ts  |  15 +
+ .../src/host/runtimes/node-jssg.ts            |  38 ++-
+ packages/orchestration/src/portable.ts        |   1 +
+ .../tests/fixtures/jssg/transforms.ts         |   2 +
+ .../tests/fixtures/parity/transforms.ts       |  18 +-
+ .../tests/fixtures/parity/workflow.ts         |   3 +-
+ .../orchestration/tests/jssg-batch.test.ts    | 100 ++++++
+ .../tests/jssg-parity.e2e.test.ts             |  35 +-
+ .../tests/node-runtime.e2e.test.ts            |   3 +
+ 26 files changed, 1051 insertions(+), 72 deletions(-)
+ create mode 100644 crates/orchestration-quickjs-host/src/pool.rs
+ create mode 100644 packages/jssg-napi/pool.d.ts
+ create mode 100644 packages/jssg-napi/pool.js
+ create mode 100644 packages/jssg-napi/worker.js
+ create mode 100644 packages/orchestration/tests/jssg-batch.test.ts
+
+diff --git a/crates/jssg-napi/src/batch.rs b/crates/jssg-napi/src/batch.rs
+index 27787e38..8dd6dd81 100644
+--- a/crates/jssg-napi/src/batch.rs
++++ b/crates/jssg-napi/src/batch.rs
+@@ -18,7 +18,9 @@
+ //! `extract_transform_output` / `JsValue::from_js`; every rule after that is
+ //! shared Rust.
+ 
+-use std::sync::Arc;
++use std::collections::HashMap;
++use std::sync::atomic::{AtomicU32, Ordering};
++use std::sync::{Arc, LazyLock, Mutex};
+ 
+ use codemod_sandbox::sandbox::engine::{
+     classify_transform_result, missing_output_error, output_json_error, CodemodOutput,
+@@ -45,6 +47,11 @@ pub struct JssgBatch {
+     plan: Arc<BatchPlan>,
+ }
+ 
++/// Plans published with `share()`, so the worker threads of a transform
++/// pool run the same batch (and its workspace index) without planning it again.
++static SHARED: LazyLock<Mutex<HashMap<u32, Arc<BatchPlan>>>> = LazyLock::new(Default::default);
++static NEXT_SHARED: AtomicU32 = AtomicU32::new(1);
++
+ #[napi]
+ impl JssgBatch {
+     /// Plan a batch from its JSON config (`jssg_batch::BatchConfig`) and the
+@@ -66,6 +73,36 @@ impl JssgBatch {
+         })
+     }
+ 
++    /// Publish this batch to the other threads of this process; `attach(id)`
++    /// opens it there until `unshare(id)`.
++    #[napi]
++    pub fn share(&self) -> u32 {
++        let id = NEXT_SHARED.fetch_add(1, Ordering::Relaxed);
++        if let Ok(mut shared) = SHARED.lock() {
++            shared.insert(id, Arc::clone(&self.plan));
++        }
++        id
++    }
++
++    /// The batch another thread published with `share()`.
++    #[napi(factory)]
++    pub fn attach(id: u32) -> Result<Self> {
++        let plan = SHARED
++            .lock()
++            .ok()
++            .and_then(|shared| shared.get(&id).cloned())
++            .ok_or_else(|| Error::from_reason(format!("no shared JSSG batch {id}")))?;
++        Ok(Self { plan })
++    }
++
++    /// Stop publishing batch `id` (attached copies keep working).
++    #[napi]
++    pub fn unshare(id: u32) {
++        if let Ok(mut shared) = SHARED.lock() {
++            shared.remove(&id);
++        }
++    }
++
+     /// Virtual module name of the artifact (`<name>.jssg.js`).
+     #[napi(getter)]
+     pub fn module(&self) -> String {
+@@ -275,10 +312,11 @@ impl Task for ParseChunk {
+         Ok(roots)
+     }
+ 
+-    fn resolve(&mut self, _env: Env, output: Self::Output) -> Result<Self::JsValue> {
++    fn resolve(&mut self, env: Env, output: Self::Output) -> Result<Self::JsValue> {
+         Ok(output
+             .into_iter()
+-            .map(|root| root.map(SgRoot::from_core))
++            .zip(&self.contents)
++            .map(|(root, content)| root.map(|root| SgRoot::tracked(&env, root, content.len())))
+             .collect())
+     }
+ }
+diff --git a/crates/jssg-napi/src/lib.rs b/crates/jssg-napi/src/lib.rs
+index 864f56c5..b330a634 100644
+--- a/crates/jssg-napi/src/lib.rs
++++ b/crates/jssg-napi/src/lib.rs
+@@ -184,24 +184,26 @@ pub fn engine_parse_with_path(
+ // ---------------------------------------------------------------------------
+ 
+ #[napi]
+-pub fn parse(lang: String, src: String) -> Result<SgRoot> {
++pub fn parse(env: Env, lang: String, src: String) -> Result<SgRoot> {
++    let len = src.len();
+     CoreRoot::parse(&lang, src, None, None)
+-        .map(SgRoot::from_core)
++        .map(|core| SgRoot::tracked(&env, core, len))
+         .map_err(|e| Error::from_reason(format!("Failed to parse: {e}")))
+ }
+ 
+ /// Synchronous, like the QuickJS facade (natively there is nothing to await).
+ #[napi(js_name = "parseAsync")]
+-pub fn parse_async(lang: String, src: String) -> Result<SgRoot> {
+-    parse(lang, src)
++pub fn parse_async(env: Env, lang: String, src: String) -> Result<SgRoot> {
++    parse(env, lang, src)
+ }
+ 
+ #[napi(js_name = "parseFile")]
+-pub fn parse_file(lang: String, file_path: String) -> Result<SgRoot> {
++pub fn parse_file(env: Env, lang: String, file_path: String) -> Result<SgRoot> {
+     let content = std::fs::read_to_string(&file_path)
+         .map_err(|e| Error::from_reason(format!("Failed to read file: {e}")))?;
++    let len = content.len();
+     CoreRoot::parse(&lang, content, Some(file_path), None)
+-        .map(SgRoot::from_core)
++        .map(|core| SgRoot::tracked(&env, core, len))
+         .map_err(|e| Error::from_reason(format!("Failed to parse: {e}")))
+ }
+ 
+@@ -273,14 +275,40 @@ pub struct FileReferences {
+ // SgRoot
+ // ---------------------------------------------------------------------------
+ 
+-#[napi]
++#[napi(custom_finalize)]
+ pub struct SgRoot {
+     core: CoreRoot,
++    /// Bytes reported to V8 as external memory (`Env::adjust_external_memory`).
++    external: i64,
+ }
+ 
++/// Roughly what a parsed tree costs per source byte. V8 cannot see the tree,
++/// so without this a batch's dead roots pile up until the heap itself fills.
++const TREE_BYTES_PER_SOURCE_BYTE: i64 = 32;
++
+ impl SgRoot {
+     fn from_core(core: CoreRoot) -> Self {
+-        SgRoot { core }
++        SgRoot { core, external: 0 }
++    }
++
++    /// A root whose tree V8 accounts for, so garbage collection keeps pace with parsing.
++    pub(crate) fn tracked(env: &Env, core: CoreRoot, source_len: usize) -> Self {
++        let external = (source_len as i64).saturating_mul(TREE_BYTES_PER_SOURCE_BYTE);
++        let external = if env.adjust_external_memory(external).is_ok() {
++            external
++        } else {
++            0
++        };
++        SgRoot { core, external }
++    }
++}
++
++impl ObjectFinalize for SgRoot {
++    fn finalize(self, env: Env) -> Result<()> {
++        if self.external != 0 {
++            env.adjust_external_memory(-self.external)?;
++        }
++        Ok(())
+     }
+ }
+ 
+@@ -626,10 +654,14 @@ impl SgNode {
+         Ok(request
+             .definition(DefinitionOptions { resolve_external })
+             .map_err(|e| core_error(&env, e))?
+-            .map(|def| Definition {
+-                node: SgNode::from_core(def.node),
+-                root: SgRoot::from_core(def.root),
+-                kind: def.kind.to_string(),
++            .map(|def| {
++                // The definition's file is parsed for this lookup: account for its tree too.
++                let source_len = def.root.root_text().len();
++                Definition {
++                    node: SgNode::from_core(def.node),
++                    root: SgRoot::tracked(&env, def.root, source_len),
++                    kind: def.kind.to_string(),
++                }
+             }))
+     }
+ 
+@@ -646,7 +678,10 @@ impl SgNode {
+             .into_iter()
+             .map(|file| {
+                 file.map(|file| FileReferences {
+-                    root: SgRoot::from_core(file.root),
++                    root: {
++                        let source_len = file.root.root_text().len();
++                        SgRoot::tracked(&env, file.root, source_len)
++                    },
+                     nodes: file
+                         .nodes
+                         .into_iter()
+diff --git a/crates/orchestration-quickjs-host/src/jssg.rs b/crates/orchestration-quickjs-host/src/jssg.rs
+index 3c515170..78fb267f 100644
+--- a/crates/orchestration-quickjs-host/src/jssg.rs
++++ b/crates/orchestration-quickjs-host/src/jssg.rs
+@@ -22,10 +22,15 @@
+ //!   `FileOutcome` JSON of the shared rules (`undefined` when it
+ //!   has no edits and no output)
+ //!   (`embedded::transform_output` then [`BatchPlan::finish`]);
+-//! - `jssgEnd(batch)`.
++//! - `jssgEnd(batch)`;
++//! - `jssgPoolSize()` / `jssgTransformRange(batch, specifier, source, start,
++//!   paths, contents)`: whole chunks parsed, transformed, and converted on
++//!   the transform pool ([`crate::pool`]), each worker with its own context,
++//!   as JSON (`{ outcome } | { error }` per file).
+ 
+ use std::collections::HashMap;
+ use std::rc::Rc;
++use std::sync::Arc;
+ 
+ use bench_timings::Phase;
+ use codemod_sandbox::sandbox::engine::embedded::{
+@@ -33,12 +38,13 @@ use codemod_sandbox::sandbox::engine::embedded::{
+ };
+ use codemod_sandbox::sandbox::engine::FileChange;
+ use jssg_batch::{BatchConfig, BatchPlan, Containment};
+-use rquickjs::{Ctx, Function, Object, Value};
++use rquickjs::{Ctx, Function, Object, Promise, Value};
+ 
+-use crate::native::{throw, HostState};
++use crate::native::{error_value, throw, HostState};
++use crate::pool::{self, Job};
+ 
+ pub struct OpenBatch {
+-    plan: BatchPlan,
++    plan: Arc<BatchPlan>,
+     /// What each finished transform call staged, until `jssgFinish`.
+     staged: HashMap<u32, Vec<FileChange>>,
+ }
+@@ -89,7 +95,7 @@ pub fn install<'js>(
+                     state.batches.borrow_mut().insert(
+                         id,
+                         OpenBatch {
+-                            plan,
++                            plan: Arc::new(plan),
+                             staged: HashMap::new(),
+                         },
+                     );
+@@ -194,29 +200,60 @@ pub fn install<'js>(
+                 move |ctx: Ctx<'js>, id: u32, index: u32, root: Value<'js>, result: Value<'js>| {
+                     // Benchmark timings: the JS loop times this call as `convert`.
+                     let text = with_batch(&ctx, &state, id, |batch| {
+-                        let core = core_root(&root).ok_or_else(|| {
+-                            throw(&ctx, None, &format!("file {index} has no SgRoot"))
+-                        })?;
+                         let staged = batch.staged.remove(&index).unwrap_or_default();
+-                        let output = transform_output(&ctx, &core, result, staged)
+-                            .map_err(|error| error.to_string());
+-                        let outcome = batch
+-                            .plan
+-                            .finish(index as usize, output)
+-                            .map_err(|error| throw(&ctx, None, &error))?;
+-                        // No edits, no output: `undefined` (the loop builds `{ path, edits: [] }`).
+-                        if outcome.edits.is_empty() && outcome.output.is_none() {
+-                            return Ok(None);
+-                        }
+-                        serde_json::to_string(&outcome)
+-                            .map(Some)
+-                            .map_err(|error| throw(&ctx, None, &error.to_string()))
++                        finish_text(&ctx, &batch.plan, index, &root, result, staged)
++                            .map_err(|error| throw(&ctx, None, &error))
+                     })?;
+                     Ok::<_, rquickjs::Error>(text)
+                 },
+             )?,
+         )?;
+     }
++    native.set("jssgPoolSize", Function::new(ctx.clone(), pool::size)?)?;
++    {
++        let state = Rc::clone(&state);
++        native.set(
++            "jssgTransformRange",
++            Function::new(
++                ctx.clone(),
++                move |ctx: Ctx<'js>,
++                      id: u32,
++                      specifier: String,
++                      source: String,
++                      start: u32,
++                      paths: Vec<String>,
++                      contents: Vec<String>|
++                      -> rquickjs::Result<Promise<'js>> {
++                    let plan = with_batch(&ctx, &state, id, |batch| Ok(Arc::clone(&batch.plan)))?;
++                    let (reply, replied) = tokio::sync::oneshot::channel();
++                    state.pool().run(Job {
++                        plan,
++                        specifier,
++                        source,
++                        start: start as usize,
++                        paths,
++                        contents,
++                        reply,
++                    });
++                    let (promise, resolve, reject) = Promise::new(&ctx)?;
++                    let ctx2 = ctx.clone();
++                    ctx.spawn(async move {
++                        let settled = match replied.await {
++                            Ok(Ok(text)) => resolve.call::<_, ()>((text,)),
++                            Ok(Err(message)) => error_value(&ctx2, None, &message)
++                                .and_then(|error| reject.call::<_, ()>((error,))),
++                            Err(_) => error_value(&ctx2, None, "a JSSG transform worker stopped")
++                                .and_then(|error| reject.call::<_, ()>((error,))),
++                        };
++                        if settled.is_err() {
++                            let _ = ctx2.catch();
++                        }
++                    });
++                    Ok(promise)
++                },
++            )?,
++        )?;
++    }
+     native.set(
+         "jssgEnd",
+         Function::new(ctx.clone(), move |id: u32| {
+@@ -225,3 +262,25 @@ pub fn install<'js>(
+     )?;
+     Ok(())
+ }
++
++/// The awaited `result` of file `index`'s transform on `root`, with what the
++/// call staged, as `FileOutcome` JSON (`None`: no edits and no output; the
++/// caller builds `{ path, edits: [] }`); the error names the file.
++pub(crate) fn finish_text<'js>(
++    ctx: &Ctx<'js>,
++    plan: &BatchPlan,
++    index: u32,
++    root: &Value<'js>,
++    result: Value<'js>,
++    staged: Vec<FileChange>,
++) -> Result<Option<String>, String> {
++    let core = core_root(root).ok_or_else(|| format!("file {index} has no SgRoot"))?;
++    let output = transform_output(ctx, &core, result, staged).map_err(|error| error.to_string());
++    let outcome = plan.finish(index as usize, output)?;
++    if outcome.edits.is_empty() && outcome.output.is_none() {
++        return Ok(None);
++    }
++    serde_json::to_string(&outcome)
++        .map(Some)
++        .map_err(|error| error.to_string())
++}
+diff --git a/crates/orchestration-quickjs-host/src/lib.rs b/crates/orchestration-quickjs-host/src/lib.rs
+index 63ec34a4..90902b2b 100644
+--- a/crates/orchestration-quickjs-host/src/lib.rs
++++ b/crates/orchestration-quickjs-host/src/lib.rs
+@@ -36,6 +36,7 @@ pub mod http;
+ pub mod jssg;
+ pub mod modules;
+ pub mod native;
++pub mod pool;
+ pub mod select;
+ mod utf8;
+ 
+@@ -109,6 +110,8 @@ async fn run_async(options: HostOptions, started: Instant) -> Result<HostOutcome
+             batches: RefCell::default(),
+             children: RefCell::default(),
+             next_id: Default::default(),
++            target: target.clone(),
++            pool: RefCell::default(),
+         });
+         native::install(&ctx, state).map_err(|error| format!("failed to install host: {error}"))?;
+         bench_timings::stop(Phase::Boot, boot);
+diff --git a/crates/orchestration-quickjs-host/src/native.rs b/crates/orchestration-quickjs-host/src/native.rs
+index 486bab73..292965d7 100644
+--- a/crates/orchestration-quickjs-host/src/native.rs
++++ b/crates/orchestration-quickjs-host/src/native.rs
+@@ -14,6 +14,7 @@ use std::fs;
+ use std::io::{self, Read, Write};
+ use std::os::unix::fs::OpenOptionsExt;
+ use std::os::unix::process::{CommandExt, ExitStatusExt};
++use std::path::PathBuf;
+ use std::process::{Command, Stdio};
+ use std::rc::Rc;
+ use std::thread::JoinHandle;
+@@ -38,9 +39,21 @@ pub struct HostState {
+     /// Live children by spawn id: their process id (= process group id).
+     pub children: RefCell<HashMap<u32, u32>>,
+     pub next_id: Cell<u32>,
++    /// Repository root, as each transform pool worker's target directory.
++    pub target: PathBuf,
++    /// The transform pool, started by the first `jssgTransformRange`.
++    pub pool: RefCell<Option<Rc<crate::pool::Pool>>>,
+ }
+ 
+ impl HostState {
++    pub fn pool(&self) -> Rc<crate::pool::Pool> {
++        Rc::clone(
++            self.pool
++                .borrow_mut()
++                .get_or_insert_with(|| Rc::new(crate::pool::Pool::new(self.target.clone()))),
++        )
++    }
++
+     pub fn next_id(&self) -> u32 {
+         let id = self.next_id.get() + 1;
+         self.next_id.set(id);
+@@ -56,7 +69,7 @@ pub fn throw<'js>(ctx: &Ctx<'js>, code: Option<&str>, message: &str) -> rquickjs
+     }
+ }
+ 
+-fn error_value<'js>(
++pub(crate) fn error_value<'js>(
+     ctx: &Ctx<'js>,
+     code: Option<&str>,
+     message: &str,
+diff --git a/crates/orchestration-quickjs-host/src/pool.rs b/crates/orchestration-quickjs-host/src/pool.rs
+new file mode 100644
+index 00000000..245dae6d
+--- /dev/null
++++ b/crates/orchestration-quickjs-host/src/pool.rs
+@@ -0,0 +1,303 @@
++//! The transform pool: threads that each own a QuickJS runtime and context
++//! (`codemod:ast-grep` and the other transform built-ins, no orchestration
++//! primitives) and run whole chunks of a batch the bundle's context planned
++//! (`jssgTransformRange`). A worker parses each file with the shared
++//! [`BatchPlan`], calls the transform, and converts the result exactly as
++//! the in-context loop does (`execution/jssg-batch.ts`), replying with JSON:
++//! `{ "results": [{ "outcome": FileOutcome } | { "error": "JSSG failed for
++//! '<path>': ..." }] }`, or an error when the chunk cannot run at all (the
++//! module does not load, a file does not parse).
++//!
++//! Each worker evaluates an artifact once, so module-level state is per
++//! worker.
++
++use std::cell::RefCell;
++use std::collections::HashMap;
++use std::path::PathBuf;
++use std::rc::Rc;
++use std::sync::mpsc::{channel, Receiver, Sender};
++use std::sync::{Arc, Mutex};
++
++use codemod_sandbox::sandbox::engine::embedded::{
++    begin_call, configure_runtime, end_call, install_context, root_value,
++};
++use codemod_sandbox::sandbox::engine::FileChange;
++use jssg_batch::BatchPlan;
++use rquickjs::{
++    async_with, AsyncContext, AsyncRuntime, CatchResultExt, Ctx, Function, Object, Promise, Value,
++};
++use tokio::sync::oneshot;
++
++use crate::jssg::finish_text;
++use crate::modules::ModuleRegistry;
++use crate::native::throw;
++
++/// One chunk: files `start ..< start + contents.len()` of `plan`.
++pub struct Job {
++    pub plan: Arc<BatchPlan>,
++    pub specifier: String,
++    pub source: String,
++    pub start: usize,
++    pub paths: Vec<String>,
++    pub contents: Vec<String>,
++    pub reply: oneshot::Sender<Result<String, String>>,
++}
++
++pub struct Pool {
++    jobs: Sender<Job>,
++}
++
++/// Workers per run: `CODEMOD_JSSG_WORKERS`, else the core count capped at 4
++/// (as the `node` runtime's pool).
++pub fn size() -> usize {
++    std::env::var("CODEMOD_JSSG_WORKERS")
++        .ok()
++        .and_then(|value| value.parse::<usize>().ok())
++        .filter(|&workers| workers >= 1)
++        .unwrap_or_else(|| {
++            std::thread::available_parallelism()
++                .map(|cores| cores.get().min(4))
++                .unwrap_or(1)
++        })
++}
++
++impl Pool {
++    pub fn new(target: PathBuf) -> Self {
++        let (jobs, queue) = channel::<Job>();
++        let queue = Arc::new(Mutex::new(queue));
++        for _ in 0..size() {
++            let queue = Arc::clone(&queue);
++            let target = target.clone();
++            std::thread::spawn(move || work(target, queue));
++        }
++        Self { jobs }
++    }
++
++    pub fn run(&self, job: Job) {
++        if let Err(error) = self.jobs.send(job) {
++            let _ = error
++                .0
++                .reply
++                .send(Err("the JSSG transform pool stopped".to_string()));
++        }
++    }
++}
++
++/// The chunk loop, evaluated once in every worker context.
++const DRIVER: &str = r#"
++const describe = (error) => {
++  if (!(error instanceof Error)) return String(error);
++  const head = `${error.name}: ${error.message}`;
++  const stack = error.stack?.trimEnd();
++  if (stack === undefined || stack === "") return head;
++  return stack.startsWith(head) ? stack : `${head}\n${stack}`;
++};
++const modules = new Map();
++globalThis.__codemodRunChunk = async (worker, specifier, start, paths, contents) => {
++  let transform;
++  try {
++    let loaded = modules.get(specifier);
++    if (loaded === undefined) {
++      loaded = import(specifier).then((namespace) => namespace.default);
++      modules.set(specifier, loaded);
++    }
++    transform = await loaded;
++    if (typeof transform !== "function") {
++      throw new Error(`jssg codemod modules must export a function. ${typeof transform} found.`);
++    }
++  } catch (error) {
++    return JSON.stringify({ fatal: `JSSG failed for '${paths[0]}': ${describe(error)}` });
++  }
++  const results = [];
++  for (let offset = 0; offset < contents.length; offset++) {
++    const index = start + offset;
++    const path = paths[offset];
++    let root;
++    try {
++      root = worker.parse(index, contents[offset]);
++    } catch (error) {
++      return JSON.stringify({ fatal: error instanceof Error ? error.message : String(error) });
++    }
++    if (root === null) {
++      results.push({ outcome: { path, edits: [] } });
++      continue;
++    }
++    let result;
++    try {
++      const options = worker.begin();
++      try {
++        result = await transform(root, options);
++      } finally {
++        worker.end(index);
++      }
++    } catch (error) {
++      results.push({ error: `JSSG failed for '${path}': ${describe(error)}` });
++      continue;
++    }
++    try {
++      const outcome = worker.finish(index, root, result);
++      results.push({ outcome: outcome === undefined ? { path, edits: [] } : JSON.parse(outcome) });
++    } catch (error) {
++      results.push({ error: error instanceof Error ? error.message : String(error) });
++    }
++  }
++  return JSON.stringify({ results });
++};
++"#;
++
++/// The batch a worker is running a chunk of, and what each call staged.
++#[derive(Default)]
++struct Current {
++    plan: Option<Arc<BatchPlan>>,
++    staged: HashMap<u32, Vec<FileChange>>,
++}
++
++fn work(target: PathBuf, queue: Arc<Mutex<Receiver<Job>>>) {
++    let next = || queue.lock().ok().and_then(|queue| queue.recv().ok());
++    let runtime = match tokio::runtime::Builder::new_current_thread()
++        .enable_all()
++        .build()
++    {
++        Ok(runtime) => runtime,
++        Err(error) => {
++            while let Some(job) = next() {
++                let _ = job
++                    .reply
++                    .send(Err(format!("JSSG transform worker: {error}")));
++            }
++            return;
++        }
++    };
++    runtime.block_on(async move {
++        let started: Result<(AsyncRuntime, AsyncContext, ModuleRegistry), String> = async {
++            let runtime = AsyncRuntime::new().map_err(|error| format!("QuickJS runtime: {error}"))?;
++            let registry = ModuleRegistry::default();
++            let globals = configure_runtime(&runtime, registry.resolver(), registry.loader()).await;
++            let context = AsyncContext::full(&runtime)
++                .await
++                .map_err(|error| format!("QuickJS context: {error}"))?;
++            let installed: Result<(), String> = async_with!(context => |ctx| {
++                install_context(&ctx, globals, &target).map_err(|error| error.to_string())?;
++                ctx.eval::<(), _>(DRIVER).catch(&ctx).map_err(|error| error.to_string())
++            })
++            .await;
++            installed.map(|()| (runtime, context, registry))
++        }
++        .await;
++        let (_runtime, context, registry) = match started {
++            Ok(started) => started,
++            Err(error) => {
++                while let Some(job) = next() {
++                    let _ = job.reply.send(Err(format!("JSSG transform worker: {error}")));
++                }
++                return;
++            }
++        };
++        let current = Rc::new(RefCell::new(Current::default()));
++        while let Some(job) = next() {
++            registry.register(job.specifier.clone(), job.source);
++            current.borrow_mut().plan = Some(job.plan);
++            let chunk_current = Rc::clone(&current);
++            let (specifier, start, paths, contents) =
++                (job.specifier, job.start, job.paths, job.contents);
++            let reply: Result<String, String> = async_with!(context => |ctx| {
++                let run = async {
++                    let worker = worker_object(&ctx, chunk_current)?;
++                    let chunk: Function = ctx.globals().get("__codemodRunChunk")?;
++                    let pending: Promise = chunk.call((worker, specifier, start as u32, paths, contents))?;
++                    pending.into_future::<String>().await
++                };
++                run.await.catch(&ctx).map_err(|error| error.to_string())
++            })
++            .await;
++            {
++                let mut current = current.borrow_mut();
++                current.plan = None;
++                current.staged.clear();
++            }
++            let reply = reply.and_then(|text| match serde_json::from_str::<serde_json::Value>(&text) {
++                Ok(serde_json::Value::Object(reply)) if reply.contains_key("fatal") => Err(reply
++                    .get("fatal")
++                    .and_then(serde_json::Value::as_str)
++                    .unwrap_or("JSSG transform worker failed")
++                    .to_string()),
++                _ => Ok(text),
++            });
++            let _ = job.reply.send(reply);
++        }
++        drop(context);
++    });
++}
++
++/// `{ parse, begin, end, finish }` over the worker's current batch.
++fn worker_object<'js>(
++    ctx: &Ctx<'js>,
++    current: Rc<RefCell<Current>>,
++) -> rquickjs::Result<Object<'js>> {
++    let plan = |ctx: &Ctx<'js>, current: &RefCell<Current>| {
++        current
++            .borrow()
++            .plan
++            .clone()
++            .ok_or_else(|| throw(ctx, None, "no JSSG batch on this worker"))
++    };
++    let worker = Object::new(ctx.clone())?;
++    {
++        let current = Rc::clone(&current);
++        worker.set(
++            "parse",
++            Function::new(
++                ctx.clone(),
++                move |ctx: Ctx<'js>, index: u32, content: String| {
++                    let plan = plan(&ctx, &current)?;
++                    match plan
++                        .parse(index as usize, &content)
++                        .map_err(|error| throw(&ctx, None, &error))?
++                    {
++                        None => Ok(Value::new_null(ctx.clone())),
++                        Some(root) => root_value(&ctx, root)
++                            .map_err(|error| throw(&ctx, None, &error.to_string())),
++                    }
++                },
++            )?,
++        )?;
++    }
++    {
++        let current = Rc::clone(&current);
++        worker.set(
++            "begin",
++            Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
++                let plan = plan(&ctx, &current)?;
++                begin_call(&ctx, plan.language, plan.params.clone().unwrap_or_default())
++                    .map_err(|error| throw(&ctx, None, &error.to_string()))
++            })?,
++        )?;
++    }
++    {
++        let current = Rc::clone(&current);
++        worker.set(
++            "end",
++            Function::new(ctx.clone(), move |ctx: Ctx<'js>, index: u32| {
++                let staged = end_call(&ctx);
++                current.borrow_mut().staged.insert(index, staged);
++            })?,
++        )?;
++    }
++    worker.set(
++        "finish",
++        Function::new(
++            ctx.clone(),
++            move |ctx: Ctx<'js>, index: u32, root: Value<'js>, result: Value<'js>| {
++                let plan = plan(&ctx, &current)?;
++                let staged = current
++                    .borrow_mut()
++                    .staged
++                    .remove(&index)
++                    .unwrap_or_default();
++                finish_text(&ctx, &plan, index, &root, result, staged)
++                    .map_err(|error| throw(&ctx, None, &error))
++            },
++        )?,
++    )?;
++    Ok(worker)
++}
+diff --git a/packages/jssg-napi/index.d.ts b/packages/jssg-napi/index.d.ts
+index 24d22bd0..589a49ff 100644
+--- a/packages/jssg-napi/index.d.ts
++++ b/packages/jssg-napi/index.d.ts
+@@ -27,6 +27,8 @@ export interface JssgBatch {
+   index(start: number, contents: string[]): Promise<void>;
+   /** Roots of files `start ..< start + contents.length`, parsed off-thread; `null` where the selector skips. */
+   parse(start: number, contents: string[]): Promise<(NativeRoot | null)[]>;
++  /** Publish this batch to the other threads of this process; `JssgBatch.attach(id)` opens it there. */
++  share(): number;
+   /** A fresh transform `options` object. */
+   options(): {
+     params: Record<string, unknown>;
+@@ -53,7 +55,13 @@ export interface Binding {
+   SgRoot: abstract new () => NativeRoot;
+   SgNode: abstract new () => object;
+   /** `config`: JSON of `jssg_batch::BatchConfig`; `paths`: root-relative file paths. */
+-  JssgBatch: new (config: string, paths: string[]) => JssgBatch;
++  JssgBatch: {
++    new (config: string, paths: string[]): JssgBatch;
++    /** The batch another thread published with `share()`. */
++    attach(id: number): JssgBatch;
++    /** Stop publishing batch `id`. */
++    unshare(id: number): void;
++  };
+   parse(language: string, source: string): NativeRoot;
+   parseAsync(language: string, source: string): NativeRoot;
+   parseFile(language: string, path: string): NativeRoot;
+diff --git a/packages/jssg-napi/index.js b/packages/jssg-napi/index.js
+index d08c1609..9c40008f 100644
+--- a/packages/jssg-napi/index.js
++++ b/packages/jssg-napi/index.js
+@@ -58,6 +58,10 @@ export async function runTransform(targetDir, params, call) {
+     release = resolve;
+   });
+   await previous;
++  // Node runs the finalizers of collected addon objects (nodes, roots and
++  // their trees) only on a macrotask; a batch loop that awaits nothing but
++  // microtasks would hold every tree of the batch until it ends.
++  await new Promise((resolve) => setImmediate(resolve));
+   const native = loadBinding();
+   native.engineBegin(targetDir);
+   current = { targetDir, params };
+diff --git a/packages/jssg-napi/package.json b/packages/jssg-napi/package.json
+index c125938e..3cf2b953 100644
+--- a/packages/jssg-napi/package.json
++++ b/packages/jssg-napi/package.json
+@@ -17,6 +17,10 @@
+     "./loader": {
+       "types": "./loader.d.ts",
+       "default": "./loader.js"
++    },
++    "./pool": {
++      "types": "./pool.d.ts",
++      "default": "./pool.js"
+     }
+   },
+   "scripts": {
+diff --git a/packages/jssg-napi/pool.d.ts b/packages/jssg-napi/pool.d.ts
+new file mode 100644
+index 00000000..0742dd68
+--- /dev/null
++++ b/packages/jssg-napi/pool.d.ts
+@@ -0,0 +1,20 @@
++export interface TransformChunk {
++  batchId: number;
++  runId: string;
++  artifact: { name: string; hash: string; source: string };
++  start: number;
++  paths: string[];
++  contents: string[];
++}
++
++/** One file of a chunk: its `FileOutcome`, or the `JSSG failed for '<path>': ...` message. */
++export type ChunkResult = { outcome: unknown } | { error: string };
++
++export interface TransformPool {
++  readonly size: number;
++  run(chunk: TransformChunk): Promise<ChunkResult[]>;
++  close(): Promise<void>;
++}
++
++export function poolSize(env?: Record<string, string | undefined>): number;
++export function createTransformPool(size?: number): TransformPool;
+diff --git a/packages/jssg-napi/pool.js b/packages/jssg-napi/pool.js
+new file mode 100644
+index 00000000..151d54b5
+--- /dev/null
++++ b/packages/jssg-napi/pool.js
+@@ -0,0 +1,105 @@
++/**
++ * A pool of worker threads that run JSSG transforms (`./worker.js`), so a
++ * batch uses every core instead of one JS thread. The main thread plans the
++ * batch and builds any workspace index; workers attach to it by id
++ * (`JssgBatch.share()`), parse their chunk, and run its transforms.
++ *
++ * Workers start on first use, keep the process alive only while they have
++ * work, and are reused across batches and runs. Each receives an artifact's
++ * source once.
++ */
++import { availableParallelism } from "node:os";
++import { Worker } from "node:worker_threads";
++
++/**
++ * Workers per process: `CODEMOD_JSSG_WORKERS`, else the core count capped at
++ * 4. Each worker holds its own isolate and parsed trees (about 200 to 300 MB
++ * on a heavy workspace codemod), so 4 keeps the peak near one serial run's.
++ */
++export function poolSize(env = process.env) {
++  const configured = Number.parseInt(env.CODEMOD_JSSG_WORKERS ?? "", 10);
++  if (Number.isInteger(configured) && configured >= 1) return configured;
++  return Math.min(availableParallelism(), 4);
++}
++
++export function createTransformPool(size = poolSize()) {
++  const workers = [];
++  const queue = [];
++  const jobs = new Map();
++  let nextJob = 0;
++
++  const spawn = () => {
++    const worker = new Worker(new URL("./worker.js", import.meta.url), {
++      env: process.env,
++      stdout: false,
++      stderr: false,
++    });
++    const slot = { worker, busy: false, artifacts: new Set() };
++    worker.unref();
++    worker.on("message", ({ job, results, fatal }) => {
++      const pending = jobs.get(job);
++      jobs.delete(job);
++      slot.busy = false;
++      worker.unref();
++      if (fatal !== undefined) pending?.reject(new Error(fatal));
++      else pending?.resolve(results);
++      pump();
++    });
++    const lost = (error) => {
++      const index = workers.indexOf(slot);
++      if (index === -1) return;
++      workers.splice(index, 1);
++      for (const [job, pending] of jobs) {
++        if (pending.slot === slot) {
++          jobs.delete(job);
++          pending.reject(error);
++        }
++      }
++      pump();
++    };
++    worker.on("error", lost);
++    worker.on("exit", (code) => lost(new Error(`JSSG transform worker exited with code ${code}`)));
++    workers.push(slot);
++    return slot;
++  };
++
++  const pump = () => {
++    while (queue.length > 0) {
++      let slot = workers.find((candidate) => !candidate.busy);
++      if (slot === undefined && workers.length < size) slot = spawn();
++      if (slot === undefined) return;
++      const { job, chunk } = queue.shift();
++      const pending = jobs.get(job);
++      pending.slot = slot;
++      slot.busy = true;
++      slot.worker.ref();
++      const key = `${chunk.runId}\0${chunk.artifact.hash}`;
++      const artifact = slot.artifacts.has(key)
++        ? { name: chunk.artifact.name, hash: chunk.artifact.hash }
++        : chunk.artifact;
++      slot.artifacts.add(key);
++      slot.worker.postMessage({ job, ...chunk, artifact });
++    }
++  };
++
++  return {
++    size,
++    /**
++     * Run one chunk: `{ batchId, runId, artifact, start, paths, contents }`.
++     * Resolves with one `{ outcome } | { error }` per file.
++     */
++    run(chunk) {
++      const job = nextJob++;
++      return new Promise((resolve, reject) => {
++        jobs.set(job, { resolve, reject });
++        queue.push({ job, chunk });
++        pump();
++      });
++    },
++    /** Stop every worker. */
++    async close() {
++      const closing = workers.splice(0);
++      await Promise.all(closing.map(({ worker }) => worker.terminate()));
++    },
++  };
++}
+diff --git a/packages/jssg-napi/worker.js b/packages/jssg-napi/worker.js
+new file mode 100644
+index 00000000..c03bbb1a
+--- /dev/null
++++ b/packages/jssg-napi/worker.js
+@@ -0,0 +1,74 @@
++/**
++ * A transform pool worker (`./pool.js`): runs whole chunks of a batch that
++ * the main thread planned and published (`JssgBatch.share()`), each file
++ * parsed, transformed, and converted exactly as the in-process loop does
++ * (`packages/orchestration/src/execution/jssg-batch.ts`). Per file it posts
++ * `{ outcome }` or `{ error }` ("JSSG failed for '<path>': ..."); a module
++ * that does not load fails the whole chunk.
++ *
++ * Each worker evaluates an artifact once per run, so module-level state is
++ * per worker, not per run.
++ */
++import { parentPort } from "node:worker_threads";
++import { loadBinding, runTransform } from "./index.js";
++import { importArtifact } from "./loader.js";
++
++const native = loadBinding();
++const modules = new Map();
++
++const describe = (error) =>
++  error instanceof Error ? `${error.name}: ${error.message}` : String(error);
++
++async function transformChunk({ batchId, runId, artifact, start, paths, contents }) {
++  const key = `${runId}\0${artifact.hash}`;
++  let loaded = modules.get(key);
++  if (loaded === undefined) {
++    loaded = importArtifact(artifact, runId);
++    modules.set(key, loaded);
++  }
++  let transform;
++  try {
++    transform = await loaded;
++    if (typeof transform !== "function") {
++      throw new Error(`jssg codemod modules must export a function. ${typeof transform} found.`);
++    }
++  } catch (error) {
++    return { fatal: `JSSG failed for '${paths[0]}': ${describe(error)}` };
++  }
++  const batch = native.JssgBatch.attach(batchId);
++  const { targetRoot, params } = batch;
++  const options = batch.options();
++  const roots = await batch.parse(start, contents);
++  const results = [];
++  for (const [offset, root] of roots.entries()) {
++    const path = paths[offset];
++    if (root === null) {
++      results.push({ outcome: { path, edits: [] } });
++      continue;
++    }
++    let ran;
++    try {
++      ran = await runTransform(targetRoot, params, () =>
++        transform(root, { ...options, params: { ...options.params } }),
++      );
++    } catch (error) {
++      results.push({ error: `JSSG failed for '${path}': ${describe(error)}` });
++      continue;
++    }
++    try {
++      results.push({
++        outcome: batch.finish(start + offset, root, ran.result, ran.staged) ?? { path, edits: [] },
++      });
++    } catch (error) {
++      results.push({ error: error instanceof Error ? error.message : String(error) });
++    }
++  }
++  return { results };
++}
++
++parentPort.on("message", ({ job, ...chunk }) => {
++  transformChunk(chunk).then(
++    (reply) => parentPort.postMessage({ job, ...reply }),
++    (error) => parentPort.postMessage({ job, fatal: describe(error) }),
++  );
++});
+diff --git a/packages/orchestration/src/authoring/runnable.ts b/packages/orchestration/src/authoring/runnable.ts
+index 5bcdad34..a0073940 100644
+--- a/packages/orchestration/src/authoring/runnable.ts
++++ b/packages/orchestration/src/authoring/runnable.ts
+@@ -42,6 +42,7 @@ import {
+   type JssgOperation,
+   type Operation,
+   type Selector,
++  type JssgFileErrorPolicy,
+   type SemanticAnalysis,
+   type Target,
+ } from "../core/protocol.ts";
+@@ -161,6 +162,8 @@ export interface JssgOptions<L extends string, I, O> extends DataOptions<I, O> {
+   include?: string[];
+   exclude?: string[];
+   semanticAnalysis?: SemanticAnalysis;
++  /** A file whose transform throws: `skip` it and report it (default), or `fail` the step with nothing written. */
++  onFileError?: JssgFileErrorPolicy;
+   /**
+    * Optional static prefilter: files without a match never reach the
+    * sandbox. Plain ast-grep rule data; unlike a legacy `getSelector()` it is
+@@ -217,6 +220,7 @@ export function jssg<L extends string, I = void, O = unknown>(
+         operation.semanticAnalysis = options.semanticAnalysis;
+       }
+       if (selector !== undefined) operation.selector = selector;
++      if (options.onFileError !== undefined) operation.onFileError = options.onFileError;
+       if (target !== undefined) operation.target = target;
+       if (input !== undefined) operation.input = input as Json;
+       return operation;
+diff --git a/packages/orchestration/src/core/protocol.ts b/packages/orchestration/src/core/protocol.ts
+index fe148eb5..02628aaa 100644
+--- a/packages/orchestration/src/core/protocol.ts
++++ b/packages/orchestration/src/core/protocol.ts
+@@ -83,8 +83,17 @@ export interface JssgOperation {
+   selector?: Selector;
+   target?: Target;
+   input?: Json;
++  /** What a file whose transform throws or returns an invalid result does to the command (default `skip`). */
++  onFileError?: JssgFileErrorPolicy;
+ }
+ 
++/**
++ * `skip`: the file is left unchanged and reported, the other files still
++ * commit (the YAML engine's behaviour). `fail`: the command fails and
++ * nothing is written.
++ */
++export type JssgFileErrorPolicy = "skip" | "fail";
++
+ /**
+  * The built-in agent's tools, by their `codemod-ai` names (the YAML `ai` step
+  * `tools` list). `bash` runs arbitrary commands and `mcp_tool` starts
+@@ -329,6 +338,7 @@ const OPERATION_FIELDS = {
+     "selector",
+     "target",
+     "input",
++    "onFileError",
+   ],
+   agent: ["kind", "prompt", "input", "backend", "responseFormat"],
+   assessment: ["kind", "state", "questions", "model"],
+@@ -527,7 +537,10 @@ export function isOperation(value: unknown): value is Operation {
+         (value.semanticAnalysis === undefined || isSemanticAnalysis(value.semanticAnalysis)) &&
+         (value.selector === undefined || isSelector(value.selector)) &&
+         (value.target === undefined || isTarget(value.target)) &&
+-        (value.input === undefined || isJson(value.input))
++        (value.input === undefined || isJson(value.input)) &&
++        (value.onFileError === undefined ||
++          value.onFileError === "skip" ||
++          value.onFileError === "fail")
+       );
+     case "agent":
+       return (
+diff --git a/packages/orchestration/src/execution/jssg-batch.ts b/packages/orchestration/src/execution/jssg-batch.ts
+index ba9469d5..3ce2ceea 100644
+--- a/packages/orchestration/src/execution/jssg-batch.ts
++++ b/packages/orchestration/src/execution/jssg-batch.ts
+@@ -80,10 +80,26 @@ export interface JssgBatch<Root = unknown, Ran = unknown> {
+   call(index: number, root: Root, transform: TransformFunction): Promise<Ran>;
+   /** The file's `FileOutcome`; throws `JSSG failed for '<path>': ...`. */
+   finish(index: number, root: Root, ran: Ran): FileOutcome;
++  /**
++   * Parse and transform files `start ..< start + contents.length` on another
++   * thread, one result per file in order. Present when the engine runs
++   * transforms on a worker pool of `parallelism` threads; the loop then
++   * hands it every chunk at once and the pool runs them side by side.
++   */
++  transformRange?(
++    start: number,
++    contents: string[],
++    artifact: TransformArtifact,
++  ): Promise<RangeResult[]>;
++  /** Worker threads behind `transformRange`. */
++  readonly parallelism?: number;
+   /** Release the batch. */
+   close(): void;
+ }
+ 
++/** One file of a `transformRange`: its outcome, or the `JSSG failed for '<path>': ...` message. */
++export type RangeResult = { outcome: FileOutcome } | { error: string };
++
+ /** What a runtime provides to run JSSG batches in-process. */
+ export interface JssgBatchEngine<Root = unknown, Ran = unknown> {
+   /** Plan a batch; throws with the planning error (nothing has run). */
+@@ -149,14 +165,24 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
+       return failed((error as Error).message ?? String(error));
+     }
+     const artifact: TransformArtifact = { ...operation.transform, source: source ?? "" };
++    const skipFailures = (operation.onFileError ?? "skip") === "skip";
++    const outcomes: FileOutcome[] = [];
++    const failures: { path: string; error: string }[] = [];
++    /** Record a failed file; false when the policy fails the command instead. */
++    const fileFailed = (path: string, error: string): boolean => {
++      if (!skipFailures) return false;
++      failures.push({ path, error });
++      outcomes.push({ path, edits: [] });
++      return true;
++    };
++    const succeeded = (): OperationCompletion => ({
++      protocolVersion: PROTOCOL_VERSION,
++      commandId: request.commandId,
++      status: "succeeded",
++      output: { files: outcomes, failures } as unknown as Json,
++    });
+     let pending: Promise<unknown[]> | undefined;
+     try {
+-      const parse = (start: number) =>
+-        batch.parse(
+-          start,
+-          files.slice(start, start + chunkSize).map((file) => file.content),
+-        );
+-      const outcomes: FileOutcome[] = [];
+       // Benchmark timings (`core/timings.ts`; no-ops when off), as
+       // back-to-back laps of the loop: waiting for a chunk is `parse` (the
+       // parse itself on this thread, or blocked on worker threads, whose CPU
+@@ -174,6 +200,37 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
+         }
+         mark = lap(Phase.setup, mark);
+       }
++      const transformRange = batch.transformRange?.bind(batch);
++      if (transformRange !== undefined) {
++        // Small chunks keep every worker busy until the end of the batch.
++        const size = Math.max(
++          1,
++          Math.min(chunkSize, Math.ceil(files.length / ((batch.parallelism ?? 1) * 4))),
++        );
++        const ranges: Promise<RangeResult[]>[] = [];
++        for (let start = 0; start < files.length; start += size) {
++          const contents = files.slice(start, start + size).map((file) => file.content);
++          ranges.push(transformRange(start, contents, artifact));
++        }
++        for (const range of ranges) range.catch(() => {});
++        for (const range of ranges) {
++          const results = await range;
++          if (signal?.aborted) return failed("cancelled");
++          for (const result of results) {
++            if ("outcome" in result) outcomes.push(result.outcome);
++            else if (!fileFailed(files[outcomes.length]!.path, result.error)) {
++              return failed(result.error);
++            }
++          }
++        }
++        lap(Phase.transform, mark);
++        return succeeded();
++      }
++      const parse = (start: number) =>
++        batch.parse(
++          start,
++          files.slice(start, start + chunkSize).map((file) => file.content),
++        );
+       pending = files.length > 0 ? parse(0) : undefined;
+       for (let start = 0; pending !== undefined; start += chunkSize) {
+         const roots = await pending;
+@@ -188,30 +245,39 @@ export function createJssgBatchDispatch(options: JssgBatchDispatchOptions): Jssg
+             outcomes.push({ path: file.path, edits: [] });
+             continue;
+           }
+-          let ran: unknown;
++          // A module that does not load fails every file alike, so it fails the command.
++          let transform: unknown;
+           try {
+-            const transform = await load(artifact, batch.module);
+-            mark = lap(Phase.setup, mark);
++            transform = await load(artifact, batch.module);
+             if (typeof transform !== "function") {
+               throw new Error(
+                 `jssg codemod modules must export a function. ${typeof transform} found.`,
+               );
+             }
+-            ran = await batch.call(index, root, transform as TransformFunction);
+           } catch (error) {
+             return failed(`JSSG failed for '${file.path}': ${engine.describeError(error)}`);
+           }
+-          mark = lap(Phase.transform, mark);
+-          outcomes.push(batch.finish(index, root, ran));
+-          mark = lap(Phase.convert, mark);
++          mark = lap(Phase.setup, mark);
++          let outcome: FileOutcome;
++          try {
++            let ran: unknown;
++            try {
++              ran = await batch.call(index, root, transform as TransformFunction);
++            } catch (error) {
++              throw new Error(`JSSG failed for '${file.path}': ${engine.describeError(error)}`);
++            }
++            mark = lap(Phase.transform, mark);
++            outcome = batch.finish(index, root, ran);
++            mark = lap(Phase.convert, mark);
++          } catch (error) {
++            const message = (error as Error).message ?? String(error);
++            if (!fileFailed(file.path, message)) return failed(message);
++            continue;
++          }
++          outcomes.push(outcome);
+         }
+       }
+-      return {
+-        protocolVersion: PROTOCOL_VERSION,
+-        commandId: request.commandId,
+-        status: "succeeded",
+-        output: { files: outcomes as unknown as Json },
+-      };
++      return succeeded();
+     } catch (error) {
+       return failed((error as Error).message ?? String(error));
+     } finally {
+diff --git a/packages/orchestration/src/execution/jssg.ts b/packages/orchestration/src/execution/jssg.ts
+index ca6b8ca9..ffc7c6b7 100644
+--- a/packages/orchestration/src/execution/jssg.ts
++++ b/packages/orchestration/src/execution/jssg.ts
+@@ -41,7 +41,9 @@ import {
+  * Runs one transform batch: `request.context` carries `targetRoot`, the
+  * selected `files` with their content, and the artifact `source`. It must
+  * never write to the repository and never throw; a successful completion's
+- * `output` is `{ files: FileOutcome[] }` in request order. `signal` aborts.
++ * `output` is `{ files: FileOutcome[], failures? }` in request order, where
++ * `failures` lists the files the `skip` policy left unchanged (each also in
++ * `files`, with no edits). `signal` aborts.
+  */
+ export type JssgDispatch = (
+   request: OperationRequest,
+@@ -150,6 +152,7 @@ export async function executeJssgCommand(
+     });
+   }
+   const outcomes = isRecord(completion.output) ? completion.output.files : undefined;
++  const failures = isRecord(completion.output) ? completion.output.failures : undefined;
+   if (
+     !isFileOutcomes(outcomes) ||
+     outcomes.length !== files.length ||
+@@ -160,6 +163,15 @@ export async function executeJssgCommand(
+     });
+   }
+ 
++  // Skipped files are reported the way the YAML engine reports them: one line each, on stderr.
++  if (Array.isArray(failures)) {
++    for (const failure of failures) {
++      if (isRecord(failure) && typeof failure.error === "string") {
++        console.error(`jssg '${operation.transform.name}': skipped ${failure.error}`);
++      }
++    }
++  }
++
+   let staged: Staged;
+   try {
+     staged = stage(host, targetRoot, outcomes);
+diff --git a/packages/orchestration/src/host/quickjs/dispatch.ts b/packages/orchestration/src/host/quickjs/dispatch.ts
+index e232991b..34c0fc2b 100644
+--- a/packages/orchestration/src/host/quickjs/dispatch.ts
++++ b/packages/orchestration/src/host/quickjs/dispatch.ts
+@@ -15,7 +15,9 @@
+  *   call, the per-context staging of `write()`/`jssgTransform()` and the
+  *   transform options;
+  * - `jssgFinish(batch, index, root, result)`: the shared result
+- *   conversion, as `FileOutcome` JSON.
++ *   conversion, as `FileOutcome` JSON;
++ * - `jssgTransformRange(...)`: batches of `POOL_MIN_FILES` or more run in
++ *   chunks on the host's transform pool, one QuickJS context per thread.
+  *
+  * Transform modules are evaluated once per run, cached by artifact hash;
+  * module-level state is therefore shared by every file and command of the
+@@ -28,12 +30,18 @@ import type { FileOutcome } from "../../core/protocol.ts";
+ import {
+   createJssgBatchDispatch,
+   type JssgBatchEngine,
++  type RangeResult,
+   type TransformFunction,
+ } from "../../execution/jssg-batch.ts";
+ import type { JssgDispatch } from "../../execution/jssg.ts";
+ import type { QuickjsNative } from "./native.ts";
+ 
+ /** `Name: message` plus the stack (QuickJS's `stack` holds only the frames). */
++/** Batches at least this large run on the transform pool; smaller ones stay in this context. */
++const POOL_MIN_FILES = 64;
++
++const specifierOf = (hash: string, module: string) => `jssg-artifact:${hash}/${module}`;
++
+ const describe = (error: unknown) => {
+   if (!(error instanceof Error)) return String(error);
+   const head = `${error.name}: ${error.message}`;
+@@ -71,11 +79,26 @@ export function createQuickjsDispatch(native: QuickjsNative): JssgDispatch {
+   const engine: JssgBatchEngine<unknown, unknown> = {
+     open(config, paths) {
+       const { id, module, indexesWorkspace } = native.jssgBegin(JSON.stringify(config), paths);
++      const workers = paths.length >= POOL_MIN_FILES ? native.jssgPoolSize() : 1;
+       const end = (index: number) => {
+         native.jssgCallEnd(id, index);
+         release();
+       };
+       return {
++        ...(workers > 1 && {
++          parallelism: workers,
++          transformRange: (start: number, contents: string[], artifact) =>
++            native
++              .jssgTransformRange(
++                id,
++                specifierOf(artifact.hash, module),
++                artifact.source,
++                start,
++                paths.slice(start, start + contents.length),
++                contents,
++              )
++              .then((text) => (JSON.parse(text) as { results: RangeResult[] }).results),
++        }),
+         module,
+         indexesWorkspace,
+         index: (start, contents) =>
+@@ -119,7 +142,7 @@ export function createQuickjsDispatch(native: QuickjsNative): JssgDispatch {
+       };
+     },
+     load(artifact, module) {
+-      const specifier = `jssg-artifact:${artifact.hash}/${module}`;
++      const specifier = specifierOf(artifact.hash, module);
+       native.registerModule(specifier, artifact.source);
+       return (import(specifier) as Promise<{ default?: unknown }>).then(
+         (namespace) => namespace.default,
+diff --git a/packages/orchestration/src/host/quickjs/native.ts b/packages/orchestration/src/host/quickjs/native.ts
+index 44502e96..3d04318a 100644
+--- a/packages/orchestration/src/host/quickjs/native.ts
++++ b/packages/orchestration/src/host/quickjs/native.ts
+@@ -106,6 +106,21 @@ export interface QuickjsNative {
+   /** The awaited transform result as `FileOutcome` JSON (`undefined`: no edits, no output). Throws `JSSG failed for '<path>': ...`. */
+   jssgFinish(batch: number, index: number, root: unknown, result: unknown): string | undefined;
+   jssgEnd(batch: number): void;
++  /** Threads of the transform pool (`CODEMOD_JSSG_WORKERS`, else the cores capped at 4). */
++  jssgPoolSize(): number;
++  /**
++   * Parse, transform, and convert files `start ..< start + contents.length`
++   * on the transform pool: JSON `{ results: RangeResult[] }`. Rejects when the
++   * chunk cannot run (the module does not load, a file does not parse).
++   */
++  jssgTransformRange(
++    batch: number,
++    specifier: string,
++    source: string,
++    start: number,
++    paths: string[],
++    contents: string[],
++  ): Promise<string>;
+ }
+ 
+ /** The host's primitives, or an error naming what is missing. */
+diff --git a/packages/orchestration/src/host/runtimes/node-jssg.ts b/packages/orchestration/src/host/runtimes/node-jssg.ts
+index e2d72b4f..3dc31bf7 100644
+--- a/packages/orchestration/src/host/runtimes/node-jssg.ts
++++ b/packages/orchestration/src/host/runtimes/node-jssg.ts
+@@ -8,8 +8,9 @@
+  * - artifacts are evaluated as ES modules in this process
+  *   (`@codemod.com/jssg-napi/loader`: in-memory module hooks,
+  *   `codemod:ast-grep` resolved to the addon-backed module);
+- * - transform calls are serialized process-wide with staged writes
+- *   (`runTransform`).
++ * - transform calls are serialized per thread with staged writes
++ *   (`runTransform`); batches of `POOL_MIN_FILES` or more run on a pool of
++ *   worker threads (`@codemod.com/jssg-napi/pool`, `CODEMOD_JSSG_WORKERS`).
+  */
+ import {
+   loadBinding,
+@@ -18,9 +19,15 @@ import {
+   type StagedChanges,
+ } from "@codemod.com/jssg-napi";
+ import { importArtifact } from "@codemod.com/jssg-napi/loader";
++import { createTransformPool, type TransformPool } from "@codemod.com/jssg-napi/pool";
+ import type { FileOutcome } from "../../core/protocol.ts";
+ import { addTimingsSource, timingsEnabled, type PhaseTotals } from "../../core/timings.ts";
+-import { describeError, type JssgBatchEngine } from "../../execution/jssg-batch.ts";
++import {
++  describeError,
++  type JssgBatchEngine,
++  type RangeResult,
++  type TransformArtifact,
++} from "../../execution/jssg-batch.ts";
+ 
+ import type { Host } from "../../core/host.ts";
+ 
+@@ -46,6 +53,10 @@ export function createNapiSelectHost(base: Host): Host {
+ 
+ let engines = 0;
+ let timingsSourceAdded = false;
++let pool: TransformPool | undefined;
++
++/** Batches at least this large run on the transform pool; smaller ones stay on this thread. */
++const POOL_MIN_FILES = 64;
+ 
+ /** One engine per run: each artifact is evaluated once per engine. */
+ export function createNapiJssgEngine(): JssgBatchEngine<
+@@ -66,7 +77,24 @@ export function createNapiJssgEngine(): JssgBatchEngine<
+       const { targetRoot, params } = batch;
+       // The options Rust builds, once per batch; every file gets its own copy.
+       const options = batch.options();
++      pool ??= createTransformPool();
++      const shared = pool.size > 1 && paths.length >= POOL_MIN_FILES ? batch.share() : undefined;
++      const workers = pool;
+       return {
++        ...(shared === undefined
++          ? {}
++          : {
++              parallelism: workers.size,
++              transformRange: (start: number, contents: string[], artifact: TransformArtifact) =>
++                workers.run({
++                  batchId: shared,
++                  runId,
++                  artifact,
++                  start,
++                  paths: paths.slice(start, start + contents.length),
++                  contents,
++                }) as Promise<RangeResult[]>,
++            }),
+         module: batch.module,
+         indexesWorkspace: batch.indexesWorkspace,
+         index: (start, contents) => batch.index(start, contents),
+@@ -80,7 +108,9 @@ export function createNapiJssgEngine(): JssgBatchEngine<
+             path: paths[index]!,
+             edits: [],
+           },
+-        close: () => {},
++        close: () => {
++          if (shared !== undefined) native.JssgBatch.unshare(shared);
++        },
+       };
+     },
+     load: (artifact) => importArtifact(artifact, runId),
+diff --git a/packages/orchestration/src/portable.ts b/packages/orchestration/src/portable.ts
+index cf6efe76..87143de2 100644
+--- a/packages/orchestration/src/portable.ts
++++ b/packages/orchestration/src/portable.ts
+@@ -162,6 +162,7 @@ export type {
+   Edit,
+   ShellOperation,
+   FileOutcome,
++  JssgFileErrorPolicy,
+   JssgOperation,
+   Operation,
+   OperationCompletion,
+diff --git a/packages/orchestration/tests/fixtures/jssg/transforms.ts b/packages/orchestration/tests/fixtures/jssg/transforms.ts
+index 66c00903..90cebfc4 100644
+--- a/packages/orchestration/tests/fixtures/jssg/transforms.ts
++++ b/packages/orchestration/tests/fixtures/jssg/transforms.ts
+@@ -94,6 +94,7 @@ export const guarded = jssg({
+ export const failSecond = jssg({
+   name: "fail-second",
+   language: "typescript",
++  onFileError: "fail",
+   async transform(root) {
+     if (root.relativeFilename().endsWith("b.ts")) throw new Error("second file exploded");
+     return migrateText(root.root().text());
+@@ -125,6 +126,7 @@ export const rename = jssg({
+ export const escape = jssg({
+   name: "escape",
+   language: "typescript",
++  onFileError: "fail",
+   transform(root) {
+     root.rename("../escaped.ts");
+     return root.root().text();
+diff --git a/packages/orchestration/tests/fixtures/parity/transforms.ts b/packages/orchestration/tests/fixtures/parity/transforms.ts
+index fbff2887..9baeafd9 100644
+--- a/packages/orchestration/tests/fixtures/parity/transforms.ts
++++ b/packages/orchestration/tests/fixtures/parity/transforms.ts
+@@ -27,6 +27,7 @@ type AstGrep = typeof import("codemod:ast-grep") & {
+ export const returns = jssg({
+   name: "returns",
+   language: "typescript",
++  onFileError: "fail",
+   transform(root, options): string | null {
+     const text = root.root().text();
+     const results: Record<string, () => unknown> = {
+@@ -88,6 +89,7 @@ export const multi = jssg({
+ export const renameInto = jssg({
+   name: "rename-into",
+   language: "typescript",
++  onFileError: "fail",
+   transform(root, options) {
+     const name = root.filename().split(/[\\/]/u).pop()!;
+     root.rename(`${options.targetDir}/${String(options.params.input)}/${name}`);
+@@ -99,6 +101,7 @@ export const renameInto = jssg({
+ export const secondaryAt = jssg({
+   name: "secondary-at",
+   language: "typescript",
++  onFileError: "fail",
+   async transform(_root, options) {
+     const { jssgTransform } = await import("codemod:ast-grep");
+     await jssgTransform(
+@@ -110,12 +113,21 @@ export const secondaryAt = jssg({
+   },
+ });
+ 
+-/**
+- * Throws on `b.ts` (after `a.ts` succeeded), a plain `Error`.
+- */
++/** Throws on `b.ts` (after `a.ts` succeeded), a plain `Error`, failing the command. */
+ export const throwing = jssg({
+   name: "throwing",
+   language: "typescript",
++  onFileError: "fail",
++  transform(root) {
++    if (root.relativeFilename().endsWith("b.ts")) throw new Error("b.ts is not allowed");
++    return migrateText(root.root().text());
++  },
++});
++
++/** Throws for files named `*b.ts` under the default policy: they are skipped and reported. */
++export const skipping = jssg({
++  name: "skipping",
++  language: "typescript",
+   transform(root) {
+     if (root.relativeFilename().endsWith("b.ts")) throw new Error("b.ts is not allowed");
+     return migrateText(root.root().text());
+diff --git a/packages/orchestration/tests/fixtures/parity/workflow.ts b/packages/orchestration/tests/fixtures/parity/workflow.ts
+index aaf2bdb4..7dbee48c 100644
+--- a/packages/orchestration/tests/fixtures/parity/workflow.ts
++++ b/packages/orchestration/tests/fixtures/parity/workflow.ts
+@@ -8,10 +8,11 @@ import {
+   returns,
+   secondaryAt,
+   selected,
++  skipping,
+   throwing,
+ } from "./transforms.ts";
+ 
+-const steps = { encoding, multi, renameInto, returns, secondaryAt, selected, throwing };
++const steps = { encoding, multi, renameInto, returns, secondaryAt, selected, skipping, throwing };
+ 
+ interface Case {
+   step: keyof typeof steps;
+diff --git a/packages/orchestration/tests/jssg-batch.test.ts b/packages/orchestration/tests/jssg-batch.test.ts
+new file mode 100644
+index 00000000..d5dd893d
+--- /dev/null
++++ b/packages/orchestration/tests/jssg-batch.test.ts
+@@ -0,0 +1,100 @@
++/**
++ * The portable batch loop (`createJssgBatchDispatch`) against a scripted
++ * engine: what a failing file does under each `onFileError` policy, and that
++ * a pool engine (`transformRange`) answers exactly as the serial loop. The
++ * real engines run in the runtimes' e2e tests.
++ */
++import { describe, expect, it } from "vitest";
++import {
++  createJssgBatchDispatch,
++  type JssgBatch,
++  type JssgBatchEngine,
++  type RangeResult,
++} from "../src/execution/jssg-batch.ts";
++import { PROTOCOL_VERSION, type JssgOperation } from "../src/index.ts";
++import { ref } from "./helpers.ts";
++
++/** Upper-cases each file; a file whose content is `boom` throws. */
++const transform = (root: unknown) => {
++  if (root === "boom") throw new Error("boom");
++  return String(root).toUpperCase();
++};
++
++function engine(pool: boolean): JssgBatchEngine<string, string> {
++  return {
++    open(_config, paths) {
++      const finish = (index: number, ran: string) => ({
++        path: paths[index]!,
++        edits: [{ path: paths[index]!, content: ran }],
++      });
++      const batch: JssgBatch<string, string> = {
++        module: "t.jssg.js",
++        indexesWorkspace: false,
++        index: async () => {},
++        parse: async (_start, contents) => contents,
++        call: async (_index, root, fn) => fn(root, {}) as string,
++        finish: (index, _root, ran) => finish(index, ran),
++        close: () => {},
++      };
++      if (!pool) return batch;
++      return {
++        ...batch,
++        call: () => Promise.reject(new Error("the pool engine ran a file on this thread")),
++        parallelism: 2,
++        transformRange: async (start, contents) =>
++          contents.map((content, offset): RangeResult => {
++            try {
++              return { outcome: finish(start + offset, transform(content)) };
++            } catch {
++              return { error: `JSSG failed for '${paths[start + offset]}': Error: boom` };
++            }
++          }),
++      };
++    },
++    load: async () => transform,
++    describeError: (error) => `${(error as Error).name}: ${(error as Error).message}`,
++  };
++}
++
++const files = ["a", "boom", "c"].map((content, index) => ({ path: `${index}.ts`, content }));
++
++function run(options: { pool?: boolean; onFileError?: JssgOperation["onFileError"] } = {}) {
++  const operation: JssgOperation = {
++    kind: "jssg",
++    transform: ref("t"),
++    language: "typescript",
++    ...(options.onFileError === undefined ? {} : { onFileError: options.onFileError }),
++  };
++  return createJssgBatchDispatch({ engine: engine(options.pool ?? false) })({
++    protocolVersion: PROTOCOL_VERSION,
++    commandId: "t",
++    operation,
++    context: { targetRoot: "/repo", files, artifact: { source: "" } },
++  });
++}
++
++const skipped = {
++  files: [
++    { path: "0.ts", edits: [{ path: "0.ts", content: "A" }] },
++    { path: "1.ts", edits: [] },
++    { path: "2.ts", edits: [{ path: "2.ts", content: "C" }] },
++  ],
++  failures: [{ path: "1.ts", error: "JSSG failed for '1.ts': Error: boom" }],
++};
++
++describe("createJssgBatchDispatch", () => {
++  it("skips a file whose transform throws, reports it, and keeps the other files", async () => {
++    expect(await run()).toMatchObject({ status: "succeeded", output: skipped });
++  });
++
++  it("fails the command on a throwing file when onFileError is 'fail'", async () => {
++    expect(await run({ onFileError: "fail" })).toMatchObject({
++      status: "failed",
++      error: { message: "JSSG failed for '1.ts': Error: boom" },
++    });
++  });
++
++  it("a pool engine answers with the same outcomes and failures as the serial loop", async () => {
++    expect(await run({ pool: true })).toMatchObject({ status: "succeeded", output: skipped });
++  });
++});
+diff --git a/packages/orchestration/tests/jssg-parity.e2e.test.ts b/packages/orchestration/tests/jssg-parity.e2e.test.ts
+index c7702a37..fc1ac0ce 100644
+--- a/packages/orchestration/tests/jssg-parity.e2e.test.ts
++++ b/packages/orchestration/tests/jssg-parity.e2e.test.ts
+@@ -59,6 +59,8 @@ interface Setup {
+   files: Record<string, string>;
+   /** Directory symlinks inside the repository pointing at a fresh directory outside it. */
+   outsideLinks?: string[];
++  /** Transform pool threads (`CODEMOD_JSSG_WORKERS`); default 1. */
++  workers?: number;
+ }
+ 
+ interface Outcome {
+@@ -67,6 +69,8 @@ interface Outcome {
+   initial: Record<string, string>;
+   output?: unknown;
+   error?: string;
++  /** The files a successful run skipped, as it reported them. */
++  skipped?: string[];
+   tree: Record<string, string>;
+   outside: Record<string, string>;
+ }
+@@ -124,6 +128,7 @@ function runOn(runtime: Runtime, setup: Setup, input: unknown): Outcome {
+         ...process.env,
+         CODEMOD_QUICKJS_HOST_BIN: host,
+         CODEMOD_WORKFLOW_CACHE: join(scratch, "cache"),
++        CODEMOD_JSSG_WORKERS: String(setup.workers ?? 1),
+       },
+     },
+   );
+@@ -133,8 +138,12 @@ function runOn(runtime: Runtime, setup: Setup, input: unknown): Outcome {
+     tree: tree(repo),
+     outside: tree(outside),
+   };
+-  if (outcome.ok) outcome.output = JSON.parse(result.stdout) as unknown;
+-  else outcome.error = normalize(result.stderr, repo);
++  if (outcome.ok) {
++    outcome.output = JSON.parse(result.stdout) as unknown;
++    outcome.skipped = normalize(result.stderr, repo)
++      .split("\n")
++      .filter((line) => line.includes("skipped"));
++  } else outcome.error = normalize(result.stderr, repo);
+   return outcome;
+ }
+ 
+@@ -229,6 +238,28 @@ describe.skipIf(!enabled)("JSSG parity: node, quickjs", () => {
+     parity({ files: TWO }, { step: "throwing" }, { error: "JSSG failed for 'b.ts'", thrown: true });
+   });
+ 
++  it("a file whose transform throws is skipped and reported; the others are written", () => {
++    const outcomes = parity({ files: TWO }, { step: "skipping" }, { ok: true });
++    expect(outcomes.node.tree).toEqual({ "a.ts": "newApi(1);\n", "b.ts": TWO["b.ts"] });
++    expect(outcomes.node.skipped).toEqual([
++      "jssg 'skipping': skipped JSSG failed for 'b.ts': Error: b.ts is not allowed",
++    ]);
++  });
++
++  it("a batch on the transform pool writes, outputs, and skips as one thread does", () => {
++    const files = Object.fromEntries(
++      Array.from({ length: 80 }, (_, n) => [
++        `f${String(n).padStart(2, "0")}${n % 9 === 0 ? "b" : ""}.ts`,
++        n % 3 === 0 ? `plain(${n});\n` : `oldApi(${n});\n`,
++      ]),
++    );
++    for (const step of ["selected", "skipping"]) {
++      const serial = parity({ files }, { step }, { ok: true });
++      const pooled = parity({ files, workers: 3 }, { step }, { ok: true });
++      expect(pooled.node).toEqual(serial.node);
++    }
++  });
++
+   it("the static selector skips files before the transform runs", () => {
+     const files = { "a.ts": "oldApi(1);\n", "b.ts": "plain(2);\n", "c/d.ts": "x(oldApi(3));\n" };
+     const outcomes = parity({ files }, { step: "selected" }, { ok: true });
+diff --git a/packages/orchestration/tests/node-runtime.e2e.test.ts b/packages/orchestration/tests/node-runtime.e2e.test.ts
+index 7bdff532..3fc34135 100644
+--- a/packages/orchestration/tests/node-runtime.e2e.test.ts
++++ b/packages/orchestration/tests/node-runtime.e2e.test.ts
+@@ -137,10 +137,13 @@ type Spec = Omit<JssgOperation, "kind" | "transform" | "language"> & {
+ /** Run one JSSG command on the node runtime's dispatch against a copy of `files`. */
+ async function both(spec: Spec, files: Record<string, string>): Promise<{ node: Arm }> {
+   const { transform, language = "typescript", ...rest } = spec;
++  // Failures here check each error's message, so a failing file fails the
++  // command; the default skip policy is covered by `jssg-parity.e2e.test.ts`.
+   const operation: JssgOperation = {
+     kind: "jssg",
+     transform: artifactRef(transform),
+     language,
++    onFileError: "fail",
+     ...rest,
+   };
+   const repo = makeRepo(files);
+-- 
+2.43.0
+

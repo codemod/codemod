@@ -1,0 +1,1964 @@
+[
+  [
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "span"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "li"
+        }
+      },
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "li"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "li"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      },
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      },
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "click-on-non-interactive",
+        "dims": {
+          "element": "div"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "repository"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "repository"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "repository"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "repository"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      },
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "db-query-in-loop",
+        "dims": {
+          "orm": "prisma"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      },
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "derived-value"
+        }
+      },
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "reset-on-change"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "reset-on-change"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "derived-state-effect",
+        "dims": {
+          "kind": "reset-on-change"
+        }
+      }
+    ]
+  ],
+  [],
+  [
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "yes"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      },
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      },
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      },
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      },
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      },
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      },
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      },
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      },
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "exhaustive-deps-suppressed",
+        "dims": {
+          "tool": "eslint",
+          "justified": "no"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "floating-async-iteration",
+        "dims": {
+          "method": "map-result-discarded"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "floating-async-iteration",
+        "dims": {
+          "method": "forEach"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "img-missing-alt",
+        "dims": {
+          "element": "img"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "img-missing-alt",
+        "dims": {
+          "element": "img"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "index-in-expression"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "index-in-expression"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "index-in-expression"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "index-in-expression"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      },
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "index-as-key",
+        "dims": {
+          "form": "bare-index"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "function"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "nested-component-definition",
+        "dims": {
+          "declaredAs": "arrow"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "0"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "0"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "0"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "0"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "1000+",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "1000+",
+          "stateHooks": "11+"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "6-10"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "6-10"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "1-5"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "0"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "500-999",
+          "stateHooks": "0"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "oversized-component",
+        "dims": {
+          "size": "300-499",
+          "stateHooks": "1-5"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "route-entry-directive",
+        "dims": {
+          "entry": "page",
+          "directive": "use-client"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "route-entry-directive",
+        "dims": {
+          "entry": "layout",
+          "directive": "use-client"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "route-entry-directive",
+        "dims": {
+          "entry": "page",
+          "directive": "use-client"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "route-entry-directive",
+        "dims": {
+          "entry": "layout",
+          "directive": "use-client"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      },
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "server-action-without-auth",
+        "dims": {
+          "kind": "async-function",
+          "effect": "cache-revalidation"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "unsanitized-inner-html",
+        "dims": {
+          "source": "variable"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unsanitized-inner-html",
+        "dims": {
+          "source": "template"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unsanitized-inner-html",
+        "dims": {
+          "source": "template"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unsanitized-inner-html",
+        "dims": {
+          "source": "template"
+        }
+      },
+      {
+        "metric": "unsanitized-inner-html",
+        "dims": {
+          "source": "template"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unsanitized-inner-html",
+        "dims": {
+          "source": "template"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unsanitized-inner-html",
+        "dims": {
+          "source": "expression"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unsanitized-inner-html",
+        "dims": {
+          "source": "function-result"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unsanitized-inner-html",
+        "dims": {
+          "source": "template"
+        }
+      }
+    ]
+  ],
+  [
+    [
+      {
+        "metric": "unstable-context-value",
+        "dims": {
+          "shape": "object",
+          "via": "inline",
+          "wraps": "inline-tree"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unstable-context-value",
+        "dims": {
+          "shape": "object",
+          "via": "inline",
+          "wraps": "children-prop"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unstable-context-value",
+        "dims": {
+          "shape": "object",
+          "via": "inline",
+          "wraps": "inline-tree"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unstable-context-value",
+        "dims": {
+          "shape": "object",
+          "via": "inline",
+          "wraps": "inline-tree"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unstable-context-value",
+        "dims": {
+          "shape": "object",
+          "via": "inline",
+          "wraps": "inline-tree"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unstable-context-value",
+        "dims": {
+          "shape": "object",
+          "via": "inline",
+          "wraps": "children-prop"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unstable-context-value",
+        "dims": {
+          "shape": "object",
+          "via": "inline",
+          "wraps": "children-prop"
+        }
+      }
+    ],
+    [
+      {
+        "metric": "unstable-context-value",
+        "dims": {
+          "shape": "object",
+          "via": "inline",
+          "wraps": "inline-tree"
+        }
+      },
+      {
+        "metric": "unstable-context-value",
+        "dims": {
+          "shape": "object",
+          "via": "inline",
+          "wraps": "inline-tree"
+        }
+      }
+    ]
+  ]
+]

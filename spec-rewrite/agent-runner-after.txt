@@ -1,0 +1,44 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/agent-runner.test.ts > a builtin agent > ignores the external agent timeout
+ ✓ tests/agent-runner.test.ts > a builtin agent > hands the runner the request unchanged
+ ✓ tests/agent-runner.test.ts > a builtin agent > starts the runner in the target repository
+ ✓ tests/agent-runner.test.ts > a builtin agent > starts the runner with allowlisted host variables and the explicit env, but no credentials
+ ✓ tests/agent-runner.test.ts > a builtin agent > sends the LLM key on stdin and marks that it did
+ ✓ tests/agent-runner.test.ts > a builtin agent > sends no secrets and no marker without an LLM key
+ ✓ tests/agent-runner.test.ts > a claude-code agent > gets HOME and CODEX_HOME but no LLM settings, provider key or secrets
+ ✓ tests/agent-runner.test.ts > a claude-code agent > is refused an explicit provider key before start
+ ✓ tests/agent-runner.test.ts > a claude-code agent > never repeats the refused key
+ ✓ tests/agent-runner.test.ts > a codex agent > gets HOME and CODEX_HOME but no LLM settings, provider key or secrets
+ ✓ tests/agent-runner.test.ts > a codex agent > is refused an explicit provider key before start
+ ✓ tests/agent-runner.test.ts > a codex agent > never repeats the refused key
+ ✓ tests/agent-runner.test.ts > fails with build instructions when no runner was found
+ ✓ tests/agent-runner.test.ts > fails with build instructions when the runner is missing
+ ✓ tests/agent-runner.test.ts > fails with build instructions when the runner is a directory
+ ✓ tests/agent-runner.test.ts > rejects an external agent timeout of 0
+ ✓ tests/agent-runner.test.ts > rejects an external agent timeout of -1
+ ✓ tests/agent-runner.test.ts > rejects an external agent timeout of NaN
+ ✓ tests/agent-runner.test.ts > rejects an external agent timeout of Infinity
+ ✓ tests/agent-runner.test.ts > rejects an external agent timeout of 2147483648
+ ✓ tests/agent-runner.test.ts > cancels a builtin agent aborted before start
+ ✓ tests/agent-runner.test.ts > cancels a claude-code agent aborted before start
+ ✓ tests/agent-runner.test.ts > cancels a codex agent aborted before start
+ ✓ tests/agent-runner.test.ts > an agent aborted after spawn > reports a builtin agent as unknown, since it may have changed files
+ ✓ tests/agent-runner.test.ts > an agent aborted after spawn > reports a claude-code agent as unknown, since it may have changed files
+ ✓ tests/agent-runner.test.ts > an agent aborted after spawn > reports a codex agent as unknown, since it may have changed files
+ ✓ tests/agent-runner.test.ts > an agent aborted after spawn > kills a builtin agent's process tree 1492ms
+ ✓ tests/agent-runner.test.ts > an agent aborted after spawn > kills a claude-code agent's process tree
+ ✓ tests/agent-runner.test.ts > an agent aborted after spawn > kills a codex agent's process tree
+ ✓ tests/agent-runner.test.ts > an external agent past its timeout > is unknown and marked timed out on the host clock
+ ✓ tests/agent-runner.test.ts > an external agent past its timeout > has its process tree killed 1468ms
+ ✓ tests/agent-runner.test.ts > treats a runner that writes garbage as unknown, since the agent may have changed files
+ ✓ tests/agent-runner.test.ts > treats a runner that answers for another command as unknown, since the agent may have changed files
+ ✓ tests/agent-runner.test.ts > treats a runner that exits without a completion as unknown, since the agent may have changed files
+ ✓ tests/agent-runner.test.ts > replays a recorded agent step without a runner
+
+ Test Files  1 passed (1)
+      Tests  35 passed (35)
+   Start at  02:47:54
+   Duration  5.65s (transform 325ms, setup 0ms, collect 444ms, tests 4.90s, environment 0ms, prepare 70ms)
+

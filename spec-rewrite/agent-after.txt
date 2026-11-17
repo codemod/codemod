@@ -1,0 +1,106 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/agent.test.ts > agent request serialization > builds the operation of the shared fixture agent-request.json
+ ✓ tests/agent.test.ts > agent request serialization > builds the operation of the shared fixture agent-claude-code-request.json
+ ✓ tests/agent.test.ts > agent request serialization > builds the operation of the shared fixture agent-codex-request.json
+ ✓ tests/agent.test.ts > agent request serialization > records no backend as the builtin default tools
+ ✓ tests/agent.test.ts > agent request serialization > records a builtin backend without tools as the default tools
+ ✓ tests/agent.test.ts > agent request serialization > records builtin tools and maxSteps
+ ✓ tests/agent.test.ts > agent request serialization > records an empty builtin tool set
+ ✓ tests/agent.test.ts > agent request serialization > records claude-code without tools as the default file tools
+ ✓ tests/agent.test.ts > agent request serialization > records claude-code tools as given
+ ✓ tests/agent.test.ts > agent request serialization > records codex without a sandbox as workspace-write
+ ✓ tests/agent.test.ts > agent request serialization > records a read-only codex sandbox as given
+ ✓ tests/agent.test.ts > agent request serialization > leaves shell and unconfined tools out of every default tool set
+ ✓ tests/agent.test.ts > agent request serialization > refuses builtin tools ["rm_rf"] when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses builtin tools ["glob","glob"] when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses claude-code tools ["bash"] when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses claude-code tools ["Read","Read"] when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses builtin maxSteps 0 when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses builtin maxSteps 1.5 when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses a builtin backend's unsupported 'sandbox' when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses a claude-code backend's unsupported 'maxSteps' when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses a codex backend's unsupported 'tools' when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses a codex backend's unsupported 'maxSteps' when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses an unsafe codex sandbox when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses an unknown backend kind when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses a null backend when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses tools outside the backend when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > refuses maxSteps outside the backend when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > accepts a builtin step with input, maxSteps and a JSON response on the wire
+ ✓ tests/agent.test.ts > agent request serialization > accepts a claude-code step with no tools on the wire
+ ✓ tests/agent.test.ts > agent request serialization > accepts a read-only codex step on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects no backend on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects tools outside the backend on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects an unknown builtin tool on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects a repeated builtin tool on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects zero builtin maxSteps on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects claude-code maxSteps on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects a codex backend without a sandbox on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects an unsafe codex sandbox on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects an XML response format on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects non-JSON input on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects a model on the wire
+ ✓ tests/agent.test.ts > agent request serialization > rejects the removed 'ai' kind on the wire
+ ✓ tests/agent.test.ts > agent response parsing > decodes the response as { text } when the step has no output schema
+ ✓ tests/agent.test.ts > agent response parsing > parses the output from bare JSON
+ ✓ tests/agent.test.ts > agent response parsing > parses the output from JSON with surrounding whitespace
+ ✓ tests/agent.test.ts > agent response parsing > parses the output from a single ```json block
+ ✓ tests/agent.test.ts > agent response parsing > parses the output from a ```json block after prose
+ ✓ tests/agent.test.ts > agent response parsing > parses the output from a single unlabelled fenced block
+ ✓ tests/agent.test.ts > agent response parsing > rejects prose, quoting it in the error
+ ✓ tests/agent.test.ts > agent response parsing > rejects two fenced blocks
+ ✓ tests/agent.test.ts > agent response parsing > rejects a fenced block that is not JSON
+ ✓ tests/agent.test.ts > agent response parsing > rejects a fenced block of another language
+ ✓ tests/agent.test.ts > agent response parsing > quotes only the first 200 characters of a long response
+ ✓ tests/agent.test.ts > agent response parsing > rejects JSON that does not match the output schema with a SchemaError
+ ✓ tests/agent.test.ts > agent response parsing > rejects the completion output {"stdout":"x"}
+ ✓ tests/agent.test.ts > agent response parsing > rejects the completion output undefined
+ ✓ tests/agent.test.ts > agent failures > surfaces a failed completion as an OperationError with its message and phase
+ ✓ tests/agent.test.ts > process-tree cleanup > lists descendants by walking parent ids, parents first
+ ✓ tests/agent.test.ts > process-tree cleanup > stops parents first and kills children first, then the group, from one listing
+ ✓ tests/agent.test.ts > agent launch environment > passes allowlisted host variables plus explicit ones, and no other credentials
+ ✓ tests/agent.test.ts > agent launch environment > lets an explicit variable replace a host variable of another case on Windows
+ ✓ tests/agent.test.ts > agent launch environment > keeps variables whose names differ only in case on other platforms
+ ✓ tests/agent.test.ts > agent launch environment > hands the builtin runner its LLM key on stdin, explicit over host on Windows
+ ✓ tests/agent.test.ts > agent launch environment > omits a blank LLM key
+ ✓ tests/agent.test.ts > agent launch environment > gives claude-code its CLI home but no LLM settings or provider secrets
+ ✓ tests/agent.test.ts > agent launch environment > gives codex its CLI home but no LLM settings or provider secrets
+ ✓ tests/agent.test.ts > agent launch environment > strips credential-looking explicit variables from an external runner's launch
+ ✓ tests/agent.test.ts > agent launch environment > classifies ANTHROPIC_API_KEY as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies ANTHROPIC_BASE_URL as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies OPENAI_API_KEY as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies CLAUDE_CODE_OAUTH_TOKEN as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies CODEX_API_KEY as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies AWS_PROFILE as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies GOOGLE_APPLICATION_CREDENTIALS as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies GITHUB_TOKEN as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies NPM_TOKEN as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies db_password as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies SSH_AUTH_SOCK as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies MY_SECRET as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies STRIPE_KEY as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies LLM_API_KEY as a credential
+ ✓ tests/agent.test.ts > agent launch environment > classifies CODEMOD_AGENT_SECRETS as a credential
+ ✓ tests/agent.test.ts > agent launch environment > does not classify PATH as a credential
+ ✓ tests/agent.test.ts > agent launch environment > does not classify HOME as a credential
+ ✓ tests/agent.test.ts > agent launch environment > does not classify CLAUDE_CONFIG_DIR as a credential
+ ✓ tests/agent.test.ts > agent launch environment > does not classify codex_home as a credential
+ ✓ tests/agent.test.ts > agent launch environment > does not classify FAKE_AGENT_MODE as a credential
+ ✓ tests/agent.test.ts > agent launch environment > does not classify KEYBOARD as a credential
+ ✓ tests/agent.test.ts > agent launch environment > does not classify MONKEY as a credential
+ ✓ tests/agent.test.ts > agent launch environment > names the credential variables an external backend refuses
+ ✓ tests/agent.test.ts > agent launch environment > accepts CLI home variables for an external backend
+ ✓ tests/agent.test.ts > agent history > records the step's backend with the scheduled command
+ ✓ tests/agent.test.ts > agent history > replays a recorded step without an agent runner
+ ✓ tests/agent.test.ts > agent history > treats a switch to backend {"kind":"codex","sandbox":"workspace-write"} as a changed command on replay
+ ✓ tests/agent.test.ts > agent history > treats a switch to backend {"kind":"claude-code","tools":["Read"]} as a changed command on replay
+ ✓ tests/agent.test.ts > agent history > treats a switch to backend {"kind":"builtin"} as a changed command on replay
+ ✓ tests/agent.test.ts > agent composition > takes a preceding step's output as input and decodes the harness's scripted text
+
+ Test Files  1 passed (1)
+      Tests  97 passed (97)
+   Start at  02:48:24
+   Duration  793ms (transform 328ms, setup 0ms, collect 430ms, tests 71ms, environment 0ms, prepare 65ms)
+

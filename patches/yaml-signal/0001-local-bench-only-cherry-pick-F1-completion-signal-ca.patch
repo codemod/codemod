@@ -1,0 +1,749 @@
+From 9eb30297857ad5a5d3acb073618c5f415be319db Mon Sep 17 00:00:00 2001
+From: bench <bench@local>
+Date: Sun, 8 Nov 2026 22:05:03 +0000
+Subject: [PATCH] local bench only: cherry-pick F1 completion signal (ca8bb5ba,
+ 013964f9)
+
+---
+ crates/cli/src/commands/workflow/resume.rs  |  12 +-
+ crates/cli/src/workflow_runner.rs           |  61 ++++-
+ crates/cli/tests/workflow_run_completion.rs | 238 ++++++++++++++++++++
+ crates/core/src/engine.rs                   |  35 ++-
+ crates/core/src/lib.rs                      |   1 +
+ crates/core/src/workflow_completion.rs      | 207 +++++++++++++++++
+ 6 files changed, 547 insertions(+), 7 deletions(-)
+ create mode 100644 crates/cli/tests/workflow_run_completion.rs
+ create mode 100644 crates/core/src/workflow_completion.rs
+
+diff --git a/crates/cli/src/commands/workflow/resume.rs b/crates/cli/src/commands/workflow/resume.rs
+index 75a024ed..b96bba16 100644
+--- a/crates/cli/src/commands/workflow/resume.rs
++++ b/crates/cli/src/commands/workflow/resume.rs
+@@ -5,7 +5,7 @@ use crate::commands::run_telemetry::{nested_codemod_run_observer, persisted_work
+ use crate::engine::create_engine;
+ use crate::utils::path_safety::normalize_target_path;
+ use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
+-use crate::workflow_runner::resolve_workflow_source;
++use crate::workflow_runner::{resolve_workflow_source, wait_for_run_progress};
+ use crate::TelemetrySenderMutex;
+ use anyhow::{Context, Result};
+ use butterflow_models::{Task, TaskStatus, WorkflowStatus};
+@@ -197,6 +197,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
+         return Ok(());
+     }
+ 
++    // Wake as soon as the executor started above exits instead of waiting
++    // out the poll interval.
++    let mut completion = engine.completion_signal(args.id);
++
+     loop {
+         let status = engine
+             .get_workflow_status(args.id)
+@@ -247,7 +251,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
+             }
+             _ => {
+                 // Wait a bit before checking again
+-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
++                wait_for_run_progress(completion.as_mut(), std::time::Duration::from_secs(1)).await;
+             }
+         }
+     }
+@@ -271,6 +275,8 @@ async fn wait_for_triggered_tasks(
+         return Ok(());
+     }
+ 
++    let mut completion = engine.completion_signal(workflow_run_id);
++
+     loop {
+         let tasks = engine
+             .get_tasks(workflow_run_id)
+@@ -293,7 +299,7 @@ async fn wait_for_triggered_tasks(
+             break;
+         }
+ 
+-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
++        wait_for_run_progress(completion.as_mut(), std::time::Duration::from_secs(1)).await;
+     }
+ 
+     Ok(())
+diff --git a/crates/cli/src/workflow_runner.rs b/crates/cli/src/workflow_runner.rs
+index c0f01251..a6dc7d3f 100644
+--- a/crates/cli/src/workflow_runner.rs
++++ b/crates/cli/src/workflow_runner.rs
+@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
+ use butterflow_core::config::WorkflowRunConfig;
+ use butterflow_core::engine::Engine;
+ use butterflow_core::utils;
++use butterflow_core::workflow_completion::WorkflowCompletionSignal;
+ use butterflow_models::node::NodeType;
+ use butterflow_models::task::TaskErrorDetails;
+ use butterflow_models::trigger::TriggerType;
+@@ -118,14 +119,41 @@ pub async fn wait_for_workflow_completion(
+     let workflow_run_uuid = workflow_run_id.parse::<Uuid>()?;
+     let wait_started = Instant::now();
+     let mut last_heartbeat = Instant::now();
++    // Wakes the loop as soon as this process's executor for the run exits;
++    // `None` (run driven elsewhere) falls back to plain polling.
++    let mut completion = engine.completion_signal(workflow_run_uuid);
+ 
+     loop {
++        // Snapshot executor activity before reading the status, so any status
++        // write by an executor that has already exited is visible below.
++        let executor_activity = completion.as_ref().map(|signal| signal.activity());
++
+         // Get workflow status
+         let status = engine
+             .get_workflow_status(workflow_run_uuid)
+             .await
+             .context("Failed to get workflow status")?;
+ 
++        if !is_settled_workflow_status(status) {
++            if let Some(error) = executor_activity
++                .filter(|activity| activity.failed_without_executor())
++                .and_then(|activity| activity.last_error)
++            {
++                // The executor gave up without recording a final status;
++                // polling would never see one, so report its error instead.
++                println!(
++                    "{} {}",
++                    style("Workflow failed").red(),
++                    style(format!(
++                        "after {:.1}s",
++                        wait_started.elapsed().as_secs_f64()
++                    ))
++                    .dim()
++                );
++                return Err(anyhow::anyhow!(error));
++            }
++        }
++
+         match status {
+             WorkflowStatus::Completed => {
+                 println!(
+@@ -224,7 +252,7 @@ pub async fn wait_for_workflow_completion(
+                     last_heartbeat = Instant::now();
+                 }
+                 // Still running, wait a bit before checking again
+-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
++                wait_for_run_progress(completion.as_mut(), Duration::from_secs(2)).await;
+             }
+             WorkflowStatus::Canceled => {
+                 println!(
+@@ -236,7 +264,7 @@ pub async fn wait_for_workflow_completion(
+             }
+             _ => {
+                 // Wait a bit before checking again
+-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
++                wait_for_run_progress(completion.as_mut(), Duration::from_secs(1)).await;
+             }
+         }
+     }
+@@ -244,6 +272,35 @@ pub async fn wait_for_workflow_completion(
+     Ok(())
+ }
+ 
++/// Statuses a wait loop stops on: terminal ones plus `AwaitingTrigger`.
++fn is_settled_workflow_status(status: WorkflowStatus) -> bool {
++    matches!(
++        status,
++        WorkflowStatus::Completed
++            | WorkflowStatus::Failed
++            | WorkflowStatus::Canceled
++            | WorkflowStatus::AwaitingTrigger
++    )
++}
++
++/// Sleep for `fallback` before the next status poll, waking early when an
++/// in-process executor for the run exits. Each exit wakes the loop once, so a
++/// status that stays non-terminal falls back to plain polling.
++pub(crate) async fn wait_for_run_progress(
++    completion: Option<&mut WorkflowCompletionSignal>,
++    fallback: Duration,
++) {
++    match completion {
++        Some(signal) => {
++            tokio::select! {
++                _ = signal.executor_exited() => {}
++                _ = tokio::time::sleep(fallback) => {}
++            }
++        }
++        None => tokio::time::sleep(fallback).await,
++    }
++}
++
+ fn failed_workflow_error(tasks: &[Task]) -> Option<anyhow::Error> {
+     tasks
+         .iter()
+diff --git a/crates/cli/tests/workflow_run_completion.rs b/crates/cli/tests/workflow_run_completion.rs
+new file mode 100644
+index 00000000..151c8ba5
+--- /dev/null
++++ b/crates/cli/tests/workflow_run_completion.rs
+@@ -0,0 +1,238 @@
++//! `codemod workflow run` must return as soon as the in-process workflow
++//! executor finishes, instead of waiting out the status poll interval, while
++//! runs that pause on a manual trigger still pause and can be resumed.
++
++use std::path::Path;
++use std::process::{Command, Output};
++use std::sync::Once;
++use std::time::{Duration, Instant};
++
++/// Whole-process bound (debug binary, startup included). Generous for a loaded
++/// CI machine, but below the 2 s the wait loop used to sleep when it first saw
++/// a running workflow.
++const FAST_EXIT: Duration = Duration::from_millis(1500);
++
++/// Upper bound for the wait loop itself, as printed by the CLI in
++/// "Workflow completed in X.Xs" (excludes process startup).
++const FAST_WAIT_SECS: f64 = 0.3;
++
++static WARM_BINARY: Once = Once::new();
++
++/// Run `codemod` from `cwd` (shell steps inherit the process cwd).
++fn codemod(home: &Path, cwd: &Path, args: &[&str]) -> (Output, Duration) {
++    // The first exec of a freshly linked binary can take seconds on macOS;
++    // keep that out of the timed runs.
++    WARM_BINARY.call_once(|| {
++        let _ = Command::new(env!("CARGO_BIN_EXE_codemod"))
++            .arg("--version")
++            .output();
++    });
++    let started = Instant::now();
++    let output = Command::new(env!("CARGO_BIN_EXE_codemod"))
++        .current_dir(cwd)
++        .arg("--disable-analytics")
++        .args(args)
++        // The local state adapter lives under the platform data dir; keep it
++        // inside the test's temp dir.
++        .env("HOME", home)
++        .env("XDG_DATA_HOME", home.join("data"))
++        .env("NO_COLOR", "1")
++        .output()
++        .expect("failed to run codemod");
++    (output, started.elapsed())
++}
++
++fn describe(output: &Output) -> String {
++    format!(
++        "status: {:?}\nstdout:\n{}\nstderr:\n{}",
++        output.status,
++        String::from_utf8_lossy(&output.stdout),
++        String::from_utf8_lossy(&output.stderr)
++    )
++}
++
++fn workflow_run_id(output: &Output) -> String {
++    let stdout = String::from_utf8_lossy(&output.stdout);
++    stdout
++        .lines()
++        .find_map(|line| line.trim().strip_prefix("Workflow started "))
++        .map(|id| id.trim().to_string())
++        .unwrap_or_else(|| panic!("no run id in output\n{}", describe(output)))
++}
++
++/// Seconds from "Workflow completed in X.Xs".
++fn completed_wait_secs(output: &Output) -> f64 {
++    let stdout = String::from_utf8_lossy(&output.stdout);
++    stdout
++        .lines()
++        .find_map(|line| line.trim().strip_prefix("Workflow completed in "))
++        .and_then(|rest| rest.trim().strip_suffix('s'))
++        .and_then(|secs| secs.parse().ok())
++        .unwrap_or_else(|| panic!("no completion time in output\n{}", describe(output)))
++}
++
++fn write_workflow(dir: &Path, body: &str) -> String {
++    let path = dir.join("workflow.yaml");
++    std::fs::write(&path, body).unwrap();
++    path.to_str().unwrap().to_string()
++}
++
++const TRIVIAL_WORKFLOW: &str = r#"version: "1"
++nodes:
++  - id: touch
++    name: Touch
++    type: automatic
++    steps:
++      - name: touch
++        run: echo done > touched.txt
++"#;
++
++const MANUAL_WORKFLOW: &str = r#"version: "1"
++nodes:
++  - id: first
++    name: First
++    type: automatic
++    steps:
++      - name: first
++        run: echo first > first.txt
++  - id: gated
++    name: Gated
++    type: automatic
++    depends_on: [first]
++    trigger:
++      type: manual
++    steps:
++      - name: gated
++        run: echo gated > gated.txt
++"#;
++
++#[test]
++fn trivial_workflow_exits_without_waiting_for_the_poll_interval() {
++    let home = tempfile::tempdir().unwrap();
++    let target = tempfile::tempdir().unwrap();
++    let workflow = write_workflow(home.path(), TRIVIAL_WORKFLOW);
++    let target_arg = target.path().to_str().unwrap();
++    let args = [
++        "workflow",
++        "run",
++        "-w",
++        &workflow,
++        "--target",
++        target_arg,
++        "--allow-dirty",
++        "--no-interactive",
++    ];
++
++    // Warm-up run so binary load and first-run state setup aren't timed.
++    let (output, _) = codemod(home.path(), target.path(), &args);
++    assert!(output.status.success(), "{}", describe(&output));
++
++    std::fs::remove_file(target.path().join("touched.txt")).unwrap();
++    let (output, elapsed) = codemod(home.path(), target.path(), &args);
++    assert!(output.status.success(), "{}", describe(&output));
++    assert_eq!(
++        std::fs::read_to_string(target.path().join("touched.txt"))
++            .unwrap()
++            .trim(),
++        "done"
++    );
++    let wait_secs = completed_wait_secs(&output);
++    assert!(
++        wait_secs < FAST_WAIT_SECS,
++        "wait loop took {wait_secs}s, expected < {FAST_WAIT_SECS}s\n{}",
++        describe(&output)
++    );
++    assert!(
++        elapsed < FAST_EXIT,
++        "workflow run took {elapsed:?}, expected < {FAST_EXIT:?}\n{}",
++        describe(&output)
++    );
++}
++
++#[test]
++fn manual_trigger_still_pauses_and_resumes() {
++    let home = tempfile::tempdir().unwrap();
++    let target = tempfile::tempdir().unwrap();
++    let workflow = write_workflow(home.path(), MANUAL_WORKFLOW);
++    let target_arg = target.path().to_str().unwrap();
++
++    let (output, elapsed) = codemod(
++        home.path(),
++        target.path(),
++        &[
++            "workflow",
++            "run",
++            "-w",
++            &workflow,
++            "--target",
++            target_arg,
++            "--allow-dirty",
++            "--no-interactive",
++        ],
++    );
++    assert!(output.status.success(), "{}", describe(&output));
++    let stdout = String::from_utf8_lossy(&output.stdout);
++    assert!(
++        !stdout.contains("Workflow completed"),
++        "{}",
++        describe(&output)
++    );
++    assert!(target.path().join("first.txt").exists());
++    assert!(
++        !target.path().join("gated.txt").exists(),
++        "gated step ran without its trigger"
++    );
++    assert!(
++        elapsed < FAST_EXIT,
++        "pausing took {elapsed:?}\n{}",
++        describe(&output)
++    );
++    let run_id = workflow_run_id(&output);
++
++    let (status, _) = codemod(
++        home.path(),
++        target.path(),
++        &["workflow", "status", "-i", &run_id],
++    );
++    assert!(status.status.success(), "{}", describe(&status));
++    assert!(
++        String::from_utf8_lossy(&status.stdout).contains("AwaitingTrigger"),
++        "{}",
++        describe(&status)
++    );
++
++    let (output, elapsed) = codemod(
++        home.path(),
++        target.path(),
++        &[
++            "workflow",
++            "resume",
++            "-w",
++            &workflow,
++            "-i",
++            &run_id,
++            "--trigger-all",
++            "--target",
++            target_arg,
++            "--allow-dirty",
++            "--no-interactive",
++        ],
++    );
++    assert!(output.status.success(), "{}", describe(&output));
++    assert!(
++        String::from_utf8_lossy(&output.stdout).contains("Workflow completed successfully"),
++        "{}",
++        describe(&output)
++    );
++    assert_eq!(
++        std::fs::read_to_string(target.path().join("gated.txt"))
++            .unwrap()
++            .trim(),
++        "gated"
++    );
++    assert!(
++        elapsed < FAST_EXIT,
++        "resume took {elapsed:?}\n{}",
++        describe(&output)
++    );
++}
+diff --git a/crates/core/src/engine.rs b/crates/core/src/engine.rs
+index 0db51538..6608e535 100644
+--- a/crates/core/src/engine.rs
++++ b/crates/core/src/engine.rs
+@@ -46,6 +46,7 @@ use crate::slog;
+ use crate::structured_log::{StdoutCaptureGuard, StepContext, StructuredLogger};
+ use crate::task_state_service::TaskStateService;
+ use crate::utils::validate_workflow;
++use crate::workflow_completion::{WorkflowCompletionSignal, WorkflowExecutorRegistry};
+ use crate::workflow_runtime::{publish_event, WorkflowEvent};
+ use chrono::Utc;
+ use codemod_sandbox::llm::{LlmRequestHandler, LlmResponse};
+@@ -612,6 +613,10 @@ pub struct Engine {
+     /// (today: the js-ast-grep file loop). `cancel_workflow` flips every entry
+     /// so the step can short-circuit without polling the state backend.
+     step_cancel_signals: Arc<std::sync::Mutex<HashMap<Uuid, Arc<AtomicBool>>>>,
++
++    /// Exit signals for workflow executors spawned by this engine (and its
++    /// clones), keyed by workflow run id. See [`Engine::completion_signal`].
++    workflow_executors: WorkflowExecutorRegistry,
+ }
+ 
+ /// Represents a codemod dependency chain for cycle detection
+@@ -1090,6 +1095,7 @@ impl Engine {
+                 .with_text_log_fallthrough(true),
+             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
++            workflow_executors: WorkflowExecutorRegistry::default(),
+         }
+     }
+ 
+@@ -1117,6 +1123,7 @@ impl Engine {
+             structured_logger,
+             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
++            workflow_executors: WorkflowExecutorRegistry::default(),
+         }
+     }
+ 
+@@ -1214,6 +1221,7 @@ impl Engine {
+             structured_logger,
+             output_heartbeat_callbacks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+             step_cancel_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
++            workflow_executors: WorkflowExecutorRegistry::default(),
+         }
+     }
+ 
+@@ -1480,6 +1488,10 @@ impl Engine {
+ 
+     fn spawn_workflow_executor(&self, workflow_run_id: Uuid) {
+         let mut workflow_engine = self.clone();
++        // Registered before the thread starts so a subscriber that arrives
++        // right after `run_workflow` returns still observes this executor.
++        // The guard reports the exit when dropped, including on panic.
++        let mut executor_guard = self.workflow_executors.begin(workflow_run_id);
+ 
+         std::thread::spawn(move || {
+             let rt = tokio::runtime::Builder::new_multi_thread()
+@@ -1487,14 +1499,32 @@ impl Engine {
+                 .enable_all()
+                 .build()
+                 .expect("failed to build workflow runtime");
+-            rt.block_on(async move {
++            rt.block_on(async {
+                 if let Err(e) = workflow_engine.execute_workflow(workflow_run_id).await {
+-                    workflow_engine.emit_error(format!("Workflow execution failed: {e}"));
++                    let message = format!("Workflow execution failed: {e}");
++                    workflow_engine.emit_error(message.clone());
++                    executor_guard.fail(message);
+                 }
+             });
++            // Signal before tearing the runtime down so waiters don't also
++            // wait for its shutdown.
++            drop(executor_guard);
++            drop(rt);
+         });
+     }
+ 
++    /// Wake-up signal for executors of `workflow_run_id` started by this
++    /// engine or one of its clones (`run_workflow`, `resume_workflow`,
++    /// `trigger_all`). Returns `None` when no executor for the run was started
++    /// in this process, e.g. a run driven by another process through shared
++    /// state; callers must then rely on polling alone.
++    ///
++    /// The signal only says "an executor exited". The workflow status in the
++    /// state adapter stays authoritative, so re-read it after waking.
++    pub fn completion_signal(&self, workflow_run_id: Uuid) -> Option<WorkflowCompletionSignal> {
++        self.workflow_executors.subscribe(workflow_run_id)
++    }
++
+     pub(crate) async fn append_task_log(
+         &self,
+         task_id: Uuid,
+@@ -4358,6 +4388,7 @@ impl Clone for Engine {
+             structured_logger: self.structured_logger.clone(),
+             output_heartbeat_callbacks: Arc::clone(&self.output_heartbeat_callbacks),
+             step_cancel_signals: Arc::clone(&self.step_cancel_signals),
++            workflow_executors: self.workflow_executors.clone(),
+         }
+     }
+ }
+diff --git a/crates/core/src/lib.rs b/crates/core/src/lib.rs
+index d44e98af..01e9cb00 100644
+--- a/crates/core/src/lib.rs
++++ b/crates/core/src/lib.rs
+@@ -21,6 +21,7 @@ pub(crate) mod step_executor;
+ pub mod structured_log;
+ pub(crate) mod task_state_service;
+ pub mod utils;
++pub mod workflow_completion;
+ pub mod workflow_runtime;
+ 
+ pub use butterflow_models::{
+diff --git a/crates/core/src/workflow_completion.rs b/crates/core/src/workflow_completion.rs
+new file mode 100644
+index 00000000..9cc3274d
+--- /dev/null
++++ b/crates/core/src/workflow_completion.rs
+@@ -0,0 +1,207 @@
++//! In-process completion signals for workflow executors.
++//!
++//! The engine drives each workflow run on a dedicated thread
++//! (`Engine::spawn_workflow_executor`). Callers in the same process (the CLI's
++//! `workflow run` / `workflow resume` wait loops) used to learn about the end
++//! of a run only by polling the state adapter on a fixed sleep. This module
++//! lets them wake as soon as an executor exits instead, while the state
++//! adapter stays the source of truth for the run's status.
++//!
++//! A run can have several executor episodes (start, then one per resume or
++//! trigger), so the signal tracks a monotonically increasing exit count
++//! rather than a one-shot flag.
++
++use std::collections::HashMap;
++use std::sync::{Arc, Mutex};
++use tokio::sync::watch;
++use uuid::Uuid;
++
++/// Executor activity for one workflow run, as seen by this process.
++#[derive(Clone, Debug, Default, PartialEq, Eq)]
++pub struct WorkflowExecutorActivity {
++    /// Executors for this run currently running in this process.
++    pub active: usize,
++    /// Number of executors for this run that have exited, with any outcome.
++    pub exits: u64,
++    /// Error from the most recently exited executor, if it failed or panicked.
++    pub last_error: Option<String>,
++}
++
++impl WorkflowExecutorActivity {
++    /// True when no executor is running and the last one to exit failed.
++    pub fn failed_without_executor(&self) -> bool {
++        self.active == 0 && self.exits > 0 && self.last_error.is_some()
++    }
++}
++
++/// Per-run executor activity channels, shared by every clone of an engine.
++#[derive(Clone, Default)]
++pub(crate) struct WorkflowExecutorRegistry {
++    runs: Arc<Mutex<HashMap<Uuid, Arc<watch::Sender<WorkflowExecutorActivity>>>>>,
++}
++
++impl WorkflowExecutorRegistry {
++    fn sender(&self, workflow_run_id: Uuid) -> Arc<watch::Sender<WorkflowExecutorActivity>> {
++        let mut runs = self.runs.lock().unwrap_or_else(|error| error.into_inner());
++        Arc::clone(
++            runs.entry(workflow_run_id)
++                .or_insert_with(|| Arc::new(watch::channel(Default::default()).0)),
++        )
++    }
++
++    /// Record that an executor for `workflow_run_id` is starting. The returned
++    /// guard reports the exit when dropped, including during a panic unwind.
++    pub(crate) fn begin(&self, workflow_run_id: Uuid) -> WorkflowExecutorGuard {
++        let sender = self.sender(workflow_run_id);
++        sender.send_modify(|activity| activity.active += 1);
++        WorkflowExecutorGuard {
++            sender,
++            error: None,
++        }
++    }
++
++    /// Subscribe to executor exits for a run. `None` when no executor for the
++    /// run was ever started in this process (e.g. the run is driven by another
++    /// process through shared state), in which case callers must poll.
++    pub(crate) fn subscribe(&self, workflow_run_id: Uuid) -> Option<WorkflowCompletionSignal> {
++        let runs = self.runs.lock().unwrap_or_else(|error| error.into_inner());
++        let receiver = runs.get(&workflow_run_id)?.subscribe();
++        let seen_exits = receiver.borrow().exits;
++        Some(WorkflowCompletionSignal {
++            receiver,
++            seen_exits,
++        })
++    }
++}
++
++/// Reports an executor exit to subscribers when dropped.
++pub(crate) struct WorkflowExecutorGuard {
++    sender: Arc<watch::Sender<WorkflowExecutorActivity>>,
++    error: Option<String>,
++}
++
++impl WorkflowExecutorGuard {
++    pub(crate) fn fail(&mut self, error: String) {
++        self.error = Some(error);
++    }
++}
++
++impl Drop for WorkflowExecutorGuard {
++    fn drop(&mut self) {
++        let error = self
++            .error
++            .take()
++            .or_else(|| std::thread::panicking().then(|| "Workflow executor panicked".to_string()));
++        self.sender.send_modify(|activity| {
++            activity.active = activity.active.saturating_sub(1);
++            activity.exits += 1;
++            activity.last_error = error;
++        });
++    }
++}
++
++/// Wakes when a workflow executor for one run exits in this process.
++///
++/// This is a wake-up hint only: after it fires, re-read the run status from
++/// the state adapter, which remains authoritative.
++pub struct WorkflowCompletionSignal {
++    receiver: watch::Receiver<WorkflowExecutorActivity>,
++    seen_exits: u64,
++}
++
++impl WorkflowCompletionSignal {
++    /// Current executor activity for the run.
++    pub fn activity(&self) -> WorkflowExecutorActivity {
++        self.receiver.borrow().clone()
++    }
++
++    /// Resolve once an executor exit happens that this signal has not reported
++    /// yet. Exits that happened after subscribing but before this call resolve
++    /// immediately; each exit is reported once. Never resolves if no further
++    /// executor exits, so pair it with a fallback timer.
++    pub async fn executor_exited(&mut self) -> WorkflowExecutorActivity {
++        let seen = self.seen_exits;
++        match self
++            .receiver
++            .wait_for(|activity| activity.exits > seen)
++            .await
++        {
++            Ok(activity) => {
++                let activity = activity.clone();
++                self.seen_exits = activity.exits;
++                activity
++            }
++            // The engine that owned the channel is gone; nothing will fire.
++            Err(_) => std::future::pending().await,
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::time::Duration;
++
++    #[tokio::test]
++    async fn subscribe_is_none_for_unknown_run() {
++        let registry = WorkflowExecutorRegistry::default();
++        assert!(registry.subscribe(Uuid::new_v4()).is_none());
++    }
++
++    #[tokio::test]
++    async fn fires_once_per_exit_and_reports_errors() {
++        let registry = WorkflowExecutorRegistry::default();
++        let run_id = Uuid::new_v4();
++
++        let guard = registry.begin(run_id);
++        let mut signal = registry.subscribe(run_id).expect("run was started here");
++        assert_eq!(signal.activity().active, 1);
++
++        drop(guard);
++        let activity = tokio::time::timeout(Duration::from_secs(1), signal.executor_exited())
++            .await
++            .expect("exit should be reported");
++        assert_eq!(activity.active, 0);
++        assert_eq!(activity.exits, 1);
++        assert!(!activity.failed_without_executor());
++
++        // Already reported: must not fire again until another executor exits.
++        assert!(
++            tokio::time::timeout(Duration::from_millis(50), signal.executor_exited())
++                .await
++                .is_err()
++        );
++
++        let mut guard = registry.begin(run_id);
++        guard.fail("boom".to_string());
++        drop(guard);
++        let activity = tokio::time::timeout(Duration::from_secs(1), signal.executor_exited())
++            .await
++            .expect("second exit should be reported");
++        assert_eq!(activity.exits, 2);
++        assert_eq!(activity.last_error.as_deref(), Some("boom"));
++        assert!(activity.failed_without_executor());
++    }
++
++    #[tokio::test]
++    async fn records_panics_as_errors() {
++        let registry = WorkflowExecutorRegistry::default();
++        let run_id = Uuid::new_v4();
++        let guard = registry.begin(run_id);
++        let mut signal = registry.subscribe(run_id).unwrap();
++
++        let handle = std::thread::spawn(move || {
++            let _guard = guard;
++            panic!("executor blew up");
++        });
++        assert!(handle.join().is_err());
++
++        let activity = tokio::time::timeout(Duration::from_secs(1), signal.executor_exited())
++            .await
++            .expect("panic exit should be reported");
++        assert_eq!(
++            activity.last_error.as_deref(),
++            Some("Workflow executor panicked")
++        );
++    }
++}
+-- 
+2.43.0
+

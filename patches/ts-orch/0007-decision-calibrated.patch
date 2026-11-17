@@ -1,0 +1,194 @@
+From ecb5aea48f4bd123b20a0a60a829b03a643fa09c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 02:27:15 +0000
+Subject: [PATCH] orchestration: record calibration per deployment, with
+ DECISION_CALIBRATED
+
+Microsoft-Decision-1 on Foundry (a path under /providers/microsoft/) does
+not claim calibrated probabilities, so its answers record calibrated:
+false. DECISION_CALIBRATED=true|false overrides either default.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/orchestration/README.md              | 13 +++++++-----
+ packages/orchestration/src/core/decision.ts   | 20 +++++++++++++++++++
+ .../orchestration/src/execution/assessment.ts |  2 +-
+ .../src/execution/decision/adapter.ts         |  2 --
+ .../src/execution/decision/openai.ts          |  1 -
+ .../src/execution/decision/systemone.ts       |  1 -
+ .../orchestration/tests/assessment.test.ts    | 20 +++++++++++++++++++
+ 7 files changed, 49 insertions(+), 10 deletions(-)
+
+diff --git a/packages/orchestration/README.md b/packages/orchestration/README.md
+index eacf4bab..41cb5b7b 100644
+--- a/packages/orchestration/README.md
++++ b/packages/orchestration/README.md
+@@ -494,7 +494,8 @@ picks the provider and model:
+   code narrows on `answer.type` (see `demo/10-assisted.ts`). `provider` is
+   the adapter that asked, `model` is the versioned model that answered (e.g.
+   `jev-1.13.0` for `jev-latest`), `calibrated` says whether the provider
+-  documents its probabilities and confidence as calibrated, and `usage` is
++  documents its probabilities and confidence as calibrated (configurable,
++  below), and `usage` is
+   `{ inputTokens?, outputTokens? }`, each count present only when the API
+   reported it. Answers are validated against the concrete resolved questions
+   both when the API responds and when a result is decoded (replay included);
+@@ -531,10 +532,12 @@ picks the provider and model:
+   instructions are stringified and yes/no criteria are appended to the
+   instructions; JSON state is sent as an `input_json` user message and text
+   state as the `input` string. A refusal becomes `{ type: "refused" }`, and
+-  usage reports input tokens only. Both adapters report `calibrated: true`.
+-  For Microsoft Decision that follows System One's contract; Microsoft's docs
+-  describe its probabilities as useful for relative ordering and thresholds
+-  and do not claim calibration.
++  usage reports input tokens only.
++- `calibrated` is `true` for TypeSafe and OpenAI, and `false` when
++  `DECISION_PATH` is under `/providers/microsoft/`: Microsoft's docs describe
++  its probabilities as useful for relative ordering and thresholds and do not
++  claim calibration. `DECISION_CALIBRATED=true|false` overrides either
++  default; any other value fails the command as a config error.
+ - In `quickjs` there is no global `fetch`: the executor gets an adapter
+   (`src/host/quickjs/fetch.ts`) over the host function `httpRequest`, which
+   only allows URLs under the decision API root, resolved as `decision.ts`
+diff --git a/packages/orchestration/src/core/decision.ts b/packages/orchestration/src/core/decision.ts
+index 4f96d508..396135e2 100644
+--- a/packages/orchestration/src/core/decision.ts
++++ b/packages/orchestration/src/core/decision.ts
+@@ -13,10 +13,17 @@
+  * | `DECISION_API_KEY`     | the key                                              |
+  * | `DECISION_AUTH_HEADER` | `authorization` (default, sends `Bearer <key>`) or a |
+  * |                        | header that carries the raw key, such as `api-key`   |
++ * | `DECISION_CALIBRATED`  | `true` or `false`: whether answers are calibrated    |
++ * |                        | probabilities (see below)                            |
+  *
+  * `systemone` still reads `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL` and
+  * `TYPESAFE_API_KEY` when the `DECISION_*` value is unset, and `openai` reads
+  * `OPENAI_API_KEY`. Blank values count as unset.
++ *
++ * Calibration is a property of the deployment, not the wire format: TypeSafe
++ * and OpenAI document calibrated probabilities, while Microsoft-Decision-1 on
++ * Foundry (a path under `/providers/microsoft/`) documents its scores only for
++ * ordering and thresholds. `DECISION_CALIBRATED` overrides either default.
+  */
+ 
+ export const DECISION_PROVIDERS = ["systemone", "openai"] as const;
+@@ -30,6 +37,8 @@ export interface DecisionSettings {
+   apiKey?: string;
+   /** Lower-case header name; `authorization` sends `Bearer <key>`. */
+   authHeader: string;
++  /** Whether answers are calibrated probabilities; recorded in each result. */
++  calibrated: boolean;
+ }
+ 
+ const DEFAULTS: Record<
+@@ -110,8 +119,19 @@ export function decisionSettings(env: Env, provider = decisionProvider(env)): De
+     provider,
+     url: `${baseURL.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`,
+     authHeader: (read(env, "DECISION_AUTH_HEADER") ?? "authorization").toLowerCase(),
++    calibrated: calibrated(env, path),
+   };
+   const apiKey = setting(env, provider, "apiKey", "DECISION_API_KEY");
+   if (apiKey !== undefined) settings.apiKey = apiKey;
+   return settings;
+ }
++
++function calibrated(env: Env, path: string): boolean {
++  const override = read(env, "DECISION_CALIBRATED")?.toLowerCase();
++  if (override === "true") return true;
++  if (override === "false") return false;
++  if (override !== undefined) {
++    throw new Error(`DECISION_CALIBRATED '${override}' is not true or false`);
++  }
++  return !/(^|\/)providers\/microsoft\//u.test(path);
++}
+diff --git a/packages/orchestration/src/execution/assessment.ts b/packages/orchestration/src/execution/assessment.ts
+index eae7235c..a9be02fb 100644
+--- a/packages/orchestration/src/execution/assessment.ts
++++ b/packages/orchestration/src/execution/assessment.ts
+@@ -145,7 +145,7 @@ export async function executeAssessment(
+       : {
+           provider: operation.provider,
+           model: decoded.model,
+-          calibrated: adapter.calibrated,
++          calibrated: settings.calibrated,
+           answers: decoded.answers,
+           usage: decoded.usage,
+         };
+diff --git a/packages/orchestration/src/execution/decision/adapter.ts b/packages/orchestration/src/execution/decision/adapter.ts
+index 1861d0ef..befcea86 100644
+--- a/packages/orchestration/src/execution/decision/adapter.ts
++++ b/packages/orchestration/src/execution/decision/adapter.ts
+@@ -22,8 +22,6 @@ export interface DecodedResponse {
+ }
+ 
+ export interface DecisionAdapter {
+-  /** Whether the API documents its probabilities and confidence as calibrated. */
+-  calibrated: boolean;
+   /** The request body, or why this provider cannot ask these questions. */
+   encode(request: DecisionRequest): { body: unknown } | { problem: string };
+   /**
+diff --git a/packages/orchestration/src/execution/decision/openai.ts b/packages/orchestration/src/execution/decision/openai.ts
+index d6a98c5e..599b1a9e 100644
+--- a/packages/orchestration/src/execution/decision/openai.ts
++++ b/packages/orchestration/src/execution/decision/openai.ts
+@@ -74,7 +74,6 @@ function decodeAnswer(answer: Record<string, unknown>, question: AssessmentQuest
+ }
+ 
+ export const openai: DecisionAdapter = {
+-  calibrated: true,
+   encode({ state, questions, model }) {
+     const entries = Object.entries(questions);
+     if (entries.length > MAX_QUESTIONS) {
+diff --git a/packages/orchestration/src/execution/decision/systemone.ts b/packages/orchestration/src/execution/decision/systemone.ts
+index bfe57283..7709c980 100644
+--- a/packages/orchestration/src/execution/decision/systemone.ts
++++ b/packages/orchestration/src/execution/decision/systemone.ts
+@@ -36,7 +36,6 @@ function decodeAnswer(answer: unknown): unknown {
+ }
+ 
+ export const systemone: DecisionAdapter = {
+-  calibrated: true,
+   encode({ state, questions, model }) {
+     const encoded = Object.entries(questions).map(([id, q]) => [id, encodeQuestion(q)]);
+     return { body: { state, questions: Object.fromEntries(encoded), model } };
+diff --git a/packages/orchestration/tests/assessment.test.ts b/packages/orchestration/tests/assessment.test.ts
+index f705a209..72b7a895 100644
+--- a/packages/orchestration/tests/assessment.test.ts
++++ b/packages/orchestration/tests/assessment.test.ts
+@@ -580,6 +580,21 @@ describe("the System One adapter", () => {
+     ]);
+   });
+ 
++  it.each<[string, Record<string, string>, boolean]>([
++    ["TypeSafe by default", {}, true],
++    ["Microsoft Decision on Foundry", { DECISION_PATH: "providers/microsoft/v1/systemone" }, false],
++    [
++      "Microsoft Decision when DECISION_CALIBRATED says so",
++      { DECISION_PATH: "providers/microsoft/v1/systemone", DECISION_CALIBRATED: "true" },
++      true,
++    ],
++    ["TypeSafe when DECISION_CALIBRATED=false", { DECISION_CALIBRATED: "FALSE" }, false],
++  ])("records whether answers are calibrated: %s", async (_, env, calibrated) => {
++    const { fetch } = api(() => yesNoReply);
++    const result = await ask(single(yesNo), fetch, { env: { ...KEY, ...env } });
++    expect(result.output).toMatchObject({ calibrated });
++  });
++
+   it("falls back to TYPESAFE_API_KEY and TYPESAFE_BASE_URL", async () => {
+     const env = { TYPESAFE_API_KEY: "legacy", TYPESAFE_BASE_URL: "http://127.0.0.1:9" };
+     const { sent, fetch } = api(() => yesNoReply);
+@@ -772,6 +787,11 @@ describe("assessment failures", () => {
+       { env: { ...KEY, DECISION_BASE_URL: "https://x/?a=1" } },
+       "decision base URL 'https://x/?a=1' must not carry a query, fragment, or user",
+     ],
++    [
++      "a calibration flag that is not true or false",
++      { env: { ...KEY, DECISION_CALIBRATED: "yes" } },
++      "DECISION_CALIBRATED 'yes' is not true or false",
++    ],
+     [
+       "a timeout too large for a timer",
+       { timeoutMs: 2 ** 31 },
+-- 
+2.43.0
+

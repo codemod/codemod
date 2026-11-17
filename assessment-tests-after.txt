@@ -1,0 +1,81 @@
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+ ✓ tests/assessment.test.ts > defining an assessment > rejects a blank name
+ ✓ tests/assessment.test.ts > defining an assessment > rejects ask that is not a function
+ ✓ tests/assessment.test.ts > defining an assessment > rejects a blank pinned model
+ ✓ tests/assessment.test.ts > defining an assessment > rejects no include patterns
+ ✓ tests/assessment.test.ts > defining an assessment > rejects a blank include pattern
+ ✓ tests/assessment.test.ts > defining an assessment > rejects an empty exclude list
+ ✓ tests/assessment.test.ts > defining an assessment > rejects a blank exclude pattern
+ ✓ tests/assessment.test.ts > defining an assessment > runs as the root
+ ✓ tests/assessment.test.ts > defining an assessment > runs as a step in sequence()
+ ✓ tests/assessment.test.ts > defining an assessment > runs as a branch of parallel()
+ ✓ tests/assessment.test.ts > defining an assessment > runs as awaited inside dynamic()
+ ✓ tests/assessment.test.ts > the recorded operation > holds the selection, the input, the provider and the model, and nothing of ask
+ ✓ tests/assessment.test.ts > the recorded operation > takes DECISION_PROVIDER and its default model
+ ✓ tests/assessment.test.ts > the recorded operation > takes DECISION_MODEL
+ ✓ tests/assessment.test.ts > the recorded operation > takes TYPESAFE_DEFAULT_MODEL for System One
+ ✓ tests/assessment.test.ts > the recorded operation > takes a pinned model over DECISION_MODEL
+ ✓ tests/assessment.test.ts > the recorded operation > rejects an unknown DECISION_PROVIDER
+ ✓ tests/assessment.test.ts > the recorded operation > replays as changed when the configured model changes
+ ✓ tests/assessment.test.ts > decoding a recorded result > reads null as no files
+ ✓ tests/assessment.test.ts > decoding a recorded result > reads undefined as no files
+ ✓ tests/assessment.test.ts > decoding a recorded result > reads %j as no files
+ ✓ tests/assessment.test.ts > decoding a recorded result > rejects a non-array output
+ ✓ tests/assessment.test.ts > decoding a recorded result > rejects an entry without a file
+ ✓ tests/assessment.test.ts > decoding a recorded result > rejects an entry with invalid questions
+ ✓ tests/assessment.test.ts > decoding a recorded result > rejects answers that miss a question
+ ✓ tests/assessment.test.ts > decoding a recorded result > rejects a result without the provider
+ ✓ tests/assessment.test.ts > decoding a recorded result > accepts a refusal in place of any answer
+ ✓ tests/assessment.test.ts > selecting and reading files > selects by include and exclude from the target root, in walker order
+ ✓ tests/assessment.test.ts > selecting and reading files > skips symlinks
+ ✓ tests/assessment.test.ts > selecting and reading files > asks nothing and returns no results when no file matches
+ ✓ tests/assessment.test.ts > selecting and reading files > sends each file's path and content, and the workflow input, as the state
+ ✓ tests/assessment.test.ts > selecting and reading files > asks the questions ask returns for each file
+ ✓ tests/assessment.test.ts > selecting and reading files > fails, naming the file, when ask returns invalid questions
+ ✓ tests/assessment.test.ts > selecting and reading files > fails, naming the file, when a file is not valid UTF-8
+ ✓ tests/assessment.test.ts > selecting and reading files > fails, naming the file, when a file cannot be read
+ ✓ tests/assessment.test.ts > selecting and reading files > skips a file that vanished after selection
+ ✓ tests/assessment.test.ts > replay > returns the recorded results without selecting, reading or asking
+ ✓ tests/assessment.test.ts > asking many files > asks at most fileConcurrency files at once
+ ✓ tests/assessment.test.ts > asking many files > asks at most 4 files at once by default
+ ✓ tests/assessment.test.ts > asking many files > returns results in selector order whatever order the answers arrive in
+ ✓ tests/assessment.test.ts > asking many files > fails the step with the first file's failure
+ ✓ tests/assessment.test.ts > asking many files > starts no further file after a failure
+ ✓ tests/assessment.test.ts > asking many files > stops when the run is aborted
+ ✓ tests/assessment.test.ts > the System One adapter > posts state, questions and model to /v1/systemone with a bearer key
+ ✓ tests/assessment.test.ts > the System One adapter > sends a yes/no question as noul with true and false criteria
+ ✓ tests/assessment.test.ts > the System One adapter > returns the answers in this package's shapes, with provider, model and calibration
+ ✓ tests/assessment.test.ts > the System One adapter > drops answer fields the API adds later
+ ✓ tests/assessment.test.ts > the System One adapter > reaches Microsoft Decision on Foundry with a configured path and api-key header
+ ✓ tests/assessment.test.ts > the System One adapter > falls back to TYPESAFE_API_KEY and TYPESAFE_BASE_URL
+ ✓ tests/assessment.test.ts > the OpenAI decisions adapter > posts the questions as a named array to /v1/decisions with OPENAI_API_KEY
+ ✓ tests/assessment.test.ts > the OpenAI decisions adapter > sends text state as the input string
+ ✓ tests/assessment.test.ts > the OpenAI decisions adapter > sends JSON state as an input_json message
+ ✓ tests/assessment.test.ts > the OpenAI decisions adapter > maps the answers back by name, with the legend from the question
+ ✓ tests/assessment.test.ts > the OpenAI decisions adapter > returns a refusal as a refused answer
+ ✓ tests/assessment.test.ts > the OpenAI decisions adapter > refuses more than 10 score levels before sending
+ ✓ tests/assessment.test.ts > the OpenAI decisions adapter > refuses more than 400 questions before sending
+ ✓ tests/assessment.test.ts > the OpenAI decisions adapter > fails when an answer repeats a question name
+ ✓ tests/assessment.test.ts > assessment failures > fails as config with no API key
+ ✓ tests/assessment.test.ts > assessment failures > fails as config with a base URL that is not http(s)
+ ✓ tests/assessment.test.ts > assessment failures > fails as config with a base URL with a query
+ ✓ tests/assessment.test.ts > assessment failures > fails as config with a timeout too large for a timer
+ ✓ tests/assessment.test.ts > assessment failures > fails as config with more retries than the cap
+ ✓ tests/assessment.test.ts > assessment failures > fails an HTTP error with its status, request id and body
+ ✓ tests/assessment.test.ts > assessment failures > reports the server's retry-after-ms on a rate limit
+ ✓ tests/assessment.test.ts > assessment failures > retries 429 up to maxRetries
+ ✓ tests/assessment.test.ts > assessment failures > retries 503 up to maxRetries
+ ✓ tests/assessment.test.ts > assessment failures > retries a connection error up to maxRetries
+ ✓ tests/assessment.test.ts > assessment failures > succeeds when a retry is answered
+ ✓ tests/assessment.test.ts > assessment failures > fails a request that outlives timeoutMs as timed out
+ ✓ tests/assessment.test.ts > assessment failures > fails a connection error in the request phase
+ ✓ tests/assessment.test.ts > assessment failures > fails a 2xx body that is not JSON in the response phase
+ ✓ tests/assessment.test.ts > assessment failures > fails answers that do not match the questions in the response phase
+ ✓ tests/assessment.test.ts > assessment failures > is cancelled when aborted before it starts
+ ✓ tests/assessment.test.ts > assessment failures > is cancelled when aborted during the request
+ ✓ tests/assessment.test.ts > protocol fixtures > accept the assessment request
+ ✓ tests/assessment.test.ts > protocol fixtures > accept the assessment completion
+ Test Files  1 passed (1)
+      Tests  76 passed (76)
+   Start at  02:20:06
+   Duration  1.11s (transform 362ms, setup 0ms, collect 499ms, tests 231ms, environment 0ms, prepare 105ms)

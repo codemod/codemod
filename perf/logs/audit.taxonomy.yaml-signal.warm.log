@@ -1,0 +1,20 @@
+Workflow started bb6c3f18-34ac-4209-8f23-2948a848b9b8
+⏺ Count click-on-non-interactive findings
+⏺ Count db-query-in-loop findings
+⏺ Count derived-state-effect findings
+⏺ Count effect-missing-cleanup findings
+⏺ Count exhaustive-deps-suppressed findings
+⏺ Count floating-async-iteration findings
+⏺ Count img-missing-alt findings
+⏺ Count index-as-key findings
+⏺ Count nested-component-definition findings
+⏺ Count oversized-component findings
+⏺ Count route-entry-directive findings
+⏺ Count server-action-without-auth findings
+⏺ Count unsanitized-inner-html findings
+⏺ Count unstable-context-value findings
+Workflow completed in 1.9s
+
+Metrics:
+  index-as-key:
+    form=bare-index: 6

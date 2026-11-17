@@ -1,0 +1,7 @@
+workflow,repo,arm,round,wall_s,cpu_s,peak_rss_mb,exit,diff_sha,changed_files,ts
+react-19,excalidraw,yaml-signal,0,11.773,40.847,78.9,0,e3b0c44298fc1c14,0,1794185604
+react-19,excalidraw,yaml-signal,1,12.069,42.229,84.0,0,e3b0c44298fc1c14,0,1794185616
+react-19,excalidraw,yaml-signal,2,12.075,42.556,78.6,0,e3b0c44298fc1c14,0,1794185628
+debarrel,calcom,yaml-signal,0,31.362,113.423,285.0,0,c1125779fe8cb761,188,1794185692
+debarrel,calcom,yaml-signal,1,30.531,111.054,284.4,0,c1125779fe8cb761,188,1794185723
+debarrel,calcom,yaml-signal,2,30.726,112.433,285.3,0,c1125779fe8cb761,188,1794185754

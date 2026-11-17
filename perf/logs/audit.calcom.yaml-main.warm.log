@@ -1,0 +1,68 @@
+Workflow started 83706b67-f941-4f4a-ad06-9a5e21fc43f3
+⏺ Count click-on-non-interactive findings
+⏺ Count db-query-in-loop findings
+⏺ Count derived-state-effect findings
+⏳ Workflow still running (16s elapsed; 1 running, 11 pending, 2 completed, active nodes: derived-state-effect)
+⏺ Count effect-missing-cleanup findings
+⏺ Count exhaustive-deps-suppressed findings
+⏺ Count floating-async-iteration findings
+⏳ Workflow still running (32s elapsed; 1 running, 8 pending, 5 completed, active nodes: floating-async-iteration)
+⏺ Count img-missing-alt findings
+⏺ Count index-as-key findings
+⏺ Count nested-component-definition findings
+⏳ Workflow still running (48s elapsed; 1 running, 5 pending, 8 completed, active nodes: nested-component-definition)
+⏺ Count oversized-component findings
+⏺ Count route-entry-directive findings
+⏺ Count server-action-without-auth findings
+⏳ Workflow still running (64s elapsed; 1 running, 2 pending, 11 completed, active nodes: server-action-without-auth)
+⏺ Count unsanitized-inner-html findings
+⏺ Count unstable-context-value findings
+Workflow completed in 80.1s
+
+Metrics:
+  index-as-key:
+    form=bare-index: 45
+    form=index-in-expression: 4
+  img-missing-alt:
+    element=img: 2
+  route-entry-directive:
+    entry=layout, directive=use-client: 2
+    entry=page, directive=use-client: 2
+  nested-component-definition:
+    declaredAs=arrow: 16
+    declaredAs=function: 1
+  click-on-non-interactive:
+    element=div: 14
+    element=li: 3
+    element=span: 1
+  db-query-in-loop:
+    orm=prisma: 23
+    orm=repository: 4
+  floating-async-iteration:
+    method=forEach: 1
+    method=map-result-discarded: 1
+  server-action-without-auth:
+    kind=async-function, effect=cache-revalidation: 13
+  oversized-component:
+    size=300-499, stateHooks=1-5: 17
+    size=500-999, stateHooks=1-5: 5
+    size=300-499, stateHooks=0: 3
+    stateHooks=0, size=500-999: 3
+    size=300-499, stateHooks=6-10: 1
+    size=1000+, stateHooks=1-5: 1
+    stateHooks=6-10, size=500-999: 1
+    size=1000+, stateHooks=11+: 1
+  unsanitized-inner-html:
+    source=template: 6
+    source=expression: 1
+    source=variable: 1
+    source=function-result: 1
+  exhaustive-deps-suppressed:
+    tool=eslint, justified=no: 41
+    justified=yes, tool=eslint: 1
+  derived-state-effect:
+    kind=derived-value: 12
+    kind=reset-on-change: 3
+  unstable-context-value:
+    via=inline, wraps=inline-tree, shape=object: 6
+    shape=object, via=inline, wraps=children-prop: 3

@@ -1,0 +1,41 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/target.test.ts > target normalization > normalizes the root and keeps patterns as written
+ ✓ tests/target.test.ts > target normalization > rejects not an object
+ ✓ tests/target.test.ts > target normalization > rejects an empty target
+ ✓ tests/target.test.ts > target normalization > rejects an unknown field
+ ✓ tests/target.test.ts > target normalization > rejects an empty root
+ ✓ tests/target.test.ts > target normalization > rejects an absolute posix root
+ ✓ tests/target.test.ts > target normalization > rejects an absolute windows root
+ ✓ tests/target.test.ts > target normalization > rejects a unc root
+ ✓ tests/target.test.ts > target normalization > rejects a root that escapes
+ ✓ tests/target.test.ts > target normalization > rejects a root that escapes with backslashes
+ ✓ tests/target.test.ts > target normalization > rejects a bare parent root
+ ✓ tests/target.test.ts > target normalization > rejects an empty include list
+ ✓ tests/target.test.ts > target normalization > rejects a non-string exclude entry
+ ✓ tests/target.test.ts > target normalization > rejects an absolute pattern
+ ✓ tests/target.test.ts > target normalization > rejects an escaping pattern
+ ✓ tests/target.test.ts > JSSG invocation targets > binds a normalized target on the command and puts it on the wire operation
+ ✓ tests/target.test.ts > JSSG invocation targets > matches the shared jssg-target-request fixture
+ ✓ tests/target.test.ts > JSSG invocation targets > leaves the definition untargeted and does not mutate it
+ ✓ tests/target.test.ts > JSSG invocation targets > keeps the input alongside the target for typed invocations
+ ✓ tests/target.test.ts > JSSG invocation targets > rejects invalid targets and unknown fields when the command is created
+ ✓ tests/target.test.ts > JSSG invocation targets > is not available on shell or agent invocations
+ ✓ tests/target.test.ts > targeted JSSG in static composition > carries the target into sequence IR, history, and the executor request
+ ✓ tests/target.test.ts > targeted JSSG in static composition > accepts targeted members in a parallel group
+ ✓ tests/target.test.ts > targeted JSSG in static composition > targets one definition twice when invocations carry distinct ids
+ ✓ tests/target.test.ts > targets in dynamic workflows and replay > records the target per explicit id and replays it
+ ✓ tests/target.test.ts > targets in dynamic workflows and replay > treats a different target under the same id as a changed command
+ ✓ tests/target.test.ts > targets in dynamic workflows and replay > treats adding a target to a previously untargeted command as a change
+ ✓ tests/target.test.ts > targets in dynamic workflows and replay > produces identical commands for equivalent target spellings
+ ✓ tests/target.test.ts > protocol validation of targets > validates intrinsic JSSG applicability and semantic configuration
+ ✓ tests/target.test.ts > protocol validation of targets > accepts well-formed and rejects malformed jssg targets on the wire
+ ✓ tests/target.test.ts > protocol validation of targets > rejects a target on shell, agent, and assessment operations instead of ignoring it
+ ✓ tests/target.test.ts > protocol validation of targets > rejects fields that belong to another operation kind
+
+ Test Files  1 passed (1)
+      Tests  32 passed (32)
+   Start at  02:37:21
+   Duration  780ms (transform 346ms, setup 0ms, collect 459ms, tests 28ms, environment 0ms, prepare 83ms)
+

@@ -1,0 +1,23 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/jssg.test.ts > executeJssgCommand > selects by language, sends one batch with the root, source, and input, commits, and collects outputs
+ ✓ tests/jssg.test.ts > executeJssgCommand > intersects definition globs (repository-relative) with the invocation target
+ ✓ tests/jssg.test.ts > executeJssgCommand > changes nothing when the batch fails
+ ✓ tests/jssg.test.ts > executeJssgCommand > changes nothing when an edit renames outside the root
+ ✓ tests/jssg.test.ts > executeJssgCommand > changes nothing when an edit targets an absolute path
+ ✓ tests/jssg.test.ts > executeJssgCommand > changes nothing when two edits rename onto one destination
+ ✓ tests/jssg.test.ts > executeJssgCommand > changes nothing when one source is renamed twice
+ ✓ tests/jssg.test.ts > executeJssgCommand > changes nothing when an edit writes a path another edit renames away
+ ✓ tests/jssg.test.ts > executeJssgCommand > changes nothing when a rename lands on an existing file
+ ✓ tests/jssg.test.ts > executeJssgCommand > rejects an edit that escapes through a symlink before writing
+ ✓ tests/jssg.test.ts > executeJssgCommand > commits renames and secondary edits: destinations written, sources removed afterwards
+ ✓ tests/jssg.test.ts > executeJssgCommand > skips files that vanished or are not UTF-8
+ ✓ tests/jssg.test.ts > executeJssgCommand > reports unresolvable or escaping target roots as select failures
+ ✓ tests/jssg.test.ts > executeJssgCommand > cancels before commit and leaves files untouched
+
+ Test Files  1 passed (1)
+      Tests  14 passed | 1 skipped (15)
+   Start at  02:36:17
+   Duration  1.03s (transform 353ms, setup 0ms, collect 471ms, tests 255ms, environment 0ms, prepare 71ms)
+

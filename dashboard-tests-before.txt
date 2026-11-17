@@ -1,0 +1,20 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/dashboard.test.ts > executableIr > describes every root shape as plain data
+ ✓ tests/dashboard.test.ts > RunMonitor > attributes runtime commands to their dynamic topology nodes
+ ✓ tests/dashboard.test.ts > RunMonitor > projects events without env, inputs, or outputs
+ ✓ tests/dashboard.test.ts > RunMonitor > keeps a failure's message and phase but not its output
+ ✓ tests/dashboard.test.ts > RunMonitor > stamps a run id, a monotonic sequence, and timestamps, and folds lifecycle state
+ ✓ tests/dashboard.test.ts > RunMonitor > separates runtime-issued commands from the static plan and shows replays
+ ✓ tests/dashboard.test.ts > RunMonitor > tracks pause and resume as run status without touching terminal states
+ ✓ tests/dashboard.test.ts > RunMonitor > marks a cancelled outcome, once
+ ✓ tests/dashboard.test.ts > RunMonitor > removes a command from the queued count when it is cancelled before admission
+ ✓ tests/dashboard.test.ts > RunMonitor > bounds its buffer and reports when a client fell behind
+ ✓ tests/dashboard.test.ts > RunMonitor > isolates subscribers from each other and from the run
+
+ Test Files  1 passed (1)
+      Tests  11 passed (11)
+   Start at  02:34:19
+   Duration  780ms (transform 374ms, setup 0ms, collect 495ms, tests 27ms, environment 0ms, prepare 58ms)
+

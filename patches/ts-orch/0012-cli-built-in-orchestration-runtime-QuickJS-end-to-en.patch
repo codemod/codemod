@@ -1,0 +1,1706 @@
+From 89e30cf1af9dd463ead3e5b73c0320ee28aff94d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 05:51:12 +0000
+Subject: [PATCH 12/16] cli: built-in orchestration runtime; QuickJS end-to-end
+ and parity specs in cargo
+
+The runtime's sources (and the ignore package it bundles) are embedded in
+the binary and written once per content hash to the private workflow
+cache, so codemod workflow run -w workflow.ts needs no checkout;
+CODEMOD_ORCHESTRATION_SRC still points it at a checkout's sources.
+
+The QuickJS end-to-end and JSSG parity specs move from vitest to cargo
+and drive the codemod binary: 38 + 28 specs, about 3.7 s. The encoding
+case now runs the YAML engine in the same binary.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../cli/src/commands/workflow/typescript.rs   |  38 +-
+ crates/cli/tests/jssg_parity.rs               | 454 +++++++++++
+ crates/cli/tests/support/mod.rs               | 171 +++++
+ crates/cli/tests/typescript_workflow.rs       | 725 +++++++++++++++---
+ crates/orchestration-build/build.rs           |  63 ++
+ crates/orchestration-build/src/cache.rs       |  14 +-
+ crates/orchestration-build/src/lib.rs         |   7 +-
+ crates/orchestration-build/src/runtime.rs     |  40 +
+ 8 files changed, 1369 insertions(+), 143 deletions(-)
+ create mode 100644 crates/cli/tests/jssg_parity.rs
+ create mode 100644 crates/cli/tests/support/mod.rs
+ create mode 100644 crates/orchestration-build/build.rs
+ create mode 100644 crates/orchestration-build/src/runtime.rs
+
+diff --git a/crates/cli/src/commands/workflow/typescript.rs b/crates/cli/src/commands/workflow/typescript.rs
+index febdd2d2..dd31e186 100644
+--- a/crates/cli/src/commands/workflow/typescript.rs
++++ b/crates/cli/src/commands/workflow/typescript.rs
+@@ -1,15 +1,17 @@
+ //! `codemod workflow run -w workflow.ts`: TypeScript workflows on the
+ //! orchestration engine. The workflow graph is bundled with the portable
+-//! runtime (`orchestration-build`, cached by the content of every input
+-//! file) and run in one QuickJS context by `orchestration-quickjs-host`, in
+-//! this process. SIGINT, SIGTERM and SIGHUP abort the run (the host cancels
++//! runtime built into this binary (`orchestration-build`, cached by the
++//! content of every input file) and run in one QuickJS context by
++//! `orchestration-quickjs-host`, in this process. SIGINT, SIGTERM and SIGHUP abort the run (the host cancels
+ //! the operation in flight). The final output is printed as JSON on stdout;
+ //! workflow console output goes to stderr.
+ use std::path::{Path, PathBuf};
+ use std::time::Instant;
+ 
+ use anyhow::{bail, Context, Result};
+-use orchestration_build::{cached_quickjs_bundle, default_bundle_cache, Runtime};
++use orchestration_build::{
++    cached_quickjs_bundle, default_bundle_cache, default_runtime_cache, Runtime,
++};
+ use orchestration_quickjs_host::{run, HostOptions};
+ 
+ /// Set when the runner was not found next to this binary.
+@@ -32,21 +34,21 @@ pub struct Options<'a> {
+     pub history: Option<&'a Path>,
+ }
+ 
+-/// The portable runtime's sources. `CODEMOD_ORCHESTRATION_SRC`, else this
+-/// checkout's `packages/orchestration/src`.
++/// The portable runtime built into this binary, or the sources at
++/// `CODEMOD_ORCHESTRATION_SRC` when developing the runtime itself.
+ fn runtime() -> Result<Runtime> {
+-    let src = std::env::var_os("CODEMOD_ORCHESTRATION_SRC")
+-        .map(PathBuf::from)
+-        .unwrap_or_else(|| {
+-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/orchestration/src")
+-        });
+-    let src = src.canonicalize().with_context(|| {
+-        format!(
+-            "the orchestration runtime sources are missing at {}; set CODEMOD_ORCHESTRATION_SRC",
+-            src.display()
+-        )
+-    })?;
+-    Ok(Runtime { src })
++    if let Some(src) = std::env::var_os("CODEMOD_ORCHESTRATION_SRC") {
++        let src = PathBuf::from(src);
++        let src = src.canonicalize().with_context(|| {
++            format!(
++                "CODEMOD_ORCHESTRATION_SRC does not exist: {}",
++                src.display()
++            )
++        })?;
++        return Ok(Runtime { src });
++    }
++    let cache = default_runtime_cache().map_err(anyhow::Error::msg)?;
++    Runtime::embedded(&cache).context("failed to write the orchestration runtime")
+ }
+ 
+ /// `codemod-agent`, which `agent` steps spawn, is installed next to this binary.
+diff --git a/crates/cli/tests/jssg_parity.rs b/crates/cli/tests/jssg_parity.rs
+new file mode 100644
+index 00000000..c6d5d12f
+--- /dev/null
++++ b/crates/cli/tests/jssg_parity.rs
+@@ -0,0 +1,454 @@
++//! JSSG edge cases (`fixtures/parity/`) through `codemod workflow run -w
++//! workflow.ts`: result conversion, path containment, the selector skip,
++//! per-file skips and the transform pool, all reaching the Rust batch rules
++//! (`crates/jssg-batch`) the YAML engine shares. The encoding case also runs
++//! the YAML engine and requires the same bytes.
++
++mod support;
++
++use std::collections::BTreeMap;
++use std::fs;
++use std::path::Path;
++
++use serde_json::{json, Value};
++use support::{files, fixture, tree, Scratch};
++
++/// What a run did, with the repository before it.
++#[derive(Debug, PartialEq)]
++struct Outcome {
++    initial: BTreeMap<String, String>,
++    tree: BTreeMap<String, String>,
++    output: Option<Value>,
++    error: Option<String>,
++    /// The per-file skips a successful run reported.
++    skipped: Vec<String>,
++}
++
++#[derive(Default)]
++struct Setup {
++    files: BTreeMap<String, String>,
++    /// Directory symlinks in the repository to a directory outside it.
++    outside_links: Vec<&'static str>,
++    /// Transform pool threads (`CODEMOD_JSSG_WORKERS`); default 1.
++    workers: Option<usize>,
++}
++
++fn two() -> BTreeMap<String, String> {
++    files(&[("a.ts", "oldApi(1);\n"), ("b.ts", "plain(2);\n")])
++}
++
++fn setup(files: BTreeMap<String, String>) -> Setup {
++    Setup {
++        files,
++        ..Setup::default()
++    }
++}
++
++/// Runs one case and checks what holds for every case: nothing outside the
++/// root changes, and a failing run writes nothing.
++fn run(setup: &Setup, input: Value) -> Outcome {
++    let scratch = Scratch::with(&setup.files);
++    let outside = scratch.path("outside");
++    fs::create_dir_all(&outside).unwrap();
++    fs::write(outside.join("keep.ts"), "keep;\n").unwrap();
++    for link in &setup.outside_links {
++        std::os::unix::fs::symlink(&outside, scratch.target().join(link)).unwrap();
++    }
++    let initial = scratch.files();
++    let mut command = scratch.command(
++        &fixture("parity/workflow.ts"),
++        &["--input", &input.to_string()],
++    );
++    command.env(
++        "CODEMOD_JSSG_WORKERS",
++        setup.workers.unwrap_or(1).to_string(),
++    );
++    let result = command.output().unwrap();
++    let stderr = normalize(&String::from_utf8_lossy(&result.stderr), &scratch.target());
++    let outcome = Outcome {
++        tree: scratch.files(),
++        output: result
++            .status
++            .success()
++            .then(|| serde_json::from_slice(&result.stdout).unwrap()),
++        error: (!result.status.success()).then(|| stderr.clone()),
++        skipped: stderr
++            .lines()
++            .filter(|line| line.contains("skipped"))
++            .map(|line| line.trim().to_owned())
++            .collect(),
++        initial,
++    };
++    assert_eq!(
++        tree(&outside),
++        files(&[("keep.ts", "keep;\n")]),
++        "outside the root: {outcome:#?}"
++    );
++    if outcome.error.is_some() {
++        assert_eq!(outcome.tree, outcome.initial, "a failed run wrote");
++    }
++    outcome
++}
++
++/// The text with this run's repository path replaced and stack frames removed.
++fn normalize(text: &str, repo: &Path) -> String {
++    text.replace(&repo.display().to_string(), "<REPO>")
++        .lines()
++        .filter(|line| !line.trim_start().starts_with("at "))
++        .collect::<Vec<_>>()
++        .join("\n")
++}
++
++fn error(setup: &Setup, input: Value) -> String {
++    let outcome = run(setup, input);
++    match outcome.error {
++        Some(message) => message,
++        None => panic!("succeeded: {:?}", outcome.output),
++    }
++}
++
++fn succeeded(setup: &Setup, input: Value) -> Outcome {
++    let outcome = run(setup, input);
++    assert!(outcome.error.is_none(), "{outcome:#?}");
++    outcome
++}
++
++#[test]
++fn a_changed_string_result_is_written() {
++    let outcome = succeeded(
++        &setup(two()),
++        json!({ "step": "returns", "input": "changed" }),
++    );
++    assert_eq!(outcome.tree["a.ts"], "newApi(1);\n");
++}
++
++macro_rules! results_that_change_nothing {
++    ($($name:ident: $input:literal,)*) => {$(
++        #[test]
++        fn $name() {
++            let outcome = succeeded(&setup(two()), json!({ "step": "returns", "input": $input }));
++            assert_eq!(outcome.tree, two());
++        }
++    )*};
++}
++
++results_that_change_nothing! {
++    an_unchanged_string_result_writes_nothing: "unchanged",
++    a_null_result_writes_nothing: "null",
++    an_undefined_result_writes_nothing: "undefined",
++    a_structured_null_result_writes_nothing: "structured-null",
++}
++
++macro_rules! invalid_results_fail_with_the_sandbox_error {
++    ($($name:ident: $input:literal => $message:expr,)*) => {$(
++        #[test]
++        fn $name() {
++            let message = error(&setup(two()), json!({ "step": "returns", "input": $input }));
++            assert!(message.contains($message), "{message}");
++        }
++    )*};
++}
++
++const NO_OUTPUT: &str = "Object codemod results must contain an 'output' field";
++
++invalid_results_fail_with_the_sandbox_error! {
++    an_int_result_fails: "int" => "must return either a string or null/undefined. Received int",
++    a_float_result_fails: "float" => "must return either a string or null/undefined. Received float",
++    a_bool_result_fails: "bool" => "must return either a string or null/undefined. Received bool",
++    an_array_result_fails: "array" => NO_OUTPUT,
++    structured_content_that_is_not_a_string_fails: "structured-bad-content" => "must return either a string or null/undefined. Received int",
++    a_structured_result_without_output_fails: "missing-output" => NO_OUTPUT,
++}
++
++#[test]
++fn structured_outputs_convert_to_the_same_json() {
++    let outcome = succeeded(
++        &setup(two()),
++        json!({ "step": "returns", "input": "output-shapes" }),
++    );
++    let shape = |file: &str| {
++        json!({
++            "file": file,
++            "nested": { "list": [1, "two", null, null, 2.5, -3, [true]] },
++            "missing": null,
++            "fn": null,
++            "big": 1u64 << 40,
++            "empty": {},
++        })
++    };
++    assert_eq!(outcome.output, Some(json!([shape("a.ts"), shape("b.ts")])));
++}
++
++#[test]
++fn a_thrown_error_fails_the_command_and_writes_nothing() {
++    let message = error(&setup(two()), json!({ "step": "throwing" }));
++    assert!(message.contains("JSSG failed for 'b.ts'"), "{message}");
++}
++
++#[test]
++fn a_file_whose_transform_throws_is_skipped_and_the_others_are_written() {
++    let outcome = succeeded(&setup(two()), json!({ "step": "skipping" }));
++    assert_eq!(
++        outcome.tree,
++        files(&[("a.ts", "newApi(1);\n"), ("b.ts", "plain(2);\n")])
++    );
++}
++
++#[test]
++fn a_skipped_file_is_reported() {
++    let outcome = succeeded(&setup(two()), json!({ "step": "skipping" }));
++    assert_eq!(
++        outcome.skipped,
++        ["jssg 'skipping': skipped JSSG failed for 'b.ts': Error: b.ts is not allowed"]
++    );
++}
++
++fn eighty() -> BTreeMap<String, String> {
++    (0..80)
++        .map(|n| {
++            let name = format!("f{n:02}{}.ts", if n % 9 == 0 { "b" } else { "" });
++            let content = if n % 3 == 0 {
++                format!("plain({n});\n")
++            } else {
++                format!("oldApi({n});\n")
++            };
++            (name, content)
++        })
++        .collect()
++}
++
++macro_rules! the_transform_pool_matches_one_thread {
++    ($($name:ident: $step:literal,)*) => {$(
++        #[test]
++        fn $name() {
++            let serial = succeeded(&setup(eighty()), json!({ "step": $step }));
++            let pooled = Setup { workers: Some(3), ..setup(eighty()) };
++            assert_eq!(succeeded(&pooled, json!({ "step": $step })), serial);
++        }
++    )*};
++}
++
++the_transform_pool_matches_one_thread! {
++    a_selected_batch_on_the_pool_matches_one_thread: "selected",
++    a_skipping_batch_on_the_pool_matches_one_thread: "skipping",
++}
++
++#[test]
++fn the_static_selector_skips_files_before_the_transform_runs() {
++    let files = files(&[
++        ("a.ts", "oldApi(1);\n"),
++        ("b.ts", "plain(2);\n"),
++        ("c/d.ts", "x(oldApi(3));\n"),
++    ]);
++    let outcome = succeeded(&setup(files), json!({ "step": "selected" }));
++    assert_eq!(outcome.output, Some(json!(["a.ts", "c/d.ts"])));
++}
++
++fn multi() -> Outcome {
++    let files = files(&[
++        ("main.ts", "oldApi(1);\noldApi(2);\nkeep();\n"),
++        ("lib/other.ts", "oldApi(3);\n"),
++        ("lib/plain.ts", "plain();\n"),
++    ]);
++    succeeded(
++        &setup(files),
++        json!({ "step": "multi", "include": ["main.ts"] }),
++    )
++}
++
++#[test]
++fn multiple_edits_a_staged_write_and_a_staged_transform_are_all_written() {
++    assert_eq!(
++        multi().tree,
++        files(&[
++            ("lib/other.ts", "newApi(3);\n"),
++            ("lib/plain.ts", "export const written = true;\n"),
++            ("main.ts", "newApi(1);\nnewApi(2);\nkeep();\n"),
++        ])
++    );
++}
++
++#[test]
++fn multiple_edits_report_their_count() {
++    assert_eq!(multi().output, Some(json!([2])));
++}
++
++#[test]
++fn a_rename_inside_the_root_moves_the_file() {
++    let outcome = succeeded(
++        &setup(two()),
++        json!({ "step": "renameInto", "input": "moved", "include": ["a.ts"] }),
++    );
++    assert_eq!(
++        outcome.tree,
++        files(&[("b.ts", "plain(2);\n"), ("moved/a.ts", "oldApi(1);\n")])
++    );
++}
++
++macro_rules! writes_outside_the_root_are_rejected {
++    ($($name:ident: $step:literal, $input:literal, $links:expr,)*) => {$(
++        #[test]
++        fn $name() {
++            let case = Setup { outside_links: $links, ..setup(two()) };
++            let message = error(&case, json!({ "step": $step, "input": $input, "include": ["a.ts"] }));
++            assert!(message.contains("outside the target directory"), "{message}");
++        }
++    )*};
++}
++
++writes_outside_the_root_are_rejected! {
++    a_rename_to_the_parent_is_rejected: "renameInto", "..", vec![],
++    a_rename_through_a_symlinked_directory_is_rejected: "renameInto", "out", vec!["out"],
++    a_secondary_write_through_a_symlinked_directory_is_rejected: "secondaryAt", "out/keep.ts", vec!["out"],
++    a_secondary_write_to_the_parent_is_rejected: "secondaryAt", "../escaped.ts", vec![],
++}
++
++const BOM: &str = "\u{FEFF}";
++
++/// Files for the `encoding` step, named for what `fixtures/parity/encoding.ts` does with them.
++fn encoding_files() -> BTreeMap<String, String> {
++    [
++        ("edit.ts", "oldApi(1);\n".to_owned()),
++        ("bom-edit.ts", format!("{BOM}oldApi(1);\n")),
++        (
++            "bom-crlf-edit.ts",
++            format!("{BOM}oldApi(1);\r\noldApi(2);\r\n"),
++        ),
++        ("crlf-edit.ts", "oldApi(1);\r\noldApi(2);\r\n".to_owned()),
++        ("notrail-edit.ts", "oldApi(1);".to_owned()),
++        ("bom-notrail-edit.ts", format!("{BOM}oldApi(1);")),
++        ("double-bom-edit.ts", format!("{BOM}{BOM}oldApi(1);\n")),
++        ("mid-bom-edit.ts", format!("oldApi(1);\n{BOM}x;\n")),
++        ("bom-same.ts", format!("{BOM}keep();\n")),
++        ("crlf-same.ts", "keep();\r\n".to_owned()),
++        ("bom-rename.ts", format!("{BOM}keep();\n")),
++        ("crlf-rename.ts", "keep();\r\n".to_owned()),
++        ("bom-null.ts", format!("{BOM}keep();\n")),
++    ]
++    .into_iter()
++    .map(|(path, content)| (path.to_owned(), content))
++    .collect()
++}
++
++fn encoding() -> BTreeMap<String, String> {
++    succeeded(&setup(encoding_files()), json!({ "step": "encoding" })).tree
++}
++
++/// What the transform recorded about its input: `/* seen <json> */` at the end.
++fn seen(content: &str) -> Value {
++    let start = content.find("/* seen ").unwrap() + "/* seen ".len();
++    serde_json::from_str(
++        content[start..]
++            .trim_end()
++            .strip_suffix("*/")
++            .unwrap()
++            .trim(),
++    )
++    .unwrap()
++}
++
++/// The written text before the transform's record.
++fn written(content: &str) -> &str {
++    &content[..content.find("/* seen ").unwrap_or(content.len())]
++}
++
++#[test]
++fn the_transform_sees_each_file_verbatim_with_offsets_counting_a_bom() {
++    // tree-sitter starts the root after a leading BOM, so `root().text()`
++    // lacks it but offsets count it.
++    let tree = encoding();
++    let seen = |file: &str| seen(&tree[file]);
++    let start = |file: &str| seen(file)["root"]["start"].clone();
++    let bom = seen("bom-edit.ts");
++    assert_eq!(
++        json!({
++            "edit.ts start": start("edit.ts"),
++            "bom-edit.ts": [bom["head"], bom["length"], bom["crlf"], start("bom-edit.ts")],
++            "bom-crlf-edit.ts": [seen("bom-crlf-edit.ts")["crlf"], start("bom-crlf-edit.ts")["index"]],
++            "double-bom-edit.ts index": start("double-bom-edit.ts")["index"],
++        }),
++        json!({
++            "edit.ts start": { "line": 0, "column": 0, "index": 0 },
++            "bom-edit.ts": [[111, 108], 11, false, { "line": 0, "column": 1, "index": 3 }],
++            "bom-crlf-edit.ts": [true, 3],
++            "double-bom-edit.ts index": 6,
++        })
++    );
++}
++
++#[test]
++fn written_bytes_keep_line_endings_a_missing_newline_and_a_bom() {
++    let tree = encoding();
++    let actual: BTreeMap<&str, Option<&str>> = [
++        "crlf-edit.ts",
++        "notrail-edit.ts",
++        "bom-edit.ts",
++        "bom-null.ts",
++        "bom-renamed.ts",
++        "crlf-renamed.ts",
++        "bom-rename.ts",
++        "bom-same.ts",
++        "crlf-same.ts",
++    ]
++    .into_iter()
++    .map(|file| (file, tree.get(file).map(|content| written(content))))
++    .collect();
++    let bom_keep = format!("{BOM}keep();\n");
++    let bom_edit = format!("{BOM}newApi(1);\n");
++    let expected: BTreeMap<&str, Option<&str>> = [
++        ("crlf-edit.ts", Some("newApi(1);\r\nnewApi(2);\r\n")),
++        ("notrail-edit.ts", Some("newApi(1);")),
++        ("bom-edit.ts", Some(bom_edit.as_str())),
++        ("bom-null.ts", Some(bom_keep.as_str())),
++        ("bom-renamed.ts", Some(bom_keep.as_str())),
++        ("crlf-renamed.ts", Some("keep();\r\n")),
++        ("bom-rename.ts", None),
++        ("bom-same.ts", Some("keep();\n")),
++        ("crlf-same.ts", Some("keep();\r\n")),
++    ]
++    .into_iter()
++    .collect();
++    assert_eq!(actual, expected);
++}
++
++#[test]
++fn the_yaml_engine_writes_the_same_bytes() {
++    let scratch = Scratch::with(&encoding_files());
++    let definition = scratch.path("workflow");
++    fs::create_dir_all(&definition).unwrap();
++    fs::copy(
++        fixture("parity/encoding.ts"),
++        definition.join("encoding.ts"),
++    )
++    .unwrap();
++    fs::write(
++        definition.join("workflow.yaml"),
++        r#"version: "1"
++nodes:
++  - id: encoding
++    name: encoding
++    type: automatic
++    steps:
++      - name: encoding
++        js-ast-grep:
++          js_file: encoding.ts
++          language: typescript
++          include: ["**/*.ts"]
++"#,
++    )
++    .unwrap();
++    let result = scratch
++        .command(
++            &definition.join("workflow.yaml"),
++            &["--no-interactive", "--allow-dirty"],
++        )
++        .env("DISABLE_ANALYTICS", "true")
++        .output()
++        .unwrap();
++    assert!(
++        result.status.success(),
++        "{}",
++        String::from_utf8_lossy(&result.stderr)
++    );
++    assert_eq!(scratch.files(), encoding());
++}
+diff --git a/crates/cli/tests/support/mod.rs b/crates/cli/tests/support/mod.rs
+new file mode 100644
+index 00000000..c7f73df1
+--- /dev/null
++++ b/crates/cli/tests/support/mod.rs
+@@ -0,0 +1,171 @@
++//! Running `codemod workflow run -w <workflow.ts>` on a scratch repository.
++#![allow(dead_code)]
++
++use std::collections::BTreeMap;
++use std::fs;
++use std::path::{Path, PathBuf};
++use std::process::{Child, Command, Output, Stdio};
++use std::time::{Duration, Instant};
++
++use serde_json::Value;
++use tempfile::TempDir;
++
++/// `packages/orchestration/tests/fixtures/<path>`.
++pub fn fixture(path: &str) -> PathBuf {
++    Path::new(env!("CARGO_MANIFEST_DIR"))
++        .join("../../packages/orchestration/tests/fixtures")
++        .join(path)
++}
++
++/// The orchestration sources the fixtures import.
++pub fn runtime_sources() -> PathBuf {
++    fixture("../../src")
++}
++
++pub fn files(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
++    entries
++        .iter()
++        .map(|(path, content)| (path.to_string(), content.to_string()))
++        .collect()
++}
++
++pub fn write_files(root: &Path, files: &BTreeMap<String, String>) {
++    for (path, content) in files {
++        let file = root.join(path);
++        fs::create_dir_all(file.parent().unwrap()).unwrap();
++        fs::write(file, content).unwrap();
++    }
++}
++
++/// Every regular file under `root` (symlinked directories are not entered).
++pub fn tree(root: &Path) -> BTreeMap<String, String> {
++    let mut files = BTreeMap::new();
++    let mut pending = vec![root.to_path_buf()];
++    while let Some(dir) = pending.pop() {
++        for entry in fs::read_dir(dir).unwrap() {
++            let entry = entry.unwrap();
++            let kind = entry.file_type().unwrap();
++            if kind.is_dir() {
++                pending.push(entry.path());
++            } else if kind.is_file() {
++                let relative = entry.path().strip_prefix(root).unwrap().to_owned();
++                files.insert(
++                    relative.to_string_lossy().replace('\\', "/"),
++                    String::from_utf8_lossy(&fs::read(entry.path()).unwrap()).into_owned(),
++                );
++            }
++        }
++    }
++    files
++}
++
++/// A scratch directory holding the target repository, the bundle cache and
++/// a home directory, so runs share nothing with the machine or each other.
++pub struct Scratch {
++    pub dir: TempDir,
++}
++
++impl Scratch {
++    /// A target repository holding `files`.
++    pub fn with(files: &BTreeMap<String, String>) -> Self {
++        let scratch = Self {
++            dir: TempDir::new().unwrap(),
++        };
++        fs::create_dir_all(scratch.target()).unwrap();
++        write_files(&scratch.target(), files);
++        scratch
++    }
++
++    pub fn path(&self, name: &str) -> PathBuf {
++        self.dir.path().join(name)
++    }
++
++    pub fn target(&self) -> PathBuf {
++        self.path("repo")
++    }
++
++    pub fn files(&self) -> BTreeMap<String, String> {
++        tree(&self.target())
++    }
++
++    /// `codemod workflow run -w <workflow> --target <repo> <extra>`, with
++    /// the fixtures' runtime sources.
++    pub fn command(&self, workflow: &Path, extra: &[&str]) -> Command {
++        let mut command = self.bare_command(workflow, extra);
++        command.env("CODEMOD_ORCHESTRATION_SRC", runtime_sources());
++        command
++    }
++
++    /// As [`Scratch::command`], on the runtime built into the binary.
++    pub fn bare_command(&self, workflow: &Path, extra: &[&str]) -> Command {
++        let home = self.path("home");
++        let mut command = Command::new(env!("CARGO_BIN_EXE_codemod"));
++        command
++            .arg("--disable-analytics")
++            .args(["workflow", "run", "-w"])
++            .arg(workflow)
++            .arg("--target")
++            .arg(self.target())
++            .args(extra)
++            .env("HOME", &home)
++            .env("XDG_DATA_HOME", home.join("data"))
++            .env("CODEMOD_WORKFLOW_CACHE", self.path("cache"))
++            .env("NO_COLOR", "1")
++            .env_remove("CODEMOD_ORCHESTRATION_SRC")
++            .env_remove("CODEMOD_AGENT_BIN");
++        command
++    }
++
++    pub fn run(&self, workflow: &Path, extra: &[&str]) -> Output {
++        self.command(workflow, extra).output().unwrap()
++    }
++
++    /// Starts a run in the background, for signal tests.
++    pub fn spawn(&self, mut command: Command) -> Child {
++        command
++            .stdin(Stdio::null())
++            .stdout(Stdio::piped())
++            .stderr(Stdio::piped())
++            .spawn()
++            .unwrap()
++    }
++}
++
++/// The JSON a successful run printed.
++pub fn output(output: &Output) -> Value {
++    assert!(
++        output.status.success(),
++        "{}",
++        String::from_utf8_lossy(&output.stderr)
++    );
++    serde_json::from_slice(&output.stdout).unwrap()
++}
++
++/// What a failed run reported.
++pub fn stderr(output: &Output) -> String {
++    assert!(
++        !output.status.success(),
++        "the run succeeded: {}",
++        String::from_utf8_lossy(&output.stdout)
++    );
++    String::from_utf8_lossy(&output.stderr).into_owned()
++}
++
++/// Polls `ready` until it holds or ten seconds pass.
++pub fn wait_for(what: &str, mut ready: impl FnMut() -> bool) {
++    let deadline = Instant::now() + Duration::from_secs(10);
++    while !ready() {
++        assert!(Instant::now() < deadline, "{what} never happened");
++        std::thread::sleep(Duration::from_millis(10));
++    }
++}
++
++pub fn signal(child: &Child, signal: libc::c_int) {
++    // SAFETY: kill has no memory-safety preconditions.
++    assert_eq!(unsafe { libc::kill(child.id() as libc::pid_t, signal) }, 0);
++}
++
++pub fn alive(pid: i64) -> bool {
++    // SAFETY: signal 0 only checks that the process exists.
++    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
++}
+diff --git a/crates/cli/tests/typescript_workflow.rs b/crates/cli/tests/typescript_workflow.rs
+index fb67a1b0..ab039950 100644
+--- a/crates/cli/tests/typescript_workflow.rs
++++ b/crates/cli/tests/typescript_workflow.rs
+@@ -1,136 +1,120 @@
+ //! `codemod workflow run -w workflow.ts`: the orchestration engine end to
+ //! end, from the TypeScript workflow to the edited target, in one process.
++//! The agent and decision API stand-ins are Node scripts.
++
++mod support;
+ 
+ use std::collections::BTreeMap;
+ use std::fs;
+-use std::path::{Path, PathBuf};
+-use std::process::{Command, Output};
++use std::io::{BufRead, BufReader};
++use std::path::PathBuf;
++use std::process::{Child, Command, Output, Stdio};
++use std::time::{Duration, Instant};
+ 
+ use serde_json::{json, Value};
+-use tempfile::TempDir;
++use support::{alive, files, fixture, output, signal, stderr, wait_for, Scratch};
+ 
+ /// The target every run starts from.
+-const FILES: [(&str, &str); 4] = [
+-    ("a.ts", "oldApi(1);\n"),
+-    ("b.ts", "export const b = 1;\n"),
+-    ("c.ts", "export const c = oldApi(2);\n"),
+-    ("sub/d.old.ts", "export const d = 3;\n"),
+-];
+-
+-/// `FILES` after the fixtures' `replace` and `rename` transforms.
+-const MIGRATED: [(&str, &str); 4] = [
+-    ("a.ts", "newApi(1);\n"),
+-    ("b.ts", "export const b = 1;\n"),
+-    ("c.ts", "export const c = newApi(2);\n"),
+-    ("sub/d.new.ts", "export const d = 3;\n"),
+-];
+-
+-fn fixture(path: &str) -> PathBuf {
+-    Path::new(env!("CARGO_MANIFEST_DIR"))
+-        .join("../../packages/orchestration/tests/fixtures")
+-        .join(path)
++fn initial() -> BTreeMap<String, String> {
++    files(&[
++        ("a.ts", "oldApi(1);\n"),
++        ("b.ts", "export const b = 1;\n"),
++        ("c.ts", "export const c = oldApi(2);\n"),
++        ("sub/d.old.ts", "export const d = 3;\n"),
++    ])
+ }
+ 
+-struct Run {
+-    scratch: TempDir,
++/// `initial()` after the fixtures' `replace` and `rename` transforms.
++fn migrated() -> BTreeMap<String, String> {
++    files(&[
++        ("a.ts", "newApi(1);\n"),
++        ("b.ts", "export const b = 1;\n"),
++        ("c.ts", "export const c = newApi(2);\n"),
++        ("sub/d.new.ts", "export const d = 3;\n"),
++    ])
+ }
+ 
+-impl Run {
+-    fn new() -> Self {
+-        let run = Self {
+-            scratch: TempDir::new().unwrap(),
+-        };
+-        for (path, content) in FILES {
+-            let file = run.target().join(path);
+-            fs::create_dir_all(file.parent().unwrap()).unwrap();
+-            fs::write(file, content).unwrap();
+-        }
+-        run
+-    }
+-
+-    fn target(&self) -> PathBuf {
+-        self.scratch.path().join("repo")
+-    }
+-
+-    fn codemod(&self, workflow: &Path, extra: &[&str]) -> Output {
+-        let home = self.scratch.path().join("home");
+-        Command::new(env!("CARGO_BIN_EXE_codemod"))
+-            .arg("--disable-analytics")
+-            .args(["workflow", "run", "-w"])
+-            .arg(workflow)
+-            .arg("--target")
+-            .arg(self.target())
+-            .args(extra)
+-            .env("HOME", &home)
+-            .env("XDG_DATA_HOME", home.join("data"))
+-            .env("CODEMOD_WORKFLOW_CACHE", self.scratch.path().join("cache"))
+-            .env("NO_COLOR", "1")
+-            .output()
+-            .expect("failed to run codemod")
+-    }
++fn quickjs(name: &str) -> PathBuf {
++    fixture(&format!("quickjs/{name}"))
++}
+ 
+-    fn files(&self) -> BTreeMap<String, String> {
+-        let mut files = BTreeMap::new();
+-        let mut pending = vec![self.target()];
+-        while let Some(dir) = pending.pop() {
+-            for entry in fs::read_dir(dir).unwrap() {
+-                let path = entry.unwrap().path();
+-                if path.is_dir() {
+-                    pending.push(path);
+-                } else {
+-                    let relative = path.strip_prefix(self.target()).unwrap();
+-                    files.insert(
+-                        relative.to_string_lossy().into_owned(),
+-                        fs::read_to_string(&path).unwrap(),
+-                    );
+-                }
+-            }
+-        }
+-        files
+-    }
++#[test]
++fn a_jssg_sequence_edits_and_renames_files_in_the_target() {
++    let scratch = Scratch::with(&initial());
++    scratch.run(&quickjs("jssg-sequence.ts"), &[]);
++    assert_eq!(scratch.files(), migrated());
+ }
+ 
+-fn tree(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
+-    entries
+-        .iter()
+-        .map(|(path, content)| (path.to_string(), content.to_string()))
+-        .collect()
++#[test]
++fn the_workflow_output_is_printed_as_json() {
++    let scratch = Scratch::with(&initial());
++    let printed = output(&scratch.run(&quickjs("jssg-sequence.ts"), &[]));
++    assert_eq!(printed, json!([]));
+ }
+ 
+-fn output(output: &Output) -> Value {
+-    assert!(
+-        output.status.success(),
+-        "{}",
+-        String::from_utf8_lossy(&output.stderr)
++#[test]
++fn dynamic_bodies_run_concurrent_commands_invocation_targets_and_a_shell_step() {
++    let scratch = Scratch::with(&initial());
++    let printed = output(&scratch.run(&quickjs("jssg-dynamic.ts"), &[]));
++    assert_eq!(
++        printed,
++        json!({
++            "first": [{ "file": "a.ts" }],
++            "second": [],
++            "third": [],
++            "stdout": "./a.ts\n./b.ts\n./c.ts\n./sub/d.new.ts\nnewApi(1);\n",
++        })
+     );
+-    serde_json::from_slice(&output.stdout).unwrap()
+ }
+ 
+-fn stderr(output: &Output) -> String {
+-    assert!(!output.status.success(), "the run succeeded");
+-    String::from_utf8_lossy(&output.stderr).into_owned()
++#[test]
++fn a_transform_in_an_imported_module_is_split_into_an_artifact() {
++    let scratch = Scratch::with(&initial());
++    let built = tokio::runtime::Runtime::new()
++        .unwrap()
++        .block_on(orchestration_build::build_file(&fixture(
++            "load/definitions.ts",
++        )))
++        .unwrap();
++    let printed = output(&scratch.run(&fixture("load/dynamic.ts"), &[]));
++    assert_eq!(
++        printed["transform"],
++        json!({ "name": "migrate", "hash": built.artifacts[0].hash })
++    );
+ }
+ 
+ #[test]
+-fn a_jssg_sequence_edits_and_renames_files_in_the_target() {
+-    let run = Run::new();
+-    run.codemod(&fixture("quickjs/jssg-sequence.ts"), &[]);
+-    assert_eq!(run.files(), tree(&MIGRATED));
++fn a_workflow_that_imports_the_package_runs_on_the_built_in_runtime() {
++    let scratch = Scratch::with(&initial());
++    let workflow = scratch.path("package-import.ts");
++    fs::write(
++        &workflow,
++        "import { shell } from \"@codemod.com/orchestration\";\nexport default shell({ name: \"hello\", command: \"echo hello\" });\n",
++    )
++    .unwrap();
++    let printed = output(&scratch.bare_command(&workflow, &[]).output().unwrap());
++    assert_eq!(printed["stdout"], json!("hello\n"));
+ }
+ 
+ #[test]
+-fn the_workflow_output_is_printed_as_json() {
+-    let run = Run::new();
+-    let printed = output(&run.codemod(&fixture("quickjs/jssg-sequence.ts"), &[]));
+-    assert_eq!(printed, json!([]));
++fn a_node_import_fails_the_build() {
++    let scratch = Scratch::with(&initial());
++    let workflow = scratch.path("node-import.ts");
++    fs::write(
++        &workflow,
++        "import { readFileSync } from \"node:fs\";\nexport default readFileSync;\n",
++    )
++    .unwrap();
++    let message = stderr(&scratch.run(&workflow, &[]));
++    assert!(message.contains("is a Node module"), "{message}");
+ }
+ 
+ macro_rules! input_reaches_the_root {
+     ($($name:ident: $text:literal => $value:tt,)*) => {$(
+         #[test]
+         fn $name() {
+-            let run = Run::new();
+-            let printed = output(&run.codemod(&fixture("load/input.ts"), &["--input", $text]));
++            let scratch = Scratch::with(&initial());
++            let printed = output(&scratch.run(&fixture("load/input.ts"), &["--input", $text]));
+             assert_eq!(printed, json!({ "received": $value }));
+         }
+     )*};
+@@ -143,8 +127,8 @@ input_reaches_the_root! {
+ 
+ #[test]
+ fn a_root_that_declares_input_requires_it() {
+-    let run = Run::new();
+-    let message = stderr(&run.codemod(&fixture("load/input.ts"), &[]));
++    let scratch = Scratch::with(&initial());
++    let message = stderr(&scratch.run(&fixture("load/input.ts"), &[]));
+     assert!(
+         message.contains("workflow requires an input value; pass --input <json>"),
+         "{message}"
+@@ -153,8 +137,8 @@ fn a_root_that_declares_input_requires_it() {
+ 
+ #[test]
+ fn input_that_is_not_json_is_refused() {
+-    let run = Run::new();
+-    let message = stderr(&run.codemod(&fixture("load/input.ts"), &["--input", "{name}"]));
++    let scratch = Scratch::with(&initial());
++    let message = stderr(&scratch.run(&fixture("load/input.ts"), &["--input", "{name}"]));
+     assert!(message.contains("--input must be valid JSON"), "{message}");
+ }
+ 
+@@ -162,11 +146,11 @@ macro_rules! a_failing_jssg_run_writes_nothing {
+     ($($name:ident: $which:literal => $message:literal,)*) => {$(
+         #[test]
+         fn $name() {
+-            let run = Run::new();
++            let scratch = Scratch::with(&initial());
+             let input = format!("{:?}", $which);
+-            let message = stderr(&run.codemod(&fixture("quickjs/jssg-failures.ts"), &["--input", &input]));
++            let message = stderr(&scratch.run(&quickjs("jssg-failures.ts"), &["--input", &input]));
+             assert!(message.contains($message), "{message}");
+-            assert_eq!(run.files(), tree(&FILES));
++            assert_eq!(scratch.files(), initial());
+         }
+     )*};
+ }
+@@ -177,27 +161,524 @@ a_failing_jssg_run_writes_nothing! {
+     a_rename_outside_the_target_fails_the_run_and_writes_nothing: "escape" => "is outside the target directory",
+ }
+ 
++/// Ignore files at several levels, a negation, a parent rule a negation
++/// cannot undo, and a nested `.ignore`, around the usual files.
++fn ignored() -> BTreeMap<String, String> {
++    let mut all = initial();
++    all.extend(files(&[
++        (".gitignore", "*.gen.ts\nvendor/\n!keep.gen.ts\n"),
++        ("keep.gen.ts", "oldApi(5);\n"),
++        ("x.gen.ts", "oldApi(6);\n"),
++        ("vendor/v.ts", "oldApi(7);\n"),
++        ("sub/.ignore", "!*.gen.ts\n"),
++        ("sub/y.gen.ts", "oldApi(8);\n"),
++        ("sub/deeper/.gitignore", "z.ts\n"),
++        ("sub/deeper/z.ts", "oldApi(9);\n"),
++        ("sub/deeper/w.ts", "oldApi(10);\n"),
++    ]));
++    all
++}
++
++macro_rules! native_file_selection_matches_the_interpreted_walker {
++    ($($name:ident: $workflow:literal,)*) => {$(
++        #[test]
++        fn $name() {
++            let run = |native: &str| {
++                let scratch = Scratch::with(&ignored());
++                let mut command = scratch.command(&quickjs($workflow), &[]);
++                let printed = output(&command.env("CODEMOD_NATIVE_SELECT", native).output().unwrap());
++                (printed, scratch.files())
++            };
++            assert_eq!(run("1"), run("0"));
++        }
++    )*};
++}
++
++native_file_selection_matches_the_interpreted_walker! {
++    a_sequence_selects_the_same_files_natively: "jssg-sequence.ts",
++    a_dynamic_body_selects_the_same_files_natively: "jssg-dynamic.ts",
++}
++
++/// The shell-resume fixture: `count`, then a crash with input `true`, else
++/// `gate`. Both steps append to runs.log.
++struct Resume {
++    scratch: Scratch,
++}
++
++impl Resume {
++    fn new() -> Self {
++        Self {
++            scratch: Scratch::with(&initial()),
++        }
++    }
++
++    fn run(&self, crash: &str) -> Output {
++        let history = self.scratch.path("history.json");
++        self.scratch.run(
++            &quickjs("shell-resume.ts"),
++            &["--history", history.to_str().unwrap(), "--input", crash],
++        )
++    }
++
++    fn log(&self) -> String {
++        fs::read_to_string(self.scratch.target().join("runs.log")).unwrap()
++    }
++
++    fn scheduled(&self) -> Vec<Value> {
++        let history = fs::read_to_string(self.scratch.path("history.json")).unwrap();
++        scheduled(&serde_json::from_str(&history).unwrap())
++            .into_iter()
++            .map(|command| command["id"].clone())
++            .collect()
++    }
++}
++
++fn scheduled(history: &Value) -> Vec<&Value> {
++    history["events"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .filter(|event| event["type"] == "scheduled")
++        .map(|event| &event["command"])
++        .collect()
++}
++
+ #[test]
+ fn a_failed_run_resumes_from_its_history_without_rerunning_finished_steps() {
+-    let run = Run::new();
+-    let history = run.scratch.path().join("history.json");
+-    let history = history.to_str().unwrap();
+-    let workflow = fixture("quickjs/shell-resume.ts");
+-    stderr(&run.codemod(&workflow, &["--history", history, "--input", "true"]));
+-    output(&run.codemod(&workflow, &["--history", history, "--input", "false"]));
+-    let log = fs::read_to_string(run.target().join("runs.log")).unwrap();
+-    assert_eq!(log, "count\ngate\n");
++    let resume = Resume::new();
++    stderr(&resume.run("true"));
++    output(&resume.run("false"));
++    assert_eq!(resume.log(), "count\ngate\n");
+ }
+ 
+ #[test]
+-fn a_node_import_fails_the_build() {
+-    let run = Run::new();
+-    let workflow = run.scratch.path().join("node-import.ts");
++fn a_finished_run_replays_its_output_without_running_anything() {
++    let resume = Resume::new();
++    resume.run("true");
++    resume.run("false");
++    let replayed = output(&resume.run("false"));
++    assert_eq!(
++        (replayed, resume.log()),
++        (json!("passed\n"), "count\ngate\n".to_owned())
++    );
++}
++
++#[test]
++fn a_resumed_history_schedules_each_command_once() {
++    let resume = Resume::new();
++    resume.run("true");
++    resume.run("false");
++    assert_eq!(resume.scheduled(), [json!("count"), json!("gate")]);
++}
++
++fn parallel_dynamic() -> (Value, Value) {
++    let scratch = Scratch::with(&initial());
++    let history = scratch.path("history.json");
++    let printed = output(&scratch.run(
++        &quickjs("parallel-dynamic.ts"),
++        &["--history", history.to_str().unwrap()],
++    ));
++    let recorded = serde_json::from_str(&fs::read_to_string(history).unwrap()).unwrap();
++    (printed, recorded)
++}
++
++#[test]
++fn parallel_dynamic_bodies_return_their_outputs() {
++    let (printed, _) = parallel_dynamic();
++    assert_eq!(printed, json!(["a2\n", ["b1\n", "c1\n", "b2\n"]]));
++}
++
++#[test]
++fn commands_issued_after_awaits_in_parallel_bodies_are_concurrent() {
++    // As with AsyncLocalStorage: without propagation they would lose the flag.
++    let (_, history) = parallel_dynamic();
++    let mut concurrent: Vec<&str> = scheduled(&history)
++        .into_iter()
++        .filter(|command| command["concurrent"] == true)
++        .map(|command| command["id"].as_str().unwrap())
++        .collect();
++    concurrent.sort();
++    assert_eq!(concurrent, ["a1", "a2", "b1", "b2", "c1"]);
++}
++
++fn semantic() -> (Value, BTreeMap<String, String>) {
++    let scratch = Scratch::with(&files(&[
++        (
++            "main.ts",
++            "import { add } from \"./utils\";\nconst result = add(1, 2);\n",
++        ),
++        (
++            "utils.ts",
++            "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
++        ),
++    ]));
++    let printed = output(&scratch.run(&quickjs("semantic.ts"), &[]));
++    (printed, scratch.files())
++}
++
++#[test]
++fn workspace_semantic_analysis_finds_a_definition_in_another_file() {
++    let (printed, _) = semantic();
++    assert_eq!(
++        printed[0],
++        json!([{ "file": "main.ts", "definition": "utils.ts" }])
++    );
++}
++
++#[test]
++fn workspace_semantic_analysis_stages_a_cross_file_edit() {
++    let (_, files) = semantic();
++    assert!(
++        files["utils.ts"].contains("function sum"),
++        "{}",
++        files["utils.ts"]
++    );
++}
++
++#[test]
++fn file_semantic_analysis_classifies_a_local_definition() {
++    let (printed, _) = semantic();
++    let main = printed[1]
++        .as_array()
++        .unwrap()
++        .iter()
++        .find(|entry| entry["file"] == "main.ts")
++        .unwrap();
++    assert_eq!(main["kind"], json!("local"));
++}
++
++/// The stand-in for `codemod-agent`.
++fn fake_agent() -> PathBuf {
++    fixture("fake-agent.mjs")
++}
++
++/// What the fake agent saw: its request, environment and secrets.
++fn agent_echo() -> Value {
++    let scratch = Scratch::with(&initial());
++    let mut command = scratch.command(&quickjs("static-agent.ts"), &[]);
++    command
++        .env("CODEMOD_AGENT_BIN", fake_agent())
++        .env("LLM_API_KEY", "llm-key")
++        .env("DECISION_API_KEY", "decision-key");
++    let printed = output(&command.output().unwrap());
++    serde_json::from_str(printed["text"].as_str().unwrap()).unwrap()
++}
++
++#[test]
++fn an_agent_step_reaches_the_runner_as_an_agent_request() {
++    let echo = agent_echo();
++    assert_eq!(
++        (
++            &echo["request"]["commandId"],
++            &echo["request"]["operation"]["kind"]
++        ),
++        (&json!("fix"), &json!("agent"))
++    );
++}
++
++#[test]
++fn the_runner_gets_the_model_key_on_stdin() {
++    assert_eq!(agent_echo()["secrets"], json!({ "LLM_API_KEY": "llm-key" }));
++}
++
++#[test]
++fn the_runner_environment_holds_no_keys() {
++    let echo = agent_echo();
++    let env = echo["env"].as_object().unwrap();
++    assert_eq!(
++        (
++            env.get("CODEMOD_AGENT_SECRETS"),
++            env.contains_key("LLM_API_KEY"),
++            env.contains_key("DECISION_API_KEY"),
++        ),
++        (Some(&json!("stdin")), false, false)
++    );
++}
++
++#[test]
++fn an_agent_step_without_the_runner_fails() {
++    let scratch = Scratch::with(&initial());
++    let mut command = scratch.command(&quickjs("static-agent.ts"), &[]);
++    command.env("CODEMOD_AGENT_BIN", scratch.path("no-such-agent"));
++    let message = stderr(&command.output().unwrap());
++    assert!(
++        message.contains("agent steps need the codemod-agent runner"),
++        "{message}"
++    );
++}
++
++/// Starts `command` and waits until `file` in the target has content.
++fn started(scratch: &Scratch, command: Command, file: &str) -> Child {
++    let child = scratch.spawn(command);
++    let path = scratch.target().join(file);
++    wait_for(&format!("{file} written"), || {
++        fs::read_to_string(&path).is_ok_and(|text| !text.trim().is_empty())
++    });
++    child
++}
++
++#[test]
++fn sigterm_during_an_agent_step_kills_the_runners_whole_process_tree() {
++    let scratch = Scratch::with(&initial());
++    let pid_file = scratch.target().join("pids.json");
+     fs::write(
+-        &workflow,
+-        "import { readFileSync } from \"node:fs\";\nexport default readFileSync;\n",
++        scratch.target().join("fake-agent.json"),
++        json!({
++            "FAKE_AGENT_MODE": "hang",
++            "FAKE_PID_FILE": pid_file,
++            "FAKE_CHILDREN": "2",
++            "FAKE_DETACH_CHILDREN": "1",
++        })
++        .to_string(),
+     )
+     .unwrap();
+-    let message = stderr(&run.codemod(&workflow, &[]));
+-    assert!(message.contains("is a Node module"), "{message}");
++    let mut command = scratch.command(&quickjs("static-agent.ts"), &[]);
++    command.env("CODEMOD_AGENT_BIN", fake_agent());
++    let mut child = started(&scratch, command, "pids.json");
++    let pids: Vec<i64> = serde_json::from_str(&fs::read_to_string(&pid_file).unwrap()).unwrap();
++    signal(&child, libc::SIGTERM);
++    child.wait().unwrap();
++    let deadline = Instant::now() + Duration::from_secs(5);
++    while pids.iter().any(|&pid| alive(pid)) && Instant::now() < deadline {
++        std::thread::sleep(Duration::from_millis(20));
++    }
++    let survivors: Vec<i64> = pids.into_iter().filter(|&pid| alive(pid)).collect();
++    assert_eq!(survivors, Vec::<i64>::new());
++}
++
++#[test]
++fn sigterm_kills_the_running_shell_and_fails_the_run_promptly() {
++    let scratch = Scratch::with(&initial());
++    let command = scratch.command(&quickjs("shell-hang.ts"), &[]);
++    let mut child = started(&scratch, command, "hang.pid");
++    let pid: i64 = fs::read_to_string(scratch.target().join("hang.pid"))
++        .unwrap()
++        .trim()
++        .parse()
++        .unwrap();
++    let signalled = Instant::now();
++    signal(&child, libc::SIGTERM);
++    let status = child.wait().unwrap();
++    assert_eq!(
++        (
++            status.success(),
++            signalled.elapsed() < Duration::from_secs(5),
++            alive(pid)
++        ),
++        (false, true, false)
++    );
++}
++
++#[test]
++fn sigint_cancels_a_running_jssg_batch_promptly_and_writes_nothing() {
++    // 300 files at ~10 ms each: about 3 s of transforms if the signal were ignored.
++    let mut many = initial();
++    for i in 0..300 {
++        many.insert(format!("many/f{i}.ts"), format!("oldApi({i});\n"));
++    }
++    let scratch = Scratch::with(&many);
++    let command = scratch.command(&quickjs("jssg-long.ts"), &[]);
++    let child = started(&scratch, command, "started.marker");
++    // Well inside the batch.
++    std::thread::sleep(Duration::from_millis(300));
++    let signalled = Instant::now();
++    signal(&child, libc::SIGINT);
++    let result = child.wait_with_output().unwrap();
++    let elapsed = signalled.elapsed();
++    let message = stderr(&result);
++    let mut after = scratch.files();
++    after.remove("started.marker");
++    // At most one 64-file chunk (~0.65 s) plus the file in flight.
++    assert_eq!(
++        (
++            elapsed < Duration::from_millis(1500),
++            message.contains("command 'slow' cancelled"),
++            after == many,
++        ),
++        (true, true, true),
++        "{elapsed:?} {message}"
++    );
++}
++
++/// A decision API stub: answers System One and OpenAI-shaped requests and
++/// logs each request as a JSON line.
++struct DecisionStub {
++    process: Child,
++    port: u16,
++    log: PathBuf,
++    scratch: Scratch,
++}
++
++impl DecisionStub {
++    fn start() -> Self {
++        let scratch = Scratch::with(&initial());
++        let log = scratch.path("requests.jsonl");
++        fs::write(&log, "").unwrap();
++        let mut process = Command::new("node")
++            .arg(fixture("decision-stub.mjs"))
++            .arg(&log)
++            .stdout(Stdio::piped())
++            .spawn()
++            .expect("node runs the decision API stub");
++        let mut line = String::new();
++        BufReader::new(process.stdout.as_mut().unwrap())
++            .read_line(&mut line)
++            .unwrap();
++        Self {
++            process,
++            port: line.trim().parse().unwrap(),
++            log,
++            scratch,
++        }
++    }
++
++    fn url(&self, path: &str) -> String {
++        format!("http://127.0.0.1:{}{path}", self.port)
++    }
++
++    fn run(&self, workflow: &str, input: Option<&str>, env: &[(&str, &str)]) -> Value {
++        let input = input.map(|url| json!(url).to_string());
++        let extra: Vec<&str> = input.iter().flat_map(|input| ["--input", input]).collect();
++        let mut command = self.scratch.command(&quickjs(workflow), &extra);
++        command.envs(env.iter().copied());
++        output(&command.output().unwrap())
++    }
++
++    /// The path and the `field` header of every request.
++    fn requests(&self, field: &str) -> Vec<(String, Value)> {
++        fs::read_to_string(&self.log)
++            .unwrap()
++            .lines()
++            .map(|line| {
++                let request: Value = serde_json::from_str(line).unwrap();
++                (
++                    request["path"].as_str().unwrap().to_owned(),
++                    request[field].clone(),
++                )
++            })
++            .collect()
++    }
++}
++
++impl Drop for DecisionStub {
++    fn drop(&mut self) {
++        let _ = self.process.kill();
++        let _ = self.process.wait();
++    }
++}
++
++fn judged(provider: &str, model: &str, usage: Value) -> Value {
++    json!(["a.ts", "b.ts", "c.ts", "sub/d.old.ts"].map(|file| json!({
++        "file": file,
++        "assessment": {
++            "provider": provider,
++            "model": model,
++            "calibrated": true,
++            "answers": { "risky": { "type": "yesno", "yes": 0.25 } },
++            "usage": usage,
++        },
++    })))
++}
++
++fn system_one(stub: &DecisionStub) -> Value {
++    let base = stub.url("");
++    stub.run(
++        "assessment.ts",
++        None,
++        &[
++            ("TYPESAFE_API_KEY", "test-key"),
++            ("TYPESAFE_BASE_URL", &base),
++        ],
++    )
++}
++
++#[test]
++fn an_assessment_asks_system_one_per_file_configured_by_typesafe_variables() {
++    let stub = DecisionStub::start();
++    assert_eq!(
++        system_one(&stub),
++        judged(
++            "systemone",
++            "stub-1",
++            json!({ "inputTokens": 3, "outputTokens": 1 })
++        )
++    );
++}
++
++#[test]
++fn system_one_requests_carry_the_key_as_a_bearer_token() {
++    let stub = DecisionStub::start();
++    system_one(&stub);
++    assert_eq!(
++        stub.requests("authorization"),
++        vec![("/v1/systemone".to_owned(), json!("Bearer test-key")); 4]
++    );
++}
++
++#[test]
++fn an_assessment_asks_openai_decisions_when_the_provider_is_openai() {
++    let stub = DecisionStub::start();
++    let base = stub.url("");
++    let printed = stub.run(
++        "assessment.ts",
++        None,
++        &[
++            ("DECISION_PROVIDER", "openai"),
++            ("DECISION_BASE_URL", &base),
++            ("DECISION_API_KEY", "openai-key"),
++        ],
++    );
++    assert_eq!(
++        (printed, stub.requests("authorization")),
++        (
++            judged("openai", "stub-luna", json!({ "inputTokens": 5 })),
++            vec![("/v1/decisions".to_owned(), json!("Bearer openai-key")); 4]
++        )
++    );
++}
++
++#[test]
++fn the_raw_key_goes_in_the_configured_header_on_the_configured_path() {
++    let stub = DecisionStub::start();
++    let base = stub.url("/foundry");
++    stub.run(
++        "assessment.ts",
++        None,
++        &[
++            ("DECISION_BASE_URL", &base),
++            ("DECISION_PATH", "/providers/microsoft/v1/systemone"),
++            ("DECISION_AUTH_HEADER", "api-key"),
++            ("DECISION_API_KEY", "azure-key"),
++        ],
++    );
++    assert_eq!(
++        stub.requests("apiKey"),
++        vec![
++            (
++                "/foundry/providers/microsoft/v1/systemone".to_owned(),
++                json!("azure-key")
++            );
++            4
++        ]
++    );
++}
++
++macro_rules! workflow_code_reaches_only_the_decision_api_root {
++    ($($name:ident: $url:expr => $expected:literal,)*) => {$(
++        #[test]
++        fn $name() {
++            let stub = DecisionStub::start();
++            let root = stub.url("/v1");
++            let url: fn(&DecisionStub) -> String = $url;
++            let printed = stub.run("http-escape.ts", Some(&url(&stub)), &[("DECISION_BASE_URL", &root)]);
++            assert_eq!(printed, json!($expected));
++        }
++    )*};
++}
++
++workflow_code_reaches_only_the_decision_api_root! {
++    workflow_code_cannot_reach_another_path: |stub| stub.url("/other") => "EACCES",
++    workflow_code_cannot_reach_another_host: |stub| format!("http://localhost:{}/v1/systemone", stub.port) => "EACCES",
++    workflow_code_cannot_reach_another_origin: |_| "https://example.com/v1/systemone".to_owned() => "EACCES",
++    workflow_code_reaches_a_path_under_the_root: |stub| stub.url("/v1/models") => "reached",
+ }
+diff --git a/crates/orchestration-build/build.rs b/crates/orchestration-build/build.rs
+new file mode 100644
+index 00000000..81a6d275
+--- /dev/null
++++ b/crates/orchestration-build/build.rs
+@@ -0,0 +1,63 @@
++//! Embeds the portable orchestration runtime's sources
++//! (`packages/orchestration/src`) and the npm packages it bundles, so a built
++//! binary needs no checkout.
++use std::{
++    env, fs,
++    path::{Path, PathBuf},
++};
++
++/// npm packages the runtime imports in QuickJS, embedded as `node_modules/<name>`.
++const PACKAGES: &[&str] = &["ignore"];
++
++fn collect(dir: &Path, root: &Path, prefix: &str, files: &mut Vec<(String, PathBuf)>) {
++    for entry in fs::read_dir(dir).expect("readable runtime sources") {
++        let path = entry.expect("readable runtime sources").path();
++        if path.is_dir() {
++            collect(&path, root, prefix, files);
++            continue;
++        }
++        let name = path
++            .file_name()
++            .and_then(|name| name.to_str())
++            .unwrap_or("");
++        let source =
++            name.ends_with(".ts") && !name.ends_with(".test.ts") && !name.ends_with(".d.ts");
++        if source || name.ends_with(".json") || name.ends_with(".js") {
++            let relative = path.strip_prefix(root).unwrap().to_str().unwrap();
++            files.push((
++                format!("{prefix}{}", relative.replace('\\', "/")),
++                path.canonicalize().unwrap(),
++            ));
++        }
++    }
++}
++
++fn main() {
++    let package = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap())
++        .join("../../packages/orchestration")
++        .canonicalize()
++        .expect("packages/orchestration next to this crate");
++    let src = package.join("src");
++    println!("cargo:rerun-if-changed={}", src.display());
++    let mut files = Vec::new();
++    collect(&src, &src, "", &mut files);
++    for name in PACKAGES {
++        let root = package
++            .join("node_modules")
++            .join(name)
++            .canonicalize()
++            .unwrap_or_else(|_| panic!("npm package '{name}' is missing; run pnpm install"));
++        println!("cargo:rerun-if-changed={}", root.display());
++        collect(&root, &root, &format!("node_modules/{name}/"), &mut files);
++    }
++    files.sort();
++    let entries: String = files
++        .iter()
++        .map(|(relative, path)| format!("    ({relative:?}, include_bytes!({:?})),\n", path))
++        .collect();
++    fs::write(
++        Path::new(&env::var("OUT_DIR").unwrap()).join("runtime_files.rs"),
++        format!("static RUNTIME_FILES: &[(&str, &[u8])] = &[\n{entries}];\n"),
++    )
++    .unwrap();
++}
+diff --git a/crates/orchestration-build/src/cache.rs b/crates/orchestration-build/src/cache.rs
+index ddf820eb..1e298b8a 100644
+--- a/crates/orchestration-build/src/cache.rs
++++ b/crates/orchestration-build/src/cache.rs
+@@ -53,14 +53,24 @@ fn builder() -> &'static str {
+ /// `<tmpdir>/codemod-workflow-cache-<uid>`. Fails when that directory is not
+ /// private to this user.
+ pub fn default_bundle_cache() -> Result<PathBuf, String> {
++    default_cache("quickjs")
++}
++
++/// Where [`crate::Runtime::embedded`] writes the runtime's sources.
++pub fn default_runtime_cache() -> Result<PathBuf, String> {
++    default_cache("runtime")
++}
++
++/// `<root>/<name>`, root `$CODEMOD_WORKFLOW_CACHE` or a per-user temp directory.
++fn default_cache(name: &str) -> Result<PathBuf, String> {
+     let root = match std::env::var_os("CODEMOD_WORKFLOW_CACHE") {
+         Some(root) if !root.is_empty() => PathBuf::from(root),
+         _ => std::env::temp_dir().join(format!("codemod-workflow-cache-{}", uid())),
+     };
+-    private_directory("quickjs", &root).ok_or_else(|| {
++    private_directory(name, &root).ok_or_else(|| {
+         format!(
+             "the workflow cache {} is not a directory private to this user; fix its owner and permissions or set CODEMOD_WORKFLOW_CACHE",
+-            root.join("quickjs").display()
++            root.join(name).display()
+         )
+     })
+ }
+diff --git a/crates/orchestration-build/src/lib.rs b/crates/orchestration-build/src/lib.rs
+index 9dd6899f..c9904195 100644
+--- a/crates/orchestration-build/src/lib.rs
++++ b/crates/orchestration-build/src/lib.rs
+@@ -8,14 +8,19 @@
+ //!   orchestration runtime, async lowered, with the artifact table in front.
+ //! - [`cached_quickjs_bundle`] reuses a bundle until an input file or this
+ //!   builder changes.
++//! - [`Runtime::embedded`] is the runtime built into this crate.
+ mod bundle;
+ mod cache;
++mod runtime;
+ mod split;
+ 
+ use std::{fmt, path::PathBuf};
+ 
+ pub use bundle::{build_quickjs_bundle, QuickjsBundle, Runtime};
+-pub use cache::{cached_quickjs_bundle, default_bundle_cache, private_directory, CachedBundle};
++pub use cache::{
++    cached_quickjs_bundle, default_bundle_cache, default_runtime_cache, private_directory,
++    CachedBundle,
++};
+ pub use split::{build_file, build_module, BuiltModule, JssgArtifact};
+ 
+ /// A workflow outside the supported subset, or a bundling failure.
+diff --git a/crates/orchestration-build/src/runtime.rs b/crates/orchestration-build/src/runtime.rs
+new file mode 100644
+index 00000000..e92d4660
+--- /dev/null
++++ b/crates/orchestration-build/src/runtime.rs
+@@ -0,0 +1,40 @@
++//! The portable runtime's sources, built into this crate and written once
++//! per content hash under a private cache directory, because rolldown
++//! bundles from files.
++use std::{fs, io, path::Path};
++
++use crate::{sha256, Runtime};
++
++include!(concat!(env!("OUT_DIR"), "/runtime_files.rs"));
++
++impl Runtime {
++    /// The runtime this binary was built with, materialized under `cache`
++    /// (which must be private to this user, see [`crate::private_directory`]).
++    pub fn embedded(cache: &Path) -> io::Result<Runtime> {
++        let parts: Vec<&[u8]> = RUNTIME_FILES
++            .iter()
++            .flat_map(|(path, content)| [path.as_bytes(), *content])
++            .collect();
++        let directory = cache.join(sha256(&parts));
++        if !directory.is_dir() {
++            let temporary = cache.join(format!(
++                "{}.{}.tmp",
++                directory.file_name().unwrap().to_string_lossy(),
++                std::process::id()
++            ));
++            let _ = fs::remove_dir_all(&temporary);
++            for (path, content) in RUNTIME_FILES {
++                let file = temporary.join(path);
++                fs::create_dir_all(file.parent().unwrap())?;
++                fs::write(file, content)?;
++            }
++            // A concurrent run may have won the rename; its copy is identical.
++            if fs::rename(&temporary, &directory).is_err() && directory.is_dir() {
++                let _ = fs::remove_dir_all(&temporary);
++            }
++        }
++        Ok(Runtime {
++            src: directory.canonicalize()?,
++        })
++    }
++}
+-- 
+2.43.0
+

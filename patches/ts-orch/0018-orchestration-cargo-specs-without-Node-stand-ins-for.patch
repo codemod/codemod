@@ -1,0 +1,520 @@
+From 682516f085b20e5b7f023088682dc2ce663897af Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 23:23:02 +0000
+Subject: [PATCH 18/18] orchestration: cargo specs without Node stand-ins for
+ the decision API
+
+- The decision API stub runs in the test process; decision-stub.mjs is gone.
+- The QuickJS async-context spec runs on the real bundle in cargo instead of
+  an esbuild lowering in vitest (esbuild leaves the dev dependencies). It
+  caught the for-await lowering bug fixed in the previous commit.
+- Specs whose rules the cargo specs already cover are removed: the Node
+  import rejection at the bundle layer, skip/fail on a throwing jssg file in
+  vitest, and resuming an unfinalized history in vitest.
+
+Test lines since the port: +317 -> +216. Vitest 614 -> 609 specs,
+7.06 s -> 6.31 s. Cargo 119 specs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/cli/tests/typescript_workflow.rs       | 135 +++++++++++++-----
+ crates/orchestration-build/tests/bundle.rs    |  13 --
+ packages/orchestration/package.json           |   1 -
+ .../tests/fixtures/decision-stub.mjs          |  39 -----
+ .../tests/fixtures/quickjs/async-context.ts   |   6 +
+ .../tests/fixtures/quickjs/async-scenario.ts  |  11 +-
+ .../orchestration/tests/jssg-batch.test.ts    |  30 +---
+ .../tests/quickjs-async-context.test.ts       |  83 -----------
+ packages/orchestration/tests/replay.test.ts   |  11 --
+ pnpm-lock.yaml                                |   3 -
+ 10 files changed, 115 insertions(+), 217 deletions(-)
+ delete mode 100644 packages/orchestration/tests/fixtures/decision-stub.mjs
+ create mode 100644 packages/orchestration/tests/fixtures/quickjs/async-context.ts
+ delete mode 100644 packages/orchestration/tests/quickjs-async-context.test.ts
+
+diff --git a/crates/cli/tests/typescript_workflow.rs b/crates/cli/tests/typescript_workflow.rs
+index ab039950..1fd3b32c 100644
+--- a/crates/cli/tests/typescript_workflow.rs
++++ b/crates/cli/tests/typescript_workflow.rs
+@@ -1,14 +1,17 @@
+ //! `codemod workflow run -w workflow.ts`: the orchestration engine end to
+ //! end, from the TypeScript workflow to the edited target, in one process.
+-//! The agent and decision API stand-ins are Node scripts.
++//! The agent stand-in is a Node script; the decision API stub runs in the
++//! test process.
+ 
+ mod support;
+ 
+ use std::collections::BTreeMap;
+ use std::fs;
+-use std::io::{BufRead, BufReader};
++use std::io::{BufRead, BufReader, Read, Write};
++use std::net::{TcpListener, TcpStream};
+ use std::path::PathBuf;
+-use std::process::{Child, Command, Output, Stdio};
++use std::process::{Child, Command, Output};
++use std::sync::{Arc, Mutex};
+ use std::time::{Duration, Instant};
+ 
+ use serde_json::{json, Value};
+@@ -301,6 +304,21 @@ fn commands_issued_after_awaits_in_parallel_bodies_are_concurrent() {
+     assert_eq!(concurrent, ["a1", "a2", "b1", "b2", "c1"]);
+ }
+ 
++#[test]
++fn the_async_context_matches_async_local_storage_across_awaits_groups_and_generators() {
++    let scratch = Scratch::with(&initial());
++    let seen = output(&scratch.run(&quickjs("async-context.ts"), &[]));
++    // What Node's AsyncLocalStorage observes on the same scenario.
++    let als = json!({
++        "top": "-", "A0": "A", "A1": "A", "B0": "B", "C0": "C", "B1": "B", "C1": "C",
++        "B2": "B", "Binner": "B.inner", "B3": "B", "A2": "A", "Dthen": "D", "A3": "A",
++        "E1": "E", "A4": "A", "F1": "F", "F2": "F", "F3": "F", "Acatch": "A",
++        "Afinally": "A", "Athen": "A", "Hawait": "H", "Hresolve": "H", "HfromThen": "H",
++        "HfromAsync": "H", "Hall": "H", "Hexecutor": "H", "end": "-",
++    });
++    assert_eq!(seen, als);
++}
++
+ fn semantic() -> (Value, BTreeMap<String, String>) {
+     let scratch = Scratch::with(&files(&[
+         (
+@@ -500,34 +518,33 @@ fn sigint_cancels_a_running_jssg_batch_promptly_and_writes_nothing() {
+     );
+ }
+ 
++/// Each request's path and lowercase headers.
++type Requests = Mutex<Vec<(String, BTreeMap<String, String>)>>;
++
+ /// A decision API stub: answers System One and OpenAI-shaped requests and
+-/// logs each request as a JSON line.
++/// records each request's path and headers.
+ struct DecisionStub {
+-    process: Child,
+     port: u16,
+-    log: PathBuf,
++    requests: Arc<Requests>,
+     scratch: Scratch,
+ }
+ 
+ impl DecisionStub {
+     fn start() -> Self {
++        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
++        let port = listener.local_addr().unwrap().port();
++        let requests = Arc::new(Mutex::new(Vec::new()));
++        let log = Arc::clone(&requests);
++        std::thread::spawn(move || {
++            for stream in listener.incoming().flatten() {
++                let log = Arc::clone(&log);
++                std::thread::spawn(move || serve(stream, &log));
++            }
++        });
+         let scratch = Scratch::with(&initial());
+-        let log = scratch.path("requests.jsonl");
+-        fs::write(&log, "").unwrap();
+-        let mut process = Command::new("node")
+-            .arg(fixture("decision-stub.mjs"))
+-            .arg(&log)
+-            .stdout(Stdio::piped())
+-            .spawn()
+-            .expect("node runs the decision API stub");
+-        let mut line = String::new();
+-        BufReader::new(process.stdout.as_mut().unwrap())
+-            .read_line(&mut line)
+-            .unwrap();
+         Self {
+-            process,
+-            port: line.trim().parse().unwrap(),
+-            log,
++            port,
++            requests,
+             scratch,
+         }
+     }
+@@ -544,26 +561,68 @@ impl DecisionStub {
+         output(&command.output().unwrap())
+     }
+ 
+-    /// The path and the `field` header of every request.
+-    fn requests(&self, field: &str) -> Vec<(String, Value)> {
+-        fs::read_to_string(&self.log)
+-            .unwrap()
+-            .lines()
+-            .map(|line| {
+-                let request: Value = serde_json::from_str(line).unwrap();
+-                (
+-                    request["path"].as_str().unwrap().to_owned(),
+-                    request[field].clone(),
+-                )
+-            })
++    /// The path and the `header` of every request.
++    fn requests(&self, header: &str) -> Vec<(String, Value)> {
++        let requests = self.requests.lock().unwrap();
++        let value = |headers: &BTreeMap<String, String>| json!(headers.get(header));
++        requests
++            .iter()
++            .map(|(path, headers)| (path.clone(), value(headers)))
+             .collect()
+     }
+ }
+ 
+-impl Drop for DecisionStub {
+-    fn drop(&mut self) {
+-        let _ = self.process.kill();
+-        let _ = self.process.wait();
++/// Answers one request on `stream`, which then closes.
++fn serve(stream: TcpStream, log: &Requests) {
++    let mut reader = BufReader::new(&stream);
++    let mut line = String::new();
++    reader.read_line(&mut line).unwrap();
++    let path = line.split(' ').nth(1).unwrap().to_owned();
++    let mut headers = BTreeMap::new();
++    while let Some((name, value)) = {
++        line.clear();
++        reader.read_line(&mut line).unwrap();
++        line.trim_end().split_once(": ")
++    } {
++        headers.insert(name.to_ascii_lowercase(), value.to_owned());
++    }
++    let length = headers
++        .get("content-length")
++        .map_or(0, |n| n.parse().unwrap());
++    let mut body = vec![0; length];
++    reader.read_exact(&mut body).unwrap();
++    let questions = serde_json::from_slice::<Value>(&body).unwrap_or_default()["questions"].take();
++    let answer = answer(&path, &questions);
++    log.lock().unwrap().push((path, headers));
++    let (status, body) = match answer {
++        Some(answer) => ("200 OK", answer),
++        None => (
++            "404 Not Found",
++            json!({ "error": { "message": "not found" } }),
++        ),
++    };
++    let body = body.to_string();
++    let head = format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
++    (&stream)
++        .write_all(format!("{head}{body}").as_bytes())
++        .unwrap();
++}
++
++/// A yes/no probability of 0.25 for every question, in the provider's shape.
++fn answer(path: &str, questions: &Value) -> Option<Value> {
++    if path.ends_with("/systemone") {
++        let answers: serde_json::Map<String, Value> = (questions.as_object()?.keys())
++            .map(|id| (id.clone(), json!({ "type": "noul", "noul": 0.25 })))
++            .collect();
++        let usage = json!({ "input_tokens": 3, "output_tokens": 1 });
++        Some(json!({ "model": "stub-1", "answers": answers, "usage": usage }))
++    } else if path.ends_with("/decisions") {
++        let answers: Vec<Value> = (questions.as_array()?.iter())
++            .map(|q| json!({ "type": "predicate", "name": q["name"], "probability": 0.25 }))
++            .collect();
++        Some(json!({ "model": "stub-luna", "answers": answers, "usage": { "input_tokens": 5 } }))
++    } else {
++        None
+     }
+ }
+ 
+@@ -652,7 +711,7 @@ fn the_raw_key_goes_in_the_configured_header_on_the_configured_path() {
+         ],
+     );
+     assert_eq!(
+-        stub.requests("apiKey"),
++        stub.requests("api-key"),
+         vec![
+             (
+                 "/foundry/providers/microsoft/v1/systemone".to_owned(),
+diff --git a/crates/orchestration-build/tests/bundle.rs b/crates/orchestration-build/tests/bundle.rs
+index 4a89e857..ad70baa7 100644
+--- a/crates/orchestration-build/tests/bundle.rs
++++ b/crates/orchestration-build/tests/bundle.rs
+@@ -130,19 +130,6 @@ async fn the_bundle_lists_helpers_bundled_only_into_artifacts_as_inputs() {
+     assert!(bundle.inputs.contains(&fixture("jssg/helpers.ts")));
+ }
+ 
+-#[tokio::test(flavor = "multi_thread")]
+-async fn a_node_import_is_rejected() {
+-    let message = error(&format!(
+-        "import {{ readFileSync }} from \"node:fs\";\nimport {{ shell }} from {};\nexport default shell({{ name: \"x\", command: readFileSync(\"x\", \"utf8\") }});\n",
+-        index()
+-    ))
+-    .await;
+-    assert!(
+-        message.contains("'node:fs' (imported by ") && message.contains("is a Node module"),
+-        "{message}"
+-    );
+-}
+-
+ #[tokio::test(flavor = "multi_thread")]
+ async fn a_deep_package_import_is_rejected() {
+     let message =
+diff --git a/packages/orchestration/package.json b/packages/orchestration/package.json
+index 0bdeef69..100d953b 100644
+--- a/packages/orchestration/package.json
++++ b/packages/orchestration/package.json
+@@ -39,7 +39,6 @@
+   "devDependencies": {
+     "@codemod.com/tsconfig": "workspace:*",
+     "@types/node": "*",
+-    "esbuild": "^0.27.2",
+     "typescript": "catalog:",
+     "vitest": "^1.6.0"
+   }
+diff --git a/packages/orchestration/tests/fixtures/decision-stub.mjs b/packages/orchestration/tests/fixtures/decision-stub.mjs
+deleted file mode 100644
+index eb70256d..00000000
+--- a/packages/orchestration/tests/fixtures/decision-stub.mjs
++++ /dev/null
+@@ -1,39 +0,0 @@
+-// A decision API stub for e2e tests, run as its own process (the tests drive
+-// the CLI with spawnSync, which blocks their event loop). Prints its port on
+-// the first stdout line, answers POST .../systemone (System One shape) and
+-// POST .../decisions (OpenAI shape) with a yes/no probability of 0.25 per
+-// question, and appends each request (`{path, authorization, apiKey, body}`)
+-// as one JSON line to the file named by argv[2].
+-import { appendFileSync } from "node:fs";
+-import { createServer } from "node:http";
+-
+-const log = process.argv[2];
+-
+-function answer(path, body) {
+-  const { questions } = JSON.parse(body);
+-  if (path.endsWith("/systemone")) {
+-    const answers = Object.fromEntries(
+-      Object.keys(questions).map((id) => [id, { type: "noul", noul: 0.25 }]),
+-    );
+-    return { model: "stub-1", answers, usage: { input_tokens: 3, output_tokens: 1 } };
+-  }
+-  if (path.endsWith("/decisions")) {
+-    const answers = questions.map(({ name }) => ({ type: "predicate", name, probability: 0.25 }));
+-    return { model: "stub-luna", answers, usage: { input_tokens: 5 } };
+-  }
+-  return undefined;
+-}
+-
+-const server = createServer((request, response) => {
+-  let body = "";
+-  request.setEncoding("utf8");
+-  request.on("data", (chunk) => (body += chunk));
+-  request.on("end", () => {
+-    const { authorization, "api-key": apiKey } = request.headers;
+-    appendFileSync(log, `${JSON.stringify({ path: request.url, authorization, apiKey, body })}\n`);
+-    const result = request.method === "POST" ? answer(request.url, body) : undefined;
+-    response.writeHead(result === undefined ? 404 : 200, { "content-type": "application/json" });
+-    response.end(JSON.stringify(result ?? { error: { message: "not found" } }));
+-  });
+-});
+-server.listen(0, "127.0.0.1", () => console.log(server.address().port));
+diff --git a/packages/orchestration/tests/fixtures/quickjs/async-context.ts b/packages/orchestration/tests/fixtures/quickjs/async-context.ts
+new file mode 100644
+index 00000000..fe10efe4
+--- /dev/null
++++ b/packages/orchestration/tests/fixtures/quickjs/async-context.ts
+@@ -0,0 +1,6 @@
++// The QuickJS host's async context, through the real bundle's async
++// lowering: prints what `async-scenario.ts` observed at every label.
++import { dynamic, getHost } from "../../../src/index.ts";
++import { scenario } from "./async-scenario.ts";
++
++export default dynamic(() => scenario(getHost().createAsyncContext<string>()));
+diff --git a/packages/orchestration/tests/fixtures/quickjs/async-scenario.ts b/packages/orchestration/tests/fixtures/quickjs/async-scenario.ts
+index 0dacb68c..56072d8b 100644
+--- a/packages/orchestration/tests/fixtures/quickjs/async-scenario.ts
++++ b/packages/orchestration/tests/fixtures/quickjs/async-scenario.ts
+@@ -1,10 +1,9 @@
+ /**
+- * Async-context propagation scenario shared by the Node reference
+- * (`AsyncLocalStorage`) and the QuickJS implementation
+- * (`src/host/quickjs/async-context.ts`, run lowered in a separate realm):
+- * both must observe the same value at every labelled point. Labels are
+- * compared as a map, not in order (lowered async takes a different number of
+- * microtask ticks, so interleaving may differ).
++ * Async-context propagation scenario for the QuickJS implementation
++ * (`src/host/quickjs/async-context.ts`, run by `async-context.ts`): every
++ * labelled point must observe what Node's `AsyncLocalStorage` observes
++ * (`crates/cli/tests/typescript_workflow.rs`). Labels are compared as a map,
++ * not in order (lowered async takes a different number of microtask ticks).
+  */
+ import type { AsyncContextVariable } from "../../../src/core/host.ts";
+ 
+diff --git a/packages/orchestration/tests/jssg-batch.test.ts b/packages/orchestration/tests/jssg-batch.test.ts
+index d5dd893d..e4e5fa87 100644
+--- a/packages/orchestration/tests/jssg-batch.test.ts
++++ b/packages/orchestration/tests/jssg-batch.test.ts
+@@ -1,8 +1,8 @@
+ /**
+  * The portable batch loop (`createJssgBatchDispatch`) against a scripted
+- * engine: what a failing file does under each `onFileError` policy, and that
+- * a pool engine (`transformRange`) answers exactly as the serial loop. The
+- * real engines run in the runtimes' e2e tests.
++ * engine: a pool engine (`transformRange`) answers exactly as the serial
++ * loop. What a failing file does under each `onFileError` policy is in the
++ * cargo `jssg_parity` specs, on the real engine.
+  */
+ import { describe, expect, it } from "vitest";
+ import {
+@@ -58,14 +58,9 @@ function engine(pool: boolean): JssgBatchEngine<string, string> {
+ 
+ const files = ["a", "boom", "c"].map((content, index) => ({ path: `${index}.ts`, content }));
+ 
+-function run(options: { pool?: boolean; onFileError?: JssgOperation["onFileError"] } = {}) {
+-  const operation: JssgOperation = {
+-    kind: "jssg",
+-    transform: ref("t"),
+-    language: "typescript",
+-    ...(options.onFileError === undefined ? {} : { onFileError: options.onFileError }),
+-  };
+-  return createJssgBatchDispatch({ engine: engine(options.pool ?? false) })({
++function run(pool: boolean) {
++  const operation: JssgOperation = { kind: "jssg", transform: ref("t"), language: "typescript" };
++  return createJssgBatchDispatch({ engine: engine(pool) })({
+     protocolVersion: PROTOCOL_VERSION,
+     commandId: "t",
+     operation,
+@@ -83,18 +78,7 @@ const skipped = {
+ };
+ 
+ describe("createJssgBatchDispatch", () => {
+-  it("skips a file whose transform throws, reports it, and keeps the other files", async () => {
+-    expect(await run()).toMatchObject({ status: "succeeded", output: skipped });
+-  });
+-
+-  it("fails the command on a throwing file when onFileError is 'fail'", async () => {
+-    expect(await run({ onFileError: "fail" })).toMatchObject({
+-      status: "failed",
+-      error: { message: "JSSG failed for '1.ts': Error: boom" },
+-    });
+-  });
+-
+   it("a pool engine answers with the same outcomes and failures as the serial loop", async () => {
+-    expect(await run({ pool: true })).toMatchObject({ status: "succeeded", output: skipped });
++    expect(await run(true)).toMatchObject({ status: "succeeded", output: skipped });
+   });
+ });
+diff --git a/packages/orchestration/tests/quickjs-async-context.test.ts b/packages/orchestration/tests/quickjs-async-context.test.ts
+deleted file mode 100644
+index df806a31..00000000
+--- a/packages/orchestration/tests/quickjs-async-context.test.ts
++++ /dev/null
+@@ -1,83 +0,0 @@
+-/**
+- * The QuickJS async context (`src/host/quickjs/async-context.ts`) has
+- * `AsyncLocalStorage` semantics once async code is lowered the way the
+- * quickjs bundle lowers it. The scenario runs twice: natively in Node with
+- * `AsyncLocalStorage`, and bundled with the quickjs build's lowering in a
+- * fresh `node:vm` realm (its own `Promise`, so patching `then` there touches
+- * nothing else). Every labelled observation must agree.
+- */
+-import { AsyncLocalStorage } from "node:async_hooks";
+-import { resolve } from "node:path";
+-import vm from "node:vm";
+-import { build } from "esbuild";
+-import { expect, it } from "vitest";
+-import type { AsyncContextVariable } from "../src/core/host.ts";
+-import { scenario } from "./fixtures/quickjs/async-scenario.ts";
+-
+-const src = resolve(import.meta.dirname, "../src");
+-const fixture = resolve(import.meta.dirname, "fixtures/quickjs/async-scenario.ts");
+-
+-it("matches AsyncLocalStorage across awaits, Promise.all, nesting, finally, and async generators", async () => {
+-  const storage = new AsyncLocalStorage<string>();
+-  const reference: AsyncContextVariable<string> = {
+-    get: () => storage.getStore(),
+-    run: (value, fn) => storage.run(value, fn),
+-  };
+-  const expected = await scenario(reference);
+-
+-  const entry = [
+-    `import { installPromiseContextPropagation, createPropagatingAsyncContext } from ${JSON.stringify(`${src}/host/quickjs/async-context.ts`)};`,
+-    `import { scenario } from ${JSON.stringify(fixture)};`,
+-    "installPromiseContextPropagation();",
+-    "globalThis.__run = () => scenario(createPropagatingAsyncContext());",
+-  ].join("\n");
+-  const result = await build({
+-    stdin: { contents: entry, resolveDir: src, loader: "ts" },
+-    bundle: true,
+-    write: false,
+-    format: "iife",
+-    platform: "neutral",
+-    target: "es2022",
+-    // The lowering crates/orchestration-build applies.
+-    supported: { "async-await": false, "async-generator": false, "for-await": false },
+-    logLevel: "silent",
+-  });
+-  const code = result.outputFiles[0]!.text;
+-  expect(code).not.toMatch(/\bawait\b/u);
+-  const realm = vm.createContext({});
+-  vm.runInContext(code, realm);
+-  const actual = (await (
+-    realm as { __run: () => Promise<Record<string, string>> }
+-  ).__run()) as Record<string, string>;
+-
+-  expect(expected).toMatchObject({
+-    top: "-",
+-    A0: "A",
+-    B2: "B",
+-    Binner: "B.inner",
+-    E1: "E",
+-    end: "-",
+-  });
+-  expect({ ...actual }).toEqual(expected);
+-});
+-
+-it("without lowering, native await loses the context (why the bundle lowers async)", async () => {
+-  const entry = [
+-    `import { installPromiseContextPropagation, createPropagatingAsyncContext } from ${JSON.stringify(`${src}/host/quickjs/async-context.ts`)};`,
+-    "installPromiseContextPropagation();",
+-    "const v = createPropagatingAsyncContext();",
+-    "globalThis.__run = () => v.run('A', async () => { await null; return v.get() ?? '-'; });",
+-  ].join("\n");
+-  const result = await build({
+-    stdin: { contents: entry, resolveDir: src, loader: "ts" },
+-    bundle: true,
+-    write: false,
+-    format: "iife",
+-    platform: "neutral",
+-    target: "es2022",
+-    logLevel: "silent",
+-  });
+-  const realm = vm.createContext({});
+-  vm.runInContext(result.outputFiles[0]!.text, realm);
+-  expect(await (realm as { __run: () => Promise<string> }).__run()).toBe("-");
+-});
+diff --git a/packages/orchestration/tests/replay.test.ts b/packages/orchestration/tests/replay.test.ts
+index 0d470ace..69f65271 100644
+--- a/packages/orchestration/tests/replay.test.ts
++++ b/packages/orchestration/tests/replay.test.ts
+@@ -97,15 +97,4 @@ describe("replay nondeterminism detection", () => {
+     const error = await replayError(differentOutput, h);
+     expect(error.kind).toBe("output");
+   });
+-
+-  it("continues an unfinalized history by replaying then executing only new commands", async () => {
+-    const h = await recorded(sequence(a, b), false);
+-    const resume = h.reload({
+-      results: { a: failed("must not execute"), b: failed("must not execute"), c: "fresh" },
+-    });
+-    const result = await resume.run(sequence(a, b, c));
+-    expect(result.output).toBe("abc");
+-    expect(resume.executed.map((r) => r.commandId)).toEqual(["c"]);
+-    expect(result.history.events.at(-1)).toEqual({ type: "finalized", output: "abc" });
+-  });
+ });
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 12cb593f..6823b753 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -191,9 +191,6 @@ importers:
+       '@types/node':
+         specifier: '*'
+         version: 22.16.0
+-      esbuild:
+-        specifier: ^0.27.2
+-        version: 0.27.2
+       typescript:
+         specifier: 'catalog:'
+         version: 5.9.3
+-- 
+2.43.0
+

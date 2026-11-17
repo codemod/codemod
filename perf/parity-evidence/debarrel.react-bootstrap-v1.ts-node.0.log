@@ -1,0 +1,1 @@
+command 'debarrel' failed: JSSG failed for 'test/AccordionSpec.js': Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/react-bootstrap-v1/test/AccordionSpec.js': Unexpected JSX expression

@@ -1,0 +1,63 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/scheduler.test.ts > operation weights > charges shell a weight of 1
+ ✓ tests/scheduler.test.ts > operation weights > charges agent a weight of 1
+ ✓ tests/scheduler.test.ts > operation weights > charges assessment a weight of 1
+ ✓ tests/scheduler.test.ts > operation weights > charges jssg without semantics a weight of 2
+ ✓ tests/scheduler.test.ts > operation weights > charges jssg with file semantics a weight of 2
+ ✓ tests/scheduler.test.ts > operation weights > charges jssg with workspace semantics a weight of 4
+ ✓ tests/scheduler.test.ts > operation weights > charges jssg with a workspace root a weight of 4
+ ✓ tests/scheduler.test.ts > default capacity > on a large host admits 16 units
+ ✓ tests/scheduler.test.ts > default capacity > on a laptop admits 10 units
+ ✓ tests/scheduler.test.ts > default capacity > on a tiny host admits 1 units
+ ✓ tests/scheduler.test.ts > default capacity > on a three-core host admits 3 units
+ ✓ tests/scheduler.test.ts > default capacity > on a small-memory host admits 8 units
+ ✓ tests/scheduler.test.ts > default capacity > on a memory-starved host admits 4 units
+ ✓ tests/scheduler.test.ts > default capacity > takes the operator override over the host facts
+ ✓ tests/scheduler.test.ts > default capacity > ignores a blank operator override
+ ✓ tests/scheduler.test.ts > default capacity > rejects an operator override of "0"
+ ✓ tests/scheduler.test.ts > default capacity > rejects an operator override of "-2"
+ ✓ tests/scheduler.test.ts > default capacity > rejects an operator override of "1.5"
+ ✓ tests/scheduler.test.ts > default capacity > rejects an operator override of "many"
+ ✓ tests/scheduler.test.ts > default capacity > rejects a scheduler capacity of 0
+ ✓ tests/scheduler.test.ts > bounded admission > admits a group's members up to capacity and queues the rest
+ ✓ tests/scheduler.test.ts > bounded admission > admits the next member in declaration order when one finishes
+ ✓ tests/scheduler.test.ts > bounded admission > never exceeds capacity over a whole run
+ ✓ tests/scheduler.test.ts > bounded admission > with a workspace JSSG pass > keeps lighter work queued behind a pass that does not fit yet
+ ✓ tests/scheduler.test.ts > bounded admission > with a workspace JSSG pass > admits a shell beside a pass in the capacity left over
+ ✓ tests/scheduler.test.ts > bounded admission > with a workspace JSSG pass > charges the passes their weight over the whole run
+ ✓ tests/scheduler.test.ts > bounded admission > when members finish in reverse order > returns outputs in declaration order
+ ✓ tests/scheduler.test.ts > bounded admission > when members finish in reverse order > records commands in declaration order, so replay is unaffected
+ ✓ tests/scheduler.test.ts > bounded admission > reports commands waiting for capacity as queued without starting them
+ ✓ tests/scheduler.test.ts > bounded admission > records every member as scheduled while it waits for capacity
+ ✓ tests/scheduler.test.ts > bounded admission > reports each command as admitted once
+ ✓ tests/scheduler.test.ts > cancellation > refuses a queued command on abort without starting it
+ ✓ tests/scheduler.test.ts > cancellation > leaves an admitted command running until its executor reports
+ ✓ tests/scheduler.test.ts > cancellation > fails the aborted run with an OperationError
+ ✓ tests/scheduler.test.ts > cancellation > records the refused command as cancelled while queued
+ ✓ tests/scheduler.test.ts > cancellation > holds no capacity once the aborted run settles
+ ✓ tests/scheduler.test.ts > cancellation > when the signal already aborted > fails the run with an OperationError
+ ✓ tests/scheduler.test.ts > cancellation > when the signal already aborted > admits and starts nothing
+ ✓ tests/scheduler.test.ts > pause and resume > admits nothing while paused, even with capacity free
+ ✓ tests/scheduler.test.ts > pause and resume > admits the held commands in declaration order on resume
+ ✓ tests/scheduler.test.ts > pause and resume > reports the queue and active counts when it pauses and resumes
+ ✓ tests/scheduler.test.ts > pause and resume > returns a finished command's permit without admitting the next one
+ ✓ tests/scheduler.test.ts > pause and resume > reports only actual changes between paused and running
+ ✓ tests/scheduler.test.ts > pause and resume > still refuses a queued command that is aborted while paused
+ ✓ tests/scheduler.test.ts > permits > are released after success
+ ✓ tests/scheduler.test.ts > permits > are released after an operation failure
+ ✓ tests/scheduler.test.ts > permits > are released after cancellation
+ ✓ tests/scheduler.test.ts > permits > are released after an executor launch failure
+ ✓ tests/scheduler.test.ts > replay > replays a recorded group without reaching the executor
+ ✓ tests/scheduler.test.ts > replay > consumes no capacity while replaying
+ ✓ tests/scheduler.test.ts > group shapes > bounds two groups awaited at once, one built inside the body, by the one run scheduler
+ ✓ tests/scheduler.test.ts > group shapes > runs a sequence's parallel stage under the bound, before the next stage
+ ✓ tests/scheduler.test.ts > group shapes > does not change a sequential workflow at capacity 1
+ ✓ tests/scheduler.test.ts > group shapes > bounds two concurrent runs by their own schedulers
+
+ Test Files  1 passed (1)
+      Tests  54 passed (54)
+   Start at  02:48:19
+   Duration  741ms (transform 332ms, setup 0ms, collect 437ms, tests 41ms, environment 0ms, prepare 59ms)
+

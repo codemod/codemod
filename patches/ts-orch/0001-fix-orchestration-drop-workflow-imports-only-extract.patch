@@ -1,0 +1,74 @@
+From b591408ec61e24bd80e376b514bc4b3fbaa3b067 Mon Sep 17 00:00:00 2001
+From: bench <bench@local>
+Date: Sun, 8 Nov 2026 22:17:57 +0000
+Subject: [PATCH 1/2] fix(orchestration): drop workflow imports only extracted
+ transforms use
+
+A workflow that imports a published codemod's transform (transform: imported)
+kept the import, so the node runtime's loader evaluated the transform module and
+failed on its value imports of codemod:* (e.g. parse from codemod:ast-grep).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ packages/orchestration/src/bundle/build.ts | 27 ++++++++++++++++++++++
+ packages/orchestration/tests/build.test.ts |  6 +++++
+ 2 files changed, 33 insertions(+)
+
+diff --git a/packages/orchestration/src/bundle/build.ts b/packages/orchestration/src/bundle/build.ts
+index 1aa6f3bd..03c58011 100644
+--- a/packages/orchestration/src/bundle/build.ts
++++ b/packages/orchestration/src/bundle/build.ts
+@@ -170,6 +170,33 @@ export function buildModule(source: string, file: string): BuiltModule {
+     });
+   }
+ 
++  // Imports used only inside extracted transforms live in the artifacts now.
++  // Keeping them would make the trusted runner evaluate transform modules
++  // (and their `codemod:*` imports, which only the runtimes can resolve).
++  const extracted = edits.map(({ start, end }) => ({ start, end }));
++  const inExtracted = (pos: number) => extracted.some((r) => pos >= r.start && pos < r.end);
++  const usedOutside = new Set<string>();
++  const usedInside = new Set<string>();
++  const visitRefs = (node: ts.Node): void => {
++    if (typescript.isImportDeclaration(node)) return;
++    if (typescript.isIdentifier(node) && module.imports.has(node.text)) {
++      (inExtracted(node.getStart(sf)) ? usedInside : usedOutside).add(node.text);
++    }
++    typescript.forEachChild(node, visitRefs);
++  };
++  visitRefs(sf);
++  for (const statement of sf.statements) {
++    if (!typescript.isImportDeclaration(statement) || !statement.importClause) continue;
++    const names = [...module.imports].filter(([, d]) => d === statement).map(([n]) => n);
++    if (
++      names.length > 0 &&
++      names.every((n) => !usedOutside.has(n)) &&
++      names.some((n) => usedInside.has(n))
++    ) {
++      edits.push({ start: statement.getStart(sf), end: statement.getEnd(), text: "" });
++    }
++  }
++
+   let rewritten = source;
+   for (const edit of edits.sort((a, b) => b.start - a.start)) {
+     rewritten = rewritten.slice(0, edit.start) + edit.text + rewritten.slice(edit.end);
+diff --git a/packages/orchestration/tests/build.test.ts b/packages/orchestration/tests/build.test.ts
+index 49dc1a96..edfb8134 100644
+--- a/packages/orchestration/tests/build.test.ts
++++ b/packages/orchestration/tests/build.test.ts
+@@ -210,6 +210,12 @@ export const b = jssg({ name: "b", language: "typescript", transform: () => "b"
+     expect(source.match(/transform: \{"name":"[ab]","hash"/gu)).toHaveLength(2);
+   });
+ 
++  it("drops imports only transforms use, so the runner never loads transform modules", () => {
++    const { source } = build(`${HEADER}
++export default jssg({ name: "imported", language: "typescript", transform: transformFn });`);
++    expect(source).not.toContain("import transformFn");
++  });
++
+   it("hashes the bundled content: stable across checkouts, sensitive to helpers", () => {
+     const first = build(METHOD).artifacts[0]!;
+     const moved = mkdtempSync(join(tmpdir(), "codemod-moved-"));
+-- 
+2.43.0
+

@@ -1,0 +1,52 @@
+Workflow started 43859912-2a41-496d-9e4a-6a886b49e174
+⏺ step-1
+
+About to execute shell command for step 'step-1' in node 'Shell chain':
+  true
+
+⏺ step-2
+
+About to execute shell command for step 'step-2' in node 'Shell chain':
+  true
+
+⏺ step-3
+
+About to execute shell command for step 'step-3' in node 'Shell chain':
+  true
+
+⏺ step-4
+
+About to execute shell command for step 'step-4' in node 'Shell chain':
+  true
+
+⏺ step-5
+
+About to execute shell command for step 'step-5' in node 'Shell chain':
+  true
+
+⏺ step-6
+
+About to execute shell command for step 'step-6' in node 'Shell chain':
+  true
+
+⏺ step-7
+
+About to execute shell command for step 'step-7' in node 'Shell chain':
+  true
+
+⏺ step-8
+
+About to execute shell command for step 'step-8' in node 'Shell chain':
+  true
+
+⏺ step-9
+
+About to execute shell command for step 'step-9' in node 'Shell chain':
+  true
+
+⏺ step-10
+
+About to execute shell command for step 'step-10' in node 'Shell chain':
+  true
+
+Workflow completed in 2.0s

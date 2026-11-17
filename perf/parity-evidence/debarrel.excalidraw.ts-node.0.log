@@ -1,0 +1,1 @@
+command 'debarrel' failed: JSSG failed for 'dev-docs/src/components/Highlight.js': Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/excalidraw__excalidraw/dev-docs/src/components/Highlight.js': Unexpected JSX expression

@@ -1,0 +1,82 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/target.test.ts > target normalization > strips a leading ./ and a trailing slash
+ ✓ tests/target.test.ts > target normalization > collapses // and /./ in the root
+ ✓ tests/target.test.ts > target normalization > keeps . as the repository root
+ ✓ tests/target.test.ts > target normalization > resolves .. that stays inside the repository
+ ✓ tests/target.test.ts > target normalization > converts backslashes in the root
+ ✓ tests/target.test.ts > target normalization > keeps include and exclude patterns as written
+ ✓ tests/target.test.ts > target normalization > accepts a target without a root
+ ✓ tests/target.test.ts > target normalization > treats .. inside a name as part of the name
+ ✓ tests/target.test.ts > target normalization > rejects not an object
+ ✓ tests/target.test.ts > target normalization > rejects an empty target
+ ✓ tests/target.test.ts > target normalization > rejects an unknown field
+ ✓ tests/target.test.ts > target normalization > rejects an empty root
+ ✓ tests/target.test.ts > target normalization > rejects an absolute posix root
+ ✓ tests/target.test.ts > target normalization > rejects an absolute windows root
+ ✓ tests/target.test.ts > target normalization > rejects a unc root
+ ✓ tests/target.test.ts > target normalization > rejects a root that escapes
+ ✓ tests/target.test.ts > target normalization > rejects a root that escapes with backslashes
+ ✓ tests/target.test.ts > target normalization > rejects a bare parent root
+ ✓ tests/target.test.ts > target normalization > rejects an empty include list
+ ✓ tests/target.test.ts > target normalization > rejects a non-string exclude entry
+ ✓ tests/target.test.ts > target normalization > rejects an absolute pattern
+ ✓ tests/target.test.ts > target normalization > rejects an escaping pattern
+ ✓ tests/target.test.ts > target normalization > names the invocation before the reason
+ ✓ tests/target.test.ts > JSSG invocation targets > binds the normalized target to the command
+ ✓ tests/target.test.ts > JSSG invocation targets > puts the target on the wire operation
+ ✓ tests/target.test.ts > JSSG invocation targets > sends the request in the shared jssg-target-request fixture
+ ✓ tests/target.test.ts > JSSG invocation targets > leaves the definition and its later invocations untargeted
+ ✓ tests/target.test.ts > JSSG invocation targets > keeps the input alongside the target on typed invocations
+ ✓ tests/target.test.ts > JSSG invocation targets > rejects an invalid target when the command is created
+ ✓ tests/target.test.ts > JSSG invocation targets > rejects an empty target when the command is created
+ ✓ tests/target.test.ts > JSSG invocation targets > rejects a target that is not an object when the command is created
+ ✓ tests/target.test.ts > JSSG invocation targets > rejects an unknown invocation field when the command is created
+ ✓ tests/target.test.ts > JSSG invocation targets > rejects options that are not an object when the command is created
+ ✓ tests/target.test.ts > JSSG invocation targets > rejects an id that is not a string when the command is created
+ ✓ tests/target.test.ts > JSSG invocation targets > rejects a target on a shell invocation when the command is created
+ ✓ tests/target.test.ts > JSSG invocation targets > rejects a target on an agent invocation when the command is created
+ ✓ tests/target.test.ts > targeted JSSG in static composition > carries each stage's target into the sequence IR
+ ✓ tests/target.test.ts > targeted JSSG in static composition > sends each stage's target in its executor request
+ ✓ tests/target.test.ts > targeted JSSG in static composition > replays a targeted sequence from history without executing
+ ✓ tests/target.test.ts > targeted JSSG in static composition > carries each parallel member's target into the IR
+ ✓ tests/target.test.ts > targeted JSSG in static composition > sends each parallel member its target
+ ✓ tests/target.test.ts > targeted JSSG in static composition > rejects targeting one definition twice without distinct ids
+ ✓ tests/target.test.ts > targeted JSSG in static composition > targets one definition twice under distinct ids
+ ✓ tests/target.test.ts > targets in dynamic workflows and replay > records each invocation's target and input under its explicit id
+ ✓ tests/target.test.ts > targets in dynamic workflows and replay > replays recorded targets without executing
+ ✓ tests/target.test.ts > targets in dynamic workflows and replay > fails replay as changed, executing nothing, when an id gets a different target
+ ✓ tests/target.test.ts > targets in dynamic workflows and replay > fails replay as changed when a target is added to an untargeted command
+ ✓ tests/target.test.ts > targets in dynamic workflows and replay > replays equivalent target spellings as the same command
+ ✓ tests/target.test.ts > protocol validation of operations > accepts jssg include, exclude, and workspace semantic analysis
+ ✓ tests/target.test.ts > protocol validation of operations > accepts a jssg target with a root
+ ✓ tests/target.test.ts > protocol validation of operations > accepts a jssg target with include and exclude
+ ✓ tests/target.test.ts > protocol validation of operations > accepts an empty jssg target
+ ✓ tests/target.test.ts > protocol validation of operations > accepts a shell operation
+ ✓ tests/target.test.ts > protocol validation of operations > accepts an agent operation
+ ✓ tests/target.test.ts > protocol validation of operations > accepts an assessment operation
+ ✓ tests/target.test.ts > protocol validation of operations > rejects a jssg include that is not a list
+ ✓ tests/target.test.ts > protocol validation of operations > rejects an empty jssg include list
+ ✓ tests/target.test.ts > protocol validation of operations > rejects a blank jssg exclude pattern
+ ✓ tests/target.test.ts > protocol validation of operations > rejects semantic analysis given as a string
+ ✓ tests/target.test.ts > protocol validation of operations > rejects file-mode semantic analysis with a root
+ ✓ tests/target.test.ts > protocol validation of operations > rejects an unknown semantic analysis field
+ ✓ tests/target.test.ts > protocol validation of operations > rejects a jssg target that is a string
+ ✓ tests/target.test.ts > protocol validation of operations > rejects a jssg target root that is not a string
+ ✓ tests/target.test.ts > protocol validation of operations > rejects a jssg target include that is not a list
+ ✓ tests/target.test.ts > protocol validation of operations > rejects a null jssg target exclude pattern
+ ✓ tests/target.test.ts > protocol validation of operations > rejects an unknown jssg target field
+ ✓ tests/target.test.ts > protocol validation of operations > rejects a package field on a shell operation
+ ✓ tests/target.test.ts > protocol validation of operations > rejects package and command fields on a jssg operation
+ ✓ tests/target.test.ts > protocol validation of operations > rejects an env field on an agent operation
+ ✓ tests/target.test.ts > protocol validation of operations > rejects an unknown operation kind
+ ✓ tests/target.test.ts > protocol validation of operations > rejects a target, even an empty one, on a shell operation
+ ✓ tests/target.test.ts > protocol validation of operations > rejects a target, even an empty one, on an agent operation
+ ✓ tests/target.test.ts > protocol validation of operations > rejects a target, even an empty one, on an assessment operation
+
+ Test Files  1 passed (1)
+      Tests  73 passed (73)
+   Start at  02:48:29
+   Duration  769ms (transform 343ms, setup 0ms, collect 467ms, tests 29ms, environment 0ms, prepare 60ms)
+

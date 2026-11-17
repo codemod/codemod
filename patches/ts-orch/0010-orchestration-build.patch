@@ -1,0 +1,2058 @@
+From fb1fc00b155ed7b3ac0396a78d73d448a9290651 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 05:37:35 +0000
+Subject: [PATCH 10/11] orchestration-build: jssg split on oxc and the QuickJS
+ bundle on rolldown
+
+Ports the workflow build from esbuild to Rust: the jssg() split runs on
+oxc_semantic, artifacts and the workflow bundle are built with rolldown
+(TypeScript stripped, async lowered for QuickJS), and bundles are cached
+by the content of every input file. The specs replace build.test.ts,
+quickjs-bundle.test.ts and build-cache.test.ts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Cargo.lock                                 |  28 ++
+ Cargo.toml                                 |   1 +
+ crates/orchestration-build/Cargo.toml      |  30 ++
+ crates/orchestration-build/src/bundle.rs   | 523 +++++++++++++++++++++
+ crates/orchestration-build/src/cache.rs    | 174 +++++++
+ crates/orchestration-build/src/lib.rs      |  58 +++
+ crates/orchestration-build/src/split.rs    | 430 +++++++++++++++++
+ crates/orchestration-build/tests/bundle.rs | 183 +++++++
+ crates/orchestration-build/tests/cache.rs  | 123 +++++
+ crates/orchestration-build/tests/split.rs  | 387 +++++++++++++++
+ 10 files changed, 1937 insertions(+)
+ create mode 100644 crates/orchestration-build/Cargo.toml
+ create mode 100644 crates/orchestration-build/src/bundle.rs
+ create mode 100644 crates/orchestration-build/src/cache.rs
+ create mode 100644 crates/orchestration-build/src/lib.rs
+ create mode 100644 crates/orchestration-build/src/split.rs
+ create mode 100644 crates/orchestration-build/tests/bundle.rs
+ create mode 100644 crates/orchestration-build/tests/cache.rs
+ create mode 100644 crates/orchestration-build/tests/split.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 6e096451..439b54b2 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1150,6 +1150,8 @@ dependencies = [
+  "num_cpus",
+  "oauth2",
+  "open",
++ "orchestration-build",
++ "orchestration-quickjs-host",
+  "percent-encoding",
+  "portable-pty",
+  "rand 0.8.5",
+@@ -2789,6 +2791,12 @@ version = "0.5.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
+ 
++[[package]]
++name = "hex"
++version = "0.4.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
++
+ [[package]]
+ name = "hex-simd"
+ version = "0.8.0"
+@@ -4815,6 +4823,26 @@ dependencies = [
+  "tokio",
+ ]
+ 
++[[package]]
++name = "orchestration-build"
++version = "1.18.6"
++dependencies = [
++ "anyhow",
++ "arcstr",
++ "hex",
++ "libc",
++ "oxc 0.96.0",
++ "regex",
++ "rolldown",
++ "rolldown_common",
++ "rolldown_plugin",
++ "serde",
++ "serde_json",
++ "sha2",
++ "tempfile",
++ "tokio",
++]
++
+ [[package]]
+ name = "orchestration-quickjs-host"
+ version = "1.18.6"
+diff --git a/Cargo.toml b/Cargo.toml
+index 9002c028..50a6dceb 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -5,6 +5,7 @@ members = [
+     "crates/cli",
+     "crates/runners",
+     "crates/orchestration-agent",
++    "crates/orchestration-build",
+     "crates/orchestration-quickjs-host",
+     "crates/orchestration-walker",
+     "crates/state",
+diff --git a/crates/orchestration-build/Cargo.toml b/crates/orchestration-build/Cargo.toml
+new file mode 100644
+index 00000000..d9e3a0e5
+--- /dev/null
++++ b/crates/orchestration-build/Cargo.toml
+@@ -0,0 +1,30 @@
++[package]
++name = "orchestration-build"
++version.workspace = true
++edition = "2021"
++authors.workspace = true
++description = "Builds a TypeScript orchestration workflow into one QuickJS bundle: the jssg() split and the rolldown bundle"
++documentation.workspace = true
++repository.workspace = true
++license.workspace = true
++publish = false
++
++[dependencies]
++# The rolldown the CLI already uses for `jssg bundle`, so the CLI links one copy.
++rolldown = { git = "https://github.com/rolldown/rolldown.git", rev = "3d1985ab40923590b3ae9f626b2438d9543dc588" }
++rolldown_common = { git = "https://github.com/rolldown/rolldown.git", rev = "3d1985ab40923590b3ae9f626b2438d9543dc588" }
++rolldown_plugin = { git = "https://github.com/rolldown/rolldown.git", rev = "3d1985ab40923590b3ae9f626b2438d9543dc588" }
++# The oxc that rolldown revision uses.
++oxc = { version = "=0.96.0", features = ["semantic", "transformer", "codegen"] }
++anyhow = "1"
++arcstr = "1.2"
++hex = "0.4"
++libc = "0.2"
++serde = { workspace = true }
++serde_json = { workspace = true }
++sha2 = "0.10"
++
++[dev-dependencies]
++regex = { workspace = true }
++tempfile = { workspace = true }
++tokio = { workspace = true }
+diff --git a/crates/orchestration-build/src/bundle.rs b/crates/orchestration-build/src/bundle.rs
+new file mode 100644
+index 00000000..c74b84c8
+--- /dev/null
++++ b/crates/orchestration-build/src/bundle.rs
+@@ -0,0 +1,523 @@
++//! rolldown bundles: one per `jssg()` transform artifact, and the QuickJS
++//! bundle of the whole workflow graph.
++//!
++//! The workflow bundle resolves `@codemod.com/orchestration` (and
++//! `/portable`) to the portable runtime and rejects every other entry point
++//! of the package and every `node:*` import. `codemod:*` stays external: the
++//! host provides it. Async functions and generators are lowered to
++//! generators, so continuations go through `Promise.prototype.then`, which
++//! carries the orchestration async context in QuickJS.
++use std::{
++    borrow::Cow,
++    collections::{BTreeMap, BTreeSet},
++    path::{Component, Path, PathBuf},
++    sync::{Arc, Mutex},
++};
++
++use arcstr::ArcStr;
++use oxc::{
++    allocator::Allocator,
++    codegen::Codegen,
++    parser::Parser,
++    semantic::SemanticBuilder,
++    span::SourceType,
++    transformer::{HelperLoaderMode, TransformOptions, Transformer},
++};
++use rolldown::{Bundler, BundlerOptions, InputItem, OutputFormat, Platform, ResolveOptions};
++use rolldown_common::{ModuleType, Output, ResolvedExternal};
++use rolldown_plugin::{
++    __inner::SharedPluginable, HookLoadArgs, HookLoadOutput, HookLoadReturn, HookResolveIdArgs,
++    HookResolveIdOutput, HookResolveIdReturn, HookTransformArgs, HookTransformOutput,
++    HookTransformReturn, HookUsage, Plugin, PluginContext, SharedTransformPluginContext,
++};
++
++use crate::{
++    sha256,
++    split::{build_module, JssgArtifact},
++    BuildError,
++};
++
++const PACKAGE: &str = "@codemod.com/orchestration";
++const ARTIFACTS: &str = "__CODEMOD_QUICKJS_ARTIFACTS__";
++const ENTRY_ID: &str = "\0codemod-quickjs-entry";
++
++/// Where the portable orchestration runtime's sources are.
++#[derive(Debug, Clone)]
++pub struct Runtime {
++    /// The orchestration package's `src` directory.
++    pub src: PathBuf,
++}
++
++impl Runtime {
++    fn portable(&self) -> PathBuf {
++        self.src.join("portable.ts")
++    }
++
++    fn entry(&self) -> PathBuf {
++        self.src.join("host").join("quickjs").join("entry.ts")
++    }
++}
++
++#[derive(Debug, Clone)]
++pub struct QuickjsBundle {
++    /// The ES module text.
++    pub code: String,
++    /// SHA-256 (hex) of `code`.
++    pub hash: String,
++    /// Sorted by hash.
++    pub artifacts: Vec<JssgArtifact>,
++    /// Every source file that went into the bundle. Sorted.
++    pub inputs: Vec<PathBuf>,
++}
++
++pub(crate) struct BundledArtifact {
++    pub code: String,
++    pub inputs: Vec<PathBuf>,
++}
++
++fn module_type(file: &str) -> ModuleType {
++    match Path::new(file).extension().and_then(|e| e.to_str()) {
++        Some("tsx") => ModuleType::Tsx,
++        Some("jsx") => ModuleType::Jsx,
++        Some("js" | "mjs" | "cjs") => ModuleType::Js,
++        _ => ModuleType::Ts,
++    }
++}
++
++fn is_script(id: &str) -> bool {
++    matches!(
++        Path::new(id).extension().and_then(|e| e.to_str()),
++        Some("ts" | "mts" | "cts" | "tsx" | "js" | "mjs" | "cjs" | "jsx")
++    )
++}
++
++fn external(specifier: &str) -> HookResolveIdOutput {
++    HookResolveIdOutput {
++        id: specifier.into(),
++        external: Some(ResolvedExternal::Bool(true)),
++        ..Default::default()
++    }
++}
++
++/// Errors raised inside hooks, kept whole: rolldown would flatten them into
++/// a generic plugin error.
++#[derive(Default)]
++struct Failure(Mutex<Option<BuildError>>);
++
++impl Failure {
++    fn raise(&self, error: BuildError) -> anyhow::Error {
++        let message = error.to_string();
++        self.0.lock().unwrap().get_or_insert(error);
++        anyhow::anyhow!(message)
++    }
++
++    fn take(&self) -> Option<BuildError> {
++        self.0.lock().unwrap().take()
++    }
++}
++
++// --- transform artifacts ------------------------------------------------------
++
++/// The virtual entry stands in for the workflow module itself (same path), so
++/// its relative imports resolve from the module's directory and the bundle's
++/// region comments name it relative to that directory.
++#[derive(Debug)]
++struct ArtifactEntry {
++    id: String,
++    code: String,
++}
++
++impl Plugin for ArtifactEntry {
++    fn name(&self) -> Cow<'static, str> {
++        Cow::Borrowed("codemod-jssg-artifact")
++    }
++
++    fn register_hook_usage(&self) -> HookUsage {
++        HookUsage::ResolveId | HookUsage::Load
++    }
++
++    async fn resolve_id(
++        &self,
++        _ctx: &PluginContext,
++        args: &HookResolveIdArgs<'_>,
++    ) -> HookResolveIdReturn {
++        if args.specifier == self.id {
++            return Ok(Some(HookResolveIdOutput::from_id(self.id.as_str())));
++        }
++        if args.specifier.starts_with("codemod:") {
++            return Ok(Some(external(args.specifier)));
++        }
++        Ok(None)
++    }
++
++    async fn load(&self, _ctx: &PluginContext, args: &HookLoadArgs<'_>) -> HookLoadReturn {
++        if args.id != self.id {
++            return Ok(None);
++        }
++        Ok(Some(HookLoadOutput {
++            code: ArcStr::from(self.code.as_str()),
++            module_type: Some(module_type(&self.id)),
++            ..Default::default()
++        }))
++    }
++}
++
++/// Bundle one transform's virtual entry into an ES module. The output names
++/// no absolute path (comments are relative to the module's real directory),
++/// so its hash is stable across checkouts. Node built-ins and `codemod:*`
++/// stay external; everything else is inlined.
++pub(crate) async fn bundle_artifact(
++    entry: &str,
++    file: &Path,
++) -> Result<BundledArtifact, BuildError> {
++    let directory = file
++        .parent()
++        .map(|parent| std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf()))
++        .unwrap_or_default();
++    let id = directory
++        .join(file.file_name().unwrap_or_default())
++        .to_string_lossy()
++        .into_owned();
++    let fail = |detail: String| BuildError {
++        file: file.to_path_buf(),
++        position: None,
++        message: format!("failed to bundle a jssg transform: {detail}"),
++    };
++    let plugin: SharedPluginable = Arc::new(ArtifactEntry {
++        id: id.clone(),
++        code: entry.to_owned(),
++    });
++    let chunk = generate(
++        BundlerOptions {
++            input: Some(vec![InputItem {
++                name: Some("transform".into()),
++                import: id.clone(),
++            }]),
++            cwd: Some(directory),
++            format: Some(OutputFormat::Esm),
++            platform: Some(Platform::Node),
++            ..Default::default()
++        },
++        vec![plugin],
++    )
++    .await
++    .map_err(fail)?;
++    let mut inputs = vec![file.to_path_buf()];
++    inputs.extend(
++        chunk
++            .module_ids
++            .iter()
++            .filter(|module| **module != id)
++            .filter_map(|module| source_file(module)),
++    );
++    Ok(BundledArtifact {
++        code: chunk.code,
++        inputs,
++    })
++}
++
++struct Chunk {
++    code: String,
++    module_ids: Vec<String>,
++}
++
++async fn generate(
++    options: BundlerOptions,
++    plugins: Vec<SharedPluginable>,
++) -> Result<Chunk, String> {
++    let mut bundler = Bundler::with_plugins(options, plugins).map_err(|e| e.to_string())?;
++    let output = bundler.generate().await.map_err(|e| e.to_string())?;
++    if let Some(unresolved) = output
++        .warnings
++        .iter()
++        .find(|warning| warning.kind().to_string() == "UNRESOLVED_IMPORT")
++    {
++        return Err(unresolved.to_string());
++    }
++    output
++        .assets
++        .into_iter()
++        .find_map(|asset| match asset {
++            Output::Chunk(chunk) => Some(Chunk {
++                code: chunk.code.clone(),
++                module_ids: chunk.module_ids.iter().map(|id| id.to_string()).collect(),
++            }),
++            Output::Asset(_) => None,
++        })
++        .ok_or_else(|| "rolldown produced no chunk".to_owned())
++}
++
++// --- the workflow bundle --------------------------------------------------------
++
++#[derive(Default)]
++struct Collected {
++    artifacts: BTreeMap<String, JssgArtifact>,
++    inputs: BTreeSet<PathBuf>,
++}
++
++struct QuickjsPlugin {
++    runtime: Runtime,
++    workflow_dir: PathBuf,
++    entry: String,
++    collected: Mutex<Collected>,
++    failure: Failure,
++}
++
++impl std::fmt::Debug for QuickjsPlugin {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("QuickjsPlugin").finish_non_exhaustive()
++    }
++}
++
++impl QuickjsPlugin {
++    fn portable(&self) -> HookResolveIdReturn {
++        Ok(Some(HookResolveIdOutput::from_id(
++            self.runtime.portable().to_string_lossy().as_ref(),
++        )))
++    }
++}
++
++impl Plugin for QuickjsPlugin {
++    fn name(&self) -> Cow<'static, str> {
++        Cow::Borrowed("codemod-quickjs")
++    }
++
++    fn register_hook_usage(&self) -> HookUsage {
++        HookUsage::ResolveId | HookUsage::Load | HookUsage::Transform
++    }
++
++    async fn resolve_id(
++        &self,
++        _ctx: &PluginContext,
++        args: &HookResolveIdArgs<'_>,
++    ) -> HookResolveIdReturn {
++        let specifier = args.specifier;
++        if specifier == ENTRY_ID {
++            return Ok(Some(HookResolveIdOutput::from_id(ENTRY_ID)));
++        }
++        if specifier == PACKAGE || specifier == format!("{PACKAGE}/portable") {
++            return self.portable();
++        }
++        if specifier.starts_with(&format!("{PACKAGE}/")) {
++            anyhow::bail!(
++                "'{specifier}' is not available in the quickjs runtime; import '{PACKAGE}' (the portable API)"
++            );
++        }
++        if specifier.starts_with("node:") {
++            anyhow::bail!(
++                "'{specifier}' (imported by {}) is a Node module; the quickjs runtime has no Node APIs",
++                args.importer.unwrap_or("the workflow")
++            );
++        }
++        if specifier.starts_with("codemod:") {
++            return Ok(Some(external(specifier)));
++        }
++        // The package's Node entry, reached by a relative import from inside
++        // the package (tests, demos), is the portable API as well.
++        if specifier.starts_with('.') || Path::new(specifier).is_absolute() {
++            let base = args
++                .importer
++                .filter(|importer| *importer != ENTRY_ID)
++                .and_then(|importer| Path::new(importer).parent())
++                .unwrap_or(&self.workflow_dir);
++            let target = normalize(&base.join(specifier));
++            if target == self.runtime.src.join("index")
++                || target == self.runtime.src.join("index.ts")
++            {
++                return self.portable();
++            }
++        }
++        Ok(None)
++    }
++
++    async fn load(&self, _ctx: &PluginContext, args: &HookLoadArgs<'_>) -> HookLoadReturn {
++        if args.id == ENTRY_ID {
++            return Ok(Some(HookLoadOutput {
++                code: ArcStr::from(self.entry.as_str()),
++                module_type: Some(ModuleType::Js),
++                ..Default::default()
++            }));
++        }
++        let path = Path::new(args.id);
++        // The package's own sources define `jssg`; they never call it.
++        if args.id.starts_with('\0') || !is_script(args.id) || path.starts_with(&self.runtime.src) {
++            return Ok(None);
++        }
++        let Ok(text) = std::fs::read_to_string(path) else {
++            return Ok(None);
++        };
++        if !text.contains("jssg(") {
++            return Ok(None);
++        }
++        let built = build_module(&text, path)
++            .await
++            .map_err(|error| self.failure.raise(error))?;
++        let mut collected = self.collected.lock().unwrap();
++        for artifact in built.artifacts {
++            collected.artifacts.insert(artifact.hash.clone(), artifact);
++        }
++        collected.inputs.extend(built.inputs);
++        Ok(Some(HookLoadOutput {
++            code: ArcStr::from(built.source),
++            module_type: Some(module_type(args.id)),
++            ..Default::default()
++        }))
++    }
++
++    async fn transform(
++        &self,
++        _ctx: SharedTransformPluginContext,
++        args: &HookTransformArgs<'_>,
++    ) -> HookTransformReturn {
++        if !matches!(
++            args.module_type,
++            ModuleType::Js | ModuleType::Jsx | ModuleType::Ts | ModuleType::Tsx
++        ) {
++            return Ok(None);
++        }
++        let id = if args.id == ENTRY_ID {
++            "entry.js"
++        } else {
++            args.id
++        };
++        let code = lower_async(args.code, id, args.module_type)
++            .map_err(|message| anyhow::anyhow!("{id}: {message}"))?;
++        Ok(Some(HookTransformOutput {
++            code: Some(code),
++            module_type: Some(ModuleType::Js),
++            ..Default::default()
++        }))
++    }
++}
++
++/// Strip types and lower async functions and generators (nothing else: the
++/// rest of ES2022 runs as written).
++fn lower_async(code: &str, id: &str, module_type: &ModuleType) -> Result<String, String> {
++    let source_type = match module_type {
++        ModuleType::Ts => SourceType::ts(),
++        ModuleType::Tsx => SourceType::tsx(),
++        ModuleType::Jsx => SourceType::jsx(),
++        _ => SourceType::mjs(),
++    };
++    let allocator = Allocator::default();
++    let parsed = Parser::new(&allocator, code, source_type).parse();
++    if let Some(error) = parsed.errors.first() {
++        return Err(error.message.to_string());
++    }
++    let mut program = parsed.program;
++    let scoping = SemanticBuilder::new()
++        .build(&program)
++        .semantic
++        .into_scoping();
++    let mut options = TransformOptions::default();
++    options.helper_loader.mode = HelperLoaderMode::Runtime;
++    options.env.es2017.async_to_generator = true;
++    options.env.es2018.async_generator_functions = true;
++    let result = Transformer::new(&allocator, Path::new(id), &options)
++        .build_with_scoping(scoping, &mut program);
++    if let Some(error) = result.errors.first() {
++        return Err(error.message.to_string());
++    }
++    Ok(Codegen::new().build(&program).code)
++}
++
++/// A module id that names a file (not a virtual module such as rolldown's
++/// runtime or an oxc helper).
++fn source_file(id: &str) -> Option<PathBuf> {
++    Path::new(id).is_absolute().then(|| PathBuf::from(id))
++}
++
++fn normalize(path: &Path) -> PathBuf {
++    let mut out = PathBuf::new();
++    for component in path.components() {
++        match component {
++            Component::ParentDir => {
++                out.pop();
++            }
++            Component::CurDir => {}
++            other => out.push(other),
++        }
++    }
++    out
++}
++
++/// Build the QuickJS bundle for `workflow` (an absolute path).
++pub async fn build_quickjs_bundle(
++    workflow: &Path,
++    runtime: &Runtime,
++) -> Result<QuickjsBundle, BuildError> {
++    let workflow_dir = workflow.parent().unwrap_or(Path::new("/")).to_path_buf();
++    // The QuickJS entry first, so the host and the async context are
++    // installed before the workflow's modules evaluate.
++    let entry = format!(
++        "import {{ runBundled }} from {};\nimport * as workflow from {};\nexport function main(request) {{ return runBundled(workflow, {ARTIFACTS}, request); }}\n",
++        json(&runtime.entry().to_string_lossy()),
++        json(&workflow.to_string_lossy()),
++    );
++    let plugin = Arc::new(QuickjsPlugin {
++        runtime: runtime.clone(),
++        workflow_dir: workflow_dir.clone(),
++        entry,
++        collected: Mutex::default(),
++        failure: Failure::default(),
++    });
++    let result = generate(
++        BundlerOptions {
++            input: Some(vec![InputItem {
++                name: Some("workflow".into()),
++                import: ENTRY_ID.into(),
++            }]),
++            cwd: Some(workflow_dir),
++            format: Some(OutputFormat::Esm),
++            platform: Some(Platform::Neutral),
++            resolve: Some(ResolveOptions {
++                main_fields: Some(vec!["module".into(), "main".into()]),
++                ..Default::default()
++            }),
++            ..Default::default()
++        },
++        vec![plugin.clone() as SharedPluginable],
++    )
++    .await;
++    if let Some(error) = plugin.failure.take() {
++        return Err(error);
++    }
++    let chunk = result.map_err(|detail| BuildError {
++        file: workflow.to_path_buf(),
++        position: None,
++        message: format!("failed to build the quickjs bundle: {detail}"),
++    })?;
++    let collected = std::mem::take(&mut *plugin.collected.lock().unwrap());
++    let table: serde_json::Map<String, serde_json::Value> = collected
++        .artifacts
++        .values()
++        .map(|artifact| {
++            (
++                artifact.hash.clone(),
++                serde_json::json!({ "name": artifact.name, "source": artifact.source }),
++            )
++        })
++        .collect();
++    let table = serde_json::to_string(&table).expect("the artifact table serializes");
++    let code = format!(
++        "const {ARTIFACTS} = JSON.parse({});\n{}",
++        json(&table),
++        chunk.code
++    );
++    let mut inputs: BTreeSet<PathBuf> = chunk
++        .module_ids
++        .iter()
++        .filter_map(|id| source_file(id))
++        .collect();
++    inputs.extend(collected.inputs);
++    Ok(QuickjsBundle {
++        hash: sha256(&[code.as_bytes()]),
++        code,
++        artifacts: collected.artifacts.into_values().collect(),
++        inputs: inputs.into_iter().collect(),
++    })
++}
++
++fn json(text: &str) -> String {
++    serde_json::to_string(text).expect("a string serializes")
++}
+diff --git a/crates/orchestration-build/src/cache.rs b/crates/orchestration-build/src/cache.rs
+new file mode 100644
+index 00000000..ddf820eb
+--- /dev/null
++++ b/crates/orchestration-build/src/cache.rs
+@@ -0,0 +1,174 @@
++//! The bundle cache. Entries are keyed by content hashes and validated
++//! against every input file on use, so stale entries are rebuilt rather than
++//! trusted. A directory that is not a real directory owned by this user, or
++//! that others can write to, is never used: the cache holds code that runs.
++use std::{
++    collections::BTreeMap,
++    fs,
++    io::Write,
++    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
++    path::{Path, PathBuf},
++    sync::OnceLock,
++};
++
++use serde::{Deserialize, Serialize};
++
++use crate::{
++    bundle::{build_quickjs_bundle, Runtime},
++    sha256, BuildError,
++};
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct CachedBundle {
++    pub path: PathBuf,
++    pub hash: String,
++    /// False when this call built the bundle.
++    pub cached: bool,
++}
++
++#[derive(Serialize, Deserialize)]
++struct Manifest {
++    builder: String,
++    workflow: PathBuf,
++    bundle: String,
++    hash: String,
++    inputs: BTreeMap<PathBuf, String>,
++}
++
++/// Identity of this builder (its sources and pinned toolchain): a cached
++/// bundle is reused only by the same build code.
++fn builder() -> &'static str {
++    static BUILDER: OnceLock<String> = OnceLock::new();
++    BUILDER.get_or_init(|| {
++        sha256(&[
++            include_bytes!("../Cargo.toml"),
++            include_bytes!("bundle.rs"),
++            include_bytes!("cache.rs"),
++            include_bytes!("split.rs"),
++        ])
++    })
++}
++
++/// `quickjs/` under `$CODEMOD_WORKFLOW_CACHE`, else under
++/// `<tmpdir>/codemod-workflow-cache-<uid>`. Fails when that directory is not
++/// private to this user.
++pub fn default_bundle_cache() -> Result<PathBuf, String> {
++    let root = match std::env::var_os("CODEMOD_WORKFLOW_CACHE") {
++        Some(root) if !root.is_empty() => PathBuf::from(root),
++        _ => std::env::temp_dir().join(format!("codemod-workflow-cache-{}", uid())),
++    };
++    private_directory("quickjs", &root).ok_or_else(|| {
++        format!(
++            "the workflow cache {} is not a directory private to this user; fix its owner and permissions or set CODEMOD_WORKFLOW_CACHE",
++            root.join("quickjs").display()
++        )
++    })
++}
++
++fn uid() -> u32 {
++    // SAFETY: getuid has no preconditions and cannot fail.
++    unsafe { libc::getuid() }
++}
++
++/// `<root>/<name>`, created (mode 0700) if missing; `None` when the root or
++/// the directory is not private to this user (then nothing is cached).
++pub fn private_directory(name: &str, root: &Path) -> Option<PathBuf> {
++    let is_private = |path: &Path| {
++        fs::symlink_metadata(path)
++            .is_ok_and(|stat| stat.is_dir() && stat.mode() & 0o022 == 0 && stat.uid() == uid())
++    };
++    let create = |path: &Path| {
++        fs::DirBuilder::new()
++            .recursive(true)
++            .mode(0o700)
++            .create(path)
++    };
++    // The root is checked before anything is created inside it.
++    create(root).ok()?;
++    if !is_private(root) {
++        return None;
++    }
++    let directory = root.join(name);
++    create(&directory).ok()?;
++    is_private(&directory).then_some(directory)
++}
++
++fn file_hash(path: &Path) -> Option<String> {
++    fs::read(path).ok().map(|bytes| sha256(&[&bytes]))
++}
++
++/// Write via a temporary file and a rename, so readers never see a partial entry.
++fn atomic_write(path: &Path, content: &str) -> std::io::Result<()> {
++    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
++    fs::OpenOptions::new()
++        .write(true)
++        .create(true)
++        .truncate(true)
++        .mode(0o600)
++        .open(&temporary)?
++        .write_all(content.as_bytes())?;
++    fs::rename(&temporary, path)
++}
++
++fn cached(manifest_path: &Path, cache: &Path, workflow: &Path) -> Option<CachedBundle> {
++    let manifest: Manifest = serde_json::from_slice(&fs::read(manifest_path).ok()?).ok()?;
++    let bundle = cache.join(&manifest.bundle);
++    let valid = manifest.builder == builder()
++        && manifest.workflow == workflow
++        && file_hash(&bundle).as_deref() == Some(manifest.hash.as_str())
++        && manifest
++            .inputs
++            .iter()
++            .all(|(input, hash)| file_hash(input).as_deref() == Some(hash.as_str()));
++    valid.then_some(CachedBundle {
++        path: bundle,
++        hash: manifest.hash,
++        cached: true,
++    })
++}
++
++/// The bundle for `workflow` from `cache`, rebuilt only when an input file
++/// (the workflow graph, the runtime sources, bundled packages) or this
++/// builder changed since it was cached. Bundles are stored by content hash.
++pub async fn cached_quickjs_bundle(
++    workflow: &Path,
++    runtime: &Runtime,
++    cache: &Path,
++) -> Result<CachedBundle, BuildError> {
++    let workflow = std::path::absolute(workflow).unwrap_or_else(|_| workflow.to_path_buf());
++    let key = sha256(&[builder().as_bytes(), workflow.to_string_lossy().as_bytes()]);
++    let manifest_path = cache.join(format!("{key}.json"));
++    if let Some(hit) = cached(&manifest_path, cache, &workflow) {
++        return Ok(hit);
++    }
++    let built = build_quickjs_bundle(&workflow, runtime).await?;
++    let io_error = |error: std::io::Error| BuildError {
++        file: cache.to_path_buf(),
++        position: None,
++        message: format!("cannot write the bundle cache: {error}"),
++    };
++    fs::create_dir_all(cache).map_err(io_error)?;
++    let bundle_name = format!("{}.mjs", built.hash);
++    let bundle_path = cache.join(&bundle_name);
++    if file_hash(&bundle_path).as_deref() != Some(built.hash.as_str()) {
++        atomic_write(&bundle_path, &built.code).map_err(io_error)?;
++    }
++    let manifest = Manifest {
++        builder: builder().to_owned(),
++        workflow,
++        bundle: bundle_name,
++        hash: built.hash.clone(),
++        inputs: built
++            .inputs
++            .iter()
++            .map(|input| (input.clone(), file_hash(input).unwrap_or_default()))
++            .collect(),
++    };
++    let manifest = serde_json::to_string(&manifest).expect("the manifest serializes");
++    atomic_write(&manifest_path, &manifest).map_err(io_error)?;
++    Ok(CachedBundle {
++        path: bundle_path,
++        hash: built.hash,
++        cached: false,
++    })
++}
+diff --git a/crates/orchestration-build/src/lib.rs b/crates/orchestration-build/src/lib.rs
+new file mode 100644
+index 00000000..9dd6899f
+--- /dev/null
++++ b/crates/orchestration-build/src/lib.rs
+@@ -0,0 +1,58 @@
++//! Builds a TypeScript orchestration workflow into one self-contained ES
++//! module for the QuickJS host (`orchestration-quickjs-host`):
++//!
++//! - [`build_module`] splits a workflow module: every inline `jssg()`
++//!   transform becomes its own bundled artifact, identified by content hash,
++//!   and the call is rewritten to reference it.
++//! - [`build_quickjs_bundle`] bundles the workflow graph with the portable
++//!   orchestration runtime, async lowered, with the artifact table in front.
++//! - [`cached_quickjs_bundle`] reuses a bundle until an input file or this
++//!   builder changes.
++mod bundle;
++mod cache;
++mod split;
++
++use std::{fmt, path::PathBuf};
++
++pub use bundle::{build_quickjs_bundle, QuickjsBundle, Runtime};
++pub use cache::{cached_quickjs_bundle, default_bundle_cache, private_directory, CachedBundle};
++pub use split::{build_file, build_module, BuiltModule, JssgArtifact};
++
++/// A workflow outside the supported subset, or a bundling failure.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct BuildError {
++    pub file: PathBuf,
++    /// 1-based line and column (UTF-16 code units, as editors count them).
++    pub position: Option<(usize, usize)>,
++    pub message: String,
++}
++
++impl fmt::Display for BuildError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self.position {
++            Some((line, column)) => {
++                write!(
++                    f,
++                    "{}:{line}:{column}: {}",
++                    self.file.display(),
++                    self.message
++                )
++            }
++            None => write!(f, "{}: {}", self.file.display(), self.message),
++        }
++    }
++}
++
++impl std::error::Error for BuildError {}
++
++pub(crate) fn sha256(parts: &[&[u8]]) -> String {
++    use sha2::{Digest, Sha256};
++    let mut hash = Sha256::new();
++    for (index, part) in parts.iter().enumerate() {
++        if index > 0 {
++            hash.update(b"\0");
++        }
++        hash.update(part);
++    }
++    hex::encode(hash.finalize())
++}
+diff --git a/crates/orchestration-build/src/split.rs b/crates/orchestration-build/src/split.rs
+new file mode 100644
+index 00000000..dd4f8e94
+--- /dev/null
++++ b/crates/orchestration-build/src/split.rs
+@@ -0,0 +1,430 @@
++//! The `jssg()` split. Every `jssg({ ..., transform })` call in a workflow
++//! module becomes an artifact: the transform's own source text, with the
++//! import declarations it uses, bundled into an ES module whose default
++//! export is the transform. The call is rewritten so `transform` is an
++//! `ArtifactRef` (`{ name, hash }`); no function is ever serialized.
++//!
++//! Supported subset: a transform may use its own parameters and locals,
++//! globals, and bindings the module imports from other modules (those are
++//! bundled). It may not use anything else declared in the workflow module;
++//! such captures are rejected with the source position. `name` must be a
++//! string literal; `transform` must be a method, a function or arrow
++//! expression, or an imported binding.
++use std::{
++    collections::BTreeSet,
++    path::{Path, PathBuf},
++};
++
++use oxc::{
++    allocator::Allocator,
++    ast::{
++        ast::{
++            Argument, Expression, ObjectExpression, ObjectProperty, ObjectPropertyKind,
++            PropertyKey, PropertyKind, Statement,
++        },
++        AstKind,
++    },
++    parser::Parser,
++    semantic::{Semantic, SemanticBuilder, SymbolId},
++    span::{GetSpan, SourceType, Span},
++};
++
++use crate::{bundle::bundle_artifact, sha256, BuildError};
++
++const ORCHESTRATION_PACKAGE: &str = "@codemod.com/orchestration";
++
++/// One bundled transform. `source` is what a runtime executes; `hash` identifies it.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct JssgArtifact {
++    pub name: String,
++    pub hash: String,
++    pub source: String,
++    /// The module the transform was extracted from, for messages only.
++    pub origin: PathBuf,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct BuiltModule {
++    /// The module with every inline transform replaced by its `ArtifactRef`.
++    pub source: String,
++    pub artifacts: Vec<JssgArtifact>,
++    /// Every file bundled into the artifacts, the module itself included
++    /// (for build caches). Sorted.
++    pub inputs: Vec<PathBuf>,
++}
++
++/// Read and split a module on disk.
++pub async fn build_file(file: &Path) -> Result<BuiltModule, BuildError> {
++    let source = std::fs::read_to_string(file).map_err(|error| BuildError {
++        file: file.to_path_buf(),
++        position: None,
++        message: error.to_string(),
++    })?;
++    build_module(&source, file).await
++}
++
++/// Split one module. `file` must be absolute: the transforms' relative
++/// imports resolve from its directory.
++pub async fn build_module(source: &str, file: &Path) -> Result<BuiltModule, BuildError> {
++    // The AST is not `Send`, so the analysis finishes before any bundling.
++    let plan = analyze(source, file)?;
++    let mut edits = plan.removed_imports;
++    let mut artifacts = Vec::new();
++    let mut inputs = BTreeSet::new();
++    for extraction in plan.extractions {
++        let bundled = bundle_artifact(&extraction.entry, file).await?;
++        inputs.extend(bundled.inputs);
++        let hash = sha256(&[bundled.code.as_bytes()]);
++        edits.push(Edit {
++            span: extraction.property,
++            text: format!(
++                "transform: {{\"name\":{},\"hash\":{}}}",
++                json_string(&extraction.name),
++                json_string(&hash)
++            ),
++        });
++        artifacts.push(JssgArtifact {
++            name: extraction.name,
++            hash,
++            source: bundled.code,
++            origin: file.to_path_buf(),
++        });
++    }
++    edits.sort_by_key(|edit| std::cmp::Reverse(edit.span.start));
++    let mut rewritten = source.to_owned();
++    for edit in edits {
++        rewritten.replace_range(edit.span.start as usize..edit.span.end as usize, &edit.text);
++    }
++    Ok(BuiltModule {
++        source: rewritten,
++        artifacts,
++        inputs: inputs.into_iter().collect(),
++    })
++}
++
++struct Edit {
++    span: Span,
++    text: String,
++}
++
++struct Extraction {
++    name: String,
++    /// The virtual entry module: the imports the transform uses, then
++    /// `export default <transform>`.
++    entry: String,
++    property: Span,
++}
++
++struct Plan {
++    extractions: Vec<Extraction>,
++    removed_imports: Vec<Edit>,
++}
++
++struct Import {
++    span: Span,
++    source: String,
++    symbols: Vec<SymbolId>,
++}
++
++struct Module<'s, 'a> {
++    source: &'s str,
++    file: &'s Path,
++    semantic: Semantic<'a>,
++    imports: Vec<Import>,
++}
++
++fn analyze(source: &str, file: &Path) -> Result<Plan, BuildError> {
++    let allocator = Allocator::default();
++    let source_type = SourceType::from_path(file).unwrap_or_else(|_| SourceType::ts());
++    let parsed = Parser::new(&allocator, source, source_type).parse();
++    if let Some(error) = parsed.errors.first() {
++        let start = error
++            .labels
++            .as_ref()
++            .and_then(|labels| labels.first())
++            .map(|label| label.offset() as u32);
++        return Err(BuildError {
++            file: file.to_path_buf(),
++            position: start.map(|start| position(source, start)),
++            message: error.message.to_string(),
++        });
++    }
++    let program = allocator.alloc(parsed.program);
++    let semantic = SemanticBuilder::new().build(program).semantic;
++    let imports = program
++        .body
++        .iter()
++        .filter_map(|statement| match statement {
++            Statement::ImportDeclaration(declaration) => Some(Import {
++                span: declaration.span,
++                source: declaration.source.value.to_string(),
++                symbols: declaration
++                    .specifiers
++                    .iter()
++                    .flatten()
++                    .map(|specifier| specifier.local().symbol_id())
++                    .collect(),
++            }),
++            _ => None,
++        })
++        .collect();
++    let module = Module {
++        source,
++        file,
++        semantic,
++        imports,
++    };
++
++    let mut extractions = Vec::new();
++    for node in module.semantic.nodes().iter() {
++        let AstKind::CallExpression(call) = node.kind() else {
++            continue;
++        };
++        if !matches!(&call.callee, Expression::Identifier(callee) if callee.name == "jssg") {
++            continue;
++        }
++        let Some(Argument::ObjectExpression(argument)) = call.arguments.first() else {
++            return Err(module.fail(
++                call.span,
++                "jssg() must be called with an object literal so its transform can be extracted",
++            ));
++        };
++        let Some(name) = literal_property(argument, "name") else {
++            return Err(module.fail(argument.span, "jssg name must be a string literal"));
++        };
++        let Some(property) = find_property(argument, "transform") else {
++            return Err(module.fail(argument.span, &format!("jssg '{name}' has no transform")));
++        };
++        let span = property.span;
++        let entry = module.transform_entry(property, &name)?;
++        extractions.push(Extraction {
++            name,
++            entry,
++            property: span,
++        });
++    }
++    let extracted: Vec<Span> = extractions.iter().map(|e| e.property).collect();
++    let removed_imports = module.imports_only_transforms_use(&extracted);
++    Ok(Plan {
++        extractions,
++        removed_imports,
++    })
++}
++
++impl Module<'_, '_> {
++    fn fail(&self, span: Span, message: &str) -> BuildError {
++        BuildError {
++            file: self.file.to_path_buf(),
++            position: Some(position(self.source, span.start)),
++            message: message.to_owned(),
++        }
++    }
++
++    fn text(&self, span: Span) -> &str {
++        &self.source[span.start as usize..span.end as usize]
++    }
++
++    fn transform_entry(&self, property: &ObjectProperty, name: &str) -> Result<String, BuildError> {
++        if property.kind != PropertyKind::Init {
++            return Err(self.fail(
++                property.span,
++                &format!("jssg '{name}' transform must be a method or property"),
++            ));
++        }
++        let (body, range) = if property.method {
++            let Expression::FunctionExpression(function) = &property.value else {
++                unreachable!("an object method's value is a function");
++            };
++            if function.generator {
++                return Err(self.fail(
++                    property.span,
++                    &format!("jssg '{name}' transform cannot be a generator"),
++                ));
++            }
++            if function.body.is_none() {
++                return Err(self.fail(
++                    property.span,
++                    &format!("jssg '{name}' transform has no body"),
++                ));
++            }
++            let signature = Span::new(property.key.span().end, property.span.end);
++            let body = format!(
++                "export default {}function transform{}",
++                if function.r#async { "async " } else { "" },
++                self.text(signature)
++            );
++            (body, property.span)
++        } else {
++            match &property.value {
++                Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_) => {
++                    let span = property.value.span();
++                    (format!("export default ({});", self.text(span)), span)
++                }
++                Expression::Identifier(identifier) => (
++                    format!("export default {};", identifier.name),
++                    identifier.span,
++                ),
++                value => {
++                    return Err(self.fail(
++                        value.span(),
++                        &format!("jssg '{name}' transform must be a method, a function or arrow expression, or an imported binding"),
++                    ))
++                }
++            }
++        };
++
++        let mut imports = BTreeSet::new();
++        for (symbol, reference) in self.module_references(range) {
++            if let Some(index) = self
++                .imports
++                .iter()
++                .position(|i| i.symbols.contains(&symbol))
++            {
++                let import = &self.imports[index];
++                if import.source == ORCHESTRATION_PACKAGE
++                    || import
++                        .source
++                        .starts_with(&format!("{ORCHESTRATION_PACKAGE}/"))
++                {
++                    return Err(self.fail(
++                        reference,
++                        &format!(
++                            "jssg '{name}' transform uses '{}' from {ORCHESTRATION_PACKAGE}; the orchestration runtime is not available inside a transform",
++                            self.symbol_name(symbol)
++                        ),
++                    ));
++                }
++                imports.insert(index);
++                continue;
++            }
++            let scoping = self.semantic.scoping();
++            if scoping.symbol_flags(symbol).is_value() {
++                let identifier = self.symbol_name(symbol);
++                let (line, _) = position(self.source, scoping.symbol_span(symbol).start);
++                return Err(self.fail(
++                    reference,
++                    &format!(
++                        "jssg '{name}' transform uses '{identifier}', declared in the workflow module at line {line}; a transform can only use its own code, globals, and imported bindings. Move '{identifier}' into a module and import it, or pass it through invocation input"
++                    ),
++                ));
++            }
++        }
++        let imports: Vec<&str> = imports
++            .into_iter()
++            .map(|index| self.text(self.imports[index].span))
++            .collect();
++        Ok(format!("{}\n{body}\n", imports.join("\n")))
++    }
++
++    fn symbol_name(&self, symbol: SymbolId) -> &str {
++        self.semantic.scoping().symbol_name(symbol)
++    }
++
++    /// Module-level bindings referenced as values inside `range`, each with
++    /// its first reference, in source order. Names bound inside the
++    /// transform resolve to their own scopes and never appear here.
++    fn module_references(&self, range: Span) -> Vec<(SymbolId, Span)> {
++        let scoping = self.semantic.scoping();
++        let mut found: Vec<(SymbolId, Span)> = scoping
++            .iter_bindings_in(scoping.root_scope_id())
++            .filter_map(|symbol| {
++                scoping
++                    .get_resolved_references(symbol)
++                    .filter(|reference| reference.flags().is_value())
++                    .map(|reference| self.semantic.nodes().get_node(reference.node_id()).span())
++                    .filter(|span| contains(range, *span))
++                    .min_by_key(|span| span.start)
++                    .map(|span| (symbol, span))
++            })
++            .collect();
++        found.sort_by_key(|(_, span)| span.start);
++        found
++    }
++
++    /// Imports used only inside extracted transforms live in the artifacts
++    /// now. Keeping them would make the runner evaluate transform modules
++    /// (and their `codemod:*` imports, which only the runtimes resolve).
++    fn imports_only_transforms_use(&self, extracted: &[Span]) -> Vec<Edit> {
++        let scoping = self.semantic.scoping();
++        let inside = |span: Span| extracted.iter().any(|range| contains(*range, span));
++        self.imports
++            .iter()
++            .filter(|import| {
++                let spans: Vec<Span> = import
++                    .symbols
++                    .iter()
++                    .flat_map(|symbol| scoping.get_resolved_references(*symbol))
++                    .map(|reference| self.semantic.nodes().get_node(reference.node_id()).span())
++                    .collect();
++                !import.symbols.is_empty()
++                    && spans.iter().all(|span| inside(*span))
++                    && !spans.is_empty()
++            })
++            .map(|import| Edit {
++                span: import.span,
++                text: String::new(),
++            })
++            .collect()
++    }
++}
++
++fn contains(range: Span, span: Span) -> bool {
++    span.start >= range.start && span.start < range.end
++}
++
++fn property_name<'a>(property: &'a ObjectProperty) -> Option<&'a str> {
++    if property.computed {
++        return None;
++    }
++    match &property.key {
++        PropertyKey::StaticIdentifier(identifier) => Some(identifier.name.as_str()),
++        PropertyKey::StringLiteral(literal) => Some(literal.value.as_str()),
++        _ => None,
++    }
++}
++
++fn find_property<'o, 'a>(
++    object: &'o ObjectExpression<'a>,
++    key: &str,
++) -> Option<&'o ObjectProperty<'a>> {
++    object
++        .properties
++        .iter()
++        .find_map(|property| match property {
++            ObjectPropertyKind::ObjectProperty(property)
++                if property_name(property) == Some(key) =>
++            {
++                Some(&**property)
++            }
++            _ => None,
++        })
++}
++
++fn literal_property(object: &ObjectExpression, key: &str) -> Option<String> {
++    let property = find_property(object, key)?;
++    if property.kind != PropertyKind::Init || property.method || property.shorthand {
++        return None;
++    }
++    match &property.value {
++        Expression::StringLiteral(literal) => Some(literal.value.to_string()),
++        Expression::TemplateLiteral(template) if template.expressions.is_empty() => template
++            .quasis
++            .first()
++            .and_then(|quasi| quasi.value.cooked)
++            .map(|cooked| cooked.to_string()),
++        _ => None,
++    }
++}
++
++/// 1-based line and column of a byte offset; columns count UTF-16 code units.
++pub(crate) fn position(source: &str, offset: u32) -> (usize, usize) {
++    let before = &source[..offset as usize];
++    let line_start = before.rfind('\n').map_or(0, |index| index + 1);
++    let line = before.matches('\n').count() + 1;
++    let column = before[line_start..].encode_utf16().count() + 1;
++    (line, column)
++}
++
++fn json_string(text: &str) -> String {
++    serde_json::to_string(text).expect("a string serializes")
++}
+diff --git a/crates/orchestration-build/tests/bundle.rs b/crates/orchestration-build/tests/bundle.rs
+new file mode 100644
+index 00000000..4a89e857
+--- /dev/null
++++ b/crates/orchestration-build/tests/bundle.rs
+@@ -0,0 +1,183 @@
++//! The QuickJS bundle: one self-contained module, no Node, async lowered,
++//! carrying exactly the artifacts the split produces.
++use std::{
++    fs,
++    path::{Path, PathBuf},
++    sync::OnceLock,
++};
++
++use orchestration_build::{build_file, build_quickjs_bundle, QuickjsBundle, Runtime};
++use regex::Regex;
++use tempfile::TempDir;
++use tokio::sync::OnceCell;
++
++fn package() -> PathBuf {
++    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/orchestration")
++}
++
++fn runtime() -> Runtime {
++    Runtime {
++        src: fs::canonicalize(package().join("src")).unwrap(),
++    }
++}
++
++fn fixture(path: &str) -> PathBuf {
++    fs::canonicalize(package().join("tests/fixtures").join(path)).unwrap()
++}
++
++/// The `jssg-sequence` fixture bundle, built once for this file.
++async fn sequence() -> &'static QuickjsBundle {
++    static BUNDLE: OnceCell<QuickjsBundle> = OnceCell::const_new();
++    BUNDLE
++        .get_or_init(|| async {
++            build_quickjs_bundle(&fixture("quickjs/jssg-sequence.ts"), &runtime())
++                .await
++                .unwrap()
++        })
++        .await
++}
++
++/// The bundle after its first line (the artifact table), without comments
++/// and strings.
++fn workflow_code(bundle: &QuickjsBundle) -> String {
++    static LITERALS: OnceLock<Regex> = OnceLock::new();
++    let body = &bundle.code[bundle.code.find('\n').unwrap() + 1..];
++    LITERALS
++        .get_or_init(|| {
++            Regex::new(r#"(?m)/\*[\s\S]*?\*/|`(?:[^`\\]|\\.)*`|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|//.*$"#)
++                .unwrap()
++        })
++        .replace_all(body, "\"\"")
++        .into_owned()
++}
++
++async fn error(workflow: &str) -> String {
++    let dir = TempDir::new().unwrap();
++    let file = dir.path().join("workflow.ts");
++    fs::write(&file, workflow).unwrap();
++    build_quickjs_bundle(&file, &runtime())
++        .await
++        .unwrap_err()
++        .to_string()
++}
++
++fn index() -> String {
++    serde_json::to_string(&runtime().src.join("index.ts")).unwrap()
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn the_bundle_has_no_imports() {
++    let bundle = sequence().await;
++    assert!(
++        !Regex::new(r"(?m)^\s*import\s")
++            .unwrap()
++            .is_match(&bundle.code),
++        "{}",
++        &bundle.code[..2000.min(bundle.code.len())]
++    );
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn the_bundle_lowers_every_async_function_and_await() {
++    let code = workflow_code(sequence().await);
++    let remaining: Vec<_> = Regex::new(r"\basync\b|\bawait\b")
++        .unwrap()
++        .find_iter(&code)
++        .map(|m| &code[m.start().saturating_sub(60)..(m.end() + 60).min(code.len())])
++        .collect();
++    assert_eq!(remaining, Vec::<&str>::new());
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn the_bundle_exports_main() {
++    let code = &sequence().await.code;
++    assert!(Regex::new(r"export\s*\{[^}]*\bmain\b")
++        .unwrap()
++        .is_match(code));
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn the_bundle_hash_is_the_sha256_of_its_code() {
++    let bundle = sequence().await;
++    let expected = {
++        use sha2::{Digest, Sha256};
++        hex::encode(Sha256::digest(bundle.code.as_bytes()))
++    };
++    assert_eq!(bundle.hash, expected);
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn the_bundle_carries_the_artifacts_the_split_produces() {
++    let bundle = sequence().await;
++    let split = build_file(&fixture("jssg/transforms.ts")).await.unwrap();
++    let names_and_hashes = |artifacts: &[orchestration_build::JssgArtifact]| {
++        let mut pairs: Vec<_> = artifacts
++            .iter()
++            .map(|a| (a.name.clone(), a.hash.clone()))
++            .collect();
++        pairs.sort();
++        pairs
++    };
++    assert_eq!(
++        names_and_hashes(&bundle.artifacts),
++        names_and_hashes(&split.artifacts)
++    );
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn the_bundle_lists_helpers_bundled_only_into_artifacts_as_inputs() {
++    let bundle = sequence().await;
++    assert!(bundle.inputs.contains(&fixture("jssg/helpers.ts")));
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn a_node_import_is_rejected() {
++    let message = error(&format!(
++        "import {{ readFileSync }} from \"node:fs\";\nimport {{ shell }} from {};\nexport default shell({{ name: \"x\", command: readFileSync(\"x\", \"utf8\") }});\n",
++        index()
++    ))
++    .await;
++    assert!(
++        message.contains("'node:fs' (imported by ") && message.contains("is a Node module"),
++        "{message}"
++    );
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn a_deep_package_import_is_rejected() {
++    let message =
++        error("import { run } from \"@codemod.com/orchestration/runtime\";\nexport default run;\n")
++            .await;
++    assert!(
++        message.contains("'@codemod.com/orchestration/runtime' is not available in the quickjs runtime; import '@codemod.com/orchestration' (the portable API)"),
++        "{message}"
++    );
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn the_package_name_resolves_to_the_portable_runtime() {
++    let dir = TempDir::new().unwrap();
++    let file = dir.path().join("workflow.ts");
++    fs::write(
++        &file,
++        "import { shell } from \"@codemod.com/orchestration\";\nexport default shell({ name: \"x\", command: \"true\" });\n",
++    )
++    .unwrap();
++    let bundle = build_quickjs_bundle(&file, &runtime()).await.unwrap();
++    assert!(bundle.inputs.contains(&runtime().src.join("portable.ts")));
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn a_split_error_in_the_workflow_graph_keeps_its_position() {
++    let message = error(&format!(
++        "import {{ jssg }} from {};\nconst X = 1;\nexport default jssg({{ name: \"t\", language: \"tsx\", transform() {{ return String(X); }} }});\n",
++        index()
++    ))
++    .await;
++    assert!(
++        Regex::new(r"workflow\.ts:3:\d+: jssg 't' transform uses 'X'")
++            .unwrap()
++            .is_match(&message),
++        "{message}"
++    );
++}
+diff --git a/crates/orchestration-build/tests/cache.rs b/crates/orchestration-build/tests/cache.rs
+new file mode 100644
+index 00000000..54a4a996
+--- /dev/null
++++ b/crates/orchestration-build/tests/cache.rs
+@@ -0,0 +1,123 @@
++//! The bundle cache: every change to the workflow graph, a helper bundled
++//! only into an artifact, or the cached bundle itself rebuilds.
++use std::{
++    fs,
++    os::unix::fs::PermissionsExt,
++    path::{Path, PathBuf},
++};
++
++use orchestration_build::{cached_quickjs_bundle, private_directory, CachedBundle, Runtime};
++use tempfile::TempDir;
++
++fn runtime() -> Runtime {
++    let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/orchestration");
++    Runtime {
++        src: fs::canonicalize(package.join("src")).unwrap(),
++    }
++}
++
++struct Case {
++    dir: TempDir,
++}
++
++impl Case {
++    /// A workflow whose only transform uses a helper from another module.
++    fn new() -> Self {
++        let dir = TempDir::new().unwrap();
++        let case = Self { dir };
++        case.helper("one");
++        let index = serde_json::to_string(&runtime().src.join("index.ts")).unwrap();
++        fs::write(
++            case.workflow(),
++            format!(
++                r#"import {{ jssg }} from {index};
++import {{ rewrite }} from "./helper.ts";
++export default jssg({{
++  name: "rewrite",
++  language: "typescript",
++  transform(root) {{
++    return rewrite(root.root().text());
++  }},
++}});
++"#
++            ),
++        )
++        .unwrap();
++        case
++    }
++
++    fn workflow(&self) -> PathBuf {
++        self.dir.path().join("workflow.ts")
++    }
++
++    fn helper(&self, word: &str) {
++        fs::write(
++            self.dir.path().join("helper.ts"),
++            format!("export const rewrite = (text: string): string => text.replace(\"a\", \"{word}\");\n"),
++        )
++        .unwrap();
++    }
++
++    async fn bundle(&self) -> CachedBundle {
++        cached_quickjs_bundle(&self.workflow(), &runtime(), &self.dir.path().join("cache"))
++            .await
++            .unwrap()
++    }
++}
++
++#[test]
++fn a_cache_directory_others_can_write_to_is_not_used() {
++    let root = TempDir::new().unwrap();
++    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o777)).unwrap();
++    assert_eq!(private_directory("quickjs", root.path()), None);
++}
++
++#[test]
++fn a_private_cache_directory_is_created_inside_the_root() {
++    let root = TempDir::new().unwrap();
++    assert_eq!(
++        private_directory("quickjs", root.path()),
++        Some(root.path().join("quickjs"))
++    );
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn the_first_build_is_not_cached() {
++    assert!(!Case::new().bundle().await.cached);
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn an_unchanged_workflow_is_served_from_the_cache() {
++    let case = Case::new();
++    let first = case.bundle().await;
++    assert_eq!(
++        case.bundle().await,
++        CachedBundle {
++            cached: true,
++            ..first
++        }
++    );
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn a_changed_helper_bundled_only_into_an_artifact_rebuilds() {
++    let case = Case::new();
++    case.bundle().await;
++    case.helper("two");
++    let rebuilt = case.bundle().await;
++    assert!(fs::read_to_string(&rebuilt.path).unwrap().contains("two"));
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn a_cached_bundle_that_no_longer_matches_its_hash_is_rebuilt() {
++    let case = Case::new();
++    let first = case.bundle().await;
++    fs::write(&first.path, "export function main() {}\n").unwrap();
++    assert_eq!(
++        case.bundle().await,
++        CachedBundle {
++            cached: false,
++            ..first
++        }
++    );
++}
+diff --git a/crates/orchestration-build/tests/split.rs b/crates/orchestration-build/tests/split.rs
+new file mode 100644
+index 00000000..db032f9c
+--- /dev/null
++++ b/crates/orchestration-build/tests/split.rs
+@@ -0,0 +1,387 @@
++//! The `jssg()` split: inline transforms become standalone artifacts
++//! (helpers bundled, identity by content hash, no paths), the workflow module
++//! is rewritten to reference them, and unsupported captures are refused with
++//! a position.
++use std::{fs, path::Path};
++
++use orchestration_build::{build_module, BuiltModule};
++use regex::Regex;
++use tempfile::TempDir;
++
++const HEADER: &str = r#"import { jssg, workflow } from "@codemod.com/orchestration";
++import type { SgRoot } from "@codemod.com/jssg-types/main";
++import { migrateText, OLD_API } from "./helpers.ts";
++import * as helpers from "./helpers.ts";
++import transformFn from "./helpers.ts";
++"#;
++
++const METHOD_BODY: &str = r#"
++const migrate = jssg({
++  name: "migrate",
++  language: "typescript",
++  transform(root: SgRoot, options) {
++    const input = options.params.input;
++    return { content: migrateText(root.root().text()), output: { input } };
++  },
++});
++export default dynamic(() => migrate());
++"#;
++
++fn method() -> String {
++    format!("{HEADER}{METHOD_BODY}")
++}
++
++/// A checkout with `helpers.ts`, which imports `sub/format.ts`.
++fn checkout() -> TempDir {
++    let dir = TempDir::new().unwrap();
++    fs::create_dir(dir.path().join("sub")).unwrap();
++    fs::write(
++        dir.path().join("sub/format.ts"),
++        "export const banner = (s: string) => `// ${s}\\n`;\n",
++    )
++    .unwrap();
++    fs::write(
++        dir.path().join("helpers.ts"),
++        r#"import { banner } from "./sub/format.ts";
++export const OLD_API = "oldApi";
++export function migrateText(text: string): string { return banner("migrated") + text.replaceAll(OLD_API, "newApi"); }
++export function unused(): number { return 1; }
++export default function transformFn(root: { root(): { text(): string } }) { return migrateText(root.root().text()); }
++"#,
++    )
++    .unwrap();
++    dir
++}
++
++async fn build_in(dir: &Path, source: &str) -> BuiltModule {
++    build_module(source, &dir.join("workflow.ts"))
++        .await
++        .unwrap()
++}
++
++async fn build(source: &str) -> BuiltModule {
++    let dir = checkout();
++    build_in(dir.path(), source).await
++}
++
++async fn method_artifact() -> String {
++    build(&method()).await.artifacts.remove(0).source
++}
++
++async fn error(body: &str) -> String {
++    let dir = checkout();
++    let source = format!("{HEADER}\n{body}\n");
++    build_module(&source, &dir.path().join("workflow.ts"))
++        .await
++        .unwrap_err()
++        .to_string()
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn a_method_transform_becomes_one_artifact_named_after_the_call() {
++    let built = build(&method()).await;
++    let names: Vec<_> = built.artifacts.iter().map(|a| a.name.as_str()).collect();
++    assert_eq!(names, ["migrate"]);
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn an_artifact_is_identified_by_the_sha256_of_its_source() {
++    let artifact = build(&method()).await.artifacts.remove(0);
++    let expected = {
++        use sha2::{Digest, Sha256};
++        hex::encode(Sha256::digest(artifact.source.as_bytes()))
++    };
++    assert_eq!(artifact.hash, expected);
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn an_artifact_bundles_the_helpers_its_transform_reaches_transitively() {
++    let source = method_artifact().await;
++    assert!(
++        source.contains("function migrateText") && source.contains("const banner"),
++        "{source}"
++    );
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn an_artifact_leaves_out_helpers_its_transform_does_not_reach() {
++    assert!(!method_artifact().await.contains("unused"));
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn an_artifact_leaves_out_the_rest_of_the_workflow_module() {
++    let source = method_artifact().await;
++    assert!(
++        !source.contains("dynamic(") && !source.contains("orchestration"),
++        "{source}"
++    );
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn an_artifact_default_exports_the_transform() {
++    let source = method_artifact().await;
++    assert!(
++        Regex::new(r"export \{\s*transform as default\s*\}")
++            .unwrap()
++            .is_match(&source),
++        "{source}"
++    );
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn an_artifact_names_no_absolute_path() {
++    let dir = checkout();
++    let source = build_in(dir.path(), &method())
++        .await
++        .artifacts
++        .remove(0)
++        .source;
++    let real = fs::canonicalize(dir.path()).unwrap();
++    assert!(!source.contains(real.to_str().unwrap()), "{source}");
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn the_call_references_its_artifact_by_name_and_hash() {
++    let built = build(&method()).await;
++    let reference = format!(
++        r#"transform: {{"name":"migrate","hash":"{}"}}"#,
++        built.artifacts[0].hash
++    );
++    assert!(built.source.contains(&reference), "{}", built.source);
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn the_module_keeps_everything_but_the_transform() {
++    let source = build(&method()).await.source;
++    assert!(
++        source.contains("export default dynamic(() => migrate());")
++            && !source.contains("transform(root"),
++        "{source}"
++    );
++}
++
++/// `accepts!(test, transform property, what the artifact must contain)`.
++macro_rules! accepts {
++    ($test:ident, $property:expr, $expected:expr) => {
++        #[tokio::test(flavor = "multi_thread")]
++        async fn $test() {
++            let source = format!(
++                "{HEADER}import transform from \"./helpers.ts\";\nexport const t = jssg({{ name: \"t\", language: \"tsx\", {} }});\n",
++                $property
++            );
++            let artifact = build(&source).await.artifacts.remove(0).source;
++            assert!(
++                Regex::new($expected).unwrap().is_match(&artifact),
++                "{artifact}"
++            );
++        }
++    };
++}
++
++accepts!(
++    accepts_an_arrow_function,
++    "transform: (root) => migrateText(root.root().text())",
++    r"migrateText\("
++);
++accepts!(
++    accepts_an_async_function_expression,
++    "transform: async function (root) { return migrateText(root.root().text()); }",
++    r"async function"
++);
++accepts!(
++    accepts_an_imported_binding,
++    "transform: transformFn",
++    r"function transformFn"
++);
++accepts!(
++    accepts_a_namespace_member_as_a_capture_free_reference,
++    "transform: (root) => helpers.migrateText(root.root().text())",
++    r"migrateText"
++);
++accepts!(
++    accepts_a_shorthand_imported_binding,
++    "transform",
++    r"function transformFn"
++);
++
++/// Any position (or none) before `message`.
++macro_rules! at {
++    ($message:expr) => {
++        concat!(r"(:\d+:\d+)?: .*", $message)
++    };
++}
++
++/// `rejects!(test, module body after the header, expected message after the
++/// module's path)`.
++macro_rules! rejects {
++    ($test:ident, $body:expr, $message:expr) => {
++        #[tokio::test(flavor = "multi_thread")]
++        async fn $test() {
++            let message = error($body).await;
++            assert!(
++                Regex::new(&format!(r"workflow\.ts{}", $message))
++                    .unwrap()
++                    .is_match(&message),
++                "{message}"
++            );
++        }
++    };
++}
++
++rejects!(
++    rejects_a_captured_top_level_const_at_its_reference,
++    r#"const PATTERN = "x";
++export const t = jssg({ name: "t", language: "tsx", transform(root) { return root.root().text().replace(PATTERN, ""); } });"#,
++    r":8:\d+: jssg 't' transform uses 'PATTERN', declared in the workflow module at line 7; .*import it, or pass it through invocation input"
++);
++rejects!(
++    rejects_a_captured_top_level_function,
++    r#"function helper() { return 1; }
++export const t = jssg({ name: "t", language: "tsx", transform() { return String(helper()); } });"#,
++    at!(r"uses 'helper', declared in the workflow module at line 7")
++);
++rejects!(
++    rejects_a_captured_top_level_class,
++    r#"class Box {}
++export const t = jssg({ name: "t", language: "tsx", transform() { return String(new Box()); } });"#,
++    at!(r"uses 'Box', declared in the workflow module")
++);
++rejects!(
++    rejects_a_capture_in_a_nested_arrow,
++    r#"let count = 0;
++export const t = jssg({ name: "t", language: "tsx", transform(root) { return [1].map(() => count++).join(); } });"#,
++    at!(r"uses 'count'")
++);
++rejects!(
++    rejects_the_orchestration_runtime_inside_a_transform,
++    r#"export const t = jssg({ name: "t", language: "tsx", transform() { return String(workflow); } });"#,
++    at!(
++        r"uses 'workflow' from @codemod\.com/orchestration; the orchestration runtime is not available inside a transform"
++    )
++);
++rejects!(
++    rejects_a_computed_name,
++    r#"const NAME = "t";
++export const t = jssg({ name: NAME, language: "tsx", transform() { return null; } });"#,
++    at!(r"jssg name must be a string literal")
++);
++rejects!(
++    rejects_a_missing_transform,
++    r#"export const t = jssg({ name: "t", language: "tsx" });"#,
++    at!(r"jssg 't' has no transform")
++);
++rejects!(
++    rejects_a_generator_transform,
++    r#"export const t = jssg({ name: "t", language: "tsx", *transform() {} });"#,
++    at!(r"cannot be a generator")
++);
++rejects!(
++    rejects_a_transform_that_is_not_a_function,
++    r#"export const t = jssg({ name: "t", language: "tsx", transform: 42 });"#,
++    at!(r"must be a method, a function or arrow expression, or an imported binding")
++);
++rejects!(
++    rejects_options_that_are_not_an_object_literal,
++    r#"const options = { name: "t" };
++export const t = jssg(options);"#,
++    at!(r"jssg\(\) must be called with an object literal")
++);
++rejects!(
++    rejects_an_import_that_does_not_resolve,
++    r#"import { nope } from "./missing.ts";
++export const t = jssg({ name: "t", language: "tsx", transform() { return nope(); } });"#,
++    at!(r"failed to bundle a jssg transform: .*missing\.ts")
++);
++
++#[tokio::test(flavor = "multi_thread")]
++async fn names_bound_inside_the_transform_property_names_and_globals_are_not_captures() {
++    let body = r#"
++const PATTERN = "module";
++const config = { PATTERN: 1 };
++function helper() {}
++class Box {}
++export const t = jssg({
++  name: "t",
++  language: "tsx",
++  transform(root, { params: { input } }) {
++    const PATTERN = "local";
++    function helper() { return PATTERN; }
++    for (const Box of [1]) console.log(Box);
++    try { throw 1; } catch (config) { console.log(config); }
++    const named = class helper {};
++    label: for (const [helper2] of [[1]]) { if (helper2) break label; }
++    const { PATTERN: renamed = undefined } = { PATTERN: input };
++    return JSON.stringify({ helper: helper(), config: { PATTERN }.PATTERN, named: typeof named, renamed, input });
++  },
++});"#;
++    let artifact = build(&format!("{HEADER}{body}"))
++        .await
++        .artifacts
++        .remove(0)
++        .source;
++    assert!(
++        artifact.contains("\"local\"") && !artifact.contains("\"module\""),
++        "{artifact}"
++    );
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn every_call_in_a_module_gets_its_own_artifact() {
++    let body = r#"
++export const a = jssg({ name: "a", language: "tsx", transform: () => "a" });
++export const b = jssg({ name: "b", language: "typescript", transform: () => "b" });"#;
++    let built = build(&format!("{HEADER}{body}")).await;
++    let names: Vec<_> = built.artifacts.iter().map(|a| a.name.as_str()).collect();
++    assert_eq!(names, ["a", "b"]);
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn imports_only_transforms_use_are_dropped_from_the_module() {
++    let source = build(&format!(
++        "{HEADER}\nexport default jssg({{ name: \"imported\", language: \"typescript\", transform: transformFn }});"
++    ))
++    .await
++    .source;
++    assert!(!source.contains("import transformFn"), "{source}");
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn imports_the_module_still_uses_are_kept() {
++    let source = build(&format!(
++        "{HEADER}\nexport default jssg({{ name: \"imported\", language: \"typescript\", transform: transformFn }});\nexport const name = transformFn.name;"
++    ))
++    .await
++    .source;
++    assert!(source.contains("import transformFn"), "{source}");
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn an_artifact_hash_is_the_same_in_another_checkout() {
++    let first = checkout();
++    let second = checkout();
++    let a = build_in(first.path(), &method()).await.artifacts.remove(0);
++    let b = build_in(second.path(), &method()).await.artifacts.remove(0);
++    assert_eq!(a.hash, b.hash);
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn an_artifact_hash_changes_with_a_helper_it_bundles() {
++    let dir = checkout();
++    let before = build_in(dir.path(), &method()).await.artifacts.remove(0);
++    fs::write(
++        dir.path().join("sub/format.ts"),
++        "export const banner = () => '';\n",
++    )
++    .unwrap();
++    let after = build_in(dir.path(), &method()).await.artifacts.remove(0);
++    assert_ne!(before.hash, after.hash);
++}
++
++#[tokio::test(flavor = "multi_thread")]
++async fn an_artifact_hash_changes_with_the_transform_body() {
++    let dir = checkout();
++    let before = build_in(dir.path(), &method()).await.artifacts.remove(0);
++    let changed = method().replace("output: { input }", "output: { input, v: 2 }");
++    let after = build_in(dir.path(), &changed).await.artifacts.remove(0);
++    assert_ne!(before.hash, after.hash);
++}
+-- 
+2.43.0
+

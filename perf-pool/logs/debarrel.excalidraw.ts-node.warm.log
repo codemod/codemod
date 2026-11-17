@@ -1,0 +1,4 @@
+jssg 'debarrel': skipped JSSG failed for 'dev-docs/src/components/Highlight.js': Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/excalidraw__excalidraw/dev-docs/src/components/Highlight.js': Unexpected JSX expression
+jssg 'debarrel': skipped JSSG failed for 'dev-docs/src/components/Homepage/index.js': Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/excalidraw__excalidraw/dev-docs/src/components/Homepage/index.js': Unexpected JSX expression
+jssg 'debarrel': skipped JSSG failed for 'dev-docs/src/theme/ReactLiveScope/index.js': Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/excalidraw__excalidraw/dev-docs/src/theme/ReactLiveScope/index.js': Unexpected JSX expression
+[]

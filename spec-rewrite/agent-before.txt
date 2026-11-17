@@ -1,0 +1,26 @@
+
+ RUN  v1.6.1 /home/user/ts-orch-merge/packages/orchestration
+
+ ✓ tests/agent.test.ts > agent request serialization > builds the shared fixture operations for every backend
+ ✓ tests/agent.test.ts > agent request serialization > defaults to the builtin backend with an explicit, recorded tool set without bash
+ ✓ tests/agent.test.ts > agent request serialization > records each backend's own settings and fills its safe defaults
+ ✓ tests/agent.test.ts > agent request serialization > refuses settings a backend cannot enforce when the step is defined
+ ✓ tests/agent.test.ts > agent request serialization > validates agent operations strictly and no longer knows 'ai'
+ ✓ tests/agent.test.ts > agent response parsing > returns the final response as { text } without an output schema
+ ✓ tests/agent.test.ts > agent response parsing > asks for JSON and parses bare JSON or a single fenced block
+ ✓ tests/agent.test.ts > agent response parsing > rejects output that does not match the contract, with the response in the error
+ ✓ tests/agent.test.ts > agent failures and plumbing > surfaces a failed agent completion, with its phase, as an OperationError
+ ✓ tests/agent.test.ts > agent failures and plumbing > walks descendants through parent ids, parents first
+ ✓ tests/agent.test.ts > agent failures and plumbing > kills from one snapshot: stops parents first, kills children first, then the group
+ ✓ tests/agent.test.ts > agent failures and plumbing > dedupes environment names case-insensitively on Windows only, and omits an empty key
+ ✓ tests/agent.test.ts > agent failures and plumbing > gives external backends their CLI home but no LLM settings or secret
+ ✓ tests/agent.test.ts > agent failures and plumbing > allowlists the launch environment plus explicit variables
+ ✓ tests/agent.test.ts > agent failures and plumbing > classifies credential-looking variable names and refuses them for external backends
+ ✓ tests/agent.test.ts > agent failures and plumbing > records the backend in history, replays it offline, and treats a backend change as changed
+ ✓ tests/agent.test.ts > agent failures and plumbing > composes statically and is scriptable in the harness
+
+ Test Files  1 passed (1)
+      Tests  17 passed (17)
+   Start at  02:37:15
+   Duration  835ms (transform 355ms, setup 0ms, collect 460ms, tests 86ms, environment 0ms, prepare 66ms)
+

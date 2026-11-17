@@ -1,0 +1,65 @@
+ RUN  v1.6.1 /home/user/ts-orch-head/packages/orchestration
+ ✓ tests/assessment.test.ts > assessment definition validation > requires a non-empty name
+ ✓ tests/assessment.test.ts > assessment definition validation > requires ask to be a function
+ ✓ tests/assessment.test.ts > assessment definition validation > requires a non-empty model when specified
+ ✓ tests/assessment.test.ts > assessment definition validation > requires include to be a non-empty list
+ ✓ tests/assessment.test.ts > assessment definition validation > validates exclude when specified
+ ✓ tests/assessment.test.ts > assessment definition validation > creates a valid assessment with proper options
+ ✓ tests/assessment.test.ts > assessment is a first-class Runnable > satisfies isRunnable
+ ✓ tests/assessment.test.ts > assessment is a first-class Runnable > has toOperation and decode
+ ✓ tests/assessment.test.ts > assessment is a first-class Runnable > creates a Command when called
+ ✓ tests/assessment.test.ts > assessment is a first-class Runnable > can be the root of run() without a dynamic wrapper
+ ✓ tests/assessment.test.ts > assessment is a first-class Runnable > can be composed in sequence()
+ ✓ tests/assessment.test.ts > assessment is a first-class Runnable > can be composed in parallel()
+ ✓ tests/assessment.test.ts > assessment toOperation > encodes include/exclude in state and uses sentinel questions
+ ✓ tests/assessment.test.ts > assessment toOperation > includes input in state when present
+ ✓ tests/assessment.test.ts > assessment toOperation > ask resolver is stored in a WeakMap, invisible to serialization
+ ✓ tests/assessment.test.ts > assessment toOperation > produces the same canonical identity for identical definitions
+ ✓ tests/assessment.test.ts > assessment decode > decodes a valid batch result
+ ✓ tests/assessment.test.ts > assessment decode > decodes empty array
+ ✓ tests/assessment.test.ts > assessment decode > decodes null/undefined as empty
+ ✓ tests/assessment.test.ts > assessment decode > rejects non-array output
+ ✓ tests/assessment.test.ts > assessment decode > rejects entry with missing file
+ ✓ tests/assessment.test.ts > assessment decode > rejects entry with invalid questions
+ ✓ tests/assessment.test.ts > assessment decode > rejects entry where assessment does not match questions
+ ✓ tests/assessment.test.ts > assessment workflow integration (harness) > succeeds with scripted batch results
+ ✓ tests/assessment.test.ts > assessment workflow integration (harness) > returns empty array when no files match
+ ✓ tests/assessment.test.ts > assessment workflow integration (harness) > passes workflow input to the operation
+ ✓ tests/assessment.test.ts > assessment workflow integration (harness) > uses assessment name as command id
+ ✓ tests/assessment.test.ts > assessment workflow integration (harness) > preserves per-file validation with different questions per file
+ ✓ tests/assessment.test.ts > assessment workflow integration (harness) > works inside a dynamic body (await assessSources())
+ ✓ tests/assessment.test.ts > assessment replay > replays without calling the executor
+ ✓ tests/assessment.test.ts > assessment replay > replays with zero I/O after files are deleted (focused replay test)
+ ✓ tests/assessment.test.ts > assessment replay > replays with changed files — recorded result is returned, not new data
+ ✓ tests/assessment.test.ts > assessment execution layer (file assessment) > selects files from target root (cwd), not process.cwd()
+ ✓ tests/assessment.test.ts > assessment execution layer (file assessment) > respects exclude patterns
+ ✓ tests/assessment.test.ts > assessment execution layer (file assessment) > returns empty array when no files match
+ ✓ tests/assessment.test.ts > assessment execution layer (file assessment) > skips symlinks
+ ✓ tests/assessment.test.ts > assessment execution layer (file assessment) > preserves deterministic file order
+ ✓ tests/assessment.test.ts > assessment execution layer (file assessment) > passes file content and input to ask, embedding resolved questions
+ ✓ tests/assessment.test.ts > assessment execution layer (file assessment) > uses single command id for single file, path-suffixed for multiple
+ ✓ tests/assessment.test.ts > assessment cancellation > cancels sibling files on first failure
+ ✓ tests/assessment.test.ts > assessment cancellation > cancels on abort signal
+ ✓ tests/assessment.test.ts > executeAssessment (SDK adapter) is unchanged > succeeds with a valid response
+ ✓ tests/assessment.test.ts > executeAssessment (SDK adapter) is unchanged > returns cancelled on pre-abort
+ ✓ tests/assessment.test.ts > executeAssessment (SDK adapter) is unchanged > returns a config failure for an overflowing timeout
+ ✓ tests/assessment.test.ts > executeAssessment (SDK adapter) is unchanged > returns a config failure for maxRetries above the cap
+ ✓ tests/assessment.test.ts > executeAssessment (SDK adapter) is unchanged > returns a failure when the response has no model (e.g. missing API key)
+ ✓ tests/assessment.test.ts > executeAssessment (SDK adapter) is unchanged > maps APITimeoutError to a timed-out failure
+ ✓ tests/assessment.test.ts > executeAssessment (SDK adapter) is unchanged > maps APIConnectionError to a connection failure
+ ✓ tests/assessment.test.ts > executeAssessment (SDK adapter) is unchanged > maps RateLimitError with retryAfterMs
+ ✓ tests/assessment.test.ts > executeAssessment (SDK adapter) is unchanged > maps abort signal to cancelled
+ ✓ tests/assessment.test.ts > executeAssessment (SDK adapter) is unchanged > rejects invalid base URLs
+ ✓ tests/assessment.test.ts > assessment bounded concurrency > limits concurrent SDK calls to fileConcurrency
+ ✓ tests/assessment.test.ts > assessment bounded concurrency > defaults to DEFAULT_ASSESSMENT_FILE_CONCURRENCY (4)
+ ✓ tests/assessment.test.ts > assessment bounded concurrency > queued work does not start after first failure
+ ✓ tests/assessment.test.ts > assessment bounded concurrency > preserves selector order regardless of completion order
+ ✓ tests/assessment.test.ts > assessment strict UTF-8 and read errors > fails deterministically on invalid UTF-8
+ ✓ tests/assessment.test.ts > assessment strict UTF-8 and read errors > fails deterministically on read errors (not ENOENT)
+ ✓ tests/assessment.test.ts > assessment strict UTF-8 and read errors > skips ENOENT (file vanished between selection and read)
+ ✓ tests/assessment.test.ts > protocol fixtures > assessment-request.json is valid
+ ✓ tests/assessment.test.ts > protocol fixtures > assessment-completion.json is valid
+ Test Files  1 passed (1)
+      Tests  60 passed (60)
+   Start at  02:20:08
+   Duration  1.30s (transform 473ms, setup 0ms, collect 604ms, tests 291ms, environment 0ms, prepare 93ms)

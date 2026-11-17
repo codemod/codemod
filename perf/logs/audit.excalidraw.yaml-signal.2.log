@@ -1,0 +1,38 @@
+Workflow started 9b1810e5-9897-4c8a-85ca-369b001200c7
+⏺ Count click-on-non-interactive findings
+⏺ Count db-query-in-loop findings
+⏺ Count derived-state-effect findings
+⏺ Count effect-missing-cleanup findings
+⏺ Count exhaustive-deps-suppressed findings
+⏺ Count floating-async-iteration findings
+⏺ Count img-missing-alt findings
+⏺ Count index-as-key findings
+⏺ Count nested-component-definition findings
+⏺ Count oversized-component findings
+⏺ Count route-entry-directive findings
+⏺ Count server-action-without-auth findings
+⏺ Count unsanitized-inner-html findings
+⏺ Count unstable-context-value findings
+Workflow completed in 14.9s
+
+Metrics:
+  oversized-component:
+    size=300-499, stateHooks=1-5: 6
+    stateHooks=1-5, size=500-999: 2
+    stateHooks=0, size=300-499: 2
+    stateHooks=0, size=500-999: 1
+    size=500-999, stateHooks=11+: 1
+  unstable-context-value:
+    shape=object, via=inline, wraps=inline-tree: 1
+  derived-state-effect:
+    kind=derived-value: 2
+  exhaustive-deps-suppressed:
+    justified=no, tool=eslint: 11
+  click-on-non-interactive:
+    element=div: 13
+    element=li: 1
+  index-as-key:
+    form=bare-index: 10
+    form=index-in-expression: 1
+  unsanitized-inner-html:
+    source=variable: 1

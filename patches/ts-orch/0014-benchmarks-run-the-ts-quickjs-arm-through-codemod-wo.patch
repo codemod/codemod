@@ -1,0 +1,203 @@
+From f85fd47f4fb867a626577d0c3807e8edd56d922f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 05:56:58 +0000
+Subject: [PATCH 14/16] benchmarks: run the ts-quickjs arm through codemod
+ workflow run -w
+
+The arm now launches the release codemod CLI instead of the Node launcher,
+so it no longer needs the separate quickjs host binary.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ benchmarks/runtimes/README.md      | 15 ++++++---------
+ benchmarks/runtimes/lib.sh         | 15 ++++-----------
+ benchmarks/runtimes/overhead.sh    | 18 ++++--------------
+ benchmarks/runtimes/provenance.mjs |  1 -
+ 4 files changed, 14 insertions(+), 35 deletions(-)
+
+diff --git a/benchmarks/runtimes/README.md b/benchmarks/runtimes/README.md
+index 1ed4d520..86476e5f 100644
+--- a/benchmarks/runtimes/README.md
++++ b/benchmarks/runtimes/README.md
+@@ -27,7 +27,7 @@ transform in every arm. On vite v8.3.6 the result is 331 modified files
+ | Arm | Definition | Command |
+ | --- | --- | --- |
+ | `yaml` | `yaml/workflow.yaml` (two `js-ast-grep` steps) | release `codemod workflow run --no-interactive --disable-analytics` |
+-| `ts-quickjs` | `ts/workflow.ts` (`sequence()` of two `jssg()` steps) | `node packages/orchestration/bin/codemod-workflow.mjs run --runtime=quickjs` |
++| `ts-quickjs` | `ts/workflow.ts` (`sequence()` of two `jssg()` steps) | release `codemod workflow run -w --disable-analytics` |
+ 
+ Each arm uses its default (natural) parallelism. The harness prints it but
+ never sets it:
+@@ -35,8 +35,8 @@ never sets it:
+ - `yaml`: steps run one after another. Each step walks and transforms files on
+   `min(available_parallelism, 12)` threads (no `max_threads`), with a fresh
+   QuickJS runtime per file.
+-- `ts-quickjs`: Node builds the bundle, or reuses it from its content-hash
+-  cache, then spawns `orchestration-quickjs-host`. One QuickJS context runs
++- `ts-quickjs`: the CLI builds the bundle (oxc and rolldown), or reuses it
++  from its content-hash cache, then runs it in process. One QuickJS context runs
+   the control plane and the workflow. A JSSG command of 64 files or more
+   runs on the host's transform pool (`CODEMOD_JSSG_WORKERS` threads, default
+   `min(available_parallelism, 4)`, one QuickJS context each); a smaller one
+@@ -44,7 +44,7 @@ never sets it:
+   primitives (`crates/orchestration-walker`, worker threads); batch rules
+   are `crates/jssg-batch`.
+ 
+-An arm whose binary (the host for `ts-quickjs`) is not built is skipped with
++An arm whose binary (`codemod` for both) is not built is skipped with
+ a message, unless it is in `BENCH_REQUIRE_ARMS` (default
+ `yaml ts-quickjs`), which fails instead. Every arm is probed first by
+ running it on a two-file scratch repository and checking the exact expected
+@@ -97,14 +97,11 @@ resets and cleans it with git.
+ # once: JS deps, the report UI the CLI embeds, and release binaries
+ pnpm install
+ pnpm --filter codemod-report-ui build          # crates/cli embeds report-ui/dist/index.html
+-cargo build --release -p codemod -p orchestration-quickjs-host \
+-  --features codemod/timings,orchestration-quickjs-host/timings
++cargo build --release -p codemod --features codemod/timings
+ brew install hyperfine                          # or: cargo install hyperfine
+ # The `timings` feature only compiles the phase timers in; they stay off
+ # unless CODEMOD_TIMINGS_FILE is set (overhead.sh measures both costs). Drop
+ # the --features flags for plain builds; the arms then write no timings.
+-# lib.sh pins the release quickjs host (CODEMOD_QUICKJS_HOST_BIN) instead of
+-# letting the runtime pick the newer debug build.
+ 
+ benchmarks/runtimes/setup.sh                    # clone to $HOME/.cache/codemod-bench/vite
+ benchmarks/runtimes/verify.sh                   # correctness gate only
+@@ -125,7 +122,7 @@ Knobs (environment): `BENCH_REPO` (checkout path; `setup.sh` also takes it as
+ its argument), `BENCH_RUNS` (default 5), `BENCH_WARMUP` (default 1),
+ `BENCH_ARMS` (default `yaml ts-quickjs`), `BENCH_REQUIRE_ARMS` (default
+ `yaml ts-quickjs`, which fail instead of being skipped), `CARGO_TARGET_DIR` /
+-`CODEMOD_BIN` / `CODEMOD_QUICKJS_HOST_BIN`, `BENCH_CMD_<ARM>`, `BENCH_TIMEOUT` (seconds; kills any
++`CODEMOD_BIN`, `BENCH_CMD_<ARM>`, `BENCH_TIMEOUT` (seconds; kills any
+ single arm run that exceeds it, so a hang fails instead of stalling the
+ session), and `BENCH_HOME`. `BENCH_HOME` runs
+ every arm with `HOME` set to a scratch directory, which isolates the engine's
+diff --git a/benchmarks/runtimes/lib.sh b/benchmarks/runtimes/lib.sh
+index ae3bb7a8..5e4053ae 100644
+--- a/benchmarks/runtimes/lib.sh
++++ b/benchmarks/runtimes/lib.sh
+@@ -16,7 +16,6 @@
+ #                        the gate or the benchmark instead of stalling it
+ #   BENCH_EXPECT_SHA     commit the checkout must be at (default: the pinned vite commit;
+ #                        sizes.sh sets it for its scaled repositories)
+-#   CODEMOD_QUICKJS_HOST_BIN  release quickjs host (default: <cargo target>/release/...)
+ #
+ # Every arm is launched through bin/bench-exec (compiled from bench-exec.c on
+ # first use), which sets BENCH_T0_NS and execs the arm in the same process.
+@@ -38,13 +37,8 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
+ case "$TARGET_DIR" in /*) ;; *) TARGET_DIR="$ROOT/$TARGET_DIR" ;; esac
+ if [ -d "$TARGET_DIR" ]; then TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"; fi
+ CODEMOD_BIN="${CODEMOD_BIN:-$TARGET_DIR/release/codemod}"
+-WORKFLOW_CLI="$ROOT/packages/orchestration/bin/codemod-workflow.mjs"
+ YAML_WORKFLOW="$BENCH_DIR/yaml/workflow.yaml"
+ TS_WORKFLOW="$BENCH_DIR/ts/workflow.ts"
+-# Pin the release host explicitly (the runtime would otherwise pick the newer
+-# of release/debug).
+-CODEMOD_QUICKJS_HOST_BIN="${CODEMOD_QUICKJS_HOST_BIN:-$TARGET_DIR/release/orchestration-quickjs-host}"
+-export CODEMOD_QUICKJS_HOST_BIN
+ # Read by provenance.mjs.
+ export CODEMOD_BIN VITE_TAG VITE_SHA
+ 
+@@ -110,8 +104,7 @@ ensure_bench_exec() {
+ # Release binary an arm needs, for preflight and provenance.
+ arm_binary() {
+   case "$1" in
+-    yaml) printf '%s' "$CODEMOD_BIN" ;;
+-    ts-quickjs) printf '%s' "$CODEMOD_QUICKJS_HOST_BIN" ;;
++    yaml | ts-quickjs) printf '%s' "$CODEMOD_BIN" ;;
+   esac
+ }
+ 
+@@ -227,8 +220,8 @@ arm_command_unbounded() {
+         "$(q "$CODEMOD_BIN")" "$(q "$YAML_WORKFLOW")" "$(q "$repo")"
+       ;;
+     ts-quickjs)
+-      printf 'node %s run --runtime=quickjs %s --target %s' \
+-        "$(q "$WORKFLOW_CLI")" "$(q "$TS_WORKFLOW")" "$(q "$repo")"
++      printf '%s workflow run -w %s --target %s --disable-analytics' \
++        "$(q "$CODEMOD_BIN")" "$(q "$TS_WORKFLOW")" "$(q "$repo")"
+       ;;
+     *) die "unknown arm: $arm" ;;
+   esac
+@@ -244,7 +237,7 @@ arm_concurrency() {
+         "$cpus" "$((cpus < 12 ? cpus : 12))"
+       ;;
+     ts-quickjs)
+-      printf 'one Rust process (launched by Node, which reuses the cached bundle); the workflow in one QuickJS context; a JSSG command of 64+ files on a transform pool of min(available_parallelism=%s, 4) = %s worker threads (CODEMOD_JSSG_WORKERS), one QuickJS context each; smaller commands serially on the JS thread (native walk/reads on worker threads)' \
++      printf 'one Rust process (reusing the cached bundle); the workflow in one QuickJS context; a JSSG command of 64+ files on a transform pool of min(available_parallelism=%s, 4) = %s worker threads (CODEMOD_JSSG_WORKERS), one QuickJS context each; smaller commands serially on the JS thread (native walk/reads on worker threads)' \
+         "$cpus" "$((cpus < 4 ? cpus : 4))"
+       ;;
+   esac
+diff --git a/benchmarks/runtimes/overhead.sh b/benchmarks/runtimes/overhead.sh
+index 092c4829..0036f3ca 100644
+--- a/benchmarks/runtimes/overhead.sh
++++ b/benchmarks/runtimes/overhead.sh
+@@ -14,7 +14,7 @@
+ # default one, both with CODEMOD_TIMINGS_FILE unset: the cost of compiling
+ # the instrumentation in, rather than of turning it on.
+ #
+-#   cargo build --release --target-dir /tmp/off -p codemod -p orchestration-quickjs-host
++#   cargo build --release --target-dir /tmp/off -p codemod
+ #   BENCH_OVERHEAD_BASELINE=/tmp/off ./overhead.sh
+ #
+ # Output: results/overhead/<stamp>/raw/<i>-<arm>-{off,on}.json (+ .timings.json
+@@ -36,7 +36,7 @@ MODE=env
+ if [ -n "$BASELINE" ]; then
+   MODE=build
+   BASELINE="$(cd "$BASELINE" && pwd)"
+-  for bin in codemod orchestration-quickjs-host; do
++  for bin in codemod; do
+     [ -x "$BASELINE/release/$bin" ] || die "baseline build lacks $BASELINE/release/$bin"
+   done
+ fi
+@@ -52,16 +52,6 @@ arm_for() {
+     arm_command "$2"
+   fi
+ }
+-# run_env <mode> <cmd...>: the environment the mode's binaries need.
+-run_env() {
+-  local mode="$1"
+-  shift
+-  if [ "$MODE" = build ] && [ "$mode" = off ]; then
+-    CODEMOD_QUICKJS_HOST_BIN="$BASELINE/release/orchestration-quickjs-host" "$@"
+-  else
+-    "$@"
+-  fi
+-}
+ 
+ bash "$BENCH_DIR/verify.sh"
+ # shellcheck source=/dev/null
+@@ -79,7 +69,7 @@ trap 'reset_repo "$REPO"' EXIT
+ for arm in $AVAILABLE_ARMS; do
+   for mode in off on; do
+     bash "$OUT/prepare.sh"
+-    run_env "$mode" env -u CODEMOD_TIMINGS_FILE bash -c "$(arm_for "$mode" "$arm")" \
++    env -u CODEMOD_TIMINGS_FILE bash -c "$(arm_for "$mode" "$arm")" \
+       >"$OUT/logs/warmup-$arm-$mode.log" 2>&1 ||
+       die "warmup of $arm ($mode) failed (log: $OUT/logs/warmup-$arm-$mode.log)"
+   done
+@@ -91,7 +81,7 @@ for i in $(seq 1 "$RUNS"); do
+       base="$OUT/raw/$i-$arm-$mode"
+       timings=""
+       [ "$MODE" = env ] && [ "$mode" = "on" ] && timings="$base.timings.json"
+-      run_env "$mode" bench_once "$base.json" "$arm" "bash $(q "$OUT/prepare.sh") $(q "$timings")" \
++      bench_once "$base.json" "$arm" "bash $(q "$OUT/prepare.sh") $(q "$timings")" \
+         "$timings" "$(arm_for "$mode" "$arm")"
+     done
+   done
+diff --git a/benchmarks/runtimes/provenance.mjs b/benchmarks/runtimes/provenance.mjs
+index 4e60454a..fb4751c1 100644
+--- a/benchmarks/runtimes/provenance.mjs
++++ b/benchmarks/runtimes/provenance.mjs
+@@ -43,7 +43,6 @@ const firstLine = (s) => (s === null ? null : s.split("\n")[0]);
+ const env = process.env;
+ const binaries = [
+   ["codemod", env.CODEMOD_BIN],
+-  ["orchestration-quickjs-host", env.CODEMOD_QUICKJS_HOST_BIN],
+   ["bench-exec", join(import.meta.dirname, "bin/bench-exec")],
+ ]
+   .filter(([, path]) => path)
+-- 
+2.43.0
+

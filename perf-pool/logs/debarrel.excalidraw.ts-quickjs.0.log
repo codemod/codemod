@@ -1,0 +1,10 @@
+jssg 'debarrel': skipped JSSG failed for 'dev-docs/src/components/Highlight.js': Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/excalidraw__excalidraw/dev-docs/src/components/Highlight.js': Unexpected JSX expression
+    at codemod (jssg-artifact:de3d214c298ff24de6c43ac684c0b25a7366bde4af2b2c213d03aa941ac3c33b/debarrel.jssg.js:1351:32)
+    at <anonymous> (eval_script:43:34)
+jssg 'debarrel': skipped JSSG failed for 'dev-docs/src/components/Homepage/index.js': Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/excalidraw__excalidraw/dev-docs/src/components/Homepage/index.js': Unexpected JSX expression
+    at codemod (jssg-artifact:de3d214c298ff24de6c43ac684c0b25a7366bde4af2b2c213d03aa941ac3c33b/debarrel.jssg.js:1351:32)
+    at <anonymous> (eval_script:43:34)
+jssg 'debarrel': skipped JSSG failed for 'dev-docs/src/theme/ReactLiveScope/index.js': Error: Failed to get definition: Failed to parse file '/home/user/bench-data/repos/excalidraw__excalidraw/dev-docs/src/theme/ReactLiveScope/index.js': Unexpected JSX expression
+    at codemod (jssg-artifact:de3d214c298ff24de6c43ac684c0b25a7366bde4af2b2c213d03aa941ac3c33b/debarrel.jssg.js:1351:32)
+    at <anonymous> (eval_script:43:34)
+[]

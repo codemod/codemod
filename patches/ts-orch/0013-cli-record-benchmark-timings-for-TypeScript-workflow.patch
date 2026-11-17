@@ -1,0 +1,283 @@
+From c5d9e325616f4dff239566f31d0bc56fc4f78a64 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 06:09:41 +0000
+Subject: [PATCH 13/16] cli: record benchmark timings for TypeScript workflows
+
+The quickjs host merges the JS phases into the bench-timings file
+in-process, so `codemod workflow run -w workflow.ts` writes one timings
+file labelled ts-quickjs without the Node launcher.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/cli/Cargo.toml                         |   6 +-
+ .../cli/src/commands/workflow/typescript.rs   |   4 +-
+ crates/cli/tests/typescript_timings.rs        | 125 ++++++++++++++++++
+ crates/orchestration-quickjs-host/src/lib.rs  |  24 ++++
+ crates/orchestration-quickjs-host/src/main.rs |  27 +---
+ 5 files changed, 159 insertions(+), 27 deletions(-)
+ create mode 100644 crates/cli/tests/typescript_timings.rs
+
+diff --git a/crates/cli/Cargo.toml b/crates/cli/Cargo.toml
+index 1deb2395..249a9e35 100644
+--- a/crates/cli/Cargo.toml
++++ b/crates/cli/Cargo.toml
+@@ -95,4 +95,8 @@ default = []
+ docker = ["butterflow-models/docker", "butterflow-runners/docker"]
+ podman = ["butterflow-models/podman", "butterflow-runners/podman"]
+ # Benchmark phase timings for `codemod workflow run` (CODEMOD_TIMINGS_FILE).
+-timings = ["bench-timings/timings", "butterflow-core/timings"]
++timings = [
++    "bench-timings/timings",
++    "butterflow-core/timings",
++    "orchestration-quickjs-host/timings",
++]
+diff --git a/crates/cli/src/commands/workflow/typescript.rs b/crates/cli/src/commands/workflow/typescript.rs
+index dd31e186..37c8a412 100644
+--- a/crates/cli/src/commands/workflow/typescript.rs
++++ b/crates/cli/src/commands/workflow/typescript.rs
+@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
+ use orchestration_build::{
+     cached_quickjs_bundle, default_bundle_cache, default_runtime_cache, Runtime,
+ };
+-use orchestration_quickjs_host::{run, HostOptions};
++use orchestration_quickjs_host::{record_js_timings, run, HostOptions};
+ 
+ /// Set when the runner was not found next to this binary.
+ const AGENT_BIN_ENV: &str = "CODEMOD_AGENT_BIN";
+@@ -62,6 +62,7 @@ fn agent_binary() -> Option<PathBuf> {
+ 
+ pub async fn run_typescript_workflow(options: Options<'_>) -> Result<()> {
+     let started = Instant::now();
++    bench_timings::set_arm("ts-quickjs");
+     let workflow = Path::new(options.workflow)
+         .canonicalize()
+         .with_context(|| format!("workflow does not exist: {}", options.workflow))?;
+@@ -109,6 +110,7 @@ pub async fn run_typescript_workflow(options: Options<'_>) -> Result<()> {
+         .context("the workflow host stopped unexpectedly")?
+         .map_err(anyhow::Error::msg)?;
+     let result = outcome.result;
++    record_js_timings(&result);
+ 
+     if let (Some(path), Some(history)) = (options.history, result.get("history")) {
+         std::fs::write(path, history.to_string())
+diff --git a/crates/cli/tests/typescript_timings.rs b/crates/cli/tests/typescript_timings.rs
+new file mode 100644
+index 00000000..42b2b3a0
+--- /dev/null
++++ b/crates/cli/tests/typescript_timings.rs
+@@ -0,0 +1,125 @@
++//! Benchmark timings for `codemod workflow run -w workflow.ts` (the
++//! `timings` feature): with `CODEMOD_TIMINGS_FILE` set, one file whose
++//! phases cover the run without double counting; unset, nothing is written.
++//!
++//! cargo test --release -p codemod --features timings --test typescript_timings
++#![cfg(feature = "timings")]
++
++mod support;
++
++use std::collections::BTreeMap;
++use std::fs;
++use std::path::Path;
++
++use serde_json::Value;
++use support::{output, runtime_sources, Scratch};
++
++const FILES: usize = 3;
++
++fn repository() -> BTreeMap<String, String> {
++    (0..FILES)
++        .map(|i| {
++            (
++                format!("src/f{i}.ts"),
++                format!("import {{ it }} from \"vitest\";\nconsole.log(\"f{i}\", {i});\n"),
++            )
++        })
++        .collect()
++}
++
++/// Two benchmark transforms over every file.
++fn workflow(scratch: &Scratch) -> std::path::PathBuf {
++    let transforms =
++        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/runtimes/transforms");
++    let path = scratch.path("workflow.ts");
++    fs::write(
++        &path,
++        format!(
++            r#"import {{ jssg, sequence }} from {index:?};
++import consoleToLogger from {a:?};
++import renameVitestImport from {b:?};
++const files = {{ language: "typescript", include: ["**/*.ts"] }} as const;
++const a = jssg({{ name: "console-to-logger", ...files, transform: consoleToLogger }});
++const b = jssg({{ name: "rename-vitest-import", ...files, transform: renameVitestImport }});
++export default sequence(a(), b());
++"#,
++            index = runtime_sources().join("index.ts").canonicalize().unwrap(),
++            a = transforms
++                .join("console-to-logger.ts")
++                .canonicalize()
++                .unwrap(),
++            b = transforms
++                .join("rename-vitest-import.ts")
++                .canonicalize()
++                .unwrap(),
++        ),
++    )
++    .unwrap();
++    path
++}
++
++/// The timings file of one run.
++fn timings() -> Value {
++    let scratch = Scratch::with(&repository());
++    let file = scratch.path("run.timings.json");
++    let mut command = scratch.command(&workflow(&scratch), &[]);
++    command
++        .env("CODEMOD_TIMINGS_FILE", &file)
++        .env_remove("CODEMOD_TIMINGS_ROOT_PID")
++        .env_remove("BENCH_T0_NS");
++    output(&command.output().unwrap());
++    serde_json::from_str(&fs::read_to_string(file).unwrap()).unwrap()
++}
++
++fn count(timings: &Value, phase: &str) -> u64 {
++    timings["phases"][phase]["count"].as_u64().unwrap_or(0)
++}
++
++#[test]
++fn a_typescript_run_is_labelled_ts_quickjs() {
++    assert_eq!(timings()["arm"], "ts-quickjs");
++}
++
++#[test]
++fn every_phase_of_a_run_is_recorded() {
++    let timings = timings();
++    let missing: Vec<&str> = [
++        "boot", "plan", "select", "read", "setup", "parse", "conflict", "commit",
++    ]
++    .into_iter()
++    .filter(|&phase| count(&timings, phase) == 0)
++    .collect();
++    assert_eq!(missing, Vec::<&str>::new());
++}
++
++#[test]
++fn each_transform_call_is_counted_once() {
++    assert_eq!(count(&timings(), "transform"), 2 * FILES as u64);
++}
++
++#[test]
++fn the_phases_cover_most_of_the_wall_without_double_counting() {
++    let timings = timings();
++    let phases: u64 = timings["phases"]
++        .as_object()
++        .unwrap()
++        .values()
++        .map(|phase| phase["ns"].as_u64().unwrap())
++        .sum();
++    let covered = phases as f64 / timings["wall_ns"].as_f64().unwrap();
++    assert!((0.8..=1.01).contains(&covered), "{covered}");
++}
++
++#[test]
++fn nothing_is_written_without_the_timings_file_variable() {
++    let scratch = Scratch::with(&repository());
++    let cwd = scratch.path("cwd");
++    fs::create_dir_all(&cwd).unwrap();
++    let mut command = scratch.command(&workflow(&scratch), &[]);
++    command.current_dir(&cwd).env_remove("CODEMOD_TIMINGS_FILE");
++    output(&command.output().unwrap());
++    assert_eq!(
++        (fs::read_dir(&cwd).unwrap().count(), scratch.files().len()),
++        (0, FILES)
++    );
++}
+diff --git a/crates/orchestration-quickjs-host/src/lib.rs b/crates/orchestration-quickjs-host/src/lib.rs
+index e31bad68..e83cb4a6 100644
+--- a/crates/orchestration-quickjs-host/src/lib.rs
++++ b/crates/orchestration-quickjs-host/src/lib.rs
+@@ -65,6 +65,30 @@ pub struct HostOutcome {
+     pub result: serde_json::Value,
+ }
+ 
++/// Benchmark timings: the bundle's JS-side phases (`result.timings`, the
++/// schema's `phases` shape) into the calling thread's accumulators.
++pub fn record_js_timings(result: &serde_json::Value) {
++    let Some(phases) = result
++        .get("timings")
++        .and_then(|timings| timings.as_object())
++    else {
++        return;
++    };
++    for (name, phase) in phases {
++        let Some(phase_id) = bench_timings::Phase::from_name(name) else {
++            continue;
++        };
++        let field = |key: &str| {
++            phase
++                .get(key)
++                .and_then(|value| value.as_f64())
++                .unwrap_or(0.0)
++        };
++        bench_timings::add(phase_id, field("ns") as u64, field("count") as u64);
++        bench_timings::add_cpu(phase_id, field("cpu_ns") as u64);
++    }
++}
++
+ /// Run the bundle to completion on a current-thread tokio runtime.
+ pub fn run(options: HostOptions, started: Instant) -> Result<HostOutcome, String> {
+     let runtime = tokio::runtime::Builder::new_current_thread()
+diff --git a/crates/orchestration-quickjs-host/src/main.rs b/crates/orchestration-quickjs-host/src/main.rs
+index d94fc7bd..6bdc10e5 100644
+--- a/crates/orchestration-quickjs-host/src/main.rs
++++ b/crates/orchestration-quickjs-host/src/main.rs
+@@ -20,7 +20,7 @@ use std::path::PathBuf;
+ use std::process::ExitCode;
+ use std::time::Instant;
+ 
+-use orchestration_quickjs_host::{run, HostOptions};
++use orchestration_quickjs_host::{record_js_timings, run, HostOptions};
+ 
+ const USAGE: &str = "usage: orchestration-quickjs-host run <bundle.mjs> [--target <directory>] [--input <json>] [--history <file>] [--json]";
+ 
+@@ -39,27 +39,6 @@ fn exit(code: i32) -> ! {
+     std::process::exit(code);
+ }
+ 
+-/// The bundle's JS-side phases (`result.timings`, the schema's `phases`
+-/// shape) into this thread's accumulators: the JS thread is this one.
+-fn merge_js_timings(timings: &serde_json::Value) {
+-    let Some(phases) = timings.as_object() else {
+-        return;
+-    };
+-    for (name, phase) in phases {
+-        let Some(phase_id) = bench_timings::Phase::from_name(name) else {
+-            continue;
+-        };
+-        let field = |key: &str| {
+-            phase
+-                .get(key)
+-                .and_then(|value| value.as_f64())
+-                .unwrap_or(0.0)
+-        };
+-        bench_timings::add(phase_id, field("ns") as u64, field("count") as u64);
+-        bench_timings::add_cpu(phase_id, field("cpu_ns") as u64);
+-    }
+-}
+-
+ fn run_main(started: Instant) -> ExitCode {
+     let mut args = std::env::args()
+         .skip(1)
+@@ -137,9 +116,7 @@ fn run_main(started: Instant) -> ExitCode {
+             eprintln!("failed to write history {}: {error}", path.display());
+         }
+     }
+-    if let Some(timings) = result.get("timings") {
+-        merge_js_timings(timings);
+-    }
++    record_js_timings(&result);
+     let ok = result.get("ok").and_then(|ok| ok.as_bool()) == Some(true);
+     if json {
+         // Machine form for `codemod-workflow run --runtime=quickjs`: `{ ok, output | error }`.
+-- 
+2.43.0
+

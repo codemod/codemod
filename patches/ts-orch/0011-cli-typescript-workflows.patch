@@ -1,0 +1,436 @@
+From 98a2c9177a7799a8b430bc951872e4faaea828e1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 9 Nov 2026 05:37:43 +0000
+Subject: [PATCH 11/11] cli: run TypeScript workflows with codemod workflow run
+ -w workflow.ts
+
+A .ts or .mts workflow is bundled by orchestration-build and run in this
+process by the QuickJS host, with --input for the root input and
+--history to resume a failed run. YAML workflows are unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/cli/Cargo.toml                         |   2 +
+ crates/cli/src/commands/workflow/mod.rs       |   1 +
+ crates/cli/src/commands/workflow/run.rs       |  24 +++
+ .../cli/src/commands/workflow/typescript.rs   | 125 +++++++++++
+ crates/cli/tests/typescript_workflow.rs       | 203 ++++++++++++++++++
+ 5 files changed, 355 insertions(+)
+ create mode 100644 crates/cli/src/commands/workflow/typescript.rs
+ create mode 100644 crates/cli/tests/typescript_workflow.rs
+
+diff --git a/crates/cli/Cargo.toml b/crates/cli/Cargo.toml
+index ee02934a..1deb2395 100644
+--- a/crates/cli/Cargo.toml
++++ b/crates/cli/Cargo.toml
+@@ -16,6 +16,8 @@ butterflow-core = { workspace = true }
+ butterflow-state = { workspace = true }
+ butterflow-runners = { workspace = true }
+ codemod-sandbox = { workspace = true }
++orchestration-build = { path = "../orchestration-build" }
++orchestration-quickjs-host = { path = "../orchestration-quickjs-host" }
+ bench-timings = { workspace = true }
+ codemod-telemetry = { workspace = true }
+ codemod-mcp = { workspace = true }
+diff --git a/crates/cli/src/commands/workflow/mod.rs b/crates/cli/src/commands/workflow/mod.rs
+index 8c53e89b..e6a754de 100644
+--- a/crates/cli/src/commands/workflow/mod.rs
++++ b/crates/cli/src/commands/workflow/mod.rs
+@@ -4,4 +4,5 @@ pub mod resume;
+ pub mod run;
+ pub mod status;
+ pub mod tui;
++pub mod typescript;
+ pub mod validate;
+diff --git a/crates/cli/src/commands/workflow/run.rs b/crates/cli/src/commands/workflow/run.rs
+index 04cee042..df9093d9 100644
+--- a/crates/cli/src/commands/workflow/run.rs
++++ b/crates/cli/src/commands/workflow/run.rs
+@@ -17,6 +17,9 @@ use codemod_telemetry::send_event::BaseEvent;
+ use std::sync::atomic::Ordering;
+ 
+ use crate::commands::run_telemetry::nested_codemod_run_observer;
++use crate::commands::workflow::typescript::{
++    is_typescript_workflow, run_typescript_workflow, Options as TypescriptOptions,
++};
+ use crate::commands::TelemetrySenderExt;
+ use crate::engine::{create_engine, create_registry_client};
+ use crate::pro_dry_run::{
+@@ -86,6 +89,15 @@ pub struct Command {
+     /// Name of the workflow to run when codemod.yaml defines multiple workflows
+     #[arg(long = "workflow-name", value_name = "NAME")]
+     workflow_name: Option<String>,
++
++    /// Root input of a TypeScript workflow, as JSON
++    #[arg(long, value_name = "JSON")]
++    input: Option<String>,
++
++    /// History file of a TypeScript workflow: resumed from when it exists,
++    /// written after the run
++    #[arg(long, value_name = "FILE")]
++    history: Option<PathBuf>,
+ }
+ 
+ fn should_auto_launch_workflow_tui(
+@@ -110,6 +122,18 @@ fn apply_workflow_run_mode_to_config(
+ 
+ /// Run a workflow
+ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<()> {
++    if is_typescript_workflow(&args.workflow) {
++        return run_typescript_workflow(TypescriptOptions {
++            workflow: &args.workflow,
++            target: args.target_path.as_deref(),
++            input: args.input.as_deref(),
++            history: args.history.as_deref(),
++        })
++        .await;
++    }
++    if args.input.is_some() || args.history.is_some() {
++        anyhow::bail!("--input and --history apply to TypeScript workflows (.ts, .mts) only");
++    }
+     if args.no_color {
+         console::set_colors_enabled(false);
+     }
+diff --git a/crates/cli/src/commands/workflow/typescript.rs b/crates/cli/src/commands/workflow/typescript.rs
+new file mode 100644
+index 00000000..febdd2d2
+--- /dev/null
++++ b/crates/cli/src/commands/workflow/typescript.rs
+@@ -0,0 +1,125 @@
++//! `codemod workflow run -w workflow.ts`: TypeScript workflows on the
++//! orchestration engine. The workflow graph is bundled with the portable
++//! runtime (`orchestration-build`, cached by the content of every input
++//! file) and run in one QuickJS context by `orchestration-quickjs-host`, in
++//! this process. SIGINT, SIGTERM and SIGHUP abort the run (the host cancels
++//! the operation in flight). The final output is printed as JSON on stdout;
++//! workflow console output goes to stderr.
++use std::path::{Path, PathBuf};
++use std::time::Instant;
++
++use anyhow::{bail, Context, Result};
++use orchestration_build::{cached_quickjs_bundle, default_bundle_cache, Runtime};
++use orchestration_quickjs_host::{run, HostOptions};
++
++/// Set when the runner was not found next to this binary.
++const AGENT_BIN_ENV: &str = "CODEMOD_AGENT_BIN";
++
++/// True for a workflow the orchestration engine runs.
++pub fn is_typescript_workflow(workflow: &str) -> bool {
++    matches!(
++        Path::new(workflow).extension().and_then(|e| e.to_str()),
++        Some("ts" | "mts")
++    )
++}
++
++pub struct Options<'a> {
++    pub workflow: &'a str,
++    pub target: Option<&'a Path>,
++    /// The root input as JSON text.
++    pub input: Option<&'a str>,
++    /// Resumed from when it exists; the run's history is written back to it.
++    pub history: Option<&'a Path>,
++}
++
++/// The portable runtime's sources. `CODEMOD_ORCHESTRATION_SRC`, else this
++/// checkout's `packages/orchestration/src`.
++fn runtime() -> Result<Runtime> {
++    let src = std::env::var_os("CODEMOD_ORCHESTRATION_SRC")
++        .map(PathBuf::from)
++        .unwrap_or_else(|| {
++            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/orchestration/src")
++        });
++    let src = src.canonicalize().with_context(|| {
++        format!(
++            "the orchestration runtime sources are missing at {}; set CODEMOD_ORCHESTRATION_SRC",
++            src.display()
++        )
++    })?;
++    Ok(Runtime { src })
++}
++
++/// `codemod-agent`, which `agent` steps spawn, is installed next to this binary.
++fn agent_binary() -> Option<PathBuf> {
++    let candidate = std::env::current_exe()
++        .ok()?
++        .parent()?
++        .join("codemod-agent");
++    candidate.is_file().then_some(candidate)
++}
++
++pub async fn run_typescript_workflow(options: Options<'_>) -> Result<()> {
++    let started = Instant::now();
++    let workflow = Path::new(options.workflow)
++        .canonicalize()
++        .with_context(|| format!("workflow does not exist: {}", options.workflow))?;
++    let target = match options.target {
++        Some(target) => target.to_path_buf(),
++        None => std::env::current_dir()?,
++    };
++    let target = target
++        .canonicalize()
++        .with_context(|| format!("target does not exist: {}", target.display()))?;
++    if let Some(input) = options.input {
++        if let Err(error) = serde_json::from_str::<serde_json::Value>(input) {
++            bail!("--input must be valid JSON ({error}); got: {input}");
++        }
++    }
++    let history = match options.history {
++        Some(path) => match std::fs::read_to_string(path) {
++            Ok(text) => Some(text),
++            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
++            Err(error) => bail!("failed to read history {}: {error}", path.display()),
++        },
++        None => None,
++    };
++
++    let cache = default_bundle_cache().map_err(anyhow::Error::msg)?;
++    let bundle = cached_quickjs_bundle(&workflow, &runtime()?, &cache).await?;
++
++    if std::env::var_os(AGENT_BIN_ENV).is_none() {
++        if let Some(agent) = agent_binary() {
++            // SAFETY: set before the host thread starts; nothing else reads
++            // the environment concurrently at this point.
++            std::env::set_var(AGENT_BIN_ENV, agent);
++        }
++    }
++
++    let host = HostOptions {
++        bundle: bundle.path,
++        target,
++        input: options.input.map(str::to_owned),
++        history,
++    };
++    // The host drives its own current-thread runtime.
++    let outcome = tokio::task::spawn_blocking(move || run(host, started))
++        .await
++        .context("the workflow host stopped unexpectedly")?
++        .map_err(anyhow::Error::msg)?;
++    let result = outcome.result;
++
++    if let (Some(path), Some(history)) = (options.history, result.get("history")) {
++        std::fs::write(path, history.to_string())
++            .with_context(|| format!("failed to write history {}", path.display()))?;
++    }
++    if result.get("ok").and_then(|ok| ok.as_bool()) != Some(true) {
++        let error = result
++            .get("error")
++            .and_then(|error| error.as_str())
++            .unwrap_or("the workflow failed");
++        bail!("{error}");
++    }
++    let output = result.get("output").cloned().unwrap_or_default();
++    println!("{}", serde_json::to_string_pretty(&output)?);
++    Ok(())
++}
+diff --git a/crates/cli/tests/typescript_workflow.rs b/crates/cli/tests/typescript_workflow.rs
+new file mode 100644
+index 00000000..fb67a1b0
+--- /dev/null
++++ b/crates/cli/tests/typescript_workflow.rs
+@@ -0,0 +1,203 @@
++//! `codemod workflow run -w workflow.ts`: the orchestration engine end to
++//! end, from the TypeScript workflow to the edited target, in one process.
++
++use std::collections::BTreeMap;
++use std::fs;
++use std::path::{Path, PathBuf};
++use std::process::{Command, Output};
++
++use serde_json::{json, Value};
++use tempfile::TempDir;
++
++/// The target every run starts from.
++const FILES: [(&str, &str); 4] = [
++    ("a.ts", "oldApi(1);\n"),
++    ("b.ts", "export const b = 1;\n"),
++    ("c.ts", "export const c = oldApi(2);\n"),
++    ("sub/d.old.ts", "export const d = 3;\n"),
++];
++
++/// `FILES` after the fixtures' `replace` and `rename` transforms.
++const MIGRATED: [(&str, &str); 4] = [
++    ("a.ts", "newApi(1);\n"),
++    ("b.ts", "export const b = 1;\n"),
++    ("c.ts", "export const c = newApi(2);\n"),
++    ("sub/d.new.ts", "export const d = 3;\n"),
++];
++
++fn fixture(path: &str) -> PathBuf {
++    Path::new(env!("CARGO_MANIFEST_DIR"))
++        .join("../../packages/orchestration/tests/fixtures")
++        .join(path)
++}
++
++struct Run {
++    scratch: TempDir,
++}
++
++impl Run {
++    fn new() -> Self {
++        let run = Self {
++            scratch: TempDir::new().unwrap(),
++        };
++        for (path, content) in FILES {
++            let file = run.target().join(path);
++            fs::create_dir_all(file.parent().unwrap()).unwrap();
++            fs::write(file, content).unwrap();
++        }
++        run
++    }
++
++    fn target(&self) -> PathBuf {
++        self.scratch.path().join("repo")
++    }
++
++    fn codemod(&self, workflow: &Path, extra: &[&str]) -> Output {
++        let home = self.scratch.path().join("home");
++        Command::new(env!("CARGO_BIN_EXE_codemod"))
++            .arg("--disable-analytics")
++            .args(["workflow", "run", "-w"])
++            .arg(workflow)
++            .arg("--target")
++            .arg(self.target())
++            .args(extra)
++            .env("HOME", &home)
++            .env("XDG_DATA_HOME", home.join("data"))
++            .env("CODEMOD_WORKFLOW_CACHE", self.scratch.path().join("cache"))
++            .env("NO_COLOR", "1")
++            .output()
++            .expect("failed to run codemod")
++    }
++
++    fn files(&self) -> BTreeMap<String, String> {
++        let mut files = BTreeMap::new();
++        let mut pending = vec![self.target()];
++        while let Some(dir) = pending.pop() {
++            for entry in fs::read_dir(dir).unwrap() {
++                let path = entry.unwrap().path();
++                if path.is_dir() {
++                    pending.push(path);
++                } else {
++                    let relative = path.strip_prefix(self.target()).unwrap();
++                    files.insert(
++                        relative.to_string_lossy().into_owned(),
++                        fs::read_to_string(&path).unwrap(),
++                    );
++                }
++            }
++        }
++        files
++    }
++}
++
++fn tree(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
++    entries
++        .iter()
++        .map(|(path, content)| (path.to_string(), content.to_string()))
++        .collect()
++}
++
++fn output(output: &Output) -> Value {
++    assert!(
++        output.status.success(),
++        "{}",
++        String::from_utf8_lossy(&output.stderr)
++    );
++    serde_json::from_slice(&output.stdout).unwrap()
++}
++
++fn stderr(output: &Output) -> String {
++    assert!(!output.status.success(), "the run succeeded");
++    String::from_utf8_lossy(&output.stderr).into_owned()
++}
++
++#[test]
++fn a_jssg_sequence_edits_and_renames_files_in_the_target() {
++    let run = Run::new();
++    run.codemod(&fixture("quickjs/jssg-sequence.ts"), &[]);
++    assert_eq!(run.files(), tree(&MIGRATED));
++}
++
++#[test]
++fn the_workflow_output_is_printed_as_json() {
++    let run = Run::new();
++    let printed = output(&run.codemod(&fixture("quickjs/jssg-sequence.ts"), &[]));
++    assert_eq!(printed, json!([]));
++}
++
++macro_rules! input_reaches_the_root {
++    ($($name:ident: $text:literal => $value:tt,)*) => {$(
++        #[test]
++        fn $name() {
++            let run = Run::new();
++            let printed = output(&run.codemod(&fixture("load/input.ts"), &["--input", $text]));
++            assert_eq!(printed, json!({ "received": $value }));
++        }
++    )*};
++}
++
++input_reaches_the_root! {
++    null_input_reaches_the_root: "null" => null,
++    object_input_reaches_the_root: r#"{"name":"x"}"# => { "name": "x" },
++}
++
++#[test]
++fn a_root_that_declares_input_requires_it() {
++    let run = Run::new();
++    let message = stderr(&run.codemod(&fixture("load/input.ts"), &[]));
++    assert!(
++        message.contains("workflow requires an input value; pass --input <json>"),
++        "{message}"
++    );
++}
++
++#[test]
++fn input_that_is_not_json_is_refused() {
++    let run = Run::new();
++    let message = stderr(&run.codemod(&fixture("load/input.ts"), &["--input", "{name}"]));
++    assert!(message.contains("--input must be valid JSON"), "{message}");
++}
++
++macro_rules! a_failing_jssg_run_writes_nothing {
++    ($($name:ident: $which:literal => $message:literal,)*) => {$(
++        #[test]
++        fn $name() {
++            let run = Run::new();
++            let input = format!("{:?}", $which);
++            let message = stderr(&run.codemod(&fixture("quickjs/jssg-failures.ts"), &["--input", &input]));
++            assert!(message.contains($message), "{message}");
++            assert_eq!(run.files(), tree(&FILES));
++        }
++    )*};
++}
++
++a_failing_jssg_run_writes_nothing! {
++    a_transform_that_throws_fails_the_run_and_writes_nothing: "fail-second" => "second file exploded",
++    a_rename_conflict_fails_the_run_and_writes_nothing: "conflict" => "same.ts",
++    a_rename_outside_the_target_fails_the_run_and_writes_nothing: "escape" => "is outside the target directory",
++}
++
++#[test]
++fn a_failed_run_resumes_from_its_history_without_rerunning_finished_steps() {
++    let run = Run::new();
++    let history = run.scratch.path().join("history.json");
++    let history = history.to_str().unwrap();
++    let workflow = fixture("quickjs/shell-resume.ts");
++    stderr(&run.codemod(&workflow, &["--history", history, "--input", "true"]));
++    output(&run.codemod(&workflow, &["--history", history, "--input", "false"]));
++    let log = fs::read_to_string(run.target().join("runs.log")).unwrap();
++    assert_eq!(log, "count\ngate\n");
++}
++
++#[test]
++fn a_node_import_fails_the_build() {
++    let run = Run::new();
++    let workflow = run.scratch.path().join("node-import.ts");
++    fs::write(
++        &workflow,
++        "import { readFileSync } from \"node:fs\";\nexport default readFileSync;\n",
++    )
++    .unwrap();
++    let message = stderr(&run.codemod(&workflow, &[]));
++    assert!(message.contains("is a Node module"), "{message}");
++}
+-- 
+2.43.0
+
