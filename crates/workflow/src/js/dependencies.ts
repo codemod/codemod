@@ -98,7 +98,7 @@ export const registry = Object.freeze({
   pypi: (name: string) => lookup("pypi", name),
 });
 
-/** Versions and ranges, by npm rules, Cargo's (`{ ecosystem: "cargo" }`) or PEP 440 (`{ ecosystem: "pypi" }`). */
+/** Versions and ranges, by npm rules, Cargo's (`{ ecosystem: "cargo" }`), PEP 440 (`{ ecosystem: "pypi" }`) or Composer's (`{ ecosystem: "packagist" }`). */
 export const semver = makeSemver((op, ecosystem, a, b) =>
   JSON.parse(host().semver(op, ecosystem, a, b)),
 );

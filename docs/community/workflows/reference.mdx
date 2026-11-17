@@ -327,7 +327,7 @@ const ready = await step("Releases accepting React 19", async () => {
 });
 ```
 
-`semver` has `satisfies(version, range)` (`null` for ranges it cannot read, such as `workspace:`), `compare`, `gt`, `lt`, `isBreaking(from, to)` and `isPrerelease`. Pass `{ ecosystem: "cargo" }` for Cargo's rules, or `{ ecosystem: "pypi" }` for PEP 440, which also reads Poetry's `^1.2`, `~1.2` and `||`.
+`semver` has `satisfies(version, range)` (`null` for ranges it cannot read, such as `workspace:`), `compare`, `gt`, `lt`, `isBreaking(from, to)` and `isPrerelease`. Pass `{ ecosystem: "cargo" }` for Cargo's rules, or `{ ecosystem: "pypi" }` for PEP 440, which also reads Poetry's `^1.2`, `~1.2` and `||`. `{ ecosystem: "packagist" }` follows Composer: a bound without a stability starts at that version's dev release, so `^1.0` rejects `2.0.0-RC1`, stability flags such as `@beta` are ignored, and branches such as `dev-main` cannot be compared.
 
 ### Shell commands
 

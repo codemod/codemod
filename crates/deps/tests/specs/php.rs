@@ -111,3 +111,128 @@ fn a_composer_lock_is_read_with_the_composer_json_beside_it() {
         .collect();
     assert_eq!(roots, ["acme/lib@dev-main", "acme/app@0.0.0-use.local"]);
 }
+
+fn composer_check(range: &str, version: &str) -> Option<bool> {
+    codemod_deps::semver::satisfies(Ecosystem::Packagist, range, version)
+}
+
+#[test]
+fn composer_carets_tildes_wildcards_and_hyphen_ranges_follow_composer() {
+    assert_eq!(
+        [
+            composer_check("^1.2.3", "1.9.0"),
+            composer_check("^0.3", "0.4.0"),
+            composer_check("~1.2", "1.9.0"),
+            composer_check("~1.2.3", "1.3.0"),
+            composer_check("1.2.*", "v1.2.9"),
+            composer_check("1.0 - 2.1", "2.1.5"),
+            composer_check("1.0.0 - 2.1.0", "2.1.5"),
+            composer_check(">= 1.0, < 1.1 || ^2.0", "2.3.0"),
+            composer_check("^2.0 | ^3.0", "1.0.0"),
+        ],
+        [
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(false)
+        ]
+    );
+}
+
+#[test]
+fn a_composer_bound_without_a_stability_starts_at_that_versions_dev_release() {
+    assert_eq!(
+        [
+            composer_check("<2.0", "2.0.0-beta1"),
+            composer_check("^1.0", "2.0.0-alpha1"),
+            composer_check(">=2.0", "2.0.0-RC1"),
+        ],
+        [Some(false), Some(false), Some(true)]
+    );
+}
+
+#[test]
+fn stability_flags_are_ignored_and_an_alias_is_read_from_its_left_side() {
+    assert_eq!(
+        [
+            composer_check("^1.0@beta", "1.2.0"),
+            composer_check("@dev", "3.0.0"),
+            composer_check("2.x-dev as 2.1.0", "2.x-dev"),
+        ],
+        [Some(true), Some(true), Some(true)]
+    );
+}
+
+#[test]
+fn a_composer_dev_branch_cannot_be_compared() {
+    assert_eq!(
+        [
+            composer_check("^1.0", "dev-main"),
+            composer_check("dev-main", "1.0.0")
+        ],
+        [None, None]
+    );
+}
+
+#[test]
+fn composer_versions_order_by_stability_with_patches_after_the_release() {
+    use codemod_deps::semver::compare;
+    let mut versions = [
+        "1.0.0-patch1",
+        "v1.0.1",
+        "1.0.0",
+        "1.0.0-RC1",
+        "1.0.0-beta2",
+        "1.0.0-alpha1",
+        "1.0.0-dev",
+    ];
+    versions.sort_by(|a, b| compare(Ecosystem::Packagist, a, b));
+    assert_eq!(
+        versions,
+        [
+            "1.0.0-dev",
+            "1.0.0-alpha1",
+            "1.0.0-beta2",
+            "1.0.0-RC1",
+            "1.0.0",
+            "1.0.0-patch1",
+            "v1.0.1"
+        ]
+    );
+}
+
+#[test]
+fn composer_branches_sort_before_every_version() {
+    use codemod_deps::semver::compare;
+    let mut versions = ["1.10.0", "dev-main", "1.2.0", "dev-feature"];
+    versions.sort_by(|a, b| compare(Ecosystem::Packagist, a, b));
+    assert_eq!(versions, ["dev-feature", "dev-main", "1.2.0", "1.10.0"]);
+}
+
+#[test]
+fn a_composer_package_is_found_by_its_name_in_any_case() {
+    let walk = Walk::new(composer_app());
+    let found: Vec<_> = walk
+        .nodes_named("Monolog/Monolog")
+        .into_iter()
+        .map(|id| walk.graph.label(id))
+        .collect();
+    assert_eq!(found, ["monolog/monolog@3.8.1"]);
+}
+
+#[test]
+fn a_composer_patch_release_is_not_a_prerelease() {
+    use codemod_deps::semver::is_prerelease;
+    assert_eq!(
+        [
+            is_prerelease(Ecosystem::Packagist, "1.0.0-RC1"),
+            is_prerelease(Ecosystem::Packagist, "1.0.0-patch1")
+        ],
+        [true, false]
+    );
+}
