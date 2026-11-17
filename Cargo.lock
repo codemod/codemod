@@ -1199,6 +1199,7 @@ dependencies = [
  "futures",
  "ignore",
  "node-semver",
+ "pep440_rs",
  "reqwest 0.12.23",
  "semver",
  "serde",

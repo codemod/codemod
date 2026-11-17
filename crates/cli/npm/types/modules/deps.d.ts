@@ -153,7 +153,7 @@ declare module "codemod:deps" {
   };
 
   type EcosystemOption = { ecosystem?: Ecosystem };
-  /** Version comparison with npm rules, or Cargo's with `{ ecosystem: "cargo" }`. */
+  /** Version comparison with npm rules, Cargo's with `{ ecosystem: "cargo" }`, or PEP 440 with `{ ecosystem: "pypi" }`. */
   export const semver: {
     /** true, false, or null when the range cannot be read (`workspace:`, `git:` ...). */
     satisfies(version: string, range: string, options?: EcosystemOption): boolean | null;

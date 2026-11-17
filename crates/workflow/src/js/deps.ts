@@ -20,7 +20,7 @@ function outsideStep(ecosystem: string): Promise<never> {
   );
 }
 
-/** Versions and ranges, by npm rules or (with `{ ecosystem: "cargo" }`) Cargo's. */
+/** Versions and ranges, by npm rules, Cargo's (`{ ecosystem: "cargo" }`) or PEP 440 (`{ ecosystem: "pypi" }`). */
 export const semver = makeSemver((op, ecosystem, a, b) =>
   JSON.parse(globalThis.__workflowHost.semver(op, ecosystem, a, b)),
 );
