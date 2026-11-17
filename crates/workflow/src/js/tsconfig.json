@@ -12,7 +12,8 @@
     "paths": {
       "codemod-internal:orchestrator": ["./orchestrator.ts"],
       "codemod-internal:semver": ["./semver.ts"],
-      "codemod-internal:dependencies": ["./dependencies.ts"]
+      "codemod-internal:dependencies": ["./dependencies.ts"],
+      "codemod/workflow": ["./workflow.ts"]
     },
     "noEmit": true,
     "strict": true,

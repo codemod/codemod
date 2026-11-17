@@ -72,9 +72,13 @@ impl StepIsolates {
                     crate::js::isolate_workflow_module().to_string(),
                 ),
             ],
-            // Files a step or callback imports may import `registry` and
-            // `semver` from `codemod/workflow`.
-            workflow_module: Some(ISOLATE_WORKFLOW_MODULE.to_string()),
+            // Steps, callbacks and the files they import may import
+            // `codemod/deps`, and `codemod/workflow` for helpers they share
+            // with the body.
+            codemod_modules: vec![
+                ("workflow", ISOLATE_WORKFLOW_MODULE.to_string()),
+                ("deps", DEPENDENCIES_MODULE.to_string()),
+            ],
             metrics: self.metrics.clone(),
             llm_request_handler: None,
             runtime_event_callback: Some(Arc::new(move |event: RuntimeEvent| {

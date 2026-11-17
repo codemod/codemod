@@ -29,7 +29,7 @@ use rquickjs::{CatchResultExt, Context, Ctx, Function, Module, Object, Promise, 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::build::{Built, FLOW_MODULE};
+use crate::build::{Built, DEPS_MODULE, FLOW_MODULE};
 use crate::events::{Event, EventSink};
 use crate::interaction::Interaction;
 use crate::tasks::{self, TaskContext};
@@ -474,7 +474,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
     runtime.set_loader(
         (
             // The body's codemod modules: `codemod/<name>`, or `codemod:<name>`.
-            CodemodModuleResolver::new(&["ast-grep", "workflow"]),
+            CodemodModuleResolver::new(&["ast-grep", "workflow", "deps"]),
             llrt_resolver,
             BuiltinResolver::default()
                 .with_module(ORCHESTRATOR_MODULE)
@@ -485,6 +485,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             llrt_loader.with_module("codemod/ast-grep", AstGrepModule),
             BuiltinLoader::default()
                 .with_module(FLOW_MODULE, crate::js::workflow_module())
+                .with_module(DEPS_MODULE, crate::js::deps_module())
                 .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator())
                 .with_module(SEMVER_MODULE, crate::js::semver_module()),
             QuickJSLoader,

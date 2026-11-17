@@ -4,7 +4,7 @@ sidebarTitle: "Reference"
 description: "The workflow.ts API: steps, per-file callbacks, tasks, state, and resuming runs."
 ---
 
-A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow`, and what else a workflow can import.
+A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow` and `codemod/deps`, and what else a workflow can import.
 
 ## Complete example
 
@@ -267,7 +267,7 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
 | `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
 | `installSkill({ package, path, harness, scope, force })` | Install a package's agent skill. |
-| `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback` on it. See [Dependencies](#dependencies). Result: what the callback returns. |
+| `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback` on it. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: what the callback returns. |
 | `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
 | `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. These only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped. |
 
@@ -275,7 +275,7 @@ Paths given to `jssg`, `astGrep` and shard functions are relative to the workflo
 
 ### Dependencies
 
-`dependencyGraph` reads the target's `yarn.lock` (Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` (v2 and v3) and `Cargo.lock`, with each workspace's `package.json` or `Cargo.toml` for declared ranges and dependency kinds. Yarn 1 lockfiles, `npm-shrinkwrap.json`, and bun, Go and Python lockfiles are not read.
+`dependencyGraph`, `registry` and `semver` come from `codemod/deps`. `dependencyGraph` reads the target's `yarn.lock` (Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` (v2 and v3) and `Cargo.lock`, with each workspace's `package.json` or `Cargo.toml` for declared ranges and dependency kinds. Yarn 1 lockfiles, `npm-shrinkwrap.json`, and bun, Go and Python lockfiles are not read.
 
 Without `lockfiles`, only the lockfiles at the target's root are read, since nested ones are usually fixtures or examples, and one that cannot be read is left out and listed in `g.skipped` as `{ lockfile, error }`. `lockfiles` picks which lockfiles are read instead, as a glob or a list of globs relative to the target: `**/yarn.lock` reads every `yarn.lock`, the root's included. A lockfile that `lockfiles` names and that cannot be read fails the step.
 
@@ -284,7 +284,8 @@ Without `lockfiles`, only the lockfiles at the target's root are read, since nes
 The callback gets the graph itself, not a copy. It runs in its own isolate, like a `forEachFile` callback, may be `async`, and only what it returns is recorded:
 
 ```ts
-import { step, dependencyGraph } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
 
 const usesMui = await step(
   dependencyGraph({ lockfiles: "yarn.lock" }, (g) =>
@@ -313,7 +314,8 @@ Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to
 `registry.npm(name)` and `registry.cargo(name)` resolve to `{ ecosystem, name, versions }`, oldest first, with each release's `dependencies`, `peerDependencies` and `optionalDependencies`. They work inside a function step or a `forEachFile` or `dependencyGraph` callback, and in the files those import, so the answer is recorded with the step and a resumed run does not ask again; in the workflow body they reject. Canceling the run, or a step's `timeout`, stops a lookup in progress. Each package is fetched once per run, and lookups started together are fetched together:
 
 ```ts
-import { step, registry, semver } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { registry, semver } from "codemod/deps";
 
 const ready = await step("Releases accepting React 19", async () => {
   const { versions } = await registry.npm("react-redux");
