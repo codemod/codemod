@@ -1,0 +1,23 @@
+# react-19-migration-recipe 0.1.5 with registry names swapped for local paths
+# (the bench machine cannot reach the registry CDN). Same five nested codemods, same order.
+version: "1"
+nodes:
+  - id: react-19-migration
+    name: React 19 Migration
+    type: automatic
+    steps:
+      - name: "Replace ReactDOM.render with createRoot"
+        codemod:
+          source: "../pkgs/replace-reactdom-render"
+      - name: "Replace string refs with callback refs"
+        codemod:
+          source: "../pkgs/replace-string-ref"
+      - name: "Migrate act from react-dom/test-utils to react"
+        codemod:
+          source: "../pkgs/replace-act-import"
+      - name: "Replace useFormState with useActionState"
+        codemod:
+          source: "../pkgs/replace-use-form-state"
+      - name: "Convert PropTypes to TypeScript props"
+        codemod:
+          source: "../pkgs/prop-types-typescript"

@@ -1,0 +1,144 @@
+# Dev's jssg-audit detection pack (14 read-only codemods) as one workflow:
+# one node per codemod, no depends_on, so the engine runs them in parallel.
+version: "1"
+nodes:
+  - id: click-on-non-interactive
+    name: Detect click-on-non-interactive
+    type: automatic
+    steps:
+      - name: "Count click-on-non-interactive findings"
+        js-ast-grep:
+          js_file: codemods/click-on-non-interactive/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: db-query-in-loop
+    name: Detect db-query-in-loop
+    type: automatic
+    steps:
+      - name: "Count db-query-in-loop findings"
+        js-ast-grep:
+          js_file: codemods/db-query-in-loop/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: derived-state-effect
+    name: Detect derived-state-effect
+    type: automatic
+    steps:
+      - name: "Count derived-state-effect findings"
+        js-ast-grep:
+          js_file: codemods/derived-state-effect/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: effect-missing-cleanup
+    name: Detect effect-missing-cleanup
+    type: automatic
+    steps:
+      - name: "Count effect-missing-cleanup findings"
+        js-ast-grep:
+          js_file: codemods/effect-missing-cleanup/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: exhaustive-deps-suppressed
+    name: Detect exhaustive-deps-suppressed
+    type: automatic
+    steps:
+      - name: "Count exhaustive-deps-suppressed findings"
+        js-ast-grep:
+          js_file: codemods/exhaustive-deps-suppressed/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: floating-async-iteration
+    name: Detect floating-async-iteration
+    type: automatic
+    steps:
+      - name: "Count floating-async-iteration findings"
+        js-ast-grep:
+          js_file: codemods/floating-async-iteration/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: img-missing-alt
+    name: Detect img-missing-alt
+    type: automatic
+    steps:
+      - name: "Count img-missing-alt findings"
+        js-ast-grep:
+          js_file: codemods/img-missing-alt/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: index-as-key
+    name: Detect index-as-key
+    type: automatic
+    steps:
+      - name: "Count index-as-key findings"
+        js-ast-grep:
+          js_file: codemods/index-as-key/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: nested-component-definition
+    name: Detect nested-component-definition
+    type: automatic
+    steps:
+      - name: "Count nested-component-definition findings"
+        js-ast-grep:
+          js_file: codemods/nested-component-definition/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: oversized-component
+    name: Detect oversized-component
+    type: automatic
+    steps:
+      - name: "Count oversized-component findings"
+        js-ast-grep:
+          js_file: codemods/oversized-component/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: route-entry-directive
+    name: Detect route-entry-directive
+    type: automatic
+    steps:
+      - name: "Count route-entry-directive findings"
+        js-ast-grep:
+          js_file: codemods/route-entry-directive/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: server-action-without-auth
+    name: Detect server-action-without-auth
+    type: automatic
+    steps:
+      - name: "Count server-action-without-auth findings"
+        js-ast-grep:
+          js_file: codemods/server-action-without-auth/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: unsanitized-inner-html
+    name: Detect unsanitized-inner-html
+    type: automatic
+    steps:
+      - name: "Count unsanitized-inner-html findings"
+        js-ast-grep:
+          js_file: codemods/unsanitized-inner-html/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]
+  - id: unstable-context-value
+    name: Detect unstable-context-value
+    type: automatic
+    steps:
+      - name: "Count unstable-context-value findings"
+        js-ast-grep:
+          js_file: codemods/unstable-context-value/codemod.ts
+          language: "tsx"
+          include: ["**/*.tsx", "**/*.jsx", "**/*.ts", "**/*.js"]
+          exclude: ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.next/**"]

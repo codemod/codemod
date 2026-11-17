@@ -1,0 +1,25 @@
+version: "1"
+
+nodes:
+  - id: apply-transforms
+    name: Apply AST Transformations
+    type: automatic
+    runtime:
+      type: direct
+    steps:
+      - name: "Replaces deprecated `util.is*()` methods with their modern equivalents."
+        js-ast-grep:
+          js_file: src/workflow.ts
+          base_path: .
+          include:
+            - "**/*.js"
+            - "**/*.jsx"
+            - "**/*.mjs"
+            - "**/*.cjs"
+            - "**/*.cts"
+            - "**/*.mts"
+            - "**/*.ts"
+            - "**/*.tsx"
+          exclude:
+            - "**/node_modules/**"
+          language: typescript

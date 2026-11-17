@@ -1,0 +1,116 @@
+{
+  "env": {
+    "CODEMOD_QUICKJS_HOST_BIN": "/home/user/ts-orch/target/release/orchestration-quickjs-host",
+    "CODEMOD_JSSG_NAPI": "/home/user/ts-orch/packages/jssg-napi/jssg-napi.linux-x64.node",
+    "CODEMOD_WORKFLOW_CACHE": "/home/user/bench/.wfcache",
+    "NO_COLOR": "1"
+  },
+  "arms": [
+    {
+      "name": "yaml-main",
+      "engine": "yaml",
+      "cmd": [
+        "/home/user/bench/bin-yaml-main",
+        "workflow",
+        "run",
+        "-w",
+        "{yaml}",
+        "-t",
+        "{repo}",
+        "--no-interactive",
+        "--disable-analytics",
+        "--allow-fs"
+      ]
+    },
+    {
+      "name": "yaml-signal",
+      "engine": "yaml",
+      "cmd": [
+        "/home/user/bench/bin-yaml-signal",
+        "workflow",
+        "run",
+        "-w",
+        "{yaml}",
+        "-t",
+        "{repo}",
+        "--no-interactive",
+        "--disable-analytics",
+        "--allow-fs"
+      ]
+    },
+    {
+      "name": "ts-node",
+      "engine": "ts",
+      "cmd": [
+        "node",
+        "/home/user/ts-orch/packages/orchestration/bin/codemod-workflow.mjs",
+        "run",
+        "{ts}",
+        "--target",
+        "{repo}",
+        "--runtime=node"
+      ]
+    },
+    {
+      "name": "ts-quickjs",
+      "engine": "ts",
+      "cmd": [
+        "node",
+        "/home/user/ts-orch/packages/orchestration/bin/codemod-workflow.mjs",
+        "run",
+        "{ts}",
+        "--target",
+        "{repo}",
+        "--runtime=quickjs"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "name": "util-is",
+      "dir": "/home/user/bench/workflows/util-is"
+    },
+    {
+      "name": "react-19",
+      "dir": "/home/user/bench/workflows/react-19"
+    },
+    {
+      "name": "audit",
+      "dir": "/home/user/bench/workflows/audit"
+    },
+    {
+      "name": "debarrel",
+      "dir": "/home/user/bench/workflows/debarrel"
+    },
+    {
+      "name": "shell-chain",
+      "dir": "/home/user/bench/workflows/shell-chain"
+    }
+  ],
+  "repos": [
+    {
+      "name": "probe",
+      "path": "/home/user/bench-data/repos/probe"
+    },
+    {
+      "name": "taxonomy",
+      "path": "/home/user/bench-data/repos/shadcn-ui__taxonomy"
+    },
+    {
+      "name": "excalidraw",
+      "path": "/home/user/bench-data/repos/excalidraw__excalidraw"
+    },
+    {
+      "name": "calcom",
+      "path": "/home/user/bench-data/repos/calcom__cal.com"
+    },
+    {
+      "name": "bluebird",
+      "path": "/home/user/bench-data/repos/petkaantonov__bluebird"
+    },
+    {
+      "name": "react-bootstrap-v1",
+      "path": "/home/user/bench-data/repos/react-bootstrap-v1"
+    }
+  ]
+}
