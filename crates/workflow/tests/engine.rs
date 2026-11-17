@@ -690,6 +690,23 @@ export default async function main() {
 }
 
 #[test]
+fn importing_the_deps_module_as_a_namespace_is_a_build_error() {
+    let error = build_error(
+        r#"
+import { step } from "codemod/workflow";
+import * as deps from "codemod/deps";
+export default async function main() {
+  await step(deps.dependencyGraph({}, (g) => g.workspaces()));
+}
+"#,
+    );
+    assert!(
+        error.contains(r#"import { dependencyGraph } from "codemod/deps""#),
+        "{error}"
+    );
+}
+
+#[test]
 fn importing_a_dependency_api_from_the_workflow_module_says_it_moved_to_codemod_deps() {
     let error = build_error(
         r#"

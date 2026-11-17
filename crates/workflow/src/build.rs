@@ -346,11 +346,18 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                             (&s.local, None, line)
                         }
                         ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => {
-                            if class == ModuleClass::Workflow {
+                            let names = if class == ModuleClass::Workflow {
+                                Some("step, forEachFile")
+                            } else if is_deps_module(&module) {
+                                Some("dependencyGraph")
+                            } else {
+                                None
+                            };
+                            if let Some(names) = names {
                                 return Err(analysis.error(
                                     s.span.start,
                                     format!(
-                                        "import what you use from \"{module}\" by name (import {{ step, forEachFile }} from \"{module}\"): the build finds callbacks by those names"
+                                        "import what you use from \"{module}\" by name (import {{ {names} }} from \"{module}\"): the build finds callbacks by those names"
                                     ),
                                 ));
                             }
