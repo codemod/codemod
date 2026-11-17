@@ -27,3 +27,20 @@ export const approval = bodyOnly("approval");
 export const branch = bodyOnly("branch");
 export const commit = bodyOnly("commit");
 export const pullRequest = bodyOnly("pullRequest");
+
+// The dependency API moved to `codemod/deps`. These stand in for it so a
+// helper file that still imports it from here gets an error that says where
+// it went, not a missing export.
+function movedToDeps(name: string): never {
+  throw new Error(`${name} moved to "codemod/deps": import { ${name} } from "codemod/deps"`);
+}
+const movedObject = (name: string) =>
+  new Proxy(
+    {},
+    {
+      get: (_, key) => (key === "then" || typeof key === "symbol" ? undefined : movedToDeps(name)),
+    },
+  );
+export const dependencyGraph = (): never => movedToDeps("dependencyGraph");
+export const registry = movedObject("registry");
+export const semver = movedObject("semver");

@@ -1202,6 +1202,33 @@ export default async function main() {
 }
 
 #[test]
+fn a_helper_file_using_the_old_dependency_imports_is_told_they_moved() {
+    let h = Harness::new();
+    h.bundle_file(
+        "lib/old.ts",
+        r#"
+import { registry } from "codemod/workflow";
+export const versions = () => registry.npm("dnd");
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { versions } from "./lib/old.ts";
+export default async function main() {
+  await step("Versions", async () => versions());
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains(r#"import { registry } from "codemod/deps""#),
+        "{error}"
+    );
+}
+
+#[test]
 fn a_body_only_function_called_inside_a_step_says_so() {
     let h = Harness::new();
     h.bundle_file(
