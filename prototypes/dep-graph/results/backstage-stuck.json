@@ -1,0 +1,150 @@
+{
+  "@graphiql/react@0.29.0": {
+    "verdict": "fixable",
+    "version": "0.30.0",
+    "breaking": true
+  },
+  "@headlessui/react@1.7.17": {
+    "verdict": "fixable",
+    "version": "2.2.0",
+    "breaking": true
+  },
+  "@material-ui/core@4.12.4": {
+    "verdict": "stuck",
+    "latest": "4.12.4"
+  },
+  "@material-ui/icons@4.11.3": {
+    "verdict": "stuck",
+    "latest": "4.11.3"
+  },
+  "@material-ui/lab@4.0.0-alpha.61": {
+    "verdict": "stuck",
+    "latest": null
+  },
+  "@material-ui/pickers@3.3.11": {
+    "verdict": "stuck",
+    "latest": "3.3.11"
+  },
+  "@material-ui/styles@4.11.5": {
+    "verdict": "stuck",
+    "latest": "4.11.5"
+  },
+  "@material-ui/system@4.12.2": {
+    "verdict": "stuck",
+    "latest": "4.12.2"
+  },
+  "@material-ui/utils@4.11.3": {
+    "verdict": "stuck",
+    "latest": "4.11.3"
+  },
+  "@react-hookz/web@24.0.4": {
+    "verdict": "fixable",
+    "version": "25.1.0",
+    "breaking": true
+  },
+  "@testing-library/react-hooks@8.0.1": {
+    "verdict": "stuck",
+    "latest": "8.0.1"
+  },
+  "@yarnpkg/libui@3.0.2": {
+    "verdict": "stuck",
+    "latest": "3.1.0"
+  },
+  "flux@4.0.4": {
+    "verdict": "stuck",
+    "latest": "4.0.4"
+  },
+  "graphiql@3.9.0": {
+    "verdict": "fixable",
+    "version": "4.0.0",
+    "breaking": true
+  },
+  "grpc-docs@1.1.4": {
+    "verdict": "stuck",
+    "latest": "1.1.4"
+  },
+  "ink-text-input@4.0.3": {
+    "verdict": "fixable",
+    "version": "6.0.0",
+    "breaking": true
+  },
+  "react-beautiful-dnd@13.0.0": {
+    "verdict": "stuck",
+    "latest": "13.1.1"
+  },
+  "react-debounce-input@3.3.0": {
+    "verdict": "stuck",
+    "latest": "3.3.0"
+  },
+  "react-dom@16.14.0": {
+    "verdict": "fixable",
+    "version": "19.0.0",
+    "breaking": true
+  },
+  "react-dom@18.3.1": {
+    "verdict": "fixable",
+    "version": "19.0.0",
+    "breaking": true
+  },
+  "react-dom@19.1.1": {
+    "verdict": "stuck",
+    "latest": "19.3.1"
+  },
+  "react-inspector@6.0.1": {
+    "verdict": "fixable",
+    "version": "8.0.0",
+    "breaking": true
+  },
+  "react-json-view@1.21.3": {
+    "verdict": "stuck",
+    "latest": "1.21.3"
+  },
+  "react-reconciler@0.26.2": {
+    "verdict": "fixable",
+    "version": "0.31.0",
+    "breaking": true
+  },
+  "react-redux@7.2.5": {
+    "verdict": "fixable",
+    "version": "9.2.0",
+    "breaking": true
+  },
+  "react-side-effect@2.1.0": {
+    "verdict": "stuck",
+    "latest": "2.1.2"
+  },
+  "react-test-renderer@16.14.0": {
+    "verdict": "fixable",
+    "version": "19.0.0",
+    "breaking": true
+  },
+  "react-textarea-autosize@8.4.1": {
+    "verdict": "fixable",
+    "version": "8.5.6",
+    "breaking": false
+  },
+  "use-composed-ref@1.3.0": {
+    "verdict": "fixable",
+    "version": "1.4.0",
+    "breaking": false
+  },
+  "use-isomorphic-layout-effect@1.1.2": {
+    "verdict": "fixable",
+    "version": "1.2.0",
+    "breaking": false
+  },
+  "use-latest@1.2.1": {
+    "verdict": "fixable",
+    "version": "1.3.0",
+    "breaking": false
+  },
+  "use-memo-one@1.1.1": {
+    "verdict": "stuck",
+    "latest": "1.1.3"
+  },
+  "use-resize-observer@9.1.0": {
+    "verdict": "fixable",
+    "version": "10.0.0",
+    "breaking": true
+  }
+}

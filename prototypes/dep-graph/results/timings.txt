@@ -1,0 +1,20 @@
+graph: 4053 nodes, 13564 edges from yarn.lock in 1.636364312s
+query in 4.944421ms
+graph: 4053 nodes, 13564 edges from yarn.lock in 126.504965ms
+query in 5.625324ms
+graph: 4053 nodes, 13564 edges from yarn.lock in 83.630929ms
+stuck in 466.156436ms
+graph: 1627 nodes, 4956 edges from pnpm-lock.yaml + Cargo.lock in 284.997852ms
+query in 1.068612ms
+graph: 4053 nodes, 13564 edges from yarn.lock in 104.402313ms
+sql in 41.343957ms
+graph: 4053 nodes, 13564 edges from yarn.lock in 88.536899ms
+sql in 26.900492ms
+graph: 4053 nodes, 13564 edges from yarn.lock in 88.899402ms
+sql in 113.2539ms
+graph: 1627 nodes, 4956 edges from pnpm-lock.yaml + Cargo.lock in 23.471093ms
+sql in 10.251242ms
+graph: 4053 nodes, 13564 edges from yarn.lock in 82.819659ms
+impact in 538.259443ms
+graph: 1627 nodes, 4956 edges from pnpm-lock.yaml + Cargo.lock in 22.376448ms
+impact in 344.906349ms

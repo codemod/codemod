@@ -1,0 +1,15 @@
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test a_cargo_dependency_with_a_version_resolves_to_that_version ... ok
+test a_later_release_that_accepts_the_version_is_the_fix ... ok
+test a_package_with_no_accepting_release_is_stuck ... ok
+test a_path_pattern_rejects_refuses ... ok
+test a_path_query_returns_the_shortest_chain_from_each_workspace ... ok
+test a_refusal_the_installed_release_does_not_publish_is_a_local_override ... ok
+test a_workspace_dependency_kind_comes_from_its_package_json ... ok
+test a_zero_major_minor_bump_counts_as_breaking ... ok
+test accepts_is_the_complement_of_refuses ... ok
+test pnpm_collapses_peer_suffixed_snapshots_into_one_node ... ok
+test refuses_lists_peer_ranges_that_exclude_the_version ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

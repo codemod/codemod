@@ -1,0 +1,135 @@
+{
+  "target": "cargo:tree-sitter@0.27.2",
+  "summary": {
+    "blockers": 3,
+    "fixable": 3,
+    "fixable_breaking": 0,
+    "stuck": 0,
+    "unknown": 0,
+    "local_override": 0,
+    "workspaces_affected": 5,
+    "files_to_touch": 21
+  },
+  "own_manifests": [
+    {
+      "from": "codemod-ai@1.18.7",
+      "workspace": "crates/ai",
+      "to": "tree-sitter@0.26.13",
+      "kind": "prod",
+      "req": "0.26"
+    },
+    {
+      "from": "testing-utils@1.18.7",
+      "workspace": "crates/testing-utils",
+      "to": "tree-sitter@0.26.13",
+      "kind": "prod",
+      "req": "0.26"
+    }
+  ],
+  "blockers": [
+    {
+      "package": "ast-grep-core@0.45.2",
+      "refuses": {
+        "tree-sitter": "^0.26.3"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "0.45.3",
+        "breaking": false
+      },
+      "workspaces": 5,
+      "direct": 2,
+      "example_chain": [
+        "tree-sitter-loader@1.18.7",
+        "ast-grep-dynamic@0.45.2",
+        "ast-grep-core@0.45.2"
+      ],
+      "code": [
+        {
+          "import": "ast-grep-config",
+          "files": 2,
+          "sample": [
+            "crates/cli/src/commands/jssg/list_applicable.rs",
+            "crates/core/src/jssg_execution_service.rs"
+          ],
+          "grep_pattern": "use ast_grep_config::$$$"
+        },
+        {
+          "import": "ast-grep-core",
+          "files": 12,
+          "sample": [
+            "crates/codemod-sandbox/src/ast_grep/mod.rs",
+            "crates/codemod-sandbox/src/ast_grep/native.rs",
+            "crates/codemod-sandbox/src/ast_grep/scanner.rs"
+          ],
+          "grep_pattern": "use ast_grep_core::$$$"
+        },
+        {
+          "import": "ast-grep-dynamic",
+          "files": 1,
+          "sample": [
+            "crates/tree-sitter-loader/src/lib.rs"
+          ],
+          "grep_pattern": "use ast_grep_dynamic::$$$"
+        }
+      ]
+    },
+    {
+      "package": "ast-grep-dynamic@0.45.2",
+      "refuses": {
+        "tree-sitter": "^0.26.3"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "0.45.3",
+        "breaking": false
+      },
+      "workspaces": 2,
+      "direct": 2,
+      "example_chain": [
+        "tree-sitter-loader@1.18.7",
+        "ast-grep-dynamic@0.45.2"
+      ],
+      "code": [
+        {
+          "import": "ast-grep-dynamic",
+          "files": 2,
+          "sample": [
+            "crates/codemod-sandbox/src/sandbox/engine/codemod_lang.rs",
+            "crates/tree-sitter-loader/src/lib.rs"
+          ],
+          "grep_pattern": "use ast_grep_dynamic::$$$"
+        }
+      ]
+    },
+    {
+      "package": "ast-grep-language@0.45.2",
+      "refuses": {
+        "tree-sitter": "^0.26.3"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "0.45.3",
+        "breaking": false
+      },
+      "workspaces": 3,
+      "direct": 3,
+      "example_chain": [
+        "codemod-sandbox@1.18.7",
+        "ast-grep-language@0.45.2"
+      ],
+      "code": [
+        {
+          "import": "ast-grep-language",
+          "files": 12,
+          "sample": [
+            "crates/codemod-sandbox/src/ast_grep/mod.rs",
+            "crates/codemod-sandbox/src/ast_grep/sg_node.rs",
+            "crates/codemod-sandbox/src/ast_grep/utils.rs"
+          ],
+          "grep_pattern": "use ast_grep_language::$$$"
+        }
+      ]
+    }
+  ]
+}

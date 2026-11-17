@@ -1,0 +1,2426 @@
+{
+  "target": "npm:react@19.0.0",
+  "summary": {
+    "blockers": 26,
+    "fixable": 11,
+    "fixable_breaking": 7,
+    "stuck": 15,
+    "unknown": 0,
+    "local_override": 0,
+    "workspaces_affected": 41,
+    "files_to_touch": 595
+  },
+  "own_manifests": [
+    {
+      "from": "@backstage/app-defaults@0.0.0-use.local",
+      "workspace": "packages/app-defaults",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/app-defaults@0.0.0-use.local",
+      "workspace": "packages/app-defaults",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/core-app-api@0.0.0-use.local",
+      "workspace": "packages/core-app-api",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/core-app-api@0.0.0-use.local",
+      "workspace": "packages/core-app-api",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/core-compat-api@0.0.0-use.local",
+      "workspace": "packages/core-compat-api",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/core-compat-api@0.0.0-use.local",
+      "workspace": "packages/core-compat-api",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/core-components@0.0.0-use.local",
+      "workspace": "packages/core-components",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/core-components@0.0.0-use.local",
+      "workspace": "packages/core-components",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/core-plugin-api@0.0.0-use.local",
+      "workspace": "packages/core-plugin-api",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/core-plugin-api@0.0.0-use.local",
+      "workspace": "packages/core-plugin-api",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/dev-utils@0.0.0-use.local",
+      "workspace": "packages/dev-utils",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/dev-utils@0.0.0-use.local",
+      "workspace": "packages/dev-utils",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-app-api@0.0.0-use.local",
+      "workspace": "packages/frontend-app-api",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-app-api@0.0.0-use.local",
+      "workspace": "packages/frontend-app-api",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-defaults@0.0.0-use.local",
+      "workspace": "packages/frontend-defaults",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-defaults@0.0.0-use.local",
+      "workspace": "packages/frontend-defaults",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-dev-utils@0.0.0-use.local",
+      "workspace": "packages/frontend-dev-utils",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-dev-utils@0.0.0-use.local",
+      "workspace": "packages/frontend-dev-utils",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-dynamic-feature-loader@0.0.0-use.local",
+      "workspace": "packages/frontend-dynamic-feature-loader",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-dynamic-feature-loader@0.0.0-use.local",
+      "workspace": "packages/frontend-dynamic-feature-loader",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-plugin-api@0.0.0-use.local",
+      "workspace": "packages/frontend-plugin-api",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-plugin-api@0.0.0-use.local",
+      "workspace": "packages/frontend-plugin-api",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-test-utils@0.0.0-use.local",
+      "workspace": "packages/frontend-test-utils",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-test-utils@0.0.0-use.local",
+      "workspace": "packages/frontend-test-utils",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/integration-react@0.0.0-use.local",
+      "workspace": "packages/integration-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/integration-react@0.0.0-use.local",
+      "workspace": "packages/integration-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/module-federation-common@0.0.0-use.local",
+      "workspace": "packages/module-federation-common",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/module-federation-common@0.0.0-use.local",
+      "workspace": "packages/module-federation-common",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-api-docs-module-protoc-gen-doc@0.0.0-use.local",
+      "workspace": "plugins/api-docs-module-protoc-gen-doc",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-api-docs-module-protoc-gen-doc@0.0.0-use.local",
+      "workspace": "plugins/api-docs-module-protoc-gen-doc",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-api-docs@0.0.0-use.local",
+      "workspace": "plugins/api-docs",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-api-docs@0.0.0-use.local",
+      "workspace": "plugins/api-docs",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-app-react@0.0.0-use.local",
+      "workspace": "plugins/app-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-app-react@0.0.0-use.local",
+      "workspace": "plugins/app-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-app-visualizer@0.0.0-use.local",
+      "workspace": "plugins/app-visualizer",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-app-visualizer@0.0.0-use.local",
+      "workspace": "plugins/app-visualizer",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-app@0.0.0-use.local",
+      "workspace": "plugins/app",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-app@0.0.0-use.local",
+      "workspace": "plugins/app",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-auth-react@0.0.0-use.local",
+      "workspace": "plugins/auth-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-auth-react@0.0.0-use.local",
+      "workspace": "plugins/auth-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-auth@0.0.0-use.local",
+      "workspace": "plugins/auth",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-auth@0.0.0-use.local",
+      "workspace": "plugins/auth",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-catalog-graph@0.0.0-use.local",
+      "workspace": "plugins/catalog-graph",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-catalog-graph@0.0.0-use.local",
+      "workspace": "plugins/catalog-graph",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-catalog-import@0.0.0-use.local",
+      "workspace": "plugins/catalog-import",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-catalog-import@0.0.0-use.local",
+      "workspace": "plugins/catalog-import",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-catalog-react@0.0.0-use.local",
+      "workspace": "plugins/catalog-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-catalog-react@0.0.0-use.local",
+      "workspace": "plugins/catalog-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-catalog-unprocessed-entities@0.0.0-use.local",
+      "workspace": "plugins/catalog-unprocessed-entities",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-catalog-unprocessed-entities@0.0.0-use.local",
+      "workspace": "plugins/catalog-unprocessed-entities",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-catalog@0.0.0-use.local",
+      "workspace": "plugins/catalog",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-catalog@0.0.0-use.local",
+      "workspace": "plugins/catalog",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-config-schema@0.0.0-use.local",
+      "workspace": "plugins/config-schema",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-config-schema@0.0.0-use.local",
+      "workspace": "plugins/config-schema",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-devtools-react@0.0.0-use.local",
+      "workspace": "plugins/devtools-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-devtools-react@0.0.0-use.local",
+      "workspace": "plugins/devtools-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-devtools@0.0.0-use.local",
+      "workspace": "plugins/devtools",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-devtools@0.0.0-use.local",
+      "workspace": "plugins/devtools",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-home-react@0.0.0-use.local",
+      "workspace": "plugins/home-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-home-react@0.0.0-use.local",
+      "workspace": "plugins/home-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-home@0.0.0-use.local",
+      "workspace": "plugins/home",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-home@0.0.0-use.local",
+      "workspace": "plugins/home",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes-cluster@0.0.0-use.local",
+      "workspace": "plugins/kubernetes-cluster",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes-cluster@0.0.0-use.local",
+      "workspace": "plugins/kubernetes-cluster",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes-react@0.0.0-use.local",
+      "workspace": "plugins/kubernetes-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes-react@0.0.0-use.local",
+      "workspace": "plugins/kubernetes-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes@0.0.0-use.local",
+      "workspace": "plugins/kubernetes",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes@0.0.0-use.local",
+      "workspace": "plugins/kubernetes",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-mui-to-bui@0.0.0-use.local",
+      "workspace": "plugins/mui-to-bui",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-mui-to-bui@0.0.0-use.local",
+      "workspace": "plugins/mui-to-bui",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-notifications@0.0.0-use.local",
+      "workspace": "plugins/notifications",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-notifications@0.0.0-use.local",
+      "workspace": "plugins/notifications",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-org-react@0.0.0-use.local",
+      "workspace": "plugins/org-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-org-react@0.0.0-use.local",
+      "workspace": "plugins/org-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-org@0.0.0-use.local",
+      "workspace": "plugins/org",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-org@0.0.0-use.local",
+      "workspace": "plugins/org",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-permission-react@0.0.0-use.local",
+      "workspace": "plugins/permission-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-permission-react@0.0.0-use.local",
+      "workspace": "plugins/permission-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder-node-test-utils@0.0.0-use.local",
+      "workspace": "plugins/scaffolder-node-test-utils",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder-node-test-utils@0.0.0-use.local",
+      "workspace": "plugins/scaffolder-node-test-utils",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder-react@0.0.0-use.local",
+      "workspace": "plugins/scaffolder-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder-react@0.0.0-use.local",
+      "workspace": "plugins/scaffolder-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder@0.0.0-use.local",
+      "workspace": "plugins/scaffolder",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder@0.0.0-use.local",
+      "workspace": "plugins/scaffolder",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-search-react@0.0.0-use.local",
+      "workspace": "plugins/search-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-search-react@0.0.0-use.local",
+      "workspace": "plugins/search-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-search@0.0.0-use.local",
+      "workspace": "plugins/search",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-search@0.0.0-use.local",
+      "workspace": "plugins/search",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-signals-react@0.0.0-use.local",
+      "workspace": "plugins/signals-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-signals-react@0.0.0-use.local",
+      "workspace": "plugins/signals-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-signals@0.0.0-use.local",
+      "workspace": "plugins/signals",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-signals@0.0.0-use.local",
+      "workspace": "plugins/signals",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-addons-test-utils@0.0.0-use.local",
+      "workspace": "plugins/techdocs-addons-test-utils",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-addons-test-utils@0.0.0-use.local",
+      "workspace": "plugins/techdocs-addons-test-utils",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-module-addons-contrib@0.0.0-use.local",
+      "workspace": "plugins/techdocs-module-addons-contrib",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-module-addons-contrib@0.0.0-use.local",
+      "workspace": "plugins/techdocs-module-addons-contrib",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-react@0.0.0-use.local",
+      "workspace": "plugins/techdocs-react",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-react@0.0.0-use.local",
+      "workspace": "plugins/techdocs-react",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-techdocs@0.0.0-use.local",
+      "workspace": "plugins/techdocs",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-techdocs@0.0.0-use.local",
+      "workspace": "plugins/techdocs",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-user-settings@0.0.0-use.local",
+      "workspace": "plugins/user-settings",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-user-settings@0.0.0-use.local",
+      "workspace": "plugins/user-settings",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/test-utils@0.0.0-use.local",
+      "workspace": "packages/test-utils",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/test-utils@0.0.0-use.local",
+      "workspace": "packages/test-utils",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/theme@0.0.0-use.local",
+      "workspace": "packages/theme",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/theme@0.0.0-use.local",
+      "workspace": "packages/theme",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/ui@0.0.0-use.local",
+      "workspace": "packages/ui",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/ui@0.0.0-use.local",
+      "workspace": "packages/ui",
+      "to": "react",
+      "kind": "peer",
+      "req": "^18.0.0"
+    },
+    {
+      "from": "@backstage/version-bridge@0.0.0-use.local",
+      "workspace": "packages/version-bridge",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/version-bridge@0.0.0-use.local",
+      "workspace": "packages/version-bridge",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@internal/plugin-todo-list@0.0.0-use.local",
+      "workspace": "plugins/example-todo-list",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@internal/plugin-todo-list@0.0.0-use.local",
+      "workspace": "plugins/example-todo-list",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "app-example-plugin@0.0.0-use.local",
+      "workspace": "packages/app-example-plugin",
+      "to": "react@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "app-example-plugin@0.0.0-use.local",
+      "workspace": "packages/app-example-plugin",
+      "to": "react",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "example-app-legacy@0.0.0-use.local",
+      "workspace": "packages/app-legacy",
+      "to": "react@18.3.1",
+      "kind": "prod",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "example-app@0.0.0-use.local",
+      "workspace": "packages/app",
+      "to": "react@18.3.1",
+      "kind": "prod",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "example-app@0.0.0-use.local",
+      "workspace": "packages/app",
+      "to": "react@18.3.1",
+      "kind": "prod",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "techdocs-cli-embedded-app@0.0.0-use.local",
+      "workspace": "packages/techdocs-cli-embedded-app",
+      "to": "react@18.3.1",
+      "kind": "prod",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/app-defaults@0.0.0-use.local",
+      "workspace": "packages/app-defaults",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/app-defaults@0.0.0-use.local",
+      "workspace": "packages/app-defaults",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/core-app-api@0.0.0-use.local",
+      "workspace": "packages/core-app-api",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/core-app-api@0.0.0-use.local",
+      "workspace": "packages/core-app-api",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/core-compat-api@0.0.0-use.local",
+      "workspace": "packages/core-compat-api",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/core-compat-api@0.0.0-use.local",
+      "workspace": "packages/core-compat-api",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/core-components@0.0.0-use.local",
+      "workspace": "packages/core-components",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/core-components@0.0.0-use.local",
+      "workspace": "packages/core-components",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/core-plugin-api@0.0.0-use.local",
+      "workspace": "packages/core-plugin-api",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/core-plugin-api@0.0.0-use.local",
+      "workspace": "packages/core-plugin-api",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/dev-utils@0.0.0-use.local",
+      "workspace": "packages/dev-utils",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/dev-utils@0.0.0-use.local",
+      "workspace": "packages/dev-utils",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-app-api@0.0.0-use.local",
+      "workspace": "packages/frontend-app-api",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-app-api@0.0.0-use.local",
+      "workspace": "packages/frontend-app-api",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-defaults@0.0.0-use.local",
+      "workspace": "packages/frontend-defaults",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-defaults@0.0.0-use.local",
+      "workspace": "packages/frontend-defaults",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-dev-utils@0.0.0-use.local",
+      "workspace": "packages/frontend-dev-utils",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-dev-utils@0.0.0-use.local",
+      "workspace": "packages/frontend-dev-utils",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-dynamic-feature-loader@0.0.0-use.local",
+      "workspace": "packages/frontend-dynamic-feature-loader",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-dynamic-feature-loader@0.0.0-use.local",
+      "workspace": "packages/frontend-dynamic-feature-loader",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-plugin-api@0.0.0-use.local",
+      "workspace": "packages/frontend-plugin-api",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-plugin-api@0.0.0-use.local",
+      "workspace": "packages/frontend-plugin-api",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/frontend-test-utils@0.0.0-use.local",
+      "workspace": "packages/frontend-test-utils",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/frontend-test-utils@0.0.0-use.local",
+      "workspace": "packages/frontend-test-utils",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/integration-react@0.0.0-use.local",
+      "workspace": "packages/integration-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/integration-react@0.0.0-use.local",
+      "workspace": "packages/integration-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/module-federation-common@0.0.0-use.local",
+      "workspace": "packages/module-federation-common",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/module-federation-common@0.0.0-use.local",
+      "workspace": "packages/module-federation-common",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-api-docs-module-protoc-gen-doc@0.0.0-use.local",
+      "workspace": "plugins/api-docs-module-protoc-gen-doc",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-api-docs-module-protoc-gen-doc@0.0.0-use.local",
+      "workspace": "plugins/api-docs-module-protoc-gen-doc",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-api-docs@0.0.0-use.local",
+      "workspace": "plugins/api-docs",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-api-docs@0.0.0-use.local",
+      "workspace": "plugins/api-docs",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-app-react@0.0.0-use.local",
+      "workspace": "plugins/app-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-app-react@0.0.0-use.local",
+      "workspace": "plugins/app-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-app-visualizer@0.0.0-use.local",
+      "workspace": "plugins/app-visualizer",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-app-visualizer@0.0.0-use.local",
+      "workspace": "plugins/app-visualizer",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-app@0.0.0-use.local",
+      "workspace": "plugins/app",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-app@0.0.0-use.local",
+      "workspace": "plugins/app",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-auth-react@0.0.0-use.local",
+      "workspace": "plugins/auth-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-auth-react@0.0.0-use.local",
+      "workspace": "plugins/auth-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-auth@0.0.0-use.local",
+      "workspace": "plugins/auth",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-auth@0.0.0-use.local",
+      "workspace": "plugins/auth",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-catalog-graph@0.0.0-use.local",
+      "workspace": "plugins/catalog-graph",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-catalog-graph@0.0.0-use.local",
+      "workspace": "plugins/catalog-graph",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-catalog-import@0.0.0-use.local",
+      "workspace": "plugins/catalog-import",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-catalog-import@0.0.0-use.local",
+      "workspace": "plugins/catalog-import",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-catalog-react@0.0.0-use.local",
+      "workspace": "plugins/catalog-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-catalog-react@0.0.0-use.local",
+      "workspace": "plugins/catalog-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-catalog-unprocessed-entities@0.0.0-use.local",
+      "workspace": "plugins/catalog-unprocessed-entities",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-catalog-unprocessed-entities@0.0.0-use.local",
+      "workspace": "plugins/catalog-unprocessed-entities",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-catalog@0.0.0-use.local",
+      "workspace": "plugins/catalog",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-catalog@0.0.0-use.local",
+      "workspace": "plugins/catalog",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-config-schema@0.0.0-use.local",
+      "workspace": "plugins/config-schema",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-config-schema@0.0.0-use.local",
+      "workspace": "plugins/config-schema",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-devtools-react@0.0.0-use.local",
+      "workspace": "plugins/devtools-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-devtools-react@0.0.0-use.local",
+      "workspace": "plugins/devtools-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-devtools@0.0.0-use.local",
+      "workspace": "plugins/devtools",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-devtools@0.0.0-use.local",
+      "workspace": "plugins/devtools",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-home-react@0.0.0-use.local",
+      "workspace": "plugins/home-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-home-react@0.0.0-use.local",
+      "workspace": "plugins/home-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-home@0.0.0-use.local",
+      "workspace": "plugins/home",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-home@0.0.0-use.local",
+      "workspace": "plugins/home",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes-cluster@0.0.0-use.local",
+      "workspace": "plugins/kubernetes-cluster",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes-cluster@0.0.0-use.local",
+      "workspace": "plugins/kubernetes-cluster",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes-react@0.0.0-use.local",
+      "workspace": "plugins/kubernetes-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes-react@0.0.0-use.local",
+      "workspace": "plugins/kubernetes-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes@0.0.0-use.local",
+      "workspace": "plugins/kubernetes",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-kubernetes@0.0.0-use.local",
+      "workspace": "plugins/kubernetes",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-mui-to-bui@0.0.0-use.local",
+      "workspace": "plugins/mui-to-bui",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-mui-to-bui@0.0.0-use.local",
+      "workspace": "plugins/mui-to-bui",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-notifications@0.0.0-use.local",
+      "workspace": "plugins/notifications",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-notifications@0.0.0-use.local",
+      "workspace": "plugins/notifications",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-org-react@0.0.0-use.local",
+      "workspace": "plugins/org-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-org-react@0.0.0-use.local",
+      "workspace": "plugins/org-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-org@0.0.0-use.local",
+      "workspace": "plugins/org",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-org@0.0.0-use.local",
+      "workspace": "plugins/org",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-permission-react@0.0.0-use.local",
+      "workspace": "plugins/permission-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-permission-react@0.0.0-use.local",
+      "workspace": "plugins/permission-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder-node-test-utils@0.0.0-use.local",
+      "workspace": "plugins/scaffolder-node-test-utils",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder-node-test-utils@0.0.0-use.local",
+      "workspace": "plugins/scaffolder-node-test-utils",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder-react@0.0.0-use.local",
+      "workspace": "plugins/scaffolder-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder-react@0.0.0-use.local",
+      "workspace": "plugins/scaffolder-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder@0.0.0-use.local",
+      "workspace": "plugins/scaffolder",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-scaffolder@0.0.0-use.local",
+      "workspace": "plugins/scaffolder",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-search-react@0.0.0-use.local",
+      "workspace": "plugins/search-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-search-react@0.0.0-use.local",
+      "workspace": "plugins/search-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-search@0.0.0-use.local",
+      "workspace": "plugins/search",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-search@0.0.0-use.local",
+      "workspace": "plugins/search",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-signals-react@0.0.0-use.local",
+      "workspace": "plugins/signals-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-signals-react@0.0.0-use.local",
+      "workspace": "plugins/signals-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-signals@0.0.0-use.local",
+      "workspace": "plugins/signals",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-signals@0.0.0-use.local",
+      "workspace": "plugins/signals",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-addons-test-utils@0.0.0-use.local",
+      "workspace": "plugins/techdocs-addons-test-utils",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-addons-test-utils@0.0.0-use.local",
+      "workspace": "plugins/techdocs-addons-test-utils",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-module-addons-contrib@0.0.0-use.local",
+      "workspace": "plugins/techdocs-module-addons-contrib",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-module-addons-contrib@0.0.0-use.local",
+      "workspace": "plugins/techdocs-module-addons-contrib",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-react@0.0.0-use.local",
+      "workspace": "plugins/techdocs-react",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-techdocs-react@0.0.0-use.local",
+      "workspace": "plugins/techdocs-react",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-techdocs@0.0.0-use.local",
+      "workspace": "plugins/techdocs",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-techdocs@0.0.0-use.local",
+      "workspace": "plugins/techdocs",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/plugin-user-settings@0.0.0-use.local",
+      "workspace": "plugins/user-settings",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/plugin-user-settings@0.0.0-use.local",
+      "workspace": "plugins/user-settings",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/test-utils@0.0.0-use.local",
+      "workspace": "packages/test-utils",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/test-utils@0.0.0-use.local",
+      "workspace": "packages/test-utils",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/theme@0.0.0-use.local",
+      "workspace": "packages/theme",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/theme@0.0.0-use.local",
+      "workspace": "packages/theme",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@backstage/ui@0.0.0-use.local",
+      "workspace": "packages/ui",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/ui@0.0.0-use.local",
+      "workspace": "packages/ui",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^18.0.0"
+    },
+    {
+      "from": "@backstage/version-bridge@0.0.0-use.local",
+      "workspace": "packages/version-bridge",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@backstage/version-bridge@0.0.0-use.local",
+      "workspace": "packages/version-bridge",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "@internal/plugin-todo-list@0.0.0-use.local",
+      "workspace": "plugins/example-todo-list",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "@internal/plugin-todo-list@0.0.0-use.local",
+      "workspace": "plugins/example-todo-list",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "app-example-plugin@0.0.0-use.local",
+      "workspace": "packages/app-example-plugin",
+      "to": "react-dom@18.3.1",
+      "kind": "dev",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "app-example-plugin@0.0.0-use.local",
+      "workspace": "packages/app-example-plugin",
+      "to": "react-dom",
+      "kind": "peer",
+      "req": "^17.0.0 || ^18.0.0"
+    },
+    {
+      "from": "example-app-legacy@0.0.0-use.local",
+      "workspace": "packages/app-legacy",
+      "to": "react-dom@18.3.1",
+      "kind": "prod",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "example-app@0.0.0-use.local",
+      "workspace": "packages/app",
+      "to": "react-dom@18.3.1",
+      "kind": "prod",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "example-app@0.0.0-use.local",
+      "workspace": "packages/app",
+      "to": "react-dom@18.3.1",
+      "kind": "prod",
+      "req": "^18.0.2"
+    },
+    {
+      "from": "techdocs-cli-embedded-app@0.0.0-use.local",
+      "workspace": "packages/techdocs-cli-embedded-app",
+      "to": "react-dom@18.3.1",
+      "kind": "prod",
+      "req": "^18.0.2"
+    }
+  ],
+  "blockers": [
+    {
+      "package": "@graphiql/react@0.29.0",
+      "refuses": {
+        "react": "^16.8.0 || ^17 || ^18",
+        "react-dom": "^16.8.0 || ^17 || ^18"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "0.30.0",
+        "breaking": true
+      },
+      "workspaces": 1,
+      "direct": 1,
+      "example_chain": [
+        "@backstage/plugin-api-docs@0.0.0-use.local",
+        "@graphiql/react@0.29.0"
+      ],
+      "code": [
+        {
+          "import": "@graphiql/react",
+          "files": 1,
+          "sample": [
+            "plugins/api-docs/src/components/GraphQlDefinitionWidget/GraphQlDefinition.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@graphiql/react'"
+        }
+      ]
+    },
+    {
+      "package": "@headlessui/react@1.7.17",
+      "refuses": {
+        "react": "^16 || ^17 || ^18",
+        "react-dom": "^16 || ^17 || ^18"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "2.2.0",
+        "breaking": true
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/plugin-api-docs@0.0.0-use.local",
+        "@graphiql/react@0.29.0",
+        "@headlessui/react@1.7.17"
+      ],
+      "code": [
+        {
+          "import": "@graphiql/react",
+          "files": 1,
+          "sample": [
+            "plugins/api-docs/src/components/GraphQlDefinitionWidget/GraphQlDefinition.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@graphiql/react'"
+        }
+      ]
+    },
+    {
+      "package": "@material-ui/core@4.12.4",
+      "refuses": {
+        "react": "^16.8.0 || ^17.0.0",
+        "react-dom": "^16.8.0 || ^17.0.0"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "4.12.4"
+      },
+      "workspaces": 37,
+      "direct": 37,
+      "example_chain": [
+        "techdocs-cli-embedded-app@0.0.0-use.local",
+        "@material-ui/core@4.12.4"
+      ],
+      "code": [
+        {
+          "import": "@material-ui/core",
+          "files": 528,
+          "sample": [
+            "packages/app-defaults/src/defaults/components.tsx",
+            "packages/app-legacy/src/components/Root/LogoFull.tsx",
+            "packages/app-legacy/src/components/Root/LogoIcon.jsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-ui/core'"
+        }
+      ]
+    },
+    {
+      "package": "@material-ui/icons@4.11.3",
+      "refuses": {
+        "react": "^16.8.0 || ^17.0.0",
+        "react-dom": "^16.8.0 || ^17.0.0"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "4.11.3"
+      },
+      "workspaces": 29,
+      "direct": 29,
+      "example_chain": [
+        "techdocs-cli-embedded-app@0.0.0-use.local",
+        "@material-ui/icons@4.11.3"
+      ],
+      "code": [
+        {
+          "import": "@material-ui/icons",
+          "files": 187,
+          "sample": [
+            "packages/app-defaults/src/defaults/icons.tsx",
+            "packages/app-defaults/src/defaults/themes.tsx",
+            "packages/app-example-plugin/src/ExampleSidebarItem.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-ui/icons'"
+        }
+      ]
+    },
+    {
+      "package": "@material-ui/lab@4.0.0-alpha.61",
+      "refuses": {
+        "react": "^16.8.0 || ^17.0.0",
+        "react-dom": "^16.8.0 || ^17.0.0"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": null
+      },
+      "workspaces": 22,
+      "direct": 22,
+      "example_chain": [
+        "example-app@0.0.0-use.local",
+        "@material-ui/lab@4.0.0-alpha.61"
+      ],
+      "code": [
+        {
+          "import": "@material-ui/lab",
+          "files": 47,
+          "sample": [
+            "packages/core-components/src/components/AlertDisplay/AlertDisplay.tsx",
+            "plugins/api-docs/src/components/ApiDefinitionCard/ApiDefinitionCard.tsx",
+            "plugins/catalog-graph/src/components/CatalogGraphPage/CatalogGraphPage.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-ui/lab'"
+        }
+      ]
+    },
+    {
+      "package": "@material-ui/pickers@3.3.11",
+      "refuses": {
+        "react": "^16.8.0 || ^17.0.0",
+        "react-dom": "^16.8.0 || ^17.0.0"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "3.3.11"
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/core-components@0.0.0-use.local",
+        "@material-table/core@3.2.5",
+        "@material-ui/pickers@3.3.11"
+      ],
+      "code": [
+        {
+          "import": "@material-table/core",
+          "files": 1,
+          "sample": [
+            "packages/core-components/src/components/Table/Table.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-table/core'"
+        }
+      ]
+    },
+    {
+      "package": "@material-ui/styles@4.11.5",
+      "refuses": {
+        "react": "^16.8.0 || ^17.0.0",
+        "react-dom": "^16.8.0 || ^17.0.0"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "4.11.5"
+      },
+      "workspaces": 37,
+      "direct": 2,
+      "example_chain": [
+        "techdocs-cli-embedded-app@0.0.0-use.local",
+        "@material-ui/core@4.12.4",
+        "@material-ui/styles@4.11.5"
+      ],
+      "code": [
+        {
+          "import": "@material-table/core",
+          "files": 1,
+          "sample": [
+            "packages/core-components/src/components/Table/Table.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-table/core'"
+        },
+        {
+          "import": "@material-ui/core",
+          "files": 390,
+          "sample": [
+            "packages/app-defaults/src/defaults/components.tsx",
+            "packages/app-legacy/src/components/Root/LogoFull.tsx",
+            "packages/app-legacy/src/components/Root/LogoIcon.jsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-ui/core'"
+        },
+        {
+          "import": "@material-ui/styles",
+          "files": 2,
+          "sample": [
+            "plugins/techdocs-react/src/component.tsx",
+            "plugins/techdocs/src/home/components/TechDocsCustomHome.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-ui/styles'"
+        }
+      ]
+    },
+    {
+      "package": "@material-ui/system@4.12.2",
+      "refuses": {
+        "react": "^16.8.0 || ^17.0.0",
+        "react-dom": "^16.8.0 || ^17.0.0"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "4.12.2"
+      },
+      "workspaces": 37,
+      "direct": 0,
+      "example_chain": [
+        "techdocs-cli-embedded-app@0.0.0-use.local",
+        "@material-ui/core@4.12.4",
+        "@material-ui/system@4.12.2"
+      ],
+      "code": [
+        {
+          "import": "@material-ui/core",
+          "files": 528,
+          "sample": [
+            "packages/app-defaults/src/defaults/components.tsx",
+            "packages/app-legacy/src/components/Root/LogoFull.tsx",
+            "packages/app-legacy/src/components/Root/LogoIcon.jsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-ui/core'"
+        }
+      ]
+    },
+    {
+      "package": "@material-ui/utils@4.11.3",
+      "refuses": {
+        "react": "^16.8.0 || ^17.0.0",
+        "react-dom": "^16.8.0 || ^17.0.0"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "4.11.3"
+      },
+      "workspaces": 37,
+      "direct": 0,
+      "example_chain": [
+        "techdocs-cli-embedded-app@0.0.0-use.local",
+        "@material-ui/core@4.12.4",
+        "@material-ui/utils@4.11.3"
+      ],
+      "code": [
+        {
+          "import": "@material-ui/core",
+          "files": 528,
+          "sample": [
+            "packages/app-defaults/src/defaults/components.tsx",
+            "packages/app-legacy/src/components/Root/LogoFull.tsx",
+            "packages/app-legacy/src/components/Root/LogoIcon.jsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-ui/core'"
+        }
+      ]
+    },
+    {
+      "package": "@react-hookz/web@24.0.4",
+      "refuses": {
+        "react": "^16.8 || ^17 || ^18",
+        "react-dom": "^16.8 || ^17 || ^18"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "25.1.0",
+        "breaking": true
+      },
+      "workspaces": 8,
+      "direct": 8,
+      "example_chain": [
+        "@backstage/plugin-techdocs-module-addons-contrib@0.0.0-use.local",
+        "@react-hookz/web@24.0.4"
+      ],
+      "code": [
+        {
+          "import": "@react-hookz/web",
+          "files": 20,
+          "sample": [
+            "packages/core-components/src/components/LogViewer/useLogViewerSearch.tsx",
+            "packages/core-components/src/hooks/useQueryParamState.ts",
+            "packages/core-components/src/layout/ProxiedSignInPage/ProxiedSignInPage.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@react-hookz/web'"
+        }
+      ]
+    },
+    {
+      "package": "@testing-library/react-hooks@8.0.1",
+      "refuses": {
+        "react": "^16.9.0 || ^17.0.0",
+        "react-dom": "^16.9.0 || ^17.0.0"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "8.0.1"
+      },
+      "workspaces": 1,
+      "direct": 1,
+      "example_chain": [
+        "@backstage/core-app-api@0.0.0-use.local",
+        "@testing-library/react-hooks@8.0.1"
+      ],
+      "code": [
+        {
+          "import": "@testing-library/react-hooks",
+          "files": 0,
+          "sample": [],
+          "grep_pattern": "import $$$ from '@testing-library/react-hooks'"
+        }
+      ]
+    },
+    {
+      "package": "flux@4.0.4",
+      "refuses": {
+        "react": "^15.0.2 || ^16.0.0 || ^17.0.0"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "4.0.4"
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/plugin-devtools@0.0.0-use.local",
+        "react-json-view@1.21.3",
+        "flux@4.0.4"
+      ],
+      "code": [
+        {
+          "import": "react-json-view",
+          "files": 1,
+          "sample": [
+            "plugins/devtools/src/components/Content/ConfigContent/ConfigContent.tsx"
+          ],
+          "grep_pattern": "import $$$ from 'react-json-view'"
+        }
+      ]
+    },
+    {
+      "package": "graphiql@3.9.0",
+      "refuses": {
+        "react": "^16.8.0 || ^17 || ^18",
+        "react-dom": "^16.8.0 || ^17 || ^18"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "4.0.0",
+        "breaking": true
+      },
+      "workspaces": 1,
+      "direct": 1,
+      "example_chain": [
+        "@backstage/plugin-api-docs@0.0.0-use.local",
+        "graphiql@3.9.0"
+      ],
+      "code": [
+        {
+          "import": "graphiql",
+          "files": 1,
+          "sample": [
+            "plugins/api-docs/src/components/GraphQlDefinitionWidget/GraphQlDefinition.tsx"
+          ],
+          "grep_pattern": "import $$$ from 'graphiql'"
+        }
+      ]
+    },
+    {
+      "package": "grpc-docs@1.1.4",
+      "refuses": {
+        "react": "^16.0.0",
+        "react-dom": "^16.13.1"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "1.1.4"
+      },
+      "workspaces": 1,
+      "direct": 1,
+      "example_chain": [
+        "@backstage/plugin-api-docs-module-protoc-gen-doc@0.0.0-use.local",
+        "grpc-docs@1.1.4"
+      ],
+      "code": [
+        {
+          "import": "grpc-docs",
+          "files": 1,
+          "sample": [
+            "plugins/api-docs-module-protoc-gen-doc/src/widgets.tsx"
+          ],
+          "grep_pattern": "import $$$ from 'grpc-docs'"
+        }
+      ]
+    },
+    {
+      "package": "react-beautiful-dnd@13.0.0",
+      "refuses": {
+        "react": "^16.8.5",
+        "react-dom": "^16.8.5"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "13.1.1"
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/core-components@0.0.0-use.local",
+        "@material-table/core@3.2.5",
+        "react-beautiful-dnd@13.0.0"
+      ],
+      "code": [
+        {
+          "import": "@material-table/core",
+          "files": 1,
+          "sample": [
+            "packages/core-components/src/components/Table/Table.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-table/core'"
+        }
+      ]
+    },
+    {
+      "package": "react-debounce-input@3.3.0",
+      "refuses": {
+        "react": "^15.3.0 || 16 || 17 || 18"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "3.3.0"
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/plugin-api-docs@0.0.0-use.local",
+        "swagger-ui-react@5.33.1",
+        "react-debounce-input@3.3.0"
+      ],
+      "code": [
+        {
+          "import": "swagger-ui-react",
+          "files": 1,
+          "sample": [
+            "plugins/api-docs/src/components/OpenApiDefinitionWidget/OpenApiDefinition.tsx"
+          ],
+          "grep_pattern": "import $$$ from 'swagger-ui-react'"
+        }
+      ]
+    },
+    {
+      "package": "react-inspector@6.0.1",
+      "refuses": {
+        "react": "^16.8.4 || ^17.0.0 || ^18.0.0"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "8.0.0",
+        "breaking": true
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/plugin-api-docs@0.0.0-use.local",
+        "swagger-ui-react@5.33.1",
+        "react-inspector@6.0.1"
+      ],
+      "code": [
+        {
+          "import": "swagger-ui-react",
+          "files": 1,
+          "sample": [
+            "plugins/api-docs/src/components/OpenApiDefinitionWidget/OpenApiDefinition.tsx"
+          ],
+          "grep_pattern": "import $$$ from 'swagger-ui-react'"
+        }
+      ]
+    },
+    {
+      "package": "react-json-view@1.21.3",
+      "refuses": {
+        "react": "^17.0.0 || ^16.3.0 || ^15.5.4",
+        "react-dom": "^17.0.0 || ^16.3.0 || ^15.5.4"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "1.21.3"
+      },
+      "workspaces": 1,
+      "direct": 1,
+      "example_chain": [
+        "@backstage/plugin-devtools@0.0.0-use.local",
+        "react-json-view@1.21.3"
+      ],
+      "code": [
+        {
+          "import": "react-json-view",
+          "files": 1,
+          "sample": [
+            "plugins/devtools/src/components/Content/ConfigContent/ConfigContent.tsx"
+          ],
+          "grep_pattern": "import $$$ from 'react-json-view'"
+        }
+      ]
+    },
+    {
+      "package": "react-redux@7.2.5",
+      "refuses": {
+        "react": "^16.8.3 || ^17"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "9.2.0",
+        "breaking": true
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/core-components@0.0.0-use.local",
+        "@material-table/core@3.2.5",
+        "react-beautiful-dnd@13.0.0",
+        "react-redux@7.2.5"
+      ],
+      "code": [
+        {
+          "import": "@material-table/core",
+          "files": 1,
+          "sample": [
+            "packages/core-components/src/components/Table/Table.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-table/core'"
+        }
+      ]
+    },
+    {
+      "package": "react-side-effect@2.1.0",
+      "refuses": {
+        "react": "^16.3.0"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "2.1.2"
+      },
+      "workspaces": 3,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/plugin-techdocs@0.0.0-use.local",
+        "react-helmet@6.1.0",
+        "react-side-effect@2.1.0"
+      ],
+      "code": [
+        {
+          "import": "react-helmet",
+          "files": 7,
+          "sample": [
+            "packages/core-components/src/components/TabbedLayout/RoutedTabs.tsx",
+            "packages/core-components/src/layout/ContentHeader/ContentHeader.tsx",
+            "packages/core-components/src/layout/Header/Header.tsx"
+          ],
+          "grep_pattern": "import $$$ from 'react-helmet'"
+        }
+      ]
+    },
+    {
+      "package": "react-textarea-autosize@8.4.1",
+      "refuses": {
+        "react": "^16.8.0 || ^17.0.0 || ^18.0.0"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "8.5.6",
+        "breaking": false
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/plugin-devtools@0.0.0-use.local",
+        "react-json-view@1.21.3",
+        "react-textarea-autosize@8.4.1"
+      ],
+      "code": [
+        {
+          "import": "react-json-view",
+          "files": 1,
+          "sample": [
+            "plugins/devtools/src/components/Content/ConfigContent/ConfigContent.tsx"
+          ],
+          "grep_pattern": "import $$$ from 'react-json-view'"
+        }
+      ]
+    },
+    {
+      "package": "use-composed-ref@1.3.0",
+      "refuses": {
+        "react": "^16.8.0 || ^17.0.0 || ^18.0.0"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "1.4.0",
+        "breaking": false
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/plugin-devtools@0.0.0-use.local",
+        "react-json-view@1.21.3",
+        "react-textarea-autosize@8.4.1",
+        "use-composed-ref@1.3.0"
+      ],
+      "code": [
+        {
+          "import": "react-json-view",
+          "files": 1,
+          "sample": [
+            "plugins/devtools/src/components/Content/ConfigContent/ConfigContent.tsx"
+          ],
+          "grep_pattern": "import $$$ from 'react-json-view'"
+        }
+      ]
+    },
+    {
+      "package": "use-isomorphic-layout-effect@1.1.2",
+      "refuses": {
+        "react": "^16.8.0 || ^17.0.0 || ^18.0.0"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "1.2.0",
+        "breaking": false
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/plugin-devtools@0.0.0-use.local",
+        "react-json-view@1.21.3",
+        "react-textarea-autosize@8.4.1",
+        "use-latest@1.2.1",
+        "use-isomorphic-layout-effect@1.1.2"
+      ],
+      "code": [
+        {
+          "import": "react-json-view",
+          "files": 1,
+          "sample": [
+            "plugins/devtools/src/components/Content/ConfigContent/ConfigContent.tsx"
+          ],
+          "grep_pattern": "import $$$ from 'react-json-view'"
+        }
+      ]
+    },
+    {
+      "package": "use-latest@1.2.1",
+      "refuses": {
+        "react": "^16.8.0 || ^17.0.0 || ^18.0.0"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "1.3.0",
+        "breaking": false
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/plugin-devtools@0.0.0-use.local",
+        "react-json-view@1.21.3",
+        "react-textarea-autosize@8.4.1",
+        "use-latest@1.2.1"
+      ],
+      "code": [
+        {
+          "import": "react-json-view",
+          "files": 1,
+          "sample": [
+            "plugins/devtools/src/components/Content/ConfigContent/ConfigContent.tsx"
+          ],
+          "grep_pattern": "import $$$ from 'react-json-view'"
+        }
+      ]
+    },
+    {
+      "package": "use-memo-one@1.1.1",
+      "refuses": {
+        "react": "^16.8.0"
+      },
+      "fix": {
+        "verdict": "stuck",
+        "latest": "1.1.3"
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/core-components@0.0.0-use.local",
+        "@material-table/core@3.2.5",
+        "react-beautiful-dnd@13.0.0",
+        "use-memo-one@1.1.1"
+      ],
+      "code": [
+        {
+          "import": "@material-table/core",
+          "files": 1,
+          "sample": [
+            "packages/core-components/src/components/Table/Table.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@material-table/core'"
+        }
+      ]
+    },
+    {
+      "package": "use-resize-observer@9.1.0",
+      "refuses": {
+        "react": "16.8.0 - 18",
+        "react-dom": "16.8.0 - 18"
+      },
+      "fix": {
+        "verdict": "fixable",
+        "version": "10.0.0",
+        "breaking": true
+      },
+      "workspaces": 1,
+      "direct": 0,
+      "example_chain": [
+        "@backstage/plugin-api-docs@0.0.0-use.local",
+        "@asyncapi/react-component@2.6.5",
+        "use-resize-observer@9.1.0"
+      ],
+      "code": [
+        {
+          "import": "@asyncapi/react-component",
+          "files": 1,
+          "sample": [
+            "plugins/api-docs/src/components/AsyncApiDefinitionWidget/AsyncApiDefinition.tsx"
+          ],
+          "grep_pattern": "import $$$ from '@asyncapi/react-component'"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+[
+  {
+    "from": "@backstage/core-components@0.0.0-use.local",
+    "workspace": "packages/core-components",
+    "chain": [
+      "@backstage/core-components@0.0.0-use.local",
+      "@material-table/core@3.2.5",
+      "react-beautiful-dnd@13.0.0"
+    ]
+  }
+]
