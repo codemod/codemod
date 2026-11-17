@@ -185,7 +185,18 @@ Dev, no PRs. Still local only: the draft "untracked read" rule at
 - **State:** pushed by the Solid channel; see its `HANDOFF.md`.
 
 ### React Compiler as WASM in the sandbox (spike)
-- **State:** pending. Its branch and doc will be added here when they're reported.
+- **Where:** `devagrawal09/react-to-solid-codemod` `handoff/react-compiler-wasm` @ `7ff7fe4`, and cm
+  `handoff/wasm-loader` @ `3d326a9` (a generic `.wasm` loader on `engine/code-first`). No PRs.
+- **State:** oxc's React Compiler, built to WASM, runs inside the codemod's sandbox through the loader,
+  so React stays out of Codemod core. Checks pass on Mo's base; a clean WASM rebuild matches the native
+  compiler output on all 810 test files. Needs a carried oxc "facts" patch (656 diff lines).
+- **Decision for Dev:** propose the loader to Mo as a capability for codemod packages, with the numbers
+  (recommended); add a memory cap and cancellation before it ships (recommended); upstream the oxc
+  patch or carry it; re-baseline on oxc's compiler instead of Babel 1.0.0 (recommended); then move
+  `extract`'s AST side off Babel; wasmtime vs a smaller interpreter (recommended: wasmtime unless binary
+  size, +13.8 MB, is a hard limit).
+- **Docs:** [react-compiler-wasm HANDOFF.md](https://github.com/devagrawal09/react-to-solid-codemod/blob/handoff/react-compiler-wasm/HANDOFF.md),
+  [wasm-loader HANDOFF.md](https://github.com/codemod/codemod/blob/handoff/wasm-loader/HANDOFF.md)
 
 ## 6. Agent programming model (structured reasoning)
 
