@@ -327,7 +327,7 @@ const ready = await step("Releases accepting React 19", async () => {
 });
 ```
 
-`semver` has `satisfies(version, range)` (`null` for ranges it cannot read, such as `workspace:`), `compare`, `gt`, `lt`, `isBreaking(from, to)` and `isPrerelease`. Pass `{ ecosystem: "cargo" }` for Cargo's rules, or `{ ecosystem: "pypi" }` for PEP 440, which also reads Poetry's `^1.2`, `~1.2` and `||`.
+`semver` has `satisfies(version, range)` (`null` for ranges it cannot read, such as `workspace:`), `compare`, `gt`, `lt`, `isBreaking(from, to)` and `isPrerelease`. Pass `{ ecosystem: "cargo" }` for Cargo's rules, `{ ecosystem: "pypi" }` for PEP 440, which also reads Poetry's `^1.2`, `~1.2` and `||`, or `{ ecosystem: "maven" }` for Maven's version order (`1.0-alpha` < `1.0-rc1` < `1.0-SNAPSHOT` < `1.0` < `1.0-sp1`) and ranges (`[1.0,2.0)`, `(,1.0],[1.2,)`, `[1.5]`); a bare `1.0` accepts 1.0 or higher, as Gradle reads it, and `1.+` accepts versions starting with `1.`.
 
 ### Shell commands
 
