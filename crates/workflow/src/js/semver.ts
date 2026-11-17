@@ -1,7 +1,7 @@
 // `semver` for `codemod/workflow`, shared by the workflow body and isolates.
 // `call(op, ecosystem, a, b)` is the host's version logic (crates/deps).
 
-export type Ecosystem = "npm" | "cargo" | "pypi";
+export type Ecosystem = "npm" | "cargo" | "pypi" | "rubygems";
 export interface SemverOptions {
   ecosystem?: Ecosystem;
 }

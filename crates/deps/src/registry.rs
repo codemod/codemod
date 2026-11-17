@@ -180,6 +180,9 @@ async fn fetch_all(
     names: &[String],
     requests: &tokio::sync::Semaphore,
 ) -> Result<Vec<(String, Vec<Release>)>, String> {
+    if ecosystem == Ecosystem::Rubygems {
+        return Err("RubyGems release lookups are not supported yet".into());
+    }
     let client = reqwest::Client::builder()
         .user_agent("codemod-workflow")
         .timeout(std::time::Duration::from_secs(30))
@@ -201,6 +204,7 @@ async fn fetch_all(
                     format!("https://pypi.org/pypi/{name}/json"),
                     "application/json",
                 ),
+                Ecosystem::Rubygems => unreachable!("rejected above"),
             };
             let _permit = requests.acquire().await.map_err(|e| e.to_string())?;
             let response = client
@@ -224,6 +228,7 @@ async fn fetch_all(
                 Ecosystem::Npm => npm_releases(&text),
                 Ecosystem::Cargo => crate_releases(&text),
                 Ecosystem::Pypi => pypi_releases(&text),
+                Ecosystem::Rubygems => unreachable!("rejected above"),
             }
             .map_err(|e| format!("{url}: {e}"))?;
             Ok((name.clone(), releases))

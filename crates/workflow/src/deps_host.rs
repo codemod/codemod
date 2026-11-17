@@ -17,7 +17,7 @@ pub const DEPENDENCIES_MODULE: &str = "codemod-internal:dependencies";
 
 pub(crate) fn ecosystem(name: &str) -> Result<Ecosystem, String> {
     Ecosystem::parse(name)
-        .ok_or_else(|| format!("unknown ecosystem '{name}'; use npm, cargo or pypi"))
+        .ok_or_else(|| format!("unknown ecosystem '{name}'; use npm, cargo, pypi or rubygems"))
 }
 
 /// Each named package's releases, as the JSON `registry.npm(name)` resolves to.
