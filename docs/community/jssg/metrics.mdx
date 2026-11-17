@@ -42,7 +42,7 @@ import { step, jssg } from "codemod/workflow";
 export default async function main() {
   const scan = await step("Scan", jssg("scripts/codemod.ts"));
   // [{ file: "src/a.tsx", data: { buttons: 2 } }, { file: "src/b.tsx", data: { buttons: 1 } }]
-  const total = scan.data.reduce((sum, { data }) => sum + data.buttons, 0);
+  const total = scan.data.reduce((sum, { data }) => sum + (data as { buttons: number }).buttons, 0);
   return { total };
 }
 ```
@@ -55,19 +55,19 @@ On a large repository the list can get big. Pass `reduce` and `initial` to fold 
 const scan = await step(
   "Scan",
   jssg("scripts/codemod.ts", {
-    reduce: (total, { file, data }) => total + data.buttons,
+    reduce: (total, { data }) => total + (data as { buttons: number }).buttons,
     initial: 0,
   }),
 );
 scan.data; // 3
 ```
 
-- The reducer gets `{ file, data }` for each file that returned data, in no particular order.
+- The reducer gets `{ file, data }` for each file that returned data, in no particular order, so its result shouldn't depend on the order.
 - It can read the workflow's variables, the way `forEachFile` callbacks do, as long as their values are JSON.
 - Write it inline in the `jssg(...)` call, as an arrow or `function` expression, so the build can extract it.
 - Its result must be JSON. If it throws, the step fails.
 
-A reducer only saves memory. `reduce: (all, entry) => [...all, entry], initial: []` gives the same list as no reducer, just not sorted by path.
+A reducer only saves memory, and only on the CLI: the Node test host folds after the transform ends, so it holds every file's data. `reduce: (all, entry) => [...all, entry], initial: []` gives the same list as no reducer, just not sorted by path.
 
 ## Testing
 

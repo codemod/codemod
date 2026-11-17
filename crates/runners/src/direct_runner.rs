@@ -237,8 +237,23 @@ fn collect(
     let mut lines: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     let mut kept = 0;
     let mut cut = false;
-    for line in BufReader::new(stream).lines() {
-        let Ok(line) = line else { break };
+    let mut reader = BufReader::new(stream);
+    let mut bytes = Vec::new();
+    loop {
+        bytes.clear();
+        match reader.read_until(b'\n', &mut bytes) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        if bytes.ends_with(b"\n") {
+            bytes.pop();
+            if bytes.ends_with(b"\r") {
+                bytes.pop();
+            }
+        }
+        // stdout is the step's result, so a byte that is not UTF-8 must not
+        // end it: such bytes become U+FFFD.
+        let line = String::from_utf8_lossy(&bytes).into_owned();
         if let Some(callback) = &callback {
             callback(format!("[{tag}] {line}"));
         }
@@ -358,7 +373,7 @@ impl Runner for DirectRunner {
         output_callback: Option<OutputCallback>,
     ) -> Result<CommandOutput> {
         // Check if the command starts with a shebang line
-        if command.starts_with("#!/") {
+        if command.starts_with("#!") {
             // Create a temporary file for the script
             let temp_dir = std::env::temp_dir();
             let file_name = format!("butterflow-script-{}.sh", uuid::Uuid::new_v4());

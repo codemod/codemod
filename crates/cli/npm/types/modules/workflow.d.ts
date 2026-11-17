@@ -611,7 +611,8 @@ declare module "codemod:workflow" {
    *
    * @example
    * await step("Install", shell("npm install"));
-   * const { stdout } = await step("Detect", shell(`echo '{"major":19}'`));
+   * // A dry run skips the command, so `stdout` may be undefined.
+   * const { stdout = "{}" } = await step("Detect", shell(`echo '{"major":19}'`));
    * JSON.parse(stdout); // { major: 19 }
    */
   export function shell(command: string, options?: ShellOptions): ShellTask;
@@ -684,8 +685,10 @@ declare module "codemod:workflow" {
 
   /**
    * Folds each file's `data` into one value as the file finishes, so the
-   * step never holds every file's data at once. Files arrive in no
-   * particular order. Write `reduce` inline so the build can extract it.
+   * step never holds every file's data at once (the Node test host folds
+   * after the transform, holding it all). Files arrive in no particular
+   * order, so a result that depends on the order differs between runs.
+   * Write `reduce` inline so the build can extract it.
    */
   export interface JssgReducer<T> {
     reduce: (result: T, entry: JssgData) => T | Promise<T>;

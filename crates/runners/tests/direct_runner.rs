@@ -129,3 +129,17 @@ async fn keeps_non_ascii_text_on_windows() {
     std::fs::remove_file(&path).ok();
     assert_eq!(lines(&output.unwrap().stdout), ["found"]);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_line_that_is_not_utf8_keeps_the_rest_of_the_output() {
+    let output = run(r#"printf 'a\n\377\n{"ok":1}\n'"#).await.unwrap();
+    assert_eq!(output.stdout, "a\n\u{FFFD}\n{\"ok\":1}\n");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_script_whose_interpreter_follows_a_space_runs_with_that_interpreter() {
+    let output = run("#! /bin/cat\nnot a shell command\n").await.unwrap();
+    assert_eq!(output.stdout, "#! /bin/cat\nnot a shell command\n");
+}
