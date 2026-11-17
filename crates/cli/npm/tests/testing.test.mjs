@@ -191,6 +191,40 @@ export default async function main() {
   },
 );
 
+test("node: a jssg reducer that runs out of time folds no more files", HOSTS.node, async () => {
+  const path = join(
+    scratch({
+      "transform.ts": `
+export default function transform(root: any) {
+  return { data: 1 };
+}
+`,
+      "workflow.ts": `
+import { step, jssg, sleep } from "codemod/workflow";
+const seen = [];
+export default async function main() {
+  try {
+    await step("Slow", jssg("./transform.ts", {
+      reduce: async (total, { file }) => {
+        seen.push(file);
+        await new Promise((done) => setTimeout(done, 300));
+        return total + 1;
+      },
+      initial: 0,
+    }), { timeout: 100 });
+  } catch {}
+  await sleep("500ms");
+  return seen;
+}
+`,
+    }),
+    "workflow.ts",
+  );
+  const result = await run(path, { target: { "a.ts": "a\n", "b.ts": "b\n" }, host: "node" });
+  assert.equal(result.status, "succeeded", result.error);
+  assert.deepEqual(result.output, ["a.ts"]);
+});
+
 test("node: a retried jssg reducer starts from its initial value again", HOSTS.node, async () => {
   const path = join(
     scratch({

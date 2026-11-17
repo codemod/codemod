@@ -395,7 +395,7 @@ function host(run: NativeRun, flight: Flight, runtime: () => Runtime): Host {
       flight.begin();
       try {
         if (fn && task.task.kind === "jssg") {
-          return await within(task.timeoutMs, () => reduceInPlace(run, task, fn));
+          return await within(task.timeoutMs, (limit) => reduceInPlace(run, task, fn, limit));
         }
         if (fn) return await within(task.timeoutMs, (limit) => runInPlace(run, task, fn, limit));
         return await runNative(run, task);
@@ -419,7 +419,12 @@ async function runNative(run: NativeRun, task: InPlaceTask): Promise<Outcome> {
  * every file's data, which is then folded here. Unlike the CLI, which folds
  * each file's data as it arrives, this holds all of it until the step ends.
  */
-async function reduceInPlace(run: NativeRun, task: InPlaceTask, fn: Callback): Promise<Outcome> {
+async function reduceInPlace(
+  run: NativeRun,
+  task: InPlaceTask,
+  fn: Callback,
+  limit: Limit,
+): Promise<Outcome> {
   const { reduce, ...content } = task.task;
   const outcome = await runNative(run, { ...task, task: content });
   const result = outcome.result as { data: { file: string; data: Json }[] };
@@ -429,6 +434,8 @@ async function reduceInPlace(run: NativeRun, task: InPlaceTask, fn: Callback): P
   // A copy, so a reducer that changes its accumulator can't change a retry's.
   let folded = structuredClone((reduce as { initial: Json }).initial);
   for (const entry of result.data) {
+    // Out of time: the step has already failed.
+    if (limit.expired) throw new CanceledError("the step ran out of time");
     folded = (await context.run({ ...outer, step }, () => fn(folded, entry))) as Json;
   }
   // A failure reported with failStep() stands even if the reducer caught it.
