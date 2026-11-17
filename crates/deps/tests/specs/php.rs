@@ -236,3 +236,26 @@ fn a_composer_patch_release_is_not_a_prerelease() {
         [true, false]
     );
 }
+
+#[test]
+fn a_minified_packagist_release_inherits_the_fields_before_it_unless_unset() {
+    use codemod_deps::registry::packagist_releases;
+    let document = r#"{ "minified": "composer/2.0", "packages": { "psr/log": [
+        { "version": "3.0.0", "require": { "php": ">=8.0.0", "psr/clock": "^1.0" } },
+        { "version": "2.0.0" },
+        { "version": "1.0.0", "require": "__unset" }
+    ] } }"#;
+    let releases: Vec<_> = packagist_releases(document)
+        .unwrap()
+        .into_iter()
+        .map(|release| (release.version, release.dependencies.len()))
+        .collect();
+    assert_eq!(
+        releases,
+        [
+            ("3.0.0".to_string(), 1),
+            ("2.0.0".to_string(), 1),
+            ("1.0.0".to_string(), 0)
+        ]
+    );
+}

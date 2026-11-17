@@ -34,8 +34,8 @@ pub trait Registry: Send + Sync {
     ) -> Result<BTreeMap<String, Vec<Release>>, String>;
 }
 
-/// npm (abbreviated packuments), crates.io (sparse index) and PyPI (JSON
-/// API) over HTTPS,
+/// npm (abbreviated packuments), crates.io (sparse index), PyPI (JSON
+/// API) and Packagist (metadata v2) over HTTPS,
 /// kept for the life of the value. Concurrent asks for the same package
 /// share one request, and at most [`CONCURRENT_REQUESTS`] run at once across
 /// every ask, however many steps and workers ask together.
@@ -180,9 +180,6 @@ async fn fetch_all(
     names: &[String],
     requests: &tokio::sync::Semaphore,
 ) -> Result<Vec<(String, Vec<Release>)>, String> {
-    if ecosystem == Ecosystem::Packagist {
-        return Err("Packagist release lookups are not supported yet".into());
-    }
     let client = reqwest::Client::builder()
         .user_agent("codemod-workflow")
         .timeout(std::time::Duration::from_secs(30))
@@ -204,7 +201,10 @@ async fn fetch_all(
                     format!("https://pypi.org/pypi/{name}/json"),
                     "application/json",
                 ),
-                Ecosystem::Packagist => unreachable!("rejected above"),
+                Ecosystem::Packagist => (
+                    format!("https://repo.packagist.org/p2/{}.json", name.to_lowercase()),
+                    "application/json",
+                ),
             };
             let _permit = requests.acquire().await.map_err(|e| e.to_string())?;
             let response = client
@@ -228,7 +228,7 @@ async fn fetch_all(
                 Ecosystem::Npm => npm_releases(&text),
                 Ecosystem::Cargo => crate_releases(&text),
                 Ecosystem::Pypi => pypi_releases(&text),
-                Ecosystem::Packagist => unreachable!("rejected above"),
+                Ecosystem::Packagist => packagist_releases(&text),
             }
             .map_err(|e| format!("{url}: {e}"))?;
             Ok((name.clone(), releases))
@@ -339,4 +339,53 @@ pub fn pypi_releases(document: &str) -> Result<Vec<Release>, String> {
             })
         })
         .collect())
+}
+
+/// Releases from Packagist's metadata v2 (`/p2/vendor/name.json`). In its
+/// minified form each release lists only the fields that changed since the
+/// one before, and `"__unset"` removes a field. Each release's `require`
+/// gives its dependencies, without platform requirements (`php`, `ext-*`).
+/// Packagist yanks nothing.
+pub fn packagist_releases(document: &str) -> Result<Vec<Release>, String> {
+    let doc: serde_json::Value =
+        serde_json::from_str(document).map_err(|e| format!("not a package document: {e}"))?;
+    let packages = doc
+        .get("packages")
+        .and_then(|p| p.as_object())
+        .ok_or("not a package document")?;
+    let minified = doc.get("minified").is_some();
+    let mut releases = Vec::new();
+    for versions in packages.values() {
+        let mut current = serde_json::Map::new();
+        for entry in versions.as_array().into_iter().flatten() {
+            let entry = entry.as_object().cloned().unwrap_or_default();
+            if !minified {
+                current = entry;
+            } else {
+                for (field, value) in entry {
+                    if value == "__unset" {
+                        current.remove(&field);
+                    } else {
+                        current.insert(field, value);
+                    }
+                }
+            }
+            releases.push(Release {
+                version: current["version"].as_str().unwrap_or_default().to_string(),
+                yanked: false,
+                dependencies: current
+                    .get("require")
+                    .and_then(|r| r.as_object())
+                    .into_iter()
+                    .flatten()
+                    .filter(|(name, _)| name.contains('/'))
+                    .map(|(name, range)| {
+                        let range = range.as_str().unwrap_or("*").to_string();
+                        (name.to_lowercase(), range, Kind::Prod)
+                    })
+                    .collect(),
+            });
+        }
+    }
+    Ok(releases)
 }
