@@ -1,6 +1,7 @@
 //! Version ranges per ecosystem: npm ranges follow node-semver, Cargo
 //! requirements follow Cargo's rules (`"1.2"` means `^1.2`), and Python
-//! versions follow PEP 440, with Poetry's `^`, `~` and `||` read too.
+//! versions follow PEP 440, with Poetry's `^`, `~` and `||` read too, and
+//! Ruby gems follow RubyGems' `Gem::Version` and `Gem::Requirement`.
 
 use std::cmp::Ordering;
 
@@ -33,7 +34,7 @@ pub fn satisfies(ecosystem: Ecosystem, range: &str, version: &str) -> Option<boo
             Some(range.matches(&semver::Version::parse(version).ok()?))
         }
         Ecosystem::Pypi => pypi::satisfies(range, version),
-        Ecosystem::Rubygems => None,
+        Ecosystem::Rubygems => rubygems::satisfies(range, version),
     }
 }
 
@@ -42,7 +43,7 @@ pub fn is_prerelease(ecosystem: Ecosystem, version: &str) -> bool {
         Ecosystem::Npm => node_semver::Version::parse(version).map_or(true, |v| v.is_prerelease()),
         Ecosystem::Cargo => semver::Version::parse(version).map_or(true, |v| !v.pre.is_empty()),
         Ecosystem::Pypi => pypi::version(version).is_none_or(|v| v.any_prerelease()),
-        Ecosystem::Rubygems => false,
+        Ecosystem::Rubygems => rubygems::Version::parse(version).is_none_or(|v| v.prerelease()),
     }
 }
 
@@ -61,7 +62,7 @@ pub fn compare(ecosystem: Ecosystem, a: &str, b: &str) -> Ordering {
         Ecosystem::Npm => by(a, b, |v| node_semver::Version::parse(v).ok()),
         Ecosystem::Cargo => by(a, b, |v| semver::Version::parse(v).ok()),
         Ecosystem::Pypi => by(a, b, pypi::version),
-        Ecosystem::Rubygems => a.cmp(b),
+        Ecosystem::Rubygems => by(a, b, rubygems::Version::parse),
     }
 }
 
@@ -182,5 +183,163 @@ mod pypi {
             format!(">={lower}"),
             format!("<{epoch}{}", upper.join(".")),
         ])
+    }
+}
+
+mod rubygems {
+    use std::cmp::Ordering;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Segment {
+        Number(u64),
+        Letters(String),
+    }
+
+    /// A `Gem::Version`: runs of digits and of letters, where any letters
+    /// make a prerelease that sorts before its release (`1.0.a < 1.0`).
+    pub(super) struct Version {
+        segments: Vec<Segment>,
+    }
+
+    impl Version {
+        pub(super) fn parse(text: &str) -> Option<Self> {
+            let text = text.trim();
+            let text = if text.is_empty() { "0" } else { text };
+            if !text.starts_with(|c: char| c.is_ascii_digit())
+                || !text
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+            {
+                return None;
+            }
+            let mut segments = Vec::new();
+            let mut run = String::new();
+            // RubyGems reads `1.0-rc1` as `1.0.pre.rc1`.
+            for c in text.replace('-', ".pre.").chars().chain(['.']) {
+                let same = run
+                    .chars()
+                    .last()
+                    .is_some_and(|last| last.is_ascii_digit() == c.is_ascii_digit());
+                if !run.is_empty() && (c == '.' || !same) {
+                    segments.push(match run.parse() {
+                        Ok(number) => Segment::Number(number),
+                        Err(_) if run.starts_with(|c: char| c.is_ascii_digit()) => return None,
+                        Err(_) => Segment::Letters(run.clone()),
+                    });
+                    run.clear();
+                }
+                if c != '.' {
+                    run.push(c);
+                }
+            }
+            Some(Self { segments })
+        }
+
+        pub(super) fn prerelease(&self) -> bool {
+            self.segments
+                .iter()
+                .any(|s| matches!(s, Segment::Letters(_)))
+        }
+
+        /// The segments with trailing zeros dropped from the release part
+        /// and from the prerelease part, so `1.0` equals `1.0.0`.
+        fn canonical(&self) -> Vec<Segment> {
+            let split = self
+                .segments
+                .iter()
+                .position(|s| matches!(s, Segment::Letters(_)))
+                .unwrap_or(self.segments.len());
+            let (release, pre) = self.segments.split_at(split);
+            let trim = |part: &[Segment]| {
+                let end = part
+                    .iter()
+                    .rposition(|s| *s != Segment::Number(0))
+                    .map_or(0, |i| i + 1);
+                part[..end].to_vec()
+            };
+            [trim(release), trim(pre)].concat()
+        }
+
+        fn release(&self) -> Self {
+            let segments = self
+                .segments
+                .iter()
+                .take_while(|s| matches!(s, Segment::Number(_)))
+                .cloned()
+                .collect();
+            Self { segments }
+        }
+
+        /// The upper bound of `~>`: the prerelease and the last part
+        /// dropped, then the new last part raised (`2.2.0` to `2.3`).
+        fn bump(&self) -> Self {
+            let mut segments = self.release().segments;
+            if segments.len() > 1 {
+                segments.pop();
+            }
+            if let Some(Segment::Number(last)) = segments.last_mut() {
+                *last += 1;
+            }
+            Self { segments }
+        }
+    }
+
+    impl Ord for Version {
+        fn cmp(&self, other: &Self) -> Ordering {
+            let (a, b) = (self.canonical(), other.canonical());
+            let zero = Segment::Number(0);
+            for i in 0..a.len().max(b.len()) {
+                let ordering = match (a.get(i).unwrap_or(&zero), b.get(i).unwrap_or(&zero)) {
+                    (Segment::Number(a), Segment::Number(b)) => a.cmp(b),
+                    (Segment::Letters(a), Segment::Letters(b)) => a.cmp(b),
+                    (Segment::Letters(_), Segment::Number(_)) => Ordering::Less,
+                    (Segment::Number(_), Segment::Letters(_)) => Ordering::Greater,
+                };
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+            Ordering::Equal
+        }
+    }
+
+    impl PartialOrd for Version {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl PartialEq for Version {
+        fn eq(&self, other: &Self) -> bool {
+            self.cmp(other).is_eq()
+        }
+    }
+
+    impl Eq for Version {}
+
+    /// A `Gem::Requirement`: comma-separated clauses that must all hold,
+    /// each an operator (`=` when left out) and a version.
+    pub(super) fn satisfies(range: &str, version: &str) -> Option<bool> {
+        let version = Version::parse(version)?;
+        let mut all = true;
+        for clause in range.split(',') {
+            let clause = clause.trim();
+            let operator = ["~>", ">=", "<=", "!=", "=", ">", "<"]
+                .into_iter()
+                .find(|op| clause.starts_with(op))
+                .unwrap_or("=");
+            let bound = Version::parse(clause.strip_prefix(operator).unwrap_or(clause))?;
+            let ordering = version.cmp(&bound);
+            all &= match operator {
+                "~>" => ordering.is_ge() && version.release().cmp(&bound.bump()).is_lt(),
+                ">=" => ordering.is_ge(),
+                "<=" => ordering.is_le(),
+                "!=" => ordering.is_ne(),
+                ">" => ordering.is_gt(),
+                "<" => ordering.is_lt(),
+                _ => ordering.is_eq(),
+            };
+        }
+        Some(all)
     }
 }

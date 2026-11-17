@@ -84,15 +84,16 @@ fn bundle_dependencies(kinds: &[Kind]) -> Vec<String> {
 }
 
 #[test]
-fn the_bundle_depends_on_each_gemfile_lock_dependency_with_its_requirement() {
+fn the_bundle_depends_on_each_gemfile_lock_dependency_with_its_requirement_and_git_or_path_gems_with_none(
+) {
     assert_eq!(
         bundle_dependencies(&[Kind::Prod]),
         [
-            "<.>@0.0.0-use.local prod admin@1.0.0 >= 0",
-            "<.>@0.0.0-use.local prod app@0.3.0 >= 0",
+            "<.>@0.0.0-use.local prod admin@1.0.0 ?",
+            "<.>@0.0.0-use.local prod app@0.3.0 ?",
             "<.>@0.0.0-use.local prod nokogiri@1.16.0 >= 1.15, < 2",
             "<.>@0.0.0-use.local prod rack@3.2.8 ~> 3.0",
-            "<.>@0.0.0-use.local prod rails-html-sanitizer@1.6.0 >= 0"
+            "<.>@0.0.0-use.local prod rails-html-sanitizer@1.6.0 ?"
         ]
     );
 }
@@ -150,4 +151,49 @@ fn a_gemfile_lock_is_found_and_read_with_the_gemfile_beside_it() {
 #[test]
 fn a_file_without_gemfile_lock_sections_is_not_read() {
     assert!(lockfiles::gemfile_lock("# not a lockfile\n", &|_| None).is_err());
+}
+
+#[test]
+fn a_pessimistic_requirement_allows_only_the_last_given_part_to_rise() {
+    use codemod_deps::semver::satisfies;
+    let check = |range, version| satisfies(Ecosystem::Rubygems, range, version);
+    assert_eq!(
+        [
+            check("~> 2.2", "2.9.1"),
+            check("~> 2.2", "3.0"),
+            check("~> 2.2.0", "2.2.5"),
+            check("~> 2.2.0", "2.3.0"),
+            check(">= 1.15, < 2", "1.16.0"),
+        ],
+        [Some(true), Some(false), Some(true), Some(false), Some(true)]
+    );
+}
+
+#[test]
+fn a_gem_prerelease_sorts_before_its_release_and_trailing_zeros_do_not_count() {
+    use codemod_deps::semver::{compare, is_prerelease};
+    use std::cmp::Ordering;
+    assert_eq!(
+        (
+            compare(Ecosystem::Rubygems, "1.0.0.rc1", "1.0.0"),
+            compare(Ecosystem::Rubygems, "1.0", "1.0.0"),
+            compare(Ecosystem::Rubygems, "1.10", "1.9"),
+            is_prerelease(Ecosystem::Rubygems, "2.0.0.beta1"),
+        ),
+        (Ordering::Less, Ordering::Equal, Ordering::Greater, true)
+    );
+}
+
+#[test]
+fn a_string_that_is_not_a_gem_version_sorts_before_every_version() {
+    use codemod_deps::semver::compare;
+    let mut versions = ["1.10.0", "main", "1.2.0", "HEAD"];
+    versions.sort_by(|a, b| compare(Ecosystem::Rubygems, a, b));
+    assert_eq!(versions, ["HEAD", "main", "1.2.0", "1.10.0"]);
+}
+
+#[test]
+fn a_gem_requirement_that_rubygems_cannot_read_is_unknown() {
+    use codemod_deps::semver::satisfies;
+    assert_eq!(satisfies(Ecosystem::Rubygems, "^1.2", "1.2.0"), None);
 }

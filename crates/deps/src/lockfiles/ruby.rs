@@ -95,8 +95,12 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
             None => Kind::Prod,
         };
         let to = by_name.get(dependency.name).copied();
-        let range = dependency.detail.unwrap_or(ANY).to_string();
-        graph.edge(root, to, dependency.name, Some(range), kind);
+        // A gem from git or a path (`!`) with no requirement has no range.
+        let range = match dependency.detail {
+            Some(detail) => Some(detail.to_string()),
+            None => (!from_source).then(|| ANY.to_string()),
+        };
+        graph.edge(root, to, dependency.name, range, kind);
     }
     Ok(graph)
 }
