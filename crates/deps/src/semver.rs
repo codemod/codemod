@@ -33,6 +33,7 @@ pub fn satisfies(ecosystem: Ecosystem, range: &str, version: &str) -> Option<boo
             Some(range.matches(&semver::Version::parse(version).ok()?))
         }
         Ecosystem::Pypi => pypi::satisfies(range, version),
+        Ecosystem::Maven => None,
     }
 }
 
@@ -41,6 +42,7 @@ pub fn is_prerelease(ecosystem: Ecosystem, version: &str) -> bool {
         Ecosystem::Npm => node_semver::Version::parse(version).map_or(true, |v| v.is_prerelease()),
         Ecosystem::Cargo => semver::Version::parse(version).map_or(true, |v| !v.pre.is_empty()),
         Ecosystem::Pypi => pypi::version(version).is_none_or(|v| v.any_prerelease()),
+        Ecosystem::Maven => false,
     }
 }
 
@@ -59,6 +61,7 @@ pub fn compare(ecosystem: Ecosystem, a: &str, b: &str) -> Ordering {
         Ecosystem::Npm => by(a, b, |v| node_semver::Version::parse(v).ok()),
         Ecosystem::Cargo => by(a, b, |v| semver::Version::parse(v).ok()),
         Ecosystem::Pypi => by(a, b, pypi::version),
+        Ecosystem::Maven => a.cmp(b),
     }
 }
 

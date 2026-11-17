@@ -1,7 +1,7 @@
 //! One dependency graph across lockfile formats.
 //!
 //! Every supported lockfile (Yarn Berry, pnpm, package-lock.json,
-//! Cargo.lock, uv.lock, poetry.lock, Pipfile.lock) maps into one [`Graph`]: nodes are `name@version` per
+//! Cargo.lock, uv.lock, poetry.lock, Pipfile.lock, gradle.lockfile) maps into one [`Graph`]: nodes are `name@version` per
 //! ecosystem, edges keep the declared range, the dependency kind and the
 //! workspace. [`Walk`] reads it; [`Registry`] supplies release metadata.
 

@@ -500,3 +500,6 @@ snapshots:
 
 #[path = "specs/python.rs"]
 mod python;
+
+#[path = "specs/java.rs"]
+mod java;

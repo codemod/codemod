@@ -14,12 +14,14 @@ use std::path::Path;
 use crate::model::{Graph, Kind, Skipped};
 
 mod cargo;
+mod java;
 mod npm;
 mod pnpm;
 pub(crate) mod python;
 mod yarn;
 
 pub use cargo::{parse as cargo, Manifests as CargoManifests};
+pub use java::gradle;
 pub use npm::parse as package_lock;
 pub use pnpm::parse as pnpm;
 pub use python::{pipfile, poetry, uv};
@@ -29,7 +31,7 @@ pub use yarn::parse as yarn;
 pub type ReadFile<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 /// Lockfiles this crate reads, by file name.
-pub const LOCKFILES: [&str; 7] = [
+pub const LOCKFILES: [&str; 8] = [
     "yarn.lock",
     "pnpm-lock.yaml",
     "package-lock.json",
@@ -37,6 +39,7 @@ pub const LOCKFILES: [&str; 7] = [
     "uv.lock",
     "poetry.lock",
     "Pipfile.lock",
+    "gradle.lockfile",
 ];
 
 /// The lockfiles at `root`, merged into one graph. `only` instead keeps
@@ -103,6 +106,7 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
                 "uv.lock" => uv(&text),
                 "poetry.lock" => poetry(&text, &read),
                 "Pipfile.lock" => pipfile(&text, &read),
+                "gradle.lockfile" => gradle(&text, &read, &base),
                 _ => cargo(&text, &CargoManifests::find(&base)),
             });
         match parsed {

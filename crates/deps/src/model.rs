@@ -11,6 +11,7 @@ pub enum Ecosystem {
     Npm,
     Cargo,
     Pypi,
+    Maven,
 }
 
 impl Ecosystem {
@@ -19,6 +20,7 @@ impl Ecosystem {
             Self::Npm => "npm",
             Self::Cargo => "cargo",
             Self::Pypi => "pypi",
+            Self::Maven => "maven",
         }
     }
 
@@ -27,7 +29,7 @@ impl Ecosystem {
     pub fn package_name(self, name: &str) -> std::borrow::Cow<'_, str> {
         match self {
             Self::Pypi => crate::lockfiles::python::normalize(name).into(),
-            Self::Npm | Self::Cargo => name.into(),
+            Self::Npm | Self::Cargo | Self::Maven => name.into(),
         }
     }
 
@@ -36,6 +38,7 @@ impl Ecosystem {
             "npm" => Some(Self::Npm),
             "cargo" => Some(Self::Cargo),
             "pypi" => Some(Self::Pypi),
+            "maven" => Some(Self::Maven),
             _ => None,
         }
     }
