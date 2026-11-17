@@ -280,3 +280,43 @@ fn invalid_yaml_reports_the_validation_error() {
         .to_string();
     assert!(error.contains("missing"), "{error}");
 }
+
+/// What a shell step writes to `$STATE_OUTPUTS` reaches a transform in a
+/// later node through `getState`, as it did in the YAML engine.
+#[test]
+fn state_a_shell_step_writes_reaches_a_later_transform() {
+    let h = Harness::new();
+    h.write("src/a.ts", "const a = 'OLD';\n");
+    h.bundle_file(
+        "scripts/codemod.ts",
+        r#"
+import { getState } from "codemod/workflow";
+export default function transform(root: any) {
+  return root.root().text().replace("OLD", getState("replacement"));
+}
+"#,
+    );
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: detect
+    name: Detect
+    steps:
+      - name: Pick
+        run: echo 'replacement=NEW' >> "$STATE_OUTPUTS"
+  - id: apply
+    name: Apply
+    depends_on: [detect]
+    steps:
+      - name: Apply
+        js-ast-grep:
+          js_file: scripts/codemod.ts
+          include: ["src/**/*.ts"]
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("src/a.ts"), "const a = 'NEW';\n");
+}

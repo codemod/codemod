@@ -10,7 +10,7 @@
 
 // ----------------------------------------------------------------- JSON ---
 
-/** A JSON value: what steps record, tasks are described in, and state holds. */
+/** A JSON value: what steps record and tasks are described in. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 // ------------------------------------------------------- the run's records ---
@@ -63,7 +63,7 @@ export interface StartRequest {
   position: number;
   label: string;
   task: TaskContent;
-  /** Workflow state when the step was called. */
+  /** The state the step's transforms start from: its `state` option. */
   state: Record<string, Json>;
   /** The step's function, on hosts that run callbacks in place. */
   fn?: Callback;
@@ -207,6 +207,8 @@ export interface StepOptions {
   retries?: number;
   retryDelay?: Duration;
   timeout?: Duration;
+  /** What the step's transforms read with `getState()`; shell commands as `$CODEMOD_STATE`. */
+  state?: Record<string, Json>;
 }
 
 /**
@@ -474,6 +476,8 @@ export function describeDuration(ms: number): string {
 
 /** How often to try a step, and for how long. */
 interface Policy {
+  /** A copy of the `state` option, taken when the step is called. */
+  state: Record<string, Json>;
   attempts: number;
   /** Milliseconds between attempts. */
   retryDelay: number;
@@ -483,15 +487,20 @@ interface Policy {
 
 /** What `step(..., options)` asks for. */
 function policyOf(options: unknown, what: string): Policy {
-  if (options === undefined) return { attempts: 1, retryDelay: 0, timeout: undefined };
-  onlyKeys(options, ["retries", "retryDelay", "timeout"], what);
-  const { retries = 0, retryDelay = "1s", timeout } = options as StepOptions;
+  if (options === undefined) return { state: {}, attempts: 1, retryDelay: 0, timeout: undefined };
+  onlyKeys(options, ["retries", "retryDelay", "timeout", "state"], what);
+  const { retries = 0, retryDelay = "1s", timeout, state = {} } = options as StepOptions;
+  if (!isRecord(state) || Array.isArray(state)) {
+    throw new TypeError(`${what}: state must be an object`);
+  }
+  checkJson(state, `${what}: state`);
   if (!Number.isInteger(retries) || retries < 0) {
     throw new TypeError(`${what}: retries must be a whole number, 0 or more`);
   }
   const limit = timeout === undefined ? undefined : milliseconds(timeout, `${what}: timeout`);
   if (limit === 0) throw new TypeError(`${what}: timeout must be more than 0`);
   return {
+    state: JSON.parse(JSON.stringify(state)) as Record<string, Json>,
     attempts: retries + 1,
     retryDelay: milliseconds(retryDelay, `${what}: retryDelay`),
     timeout: limit,
@@ -583,8 +592,6 @@ export function createRuntime(host: Host) {
     return { position: nextPosition++ };
   }
 
-  const state = new Map<string, Json>();
-
   // A test run can stop after one step (`until`) and skip steps with a given
   // result (`given`), both matched by label.
   const plan: TestPlan = host.testPlan() ?? {};
@@ -597,7 +604,7 @@ export function createRuntime(host: Host) {
 
   // Recorded steps the body has issued again, waiting to settle. They settle
   // one at a time in the order they finished when they ran, so the body sees
-  // state, the clock and promise races as it did then.
+  // results, the clock and promise races as it did then.
   const replaying: Replay[] = [];
 
   /**
@@ -634,40 +641,22 @@ export function createRuntime(host: Host) {
 
   // ---------------------------------------------------------------- state ---
 
-  /** Read one state key, or the whole state as an object when called without one. Values are frozen. */
-  function getState(key?: string): Json | undefined | Readonly<Record<string, Json>> {
-    if (key === undefined) return Object.freeze(Object.fromEntries(state));
-    return state.get(key);
+  // The body has no workflow state: a step's transforms start from its
+  // `state` option, and what they set comes back on its result as
+  // `result.state`. The state functions still work inside transforms,
+  // callbacks and function steps, scoped to that one step.
+  function notInBody(name: string): () => never {
+    return () => {
+      throw new Error(
+        `${name}() is not available in the workflow body: pass values to a step with its \`state\` option, and read what it set from its result's \`state\``,
+      );
+    };
   }
+  const getState = notInBody("getState");
+  const setState = notInBody("setState");
+  const unsetState = notInBody("unsetState");
 
-  /** Set workflow state. `undefined` removes the key. */
-  function setState(key: string, value: unknown): void {
-    if (value === undefined) {
-      state.delete(key);
-      return;
-    }
-    checkJson(value, `state.${key}`);
-    state.set(key, freeze(JSON.parse(JSON.stringify(value)) as Json));
-  }
-
-  function unsetState(key: string): void {
-    state.delete(key);
-  }
-
-  function applyState(changes: Outcome["state"]): void {
-    if (!changes) return;
-    for (const [key, value] of Object.entries(changes)) {
-      if (value === null) state.delete(key);
-      else state.set(key, freeze(value));
-    }
-  }
-
-  function stateSnapshot(): Record<string, Json> {
-    return Object.fromEntries(state);
-  }
-
-  // The body runs alone, so a lock there has nothing to wait for; steps and
-  // callbacks get the real one from their own runtime.
+  // The body runs on one thread, so a lock has nothing to wait for.
   function acquireLock(_name: string): () => void {
     return () => {};
   }
@@ -780,10 +769,9 @@ export function createRuntime(host: Host) {
           // order they were issued.
           order: prior.seq ?? prior.position,
           settle() {
-            applyState(prior.state);
             settleClock(prior);
             host.event({ type: "stepReplayed", position, label: name });
-            resolve(prior.result ?? null);
+            resolve(withState(prior.result ?? null, prior.state, name));
           },
         });
         host.wake?.();
@@ -825,7 +813,7 @@ export function createRuntime(host: Host) {
       position,
       label: name,
       task: content,
-      state: stateSnapshot(),
+      state: policy.state,
       fn,
       ...(policy.timeout !== undefined && { timeoutMs: policy.timeout }),
       ...(since !== undefined && { since }),
@@ -879,7 +867,13 @@ export function createRuntime(host: Host) {
     }
     const result = outcome.result ?? null;
     const changes = outcome.state ?? null;
-    applyState(changes);
+    let returned: Json;
+    try {
+      returned = withState(result, changes, name);
+    } catch (error) {
+      record({ status: "failed", error: messageOf(error) });
+      throw new StepError(name, asError(error));
+    }
     const finishedAt = host.now();
     // Some files failed: the step finished, and the rest of the run goes on.
     if (outcome.partial !== undefined) {
@@ -888,7 +882,7 @@ export function createRuntime(host: Host) {
       record({ status: "succeeded", result, state: changes, finishedAt });
     }
     settleClock({ finishedAt });
-    return result;
+    return returned;
   }
 
   /** Whether a recorded step finished, so a resume reuses its result. */
@@ -1137,6 +1131,30 @@ export function fileHandle(
       open = false;
     },
   };
+}
+
+/**
+ * A step's result with the state its transforms set (`null` for a key they
+ * removed) as its `state`. A step that set none returns its result as is.
+ */
+function withState(
+  result: Json,
+  changes: Record<string, Json> | null | undefined,
+  step: string,
+): Json {
+  if (!changes || Object.keys(changes).length === 0) return result;
+  if (result === null) return { state: changes };
+  if (!isRecord(result) || Array.isArray(result)) {
+    throw new TypeError(
+      `step '${step}' set state but returned a ${Array.isArray(result) ? "list" : typeof result}; return an object, or return the value instead of setting state`,
+    );
+  }
+  if ("state" in result) {
+    throw new TypeError(
+      `step '${step}' set state and its result already has a \`state\`; return the value instead of setting state`,
+    );
+  }
+  return { ...result, state: changes };
 }
 
 function messageOf(error: unknown): string {

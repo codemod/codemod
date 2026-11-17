@@ -271,39 +271,33 @@ for (const host of Object.keys(HOSTS)) {
     }
   });
 
-  test(
-    `${host}: state set in callbacks reaches later steps and the body`,
-    HOSTS[host],
-    async () => {
-      const path = join(
-        scratch({
-          "workflow.ts": `
+  test(`${host}: state set in callbacks comes back on the step's result`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
 import { step, forEachFile, getState, setState, unsetState } from "codemod/workflow";
 export default async function main() {
-  setState("seen", []);
-  setState("drop", true);
-  await step("Collect", forEachFile("**/*.ts", (file) => {
+  const collected = await step("Collect", forEachFile("**/*.ts", (file) => {
     setState("last", file.path);
     setState("scratch", 1, false);
     unsetState("drop");
-  }));
-  const fromStep = await step("Read", () => ({ last: getState("last") ?? null, scratch: getState("scratch") ?? null }));
-  return { last: getState("last"), drop: getState("drop") ?? null, scratch: getState("scratch") ?? null, fromStep };
+  }), { state: { drop: true } });
+  const fromStep = await step("Read", () => ({ last: getState("last") ?? null }), {
+    state: { last: collected.state.last },
+  });
+  return { state: collected.state, fromStep };
 }
 `,
-        }),
-        "workflow.ts",
-      );
-      const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
-      assert.equal(result.status, "succeeded", result.error);
-      assert.deepEqual(result.output, {
-        last: "a.ts",
-        drop: null,
-        scratch: null,
-        fromStep: { last: "a.ts", scratch: null },
-      });
-    },
-  );
+      }),
+      "workflow.ts",
+    );
+    const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
+    assert.equal(result.status, "succeeded", result.error);
+    assert.deepEqual(result.output, {
+      state: { last: "a.ts", drop: null },
+      fromStep: { last: "a.ts" },
+    });
+  });
 
   test(`${host}: the older codemod: spelling imports the same modules`, HOSTS[host], async () => {
     const path = join(
@@ -332,9 +326,7 @@ export default async function main() {
         "workflow.ts": `
 import { step, getState, setState } from "codemod/workflow";
 export default async function main() {
-  setState("seen", ["a"]);
-  setState("same", 1);
-  const inStep = await step("Edit", () => {
+  const edited = await step("Edit", () => {
     const seen = getState("seen");
     seen.push("b");
     setState("seen", seen);
@@ -343,9 +335,9 @@ export default async function main() {
     kept.n = 2;
     setState("odd", { at: new Date(0), missing: undefined, big: Number.NaN });
     setState("same", 1);
-    return Object.keys(getState()).sort();
-  });
-  return { inStep, seen: getState("seen"), kept: getState("kept"), odd: getState("odd") };
+    return { keys: Object.keys(getState()).sort() };
+  }, { state: { seen: ["a"], same: 1 } });
+  return edited;
 }
 `,
       }),
@@ -354,11 +346,26 @@ export default async function main() {
     const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
     assert.equal(result.status, "succeeded", result.error);
     assert.deepEqual(result.output, {
-      inStep: ["kept", "odd", "same", "seen"],
-      seen: ["a", "b"],
-      kept: { n: 1 },
-      odd: { at: {}, missing: null, big: null },
+      keys: ["kept", "odd", "same", "seen"],
+      state: { seen: ["a", "b"], kept: { n: 1 }, odd: { at: {}, missing: null, big: null } },
     });
+  });
+
+  test(`${host}: the workflow body cannot use workflow state`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { getState } from "codemod/workflow";
+export default async function main() {
+  return getState("x");
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
+    assert.equal(result.status, "failed");
+    assert.match(result.error, /getState\(\) is not available in the workflow body/);
   });
 
   test(`${host}: a failing until step fails the run`, HOSTS[host], async () => {

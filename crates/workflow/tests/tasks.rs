@@ -18,18 +18,17 @@ fn approving() -> Harness {
 }
 
 #[test]
-fn shell_steps_get_the_state_contract_and_write_state() {
+fn shell_steps_read_the_state_option_and_return_state_outputs() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { step, shell, getState, setState } from "codemod/workflow";
+import { step, shell } from "codemod/workflow";
 export default async function main() {
-  setState("greeting", "hi");
   const run = await step(shell(
     'echo "seen=$(cat "$CODEMOD_STATE")" && echo "count=2" >> "$STATE_OUTPUTS" && echo "items@=\"a\"" >> "$STATE_OUTPUTS" && echo "$CODEMOD_STATE_GREETING $EXTRA"',
     { env: { EXTRA: "there" } },
-  ));
-  return { output: run.output, count: getState("count"), items: getState("items") };
+  ), { state: { greeting: "hi" } });
+  return { output: run.output, count: run.state.count, items: run.state.items };
 }
 "#,
         Value::Null,
@@ -150,10 +149,10 @@ export default function transform(root: any, options: any) {
     );
     let report = h.start(
         r#"
-import { step, jssg, getState } from "codemod/workflow";
+import { step, jssg } from "codemod/workflow";
 export default async function main() {
   const result = await step(jssg("./scripts/transform.ts", { include: "src/**/*.ts" }));
-  return { result, touched: getState("touched") };
+  return { result, touched: result.state.touched };
 }
 "#,
         json!({ "value": "42" }),

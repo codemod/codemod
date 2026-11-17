@@ -12,11 +12,9 @@ import {
   codemod,
   commit,
   forEachFile,
-  getState,
   installSkill,
   jssg,
   pullRequest,
-  setState,
   shard,
   shell,
   sleep,
@@ -192,10 +190,8 @@ export default async function main({
       method: { type: "directory", maxFilesPerShard: 20 },
       target: "./src",
       jssg: { path: "scripts/codemod.ts", include: ["**/*.ts"] },
-      previous: getState("shards"),
     }),
   );
-  setState("shards", shards);
   await Promise.all(
     shards.map((current) =>
       step(`Migrate ${current.name}`, jssg("scripts/codemod.ts", { files: current._meta_files })),
@@ -217,13 +213,16 @@ export default async function main({
 
   // ── state ────────────────────────────────────────────────────────────
 
-  setState("target", "react-19");
-  const version = getState<number>("version");
-  expectType<Equal<typeof version, number | undefined>>(true);
-  const all = getState();
-  expectType<Equal<(typeof all)["anything"], JsonValue>>(true);
+  // A step's transforms read its `state` option; what they set comes back
+  // on its result.
+  const detected = await step(shell("./detect.sh"), { state: { target: "react-19" } });
+  expectType<Equal<typeof detected.state, StateChanges | undefined>>(true);
+  const fed = await step(jssg("scripts/codemod.ts"), { state: { ...detected.state } });
+  expectType<Equal<(typeof fed.state & {})["anything"], JsonValue>>(true);
+  // @ts-expect-error state is JSON
+  void step(shell("true"), { state: { when: new Date() } });
 
   return { files: found.outputs.length };
 }
 
-import type { Frozen, JsonValue } from "codemod/workflow";
+import type { Frozen, JsonValue, StateChanges } from "codemod/workflow";

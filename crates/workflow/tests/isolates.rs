@@ -166,7 +166,7 @@ fn callbacks_can_set_state_with_the_jssg_api() {
         r#"
 import { step, forEachFile, getState, setState, acquireLock } from "codemod/workflow";
 export default async function main() {
-  await step(forEachFile({ language: "typescript" }, (file) => {
+  const seen = await step(forEachFile({ language: "typescript" }, (file) => {
     const release = acquireLock("seen");
     try {
       setState("seen", [...(getState("seen") ?? []), file.path].sort());
@@ -174,12 +174,32 @@ export default async function main() {
       release();
     }
   }));
-  return getState("seen");
+  return seen.state.seen;
 }
 "#,
         Value::Null,
     );
     assert_eq!(output(&report).unwrap(), json!(["a.ts", "b.ts"]));
+}
+
+#[test]
+fn callbacks_read_the_steps_state_option() {
+    let h = Harness::new();
+    h.write("a.ts", "");
+    let report = h.start(
+        r#"
+import { step, forEachFile, getState } from "codemod/workflow";
+export default async function main() {
+  const read = await step(
+    forEachFile({ language: "typescript" }, () => getState("target")),
+    { state: { target: "react-19" } },
+  );
+  return read.outputs;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(["react-19"]));
 }
 
 #[test]

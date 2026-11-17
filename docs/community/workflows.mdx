@@ -51,7 +51,7 @@ Code inside steps and callbacks runs in its own isolate, with npm packages, file
 
 ### State and parameters
 
-Steps can share named values through workflow state (`getState`, `setState`), which is saved with each step. Parameters passed with `--param key=value` reach the workflow as `params`.
+Steps hand values to each other as data: a step's result (including `result.state`, what its transforms set) goes into the next step's options. Parameters passed with `--param key=value` reach the workflow as `params`.
 
 ### workflow.yaml
 

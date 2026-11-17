@@ -1,10 +1,12 @@
 // `codemod:workflow` in Node.js and Bun: the shared orchestrator, with the
 // run looked up per call (see context.mjs).
 //
-// In the workflow body, `step`, `getState` and `setState` go to the run's
-// orchestrator. Inside a function step or a `forEachFile` callback, the state
-// functions see the state the step started with, and what they set becomes
-// the step's state changes, as in the engine's isolates.
+// In the workflow body, `step` goes to the run's orchestrator, and the state
+// functions throw: the body passes values to a step with its `state` option
+// and reads what the step set from `result.state`. Inside a function step or
+// a `forEachFile` callback, the state functions see the state the step
+// started with, and what they set becomes the step's state changes, as in
+// the engine's isolates.
 
 import { createHash } from "node:crypto";
 
@@ -64,7 +66,7 @@ export function waitForEvent(name: string, options?: { timeout?: Duration }): Pr
 
 export function getState(key?: string): unknown {
   const scope = current("getState()");
-  if (!scope.step) return scope.runtime.getState(key);
+  if (!scope.step) return scope.runtime.getState();
   const state = scope.step.state;
   if (key === undefined) return structuredClone(Object.fromEntries(state));
   return state.has(key) ? structuredClone(state.get(key)) : undefined;
@@ -72,7 +74,7 @@ export function getState(key?: string): unknown {
 
 export function setState(key: string, value: unknown, persist = true): void {
   const scope = current("setState()");
-  if (!scope.step) return scope.runtime.setState(key, value);
+  if (!scope.step) return scope.runtime.setState();
   const step = scope.step;
   step.state.set(key, stateValue(value));
   step.removed.delete(key);
@@ -82,7 +84,7 @@ export function setState(key: string, value: unknown, persist = true): void {
 
 export function unsetState(key: string): void {
   const scope = current("unsetState()");
-  if (!scope.step) return scope.runtime.unsetState(key);
+  if (!scope.step) return scope.runtime.unsetState();
   scope.step.state.delete(key);
   scope.step.removed.add(key);
 }

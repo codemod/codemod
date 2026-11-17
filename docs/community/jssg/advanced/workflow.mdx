@@ -215,16 +215,20 @@ Simple `setState` calls that don't depend on the current value (e.g., `setState(
 
 ### Using State Across Workflow Steps
 
-State set with `persist: true` (the default) is saved when the `jssg` step finishes. Later steps see it: other transforms through `getState`, the workflow itself through `getState` from `codemod/workflow`, and shell commands through `CODEMOD_STATE`. The values are saved with the step, so they come back when a run is resumed.
+State lives for one step: every file of the step shares it. What the transform set with `persist: true` (the default) comes back on the step's result as `result.state` when the step finishes, and is saved with the step, so it comes back when a run is resumed. To hand it to a later step, pass it as that step's `state` option: its transforms read it with `getState`, and shell commands through `CODEMOD_STATE`.
 
 <CodeGroup>
 ```ts workflow.ts
-import { step, forEachFile, jssg, shell, getState } from "codemod/workflow";
+import { step, forEachFile, jssg, shell } from "codemod/workflow";
 
 export default async function main() {
-  await step("Scan files", forEachFile({ language: "tsx" }, jssg("./scripts/scan.ts")));
-  const files = getState("filesToProcess") ?? [];
-  await step(`Process ${files.length} files`, shell`codemod jssg exec ${import.meta.dirname}/scripts/process.ts`);
+  const scan = await step("Scan files", forEachFile({ language: "tsx" }, jssg("./scripts/scan.ts")));
+  const files = (scan.state?.filesToProcess as string[] | undefined) ?? [];
+  await step(
+    `Process ${files.length} files`,
+    shell`codemod jssg exec ${import.meta.dirname}/scripts/process.ts`,
+    { state: { filesToProcess: files } },
+  );
 }
 ```
 
@@ -260,7 +264,7 @@ console.log(`Processing ${files.length} files`);
 
 ### Transient State
 
-Pass `persist: false` to keep state only for the current step execution (useful for in-memory coordination that doesn't need to survive across steps):
+Pass `persist: false` to keep a value out of `result.state` (useful for in-memory coordination between the step's files):
 
 ```ts
 setState("processingQueue", queue, false); // not persisted

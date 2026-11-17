@@ -192,7 +192,7 @@ A callback (or function step) runs in its own isolate, so the build copies in wh
 - **Module-level constants, functions and classes** it uses are copied in.
 - **Local variables of the surrounding function** are passed in as frozen copies when the step starts. They must be JSON values.
 - **Imports** it uses are available: `codemod/ast-grep`, `codemod/metrics`, `codemod/runtime`, Node-style modules (`path`, `fs` with `--allow-fs`, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
-- **State:** `getState`, `setState`, `unsetState` and `acquireLock` from `codemod/workflow` work as in [JSSG transforms](/community/jssg/advanced/workflow). Prefer returning values: outputs are ordered and need no locks.
+- **State:** `getState`, `setState`, `unsetState` and `acquireLock` from `codemod/workflow` work as in [JSSG transforms](/community/jssg/advanced/workflow), scoped to the step (see [State](#state)). Prefer returning values: outputs are ordered and need no locks.
 
 These are build errors, reported with the file, line and column:
 
@@ -304,9 +304,9 @@ await step("Format", shell("npx prettier --write src"));
 | Variable | Value |
 |---|---|
 | `CODEMOD_PATH` | The workflow's directory (prefer `import.meta.dirname` in `workflow.ts`) |
-| `CODEMOD_STATE` | A file containing the workflow state as JSON |
-| `CODEMOD_STATE_<KEY>` | Each state value, JSON-encoded |
-| `STATE_OUTPUTS` | A file the command can write `key=value` (set) or `key@=value` (append) lines to; they become workflow state |
+| `CODEMOD_STATE` | A file containing the step's `state` option as JSON |
+| `CODEMOD_STATE_<KEY>` | Each value of the step's `state` option, JSON-encoded |
+| `STATE_OUTPUTS` | A file the command can write `key=value` (set) or `key@=value` (append) lines to; they arrive as `result.state` |
 
 Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
 
@@ -380,22 +380,27 @@ Otherwise the prompt is printed as instructions and nothing runs.
 
 ## State
 
-Workflow state is a set of named JSON values shared by the workflow and the steps it runs.
+The workflow body has no global state. Values move between steps as data: a step's `state` option goes in, and what the step set comes back on its result as `result.state`.
 
 ```ts
-import { step, shell, getState, setState } from "codemod/workflow";
+import { step, shell, forEachFile, jssg } from "codemod/workflow";
 
-setState("target", "react-19");
-await step(shell('echo "version=19" >> "$STATE_OUTPUTS"'));
-getState("version"); // 19
-getState();          // { target: "react-19", version: 19 }
+const detect = await step("Detect", shell('echo "version=19" >> "$STATE_OUTPUTS"'));
+detect.state; // { version: 19 }
+
+const migrated = await step(
+  "Migrate",
+  forEachFile(jssg("scripts/codemod.ts")),
+  { state: { version: detect.state?.version ?? 18 } },
+);
+migrated.state; // what the transform set with setState, if anything
 ```
 
-- **In the workflow:** `getState(key)` reads a value; `getState()` returns all of them. `setState(key, value)` sets one.
-- **In JSSG transforms:** `setState`, `getState`, `unsetState` and `acquireLock` from `codemod/workflow`. See [Workflow context](/community/jssg/advanced/workflow).
+- **In the workflow:** pass values in with a step's `state` option; read what it set from `result.state` (`null` marks a key it removed). `getState`, `setState` and `unsetState` throw in the body.
+- **In JSSG transforms and callbacks:** `getState` reads the step's `state` option; `setState`, `unsetState` and `acquireLock` work across the step's files, as before. See [Workflow context](/community/jssg/advanced/workflow).
 - **In shell commands:** `CODEMOD_STATE` and `STATE_OUTPUTS`, above.
 
-What a step sets is saved with that step, so it is restored when the step is replayed on resume.
+A step's result, `state` included, is saved with the step, so it comes back when the step is replayed on resume.
 
 ## Parameters
 

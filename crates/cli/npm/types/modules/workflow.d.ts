@@ -130,7 +130,10 @@ declare module "codemod:workflow" {
   ): string;
 
   /**
-   * Sets a named state value that is shared across all parallel file executions.
+   * Sets a named state value that is shared across all parallel file executions
+   * of one step. Works inside JSSG transforms, `forEachFile` callbacks and
+   * function steps; in the workflow body it throws. What a step sets comes
+   * back on its result as `result.state`.
    *
    * Values are stored as native JavaScript objects internally (no JSON serialization needed).
    * When `persist` is true (the default), the value will be persisted at the end of the
@@ -152,7 +155,9 @@ declare module "codemod:workflow" {
   export function setState<T>(name: string, value: T, persist?: boolean): void;
 
   /**
-   * Gets a named state value, or `undefined` if it doesn't exist.
+   * Gets a named state value, or `undefined` if it doesn't exist. Inside a
+   * step, it reads the step's `state` option and what the step set since;
+   * in the workflow body it throws.
    *
    * @param name - The state key
    * @returns The stored value, or `undefined` if not found
@@ -251,9 +256,12 @@ declare module "codemod:workflow" {
 
   // ── Workflow authoring (workflow.ts) ───────────────────────────────────
   //
-  // Everything below is used from a workflow file. `getState`, `setState`,
-  // `unsetState` and `acquireLock` above also work inside function steps and
-  // forEachFile callbacks; the step output functions only in JSSG transforms.
+  // Everything below is used from a workflow file. `getState`, `setState`
+  // and `unsetState` above work only inside JSSG transforms,
+  // function steps and forEachFile callbacks, scoped to one step: the body
+  // passes state in with the step's `state` option and reads what the step
+  // set from `result.state`. The step output functions work only in JSSG
+  // transforms.
   //
   // Code inside `step(() => ...)` and `forEachFile(...)` callbacks runs in
   // its own isolate, with every module the run allows (`fs`, `fetch` and
@@ -362,7 +370,19 @@ declare module "codemod:workflow" {
      * dropped.
      */
     timeout?: Duration;
+    /**
+     * State the step's transforms read with `getState()` (and shell commands
+     * as `$CODEMOD_STATE`). Copied when the step is called. For transforms
+     * written against workflow state; new code passes values as options.
+     */
+    state?: { readonly [key: string]: JsonValue };
   }
+
+  /**
+   * What a step's transforms set with `setState`, by key; `null` for a key
+   * they removed. Present on a result only when they set something.
+   */
+  export type StateChanges = { readonly [key: string]: JsonValue };
 
   /**
    * Runs a task as a durable step and resolves to its frozen result.
@@ -537,6 +557,8 @@ declare module "codemod:workflow" {
     failures: FileFailure[];
     /** What callbacks recorded with `codemod/metrics`, by metric name. */
     metrics: Record<string, MetricEntry[]>;
+    /** What callbacks set with `setState`. */
+    state?: StateChanges;
   }
 
   /**
@@ -617,12 +639,6 @@ declare module "codemod:workflow" {
   ): Task<AstGrepResult>;
 
   /**
-   * Returns the whole workflow state as a frozen object.
-   * (With a key, see the `getState(name)` overload above.)
-   */
-  export function getState(): Readonly<Record<string, JsonValue>>;
-
-  /**
    * A result for tasks that do nothing in some runs: shell commands, agents
    * and skill installs in a dry run, git tasks without `--managed-git`.
    */
@@ -640,12 +656,13 @@ declare module "codemod:workflow" {
   /** A value in a `shell` template: quoted as one word, or one word per item. */
   export type ShellValue = string | number | boolean | readonly (string | number | boolean)[];
 
-  export type ShellTask = Task<Skippable<{ output: string }>>;
+  export type ShellTask = Task<Skippable<{ output: string; state?: StateChanges }>>;
 
   /**
-   * Runs a shell command. It can read the workflow state from `$CODEMOD_STATE`
-   * (a JSON file) or `$CODEMOD_STATE_<KEY>`, and set state by writing
-   * `key=value` (or `key@=value` to append) lines to `$STATE_OUTPUTS`.
+   * Runs a shell command. It can read the step's `state` option from
+   * `$CODEMOD_STATE` (a JSON file) or `$CODEMOD_STATE_<KEY>`, and return
+   * values by writing `key=value` (or `key@=value` to append) lines to
+   * `$STATE_OUTPUTS`, which arrive as `result.state`.
    *
    * @example
    * await step("Install", shell("npm install"));
@@ -706,6 +723,8 @@ declare module "codemod:workflow" {
     changes: FileChanges;
     unmodified: number;
     failures: FileFailure[];
+    /** What the transform set with `setState`. */
+    state?: StateChanges;
   }
 
   /**

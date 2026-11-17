@@ -377,16 +377,15 @@ export default async function main({ params }: { params: { name: string } }) {
 }
 
 #[test]
-fn workflow_state_is_shared_and_replayed() {
+fn a_steps_state_comes_back_on_its_replayed_result() {
     let h = Harness::new();
     h.write("a.txt", "a");
     let source = r#"
-import { step, getState, setState } from "codemod/workflow";
+import { step, forEachFile, setState } from "codemod/workflow";
 export default async function main() {
-  const files = await step("List", () => ["a.txt"]);
-  setState("files", files);
+  const listed = await step("List", forEachFile("*.txt", (file) => { setState("files", [file.path]); }));
   await step("Check", () => { throw new Error("stop"); });
-  return getState("files");
+  return listed.state;
 }
 "#;
     let first = h.start(source, Value::Null);
@@ -396,7 +395,24 @@ export default async function main() {
         &first,
         Some(&source.replace("throw new Error(\"stop\");", "return 1;")),
     );
-    assert_eq!(output(&second).unwrap(), json!(["a.txt"]));
+    assert_eq!(output(&second).unwrap(), json!({ "files": ["a.txt"] }));
+}
+
+#[test]
+fn the_workflow_body_cannot_use_workflow_state() {
+    let h = Harness::new();
+    let report = h.start(
+        r#"
+import { setState } from "codemod/workflow";
+export default async function main() { setState("x", 1); }
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("setState() is not available in the workflow body"),
+        "{error}"
+    );
 }
 
 #[test]

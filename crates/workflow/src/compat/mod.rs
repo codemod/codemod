@@ -10,6 +10,10 @@
 //! - each step becomes `await step("<name>", <task>)`;
 //! - matrix nodes run once per value (`values`, or the array in state for
 //!   `from_state`), concurrently;
+//! - workflow state is a plain object local to the run, `state`: steps that
+//!   can read it (shell, jssg) get it as their `state` option, and what they
+//!   set comes back on their result and is applied with `update(state, ...)`.
+//!   The engine keeps no workflow state of its own;
 //! - `${{ }}` expressions become TypeScript where that is exact, and
 //!   otherwise call `evaluate(...)`, which uses the YAML engine's evaluator;
 //!   `if:` conditions always go through `evaluate(...)`, and one that cannot
@@ -66,6 +70,10 @@ struct Generator {
     uses_after: bool,
     uses_matrix_env: bool,
     uses_context: bool,
+    /// Shell and jssg steps pass `state` and apply what they set: the
+    /// workflow reads state, or has more than one step that could write it.
+    plumb_state: bool,
+    uses_update: bool,
     /// Tasks get the run's params anyway; pass `params` explicitly only when
     /// it differs from them (defaults, template inputs).
     pass_params: bool,
@@ -83,6 +91,56 @@ struct NodeCode {
     /// Matrix values (`values` or state) when the node runs once per value.
     matrix: Option<String>,
     uses_params: bool,
+    uses_state: bool,
+}
+
+/// Parameters of a node function: `params` and `state` when it uses them.
+fn parameters(params: bool, state: bool) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    if params {
+        names.push("params");
+    }
+    if state {
+        names.push("state");
+    }
+    names
+}
+
+fn declared(names: &[&str]) -> Vec<String> {
+    names
+        .iter()
+        .map(|name| match *name {
+            "params" => "params: Params".to_string(),
+            _ => "state: State".to_string(),
+        })
+        .collect()
+}
+
+/// Whether translated steps must carry state from one to the next: the
+/// workflow reads it (`state.` in an expression, `from_state`), or more than
+/// one step could set it (shell, jssg, shard), so a later one may read it.
+fn plumbs_state(workflow: &Workflow) -> bool {
+    let text = serde_json::to_string(workflow).unwrap_or_default();
+    let reads = text.contains("state.")
+        || workflow.nodes.iter().any(|node| {
+            node.strategy
+                .as_ref()
+                .is_some_and(|s| s.from_state.is_some())
+        });
+    let steps = workflow
+        .nodes
+        .iter()
+        .flat_map(|node| &node.steps)
+        .chain(workflow.templates.iter().flat_map(|t| &t.steps));
+    let writers = steps
+        .filter(|step| {
+            matches!(
+                step.action,
+                StepAction::RunScript(_) | StepAction::JSAstGrep(_) | StepAction::Shard(_)
+            )
+        })
+        .count();
+    reads || writers > 1
 }
 
 /// Where a list of steps is being generated.
@@ -163,6 +221,7 @@ impl Generator {
 
         let has_defaults = defaults.as_object().is_some_and(|d| !d.is_empty());
         self.pass_params = has_defaults || !workflow.templates.is_empty();
+        self.plumb_state = plumbs_state(workflow);
 
         let order = topological(&workflow.nodes);
         let nodes: Vec<NodeCode> = order.iter().map(|node| self.node_code(node)).collect();
@@ -185,7 +244,7 @@ impl Generator {
             }
             let _ = writeln!(
                 templates_text,
-                "/** {} */\nasync function {name}(params: Params, matrix: Matrix) {{",
+                "/** {} */\nasync function {name}(params: Params, matrix: Matrix, state: State) {{",
                 template_def.name
             );
             let empty = HashMap::new();
@@ -205,6 +264,7 @@ impl Generator {
         let uses_params = has_defaults
             || !workflow.templates.is_empty()
             || nodes.iter().any(|node| node.uses_params);
+        let uses_state = !workflow.templates.is_empty() || nodes.iter().any(|node| node.uses_state);
         let mut main = String::new();
         if has_defaults {
             self.uses_context = true;
@@ -218,13 +278,16 @@ impl Generator {
         } else {
             main.push_str("export default async function main() {\n");
         }
+        if uses_state {
+            main.push_str("  const state: State = {};\n");
+        }
 
         let call = |node: &NodeCode| {
-            if node.uses_params {
-                format!("{}(params)", node.function)
-            } else {
-                format!("{}()", node.function)
-            }
+            format!(
+                "{}({})",
+                node.function,
+                parameters(node.uses_params, node.uses_state).join(", ")
+            )
         };
         let single = nodes.len() == 1 && nodes[0].matrix.is_none() && workflow.templates.is_empty();
         let chain = order.iter().enumerate().all(|(index, node)| match index {
@@ -276,27 +339,24 @@ impl Generator {
             for code in &nodes {
                 self.body.push('\n');
                 self.body.push_str(&code.preamble);
-                let (params, pass) = if code.uses_params {
-                    ("params: Params", "params, ")
-                } else {
-                    ("", "")
-                };
+                let names = parameters(code.uses_params, code.uses_state);
+                let params = declared(&names).join(", ");
                 match &code.matrix {
                     Some(source) => {
                         let instance = format!("{}For", code.function);
+                        let pass: String = names.iter().map(|name| format!("{name}, ")).collect();
                         let _ = writeln!(
                             self.body,
                             "async function {}({params}) {{\n  await Promise.all(\n    {source}.map((matrix: Matrix, index: number) => {instance}({pass}matrix, index)),\n  );\n}}\n",
                             code.function
                         );
+                        let declare: String = declared(&names)
+                            .into_iter()
+                            .map(|param| format!("{param}, "))
+                            .collect();
                         let _ = writeln!(
                             self.body,
-                            "async function {instance}({pass}matrix: Matrix, index: number) {{",
-                            pass = if code.uses_params {
-                                "params: Params, "
-                            } else {
-                                ""
-                            }
+                            "async function {instance}({declare}matrix: Matrix, index: number) {{"
                         );
                     }
                     None => {
@@ -356,10 +416,7 @@ impl Generator {
                     (Some(values), _) => {
                         serde_json::to_string(values).unwrap_or_else(|_| "[]".into())
                     }
-                    (None, Some(key)) => {
-                        self.import("getState");
-                        format!("(getState<any>({}) ?? [])", js_string(key))
-                    }
+                    (None, Some(key)) => format!("(state[{}] ?? [])", js_string(key)),
                     (None, None) => "[]".into(),
                 });
         let meta_files = node
@@ -427,6 +484,10 @@ impl Generator {
             function,
             preamble,
             uses_params: mentions(&inner, "params"),
+            uses_state: mentions(&inner, "state")
+                || matrix_source
+                    .as_deref()
+                    .is_some_and(|source| mentions(source, "state")),
             inner,
             matrix: matrix_source,
         }
@@ -642,8 +703,6 @@ impl Generator {
             }
             StepAction::Shard(shard) => {
                 self.import("shard");
-                self.import("setState");
-                self.import("getState");
                 let mut fields = Vec::new();
                 fields.push((
                     "method",
@@ -692,15 +751,9 @@ impl Generator {
                     ));
                     fields.push(("jssg", object(&js_fields)));
                 }
-                fields.push((
-                    "previous",
-                    format!("getState<any>({})", js_string(&shard.output_state)),
-                ));
-                let statement = format!(
-                    "setState({}, await step({name}, shard({})));",
-                    js_string(&shard.output_state),
-                    object(&fields)
-                );
+                let key = format!("state[{}]", js_string(&shard.output_state));
+                fields.push(("previous", key.clone()));
+                let statement = format!("{key} = await step({name}, shard({}));", object(&fields));
                 return (notes, statement);
             }
             StepAction::UseTemplate(use_template) => {
@@ -708,13 +761,24 @@ impl Generator {
                 let inputs =
                     serde_json::to_string(&use_template.inputs).unwrap_or_else(|_| "{}".into());
                 let statement = if use_template.inputs.is_empty() {
-                    format!("await {function}(params, matrix);")
+                    format!("await {function}(params, matrix, state);")
                 } else {
-                    format!("await {function}({{ ...params, ...{inputs} }}, matrix);")
+                    format!("await {function}({{ ...params, ...{inputs} }}, matrix, state);")
                 };
                 return (notes, statement);
             }
         };
+        let reads_state = matches!(
+            step.action,
+            StepAction::RunScript(_) | StepAction::JSAstGrep(_)
+        );
+        if reads_state && self.plumb_state {
+            self.uses_update = true;
+            return (
+                notes,
+                format!("update(state, await step({name}, {task}, {{ state }}));"),
+            );
+        }
         (notes, format!("await step({name}, {task});"))
     }
 
@@ -784,11 +848,6 @@ impl Generator {
         if self.body.contains("evaluate(") {
             imports.push("__evaluate as evaluate");
         }
-        if (self.body.contains("getState(") || self.body.contains("getState<"))
-            && !imports.contains(&"getState")
-        {
-            imports.push("getState");
-        }
         imports.sort_by_key(|name| name.trim_start_matches("__"));
         let _ = writeln!(
             source,
@@ -806,6 +865,10 @@ impl Generator {
         if mentions(&self.body, "Matrix") || self.uses_matrix_env {
             aliases.push_str("type Matrix = Record<string, any> | null;\n");
         }
+        if mentions(&self.body, "State") {
+            // workflow.yaml declares no types for state, so it is read as `any`.
+            aliases.push_str("type State = Record<string, any>;\n");
+        }
         if !aliases.is_empty() {
             source.push_str(&aliases);
             source.push('\n');
@@ -814,6 +877,11 @@ impl Generator {
         if self.uses_after {
             source.push_str(
                 "\nfunction after(dependencies: Promise<unknown>[], run: () => Promise<unknown>) {\n  return Promise.all(dependencies).then(run);\n}\n",
+            );
+        }
+        if self.uses_update {
+            source.push_str(
+                "\n/** Apply what a step set to the workflow's state; `null` removes a key. */\nfunction update(state: State, result: { readonly state?: Readonly<Record<string, unknown>> }) {\n  for (const [key, value] of Object.entries(result.state ?? {})) {\n    if (value === null) delete state[key];\n    else state[key] = value;\n  }\n}\n",
             );
         }
         if self.uses_matrix_env {
