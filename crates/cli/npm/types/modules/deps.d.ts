@@ -146,7 +146,7 @@ declare module "codemod:deps" {
   }
 
   /**
-   * Release metadata from npm, crates.io and PyPI. Usable inside a function step or
+   * Release metadata from npm, crates.io, PyPI and RubyGems. Usable inside a function step or
    * a `forEachFile` / `dependencyGraph` callback, so the answer is recorded
    * with the step; in the workflow body it rejects. Lookups are cached for the
    * run and asked once per package.
@@ -156,6 +156,8 @@ declare module "codemod:deps" {
     cargo(name: string): Promise<PackageReleases>;
     /** Versions are normalized (`2.0.0.RC1` is `2.0.0rc1`), as lockfiles write them. */
     pypi(name: string): Promise<PackageReleases<ReleaseVersion>>;
+    /** Releases carry runtime dependencies only; yanked versions are left out. */
+    rubygems(name: string): Promise<PackageReleases>;
   };
 
   type EcosystemOption = { ecosystem?: Ecosystem };

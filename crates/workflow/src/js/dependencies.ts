@@ -91,11 +91,12 @@ function flush(): void {
   }
 }
 
-/** Package releases from npm, crates.io and PyPI, oldest first. */
+/** Package releases from npm, crates.io, PyPI and RubyGems, oldest first. */
 export const registry = Object.freeze({
   npm: (name: string) => lookup("npm", name),
   cargo: (name: string) => lookup("cargo", name),
   pypi: (name: string) => lookup("pypi", name),
+  rubygems: (name: string) => lookup("rubygems", name),
 });
 
 /** Versions and ranges, by npm rules, Cargo's (`{ ecosystem: "cargo" }`) PEP 440 (`{ ecosystem: "pypi" }`) or RubyGems' (`{ ecosystem: "rubygems" }`). */

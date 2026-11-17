@@ -197,3 +197,50 @@ fn a_gem_requirement_that_rubygems_cannot_read_is_unknown() {
     use codemod_deps::semver::satisfies;
     assert_eq!(satisfies(Ecosystem::Rubygems, "^1.2", "1.2.0"), None);
 }
+
+const COMPACT_INDEX: &str = "---
+1.15.5-x86_64-linux racc:~> 1.4|checksum:c5d9,ruby:>= 2.7
+1.15.5 mini_portile2:~> 2.8.2,racc:~> 1.4|checksum:2244,ruby:>= 2.7.0
+1.16.0.rc1 racc:>= 1.4&< 2|checksum:9a1c
+";
+
+fn indexed_dependencies() -> Vec<(String, Vec<String>)> {
+    use codemod_deps::registry::rubygems_releases;
+    rubygems_releases(COMPACT_INDEX)
+        .unwrap()
+        .into_iter()
+        .map(|release| {
+            let dependencies = release
+                .dependencies
+                .iter()
+                .map(|(name, range, _)| format!("{name} {range}"))
+                .collect();
+            (release.version, dependencies)
+        })
+        .collect()
+}
+
+#[test]
+fn a_gem_built_for_several_platforms_is_one_release_with_its_plain_ruby_dependencies() {
+    assert_eq!(
+        indexed_dependencies()[0],
+        (
+            "1.15.5".to_string(),
+            vec![
+                "mini_portile2 ~> 2.8.2".to_string(),
+                "racc ~> 1.4".to_string()
+            ]
+        )
+    );
+}
+
+#[test]
+fn compact_index_requirements_joined_by_ampersands_read_as_one_requirement() {
+    assert_eq!(
+        indexed_dependencies()[1],
+        (
+            "1.16.0.rc1".to_string(),
+            vec!["racc >= 1.4, < 2".to_string()]
+        )
+    );
+}

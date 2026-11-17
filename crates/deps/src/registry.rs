@@ -34,8 +34,8 @@ pub trait Registry: Send + Sync {
     ) -> Result<BTreeMap<String, Vec<Release>>, String>;
 }
 
-/// npm (abbreviated packuments), crates.io (sparse index) and PyPI (JSON
-/// API) over HTTPS,
+/// npm (abbreviated packuments), crates.io (sparse index), PyPI (JSON
+/// API) and RubyGems (compact index) over HTTPS,
 /// kept for the life of the value. Concurrent asks for the same package
 /// share one request, and at most [`CONCURRENT_REQUESTS`] run at once across
 /// every ask, however many steps and workers ask together.
@@ -180,9 +180,6 @@ async fn fetch_all(
     names: &[String],
     requests: &tokio::sync::Semaphore,
 ) -> Result<Vec<(String, Vec<Release>)>, String> {
-    if ecosystem == Ecosystem::Rubygems {
-        return Err("RubyGems release lookups are not supported yet".into());
-    }
     let client = reqwest::Client::builder()
         .user_agent("codemod-workflow")
         .timeout(std::time::Duration::from_secs(30))
@@ -204,7 +201,7 @@ async fn fetch_all(
                     format!("https://pypi.org/pypi/{name}/json"),
                     "application/json",
                 ),
-                Ecosystem::Rubygems => unreachable!("rejected above"),
+                Ecosystem::Rubygems => (format!("https://rubygems.org/info/{name}"), "text/plain"),
             };
             let _permit = requests.acquire().await.map_err(|e| e.to_string())?;
             let response = client
@@ -228,7 +225,7 @@ async fn fetch_all(
                 Ecosystem::Npm => npm_releases(&text),
                 Ecosystem::Cargo => crate_releases(&text),
                 Ecosystem::Pypi => pypi_releases(&text),
-                Ecosystem::Rubygems => unreachable!("rejected above"),
+                Ecosystem::Rubygems => rubygems_releases(&text),
             }
             .map_err(|e| format!("{url}: {e}"))?;
             Ok((name.clone(), releases))
@@ -339,4 +336,54 @@ pub fn pypi_releases(document: &str) -> Result<Vec<Release>, String> {
             })
         })
         .collect())
+}
+
+/// Releases from a RubyGems compact index file (`/info/{name}`): one line
+/// per version and platform, `1.16.0-x86_64-linux racc:~> 1.4|checksum:...`.
+/// A version built for several platforms is one release, with the
+/// dependencies of its plain Ruby build when there is one. Yanked versions
+/// are not in the file, and only runtime dependencies are.
+pub fn rubygems_releases(index: &str) -> Result<Vec<Release>, String> {
+    let mut lines = index.lines().filter(|line| !line.trim().is_empty());
+    if lines.next() != Some("---") {
+        return Err("not a compact index file".to_string());
+    }
+    let mut releases: Vec<Release> = Vec::new();
+    let mut seen = HashMap::<String, usize>::new();
+    for line in lines {
+        let (name, rest) = line.split_once(' ').ok_or("unreadable index line")?;
+        let (version, platform) = match name.split_once('-') {
+            Some((version, platform)) => (version, Some(platform)),
+            None => (name, None),
+        };
+        let dependencies = rest
+            .split('|')
+            .next()
+            .unwrap_or_default()
+            .split(',')
+            .filter(|dependency| !dependency.trim().is_empty())
+            .map(|dependency| {
+                let (name, requirement) =
+                    dependency.split_once(':').unwrap_or((dependency, ">= 0"));
+                (
+                    name.trim().to_string(),
+                    requirement.replace('&', ", "),
+                    Kind::Prod,
+                )
+            })
+            .collect();
+        match seen.get(version) {
+            Some(&at) if platform.is_none() => releases[at].dependencies = dependencies,
+            Some(_) => {}
+            None => {
+                seen.insert(version.to_string(), releases.len());
+                releases.push(Release {
+                    version: version.to_string(),
+                    yanked: false,
+                    dependencies,
+                });
+            }
+        }
+    }
+    Ok(releases)
 }
