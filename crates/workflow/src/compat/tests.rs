@@ -377,6 +377,44 @@ nodes:
 }
 
 #[test]
+fn a_template_nested_ten_deep_still_carries_state() {
+    let mut yaml = String::from(
+        r#"
+version: "1"
+templates:
+  - id: t0
+    name: T0
+    steps:
+      - name: Count
+        run: echo "count=1" >> "$STATE_OUTPUTS"
+      - name: Again
+        run: echo "count=2" >> "$STATE_OUTPUTS"
+"#,
+    );
+    for level in 1..=10 {
+        yaml.push_str(&format!(
+            "  - id: t{level}\n    name: T{level}\n    steps:\n      - name: Use{level}\n        use:\n          template: t{}\n",
+            level - 1
+        ));
+    }
+    yaml.push_str(
+        r#"nodes:
+  - id: deep
+    name: Deep
+    steps:
+      - name: Top
+        use:
+          template: t10
+"#,
+    );
+    let source = source_of(&yaml);
+    assert!(
+        source.contains(r#"Object.assign(state, (await step("Count", shell("#),
+        "{source}"
+    );
+}
+
+#[test]
 fn a_transform_in_a_workflow_that_reads_state_is_flagged() {
     let result = translated(
         r#"

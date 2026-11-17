@@ -133,24 +133,33 @@ fn plumbs_state(workflow: &Workflow) -> bool {
     let writers: usize = workflow
         .nodes
         .iter()
-        .map(|node| writers(&node.steps, workflow, 0))
+        .map(|node| writers(&node.steps, workflow, &mut Vec::new()))
         .sum();
     reads || writers > 1
 }
 
 /// How many steps among these could set state, following template uses.
-fn writers(steps: &[Step], workflow: &Workflow, depth: usize) -> usize {
+/// `using` holds the templates being followed, so a template that uses
+/// itself (an error elsewhere) ends the walk instead of looping.
+fn writers<'a>(steps: &[Step], workflow: &'a Workflow, using: &mut Vec<&'a str>) -> usize {
     steps
         .iter()
         .map(|step| match &step.action {
             StepAction::RunScript(_) | StepAction::Shard(_) => 1,
-            // A template that uses itself is an error elsewhere; stop here.
-            StepAction::UseTemplate(_) if depth > 8 => 0,
-            StepAction::UseTemplate(used) => workflow
-                .templates
-                .iter()
-                .find(|template| template.id == used.template)
-                .map_or(0, |template| writers(&template.steps, workflow, depth + 1)),
+            StepAction::UseTemplate(used) => {
+                let Some(template) = workflow
+                    .templates
+                    .iter()
+                    .find(|template| template.id == used.template)
+                    .filter(|template| !using.contains(&template.id.as_str()))
+                else {
+                    return 0;
+                };
+                using.push(&template.id);
+                let count = writers(&template.steps, workflow, using);
+                using.pop();
+                count
+            }
             _ => 0,
         })
         .sum()

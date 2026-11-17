@@ -175,7 +175,7 @@ impl MetricsContext {
 /// ```
 pub fn record_data<'js>(
     ctx: &Ctx<'js>,
-    context: &MetricsContext,
+    context: Option<&MetricsContext>,
     data: &rquickjs::Value<'js>,
 ) -> Result<()> {
     let object = data
@@ -214,9 +214,13 @@ pub fn record_data<'js>(
             counted.push((name.clone(), Cardinality::new(pairs)));
         }
     }
-    // Nothing is counted unless the whole of `data` is well formed.
-    for (name, cardinality) in counted {
-        context.increment(&name, cardinality, 1);
+    // Nothing is counted unless the whole of `data` is well formed, and
+    // `data` is checked even when nothing collects it, so a transform fails
+    // the same way wherever it runs.
+    if let Some(context) = context {
+        for (name, cardinality) in counted {
+            context.increment(&name, cardinality, 1);
+        }
     }
     Ok(())
 }

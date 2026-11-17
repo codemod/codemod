@@ -1899,6 +1899,14 @@ function example() {
     }
 
     async fn run_returning(body: &str, content: &str) -> Result<CodemodOutput, ExecutionError> {
+        run_collecting(body, content, Some(crate::metrics::MetricsContext::new())).await
+    }
+
+    async fn run_collecting(
+        body: &str,
+        content: &str,
+        metrics_context: Option<crate::metrics::MetricsContext>,
+    ) -> Result<CodemodOutput, ExecutionError> {
         let script = format!("export default function transform(root) {{ {body} }}");
         let (temp_dir, codemod_path) = setup_test_codemod(&script);
         let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
@@ -1913,7 +1921,7 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: Some(crate::metrics::MetricsContext::new()),
+            metrics_context,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1936,6 +1944,21 @@ function example() {
         assert!(
             matches!(output.primary, ExecutionResult::Modified(ref m) if m.content == "const b = 1;"),
             "{output:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_data_fails_even_when_nothing_collects_it() {
+        let error = run_collecting(
+            r#"return { edit: "const b = 1;", data: { seen: [42] } };"#,
+            "const a = 1;",
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("must be an object of labels"),
+            "{error}"
         );
     }
 

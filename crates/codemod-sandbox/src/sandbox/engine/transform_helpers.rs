@@ -132,9 +132,8 @@ pub fn process_transform_result(
         }
         let data: Value = object.get("data").map_err(|e| failed(e.to_string()))?;
         if !data.is_undefined() && !data.is_null() {
-            if let Some(context) = ctx.userdata::<MetricsContext>() {
-                record_data(ctx, &context, &data).map_err(|e| failed(caught(ctx, e)))?;
-            }
+            let context = ctx.userdata::<MetricsContext>();
+            record_data(ctx, context.as_deref(), &data).map_err(|e| failed(caught(ctx, e)))?;
         }
         let edit: Value = object.get("edit").map_err(|e| failed(e.to_string()))?;
         return process_edit(&edit, sg_root_inner, modification_check);
