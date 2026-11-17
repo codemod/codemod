@@ -94,7 +94,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     })?;
 
     let outcome: Outcome = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    isolates.metrics(task);
+    isolates.data(task);
     if let Some(message) = failure {
         return Err(message);
     }
@@ -105,5 +105,5 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     }
     let planned = jssg::plan(task, &changes)?;
     changes::commit(task, &planned, task.run.dry_run)?;
-    Ok(TaskOutcome::new(outcome.result).with_state(isolates.state_changes()))
+    Ok(TaskOutcome::new(outcome.result))
 }

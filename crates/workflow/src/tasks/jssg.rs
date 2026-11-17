@@ -77,14 +77,13 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             outcome.failures[0].1
         )));
     }
-    let state = outcome.state.clone();
     let total = outcome.changes.len() + outcome.unmodified + outcome.failures.len();
     Ok(TaskOutcome::new(json!({
         "changes": applied,
         "unmodified": outcome.unmodified,
         "failures": failures,
+        "data": outcome.metrics,
     }))
-    .with_state(state)
     .with_failures(outcome.failures.len(), total))
 }
 
@@ -156,7 +155,6 @@ pub(crate) fn execute(
         semantic,
         threads: request.threads,
         dry_run,
-        initial_state: task.state.clone().into_iter().collect(),
         cancel: Some(task.cancel.clone()),
         progress: Some(task.walk_progress()),
         on_log: Some(step_logs(task)),

@@ -10,7 +10,7 @@
 
 // ----------------------------------------------------------------- JSON ---
 
-/** A JSON value: what steps record, tasks are described in, and state holds. */
+/** A JSON value: what steps record and tasks are described in. */
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 // ------------------------------------------------------- the run's records ---
@@ -36,8 +36,6 @@ export interface StepRecord {
   key: string;
   status: StepStatus;
   result?: Json;
-  /** State the step set: keys to values, where `null` removes a key. */
-  state?: Record<string, Json> | null;
   error?: string | null;
   /** When a successful step finished, in milliseconds since the epoch. */
   finishedAt?: number | null;
@@ -63,8 +61,6 @@ export interface StartRequest {
   position: number;
   label: string;
   task: TaskContent;
-  /** Workflow state when the step was called. */
-  state: Record<string, Json>;
   /** The step's function, on hosts that run callbacks in place. */
   fn?: Callback;
   /** How long the task may run, from the step's `timeout`. */
@@ -76,8 +72,6 @@ export interface StartRequest {
 /** What a task resolves to: `TaskOutcome` in `crates/workflow/src/tasks/mod.rs`. */
 export interface Outcome {
   result?: Json;
-  /** State the task set: keys to values, where `null` removes a key. */
-  state?: Record<string, Json> | null;
   /** Set when some of the task's files failed: how many, as a message. */
   partial?: string;
 }
@@ -514,6 +508,11 @@ interface Policy {
 /** What `step(..., options)` asks for. */
 function policyOf(options: unknown, what: string): Policy {
   if (options === undefined) return { attempts: 1, retryDelay: 0, timeout: undefined };
+  if (isRecord(options) && "state" in options) {
+    throw new TypeError(
+      `${what}: steps take no \`state\`: give values to the task itself (a function step's variables, jssg \`params\`, shell \`env\`) and read what it found from its result`,
+    );
+  }
   onlyKeys(options, ["retries", "retryDelay", "timeout"], what);
   const { retries = 0, retryDelay = "1s", timeout } = options as StepOptions;
   if (!Number.isInteger(retries) || retries < 0) {
@@ -613,8 +612,6 @@ export function createRuntime(host: Host) {
     return { position: nextPosition++ };
   }
 
-  const state = new Map<string, Json>();
-
   // A test run can stop after one step (`until`) and skip steps with a given
   // result (`given`), both matched by label.
   const plan: TestPlan = host.testPlan() ?? {};
@@ -627,7 +624,7 @@ export function createRuntime(host: Host) {
 
   // Recorded steps the body has issued again, waiting to settle. They settle
   // one at a time in the order they finished when they ran, so the body sees
-  // state, the clock and promise races as it did then.
+  // results, the clock and promise races as it did then.
   const replaying: Replay[] = [];
 
   /**
@@ -660,68 +657,6 @@ export function createRuntime(host: Host) {
   // for it, so Date.now() in the body gives the same answer on every replay.
   function settleClock(entry: Pick<StepRecord, "finishedAt">): void {
     if (typeof entry.finishedAt === "number") host.advanceClock(entry.finishedAt);
-  }
-
-  // ---------------------------------------------------------------- state ---
-
-  /** Read one state key, or the whole state as an object when called without one. Values are frozen. */
-  function getState(key?: string): Json | undefined | Readonly<Record<string, Json>> {
-    if (key === undefined) return Object.freeze(Object.fromEntries(state));
-    return state.get(key);
-  }
-
-  /** Set workflow state. `undefined` removes the key. */
-  function setState(key: string, value: unknown): void {
-    if (value === undefined) {
-      state.delete(key);
-      return;
-    }
-    checkJson(value, `state.${key}`);
-    state.set(key, freeze(JSON.parse(JSON.stringify(value)) as Json));
-  }
-
-  function unsetState(key: string): void {
-    state.delete(key);
-  }
-
-  function applyState(changes: Outcome["state"]): void {
-    if (!changes) return;
-    for (const [key, value] of Object.entries(changes)) {
-      if (value === null) state.delete(key);
-      else state.set(key, freeze(value));
-    }
-  }
-
-  function stateSnapshot(): Record<string, Json> {
-    return Object.fromEntries(state);
-  }
-
-  // The body runs alone, so a lock there has nothing to wait for; steps and
-  // callbacks get the real one from their own runtime.
-  function acquireLock(_name: string): () => void {
-    return () => {};
-  }
-
-  // Step outputs are kept for the transforms that still set them; nothing in
-  // a workflow reads them back but these functions.
-  const stepOutputs = new Map<string, string>();
-  const outputKey = (stepId: string, name: string) => JSON.stringify([stepId, name]);
-
-  function setStepOutput(name: string, value: unknown): void {
-    stepOutputs.set(outputKey("", name), String(value));
-  }
-
-  function getStepOutput(stepId: string, name: string): string | null {
-    return stepOutputs.get(outputKey(stepId, name)) ?? null;
-  }
-
-  function getOrSetStepOutput(stepId: string, name: string, value: unknown): string {
-    const key = outputKey(stepId, name);
-    const existing = stepOutputs.get(key);
-    if (existing !== undefined) return existing;
-    const text = String(value);
-    stepOutputs.set(key, text);
-    return text;
   }
 
   /** Evaluate a workflow.yaml `${{ }}` expression; used by translated workflows. */
@@ -761,7 +696,7 @@ export function createRuntime(host: Host) {
     const described = label === undefined ? "step" : `step '${label}'`;
     const policy = policyOf(options, described);
     // Everything up to the first await runs synchronously inside step(), so
-    // captures and state are a snapshot taken when the step is called.
+    // captures are a snapshot taken when the step is called.
     let content: TaskContent;
     let fn: Callback | undefined;
     const callback = callbackOf(task);
@@ -817,7 +752,6 @@ export function createRuntime(host: Host) {
           // order they were issued.
           order: prior.seq ?? prior.position,
           settle() {
-            applyState(prior.state);
             settleClock(prior);
             host.event({ type: "stepReplayed", position, label: name });
             resolve(prior.result ?? null);
@@ -862,7 +796,6 @@ export function createRuntime(host: Host) {
       position,
       label: name,
       task: content,
-      state: stateSnapshot(),
       fn,
       ...(policy.timeout !== undefined && { timeoutMs: policy.timeout }),
       ...(since !== undefined && { since }),
@@ -893,7 +826,6 @@ export function createRuntime(host: Host) {
               position,
               label: name,
               task: { kind: "sleep", duration: policy.retryDelay },
-              state: {},
             });
           }
           attempt++;
@@ -915,14 +847,12 @@ export function createRuntime(host: Host) {
       throw new StepError(name, error);
     }
     const result = outcome.result ?? null;
-    const changes = outcome.state ?? null;
-    applyState(changes);
     const finishedAt = host.now();
     // Some files failed: the step finished, and the rest of the run goes on.
     if (outcome.partial !== undefined) {
-      record({ status: "partial", result, state: changes, finishedAt, error: outcome.partial });
+      record({ status: "partial", result, finishedAt, error: outcome.partial });
     } else {
-      record({ status: "succeeded", result, state: changes, finishedAt });
+      record({ status: "succeeded", result, finishedAt });
     }
     settleClock({ finishedAt });
     return result;
@@ -969,13 +899,6 @@ export function createRuntime(host: Host) {
   const { callbackOf: _, ...builders } = tasks;
   return {
     ...builders,
-    getState,
-    setState,
-    unsetState,
-    acquireLock,
-    setStepOutput,
-    getStepOutput,
-    getOrSetStepOutput,
     __evaluate,
     step,
     sleep,

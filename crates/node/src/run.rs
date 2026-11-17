@@ -243,16 +243,6 @@ impl Run {
             .map_err(Error::from_reason)
     }
 
-    /// Add metrics a step recorded to the run summary.
-    #[napi]
-    pub fn add_metrics(&self, metrics: String) -> Result<()> {
-        let metrics: Value = serde_json::from_str(&metrics).map_err(to_napi)?;
-        self.inner
-            .run
-            .add_metrics(metrics)
-            .map_err(Error::from_reason)
-    }
-
     /// Events since the last call, as the engine reports them.
     #[napi]
     pub fn take_events(&self) -> Result<Value> {

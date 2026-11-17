@@ -1,7 +1,6 @@
 //! Host tasks: the work a step hands to Rust. Each task is a thin adapter
 //! over an existing executor.
 
-use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -36,8 +35,6 @@ pub(crate) struct TaskContext<'a> {
     /// Position of the step running this task, for events.
     pub position: u64,
     pub label: String,
-    /// Workflow state when the step started.
-    pub state: serde_json::Map<String, Value>,
     /// Set when the task must stop: the run was canceled, or the step ran
     /// out of time. The run's own flag for a step without a timeout.
     pub cancel: Arc<AtomicBool>,
@@ -98,9 +95,6 @@ impl TaskContext<'_> {
 #[derive(Debug, Serialize)]
 pub(crate) struct TaskOutcome {
     pub result: Value,
-    /// State the task set: keys to values, `null` removes a key.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub state: Option<BTreeMap<String, Value>>,
     /// Set when some of the task's files failed: how many, as a message. The
     /// step is then recorded as partial.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -111,7 +105,6 @@ impl TaskOutcome {
     pub fn new(result: Value) -> Self {
         Self {
             result,
-            state: None,
             partial: None,
         }
     }
@@ -120,13 +113,6 @@ impl TaskOutcome {
     pub fn with_failures(mut self, failed: usize, total: usize) -> Self {
         if failed > 0 {
             self.partial = Some(failed_files(failed, total));
-        }
-        self
-    }
-
-    pub fn with_state(mut self, state: BTreeMap<String, Value>) -> Self {
-        if !state.is_empty() {
-            self.state = Some(state);
         }
         self
     }

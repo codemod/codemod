@@ -407,8 +407,6 @@ struct HostRequest {
     position: u64,
     label: String,
     task: serde_json::Value,
-    #[serde(default)]
-    state: serde_json::Map<String, serde_json::Value>,
     /// How long the task may run, from the step's `timeout`.
     #[serde(default)]
     timeout_ms: Option<u64>,
@@ -476,7 +474,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
     runtime.set_loader(
         (
             // The body's codemod modules: `codemod/<name>`, or `codemod:<name>`.
-            CodemodModuleResolver::new(&["ast-grep", "workflow", "metrics"]),
+            CodemodModuleResolver::new(&["ast-grep", "workflow"]),
             llrt_resolver,
             BuiltinResolver::default()
                 .with_module(ORCHESTRATOR_MODULE)
@@ -488,8 +486,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             BuiltinLoader::default()
                 .with_module(FLOW_MODULE, crate::js::workflow_module())
                 .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator())
-                .with_module(SEMVER_MODULE, crate::js::semver_module())
-                .with_module("codemod/metrics", crate::js::body_metrics()),
+                .with_module(SEMVER_MODULE, crate::js::semver_module()),
             QuickJSLoader,
         ),
     );
@@ -695,7 +692,6 @@ pub(crate) fn run_host_task(run: &Arc<RunContext>, request: &str) -> Result<Stri
         run,
         position: request.position,
         label: request.label,
-        state: request.state,
         cancel: match &clock {
             Some(clock) => Arc::clone(&clock.cancel),
             None => Arc::clone(&run.cancel),

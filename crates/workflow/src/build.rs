@@ -107,7 +107,7 @@ const PURE_BUILTINS: &[&str] = &[
 pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
     match codemod_module(specifier) {
         Some("workflow") => return Ok(ModuleClass::Workflow),
-        Some("metrics" | "ast-grep") => return Ok(ModuleClass::Pure),
+        Some("ast-grep") => return Ok(ModuleClass::Pure),
         Some(_) => return Ok(ModuleClass::StepsOnly),
         None => {}
     }
@@ -119,6 +119,11 @@ pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
         // an import of one is gone once the types are stripped.
         if name.starts_with("ast-grep/langs/") || name.starts_with("langs/") {
             return Ok(ModuleClass::Pure);
+        }
+        if name == "metrics" {
+            return Err(format!(
+                "'{specifier}' was removed: a transform reports counts by returning `{{ edit, data }}`, and a callback returns them as its output"
+            ));
         }
         let modules: Vec<String> = CODEMOD_MODULES
             .iter()
@@ -233,8 +238,16 @@ impl Isolated {
     }
 }
 
-/// `codemod/workflow` functions that work inside an isolate: the JSSG state API.
-const ISOLATE_STATE_API: &[&str] = &["getState", "setState", "unsetState", "acquireLock"];
+/// `codemod/workflow` exports that were removed with workflow state.
+const REMOVED_STATE_API: &[&str] = &[
+    "getState",
+    "setState",
+    "unsetState",
+    "acquireLock",
+    "setStepOutput",
+    "getStepOutput",
+    "getOrSetStepOutput",
+];
 
 /// `codemod:workflow` exports that steps and callbacks import from
 /// `codemod-internal:dependencies`, which runs in the isolate.
@@ -295,6 +308,16 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                 continue;
                             }
                             let imported = s.imported.name().to_string();
+                            if module == "codemod/workflow"
+                                && REMOVED_STATE_API.contains(&imported.as_str())
+                            {
+                                return Err(analysis.error(
+                                    s.span.start,
+                                    format!(
+                                        "'{imported}' was removed: workflows have no state. Give a step what it needs (a function step's variables, jssg `params`, shell `env`) and read what it found from its result"
+                                    ),
+                                ));
+                            }
                             let line = format!(
                                 "import {{ {imported} as {} }} from {:?};",
                                 s.local.name, module
@@ -757,7 +780,7 @@ impl Analysis<'_> {
                 parts.imports.insert((import.at, line));
                 return Ok(());
             }
-            if is_flow_module(&import.source) && !ISOLATE_STATE_API.contains(&imported) {
+            if is_flow_module(&import.source) {
                 return Err(self.error(
                     at.start,
                     format!(
@@ -805,6 +828,11 @@ pub fn check_imports(file: &Path, source: &str, built: &Built) -> Result<(), Bui
         return Ok(());
     }
     let name = file.display().to_string();
+    // The resolver joins a relative importer onto its base directory, which
+    // would repeat the workflow's directory: resolve from the absolute path.
+    let file = std::path::absolute(file)
+        .map_err(|e| error_at(&name, source, 0, format!("cannot resolve imports: {e}")))?;
+    let importer = file.to_string_lossy().to_string();
     let base_dir = file
         .parent()
         .map(Path::to_path_buf)
@@ -819,7 +847,7 @@ pub fn check_imports(file: &Path, source: &str, built: &Built) -> Result<(), Bui
     for import in &built.body_imports {
         let at = |message: String| error_at(&name, source, import.offset, message);
         let resolved = resolver
-            .resolve(&name, &import.source)
+            .resolve(&importer, &import.source)
             .map_err(|e| at(format!("cannot resolve '{}': {e}", import.source)))?;
         let chain = walk.effectful(Path::new(&resolved)).map_err(at)?;
         if let Some(chain) = chain {

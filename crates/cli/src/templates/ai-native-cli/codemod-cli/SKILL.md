@@ -44,7 +44,7 @@ Everything below runs through the Codemod CLI. For work on the user's Codemod pl
 
 The Performant codemods section of `jssg-gotchas` is required reading for any JSSG package: discriminating selectors or token gates, no per-file full-repo walks, and a timed no-op vs real run on the same entry path (`workflow run` when the package uses selectors/globs; otherwise `jssg run --language`) before you claim it is done.
 
-For mining / Insights metrics packages, Insights loads the `js-ast-grep` script of the one bound workflow step: call `useMetricAtom` and `increment` in that script and `return null`, not only in a package-entry file or helper import.
+For mining / Insights metrics packages, Insights loads the `js-ast-grep` script of the one bound workflow step: return `{ edit: null, data }` from that script, not only from a package-entry file or helper import.
 
 ## Migrations: search the registry first
 

@@ -34,10 +34,6 @@
       "types": "./src/main.d.ts",
       "default": "./src/main.d.ts"
     },
-    "./metrics": {
-      "types": "./src/metrics.d.ts",
-      "default": "./src/metrics.d.ts"
-    },
     "./runtime": {
       "types": "./src/runtime.d.ts",
       "default": "./src/runtime.d.ts"

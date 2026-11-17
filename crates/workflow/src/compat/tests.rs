@@ -49,12 +49,12 @@ fn a_linear_shell_workflow_becomes_a_sequence_of_awaits() {
     let source = translated(&text).source;
     assert!(
         source.contains(
-            "export default async function main() {\n  await setupNode();\n  await transformNode();\n  await cleanupNode();\n}"
+            "export default async function main() {\n  const state: State = {};\n  await setupNode(state);\n  await transformNode(state);\n  await cleanupNode(state);\n}"
         ),
         "{source}"
     );
     assert!(
-        source.contains("await step(\"Initialize\", shell(\"$CODEMOD_PATH/scripts/setup.sh\"));"),
+        source.contains(r#"Object.assign(state, (await step("Initialize", shell("export STATE_OUTPUTS=\"$CODEMOD_OUTPUT\"; $CODEMOD_PATH/scripts/setup.sh", { env: { ...stateEnv(state) } }))).values);"#),
         "{source}"
     );
     for unused in [
@@ -162,7 +162,7 @@ nodes:
     )
     .source;
     assert!(
-        source.contains("await Promise.all([aNode(), bNode()]);"),
+        source.contains("await Promise.all([aNode(state), bNode(state)]);"),
         "{source}"
     );
 }
@@ -264,16 +264,16 @@ fn the_documented_features_translate_and_build() {
 
     expect("\"pr_size\": 20");
     expect("\"mode\": \"safe\"");
-    expect("setState(\"shards\", await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", jssg: { path: \"scripts/codemod.ts\", language: \"tsx\", params }, previous: getState<any>(\"shards\") })));");
-    expect("(getState<any>(\"shards\") ?? []).map((matrix: Matrix, index: number) => applyNodeFor(params, matrix, index))");
+    expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", jssg: { path: \"scripts/codemod.ts\", language: \"tsx\", params }, previous: state[\"shards\"] }));");
+    expect("(state[\"shards\"] ?? []).map((matrix: Matrix, index: number) => applyNodeFor(params, state, matrix, index))");
     expect("await step(approval(\"Run 'Apply transforms'?\"));");
     expect("const branchName = `codemod-apply-${index}`;");
     expect("forEachFile({ language: \"tsx\" }, jssg(\"scripts/codemod.ts\", {\n    files: matrix?._meta_files,\n    params,\n    matrix: matrix ?? undefined,\n  }))");
-    expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state: getState() })) {");
+    expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state })) {");
     expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
-    expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state: getState() })) {");
-    expect("shell(\"echo fast\", { env: { ...matrixEnv(matrix), CI: \"true\" } })");
-    expect("await lintFixTemplate({ ...params, ...{\"target_glob\":\"src/**\"} }, matrix);");
+    expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state })) {");
+    expect("shell(\"export STATE_OUTPUTS=\\\"$CODEMOD_OUTPUT\\\"; echo fast\", { env: { ...stateEnv(state), ...matrixEnv(matrix), CI: \"true\" } })");
+    expect("await lintFixTemplate({ ...params, ...{\"target_glob\":\"src/**\"} }, matrix, state);");
     expect("await step(pullRequest({ title: `refactor: migrate ${matrix?.name}`, draft: true, branch: branchName }));");
     expect("agent(`Summarize ${matrix?.team}`)");
     expect("codemod(\"@codemod/other\", { params })");
@@ -317,4 +317,143 @@ nodes:
         "{}",
         translated.source
     );
+}
+
+// ---- workflow state is a local object, not an engine API ----
+
+fn source_of(yaml: &str) -> String {
+    translated(yaml).source
+}
+
+#[test]
+fn a_shell_step_gets_state_as_variables_and_its_values_are_copied_into_it() {
+    let source = source_of(
+        r#"
+version: "1"
+nodes:
+  - id: detect
+    name: Detect
+    steps:
+      - name: Version
+        run: echo "version=19" >> "$STATE_OUTPUTS"
+      - name: Use it
+        run: echo ${{ state.version }}
+"#,
+    );
+    assert!(
+        source.contains(r#"Object.assign(state, (await step("Version", shell("export STATE_OUTPUTS=\"$CODEMOD_OUTPUT\"; echo \"version=19\" >> \"$STATE_OUTPUTS\"", { env: { ...stateEnv(state) } }))).values);"#),
+        "{source}"
+    );
+    assert!(source.contains("echo ${state.version}`"), "{source}");
+}
+
+#[test]
+fn a_template_that_can_write_state_carries_it_when_used_twice() {
+    let source = source_of(
+        r#"
+version: "1"
+templates:
+  - id: bump
+    name: Bump
+    steps:
+      - name: Count
+        run: echo "count=1" >> "$STATE_OUTPUTS"
+nodes:
+  - id: twice
+    name: Twice
+    steps:
+      - name: First
+        use:
+          template: bump
+      - name: Second
+        use:
+          template: bump
+"#,
+    );
+    assert!(
+        source.contains(r#"Object.assign(state, (await step("Count", shell("#),
+        "{source}"
+    );
+}
+
+#[test]
+fn a_template_nested_ten_deep_still_carries_state() {
+    let mut yaml = String::from(
+        r#"
+version: "1"
+templates:
+  - id: t0
+    name: T0
+    steps:
+      - name: Count
+        run: echo "count=1" >> "$STATE_OUTPUTS"
+      - name: Again
+        run: echo "count=2" >> "$STATE_OUTPUTS"
+"#,
+    );
+    for level in 1..=10 {
+        yaml.push_str(&format!(
+            "  - id: t{level}\n    name: T{level}\n    steps:\n      - name: Use{level}\n        use:\n          template: t{}\n",
+            level - 1
+        ));
+    }
+    yaml.push_str(
+        r#"nodes:
+  - id: deep
+    name: Deep
+    steps:
+      - name: Top
+        use:
+          template: t10
+"#,
+    );
+    let source = source_of(&yaml);
+    assert!(
+        source.contains(r#"Object.assign(state, (await step("Count", shell("#),
+        "{source}"
+    );
+}
+
+#[test]
+fn a_transform_in_a_workflow_that_reads_state_is_flagged() {
+    let result = translated(
+        r#"
+version: "1"
+nodes:
+  - id: scan
+    name: Scan
+    steps:
+      - name: Collect
+        js-ast-grep:
+          js_file: scripts/collect.ts
+      - name: Report
+        run: echo ${{ state.found }}
+"#,
+    );
+    assert!(
+        result.warnings.iter().any(|w| w
+            .starts_with("step 'Collect': a transform can no longer read or set workflow state")),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn a_workflow_with_one_step_and_no_state_reads_stays_plain() {
+    let source = source_of(
+        r#"
+version: "1"
+nodes:
+  - id: only
+    name: Only
+    steps:
+      - name: Run
+        run: echo hi
+"#,
+    );
+    assert!(
+        source.contains(r#"await step("Run", shell("echo hi"));"#),
+        "{source}"
+    );
+    assert!(!source.contains("State"), "{source}");
 }

@@ -377,26 +377,17 @@ export default async function main({ params }: { params: { name: string } }) {
 }
 
 #[test]
-fn workflow_state_is_shared_and_replayed() {
+fn a_step_given_a_state_option_fails() {
     let h = Harness::new();
-    h.write("a.txt", "a");
-    let source = r#"
-import { step, getState, setState } from "codemod/workflow";
-export default async function main() {
-  const files = await step("List", () => ["a.txt"]);
-  setState("files", files);
-  await step("Check", () => { throw new Error("stop"); });
-  return getState("files");
-}
-"#;
-    let first = h.start(source, Value::Null);
-    assert!(output(&first).is_err());
-
-    let second = h.resume(
-        &first,
-        Some(&source.replace("throw new Error(\"stop\");", "return 1;")),
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+export default async function main() { await step("Old", () => 1, { state: { x: 1 } } as any); }
+"#,
+        Value::Null,
     );
-    assert_eq!(output(&second).unwrap(), json!(["a.txt"]));
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("steps take no `state`"), "{error}");
 }
 
 #[test]
@@ -662,6 +653,27 @@ export const rewrite = () => step(forEachFile("**/*.ts", (file) => { file.write(
     )
     .unwrap();
     assert!(codemod_workflow::load_workflow(&path).is_ok());
+}
+
+#[test]
+fn a_workflow_loaded_by_a_relative_path_resolves_imports_from_its_own_directory() {
+    let bundle = tempfile::tempdir_in(".").unwrap();
+    std::fs::create_dir(bundle.path().join("src")).unwrap();
+    std::fs::write(
+        bundle.path().join("src/helper.ts"),
+        "export const answer = 42;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        bundle.path().join("src/workflow.ts"),
+        "import { answer } from \"./helper.ts\";\nexport default async function main() { return answer; }\n",
+    )
+    .unwrap();
+
+    // Loaded the way the CLI is given it: relative to the working directory, e.g. `.tmpXXXX/src/workflow.ts`.
+    let relative = std::path::Path::new(bundle.path().file_name().unwrap()).join("src/workflow.ts");
+
+    assert!(codemod_workflow::load_workflow(&relative).is_ok());
 }
 
 #[test]

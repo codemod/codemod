@@ -1271,10 +1271,10 @@ import { format } from "node:util";
 import path from "path";
 import { readFile } from "fs/promises";
 import { parse } from "codemod/ast-grep";
-import { useMetricAtom } from "codemod/metrics";
+import { warn } from "codemod/runtime";
 import { generate } from "codemod:llm";
 export default function transform() {
-  return [format("%s", "ok"), path.sep, readFile, parse, useMetricAtom, generate];
+  return [format("%s", "ok"), path.sep, readFile, parse, warn, generate];
 }
 "#,
         )
@@ -1285,10 +1285,10 @@ export default function transform() {
         fs::create_dir_all(installed.join("runtime")).unwrap();
         fs::write(
             installed.join("package.json"),
-            r#"{ "name": "codemod", "type": "module", "exports": { "./ast-grep": "./runtime/ast-grep.mjs", "./metrics": "./runtime/metrics.mjs" } }"#,
+            r#"{ "name": "codemod", "type": "module", "exports": { "./ast-grep": "./runtime/ast-grep.mjs", "./runtime": "./runtime/runtime.mjs" } }"#,
         )
         .unwrap();
-        for shim in ["ast-grep", "metrics"] {
+        for shim in ["ast-grep", "runtime"] {
             fs::write(
                 installed.join(format!("runtime/{shim}.mjs")),
                 "export const NODE_SHIM = true;\n",
@@ -1304,7 +1304,7 @@ export default function transform() {
         assert!(bundled.contains("path"));
         assert!(bundled.contains("fs/promises"));
         assert!(bundled.contains("codemod/ast-grep"));
-        assert!(bundled.contains("codemod/metrics"));
+        assert!(bundled.contains("codemod/runtime"));
         assert!(bundled.contains("codemod:llm"));
         assert!(!bundled.contains("NODE_SHIM"), "{bundled}");
     }

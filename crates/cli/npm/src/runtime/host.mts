@@ -38,8 +38,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { JsonValue } from "../testing/index.mts";
 import { addon } from "./addon.mts";
 import type { Addon, FileEffects, NativeRun } from "./addon.mts";
-import { context, metricsOf, stateChanges, stepScope } from "./context.mts";
-import type { MetricEntry, RunScope, StepScope } from "./context.mts";
+import { context, stepScope } from "./context.mts";
+import type { RunScope } from "./context.mts";
 import { ORCHESTRATOR_VERSION } from "./orchestrator-version.mts";
 import {
   AwaitingApprovalError,
@@ -463,33 +463,16 @@ async function runInPlace(
   const outer = context.getStore();
   if (!outer) throw new Error("a step started outside its run");
   if (task.task.kind === "function") {
-    const step = stepScope(task.position, task.label, task.state);
-    let value: unknown;
-    try {
-      value = await context.run({ ...outer, step }, () => fn());
-    } finally {
-      // What the step measured counts even when it then fails.
-      flushMetrics(run, step);
-    }
+    const step = stepScope(task.position, task.label);
+    const value = await context.run({ ...outer, step }, () => fn());
     // A failure reported with failStep() stands even if the code caught it.
     if (step.failure !== undefined) throw new Error(step.failure);
     const result = value === undefined ? null : value;
     checkJson(result, "the step's result");
-    return outcome(result, step);
+    return { result };
   }
   if (task.task.kind === "forEachFile") return forEachFile(run, outer, task, fn, limit);
   throw new Error(`cannot run a ${task.task.kind} task in place`);
-}
-
-function outcome(result: Json, step: StepScope): Outcome {
-  const state = stateChanges(step);
-  return Object.keys(state).length ? { result, state } : { result };
-}
-
-function flushMetrics(run: NativeRun, step: StepScope): Record<string, MetricEntry[]> {
-  const metrics = metricsOf(step);
-  if (Object.keys(metrics).length) run.addMetrics(JSON.stringify(metrics));
-  return metrics;
 }
 
 async function forEachFile(
@@ -501,7 +484,7 @@ async function forEachFile(
 ): Promise<Outcome> {
   const selector = task.task.selector as Selector;
   const { language, files } = await run.selectFiles(JSON.stringify(selector));
-  const step = stepScope(task.position, task.label, task.state, language ?? undefined);
+  const step = stepScope(task.position, task.label, language ?? undefined);
   const total = files.length;
   const every = Math.max(1, Math.floor(total / 100));
   let processed = 0;
@@ -560,8 +543,6 @@ async function forEachFile(
   // Out of time: the step has already failed, and nothing it did is written.
   if (limit.expired) throw new CanceledError("the step ran out of time");
 
-  // Before the commit: a commit that fails must not lose what was measured.
-  const metrics = flushMetrics(run, step);
   effects.sort((a, b) => (a.path < b.path ? -1 : 1));
   const committed = await run.commitFiles(task.position, task.label, JSON.stringify(effects));
   const allFailures = [...failures, ...committed.failures].sort((a, b) =>
@@ -580,15 +561,13 @@ async function forEachFile(
       `the callback failed on every file; first error: ${first.path}: ${first.error}`,
     );
   }
-  const result = outcome(
-    {
+  const result: Outcome = {
+    result: {
       outputs: outputs.flatMap((entry) => (entry ? [entry.output] : [])),
       changes: committed.changes,
       failures: allFailures,
-      metrics,
     },
-    step,
-  );
+  };
   if (!allFailures.length) return result;
   return {
     ...result,

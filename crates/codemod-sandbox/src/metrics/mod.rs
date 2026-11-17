@@ -1,7 +1,5 @@
 use dashmap::DashMap;
-use rquickjs::class::Trace;
-use rquickjs::module::{Declarations, Exports, ModuleDef};
-use rquickjs::{prelude::Opt, Class, Ctx, Exception, JsLifetime, Object, Result};
+use rquickjs::{Ctx, Exception, JsLifetime, Result};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -167,149 +165,64 @@ impl MetricsContext {
     }
 }
 
-/// MetricAtom class exposed to JavaScript.
-/// Holds a reference to the shared MetricsContext.
-#[derive(Clone)]
-#[rquickjs::class]
-pub struct MetricAtom {
-    name: String,
-    context: MetricsContext,
-}
-
-impl Trace<'_> for MetricAtom {
-    fn trace<'a>(&self, _tracer: rquickjs::class::Tracer<'a, '_>) {
-        // No JavaScript values to trace
-    }
-}
-
-unsafe impl<'js> JsLifetime<'js> for MetricAtom {
-    type Changed<'to> = MetricAtom;
-}
-
-#[rquickjs::methods]
-impl MetricAtom {
-    /// Increment the metric with optional cardinality dimensions.
-    ///
-    /// Example:
-    /// ```js
-    /// metricAtom.increment(); // increment with empty cardinality
-    /// metricAtom.increment({ propName: "className", propValue: "container" }); // with cardinality
-    /// metricAtom.increment({ propName: "className" }, 5); // with cardinality and amount
-    /// ```
-    #[qjs(rename = "increment")]
-    pub fn increment<'js>(
-        &self,
-        ctx: Ctx<'js>,
-        cardinality: Opt<rquickjs::Value<'js>>,
-        amount: Opt<rquickjs::Value<'js>>,
-    ) -> Result<()> {
-        // A whole amount of at least 0; anything that is not a number counts 1.
-        let increment_amount = match amount.0 {
-            Some(val) if val.is_int() => val.as_int().unwrap_or(1).max(0) as u64,
-            Some(val) if val.is_float() => match val.as_float() {
-                Some(amount) if amount.is_finite() => amount.max(0.0) as u64,
-                _ => 1,
-            },
-            _ => 1,
-        };
-
-        let pairs = match cardinality.0 {
-            Some(val) if val.is_object() && !val.is_null() && !val.is_undefined() => {
-                let obj = val
-                    .as_object()
-                    .ok_or_else(|| Exception::throw_message(&ctx, "Invalid cardinality object"))?;
-                let mut pairs: Vec<(String, String)> = Vec::new();
-                for key in obj.keys::<String>() {
-                    let key = key?;
-                    let value: rquickjs::Value = obj.get(&key)?;
-                    // Skip undefined or null values
-                    if value.is_undefined() || value.is_null() {
-                        continue;
-                    }
-                    // As `String(value)`: numbers and booleans are fine as labels.
-                    let value_str = value.get::<rquickjs::Coerced<String>>()?.0;
-                    pairs.push((key, value_str));
+/// Adds a transform's returned `data` to the context: each row of
+/// `data[name]` counts once for `name`, labelled by the row's fields
+/// (`null` and `undefined` fields are left out, other values are labelled as
+/// `String(value)`).
+///
+/// ```js
+/// return { edit: null, data: { "prop-usage": [{ propName: "className" }] } };
+/// ```
+pub fn record_data<'js>(
+    ctx: &Ctx<'js>,
+    context: Option<&MetricsContext>,
+    data: &rquickjs::Value<'js>,
+) -> Result<()> {
+    let object = data
+        .as_object()
+        .filter(|_| !data.is_array() && !data.is_function())
+        .ok_or_else(|| {
+            Exception::throw_type(ctx, "a transform's `data` must be an object of named lists")
+        })?;
+    let mut counted: Vec<(String, Cardinality)> = Vec::new();
+    for name in object.keys::<String>() {
+        let name = name?;
+        let rows: rquickjs::Value = object.get(&name)?;
+        let rows = rows.as_array().ok_or_else(|| {
+            Exception::throw_type(ctx, &format!("data[\"{name}\"] must be a list of rows"))
+        })?;
+        for row in rows.iter::<rquickjs::Value>() {
+            let row = row?;
+            let row = row
+                .as_object()
+                .filter(|_| !row.is_array() && !row.is_function())
+                .ok_or_else(|| {
+                    Exception::throw_type(
+                        ctx,
+                        &format!("each row of data[\"{name}\"] must be an object of labels"),
+                    )
+                })?;
+            let mut pairs: Vec<(String, String)> = Vec::new();
+            for key in row.keys::<String>() {
+                let key = key?;
+                let value: rquickjs::Value = row.get(&key)?;
+                if value.is_undefined() || value.is_null() {
+                    continue;
                 }
-                pairs
+                pairs.push((key, value.get::<rquickjs::Coerced<String>>()?.0));
             }
-            _ => Vec::new(), // No cardinality or undefined/null
-        };
-
-        self.context
-            .increment(&self.name, Cardinality::new(pairs), increment_amount);
-        Ok(())
-    }
-
-    /// Get the current entries for this metric as an array of {cardinality, count} objects
-    #[qjs(rename = "getEntries")]
-    pub fn get_entries<'js>(&self, ctx: Ctx<'js>) -> Result<rquickjs::Array<'js>> {
-        let entries = self.context.get(&self.name);
-        let arr = rquickjs::Array::new(ctx.clone())?;
-
-        for (i, entry) in entries.iter().enumerate() {
-            let obj = Object::new(ctx.clone())?;
-            let cardinality_obj = Object::new(ctx.clone())?;
-            for (key, value) in &entry.cardinality {
-                cardinality_obj.set(key.as_str(), value.as_str())?;
-            }
-            obj.set("cardinality", cardinality_obj)?;
-            obj.set("count", entry.count)?;
-            arr.set(i, obj)?;
+            counted.push((name.clone(), Cardinality::new(pairs)));
         }
-
-        Ok(arr)
     }
-
-    /// Get the metric name
-    #[qjs(get, rename = "name")]
-    pub fn name(&self) -> String {
-        self.name.clone()
+    // Nothing is counted unless the whole of `data` is well formed, and
+    // `data` is checked even when nothing collects it, so a transform fails
+    // the same way wherever it runs.
+    if let Some(context) = context {
+        for (name, cardinality) in counted {
+            context.increment(&name, cardinality, 1);
+        }
     }
-}
-
-/// Module definition for metrics.
-/// Gets the MetricsContext from runtime userdata when evaluated.
-pub struct MetricsModule;
-
-impl ModuleDef for MetricsModule {
-    fn declare(declare: &Declarations) -> Result<()> {
-        declare.declare("useMetricAtom")?;
-        declare.declare("MetricAtom")?;
-        declare.declare("default")?;
-        Ok(())
-    }
-
-    fn evaluate<'js>(ctx: &Ctx<'js>, exports: &Exports<'js>) -> Result<()> {
-        // Get the metrics context from the runtime's userdata
-        let metrics_context: MetricsContext = ctx
-            .userdata::<MetricsContext>()
-            .ok_or_else(|| {
-                Exception::throw_message(ctx, "MetricsContext not found in runtime userdata")
-            })?
-            .clone();
-
-        let default = Object::new(ctx.clone())?;
-
-        // Create the useMetricAtom function that captures the context
-        let context_for_closure = metrics_context.clone();
-        let use_metric_atom = rquickjs::Function::new(
-            ctx.clone(),
-            move |_ctx: Ctx<'_>, name: String| -> Result<MetricAtom> {
-                Ok(MetricAtom {
-                    name,
-                    context: context_for_closure.clone(),
-                })
-            },
-        )?;
-
-        Class::<MetricAtom>::define(&default)?;
-        default.set("useMetricAtom", use_metric_atom.clone())?;
-
-        exports.export("useMetricAtom", use_metric_atom)?;
-        exports.export("MetricAtom", Class::<MetricAtom>::create_constructor(ctx)?)?;
-        exports.export("default", default)?;
-        Ok(())
-    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -186,8 +186,6 @@ async fn handler_impl(args: &Command) -> Result<()> {
         anyhow::bail!("Codemod file '{}' does not exist", codemod_path.display());
     }
 
-    std::env::set_var("CODEMOD_STEP_ID", "jssg");
-
     let current_dir = std::env::current_dir()?;
     let base_config = TestConfig::load_hierarchical(&current_dir, None)?;
 
@@ -363,7 +361,6 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     semantic_provider,
                     metrics_context: Some(metrics_context.clone()),
                     llm_request_handler: None,
-                    shared_state_context: None,
                     runtime_event_callback: Some(runtime_event_callback),
                     cancellation_flag: None,
                     test_mode: true,

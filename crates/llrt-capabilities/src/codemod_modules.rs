@@ -6,7 +6,7 @@
 //! register under `codemod/<name>`.
 
 /// The codemod runtime modules, by name.
-pub const CODEMOD_MODULES: &[&str] = &["ast-grep", "workflow", "metrics", "runtime", "llm"];
+pub const CODEMOD_MODULES: &[&str] = &["ast-grep", "workflow", "runtime", "llm"];
 
 /// The module a specifier names (`"ast-grep"` for both `codemod/ast-grep` and
 /// `codemod:ast-grep`), if it names one.
@@ -37,6 +37,6 @@ mod tests {
         assert_eq!(codemod_module("codemod/testing"), None);
         assert_eq!(codemod_module("codemod/ast-grep/langs/java"), None);
         assert_eq!(codemod_module("codemod"), None);
-        assert_eq!(codemod_module_specifier("metrics"), "codemod/metrics");
+        assert_eq!(codemod_module_specifier("runtime"), "codemod/runtime");
     }
 }

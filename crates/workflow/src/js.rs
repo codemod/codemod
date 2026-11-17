@@ -55,10 +55,6 @@ javascript! {
     /// Replay-safe globals of the workflow body; a script, not a module.
     pub(crate) fn body_globals = include_str!("js/body_globals.ts"), "body_globals.ts"
 }
-javascript! {
-    /// `codemod/metrics` as the workflow body sees it.
-    pub(crate) fn body_metrics = include_str!("js/body_metrics.ts"), "body_metrics.ts"
-}
 
 /// Identifies the orchestrator's source. The npm package records the same
 /// value when it is built, so it can tell an addon built from another
@@ -77,7 +73,6 @@ mod tests {
             super::orchestrator(),
             super::workflow_module(),
             super::body_globals(),
-            super::body_metrics(),
             super::semver_module(),
             super::dependencies_module(),
         ] {

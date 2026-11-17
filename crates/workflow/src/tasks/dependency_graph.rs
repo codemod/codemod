@@ -86,13 +86,13 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     })?;
 
     let outcome: Outcome = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    isolates.metrics(task);
+    isolates.data(task);
     if !outcome.ok {
         return Err(outcome
             .error
             .unwrap_or_else(|| "the step failed".to_string()));
     }
-    Ok(TaskOutcome::new(outcome.result).with_state(isolates.state_changes()))
+    Ok(TaskOutcome::new(outcome.result))
 }
 
 /// `__graphHost`: the graph's host functions, over node ids and JSON.
