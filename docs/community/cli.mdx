@@ -241,7 +241,7 @@ Remove what `codemod ai` set up for one coding agent.
 npx codemod ai uninstall [--harness <claude|goose|opencode|cursor|codex|auto>] [--project|--user] [--dry-run] [--yes] [--format <logs|table|json|yaml>]
 ```
 
-`ai uninstall` removes the Codemod skill, the `/codemod` command, the `codemod` MCP server entry, the Codemod section in `AGENTS.md`, `CLAUDE.md` or `.goosehints`, the periodic update hook and the install record. It edits shared files rather than deleting them, so your other MCP servers, hooks and settings stay. It keeps anything you edited, and anything another agent set up in the same place still uses, and says why. It asks before removing anything; use `--dry-run` to see the list without changing files, and `--yes` to remove without a prompt (required when there's no terminal to ask in). With `--harness auto` it picks the one agent Codemod is set up for, and asks you to choose with `--harness` when there are several.
+`ai uninstall` removes the Codemod and sdk-migration skills, the `/codemod` and `/sdk-migration` commands, the `codemod` MCP server entry, the Codemod section in `AGENTS.md`, `CLAUDE.md` or `.goosehints`, the periodic update hook and the install record. It edits shared files rather than deleting them, so your other MCP servers, hooks and settings stay. It keeps anything you edited, and anything another agent set up in the same place still uses, and says why. It asks before removing anything; use `--dry-run` to see the list without changing files, and `--yes` to remove without a prompt (required when there's no terminal to ask in). With `--harness auto` it picks the one agent Codemod is set up for, and asks you to choose with `--harness` when there are several.
 
 **`ai dump-ast`**
 

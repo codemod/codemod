@@ -301,9 +301,11 @@ fn check_command(
             .ok()
             .flatten()
             .map(|(recipe_path, _)| recipe_path),
-        _ => mcs_command_entrypoint_path_for_harness(harness, scope, runtime_paths)
-            .ok()
-            .flatten(),
+        _ => {
+            mcs_command_entrypoint_path_for_harness(harness, scope, MCS_COMMAND_NAME, runtime_paths)
+                .ok()
+                .flatten()
+        }
     };
     match path {
         Some(path) if path.is_file() => pass(NAME, display_path(&path, runtime_paths)),

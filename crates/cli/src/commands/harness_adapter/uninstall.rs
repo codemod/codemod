@@ -200,42 +200,70 @@ fn shared_with(
         .map(|&(harness, _)| harness)
 }
 
+/// A skill `codemod ai` installs: its label, folder name and the marker its
+/// SKILL.md carries.
+const INSTALLED_SKILLS: [(&str, &str, &str); 2] = [
+    (
+        "Codemod skill",
+        MCS_SKILL_DIR_NAME,
+        MCS_COMPATIBILITY_MARKER,
+    ),
+    (
+        "sdk-migration skill",
+        SDK_MIGRATION_SKILL_DIR_NAME,
+        "codemod-compatibility: skill-package-v1",
+    ),
+];
+
 fn plan_skill(
     plan: &mut UninstallPlan,
     other_setups: &[(Harness, InstallScope)],
     runtime_paths: &RuntimePaths,
 ) -> AdapterResult<()> {
-    const WHAT: &str = "Codemod skill";
-    let skill_dir =
-        skills_root_for_harness(plan.harness, plan.scope, runtime_paths)?.join(MCS_SKILL_DIR_NAME);
-    let Some(content) = plan.read(&skill_dir.join(SKILL_FILE_NAME)) else {
-        return Ok(());
-    };
-    if !content.contains(MCS_COMPATIBILITY_MARKER) {
-        plan.keep(WHAT, &skill_dir, "it isn't the skill Codemod installs");
-        return Ok(());
-    }
-    let shared = shared_with(other_setups, |harness, scope| {
-        skills_root_for_harness(harness, scope, runtime_paths)
-            .is_ok_and(|root| root.join(MCS_SKILL_DIR_NAME) == skill_dir)
-    });
-    match shared {
-        Some(other) => plan.keep(
-            WHAT,
-            &skill_dir,
-            format!("{} uses it too", other.display_name()),
-        ),
-        None => plan.remove_dir(WHAT, skill_dir),
+    for (what, dir_name, marker) in INSTALLED_SKILLS {
+        let skill_dir =
+            skills_root_for_harness(plan.harness, plan.scope, runtime_paths)?.join(dir_name);
+        let Some(content) = plan.read(&skill_dir.join(SKILL_FILE_NAME)) else {
+            continue;
+        };
+        if !content.contains(marker) {
+            plan.keep(what, &skill_dir, "it isn't the skill Codemod installs");
+            continue;
+        }
+        let shared = shared_with(other_setups, |harness, scope| {
+            skills_root_for_harness(harness, scope, runtime_paths)
+                .is_ok_and(|root| root.join(dir_name) == skill_dir)
+        });
+        match shared {
+            Some(other) => plan.keep(
+                what,
+                &skill_dir,
+                format!("{} uses it too", other.display_name()),
+            ),
+            None => plan.remove_dir(what, skill_dir),
+        }
     }
     Ok(())
 }
 
-fn is_codemod_command_file(content: &str) -> bool {
-    content == MCS_COMMAND_MD || content.contains("installed `codemod` skill")
-}
+/// A slash command `codemod ai` installs: its label, file name, the text it
+/// installs and a line every version of that text carries.
+const INSTALLED_COMMANDS: [(&str, &str, &str, &str); 2] = [
+    (
+        "/codemod command",
+        MCS_COMMAND_NAME,
+        MCS_COMMAND_MD,
+        "installed `codemod` skill",
+    ),
+    (
+        "/sdk-migration command",
+        SDK_MIGRATION_SKILL_COMPONENT_ID,
+        SDK_MIGRATION_COMMAND_MD,
+        "installed `sdk-migration` skill",
+    ),
+];
 
 fn plan_command(plan: &mut UninstallPlan, runtime_paths: &RuntimePaths) -> AdapterResult<()> {
-    const WHAT: &str = "/codemod command";
     if plan.harness == Harness::Goose {
         if let Some((recipe_path, config_path)) =
             goose_mcs_command_paths(plan.scope, runtime_paths)?
@@ -244,15 +272,23 @@ fn plan_command(plan: &mut UninstallPlan, runtime_paths: &RuntimePaths) -> Adapt
         }
         return Ok(());
     }
-    let Some(path) =
-        mcs_command_entrypoint_path_for_harness(plan.harness, plan.scope, runtime_paths)?
-    else {
-        return Ok(());
-    };
-    match plan.read(&path) {
-        Some(content) if is_codemod_command_file(&content) => plan.remove_file(WHAT, path),
-        Some(_) => plan.keep(WHAT, &path, "it was edited"),
-        None => {}
+    for (what, command_name, installed_text, signature) in INSTALLED_COMMANDS {
+        let Some(path) = mcs_command_entrypoint_path_for_harness(
+            plan.harness,
+            plan.scope,
+            command_name,
+            runtime_paths,
+        )?
+        else {
+            continue;
+        };
+        match plan.read(&path) {
+            Some(content) if content == installed_text || content.contains(signature) => {
+                plan.remove_file(what, path)
+            }
+            Some(_) => plan.keep(what, &path, "it was edited"),
+            None => {}
+        }
     }
     Ok(())
 }
@@ -728,6 +764,7 @@ mod tests {
         let command = mcs_command_entrypoint_path_for_harness(
             Harness::Cursor,
             InstallScope::Project,
+            MCS_COMMAND_NAME,
             &runtime_paths,
         )
         .unwrap()
