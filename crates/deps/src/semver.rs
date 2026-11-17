@@ -10,6 +10,11 @@ use crate::model::Ecosystem;
 pub fn satisfies(ecosystem: Ecosystem, range: &str, version: &str) -> Option<bool> {
     match ecosystem {
         Ecosystem::Npm => {
+            // Any protocol but `npm:` (`file:`, `link:`, `git+https:` ...)
+            // names no registry range, even when it ends in `@^1`.
+            if range.contains(':') && !range.starts_with("npm:") {
+                return None;
+            }
             let range = range.strip_prefix("npm:").unwrap_or(range);
             // An alias ("npm:other@^1") carries its range after the last '@'.
             let range = match range.rfind('@') {

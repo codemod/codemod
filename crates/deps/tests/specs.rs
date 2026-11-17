@@ -146,7 +146,7 @@ snapshots:
     let graph = lockfiles::pnpm(lock, &|_| Some(r#"{ "name": "app" }"#.into())).unwrap();
     assert_eq!(
         chains_to(graph, "react", &[]),
-        ["app@workspace > table@3.2.5 > react@18.3.1"]
+        ["app@0.0.0-use.local > table@3.2.5 > react@18.3.1"]
     );
 }
 
@@ -156,7 +156,7 @@ fn pnpm_reads_the_project_document_when_pnpm_prepends_its_own() {
     let graph = lockfiles::pnpm(lock, &|_| None).unwrap();
     assert_eq!(
         workspace_dependencies(graph, &[]),
-        ["<.>@workspace prod left-pad@1.3.0 ^1.0.0"]
+        ["<.>@0.0.0-use.local prod left-pad@1.3.0 ^1.0.0"]
     );
 }
 
@@ -391,4 +391,46 @@ fn cargo_manifests_outside_the_workspace_members_are_not_taken() {
     ]);
     let manifests = CargoManifests::find(dir.path());
     assert_eq!(manifests.members["app"].0, "crates/app");
+}
+
+#[test]
+fn a_registry_answer_that_cannot_be_read_is_an_error_not_an_empty_package() {
+    use codemod_deps::registry::{crate_releases, npm_releases};
+    assert!(npm_releases("<html>busy</html>").is_err());
+    assert!(npm_releases("[]").is_err());
+    assert_eq!(
+        npm_releases(r#"{ "name": "a", "versions": {} }"#)
+            .unwrap()
+            .len(),
+        0
+    );
+    assert!(crate_releases("{\"vers\":\"1.0.0\"}\n{\"vers\":").is_err());
+    assert_eq!(crate_releases("{\"vers\":\"1.0.0\"}\n\n").unwrap().len(), 1);
+}
+
+#[test]
+fn a_range_with_a_protocol_other_than_npm_cannot_be_read() {
+    use codemod_deps::semver::satisfies;
+    assert_eq!(satisfies(Ecosystem::Npm, "file:../foo@^1", "1.2.0"), None);
+    assert_eq!(satisfies(Ecosystem::Npm, "link:../foo", "1.2.0"), None);
+    assert_eq!(satisfies(Ecosystem::Npm, "npm:foo@^1", "1.2.0"), Some(true));
+    assert_eq!(satisfies(Ecosystem::Npm, "^1", "2.0.0"), Some(false));
+}
+
+#[test]
+fn a_registry_package_does_not_merge_into_a_workspace_with_its_name_and_version() {
+    let mut local = Graph::from_lockfile("Cargo.lock");
+    local.workspace(Ecosystem::Cargo, "foo", "1.0.0", ".");
+    let mut vendored = Graph::from_lockfile("Cargo.lock");
+    vendored.node(Ecosystem::Cargo, "foo", "1.0.0");
+    let mut graph = Graph::default();
+    graph.merge(local, ".");
+    graph.merge(vendored, "tools");
+    let foos: Vec<_> = graph
+        .nodes
+        .iter()
+        .filter(|n| n.name == "foo")
+        .map(|n| n.workspace.clone())
+        .collect();
+    assert_eq!(foos, [Some(".".to_string()), None]);
 }

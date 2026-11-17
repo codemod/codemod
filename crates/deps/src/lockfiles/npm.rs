@@ -40,7 +40,12 @@ pub fn parse(text: &str) -> Result<Graph, String> {
                     .get("name")
                     .and_then(Value::as_str)
                     .map_or_else(|| format!("<{dir}>"), String::from);
-                graph.workspace(Ecosystem::Npm, &name, "workspace", dir)
+                // package-lock.json copies each workspace's package.json version.
+                let version = entry
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .unwrap_or(super::UNVERSIONED);
+                graph.workspace(Ecosystem::Npm, &name, version, dir)
             }
         };
         by_path.insert(path, id);

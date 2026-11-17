@@ -42,6 +42,9 @@ pub struct WorkerOptions<R> {
     pub resolver: Arc<R>,
     /// In-memory modules, by name, as JavaScript source.
     pub modules: Vec<(String, String)>,
+    /// The in-memory module `codemod/workflow` resolves to; without one,
+    /// importing it is an error.
+    pub workflow_module: Option<String>,
     pub metrics: MetricsContext,
     /// Handles `codemod:llm` requests; the module exists only when fetch is granted.
     pub llm_request_handler: Option<LlmRequestHandler>,
@@ -110,6 +113,7 @@ impl Worker {
 
         let (resolver, loader, globals) = module_builder.builder.build();
         let (codemod_resolver, loader) = crate::with_codemod_modules!(loader, llm: fetch);
+        let codemod_resolver = codemod_resolver.with_workflow(options.workflow_module.clone());
 
         let mut memory_resolver = BuiltinResolver::default();
         let mut memory_loader = BuiltinLoader::default();

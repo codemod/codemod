@@ -101,7 +101,13 @@ pub struct Graph {
     /// Lockfiles found but not read, with why: when none were asked for by
     /// name, one that cannot be read is left out instead of failing.
     pub skipped: Vec<Skipped>,
+    /// Third-party packages by `name@version`.
     index: HashMap<(Ecosystem, String, String), usize>,
+    /// The first workspace with each `name@version`, for edges that resolve
+    /// to the repository's own packages. Kept apart from `index`, so a
+    /// registry package never merges into a workspace that shares its
+    /// name and version.
+    workspace_versions: HashMap<(Ecosystem, String, String), usize>,
     /// Workspaces are also keyed by directory: two lockfiles in one
     /// repository can each have a root package with the same name.
     workspaces: HashMap<(Ecosystem, String, String, String), usize>,
@@ -158,15 +164,20 @@ impl Graph {
         });
         let id = self.nodes.len() - 1;
         self.workspaces.insert(key, id);
-        self.index
+        self.workspace_versions
             .entry((ecosystem, name.to_string(), version.to_string()))
             .or_insert(id);
         id
     }
 
+    /// The node an edge to `name@version` resolves to: one of the
+    /// repository's own packages first, as lockfiles list them, then a
+    /// third-party package.
     pub fn find(&self, ecosystem: Ecosystem, name: &str, version: &str) -> Option<usize> {
-        self.index
-            .get(&(ecosystem, name.to_string(), version.to_string()))
+        let key = (ecosystem, name.to_string(), version.to_string());
+        self.workspace_versions
+            .get(&key)
+            .or_else(|| self.index.get(&key))
             .copied()
     }
 

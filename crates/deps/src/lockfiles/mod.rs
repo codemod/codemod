@@ -105,6 +105,15 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
     Ok(graph)
 }
 
+/// The version of a workspace package that declares none, as Yarn records it.
+pub(crate) const UNVERSIONED: &str = "0.0.0-use.local";
+
+/// A package.json's `version`.
+pub(crate) fn package_json_version(text: &str) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_str(text).ok()?;
+    json.get("version")?.as_str().map(String::from)
+}
+
 /// A package.json's name and its declared dependencies with their kinds.
 pub(crate) fn package_json(text: &str) -> (Option<String>, Vec<(String, String, Kind)>) {
     let json: serde_json::Value = serde_json::from_str(text).unwrap_or_default();

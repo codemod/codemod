@@ -958,6 +958,7 @@ impl codemod_deps::Registry for FakeRegistry {
         &self,
         _: codemod_deps::Ecosystem,
         names: &[String],
+        _: &std::sync::atomic::AtomicBool,
     ) -> Result<std::collections::BTreeMap<String, Vec<codemod_deps::Release>>, String> {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let release = |version: &str, react: &str| codemod_deps::Release {
@@ -1162,5 +1163,125 @@ export default async function main() {
             "read": ["yarn.lock"],
             "skipped": [{ "lockfile": "examples/old/yarn.lock", "error": "Yarn v1 lockfiles are not read yet" }]
         })
+    );
+}
+
+#[test]
+fn a_helper_file_a_step_imports_can_use_registry_and_semver() {
+    let h = with_registry(Arc::default());
+    h.bundle_file(
+        "lib/releases.ts",
+        r#"
+import { registry, semver, step } from "codemod/workflow";
+export async function newest(name: string) {
+  const { versions } = await registry.npm(name);
+  return versions.map((r) => r.version).sort((a, b) => semver.compare(a, b)).at(-1);
+}
+// Shared with the workflow body: importing body-only functions still works.
+export const run = (name: string) => step(name, async () => newest(name));
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { newest } from "./lib/releases.ts";
+export default async function main() {
+  return await step("Newest dnd", async () => newest("dnd"));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!("14.0.0"));
+}
+
+#[test]
+fn a_body_only_function_called_inside_a_step_says_so() {
+    let h = Harness::new();
+    h.bundle_file(
+        "lib/nested.ts",
+        r#"
+import { step, shell } from "codemod/workflow";
+export const nested = () => step("Inner", shell("true"));
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { nested } from "./lib/nested.ts";
+export default async function main() {
+  await step("Outer", async () => nested());
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("shell() can only be called in the workflow body"),
+        "{error}"
+    );
+}
+
+/// A registry that answers only when its lookup is canceled.
+struct HangingRegistry;
+
+impl codemod_deps::Registry for HangingRegistry {
+    fn releases(
+        &self,
+        _: codemod_deps::Ecosystem,
+        _: &[String],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<std::collections::BTreeMap<String, Vec<codemod_deps::Release>>, String> {
+        let started = std::time::Instant::now();
+        while !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            if started.elapsed() > std::time::Duration::from_secs(20) {
+                return Err("never canceled".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Err("the registry lookup was canceled".into())
+    }
+}
+
+#[test]
+fn a_step_that_runs_out_of_time_stops_its_registry_lookup() {
+    let h = Harness::with_services(
+        Arc::new(MemoryStore::default()),
+        Arc::new(NonInteractive { approve_all: false }),
+        Services {
+            package_registry: Some(Arc::new(HangingRegistry)),
+            ..Services::default()
+        },
+    );
+    let started = std::time::Instant::now();
+    let report = h.start(
+        r#"
+import { step, registry } from "codemod/workflow";
+export default async function main() {
+  await step("Look up", async () => (await registry.npm("dnd")).versions.length, { timeout: "300ms" });
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("timed out"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
+
+#[test]
+fn a_dependency_graph_result_keeps_a_proto_key_as_data() {
+    let h = Harness::new();
+    yarn_target(&h);
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod/workflow";
+export default async function main() {
+  return await step(dependencyGraph({}, () => JSON.parse('{"__proto__": {"a": 1}, "b": 2}')));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "__proto__": { "a": 1 }, "b": 2 })
     );
 }

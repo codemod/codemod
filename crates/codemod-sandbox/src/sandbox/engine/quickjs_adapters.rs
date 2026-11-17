@@ -37,6 +37,8 @@ impl<R: ModuleResolver> Resolver for QuickJSResolver<R> {
 /// where the `codemod` package's files for Node.js would be found.
 pub struct CodemodModuleResolver {
     modules: Vec<&'static str>,
+    /// What `codemod/workflow` resolves to, when this runtime has one.
+    workflow: Option<String>,
 }
 
 impl CodemodModuleResolver {
@@ -44,6 +46,7 @@ impl CodemodModuleResolver {
     pub fn new(modules: &[&'static str]) -> Self {
         Self {
             modules: modules.to_vec(),
+            workflow: None,
         }
     }
 
@@ -54,7 +57,17 @@ impl CodemodModuleResolver {
         if llm {
             modules.push("llm");
         }
-        Self { modules }
+        Self {
+            modules,
+            workflow: None,
+        }
+    }
+
+    /// Resolve `codemod/workflow` (and `codemod:workflow`) to `module`, a
+    /// module the runtime's loaders provide.
+    pub fn with_workflow(mut self, module: Option<String>) -> Self {
+        self.workflow = module;
+        self
     }
 }
 
@@ -69,6 +82,7 @@ impl Resolver for CodemodModuleResolver {
         let unavailable = |why: String| Err(Error::new_loading_message(name, why));
         match codemod_module(name) {
             Some(module) if self.modules.contains(&module) => Ok(codemod_module_specifier(module)),
+            Some("workflow") if self.workflow.is_some() => Ok(self.workflow.clone().unwrap_or_default()),
             Some("llm") => unavailable(
                 "it needs the fetch capability: add `fetch` to `capabilities` in codemod.yaml, or pass --allow-fetch".to_string(),
             ),

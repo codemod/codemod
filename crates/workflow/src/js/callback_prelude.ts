@@ -92,7 +92,16 @@ function __plain(value: unknown): unknown {
     if (Array.isArray(value)) return value.map(__plain);
     if (prototype === Object.prototype) {
       const plain: Record<string, unknown> = {};
-      for (const [key, item] of Object.entries(value)) plain[key] = __plain(item);
+      // defineProperty keeps a `__proto__` key as data, where assigning it
+      // would set the object's prototype.
+      for (const [key, item] of Object.entries(value)) {
+        Object.defineProperty(plain, key, {
+          value: __plain(item),
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
       return plain;
     }
   }
