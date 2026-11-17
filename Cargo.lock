@@ -1268,6 +1268,7 @@ dependencies = [
  "ast-grep-core",
  "ast-grep-dynamic",
  "ast-grep-language",
+ "bit-set 0.11.1",
  "bytes",
  "codemod-llrt-capabilities",
  "dashmap 6.1.0",

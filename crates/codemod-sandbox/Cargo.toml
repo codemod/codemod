@@ -43,6 +43,7 @@ js-sys = { workspace = true, optional = true }
 web-tree-sitter-sg = { git = "https://github.com/mohebifar/tree-sitter-wasm.git", branch = "upgrade/0.25.4", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 ast-grep-core = { workspace = true, optional = true }
+bit-set = "0.11"
 ast-grep-config = { workspace = true, optional = true }
 ast-grep-language = { workspace = true, default-features = true, optional = true }
 ignore = { workspace = true, optional = true }

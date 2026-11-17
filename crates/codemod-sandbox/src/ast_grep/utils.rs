@@ -39,6 +39,15 @@ impl Matcher for JsMatcherRjs {
             JsMatcherRjs::Config(c) => c.match_node_with_env(node, env),
         }
     }
+
+    // Lets `findAll` skip nodes of kinds the matcher can never match instead of trying each one.
+    fn potential_kinds(&self) -> Option<bit_set::BitSet> {
+        match self {
+            JsMatcherRjs::Pattern(p) => p.potential_kinds(),
+            JsMatcherRjs::Kind(k) => k.potential_kinds(),
+            JsMatcherRjs::Config(c) => c.potential_kinds(),
+        }
+    }
 }
 
 // Convert a JavaScript value to an appropriate ast-grep matcher
