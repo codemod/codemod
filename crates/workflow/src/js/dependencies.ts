@@ -1,7 +1,6 @@
-// `codemod-internal:dependencies`: `registry`, `semver` and the dependency
-// graph inside isolates (function steps, forEachFile and dependencyGraph
-// callbacks). The build imports `registry` and `semver` from here when a
-// step or callback uses them. The host installs
+// `codemod/deps` inside isolates (function steps, forEachFile and
+// dependencyGraph callbacks, and the files they import): `registry`,
+// `semver` and the dependency graph. The host installs
 // `globalThis.__dependencyHost` in every isolate and
 // `globalThis.__graphHost` for dependencyGraph callbacks (`globals.d.ts`).
 
@@ -102,6 +101,13 @@ export const registry = Object.freeze({
 export const semver = makeSemver((op, ecosystem, a, b) =>
   JSON.parse(host().semver(op, ecosystem, a, b)),
 );
+
+/** Starts a step, which only the workflow body can do. */
+export function dependencyGraph(): never {
+  throw new Error(
+    "dependencyGraph() can only be called in the workflow body, not inside a step or forEachFile callback",
+  );
+}
 
 // ------------------------------------------------------------------ graph ---
 

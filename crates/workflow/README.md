@@ -28,7 +28,7 @@ export default async function main() {
 | `src/tasks/isolate.rs`, `src/tasks/for_each_file.rs`, `src/tasks/function.rs` | Callbacks and function steps on sandbox workers (`codemod_sandbox::Worker`): the JSSG module set, async, imports, metrics and state |
 | `src/engine.rs` | `Engine::start` / `resume` / `cancel` over a `RunStore` (`crates/state`) |
 | `src/tasks/` | Host tasks, each a thin adapter over an existing executor: `forEachFile`, `jssg` (`butterflow_core::jssg_runner`), `astGrep`, `shell`, `shard`, `codemod`, `agent`, `installSkill`, `approval`, `branch` / `commit` / `pullRequest`, and `dependencyGraph` (over the `codemod-deps` crate) |
-| `src/deps_host.rs`, `src/js/dependencies.ts`, `src/js/semver.ts` | `registry` and `semver`: the module isolates import them from, batching lookups started together; the host side over `Services::package_registry` |
+| `src/js/deps.ts`, `src/deps_host.rs`, `src/js/dependencies.ts`, `src/js/semver.ts` | `codemod/deps`: `dependencyGraph`, `registry` and `semver` in the body (`deps.ts`) and in isolates (`dependencies.ts`), batching lookups started together; the host side over `Services::package_registry` |
 | `src/tasks/changes.rs` | One commit path for every task that edits files: conflict checks, dry run, diffs |
 | `src/compat/` | workflow.yaml to TypeScript; `${{ }}` expressions become TypeScript or fall back to `evaluate()`, which uses the YAML engine's evaluator |
 | `src/events.rs`, `src/interaction.rs` | What the engine reports, and the questions it asks; the CLI implements both |

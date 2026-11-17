@@ -37,8 +37,9 @@ impl<R: ModuleResolver> Resolver for QuickJSResolver<R> {
 /// where the `codemod` package's files for Node.js would be found.
 pub struct CodemodModuleResolver {
     modules: Vec<&'static str>,
-    /// What `codemod/workflow` resolves to, when this runtime has one.
-    workflow: Option<String>,
+    /// Codemod modules that resolve to an in-memory module the runtime's
+    /// loaders provide, by name: `codemod/workflow` in workflow steps.
+    provided: Vec<(&'static str, String)>,
 }
 
 impl CodemodModuleResolver {
@@ -46,7 +47,7 @@ impl CodemodModuleResolver {
     pub fn new(modules: &[&'static str]) -> Self {
         Self {
             modules: modules.to_vec(),
-            workflow: None,
+            provided: Vec::new(),
         }
     }
 
@@ -59,14 +60,14 @@ impl CodemodModuleResolver {
         }
         Self {
             modules,
-            workflow: None,
+            provided: Vec::new(),
         }
     }
 
-    /// Resolve `codemod/workflow` (and `codemod:workflow`) to `module`, a
-    /// module the runtime's loaders provide.
-    pub fn with_workflow(mut self, module: Option<String>) -> Self {
-        self.workflow = module;
+    /// Resolve each named codemod module (`workflow` for `codemod/workflow`
+    /// and `codemod:workflow`) to the module the runtime's loaders provide.
+    pub fn providing(mut self, provided: Vec<(&'static str, String)>) -> Self {
+        self.provided = provided;
         self
     }
 }
@@ -80,9 +81,13 @@ impl Resolver for CodemodModuleResolver {
             return Err(Error::new_resolving(base, name));
         };
         let unavailable = |why: String| Err(Error::new_loading_message(name, why));
+        let provided = codemod_module(name)
+            .and_then(|module| self.provided.iter().find(|(named, _)| *named == module));
+        if let Some((_, target)) = provided {
+            return Ok(target.clone());
+        }
         match codemod_module(name) {
             Some(module) if self.modules.contains(&module) => Ok(codemod_module_specifier(module)),
-            Some("workflow") if self.workflow.is_some() => Ok(self.workflow.clone().unwrap_or_default()),
             Some("llm") => unavailable(
                 "it needs the fetch capability: add `fetch` to `capabilities` in codemod.yaml, or pass --allow-fetch".to_string(),
             ),

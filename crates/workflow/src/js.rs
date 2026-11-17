@@ -44,16 +44,22 @@ javascript! {
     pub(crate) fn workflow_module = include_str!("js/workflow.ts"), "workflow.ts"
 }
 javascript! {
+    /// `codemod/deps` in the workflow body: `dependencyGraph`, and `registry`
+    /// and `semver` outside steps.
+    pub(crate) fn deps_module = include_str!("js/deps.ts"), "deps.ts"
+}
+javascript! {
     /// `codemod-internal:semver`: `semver` for the body and isolates.
     pub(crate) fn semver_module = include_str!("js/semver.ts"), "semver.ts"
 }
 javascript! {
-    /// `codemod-internal:dependencies`: `registry`, `semver` and the graph in isolates.
+    /// `codemod/deps` in isolates, also as `codemod-internal:dependencies`:
+    /// `registry`, `semver` and the graph.
     pub(crate) fn dependencies_module = include_str!("js/dependencies.ts"), "dependencies.ts"
 }
 javascript! {
     /// `codemod/workflow` in isolates, for files steps and callbacks import:
-    /// `registry` and `semver`, and the body-only functions as errors.
+    /// the body-only functions as errors.
     pub(crate) fn isolate_workflow_module = include_str!("js/isolate_workflow.ts"), "isolate_workflow.ts"
 }
 javascript! {
@@ -77,6 +83,7 @@ mod tests {
         for js in [
             super::orchestrator(),
             super::workflow_module(),
+            super::deps_module(),
             super::body_globals(),
             super::semver_module(),
             super::dependencies_module(),

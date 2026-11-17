@@ -1004,7 +1004,8 @@ fn a_dependency_graph_callback_walks_the_targets_lockfiles_through_a_live_handle
     yarn_target(&h);
     let report = h.start(
         r#"
-import { step, dependencyGraph } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
 export default async function main() {
   return await step(dependencyGraph({}, (g) => g.node("dnd").workspacesReaching().map((r) => r.chain)));
 }
@@ -1023,7 +1024,8 @@ fn node_releases_keep_newer_versions_whose_ranges_accept_the_asked_version() {
     yarn_target(&h);
     let report = h.start(
         r#"
-import { step, dependencyGraph } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
 export default async function main() {
   return await step(dependencyGraph({}, async (g) => {
     const releases = await g.node("dnd").releases({ accepting: { react: "19.0.0" }, newerThanMine: true });
@@ -1044,7 +1046,8 @@ fn a_resumed_run_replays_a_dependency_graph_step_without_asking_the_registry_aga
     let workflow = |later: &str| {
         format!(
             r#"
-import {{ step, dependencyGraph, registry }} from "codemod/workflow";
+import {{ step }} from "codemod/workflow";
+import {{ dependencyGraph, registry }} from "codemod/deps";
 export default async function main() {{
   const dnd = await step(dependencyGraph({{}}, async () => (await registry.npm("dnd")).versions.length));
   await step("Later", () => {{ {later} }});
@@ -1064,7 +1067,8 @@ fn a_for_each_file_callback_can_await_a_registry_lookup() {
     h.write("a.txt", "dnd");
     let report = h.start(
         r#"
-import { step, forEachFile, registry } from "codemod/workflow";
+import { step, forEachFile } from "codemod/workflow";
+import { registry } from "codemod/deps";
 export default async function main() {
   const found = await step(forEachFile("*.txt", async (file) => (await registry.npm(file.text)).versions.length));
   return found.outputs;
@@ -1080,7 +1084,8 @@ fn a_function_step_can_await_a_registry_lookup() {
     let h = with_registry(Arc::default());
     let report = h.start(
         r#"
-import { step, registry } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { registry } from "codemod/deps";
 export default async function main() {
   return await step("Look up dnd", async () => (await registry.npm("dnd")).versions.length);
 }
@@ -1095,7 +1100,7 @@ fn a_registry_lookup_outside_a_step_fails_because_it_would_not_be_recorded() {
     let h = with_registry(Arc::default());
     let report = h.start(
         r#"
-import { registry } from "codemod/workflow";
+import { registry } from "codemod/deps";
 export default async function main() { await registry.npm("dnd"); }
 "#,
         Value::Null,
@@ -1109,7 +1114,8 @@ fn a_dependency_graph_step_fails_when_the_target_has_no_lockfile() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { step, dependencyGraph } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
 export default async function main() { await step("Deps", dependencyGraph({}, (g) => g.workspaces())); }
 "#,
         Value::Null,
@@ -1125,7 +1131,8 @@ fn a_dependency_graph_callback_commits_what_it_changes_with_jssg_transform() {
     h.write("a.ts", "const version = 0;\n");
     let report = h.start(
         r#"
-import { step, dependencyGraph } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
 import { jssgTransform } from "codemod/ast-grep";
 export default async function main({ target }) {
   await step(dependencyGraph({}, async (g) => {
@@ -1151,7 +1158,8 @@ fn a_dependency_graph_reads_only_root_lockfiles_and_lists_ones_it_could_not_read
     );
     let report = h.start(
         r#"
-import { step, dependencyGraph } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
 export default async function main() {
   return await step(dependencyGraph({}, (g) => ({ read: g.lockfiles, skipped: g.skipped.map((s) => s.lockfile) })));
 }
@@ -1170,7 +1178,8 @@ fn a_helper_file_a_step_imports_can_use_registry_and_semver() {
     h.bundle_file(
         "lib/releases.ts",
         r#"
-import { registry, semver, step } from "codemod/workflow";
+import { registry, semver } from "codemod/deps";
+import { step } from "codemod/workflow";
 export async function newest(name: string) {
   const { versions } = await registry.npm(name);
   return versions.map((r) => r.version).sort((a, b) => semver.compare(a, b)).at(-1);
@@ -1253,7 +1262,8 @@ fn a_step_that_runs_out_of_time_stops_its_registry_lookup() {
     let started = std::time::Instant::now();
     let report = h.start(
         r#"
-import { step, registry } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { registry } from "codemod/deps";
 export default async function main() {
   await step("Look up", async () => (await registry.npm("dnd")).versions.length, { timeout: "300ms" });
 }
@@ -1271,7 +1281,8 @@ fn a_dependency_graph_result_keeps_a_proto_key_as_data() {
     yarn_target(&h);
     let report = h.start(
         r#"
-import { step, dependencyGraph } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
 export default async function main() {
   return await step(dependencyGraph({}, () => JSON.parse('{"__proto__": {"a": 1}, "b": 2}')));
 }

@@ -690,6 +690,22 @@ export default async function main() {
 }
 
 #[test]
+fn importing_a_dependency_api_from_the_workflow_module_says_it_moved_to_codemod_deps() {
+    let error = build_error(
+        r#"
+import { step, dependencyGraph } from "codemod/workflow";
+export default async function main() {
+  await step(dependencyGraph({}, (g) => g.workspaces()));
+}
+"#,
+    );
+    assert!(
+        error.contains(r#"import { dependencyGraph } from "codemod/deps""#),
+        "{error}"
+    );
+}
+
+#[test]
 fn a_callback_keeps_its_id_through_comments_and_either_module_spelling() {
     let ids = |source: &str| -> Vec<String> {
         build("workflow.ts", source)
