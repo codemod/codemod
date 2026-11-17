@@ -313,7 +313,7 @@ Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to
 
 ### `registry` and `semver`
 
-`registry.npm(name)` and `registry.cargo(name)` resolve to `{ ecosystem, name, versions }`, oldest first, with each release's `dependencies`, `peerDependencies` and `optionalDependencies`. They work inside a function step or a `forEachFile` or `dependencyGraph` callback, and in the files those import, so the answer is recorded with the step and a resumed run does not ask again; in the workflow body they reject. Canceling the run, or a step's `timeout`, stops a lookup in progress. Each package is fetched once per run, and lookups started together are fetched together:
+`registry.npm(name)`, `registry.cargo(name)` and `registry.pypi(name)` resolve to `{ ecosystem, name, versions }`, oldest first, with each release's `dependencies`, `peerDependencies` and `optionalDependencies`. PyPI lists dependencies per file rather than per release, so PyPI releases have none, and `releases({ accepting })` on a Python package throws. They work inside a function step or a `forEachFile` or `dependencyGraph` callback, and in the files those import, so the answer is recorded with the step and a resumed run does not ask again; in the workflow body they reject. Canceling the run, or a step's `timeout`, stops a lookup in progress. Each package is fetched once per run, and lookups started together are fetched together:
 
 ```ts
 import { step } from "codemod/workflow";

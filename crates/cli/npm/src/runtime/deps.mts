@@ -19,6 +19,8 @@ export const registry = Object.freeze({
     Promise.reject(new Error(`registry.npm() ${QUICKJS_ONLY}`)),
   cargo: (_name: string): Promise<never> =>
     Promise.reject(new Error(`registry.cargo() ${QUICKJS_ONLY}`)),
+  pypi: (_name: string): Promise<never> =>
+    Promise.reject(new Error(`registry.pypi() ${QUICKJS_ONLY}`)),
 });
 
 export const semver = Object.freeze({

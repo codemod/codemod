@@ -91,10 +91,11 @@ function flush(): void {
   }
 }
 
-/** Package releases from npm and crates.io, oldest first. */
+/** Package releases from npm, crates.io and PyPI, oldest first. */
 export const registry = Object.freeze({
   npm: (name: string) => lookup("npm", name),
   cargo: (name: string) => lookup("cargo", name),
+  pypi: (name: string) => lookup("pypi", name),
 });
 
 /** Versions and ranges, by npm rules, Cargo's (`{ ecosystem: "cargo" }`) or PEP 440 (`{ ecosystem: "pypi" }`). */
@@ -251,6 +252,11 @@ export function __graph() {
      */
     async releases({ accepting, newerThanMine = false, prereleases = false }: ReleaseOptions = {}) {
       const options = { ecosystem: this.ecosystem };
+      if (accepting && this.ecosystem === "pypi") {
+        throw new TypeError(
+          "accepting cannot filter PyPI releases: PyPI lists no dependencies per release",
+        );
+      }
       const found = await registry[this.ecosystem](this.name);
       return found.versions
         .filter(
