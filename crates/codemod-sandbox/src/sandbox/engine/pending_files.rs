@@ -125,8 +125,20 @@ impl TakenFile {
 
 impl Drop for TakenFile {
     fn drop(&mut self) {
-        if let Some(file) = self.files.lock().get_mut(&self.path) {
-            file.holder = None;
+        {
+            let mut files = self.files.lock();
+            // A file given back as it was on disk is forgotten: the next
+            // transform that asks for it reads it again. Keeping every file
+            // a step reads held two copies of the whole target until the
+            // step ended.
+            let unchanged = files
+                .get(&self.path)
+                .is_some_and(|file| file.text == file.original);
+            if unchanged {
+                files.remove(&self.path);
+            } else if let Some(file) = files.get_mut(&self.path) {
+                file.holder = None;
+            }
         }
         self.files.inner.1.notify_all();
     }
@@ -179,5 +191,15 @@ mod tests {
         let files = PendingFiles::default();
         drop(files.take(&path).unwrap());
         assert!(files.changed().is_empty());
+    }
+
+    #[test]
+    fn a_file_given_back_unchanged_is_not_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.ts");
+        std::fs::write(&path, "x").unwrap();
+        let files = PendingFiles::default();
+        drop(files.take(&path).unwrap());
+        assert!(files.lock().is_empty());
     }
 }
