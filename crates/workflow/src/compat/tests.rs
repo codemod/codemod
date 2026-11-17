@@ -54,7 +54,9 @@ fn a_linear_shell_workflow_becomes_a_sequence_of_awaits() {
         "{source}"
     );
     assert!(
-        source.contains(r#"applyValues(state, (await step("Initialize", shell("$CODEMOD_PATH/scripts/setup.sh", { env: { ...stateEnv(state) } }))).values);"#),
+        source.contains(
+            r#"applyStateOutputs(state, await step("Initialize", shell("CODEMOD_STATE_DIR="#
+        ) && source.contains(r#"(\n$CODEMOD_PATH/scripts/setup.sh\n)"#),
         "{source}"
     );
     for unused in [
@@ -272,9 +274,8 @@ fn the_documented_features_translate_and_build() {
     expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state })) {");
     expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state })) {");
-    expect(
-        "shell(\"echo fast\", { env: { ...stateEnv(state), ...matrixEnv(matrix), CI: \"true\" } })",
-    );
+    expect("(\\necho fast\\n)");
+    expect("\", { env: { ...stateEnv(state), ...matrixEnv(matrix), CI: \"true\" } })");
     expect("await lintFixTemplate({ ...params, ...{\"target_glob\":\"src/**\"} }, matrix, state);");
     expect("await step(pullRequest({ title: `refactor: migrate ${matrix?.name}`, draft: true, branch: branchName }));");
     expect("agent(`Summarize ${matrix?.team}`)");
@@ -343,10 +344,10 @@ nodes:
 "#,
     );
     assert!(
-        source.contains(r#"applyValues(state, (await step("Version", shell("echo \"version=19\" >> \"$STATE_OUTPUTS\"", { env: { ...stateEnv(state) } }))).values);"#),
+        source.contains(r#"applyStateOutputs(state, await step("Version", shell("#),
         "{source}"
     );
-    assert!(source.contains("echo ${state.version}`"), "{source}");
+    assert!(source.contains("(\\necho ${state.version}\\n)"), "{source}");
 }
 
 #[test]
@@ -373,7 +374,7 @@ nodes:
 "#,
     );
     assert!(
-        source.contains(r#"applyValues(state, (await step("Count", shell("#),
+        source.contains(r#"applyStateOutputs(state, await step("Count", shell("#),
         "{source}"
     );
 }
@@ -411,7 +412,7 @@ templates:
     );
     let source = source_of(&yaml);
     assert!(
-        source.contains(r#"applyValues(state, (await step("Count", shell("#),
+        source.contains(r#"applyStateOutputs(state, await step("Count", shell("#),
         "{source}"
     );
 }
@@ -461,29 +462,6 @@ nodes:
 }
 
 #[test]
-fn a_shebang_script_is_left_as_written_in_a_workflow_that_carries_state() {
-    let source = source_of(
-        r#"
-version: "1"
-nodes:
-  - id: detect
-    name: Detect
-    steps:
-      - name: Version
-        run: |
-          #!/usr/bin/env python3
-          print("ok")
-      - name: Use it
-        run: echo ${{ state.version }}
-"#,
-    );
-    assert!(
-        source.contains(r##"shell("#!/usr/bin/env python3\nprint(\"ok\")\n""##),
-        "{source}"
-    );
-}
-
-#[test]
 fn templates_used_many_times_over_are_walked_once() {
     let mut yaml = String::from(
         "version: \"1\"\ntemplates:\n  - id: t0\n    name: T0\n    steps:\n      - name: Count\n        run: echo \"count=1\" >> \"$STATE_OUTPUTS\"\n",
@@ -498,7 +476,7 @@ fn templates_used_many_times_over_are_walked_once() {
     yaml.push_str("nodes:\n  - id: top\n    name: Top\n    steps:\n      - name: Top\n        use:\n          template: t40\n");
     let source = source_of(&yaml);
     assert!(
-        source.contains("applyValues(state, (await step(\"Count\""),
+        source.contains("applyStateOutputs(state, await step(\"Count\""),
         "{source}"
     );
 }

@@ -754,17 +754,14 @@ state:
 | JSON values | Use valid JSON | `user={"name":"Alice","id":123}` |
 
 <Info>
-A line splits at its first `=`, so a value may contain `=`. A value that parses as JSON is stored as JSON (`10` is a number, `true` a boolean); anything else is stored as a string. Updates are applied only if the step exits successfully.
+A line splits at its first `=`, so a value may contain `=`, and its key can't be empty or start or end with a space. A value that parses as JSON is stored as JSON (`10` is a number, `true` a boolean); anything else is stored as a string. Updates are applied only if the step exits successfully.
 </Info>
 
-`$STATE_OUTPUTS` is the same file as `$CODEMOD_OUTPUT` in TypeScript workflows, so
-scripts written for either name work.
-
-State belongs to one workflow run. A nested `codemod:` step runs the other codemod
-with its own state: it doesn't see the parent's state, and what it sets doesn't
-reach the parent. Pass values to it with `params` instead. JSSG transforms cannot
-read or set workflow state; `codemod workflow upgrade` flags each transform step in
-a workflow that uses state.
+State belongs to one workflow run. A nested `codemod:` step runs the other package
+as its own workflow, with its own state: it doesn't see the parent's state, and what
+it writes doesn't come back. Pass values to it with `params` instead. JSSG transforms
+cannot read or set workflow state; `codemod workflow upgrade` flags each transform
+step in a workflow that uses state.
 
 ---
 

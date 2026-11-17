@@ -184,8 +184,9 @@ export default async function main({
   forEachFile(shell("echo hi"));
 
   const ran = await step(shell("echo hi", { cwd: target, env: { A: "1" } }));
-  expectType<Equal<typeof ran.output, string | undefined>>(true);
-  if (!ran.skipped) expectType<Equal<typeof ran.output, string>>(true);
+  expectType<Equal<typeof ran.stdout, string | undefined>>(true);
+  if (!ran.skipped) expectType<Equal<typeof ran.exitCode, number>>(true);
+  await step(shell("exit 3", { allowFailure: true }));
   const tagged = await step(shell`${target}/scripts/setup.sh ${["a b", 1, true]}`);
   expectType<Equal<typeof tagged, typeof ran>>(true);
   await step(shell({ cwd: target })`npm run build`);
@@ -222,10 +223,9 @@ export default async function main({
 
   // ── values between steps ─────────────────────────────────────────────
 
-  // A shell step returns values; a later step gets them as params.
+  // A shell step's output is parsed by the workflow; a later step gets it as params.
   const detected = await step(shell("./detect.sh"));
-  expectType<Equal<(typeof detected.values & {})["anything"], JsonValue>>(true);
-  await step(jssg("scripts/codemod.ts", { params: { ...detected.values } }));
+  await step(jssg("scripts/codemod.ts", { params: JSON.parse(detected.stdout ?? "{}") }));
   // @ts-expect-error steps take no state
   void step(shell("true"), { state: { target: "react-19" } });
 

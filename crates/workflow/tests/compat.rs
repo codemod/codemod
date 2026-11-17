@@ -63,10 +63,6 @@ nodes:
     assert_eq!(h.read("src/b.ts"), "const b = 'NEW';\n");
     let labels: Vec<&str> = report.steps.iter().map(|s| s.label.as_str()).collect();
     assert_eq!(labels, ["Apply", "Count", "Runs when two files changed"]);
-    assert_eq!(
-        report.steps[2].result.as_ref().unwrap()["values"]["done"],
-        json!(true)
-    );
 }
 
 /// The YAML engine skipped a step whose condition could not be evaluated,
@@ -130,10 +126,10 @@ nodes:
     );
     let report = h.start_loaded(workflow, Value::Null, false);
     assert!(output(&report).is_ok(), "{:?}", report.ending);
-    assert_eq!(
-        report.steps[0].result.as_ref().unwrap()["values"]["said"],
-        json!("world")
-    );
+    let stdout = report.steps[0].result.as_ref().unwrap()["stdout"]
+        .as_str()
+        .unwrap();
+    assert!(stdout.ends_with("said=world\n"), "{stdout}");
 }
 
 #[test]
@@ -303,33 +299,81 @@ nodes:
     );
     let report = h.start_loaded(workflow, Value::Null, false);
     assert!(output(&report).is_ok(), "{:?}", report.ending);
-    let read = &report.steps[1].result.as_ref().unwrap()["output"];
-    assert_eq!(read.as_str().unwrap().trim(), "\"NEW\"");
+    let read = &report.steps[1].result.as_ref().unwrap()["stdout"];
+    assert_eq!(printed(read), "\"NEW\"");
 }
 
-/// Writing `null` for a key removes it from state, as in the YAML engine.
-#[cfg(unix)]
-#[test]
-fn a_null_value_removes_a_state_key() {
+/// Runs a node of these YAML steps; what the last one printed, trimmed.
+fn last_printed(steps: &str) -> String {
     let h = Harness::new();
     let workflow = h.workflow_file(
         "workflow.yaml",
-        r#"
-version: "1"
-nodes:
-  - id: detect
-    name: Detect
-    steps:
-      - name: Set
+        &format!("version: \"1\"\nnodes:\n  - id: only\n    name: Only\n    steps:\n{steps}"),
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let last = report.steps.last().unwrap().result.as_ref().unwrap();
+    printed(&last["stdout"])
+}
+
+/// What a translated step printed, without the state lines added after it.
+fn printed(stdout: &Value) -> String {
+    let stdout = stdout.as_str().unwrap();
+    let own = stdout.split("::codemod-state-outputs::").next().unwrap();
+    own.trim().to_string()
+}
+
+#[test]
+fn a_script_with_its_own_interpreter_can_write_state() {
+    let printed = last_printed(
+        r#"      - name: Pick
+        run: |
+          #!/bin/sh
+          echo "picked=yes" >> "$STATE_OUTPUTS"
+      - name: Read
+        run: echo "$CODEMOD_STATE_PICKED"
+"#,
+    );
+    assert_eq!(printed, "\"yes\"");
+}
+
+#[test]
+fn a_state_line_is_split_at_its_first_equals_sign() {
+    let printed = last_printed(
+        r#"      - name: Note
+        run: echo 'note=a@=b' >> "$STATE_OUTPUTS"
+      - name: Read
+        run: echo "$CODEMOD_STATE_NOTE"
+"#,
+    );
+    assert_eq!(printed, "\"a@=b\"");
+}
+
+#[test]
+fn setting_state_to_null_removes_the_key() {
+    let printed = last_printed(
+        r#"      - name: Set
         run: echo 'flag=1' >> "$STATE_OUTPUTS"
-      - name: Unset
+      - name: Clear
         run: echo 'flag=null' >> "$STATE_OUTPUTS"
       - name: Read
         run: echo "[${CODEMOD_STATE_FLAG-unset}]"
 "#,
     );
-    let report = h.start_loaded(workflow, Value::Null, false);
-    assert!(output(&report).is_ok(), "{:?}", report.ending);
-    let read = &report.steps[2].result.as_ref().unwrap()["output"];
-    assert_eq!(read.as_str().unwrap().trim(), "[unset]");
+    assert_eq!(printed, "[unset]");
+}
+
+#[test]
+fn a_multi_line_command_with_an_expression_keeps_its_lines_as_written() {
+    let printed = last_printed(
+        r#"      - name: Pick
+        run: echo 'who=world' >> "$STATE_OUTPUTS"
+      - name: Heredoc
+        run: |
+          cat <<END
+          hello ${{ state.who }}
+          END
+"#,
+    );
+    assert!(printed.starts_with("hello world"), "{printed}");
 }

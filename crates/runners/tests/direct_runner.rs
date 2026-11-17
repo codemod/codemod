@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
-use butterflow_models::Error;
-use butterflow_runners::direct_runner::DirectRunner;
+use butterflow_runners::direct_runner::{CommandOutput, DirectRunner};
 use butterflow_runners::Runner;
 
-async fn run(command: &str) -> butterflow_models::Result<String> {
+async fn run(command: &str) -> butterflow_models::Result<CommandOutput> {
     let env: HashMap<String, String> = std::env::vars().collect();
     DirectRunner::with_quiet(true)
         .run_command(command, &env, None)
@@ -18,7 +17,7 @@ fn lines(output: &str) -> Vec<&str> {
 #[tokio::test]
 async fn runs_every_line_of_a_multi_line_step() {
     let output = run("echo message1\necho message2\n").await.unwrap();
-    assert_eq!(lines(&output), ["message1", "message2"]);
+    assert_eq!(lines(&output.stdout), ["message1", "message2"]);
 }
 
 #[tokio::test]
@@ -26,15 +25,32 @@ async fn keeps_running_after_a_failing_line_and_reports_the_last_exit_code() {
     let output = run("echo before\nexit-is-not-a-command-butterflow\necho after")
         .await
         .unwrap();
-    let output = lines(&output);
+    let output = lines(&output.stdout);
     assert_eq!(output.first(), Some(&"before"));
     assert_eq!(output.last(), Some(&"after"));
 
     let exit = if cfg!(windows) { "exit /b 3" } else { "exit 3" };
-    match run(&format!("echo one\n{exit}")).await {
-        Err(Error::ShellCommandFailed { exit_code, .. }) => assert_eq!(exit_code, 3),
-        other => panic!("expected ShellCommandFailed, got {other:?}"),
-    }
+    let output = run(&format!("echo one\n{exit}")).await.unwrap();
+    assert_eq!(output.exit_code, 3);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn keeps_stdout_and_stderr_apart() {
+    let output = run("echo out\necho err >&2").await.unwrap();
+    assert_eq!(
+        (output.stdout.as_str(), output.stderr.as_str()),
+        ("out\n", "err\n")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn keeps_the_end_of_output_that_is_too_long() {
+    let output = run("yes line | head -n 400000\necho last").await.unwrap();
+    assert!(output.cut);
+    assert!(output.stdout.len() <= butterflow_runners::direct_runner::KEPT_OUTPUT);
+    assert!(output.stdout.ends_with("line\nlast\n"));
 }
 
 // cmd's echo prints the quotes it is given; sh's removes them. Either way the
@@ -47,7 +63,7 @@ async fn passes_double_quoted_strings_through_unchanged() {
     } else {
         "scripts.dev=pulse dev"
     };
-    assert_eq!(lines(&output), [expected]);
+    assert_eq!(lines(&output.stdout), [expected]);
 }
 
 // A command that is a batch file, like npm (npm.cmd), returns to the step
@@ -78,7 +94,7 @@ async fn continues_after_a_batch_file_command_on_windows() {
     std::fs::remove_dir_all(&tools).ok();
 
     assert_eq!(
-        lines(&output.unwrap()),
+        lines(&output.unwrap().stdout),
         ["tool ran with [install]", "tool ran with [build]", "after"]
     );
 }
@@ -97,5 +113,5 @@ async fn keeps_non_ascii_text_on_windows() {
     ))
     .await;
     std::fs::remove_file(&path).ok();
-    assert_eq!(lines(&output.unwrap()), ["found"]);
+    assert_eq!(lines(&output.unwrap().stdout), ["found"]);
 }

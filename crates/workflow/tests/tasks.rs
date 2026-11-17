@@ -18,38 +18,56 @@ fn approving() -> Harness {
 }
 
 #[test]
-fn a_shell_steps_output_lines_come_back_as_values() {
+fn a_shell_step_returns_what_the_command_printed() {
     let h = Harness::new();
     let report = h.start(
         r#"
 import { step, shell } from "codemod/workflow";
 export default async function main() {
-  const run = await step(shell(
-    'echo "count=2" >> "$CODEMOD_OUTPUT" && echo "items@=\"a\"" >> "$CODEMOD_OUTPUT" && echo "$GREETING"',
+  const { stdout, stderr, exitCode } = await step(shell(
+    'echo "$GREETING" && echo careful >&2 && echo \'{"count":2}\'',
     { env: { GREETING: "hi" } },
   ));
-  return run;
+  const lines = stdout.trim().split("\n");
+  return { first: lines[0], parsed: JSON.parse(lines.at(-1)), stderr, exitCode };
 }
 "#,
         Value::Null,
     );
-    let result = output(&report).unwrap();
-    assert_eq!(result["output"].as_str().unwrap().trim(), "hi");
-    assert_eq!(result["values"], json!({ "count": 2, "items": ["a"] }));
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "first": "hi", "parsed": { "count": 2 }, "stderr": "careful\n", "exitCode": 0 })
+    );
 }
 
 #[test]
-fn a_failing_shell_command_fails_the_step() {
+fn a_failing_shell_command_fails_the_step_with_what_it_printed() {
     let h = Harness::new();
     let report = h.start(
         r#"
 import { step, shell } from "codemod/workflow";
-export default async function main() { await step("Fail", shell("echo nope && exit 3")); }
+export default async function main() { await step("Fail", shell("echo nope >&2 && exit 3")); }
 "#,
         Value::Null,
     );
     let error = output(&report).unwrap_err();
     assert!(error.contains("step 'Fail' failed"), "{error}");
+    assert!(error.contains("exited with code 3:\nnope"), "{error}");
+}
+
+#[test]
+fn a_shell_step_that_allows_failure_returns_the_exit_code() {
+    let h = Harness::new();
+    let report = h.start(
+        r#"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  return (await step(shell("exit 3", { allowFailure: true }))).exitCode;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(3));
 }
 
 #[test]
@@ -950,7 +968,7 @@ export default async function main() {
     dirname: import.meta.dirname,
     filename: import.meta.filename,
   })));
-  return { here, url: import.meta.url, echoed: echoed.output, seen: seen.outputs };
+  return { here, url: import.meta.url, echoed: echoed.stdout, seen: seen.outputs };
 }
 "#,
     );

@@ -103,7 +103,7 @@ fn a_hosted_run_runs_host_tasks() {
         .unwrap();
     let outcome: Value = serde_json::from_str(&outcome).unwrap();
     assert_eq!(
-        outcome["result"]["output"].as_str().unwrap().trim(),
+        outcome["result"]["stdout"].as_str().unwrap().trim(),
         "hosted"
     );
 

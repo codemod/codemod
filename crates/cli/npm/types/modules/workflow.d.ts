@@ -587,25 +587,32 @@ declare module "codemod:workflow" {
     env?: Readonly<Record<string, string>>;
     /** Directory to run in, relative to the target (or absolute). Defaults to the current directory. */
     cwd?: string;
+    /** Return the result of a command that exits with an error, instead of failing the step. */
+    allowFailure?: boolean;
+  }
+
+  /** What a command printed, as text (the last 1 MiB of each), and how it exited. */
+  export interface ShellResult {
+    stdout: string;
+    stderr: string;
+    /** 0, unless `allowFailure` is set; -1 when a signal ended the command. */
+    exitCode: number;
   }
 
   /** A value in a `shell` template: quoted as one word, or one word per item. */
   export type ShellValue = string | number | boolean | readonly (string | number | boolean)[];
 
-  export type ShellTask = Task<
-    Skippable<{ output: string; values?: { readonly [key: string]: JsonValue } }>
-  >;
+  export type ShellTask = Task<Skippable<ShellResult>>;
 
   /**
-   * Runs a shell command. It gets values through `env`, and can return some
-   * by writing `key=value` lines (`key@=value` adds to a list) to the file
-   * at `$CODEMOD_OUTPUT`; a value is JSON, or else a string. They arrive as
-   * `result.values`.
+   * Runs a shell command. It gets values through `env`; the workflow parses
+   * what it needs from what the command prints. A command that exits with
+   * an error fails the step, unless `allowFailure` is set.
    *
    * @example
    * await step("Install", shell("npm install"));
-   * const { values } = await step("Detect", shell(`echo "major=19" >> "$CODEMOD_OUTPUT"`));
-   * // values: { major: 19 }
+   * const { stdout } = await step("Detect", shell(`echo '{"major":19}'`));
+   * JSON.parse(stdout); // { major: 19 }
    */
   export function shell(command: string, options?: ShellOptions): ShellTask;
   /**

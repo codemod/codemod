@@ -12,8 +12,9 @@
 //!   `from_state`), concurrently;
 //! - workflow state is a plain object local to the run, `state`. A shell
 //!   step gets it as `CODEMOD_STATE_<KEY>` variables, and the lines it writes
-//!   to `$STATE_OUTPUTS` come back on its result as `values`, which are
-//!   copied into `state`. The engine has no workflow state; a jssg transform
+//!   to `$STATE_OUTPUTS` are printed at the end of its stdout, from where
+//!   `applyStateOutputs` copies them into `state`. The engine has no workflow
+//!   state; a jssg transform
 //!   can neither read nor set it, so the YAML engine's `getState`/`setState`
 //!   in a transform cannot be translated;
 //! - `${{ }}` expressions become TypeScript where that is exact, and
@@ -76,7 +77,8 @@ struct Generator {
     /// the workflow reads state, or has more than one step that could set it.
     plumb_state: bool,
     uses_state_env: bool,
-    uses_apply_values: bool,
+    /// Whether the source calls `applyStateOutputs`.
+    uses_state_outputs: bool,
     /// Tasks get the run's params anyway; pass `params` explicitly only when
     /// it differs from them (defaults, template inputs).
     pass_params: bool,
@@ -621,9 +623,12 @@ impl Generator {
                     env.iter()
                         .map(|(k, v)| format!("{}: {}", property(k), js_string(v))),
                 );
-                // The shell task sets `$STATE_OUTPUTS` itself, to the same
-                // file as `$CODEMOD_OUTPUT`, so the command stays as written.
-                let command = template(command);
+                // Without `$STATE_OUTPUTS` set, a write to it fails the command.
+                let command = if self.plumb_state || command.contains("STATE_OUTPUTS") {
+                    template(&with_state_outputs(command))
+                } else {
+                    template(command)
+                };
                 if entries.is_empty() {
                     format!("shell({command})")
                 } else {
@@ -813,10 +818,10 @@ impl Generator {
             }
         };
         if self.plumb_state && matches!(step.action, StepAction::RunScript(_)) {
-            self.uses_apply_values = true;
+            self.uses_state_outputs = true;
             return (
                 notes,
-                format!("applyValues(state, (await step({name}, {task})).values);"),
+                format!("applyStateOutputs(state, await step({name}, {task}));"),
             );
         }
         (notes, format!("await step({name}, {task});"))
@@ -905,7 +910,7 @@ impl Generator {
         if mentions(&self.body, "Matrix") || self.uses_matrix_env {
             aliases.push_str("type Matrix = Record<string, any> | null;\n");
         }
-        if mentions(&self.body, "State") {
+        if mentions(&self.body, "State") || self.uses_state_outputs || self.uses_state_env {
             // workflow.yaml declares no types for state, so it is read as `any`.
             aliases.push_str("type State = Record<string, any>;\n");
         }
@@ -924,10 +929,8 @@ impl Generator {
                 "\n/** State as `CODEMOD_STATE_<KEY>` variables, JSON-encoded as before. */\nfunction stateEnv(state: State): Record<string, string> {\n  return Object.fromEntries(\n    Object.entries(state).map(([key, value]) => [`CODEMOD_STATE_${key.toUpperCase()}`, JSON.stringify(value)]),\n  );\n}\n",
             );
         }
-        if self.uses_apply_values {
-            source.push_str(
-                "\n/** Copy a shell step's values into state; `null` removes a key, as before. */\nfunction applyValues(state: State, values: Record<string, unknown> | undefined): void {\n  for (const [key, value] of Object.entries(values ?? {})) {\n    if (value === null) delete state[key];\n    else state[key] = value;\n  }\n}\n",
-            );
+        if self.uses_state_outputs {
+            source.push_str(&STATE_OUTPUTS_HELPER.replace("{marker}", STATE_MARKER));
         }
         if self.uses_matrix_env {
             source.push_str(
@@ -940,6 +943,64 @@ impl Generator {
         }
     }
 }
+
+/// Marks where a translated step's `$STATE_OUTPUTS` lines start in its stdout.
+const STATE_MARKER: &str = "::codemod-state-outputs::";
+
+/// `command` with `$STATE_OUTPUTS` set to a file, as the YAML engine ran it.
+/// What the command writes there is printed after [`STATE_MARKER`], last,
+/// for `applyStateOutputs` to read; the exit code is the command's.
+fn with_state_outputs(command: &str) -> String {
+    let run = if command.starts_with("#!") {
+        // A script naming its interpreter runs from a file, as it did.
+        format!(
+            "cat > \"$CODEMOD_STATE_DIR/script\" <<'CODEMOD_SCRIPT_END'\n{command}\nCODEMOD_SCRIPT_END\nchmod +x \"$CODEMOD_STATE_DIR/script\"\n\"$CODEMOD_STATE_DIR/script\""
+        )
+    } else {
+        // A subshell, so an `exit` in the command still prints the lines.
+        format!("(\n{command}\n)")
+    };
+    format!(
+        "CODEMOD_STATE_DIR=\"$(mktemp -d)\" || exit 1\nexport STATE_OUTPUTS=\"$CODEMOD_STATE_DIR/outputs\"\n: > \"$STATE_OUTPUTS\"\n{run}\ncodemod_status=$?\nprintf '\\n%s\\n' '{STATE_MARKER}'\ncat \"$STATE_OUTPUTS\"\nrm -rf \"$CODEMOD_STATE_DIR\"\nexit $codemod_status"
+    )
+}
+
+/// Reads the lines `with_state_outputs` printed into `state`, as the YAML
+/// engine did: `key=value` sets, `key@=value` appends, a value is JSON or
+/// else a string, and `key=null` removes the key.
+const STATE_OUTPUTS_HELPER: &str = r#"
+/** Copies what a step wrote to `$STATE_OUTPUTS` into `state`. */
+function applyStateOutputs(state: State, result: { stdout?: string }): void {
+  const stdout = result.stdout ?? "";
+  const start = stdout.lastIndexOf("\n{marker}\n");
+  if (start < 0) return;
+  for (const line of stdout.slice(start + "\n{marker}\n".length).split("\n")) {
+    if (!line.trim()) continue;
+    const equals = line.indexOf("=");
+    const append = equals > 0 && line[equals - 1] === "@";
+    const key = line.slice(0, append ? equals - 1 : Math.max(equals, 0));
+    if (!key || key.trim() !== key) {
+      console.warn(`skipped a $STATE_OUTPUTS line that is not key=value: ${line}`);
+      continue;
+    }
+    const text = line.slice(equals + 1);
+    let value: unknown;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      value = text;
+    }
+    if (append) {
+      const list = state[key] ?? [];
+      state[key] = [...(Array.isArray(list) ? list : [list]), value];
+    } else if (value === null) {
+      delete state[key];
+    } else {
+      state[key] = value;
+    }
+  }
+}
+"#;
 
 fn workflow_templates(_workflow: &Workflow) -> HashMap<String, String> {
     HashMap::new()

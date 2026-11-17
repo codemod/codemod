@@ -378,7 +378,7 @@ export default async function main() {
 import { step, shell } from "codemod/workflow";
 export default async function main() {
   const echoed = await step("Echo", shell\`sh \${import.meta.dirname}/scripts/echo.sh \${"two words"} \${["it's", 3]}\`);
-  return { dirname: import.meta.dirname, output: echoed.output };
+  return { dirname: import.meta.dirname, output: echoed.stdout };
 }
 `,
       });
