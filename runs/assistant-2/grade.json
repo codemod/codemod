@@ -1,0 +1,39 @@
+{
+ "checkout": "/home/user/scratch/runs/assistant-2",
+ "install_exit": 0,
+ "libs_build_exit": 0,
+ "solid_ranges": {
+  "apps/codeimage dependencies": "2.0.0",
+  "apps/website dependencies": "2.0.0",
+  "packages/ui devDependencies": "2.0.0",
+  "packages/ui peerDependencies": "2.0.0",
+  "packages/atomic-state devDependencies": "2.0.0",
+  "packages/atomic-state peerDependencies": "2.0.0",
+  "packages/dom-export dependencies": "2.0.0",
+  "packages/dom-export peerDependencies": "2.0.0",
+  "packages/highlight devDependencies": "2.0.0",
+  "packages/locale dependencies": "2.0.0",
+  "packages/locale peerDependencies": "2.0.0",
+  "packages/config dependencies": "2.0.0",
+  "packages/config peerDependencies": "2.0.0"
+ },
+ "all_solid_2": true,
+ "tsc": {
+  "total": 31,
+  "baseline": 15,
+  "library": 8,
+  "core": 8
+ },
+ "core_errors": [
+  "apps/codeimage/src/components/CustomEditor/CanvasEditor.tsx:56 TS7006 Parameter 'activeToast' implicitly has an 'any' type.",
+  "apps/codeimage/src/components/FeatureBadge/FeatureCheckBanner.tsx:28 TS2746 This JSX tag's 'children' prop expects a single child of type 'never', but multiple children were provided.",
+  "apps/codeimage/src/components/FeatureBadge/FeatureCheckBanner.tsx:28 TS2322 Type 'string' is not assignable to type 'never'.",
+  "apps/codeimage/src/components/Presets/PresetSwitcher/PresetSwitcher.tsx:261 TS7006 Parameter 'e' implicitly has an 'any' type.",
+  "apps/codeimage/src/components/PropertyEditor/controls/FontPicker/FontPickerListbox.tsx:19 TS7006 Parameter 'evt' implicitly has an 'any' type.",
+  "apps/codeimage/src/components/PropertyEditor/controls/ImagePicker/ImagePickerList.tsx:135 TS7006 Parameter 'e' implicitly has an 'any' type.",
+  "apps/codeimage/src/components/Terminal/Tabs/TabName/TabName.tsx:153 TS7006 Parameter 'el' implicitly has an 'any' type.",
+  "apps/codeimage/src/index.tsx:167 TS2322 Type 'import(\"/home/user/scratch/runs/assistant-2/node_modules/.pnpm/@solidjs+web@2.0.0_solid-js@2.0.0/node_modules/@solidjs/web/types/jsx\").JSX.Element' is not"
+ ],
+ "finished": false,
+ "diff": "155 files changed, 1601 insertions(+), 1431 deletions(-)"
+}

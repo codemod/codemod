@@ -1,0 +1,16 @@
+[
+ "apps/codeimage/src/mocks/projectMockHandlers.ts|TS7006|Parameter 'editor' implicitly has an 'any' type.",
+ "apps/codeimage/src/pages/Dashboard/components/ProjectItem/ProjectItem.tsx|TS7006|Parameter 'acc' implicitly has an 'any' type.",
+ "apps/codeimage/src/pages/Dashboard/components/ProjectItem/ProjectItem.tsx|TS7006|Parameter 'editorTab' implicitly has an 'any' type.",
+ "apps/codeimage/src/pages/Dashboard/components/ProjectItem/ProjectItem.tsx|TS7031|Binding element 'id' implicitly has an 'any' type.",
+ "apps/codeimage/src/state/editor/editor.ts|TS7006|Parameter 'editor' implicitly has an 'any' type.",
+ "apps/website/../../scripts/vercel-output-build.ts|TS2554|Expected 1 arguments, but got 2.",
+ "apps/website/../../scripts/vercel-output-build.ts|TS6133|'userConfig' is declared but its value is never read.",
+ "apps/website/src/components/Landing/EditorSteps/CodeEditor/CodeEditor.tsx|TS2307|Cannot find module 'solid-codemirror/dist/types/core/createLazyCompartmentExtension' or its corresponding type declarations.",
+ "apps/website/src/core/object.ts|TS2345|Argument of type 'unknown' is not assignable to parameter of type 'T[keyof T]'.",
+ "apps/website/src/core/object.ts|TS2769|No overload matches this call.",
+ "apps/website/src/core/object.ts|TS7053|Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '{}'.",
+ "apps/website/src/ui.ts|TS2307|Cannot find module '@auth0/auth0-spa-js' or its corresponding type declarations.",
+ "apps/website/src/ui.ts|TS6133|'setAuth' is declared but its value is never read.",
+ "apps/website/src/ui.ts|TS6133|'setUser' is declared but its value is never read."
+]
