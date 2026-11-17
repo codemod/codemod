@@ -25,7 +25,24 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
             .cloned()
             .unwrap_or_default()
     };
-    let importers = mapping("importers");
+    let mut importers = mapping("importers");
+    // A project that is not a workspace (pnpm 8, lockfile 6.0) keeps its
+    // dependencies at the top level instead of under `importers`.
+    if importers.is_empty() {
+        let mut root = serde_yaml::Mapping::new();
+        for field in SECTIONS
+            .iter()
+            .map(|(field, _)| *field)
+            .chain(["specifiers"])
+        {
+            if let Some(section) = doc.get(field) {
+                root.insert(Value::String(field.into()), section.clone());
+            }
+        }
+        if !root.is_empty() {
+            importers.insert(Value::String(".".into()), Value::Mapping(root));
+        }
+    }
     let snapshots = mapping("snapshots");
     let packages = mapping("packages");
 
@@ -63,8 +80,12 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
     };
 
     for (path, sections) in &importers {
-        let path = yaml_string(path).unwrap_or_default();
-        let from = workspaces[&path];
+        let Some(path) = yaml_string(path) else {
+            continue;
+        };
+        let Some(&from) = workspaces.get(&path) else {
+            continue;
+        };
         for (field, kind) in SECTIONS {
             for (name, spec) in sections
                 .get(field)
@@ -73,10 +94,18 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
                 .flatten()
             {
                 let name = yaml_string(name).unwrap_or_default();
-                let range = spec.get("specifier").and_then(yaml_string);
+                // `{ specifier, version }`, or (lockfile 5) the version alone,
+                // with its range under `specifiers`.
+                let range = spec.get("specifier").and_then(yaml_string).or_else(|| {
+                    sections
+                        .get("specifiers")
+                        .and_then(|specifiers| specifiers.get(name.as_str()))
+                        .and_then(yaml_string)
+                });
                 let version = spec
                     .get("version")
                     .and_then(yaml_string)
+                    .or_else(|| yaml_string(spec))
                     .unwrap_or_default();
                 let to = target(&graph, &path, &name, &version);
                 graph.edge(from, to, &name, range, kind);

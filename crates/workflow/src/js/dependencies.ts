@@ -312,6 +312,11 @@ export function __graph() {
 
   const graph = Object.freeze({
     lockfiles: Object.freeze(JSON.parse(host.lockfiles) as string[]),
+    skipped: Object.freeze(
+      (JSON.parse(host.skipped) as { lockfile: string; error: string }[]).map((s) =>
+        Object.freeze(s),
+      ),
+    ),
 
     /** The repository's own packages. */
     workspaces: (): PackageNode[] => nodesOf(host.nodes("workspaces", "")),

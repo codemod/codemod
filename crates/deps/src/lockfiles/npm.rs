@@ -24,7 +24,10 @@ pub fn parse(text: &str) -> Result<Graph, String> {
             continue;
         }
         let id = match path.rsplit_once("node_modules/") {
-            Some((_, name)) => {
+            Some((_, folder)) => {
+                // An aliased install (`"foo": "npm:bar@1"`) is in the
+                // folder `foo` but is the package `bar`.
+                let name = entry.get("name").and_then(Value::as_str).unwrap_or(folder);
                 let version = entry
                     .get("version")
                     .and_then(Value::as_str)

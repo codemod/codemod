@@ -19,8 +19,36 @@ pub struct Manifests {
 
 impl Manifests {
     /// Every `Cargo.toml` under `dir`, skipping `target` and ignored files.
+    /// When the root manifest lists `[workspace] members`, only those (and
+    /// not its `exclude`s) are taken, so a vendored or fixture crate with a
+    /// member's name does not stand in for it.
     pub fn find(dir: &Path) -> Self {
         let mut manifests = Self::default();
+        let root = std::fs::read_to_string(dir.join("Cargo.toml"))
+            .ok()
+            .and_then(|text| document(&text).ok());
+        let globs = |field: &str| -> Option<Vec<String>> {
+            let list = root.as_ref()?.get("workspace")?.get(field)?.as_array()?;
+            Some(
+                list.iter()
+                    .filter_map(|glob| glob.as_str())
+                    .map(|glob| {
+                        glob.trim_start_matches("./")
+                            .trim_end_matches('/')
+                            .to_string()
+                    })
+                    .collect(),
+            )
+        };
+        let (members, excluded) = (globs("members"), globs("exclude").unwrap_or_default());
+        let is_member = |relative: &str| {
+            relative.is_empty()
+                || (members.as_ref().is_none_or(|members| {
+                    members.iter().any(|glob| super::glob_match(glob, relative))
+                }) && !excluded
+                    .iter()
+                    .any(|glob| super::glob_match(glob, relative)))
+        };
         let walk = ignore::WalkBuilder::new(dir)
             .filter_entry(|entry| {
                 !matches!(entry.file_name().to_str(), Some("target" | "node_modules"))
@@ -34,6 +62,9 @@ impl Manifests {
             let relative = relative
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default();
+            if !is_member(&relative) {
+                continue;
+            }
             let read: ReadFile = &|_| std::fs::read_to_string(entry.path()).ok();
             manifests.add(if relative.is_empty() { "." } else { &relative }, read);
         }
@@ -153,6 +184,9 @@ fn declared(manifest: &toml::Value, root: Option<&toml::Value>) -> HashMap<Strin
     for (table, kind) in tables {
         for (key, spec) in table.and_then(|t| t.as_table()).into_iter().flatten() {
             let mut spec = spec.clone();
+            // `optional` is the member's own; the workspace entry it
+            // inherits from cannot set it.
+            let optional = spec.get("optional").and_then(|o| o.as_bool()) == Some(true);
             if spec.get("workspace").and_then(|w| w.as_bool()) == Some(true) {
                 if let Some(shared) = inherited.and_then(|w| w.get(key)) {
                     spec = shared.clone();
@@ -168,7 +202,7 @@ fn declared(manifest: &toml::Value, root: Option<&toml::Value>) -> HashMap<Strin
                 .or_else(|| spec.get("version").and_then(|v| v.as_str()))
                 .unwrap_or("*")
                 .to_string();
-            let kind = if spec.get("optional").and_then(|o| o.as_bool()) == Some(true) {
+            let kind = if optional || spec.get("optional").and_then(|o| o.as_bool()) == Some(true) {
                 Kind::Optional
             } else {
                 kind

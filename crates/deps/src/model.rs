@@ -85,12 +85,22 @@ pub struct Edge {
     pub kind: Kind,
 }
 
+/// A lockfile that was found but could not be read.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Skipped {
+    pub lockfile: String,
+    pub error: String,
+}
+
 #[derive(Debug, Default)]
 pub struct Graph {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     /// Lockfiles that fed the graph, relative to the analysed root.
     pub lockfiles: Vec<String>,
+    /// Lockfiles found but not read, with why: when none were asked for by
+    /// name, one that cannot be read is left out instead of failing.
+    pub skipped: Vec<Skipped>,
     index: HashMap<(Ecosystem, String, String), usize>,
     /// Workspaces are also keyed by directory: two lockfiles in one
     /// repository can each have a root package with the same name.

@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::model::{Graph, Kind};
+use crate::model::{Graph, Kind, Skipped};
 
 mod cargo;
 mod npm;
@@ -37,6 +37,11 @@ pub const LOCKFILES: [&str; 4] = [
 /// Every lockfile under `root`, merged into one graph. `.gitignore` is
 /// respected, and `node_modules` and `target` are skipped. `only` keeps
 /// the lockfiles whose relative path matches one of its globs.
+///
+/// A lockfile `only` names that cannot be read is an error. Without `only`,
+/// one that cannot be read (a Yarn v1 lockfile in an example, say) is left
+/// out and listed in [`Graph::skipped`]; it is an error only when no
+/// lockfile can be read.
 pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
     let mut found: Vec<String> = ignore::WalkBuilder::new(root)
         .hidden(false)
@@ -72,15 +77,30 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
             .unwrap_or((".", lockfile.as_str()));
         let base = root.join(dir);
         let read = |path: &str| std::fs::read_to_string(base.join(path)).ok();
-        let text = read(file).ok_or_else(|| format!("cannot read {lockfile}"))?;
-        let parsed = match file {
-            "yarn.lock" => yarn(&text, &read),
-            "pnpm-lock.yaml" => pnpm(&text, &read),
-            "package-lock.json" => package_lock(&text),
-            _ => cargo(&text, &CargoManifests::find(&base)),
+        let parsed = read(file)
+            .ok_or_else(|| "cannot read the file".to_string())
+            .and_then(|text| match file {
+                "yarn.lock" => yarn(&text, &read),
+                "pnpm-lock.yaml" => pnpm(&text, &read),
+                "package-lock.json" => package_lock(&text),
+                _ => cargo(&text, &CargoManifests::find(&base)),
+            });
+        match parsed {
+            Ok(parsed) => graph.merge(parsed, dir),
+            Err(error) if only.is_empty() => graph.skipped.push(Skipped { lockfile, error }),
+            Err(error) => return Err(format!("{lockfile}: {error}")),
         }
-        .map_err(|error| format!("{lockfile}: {error}"))?;
-        graph.merge(parsed, dir);
+    }
+    if graph.lockfiles.is_empty() {
+        let reasons: Vec<String> = graph
+            .skipped
+            .iter()
+            .map(|skipped| format!("{}: {}", skipped.lockfile, skipped.error))
+            .collect();
+        return Err(format!(
+            "no lockfile could be read ({})",
+            reasons.join("; ")
+        ));
     }
     Ok(graph)
 }
@@ -160,8 +180,18 @@ pub(crate) fn versions_by_name(graph: &Graph) -> HashMap<String, Vec<usize>> {
     map
 }
 
-/// `*` matches any run of characters.
-fn glob_match(glob: &str, name: &str) -> bool {
+/// `*` matches any run of characters, and a leading `**/` also matches no
+/// directory at all, so `**/yarn.lock` matches the root `yarn.lock`.
+pub(crate) fn glob_match(glob: &str, name: &str) -> bool {
+    if let Some(rest) = glob.strip_prefix("**/") {
+        if glob_match(rest, name) {
+            return true;
+        }
+    }
+    star_match(glob, name)
+}
+
+fn star_match(glob: &str, name: &str) -> bool {
     let parts: Vec<&str> = glob.split('*').collect();
     if parts.len() == 1 {
         return glob == name;

@@ -227,3 +227,168 @@ fn registry_releases_are_described_oldest_first_with_dependencies_grouped_by_kin
         })
     );
 }
+
+const PACKAGE_LOCK: &str = r#"{
+  "name": "app",
+  "lockfileVersion": 3,
+  "packages": {
+    "": { "name": "app", "version": "1.0.0", "dependencies": { "a": "^1.0.0" } },
+    "node_modules/a": { "version": "1.0.0" }
+  }
+}"#;
+
+fn repository(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (path, text) in files {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    dir
+}
+
+const YARN_V1: &str = "# yarn lockfile v1\n\na@^1:\n  version \"1.0.0\"\n";
+
+#[test]
+fn a_lockfile_that_cannot_be_read_is_skipped_when_none_were_named() {
+    let dir = repository(&[
+        ("package-lock.json", PACKAGE_LOCK),
+        ("examples/old/yarn.lock", YARN_V1),
+    ]);
+    let graph = lockfiles::load(dir.path(), &[]).unwrap();
+    assert_eq!(graph.lockfiles, vec!["package-lock.json".to_string()]);
+    assert_eq!(graph.skipped.len(), 1);
+    assert_eq!(graph.skipped[0].lockfile, "examples/old/yarn.lock");
+    assert_eq!(graph.skipped[0].error, "Yarn v1 lockfiles are not read yet");
+}
+
+#[test]
+fn a_named_lockfile_that_cannot_be_read_fails() {
+    let dir = repository(&[
+        ("package-lock.json", PACKAGE_LOCK),
+        ("examples/old/yarn.lock", YARN_V1),
+    ]);
+    let error = lockfiles::load(dir.path(), &["examples/**/yarn.lock".to_string()]).unwrap_err();
+    assert!(error.contains("Yarn v1"), "{error}");
+}
+
+#[test]
+fn loading_fails_when_no_lockfile_can_be_read() {
+    let dir = repository(&[("yarn.lock", YARN_V1)]);
+    let error = lockfiles::load(dir.path(), &[]).unwrap_err();
+    assert!(error.contains("no lockfile could be read"), "{error}");
+    assert!(error.contains("yarn.lock: Yarn v1"), "{error}");
+}
+
+#[test]
+fn a_double_star_glob_also_matches_the_root_lockfile() {
+    let dir = repository(&[
+        ("package-lock.json", PACKAGE_LOCK),
+        ("packages/web/package-lock.json", PACKAGE_LOCK),
+    ]);
+    let graph = lockfiles::load(dir.path(), &["**/package-lock.json".to_string()]).unwrap();
+    assert_eq!(
+        graph.lockfiles,
+        vec![
+            "package-lock.json".to_string(),
+            "packages/web/package-lock.json".to_string()
+        ]
+    );
+}
+
+#[test]
+fn a_pnpm_project_that_is_not_a_workspace_is_its_own_root() {
+    let lock = r#"
+lockfileVersion: '6.0'
+dependencies:
+  react:
+    specifier: ^18.2.0
+    version: 18.2.0
+devDependencies:
+  typescript:
+    specifier: ^5.0.0
+    version: 5.4.5
+packages:
+  /react@18.2.0:
+    resolution: {integrity: sha512-x}
+  /typescript@5.4.5:
+    resolution: {integrity: sha512-y}
+"#;
+    let graph = lockfiles::pnpm(lock, &|path| {
+        (path == "package.json").then(|| r#"{ "name": "app" }"#.to_string())
+    })
+    .unwrap();
+    let walk = Walk::new(graph);
+    let root = walk
+        .graph
+        .nodes
+        .iter()
+        .position(|n| n.name == "app")
+        .expect("a root workspace");
+    let mut declared: Vec<String> = walk
+        .dependencies(root, &[])
+        .into_iter()
+        .map(|edge| {
+            let edge = &walk.graph.edges[edge];
+            let to = edge.to.map(|to| walk.graph.nodes[to].version.clone());
+            format!("{} {:?} {:?} {:?}", edge.name, edge.kind, edge.range, to)
+        })
+        .collect();
+    declared.sort();
+    assert_eq!(
+        declared,
+        vec![
+            "react Prod Some(\"^18.2.0\") Some(\"18.2.0\")".to_string(),
+            "typescript Dev Some(\"^5.0.0\") Some(\"5.4.5\")".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn a_pnpm_importer_with_a_key_that_is_not_text_is_ignored() {
+    let lock = "lockfileVersion: '9.0'\nimporters:\n  ~:\n    dependencies: {}\n  .:\n    dependencies: {}\n";
+    assert!(lockfiles::pnpm(lock, &|_| None).is_ok());
+}
+
+#[test]
+fn an_aliased_npm_install_is_the_package_it_aliases() {
+    let lock = r#"{
+      "lockfileVersion": 3,
+      "packages": {
+        "": { "name": "app", "dependencies": { "foo": "npm:bar@^1.0.0" } },
+        "node_modules/foo": { "name": "bar", "version": "1.2.0" }
+      }
+    }"#;
+    let walk = Walk::new(lockfiles::package_lock(lock).unwrap());
+    assert_eq!(walk.nodes_named("bar").len(), 1);
+    assert!(walk.nodes_named("foo").is_empty());
+}
+
+#[test]
+fn an_optional_cargo_dependency_inherited_from_the_workspace_stays_optional() {
+    let lock = "version = 4\n[[package]]\nname = \"app\"\nversion = \"0.1.0\"\ndependencies = [\"serde\"]\n[[package]]\nname = \"serde\"\nversion = \"1.0.200\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+    let mut manifests = CargoManifests::default();
+    manifests.add(".", &|_| Some("[workspace.dependencies]\nserde = \"1.0\"\n[package]\nname = \"app\"\n[dependencies]\nserde = { workspace = true, optional = true }\n".into()));
+    let graph = lockfiles::cargo(lock, &manifests).unwrap();
+    assert_eq!(
+        workspace_dependencies(graph, &[]),
+        ["app@0.1.0 optional serde@1.0.200 1.0"]
+    );
+}
+
+#[test]
+fn cargo_manifests_outside_the_workspace_members_are_not_taken() {
+    let dir = repository(&[
+        ("Cargo.toml", "[workspace]\nmembers = [\"crates/*\"]\n"),
+        (
+            "crates/app/Cargo.toml",
+            "[package]\nname = \"app\"\n[dependencies]\nsyn = \"2\"\n",
+        ),
+        (
+            "tests/fixtures/app/Cargo.toml",
+            "[package]\nname = \"app\"\n[dependencies]\nsyn = \"1\"\n",
+        ),
+    ]);
+    let manifests = CargoManifests::find(dir.path());
+    assert_eq!(manifests.members["app"].0, "crates/app");
+}

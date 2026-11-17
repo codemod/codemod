@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use butterflow_core::jssg_runner::JssgFileChange;
 use codemod_sandbox::sandbox::engine::ExecutionResult;
+use codemod_sandbox::Worker;
 use rquickjs::{async_with, CatchResultExt, Function, Module, Promise};
 use serde::Deserialize;
 use serde_json::Value;
@@ -65,31 +66,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
             run.await.catch(&ctx).map_err(|e| e.to_string())
         })
         .await;
-        // What the step did besides returning: a failure it reported with
-        // `failStep`, and files it changed with `jssgTransform`.
-        let effects = sandbox.take_side_effects();
-        let failure = effects.failure.map(|failure| failure.message);
-        let renames: HashMap<PathBuf, PathBuf> = effects
-            .other_files
-            .into_iter()
-            .filter_map(|change| match change.result {
-                ExecutionResult::Modified(modified) => {
-                    let path = change.path.canonicalize().unwrap_or(change.path);
-                    modified.rename_to.map(|to| (path, to))
-                }
-                _ => None,
-            })
-            .collect();
-        let changes: Vec<JssgFileChange> = sandbox
-            .changed_files()
-            .into_iter()
-            .map(|(path, original, content)| JssgFileChange {
-                rename_to: renames.get(&path).cloned(),
-                path,
-                original,
-                content,
-            })
-            .collect();
+        let (failure, changes) = side_effects(sandbox);
         Ok::<_, String>((json?, failure, changes))
     })?;
 
@@ -106,4 +83,34 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     let planned = jssg::plan(task, &changes)?;
     changes::commit(task, &planned, task.run.dry_run)?;
     Ok(TaskOutcome::new(outcome.result))
+}
+
+/// What a step's isolate did besides returning: a failure it reported with
+/// `failStep`, and the files it changed with `jssgTransform`, renames
+/// included. Shared by function steps and `dependencyGraph` callbacks.
+pub(crate) fn side_effects(sandbox: &Worker) -> (Option<String>, Vec<JssgFileChange>) {
+    let effects = sandbox.take_side_effects();
+    let failure = effects.failure.map(|failure| failure.message);
+    let renames: HashMap<PathBuf, PathBuf> = effects
+        .other_files
+        .into_iter()
+        .filter_map(|change| match change.result {
+            ExecutionResult::Modified(modified) => {
+                let path = change.path.canonicalize().unwrap_or(change.path);
+                modified.rename_to.map(|to| (path, to))
+            }
+            _ => None,
+        })
+        .collect();
+    let changes = sandbox
+        .changed_files()
+        .into_iter()
+        .map(|(path, original, content)| JssgFileChange {
+            rename_to: renames.get(&path).cloned(),
+            path,
+            original,
+            content,
+        })
+        .collect();
+    (failure, changes)
 }

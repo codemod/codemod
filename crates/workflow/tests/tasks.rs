@@ -1116,3 +1116,51 @@ export default async function main() { await step("Deps", dependencyGraph({}, (g
     let error = output(&report).unwrap_err();
     assert!(error.contains("step 'Deps' failed: no lockfile"), "{error}");
 }
+
+#[test]
+fn a_dependency_graph_callback_commits_what_it_changes_with_jssg_transform() {
+    let h = Harness::new();
+    yarn_target(&h);
+    h.write("a.ts", "const version = 0;\n");
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  await step(dependencyGraph({}, async (g) => {
+    const dnd = g.node("dnd").version;
+    await jssgTransform((root) => root.root().text().replace("0", JSON.stringify(dnd)), `${target}/a.ts`, "typescript");
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("a.ts"), "const version = \"13.0.0\";\n");
+}
+
+#[test]
+fn a_dependency_graph_lists_lockfiles_it_could_not_read() {
+    let h = Harness::new();
+    yarn_target(&h);
+    h.write(
+        "examples/old/yarn.lock",
+        "# yarn lockfile v1\n\na@^1:\n  version \"1.0.0\"\n",
+    );
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod/workflow";
+export default async function main() {
+  return await step(dependencyGraph({}, (g) => ({ read: g.lockfiles, skipped: g.skipped })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "read": ["yarn.lock"],
+            "skipped": [{ "lockfile": "examples/old/yarn.lock", "error": "Yarn v1 lockfiles are not read yet" }]
+        })
+    );
+}

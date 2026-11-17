@@ -43,6 +43,8 @@ interface DependencyHost {
 interface GraphHost {
   /** The lockfiles read, as JSON. */
   lockfiles: string;
+  /** Lockfiles found but not read, as JSON `{ lockfile, error }[]`. */
+  skipped: string;
   node(id: number): string;
   /** `"all"`, `"workspaces"` or `"named"`, with the name. */
   nodes(which: string, name: string): string;

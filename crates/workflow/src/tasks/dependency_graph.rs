@@ -12,8 +12,9 @@ use rquickjs::{async_with, CatchResultExt, Ctx, Function, Module, Object, Promis
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::function::side_effects;
 use super::isolate::{self, module_name, StepIsolates};
-use super::{block_on, Globs, TaskContext, TaskOutcome};
+use super::{block_on, changes, jssg, Globs, TaskContext, TaskOutcome};
 use crate::deps_host::DEPENDENCIES_MODULE;
 
 #[derive(Deserialize)]
@@ -49,6 +50,9 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         graph.nodes.len(),
         graph.edges.len()
     ));
+    for skipped in &graph.skipped {
+        task.log(format!("skipped {}: {}", skipped.lockfile, skipped.error));
+    }
     let walk = Arc::new(Walk::new(graph));
     let captures = serde_json::to_string(&request.captures).map_err(|e| e.to_string())?;
     let isolates = StepIsolates::new(task)?;
@@ -62,10 +66,10 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     );
     let attach_name = module_name(task, "dependency-graph");
 
-    let json = block_on(async move {
+    let (json, failure, changes) = block_on(async move {
         let sandbox = isolate::start(options, registry).await?;
         let sandbox = &sandbox;
-        async_with!(sandbox.context => |ctx| {
+        let json: Result<String, String> = async_with!(sandbox.context => |ctx| {
             let run = async {
                 install_graph(&ctx, walk)?;
                 let (_, promise) = Module::declare(ctx.clone(), attach_name.as_str(), attach.as_str())?.eval()?;
@@ -82,16 +86,25 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
             };
             run.await.catch(&ctx).map_err(|e| e.to_string())
         })
-        .await
+        .await;
+        let (failure, changes) = side_effects(sandbox);
+        Ok::<_, String>((json?, failure, changes))
     })?;
 
     let outcome: Outcome = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     isolates.data(task);
+    if let Some(message) = failure {
+        return Err(message);
+    }
     if !outcome.ok {
         return Err(outcome
             .error
             .unwrap_or_else(|| "the step failed".to_string()));
     }
+    // Files the callback changed with `jssgTransform` are committed as a
+    // function step's are.
+    let planned = jssg::plan(task, &changes)?;
+    changes::commit(task, &planned, task.run.dry_run)?;
     Ok(TaskOutcome::new(outcome.result))
 }
 
@@ -99,6 +112,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
 fn install_graph(ctx: &Ctx<'_>, walk: Arc<Walk>) -> rquickjs::Result<()> {
     let host = Object::new(ctx.clone())?;
     host.set("lockfiles", json!(walk.graph.lockfiles).to_string())?;
+    host.set("skipped", json!(walk.graph.skipped).to_string())?;
 
     let graph = Arc::clone(&walk);
     host.set(

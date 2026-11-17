@@ -488,6 +488,12 @@ declare module "codemod:workflow" {
   export interface DependencyGraph {
     /** Lockfiles read, relative to the target. */
     readonly lockfiles: readonly string[];
+    /**
+     * Lockfiles found but not read, with why. Without a `lockfiles` option,
+     * one that cannot be read (a Yarn v1 lockfile in an example, say) is
+     * left out instead of failing the step.
+     */
+    readonly skipped: readonly { readonly lockfile: string; readonly error: string }[];
     /** The repository's own packages. */
     workspaces(): PackageNode[];
     /** Every node, or every installed version of `name`. */

@@ -539,3 +539,28 @@ test("the built orchestrator has no types left in it", () => {
   const built = readFileSync(new URL("../runtime/orchestrator.mjs", import.meta.url), "utf8");
   assert.doesNotMatch(built, /^(export )?(interface|type) /m);
 });
+
+test(
+  "node: a workflow importing the dependency APIs loads, and using one says to run it with the CLI",
+  HOSTS.node,
+  async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, dependencyGraph, registry, semver } from "codemod/workflow";
+export default async function main() {
+  void registry;
+  void semver;
+  await step("Graph", dependencyGraph({}, (g) => g.workspaces().length));
+}
+`,
+      }),
+      "workflow.ts",
+    );
+
+    const result = await run(path, { target: {} });
+
+    assert.equal(result.status, "failed");
+    assert.match(result.error ?? "", /dependencyGraph\(\) is not available on the Node\.js host/);
+  },
+);
