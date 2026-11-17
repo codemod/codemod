@@ -63,7 +63,7 @@ impl Fold {
             let sandbox = codemod_sandbox::Worker::new(options)
                 .await
                 .map_err(|e| format!("could not start the reducer's runtime: {e}"))?;
-            async_with!(sandbox.context => |ctx| {
+            let json = async_with!(sandbox.context => |ctx| {
                 let run = async {
                     let declared = Module::declare(ctx.clone(), name.as_str(), module.as_str())?;
                     crate::run::set_import_meta(&declared, &workflow_path)?;
@@ -83,7 +83,12 @@ impl Fold {
                 };
                 run.await.catch(&ctx).map_err(|e| format!("the reducer failed: {e}"))
             })
-            .await
+            .await;
+            // A `failStep` the reducer caught still fails the step.
+            if let Some(failure) = sandbox.take_side_effects().failure {
+                return Err(failure.message);
+            }
+            json
         })?;
         serde_json::from_str(&json).map_err(|e| e.to_string())
     }

@@ -253,6 +253,31 @@ export default async function main() {
 }
 
 #[test]
+fn a_jssg_reducer_that_calls_fail_step_fails_the_step_even_if_it_catches_it() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+import { failStep } from "codemod/runtime";
+export default async function main() {
+  const counted = jssg("./scripts/transform.ts", {
+    include: "src/**/*.ts",
+    reduce: (total, { data }) => {
+      try { failStep("cannot add"); } catch {}
+      return total + data.calls;
+    },
+    initial: 0,
+  });
+  return (await step(counted)).data;
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).unwrap_err().contains("cannot add"));
+}
+
+#[test]
 fn jssg_transform_logs_become_step_logs_grouped_by_file() {
     let h = Harness::new();
     h.write("src/a.ts", "const a = 1;\n");

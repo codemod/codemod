@@ -973,7 +973,11 @@ const STATE_OUTPUTS_HELPER: &str = r#"
 function applyStateOutputs(state: State, result: { stdout?: string }): void {
   const stdout = result.stdout ?? "";
   const start = stdout.lastIndexOf("\n{marker}\n");
-  if (start < 0) return;
+  if (start < 0) {
+    // The wrapper always prints the marker; stdout keeps only its last 1 MiB.
+    if (result.stdout === undefined) return;
+    throw new Error("the step wrote more than 1 MiB to $STATE_OUTPUTS, so its state lines were cut");
+  }
   for (const line of stdout.slice(start + "\n{marker}\n".length).split("\n")) {
     if (!line.trim()) continue;
     const equals = line.indexOf("=");

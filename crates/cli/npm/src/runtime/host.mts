@@ -426,7 +426,8 @@ async function reduceInPlace(run: NativeRun, task: InPlaceTask, fn: Callback): P
   const outer = context.getStore();
   if (!outer) throw new Error("a step started outside its run");
   const step = stepScope(task.position, task.label);
-  let folded = (reduce as { initial: Json }).initial;
+  // A copy, so a reducer that changes its accumulator can't change a retry's.
+  let folded = structuredClone((reduce as { initial: Json }).initial);
   for (const entry of result.data) {
     folded = (await context.run({ ...outer, step }, () => fn(folded, entry))) as Json;
   }

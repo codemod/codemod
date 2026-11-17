@@ -364,6 +364,31 @@ fn setting_state_to_null_removes_the_key() {
 }
 
 #[test]
+fn state_lines_longer_than_a_step_keeps_fail_the_run() {
+    let h = Harness::new();
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: only
+    name: Only
+    steps:
+      - name: Write
+        run: yes 'key@=value' | head -n 200000 >> "$STATE_OUTPUTS"
+      - name: Read
+        run: echo "${CODEMOD_STATE_KEY-unset}" | head -c 20
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("more than 1 MiB to $STATE_OUTPUTS"),
+        "{error}"
+    );
+}
+
+#[test]
 fn a_multi_line_command_with_an_expression_keeps_its_lines_as_written() {
     let printed = last_printed(
         r#"      - name: Pick
