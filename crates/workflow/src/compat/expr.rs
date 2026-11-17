@@ -14,7 +14,7 @@ fn expr_re() -> &'static Regex {
 }
 
 /// The scope object passed to `evaluate`.
-pub const SCOPE: &str = "{ params, matrix, state: getState() }";
+pub const SCOPE: &str = "{ params, matrix, state }";
 
 /// A JavaScript string literal.
 pub fn js_string(text: &str) -> String {
@@ -89,8 +89,8 @@ fn path(expression: &str) -> Option<String> {
     let base = match root {
         "params" => format!("params.{}", rest[0]),
         "matrix" => format!("matrix?.{}", rest[0]),
-        // State has no declared types in workflow.yaml, so it is read as `any`.
-        "state" => format!("getState<any>({})", js_string(rest[0])),
+        // The workflow's local state object, which steps' results update.
+        "state" => format!("state.{}", rest[0]),
         _ => return None,
     };
     Some(
@@ -117,17 +117,14 @@ mod tests {
             template("migrate ${{ matrix.name }} for ${{ params.team.id }}"),
             "`migrate ${matrix?.name} for ${params.team?.id}`"
         );
-        assert_eq!(
-            template("${{ state.count }}`"),
-            "`${getState<any>(\"count\")}\\``"
-        );
+        assert_eq!(template("${{ state.count }}`"), "`${state.count}\\``");
     }
 
     #[test]
     fn other_expressions_fall_back_to_the_evaluator() {
         assert_eq!(
             template("n=${{ 1 + params.n }}"),
-            "`n=${evaluate(\"string\", \"${{ 1 + params.n }}\", { params, matrix, state: getState() })}`"
+            "`n=${evaluate(\"string\", \"${{ 1 + params.n }}\", { params, matrix, state })}`"
         );
     }
 
@@ -135,7 +132,7 @@ mod tests {
     fn conditions_run_through_the_evaluator() {
         assert_eq!(
             condition("${{ params.mode == \"fast\" }}"),
-            "evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state: getState() })"
+            "evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state })"
         );
         assert!(condition("state.count > 0").starts_with("evaluate(\"condition\""));
     }

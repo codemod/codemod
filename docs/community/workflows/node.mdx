@@ -63,7 +63,7 @@ The first argument is a workflow file or a package directory. In a package direc
 
 ## Import workflows yourself
 
-Workflows import `codemod/workflow`, `codemod/ast-grep`, `codemod/metrics`, `codemod/runtime` and `codemod/llm`. These are exports of the `codemod` package, so Node.js, Bun, Vite and Vitest resolve them like any other import, once the package is installed:
+Workflows import `codemod/workflow`, `codemod/ast-grep`, `codemod/runtime` and `codemod/llm`. These are exports of the `codemod` package, so Node.js, Bun, Vite and Vitest resolve them like any other import, once the package is installed:
 
 ```ts
 const workflow = await import("./workflow.ts");
@@ -91,7 +91,7 @@ const report = await runWorkflow(await import("./workflow.ts"), {
 
 Both hosts run the same orchestrator: `step()`, replay on resume, `until` and `given` work the same way. Tasks the engine owns run in the engine on both: `jssg`, `astGrep`, `shell`, `shard`, `codemod`, `agent` and the git steps, and so do selecting files for `forEachFile` and writing what callbacks change.
 
-A workflow file is checked as the CLI checks it before it runs: a callback that assigns to an outer variable, `fs` in the workflow body, and the other things the CLI refuses are errors here too, so a workflow that passes its tests also runs with the CLI. State, metrics, `codemod/runtime` logs and failures behave the same in steps and callbacks on both.
+A workflow file is checked as the CLI checks it before it runs: a callback that assigns to an outer variable, `fs` in the workflow body, and the other things the CLI refuses are errors here too, so a workflow that passes its tests also runs with the CLI. State, `codemod/runtime` logs and failures behave the same in steps and callbacks on both.
 
 On the Node.js host:
 
@@ -100,7 +100,7 @@ On the Node.js host:
 - **`codemod/llm`** is not available yet.
 - **`codemod(...)` steps** run local packages only; run workflows that use registry packages with the CLI.
 - **`definition()` and `references()`** find nothing in roots that `forEachFile` callbacks parse, as in the CLI.
-- **Callbacks run one at a time**, in this process. The CLI runs `forEachFile` callbacks on several threads, so code that reads and then sets state without `acquireLock` can lose updates there and never here.
+- **Callbacks run one at a time**, in this process. The CLI runs `forEachFile` callbacks on several threads, so a callback that relies on running after another file's callback works here and not there; return values instead.
 - **A step's `timeout` cannot stop JavaScript that is running.** When a function step or a `forEachFile` callback runs out of time here, the step fails and its file changes are not written, but its code runs on until it returns; code that never waits is not interrupted at all. The CLI stops them. Tasks such as `shell` are stopped on both.
 - **Events are sent with the CLI.** `waitForEvent` works here for runs kept with `store: "local"`; send to them with `codemod workflow send`.
 - **The workflow body may wait on anything.** The CLI stops a body that waits on a timer, or on a promise no step will settle.

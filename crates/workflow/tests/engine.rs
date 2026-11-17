@@ -377,26 +377,17 @@ export default async function main({ params }: { params: { name: string } }) {
 }
 
 #[test]
-fn workflow_state_is_shared_and_replayed() {
+fn a_step_given_a_state_option_fails() {
     let h = Harness::new();
-    h.write("a.txt", "a");
-    let source = r#"
-import { step, getState, setState } from "codemod/workflow";
-export default async function main() {
-  const files = await step("List", () => ["a.txt"]);
-  setState("files", files);
-  await step("Check", () => { throw new Error("stop"); });
-  return getState("files");
-}
-"#;
-    let first = h.start(source, Value::Null);
-    assert!(output(&first).is_err());
-
-    let second = h.resume(
-        &first,
-        Some(&source.replace("throw new Error(\"stop\");", "return 1;")),
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+export default async function main() { await step("Old", () => 1, { state: { x: 1 } } as any); }
+"#,
+        Value::Null,
     );
-    assert_eq!(output(&second).unwrap(), json!(["a.txt"]));
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("steps take no `state`"), "{error}");
 }
 
 #[test]

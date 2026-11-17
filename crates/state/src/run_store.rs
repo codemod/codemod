@@ -206,10 +206,6 @@ pub struct StepRecord {
     pub status: StepStatus,
     #[serde(default)]
     pub result: Option<Value>,
-    /// Workflow state the step set (`setState` / `STATE_OUTPUTS`): a map of
-    /// keys to values, where `null` removes a key.
-    #[serde(default)]
-    pub state: Option<BTreeMap<String, Value>>,
     #[serde(default)]
     pub error: Option<String>,
     /// When a successful or partial step finished, in milliseconds since the epoch.
@@ -700,7 +696,6 @@ mod tests {
             key: "{}".into(),
             status,
             result: Some(Value::from(position)),
-            state: None,
             error: None,
             finished_at: None,
             seq: None,

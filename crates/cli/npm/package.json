@@ -38,10 +38,6 @@
       "types": "./types/main.d.ts",
       "default": "./runtime/ast-grep.mjs"
     },
-    "./metrics": {
-      "types": "./types/metrics.d.ts",
-      "default": "./runtime/metrics.mjs"
-    },
     "./package.json": "./package.json",
     "./register": {
       "types": "./register.d.mts",

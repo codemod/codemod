@@ -12,16 +12,14 @@ The `shard` task splits a large migration into groups of files ("shards"), for e
 2. The workflow runs the transform for every shard, limited to that shard's files.
 
 ```ts workflow.ts
-import { step, shard, forEachFile, jssg, approval, branch, commit, pullRequest, getState, setState } from "codemod/workflow";
+import { step, shard, forEachFile, jssg, approval, branch, commit, pullRequest } from "codemod/workflow";
 
 export default async function main() {
   const shards = await step("Build shards", shard({
     method: { type: "directory", maxFilesPerShard: 20 },
     target: "./src",
     jssg: { path: "scripts/codemod.ts", language: "tsx", include: ["**/*.{ts,tsx}"] },
-    previous: getState("shards"),
   }));
-  setState("shards", shards);
 
   await Promise.all(shards.map(async (current, index) => {
     await step(approval(`Migrate ${current.name}?`));
@@ -36,7 +34,7 @@ export default async function main() {
 }
 ```
 
-- **`previous: getState("shards")`** keeps assignments stable when the shard step runs again (see [Re-evaluation](#re-evaluation)).
+- **`previous`** (not used here) takes an earlier result, to keep assignments stable when shards are evaluated again (see [Re-evaluation](#re-evaluation)).
 - **`files: current._meta_files`** limits each transform run to its shard's files.
 - `branch`, `commit` and `pullRequest` only touch git when the run uses `--managed-git`. See [Workflow Reference](/community/workflows/reference#tasks).
 

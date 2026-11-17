@@ -160,7 +160,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     task.log_failures(&failures);
     every_file_failed(&failures, total)?;
     let changes = changes::commit(task, &planned, run.dry_run)?;
-    let metrics = isolates.metrics(task);
+    isolates.data(task);
     let failed = failures.len();
     let failures: Vec<Value> = failures
         .into_iter()
@@ -170,9 +170,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         "outputs": outputs,
         "changes": changes,
         "failures": failures,
-        "metrics": metrics,
     }))
-    .with_state(isolates.state_changes())
     .with_failures(failed, total))
 }
 

@@ -4,8 +4,8 @@
 //! [`execute_codemod_with_quickjs`](super::execute_codemod_with_quickjs)
 //! builds a fresh runtime for every file. A [`Worker`] builds one async
 //! QuickJS context with the same modules (`codemod:ast-grep`,
-//! `codemod:workflow`, `codemod:metrics`, `codemod:runtime`, `codemod:llm`
-//! when fetch is granted, and the LLRT modules the capabilities allow), plus
+//! `codemod:workflow`, `codemod:runtime`, `codemod:llm` when fetch is
+//! granted, and the LLRT modules the capabilities allow), plus
 //! in-memory modules and relative or package imports, and keeps it for as
 //! many calls as the host makes.
 
@@ -31,7 +31,6 @@ use crate::metrics::MetricsContext;
 use crate::sandbox::errors::{ExecutionError, RuntimeError};
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::sandbox::runtime_module::{RuntimeEventCallback, RuntimeFailure, RuntimeHooksContext};
-use crate::workflow_global::SharedStateContext;
 
 /// How to build a [`Worker`].
 pub struct WorkerOptions<R> {
@@ -44,7 +43,6 @@ pub struct WorkerOptions<R> {
     /// In-memory modules, by name, as JavaScript source.
     pub modules: Vec<(String, String)>,
     pub metrics: MetricsContext,
-    pub shared_state: SharedStateContext,
     /// Handles `codemod:llm` requests; the module exists only when fetch is granted.
     pub llm_request_handler: Option<LlmRequestHandler>,
     /// Receives `codemod:runtime` events and `console` output.
@@ -174,8 +172,6 @@ impl Worker {
                 ctx.store_userdata(options.metrics.clone())
                     .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(llm.clone())
-                    .map_err(|e| fail(format!("{e:?}")))?;
-                ctx.store_userdata(options.shared_state.clone())
                     .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(hooks_for_ctx.clone())
                     .map_err(|e| fail(format!("{e:?}")))?;

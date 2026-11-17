@@ -10,17 +10,9 @@ use common::{output, Harness};
 use serde_json::{json, Value};
 
 const TRANSFORM: &str = r#"
-import { setState, getState, acquireLock } from "codemod/workflow";
 export default function transform(root: any, options: any) {
   const text = root.root().text();
   if (!text.includes("OLD")) return null;
-  // Files run in parallel: without the lock, two can read the same count.
-  const release = acquireLock("seen");
-  try {
-    setState("seen", (getState("seen") ?? 0) + 1);
-  } finally {
-    release();
-  }
   const suffix = options.matrixValues?.suffix ?? "";
   return text.replace("OLD", options.params.replacement + suffix);
 }
@@ -54,6 +46,8 @@ nodes:
     name: Follow up
     depends_on: [transform]
     steps:
+      - name: Count
+        run: echo "seen=2" >> "$STATE_OUTPUTS"
       - name: Runs when two files changed
         if: ${{ state.seen == 2 }}
         run: echo "done=true" >> "$STATE_OUTPUTS"
@@ -68,8 +62,11 @@ nodes:
     assert_eq!(h.read("src/a.ts"), "const a = 'NEW';\n");
     assert_eq!(h.read("src/b.ts"), "const b = 'NEW';\n");
     let labels: Vec<&str> = report.steps.iter().map(|s| s.label.as_str()).collect();
-    assert_eq!(labels, ["Apply", "Runs when two files changed"]);
-    assert_eq!(report.steps[1].state.as_ref().unwrap()["done"], json!(true));
+    assert_eq!(labels, ["Apply", "Count", "Runs when two files changed"]);
+    assert_eq!(
+        report.steps[2].result.as_ref().unwrap()["values"]["done"],
+        json!(true)
+    );
 }
 
 /// The YAML engine skipped a step whose condition could not be evaluated,
@@ -134,7 +131,7 @@ nodes:
     let report = h.start_loaded(workflow, Value::Null, false);
     assert!(output(&report).is_ok(), "{:?}", report.ending);
     assert_eq!(
-        report.steps[0].state.as_ref().unwrap()["said"],
+        report.steps[0].result.as_ref().unwrap()["values"]["said"],
         json!("world")
     );
 }
@@ -279,4 +276,33 @@ fn invalid_yaml_reports_the_validation_error() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("missing"), "{error}");
+}
+
+/// What a shell step writes to `$STATE_OUTPUTS` reaches a shell step in a
+/// later node as `CODEMOD_STATE_<KEY>`, JSON-encoded, as in the YAML engine.
+#[test]
+fn state_a_shell_step_writes_reaches_a_later_shell_step() {
+    let h = Harness::new();
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: detect
+    name: Detect
+    steps:
+      - name: Pick
+        run: echo 'replacement=NEW' >> "$STATE_OUTPUTS"
+  - id: apply
+    name: Apply
+    depends_on: [detect]
+    steps:
+      - name: Read
+        run: echo "$CODEMOD_STATE_REPLACEMENT"
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let read = &report.steps[1].result.as_ref().unwrap()["output"];
+    assert_eq!(read.as_str().unwrap().trim(), "\"NEW\"");
 }

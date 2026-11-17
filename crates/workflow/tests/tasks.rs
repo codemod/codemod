@@ -18,37 +18,24 @@ fn approving() -> Harness {
 }
 
 #[test]
-fn shell_steps_get_the_state_contract_and_write_state() {
+fn a_shell_steps_output_lines_come_back_as_values() {
     let h = Harness::new();
     let report = h.start(
         r#"
-import { step, shell, getState, setState } from "codemod/workflow";
+import { step, shell } from "codemod/workflow";
 export default async function main() {
-  setState("greeting", "hi");
   const run = await step(shell(
-    'echo "seen=$(cat "$CODEMOD_STATE")" && echo "count=2" >> "$STATE_OUTPUTS" && echo "items@=\"a\"" >> "$STATE_OUTPUTS" && echo "$CODEMOD_STATE_GREETING $EXTRA"',
-    { env: { EXTRA: "there" } },
+    'echo "count=2" >> "$CODEMOD_OUTPUT" && echo "items@=\"a\"" >> "$CODEMOD_OUTPUT" && echo "$GREETING"',
+    { env: { GREETING: "hi" } },
   ));
-  return { output: run.output, count: getState("count"), items: getState("items") };
+  return run;
 }
 "#,
         Value::Null,
     );
     let result = output(&report).unwrap();
-    assert!(
-        result["output"]
-            .as_str()
-            .unwrap()
-            .contains(r#"seen={"greeting":"hi"}"#),
-        "{result}"
-    );
-    assert!(
-        result["output"].as_str().unwrap().contains("\"hi\" there"),
-        "{result}"
-    );
-    assert_eq!(result["count"], json!(2));
-    assert_eq!(result["items"], json!(["a"]));
-    assert_eq!(report.steps[0].state.as_ref().unwrap()["count"], json!(2));
+    assert_eq!(result["output"].as_str().unwrap().trim(), "hi");
+    assert_eq!(result["values"], json!({ "count": 2, "items": ["a"] }));
 }
 
 #[test]
@@ -131,18 +118,16 @@ fn canceling_a_run_that_waits_for_approval_marks_it_canceled() {
 }
 
 #[test]
-fn jssg_steps_apply_changes_renames_and_state() {
+fn jssg_steps_apply_changes_and_renames() {
     let h = Harness::new();
     h.write("src/a.ts", "const x = 1;\n");
     h.write("src/b.ts", "const y = 2;\n");
     h.bundle_file(
         "scripts/transform.ts",
         r#"
-import { setState } from "codemod/workflow";
 export default function transform(root: any, options: any) {
   const text = root.root().text();
   if (!text.includes("x")) return null;
-  setState("touched", root.filename());
   root.rename(root.filename().replace("a.ts", "renamed.ts"));
   return text.replace("1", options.params.value);
 }
@@ -150,10 +135,10 @@ export default function transform(root: any, options: any) {
     );
     let report = h.start(
         r#"
-import { step, jssg, getState } from "codemod/workflow";
+import { step, jssg } from "codemod/workflow";
 export default async function main() {
   const result = await step(jssg("./scripts/transform.ts", { include: "src/**/*.ts" }));
-  return { result, touched: getState("touched") };
+  return { result };
 }
 "#,
         json!({ "value": "42" }),
@@ -167,11 +152,35 @@ export default async function main() {
         json!([{ "from": "src/a.ts", "to": "src/renamed.ts" }])
     );
     assert_eq!(result["result"]["unmodified"], json!(1));
-    assert!(
-        result["touched"].as_str().unwrap().ends_with("a.ts"),
-        "{result}"
-    );
     assert_eq!(h.engine_summary_diffs(), 1);
+}
+
+#[test]
+fn a_jssg_steps_returned_data_is_added_up_on_its_result_and_the_run() {
+    let h = Harness::new();
+    h.write("src/a.ts", "foo(); foo();\n");
+    h.write("src/b.ts", "foo();\n");
+    h.bundle_file(
+        "scripts/transform.ts",
+        r#"
+export default function transform(root: any) {
+  const calls = root.root().findAll({ rule: { pattern: "foo()" } });
+  return { data: { calls: calls.map(() => ({ name: "foo" })) } };
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  return (await step(jssg("./scripts/transform.ts", { include: "src/**/*.ts" }))).data;
+}
+"#,
+        Value::Null,
+    );
+    let calls = json!([{ "cardinality": { "name": "foo" }, "count": 3 }]);
+    assert_eq!(output(&report).unwrap()["calls"], calls);
+    assert_eq!(json!(h.summary.metrics()["calls"]), calls);
 }
 
 #[test]

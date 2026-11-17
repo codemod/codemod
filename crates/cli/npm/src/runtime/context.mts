@@ -9,30 +9,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { NativeRun } from "./addon.mts";
-import type { Json, Runtime } from "./orchestrator.mts";
-
-/** One count of a metric, for one combination of labels. */
-export type MetricEntry = {
-  cardinality: Record<string, string>;
-  count: number;
-};
+import type { Runtime } from "./orchestrator.mts";
 
 /** What a step or `forEachFile` callback sees and leaves behind. */
 export interface StepScope {
   position: number;
   label: string;
-  /** State as the step sees it. */
-  state: Map<string, unknown>;
-  /** The state the step started with, as JSON, by key. */
-  initial: Map<string, string>;
-  /** Keys set with `persist: false`: the step's own. */
-  unpersisted: Set<string>;
-  /** Keys the step removed. */
-  removed: Set<string>;
-  /** Step outputs set here. */
-  outputs: Map<string, string>;
-  /** Metrics by name, then by their labels as JSON. */
-  metrics: Map<string, Map<string, MetricEntry>>;
   /** A failure reported with `failFile` or `failStep`. */
   failure: string | undefined;
   /** `parse()`'s default language. */
@@ -64,46 +46,7 @@ export function current(what: string): RunScope {
   return store;
 }
 
-/** A fresh step scope, starting from the workflow state the step began with. */
-export function stepScope(
-  position: number,
-  label: string,
-  state: Record<string, Json> | undefined,
-  language?: string,
-): StepScope {
-  const entries = Object.entries(state ?? {});
-  return {
-    position,
-    label,
-    state: new Map(entries.map(([key, value]) => [key, structuredClone(value)])),
-    initial: new Map(entries.map(([key, value]) => [key, JSON.stringify(value)])),
-    unpersisted: new Set(),
-    removed: new Set(),
-    outputs: new Map(),
-    metrics: new Map(),
-    failure: undefined,
-    language,
-  };
-}
-
-/**
- * The state a step set or removed (`null`), compared with the state it
- * started with: what the engine's isolates report for the same code.
- */
-export function stateChanges(scope: StepScope): Record<string, Json> {
-  const changes: Record<string, Json> = {};
-  for (const [key, value] of scope.state) {
-    if (scope.unpersisted.has(key)) continue;
-    // What a step sets was made JSON when it was set (`stateValue`).
-    if (scope.initial.get(key) !== JSON.stringify(value)) changes[key] = value as Json;
-  }
-  for (const key of scope.removed) changes[key] = null;
-  return changes;
-}
-
-/** The metrics a step recorded, as the engine reports them. */
-export function metricsOf(scope: StepScope): Record<string, MetricEntry[]> {
-  const data: Record<string, MetricEntry[]> = {};
-  for (const [name, entries] of scope.metrics) data[name] = [...entries.values()];
-  return data;
+/** A fresh step scope. */
+export function stepScope(position: number, label: string, language?: string): StepScope {
+  return { position, label, failure: undefined, language };
 }

@@ -97,7 +97,6 @@ fn a_hosted_run_runs_host_tasks() {
                 "position": 0,
                 "label": "Echo",
                 "task": { "kind": "shell", "command": "echo hosted" },
-                "state": {},
             })
             .to_string(),
         )

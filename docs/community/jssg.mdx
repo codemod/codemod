@@ -174,7 +174,7 @@ export default codemod;
 *How codemods run: safety, observability, and power during execution.*
 
 - **Deny-by-default security** — No file system, child processes, or network access unless you grant [capabilities](/community/jssg/security)—unlike typical Node transform runners where full `fs` and `require` are the default.
-- **Metrics for mining, not only edits** — Use [`codemod/metrics`](/community/jssg/metrics) to count and aggregate findings (usage, readiness, rollouts) with the same harness you use for rewrites.
+- **Data for mining, not only edits** — [Return data](/community/jssg/metrics) with the edit to count and aggregate findings (usage, readiness, rollouts) with the same harness you use for rewrites.
 - **Import and edit utilities** — [`@jssg/utils`](/community/jssg/utils) and similar helpers cover tedious import and AST chores without custom Babel plugins.
 - **Multi-file and file-path changes** — Use [`jssgTransform`](/community/jssg/reference#multi-file-transforms-with-jssgtransform) to drive coordinated edits across files, and [`root.rename()`](/community/jssg/reference#file-renaming) for moves and extension changes—not only in-place source edits.
 
@@ -219,7 +219,7 @@ export default codemod;
     Validate your codemod with before/after fixtures and the test runner.
   </Card>
   <Card
-    title="Metrics"
+    title="Returning data"
     href="/community/jssg/metrics"
     icon="chart-simple"
   >

@@ -12,7 +12,6 @@
   "include": [
     "../types/modules/ast-grep.d.ts",
     "../types/modules/langs.d.ts",
-    "../types/modules/metrics.d.ts",
     "../types/modules/workflow.d.ts",
     "../testing/index.d.mts",
     "../runtime/host.d.mts",

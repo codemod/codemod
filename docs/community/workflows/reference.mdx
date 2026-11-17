@@ -156,21 +156,17 @@ Changes are recorded, not written immediately. When every file is done, the step
 - A callback that throws fails only that file; the error appears in `result.failures`, and the file and its error are logged under the step.
 - When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again.
 - When the callback fails on every file it ran on, the step fails, with the first file's error.
-- Metrics recorded with [`codemod/metrics`](/community/jssg/metrics) appear in `result.metrics` and in the run's report. Declare the metric at module level and record it in the callback.
+- To count what a callback found, return it: outputs are values, so add them up after the step. (A [JSSG transform](/community/jssg/metrics) returns `{ edit, data }` instead, and its step's result carries the totals as `data`.)
 
 ```ts
-import { useMetricAtom } from "codemod/metrics";
-
-const rewrites = useMetricAtom("rewrites");
-
 export default async function main() {
   const result = await step(forEachFile({ language: "tsx", concurrency: 4 }, async (file) => {
     const root = parse(file);
     const edits = root.root().findAll({ rule: { pattern: "moment($A)" } }).map((node) => node.replace("dayjs()"));
-    rewrites.increment({ file: file.path }, edits.length);
     if (edits.length) file.write(root.root().commitEdits(edits));
+    return { file: file.path, rewrites: edits.length };
   }));
-  result.metrics.rewrites; // [{ cardinality: { file: "src/a.tsx" }, count: 2 }, ...]
+  const rewrites = result.outputs.reduce((sum, output) => sum + output.rewrites, 0);
 }
 ```
 
@@ -181,7 +177,6 @@ export default async function main() {
   outputs: unknown[];
   changes: { written: string[]; renamed: { from: string; to: string }[]; deleted: string[] };
   failures: { path: string; error: string }[];
-  metrics: Record<string, { cardinality: Record<string, string>; count: number }[]>;
 }
 ```
 
@@ -191,8 +186,7 @@ A callback (or function step) runs in its own isolate, so the build copies in wh
 
 - **Module-level constants, functions and classes** it uses are copied in.
 - **Local variables of the surrounding function** are passed in as frozen copies when the step starts. They must be JSON values.
-- **Imports** it uses are available: `codemod/ast-grep`, `codemod/metrics`, `codemod/runtime`, Node-style modules (`path`, `fs` with `--allow-fs`, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
-- **State:** `getState`, `setState`, `unsetState` and `acquireLock` from `codemod/workflow` work as in [JSSG transforms](/community/jssg/advanced/workflow). Prefer returning values: outputs are ordered and need no locks.
+- **Imports** it uses are available: `codemod/ast-grep`, `codemod/runtime`, Node-style modules (`path`, `fs` with `--allow-fs`, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
 
 These are build errors, reported with the file, line and column:
 
@@ -260,7 +254,6 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 - **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, and npm packages or local files whose imports only reach these.
 - **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
 - **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
-- **Metrics** can be declared in the body (`useMetricAtom`) but only recorded inside steps and callbacks.
 - **`console.log`** goes to the run's output.
 
 ## Tasks
@@ -304,9 +297,9 @@ await step("Format", shell("npx prettier --write src"));
 | Variable | Value |
 |---|---|
 | `CODEMOD_PATH` | The workflow's directory (prefer `import.meta.dirname` in `workflow.ts`) |
-| `CODEMOD_STATE` | A file containing the workflow state as JSON |
-| `CODEMOD_STATE_<KEY>` | Each state value, JSON-encoded |
-| `STATE_OUTPUTS` | A file the command can write `key=value` (set) or `key@=value` (append) lines to; they become workflow state |
+| `CODEMOD_OUTPUT` | A file the command can write `key=value` lines to (`key@=value` adds to a list); a value is JSON, or else a string. They arrive as `result.values` |
+
+Give a command values with `env` or in the command itself.
 
 Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
 
@@ -378,24 +371,32 @@ Without `agent`, the step uses:
 
 Otherwise the prompt is printed as instructions and nothing runs.
 
-## State
+## Values between steps
 
-Workflow state is a set of named JSON values shared by the workflow and the steps it runs.
+Workflows have no state. A step gets what it needs from the workflow and returns what it found; the workflow passes that on.
 
 ```ts
-import { step, shell, getState, setState } from "codemod/workflow";
+import { step, shell, forEachFile, jssg } from "codemod/workflow";
 
-setState("target", "react-19");
-await step(shell('echo "version=19" >> "$STATE_OUTPUTS"'));
-getState("version"); // 19
-getState();          // { target: "react-19", version: 19 }
+const detect = await step("Detect", shell('echo "version=19" >> "$CODEMOD_OUTPUT"'));
+detect.values; // { version: 19 }
+
+const migrated = await step(
+  "Migrate",
+  forEachFile(jssg("scripts/codemod.ts", { params: { version: detect.values?.version ?? 18 } })),
+);
+migrated.data; // what the transform returned as `data`, added up
 ```
 
-- **In the workflow:** `getState(key)` reads a value; `getState()` returns all of them. `setState(key, value)` sets one.
-- **In JSSG transforms:** `setState`, `getState`, `unsetState` and `acquireLock` from `codemod/workflow`. See [Workflow context](/community/jssg/advanced/workflow).
-- **In shell commands:** `CODEMOD_STATE` and `STATE_OUTPUTS`, above.
+| Step | Values in | Values out |
+|---|---|---|
+| Function step, `forEachFile` callback | Variables it captures | Its return value; `result.outputs` for callbacks |
+| `jssg` | `params` | `{ edit, data }`; `result.data` |
+| `shell` | `env`, or the command text | `$CODEMOD_OUTPUT` lines; `result.values` |
 
-What a step sets is saved with that step, so it is restored when the step is replayed on resume.
+`getState`, `setState`, `unsetState`, `acquireLock` and the step-output functions were removed. Importing one is a build error that says what replaced it, and a step given a `state` option fails.
+
+A step's result is saved with the step, so it comes back when the step is replayed on resume.
 
 ## Parameters
 

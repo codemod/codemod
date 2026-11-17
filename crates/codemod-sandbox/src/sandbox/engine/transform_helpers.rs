@@ -1,5 +1,6 @@
 use crate::ast_grep::serde::JsValue;
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootInner};
+use crate::metrics::{record_data, MetricsContext};
 use crate::sandbox::engine::execution_engine::{ExecutionResult, ModifiedResult};
 use crate::sandbox::errors::ExecutionError;
 use rquickjs::{Ctx, IntoJs, Object, Value};
@@ -102,11 +103,59 @@ pub fn build_transform_options<'js>(
         })
 }
 
-/// Process the result value returned by a transform function.
+/// Process the result value returned by a transform function: the new
+/// content (a string), no change (`null` or `undefined`), or
+/// `{ edit, data }`, where `edit` is either of those and `data` is added to
+/// the run's `MetricsContext`, when the caller keeps one.
 ///
-/// Handles string results, null/undefined, and rename_to logic.
 /// Uses `ModificationCheck` to determine whether content was actually modified.
 pub fn process_transform_result(
+    result_obj: &Value<'_>,
+    sg_root_inner: &Arc<SgRootInner>,
+    modification_check: ModificationCheck<'_>,
+) -> Result<ExecutionResult, ExecutionError> {
+    let failed = |message: String| ExecutionError::Runtime {
+        source: crate::sandbox::errors::RuntimeError::ExecutionFailed { message },
+    };
+    if let Some(object) = result_obj
+        .as_object()
+        .filter(|_| !result_obj.is_array() && !result_obj.is_function())
+    {
+        let ctx = result_obj.ctx();
+        for key in object.keys::<String>() {
+            let key = key.map_err(|e| failed(e.to_string()))?;
+            if key != "edit" && key != "data" {
+                return Err(failed(format!(
+                    "A transform's result object takes only `edit` and `data`. Received `{key}`"
+                )));
+            }
+        }
+        let data: Value = object.get("data").map_err(|e| failed(e.to_string()))?;
+        if !data.is_undefined() && !data.is_null() {
+            let context = ctx.userdata::<MetricsContext>();
+            record_data(ctx, context.as_deref(), &data).map_err(|e| failed(caught(ctx, e)))?;
+        }
+        let edit: Value = object.get("edit").map_err(|e| failed(e.to_string()))?;
+        return process_edit(&edit, sg_root_inner, modification_check);
+    }
+    process_edit(result_obj, sg_root_inner, modification_check)
+}
+
+/// The message of a thrown JavaScript error.
+fn caught(ctx: &Ctx<'_>, error: rquickjs::Error) -> String {
+    if matches!(error, rquickjs::Error::Exception) {
+        let thrown = ctx.catch();
+        if let Some(message) = thrown
+            .as_object()
+            .and_then(|object| object.get::<_, String>("message").ok())
+        {
+            return message;
+        }
+    }
+    error.to_string()
+}
+
+fn process_edit(
     result_obj: &Value<'_>,
     sg_root_inner: &Arc<SgRootInner>,
     modification_check: ModificationCheck<'_>,
@@ -160,7 +209,7 @@ pub fn process_transform_result(
         let type_name = result_obj.type_name();
         Err(ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::ExecutionFailed {
-                message: format!("Codemod transform functions must return either a string or null/undefined. Received {type_name}"),
+                message: format!("Codemod transform functions must return a string, null/undefined, or {{ edit, data }}. Received {type_name}"),
             },
         })
     }

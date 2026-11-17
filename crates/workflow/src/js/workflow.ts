@@ -54,13 +54,6 @@ globalThis.__workflowReplayNext = runtime.replayNext;
 globalThis.__workflowClose = runtime.close;
 
 export const {
-  getState,
-  setState,
-  unsetState,
-  acquireLock,
-  setStepOutput,
-  getStepOutput,
-  getOrSetStepOutput,
   __callback,
   __evaluate,
   forEachFile,

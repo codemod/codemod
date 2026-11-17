@@ -100,86 +100,48 @@ export default async function main() {
 }
 
 #[test]
-fn metrics_declared_at_module_level_are_recorded_by_callbacks() {
+fn importing_the_removed_metrics_module_says_what_replaced_it() {
     let h = Harness::new();
-    h.write("a.ts", "foo(); foo();");
-    h.write("b.ts", "foo();");
+    let error = load_error(
+        &h,
+        r#"
+import { useMetricAtom } from "codemod/metrics";
+export default async function main() {}
+"#,
+    );
+    assert!(error.contains("returning `{ edit, data }`"), "{error}");
+}
+
+#[test]
+fn importing_a_removed_state_function_says_what_replaced_it() {
+    let h = Harness::new();
+    let error = load_error(
+        &h,
+        r#"
+import { setState } from "codemod/workflow";
+export default async function main() { setState("x", 1); }
+"#,
+    );
+    assert!(error.contains("'setState' was removed"), "{error}");
+}
+
+#[test]
+fn callbacks_take_values_by_capture_and_hand_back_what_they_found() {
+    let h = Harness::new();
+    h.write("a.ts", "react-19");
+    h.write("b.ts", "react-18");
     let report = h.start(
         r#"
 import { step, forEachFile } from "codemod/workflow";
-import { parse } from "codemod/ast-grep";
-import { useMetricAtom } from "codemod/metrics";
-
-const calls = useMetricAtom("calls");
-
 export default async function main() {
-  const result = await step(forEachFile({ language: "typescript" }, (file) => {
-    const found = parse(file).root().findAll({ rule: { pattern: "foo()" } });
-    calls.increment({ file: file.path }, found.length);
-  }));
-  return result.metrics;
+  const target = "react-19";
+  const found = await step(forEachFile({ language: "typescript" }, (file) => file.text === target ? file.path : null));
+  return found.outputs.filter(Boolean);
 }
 "#,
         Value::Null,
     );
-    let mut entries = output(&report).unwrap()["calls"]
-        .as_array()
-        .unwrap()
-        .clone();
-    entries.sort_by_key(|entry| entry["cardinality"]["file"].as_str().unwrap().to_string());
-    assert_eq!(
-        Value::Array(entries),
-        json!([
-            { "cardinality": { "file": "a.ts" }, "count": 2 },
-            { "cardinality": { "file": "b.ts" }, "count": 1 },
-        ])
-    );
-    assert!(h.summary.metrics().contains_key("calls"));
-}
-
-#[test]
-fn recording_a_metric_in_the_body_is_an_error() {
-    let h = Harness::new();
-    let report = h.start(
-        r#"
-import { useMetricAtom } from "codemod/metrics";
-const calls = useMetricAtom("calls");
-export default async function main() {
-  calls.increment();
-}
-"#,
-        Value::Null,
-    );
-    let error = output(&report).unwrap_err();
-    assert!(
-        error.contains("metrics can only be recorded inside a step"),
-        "{error}"
-    );
-}
-
-#[test]
-fn callbacks_can_set_state_with_the_jssg_api() {
-    let h = Harness::new();
-    h.write("a.ts", "");
-    h.write("b.ts", "");
-    let report = h.start(
-        r#"
-import { step, forEachFile, getState, setState, acquireLock } from "codemod/workflow";
-export default async function main() {
-  await step(forEachFile({ language: "typescript" }, (file) => {
-    const release = acquireLock("seen");
-    try {
-      setState("seen", [...(getState("seen") ?? []), file.path].sort());
-    } finally {
-      release();
-    }
-  }));
-  return getState("seen");
-}
-"#,
-        Value::Null,
-    );
-    assert_eq!(output(&report).unwrap(), json!(["a.ts", "b.ts"]));
+    assert_eq!(output(&report).unwrap(), json!(["a.ts"]));
 }
 
 #[test]

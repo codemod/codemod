@@ -3,12 +3,11 @@
 //! `codemod:*` module, the LLRT modules the run's capabilities allow, and
 //! relative or package imports resolved from the workflow's directory.
 
-use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::sandbox::runtime_module::{RuntimeEvent, RuntimeEventKind};
-use codemod_sandbox::{MetricsContext, SharedStateContext, WorkerOptions};
+use codemod_sandbox::{MetricsContext, WorkerOptions};
 use serde_json::Value;
 
 use super::TaskContext;
@@ -18,24 +17,15 @@ use crate::events::Event;
 pub(crate) struct StepIsolates {
     pub resolver: Arc<OxcResolver>,
     pub metrics: MetricsContext,
-    pub shared_state: SharedStateContext,
-    initial_state: HashMap<String, Value>,
 }
 
 impl StepIsolates {
     pub fn new(task: &TaskContext<'_>) -> Result<Self, String> {
         let resolver = OxcResolver::new(task.run.bundle_dir.clone(), None)
             .map_err(|e| format!("cannot resolve imports from the workflow directory: {e}"))?;
-        let initial_state: HashMap<String, Value> = task
-            .state
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect();
         Ok(Self {
             resolver: Arc::new(resolver),
             metrics: MetricsContext::new(),
-            shared_state: SharedStateContext::with_initial_state(initial_state.clone()),
-            initial_state,
         })
     }
 
@@ -58,7 +48,6 @@ impl StepIsolates {
                 crate::js::orchestrator().to_string(),
             )],
             metrics: self.metrics.clone(),
-            shared_state: self.shared_state.clone(),
             llm_request_handler: None,
             runtime_event_callback: Some(Arc::new(move |event: RuntimeEvent| {
                 if event.kind != RuntimeEventKind::SetCurrentUnit {
@@ -75,14 +64,9 @@ impl StepIsolates {
         }
     }
 
-    /// State the step's code set or removed (`null`), compared with the
-    /// state the step started with.
-    pub fn state_changes(&self) -> BTreeMap<String, Value> {
-        self.shared_state.changes_since(&self.initial_state)
-    }
-
-    /// Metrics the step's code recorded, also added to the run summary.
-    pub fn metrics(&self, task: &TaskContext<'_>) -> Value {
+    /// What the step's transforms and callbacks returned as `data`, added up;
+    /// also added to the run summary.
+    pub fn data(&self, task: &TaskContext<'_>) -> Value {
         let metrics = self.metrics.get_all();
         if !metrics.is_empty() {
             task.run.services.summary.merge_metrics(metrics.clone());

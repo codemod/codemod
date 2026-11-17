@@ -3,7 +3,7 @@
 
 import type TS from "codemod/ast-grep/langs/typescript";
 import { parse } from "codemod/ast-grep";
-import { useMetricAtom } from "codemod/metrics";
+import type { Codemod } from "codemod/ast-grep";
 import {
   agent,
   approval,
@@ -12,11 +12,9 @@ import {
   codemod,
   commit,
   forEachFile,
-  getState,
   installSkill,
   jssg,
   pullRequest,
-  setState,
   shard,
   shell,
   sleep,
@@ -76,16 +74,14 @@ export default async function main({
     }),
   );
   expectType<Equal<(typeof lengths.outputs)[number]["size"], number>>(true);
-  expectType<Equal<(typeof lengths.metrics)[string][number]["count"], number>>(true);
 
   // parse takes the file, text, or (lang, text).
-  const calls = useMetricAtom("calls");
   forEachFile({ language: "tsx" }, (file) => {
     const fromFile = parse<TS>(file);
     const fromText = parse("let a = 1;");
     const withLanguage = parse(file.text, { language: "tsx" });
     const legacy = parse("tsx", file.text);
-    calls.increment({ file: file.path }, fromFile.root().children().length);
+    void fromFile;
     expectType<Equal<typeof file.language, string | undefined>>(true);
     return [fromText, withLanguage, legacy].length;
   });
@@ -159,6 +155,7 @@ export default async function main({
 
   // A transform is run on the files `forEachFile` selects.
   const migrated = await step(forEachFile(jssg("./scripts/codemod.ts")));
+  expectType<Equal<(typeof migrated.data)[string][number]["count"], number>>(true);
   expectType<Equal<typeof migrated.unmodified, number>>(true);
   await step(
     forEachFile(
@@ -192,10 +189,8 @@ export default async function main({
       method: { type: "directory", maxFilesPerShard: 20 },
       target: "./src",
       jssg: { path: "scripts/codemod.ts", include: ["**/*.ts"] },
-      previous: getState("shards"),
     }),
   );
-  setState("shards", shards);
   await Promise.all(
     shards.map((current) =>
       step(`Migrate ${current.name}`, jssg("scripts/codemod.ts", { files: current._meta_files })),
@@ -215,15 +210,24 @@ export default async function main({
   const pr = await step(pullRequest({ title: "Migrate", draft: true }));
   expectType<Equal<typeof pr.url, string | null | undefined>>(true);
 
-  // ── state ────────────────────────────────────────────────────────────
+  // ── values between steps ─────────────────────────────────────────────
 
-  setState("target", "react-19");
-  const version = getState<number>("version");
-  expectType<Equal<typeof version, number | undefined>>(true);
-  const all = getState();
-  expectType<Equal<(typeof all)["anything"], JsonValue>>(true);
+  // A shell step returns values; a later step gets them as params.
+  const detected = await step(shell("./detect.sh"));
+  expectType<Equal<(typeof detected.values & {})["anything"], JsonValue>>(true);
+  await step(jssg("scripts/codemod.ts", { params: { ...detected.values } }));
+  // @ts-expect-error steps take no state
+  void step(shell("true"), { state: { target: "react-19" } });
 
   return { files: found.outputs.length };
 }
 
 import type { Frozen, JsonValue } from "codemod/workflow";
+
+// A transform returns its edit and rows to count.
+export const counts: Codemod<TS> = async (root) => ({
+  edit: null,
+  data: { calls: [{ file: root.filename(), deep: true, depth: 2 }] },
+});
+// @ts-expect-error each row is an object of labels
+export const notRows: Codemod<TS> = async () => ({ data: { calls: [1] } });

@@ -8,7 +8,6 @@ pub mod metrics;
 mod plugins;
 pub mod sandbox;
 pub mod utils;
-pub mod workflow_global;
 
 #[cfg(feature = "native")]
 pub use ast_grep::{
@@ -35,4 +34,3 @@ pub use sandbox::engine::{
 };
 #[cfg(feature = "jssg-in-memory")]
 pub use sandbox::resolvers::{InMemoryLoader, InMemoryResolver};
-pub use workflow_global::SharedStateContext;

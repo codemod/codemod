@@ -6,7 +6,6 @@
 const MODULES: Readonly<Record<string, string>> = {
   "codemod:workflow": "./workflow.mjs",
   "codemod:ast-grep": "./ast-grep.mjs",
-  "codemod:metrics": "./metrics.mjs",
   "codemod:runtime": "./runtime.mjs",
   "codemod:llm": "./llm.mjs",
 };
