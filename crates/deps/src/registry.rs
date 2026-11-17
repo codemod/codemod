@@ -33,7 +33,8 @@ pub trait Registry: Send + Sync {
     ) -> Result<BTreeMap<String, Vec<Release>>, String>;
 }
 
-/// npm (abbreviated packuments) and crates.io (sparse index) over HTTPS,
+/// npm (abbreviated packuments), crates.io (sparse index) and PyPI (JSON
+/// API) over HTTPS,
 /// kept for the life of the value. Concurrent asks for the same package
 /// share one request, and at most [`CONCURRENT_REQUESTS`] run at once across
 /// every ask, however many steps and workers ask together.
@@ -177,9 +178,6 @@ async fn fetch_all(
     names: &[String],
     requests: &tokio::sync::Semaphore,
 ) -> Result<Vec<(String, Vec<Release>)>, String> {
-    if ecosystem == Ecosystem::Pypi {
-        return Err("PyPI release lookups are not supported yet".into());
-    }
     let client = reqwest::Client::builder()
         .user_agent("codemod-workflow")
         .timeout(std::time::Duration::from_secs(30))
@@ -197,7 +195,10 @@ async fn fetch_all(
                     format!("https://index.crates.io/{}", sparse_index_path(name)),
                     "text/plain",
                 ),
-                Ecosystem::Pypi => unreachable!("rejected above"),
+                Ecosystem::Pypi => (
+                    format!("https://pypi.org/pypi/{name}/json"),
+                    "application/json",
+                ),
             };
             let _permit = requests.acquire().await.map_err(|e| e.to_string())?;
             let response = client
@@ -220,7 +221,7 @@ async fn fetch_all(
             let releases = match ecosystem {
                 Ecosystem::Npm => npm_releases(&text),
                 Ecosystem::Cargo => crate_releases(&text),
-                Ecosystem::Pypi => unreachable!("rejected above"),
+                Ecosystem::Pypi => pypi_releases(&text),
             }
             .map_err(|e| format!("{url}: {e}"))?;
             Ok((name.clone(), releases))
@@ -304,4 +305,29 @@ pub fn crate_releases(index: &str) -> Result<Vec<Release>, String> {
             })
         })
         .collect()
+}
+
+/// Releases from PyPI's JSON API. A release is yanked when every file of
+/// it is. PyPI lists dependencies only per file, so releases carry none.
+pub fn pypi_releases(document: &str) -> Result<Vec<Release>, String> {
+    let doc: serde_json::Value =
+        serde_json::from_str(document).map_err(|e| format!("not a project document: {e}"))?;
+    let releases = doc
+        .get("releases")
+        .and_then(|r| r.as_object())
+        .ok_or("not a project document")?;
+    Ok(releases
+        .iter()
+        .map(|(version, files)| {
+            let files = files.as_array().map(Vec::as_slice).unwrap_or_default();
+            Release {
+                version: version.clone(),
+                yanked: !files.is_empty()
+                    && files
+                        .iter()
+                        .all(|file| file["yanked"].as_bool() == Some(true)),
+                dependencies: Vec::new(),
+            }
+        })
+        .collect())
 }

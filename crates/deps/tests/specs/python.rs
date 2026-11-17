@@ -223,3 +223,21 @@ fn a_python_range_that_is_not_pep_440_cannot_be_read() {
     use codemod_deps::semver::satisfies;
     assert_eq!(satisfies(Ecosystem::Pypi, "latest", "1.0"), None);
 }
+
+#[test]
+fn a_pypi_release_is_yanked_only_when_every_file_is() {
+    use codemod_deps::registry::pypi_releases;
+    let document = r#"{ "releases": {
+        "1.0": [{ "yanked": true }, { "yanked": false }],
+        "1.1": [{ "yanked": true }]
+    } }"#;
+    let yanked: Vec<_> = pypi_releases(document)
+        .unwrap()
+        .into_iter()
+        .map(|release| (release.version, release.yanked))
+        .collect();
+    assert_eq!(
+        yanked,
+        [("1.0".to_string(), false), ("1.1".to_string(), true)]
+    );
+}

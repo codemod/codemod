@@ -27,7 +27,7 @@ declare module "codemod:deps" {
      * `breaking` relative to this node's version. Yanked releases are dropped.
      */
     releases(options?: {
-      /** `{ react: "19.0.0" }` keeps releases whose ranges on react accept 19.0.0. */
+      /** `{ react: "19.0.0" }` keeps releases whose ranges on react accept 19.0.0. Not for pypi packages. */
       accepting?: Record<string, string>;
       newerThanMine?: boolean;
       prereleases?: boolean;
@@ -142,7 +142,7 @@ declare module "codemod:deps" {
   }
 
   /**
-   * Release metadata from npm and crates.io. Usable inside a function step or
+   * Release metadata from npm, crates.io and PyPI. Usable inside a function step or
    * a `forEachFile` / `dependencyGraph` callback, so the answer is recorded
    * with the step; in the workflow body it rejects. Lookups are cached for the
    * run and asked once per package.
@@ -150,6 +150,8 @@ declare module "codemod:deps" {
   export const registry: {
     npm(name: string): Promise<PackageReleases>;
     cargo(name: string): Promise<PackageReleases>;
+    /** Releases carry no dependencies: PyPI lists them per file, not per release. */
+    pypi(name: string): Promise<PackageReleases>;
   };
 
   type EcosystemOption = { ecosystem?: Ecosystem };
