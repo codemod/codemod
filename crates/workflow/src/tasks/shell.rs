@@ -84,7 +84,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         })?;
 
     if output.cut {
-        task.log(&format!(
+        task.log(format!(
             "the command printed more than {} MiB; the result keeps the end of it",
             KEPT_OUTPUT / (1024 * 1024)
         ));

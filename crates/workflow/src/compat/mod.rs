@@ -952,9 +952,15 @@ const STATE_MARKER: &str = "::codemod-state-outputs::";
 /// for `applyStateOutputs` to read; the exit code is the command's.
 fn with_state_outputs(command: &str) -> String {
     let run = if command.starts_with("#!") {
-        // A script naming its interpreter runs from a file, as it did.
+        // A script naming its interpreter runs from a file, as it did. The
+        // heredoc ends at the first line equal to its delimiter, so the
+        // delimiter is one the script has no line of.
+        let mut end = "CODEMOD_SCRIPT_END".to_string();
+        while command.lines().any(|line| line == end) {
+            end.push('_');
+        }
         format!(
-            "cat > \"$CODEMOD_STATE_DIR/script\" <<'CODEMOD_SCRIPT_END'\n{command}\nCODEMOD_SCRIPT_END\nchmod +x \"$CODEMOD_STATE_DIR/script\"\n\"$CODEMOD_STATE_DIR/script\""
+            "cat > \"$CODEMOD_STATE_DIR/script\" <<'{end}'\n{command}\n{end}\nchmod +x \"$CODEMOD_STATE_DIR/script\"\n\"$CODEMOD_STATE_DIR/script\""
         )
     } else {
         // A subshell, so an `exit` in the command still prints the lines.

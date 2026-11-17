@@ -338,6 +338,23 @@ fn a_script_with_its_own_interpreter_can_write_state() {
 }
 
 #[test]
+fn a_script_with_its_own_interpreter_may_contain_any_line() {
+    let printed = last_printed(
+        r#"      - name: Pick
+        run: |
+          #!/bin/sh
+          choice=yes
+          cat > /dev/null <<'CODEMOD_SCRIPT_END'
+          CODEMOD_SCRIPT_END
+          echo "picked=$choice" >> "$STATE_OUTPUTS"
+      - name: Read
+        run: echo "$CODEMOD_STATE_PICKED"
+"#,
+    );
+    assert_eq!(printed, "\"yes\"");
+}
+
+#[test]
 fn a_state_line_is_split_at_its_first_equals_sign() {
     let printed = last_printed(
         r#"      - name: Note

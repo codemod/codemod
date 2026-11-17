@@ -364,10 +364,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     target_directory: &target_directory,
                     pending_files: None,
                 };
-                let file_name = input_path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                let file_name = data_file_name(&input_path, &target_directory);
                 let mut data = None;
                 let execution_result = execute_codemod_with_quickjs(options)
                     .await
@@ -420,6 +417,16 @@ async fn handler_impl(args: &Command) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// A file's name in `data.json`: its path from the target, with `/`, as a
+/// `jssg` step's `data` names it.
+fn data_file_name(input_path: &Path, target_directory: &Path) -> String {
+    input_path
+        .strip_prefix(target_directory)
+        .unwrap_or(input_path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 fn finish_data_collection(
@@ -597,9 +604,9 @@ fn generate_data_diff(expected: &str, actual: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_and_sanitize_error, data_to_canonical_json, finish_data_collection,
-        generate_data_diff, handle_data_snapshot, normalize_line_endings, PendingDataSnapshot,
-        SharedDataState,
+        classify_and_sanitize_error, data_file_name, data_to_canonical_json,
+        finish_data_collection, generate_data_diff, handle_data_snapshot, normalize_line_endings,
+        PendingDataSnapshot, SharedDataState,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -632,6 +639,15 @@ mod tests {
         assert_eq!(
             written,
             json!([{ "file": "a.ts", "data": [1] }, { "file": "b.ts", "data": { "a": 2, "z": 1 } }])
+        );
+    }
+
+    #[test]
+    fn a_nested_files_data_is_named_by_its_path_from_the_target() {
+        let target = PathBuf::from("/tmp/workspace");
+        assert_eq!(
+            data_file_name(&target.join("src/a.ts"), &target),
+            "src/a.ts"
         );
     }
 

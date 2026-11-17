@@ -158,6 +158,39 @@ test("CODEMOD_UPDATE_FIXTURES rewrites the expected directory and file", () => {
 
 // The same tests on both hosts: Node (in this process) and the engine's
 // QuickJS runtime (through the CLI).
+test(
+  "node: a jssg reducer that calls failStep fails the step even if it catches it",
+  HOSTS.node,
+  async () => {
+    const path = join(
+      scratch({
+        "transform.ts": `
+export default function transform(root: any) {
+  return { data: 1 };
+}
+`,
+        "workflow.ts": `
+import { step, jssg } from "codemod/workflow";
+import { failStep } from "codemod/runtime";
+export default async function main() {
+  return (await step("Count", jssg("./transform.ts", {
+    reduce: (total, { data }) => {
+      try { failStep("cannot add"); } catch {}
+      return total + data;
+    },
+    initial: 0,
+  }))).data;
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await run(path, { target: { "a.ts": "a\n" }, host: "node" });
+    assert.equal(result.status, "failed");
+    assert.match(result.error, /cannot add/);
+  },
+);
+
 test("node: a retried jssg reducer starts from its initial value again", HOSTS.node, async () => {
   const path = join(
     scratch({

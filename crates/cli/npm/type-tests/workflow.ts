@@ -234,10 +234,11 @@ export default async function main({
 
 import type { Frozen, JsonValue } from "codemod/workflow";
 
-// A transform returns its edit and rows to count.
+// A transform returns its edit and any JSON as data.
 export const counts: Codemod<TS> = async (root) => ({
   edit: null,
   data: { calls: [{ file: root.filename(), deep: true, depth: 2 }] },
 });
-// @ts-expect-error each row is an object of labels
-export const notRows: Codemod<TS> = async () => ({ data: { calls: [1] } });
+export const aNumber: Codemod<TS> = async () => ({ data: 1 });
+// @ts-expect-error data is JSON
+export const notJson: Codemod<TS> = async () => ({ data: () => 1 });

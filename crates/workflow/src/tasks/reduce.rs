@@ -3,12 +3,14 @@
 //! holds every file's data at once.
 
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 
+use codemod_deps::Registry;
 use rquickjs::{async_with, CatchResultExt, Function, Module, Promise};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::isolate::{module_name, StepIsolates};
+use super::isolate::{self, module_name, StepIsolates};
 use super::{block_on, TaskContext};
 
 #[derive(Deserialize, Clone)]
@@ -22,6 +24,7 @@ pub(crate) struct Reduce {
 /// What the reducer's thread needs, taken from the task before it starts.
 pub(crate) struct Fold {
     options: codemod_sandbox::WorkerOptions<codemod_sandbox::sandbox::resolvers::OxcResolver>,
+    registry: Option<Arc<dyn Registry>>,
     name: String,
     module: String,
     captures: String,
@@ -40,6 +43,7 @@ impl Fold {
         let isolates = StepIsolates::new(task)?;
         Ok(Self {
             options: isolates.worker_options(task, None),
+            registry: isolates.registry.clone(),
             name: module_name(task, &reduce.callback),
             module,
             captures: serde_json::to_string(&reduce.captures).map_err(|e| e.to_string())?,
@@ -53,6 +57,7 @@ impl Fold {
     pub fn run(self, entries: Receiver<String>) -> Result<Value, String> {
         let Fold {
             options,
+            registry,
             name,
             module,
             captures,
@@ -60,9 +65,7 @@ impl Fold {
             workflow_path,
         } = self;
         let json = block_on(async move {
-            let sandbox = codemod_sandbox::Worker::new(options)
-                .await
-                .map_err(|e| format!("could not start the reducer's runtime: {e}"))?;
+            let sandbox = isolate::start(options, registry).await?;
             let json = async_with!(sandbox.context => |ctx| {
                 let run = async {
                     let declared = Module::declare(ctx.clone(), name.as_str(), module.as_str())?;

@@ -278,6 +278,27 @@ export default async function main() {
 }
 
 #[test]
+fn a_jssg_reducer_can_use_semver() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
+    let report = h.start(
+        r#"
+import { step, jssg, semver } from "codemod/workflow";
+export default async function main() {
+  const counted = jssg("./scripts/transform.ts", {
+    include: "src/**/*.ts",
+    reduce: (total, { data }) => total + (semver.gt("2.0.0", "1.0.0") ? data.calls : 0),
+    initial: 0,
+  });
+  return (await step(counted)).data;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(3));
+}
+
+#[test]
 fn jssg_transform_logs_become_step_logs_grouped_by_file() {
     let h = Harness::new();
     h.write("src/a.ts", "const a = 1;\n");

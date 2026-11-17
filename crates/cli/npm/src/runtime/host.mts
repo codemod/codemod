@@ -431,6 +431,8 @@ async function reduceInPlace(run: NativeRun, task: InPlaceTask, fn: Callback): P
   for (const entry of result.data) {
     folded = (await context.run({ ...outer, step }, () => fn(folded, entry))) as Json;
   }
+  // A failure reported with failStep() stands even if the reducer caught it.
+  if (step.failure !== undefined) throw new Error(step.failure);
   if (folded === undefined) folded = null;
   checkJson(folded, "the reducer's result");
   return { ...outcome, result: { ...result, data: folded } };
