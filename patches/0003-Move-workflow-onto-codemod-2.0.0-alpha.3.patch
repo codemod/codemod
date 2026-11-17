@@ -1,0 +1,149 @@
+From 38b313f26564284782626652841b3c826c01b4d0 Mon Sep 17 00:00:00 2001
+From: Dev Agrawal <dev@codemod.com>
+Date: Mon, 16 Nov 2026 17:28:35 +0000
+Subject: [PATCH] Move workflow onto codemod 2.0.0-alpha.3: src/ layout,
+ codemod/* imports, spec tests
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ workflow/codemod.yaml           |  2 +-
+ workflow/package.json           | 16 +++++++++++
+ workflow/{ => src}/workflow.ts  | 15 ++++++----
+ workflow/tests/workflow.test.ts | 51 +++++++++++++++++++++++++++++++++
+ 4 files changed, 77 insertions(+), 7 deletions(-)
+ create mode 100644 workflow/package.json
+ rename workflow/{ => src}/workflow.ts (72%)
+ create mode 100644 workflow/tests/workflow.test.ts
+
+diff --git a/workflow/codemod.yaml b/workflow/codemod.yaml
+index 106fa8f..c9c17fe 100644
+--- a/workflow/codemod.yaml
++++ b/workflow/codemod.yaml
+@@ -4,4 +4,4 @@ version: "0.1.0"
+ description: "Deterministic read-only syntax-hotspot roasts for JavaScript, TypeScript, and Rust"
+ author: "Dev Agrawal"
+ license: "MIT"
+-workflow: "workflow.ts"
++workflow: "src/workflow.ts"
+diff --git a/workflow/package.json b/workflow/package.json
+new file mode 100644
+index 0000000..74f4f8e
+--- /dev/null
++++ b/workflow/package.json
+@@ -0,0 +1,16 @@
++{
++  "name": "codebase-roaster-workflow",
++  "version": "0.1.0",
++  "private": true,
++  "type": "module",
++  "scripts": {
++    "test": "node --test \"tests/**/*.test.ts\"",
++    "validate": "codemod workflow validate -w src/workflow.ts"
++  },
++  "dependencies": {
++    "codemod": "2.0.0-alpha.3"
++  },
++  "engines": {
++    "node": ">=22.18"
++  }
++}
+diff --git a/workflow/workflow.ts b/workflow/src/workflow.ts
+similarity index 72%
+rename from workflow/workflow.ts
+rename to workflow/src/workflow.ts
+index c6c0e07..4fb3a57 100644
+--- a/workflow/workflow.ts
++++ b/workflow/src/workflow.ts
+@@ -1,5 +1,5 @@
+-import { forEachFile, step } from "codemod:workflow";
+-import { parse } from "codemod:ast-grep";
++import { forEachFile, step } from "codemod/workflow";
++import { parse } from "codemod/ast-grep";
+ import {
+   FAMILIES,
+   GENERATED_GLOBS,
+@@ -10,7 +10,7 @@ import {
+   renderReport,
+   renderWarnings,
+   reportSections,
+-} from "./src/core.ts";
++} from "./core.ts";
+ 
+ export default async function main() {
+   // One step per family, run together: each family re-parses every file.
+@@ -37,9 +37,12 @@ export default async function main() {
+     ]),
+   );
+   // Every family parses the same files, so one family's failures cover them all.
++  const failures = scans[0]?.failures ?? [];
+   console.log(
+-    [renderReport(sections, quips), renderWarnings(scans[0]?.failures ?? [])]
+-      .filter(Boolean)
+-      .join("\n\n"),
++    [renderReport(sections, quips), renderWarnings(failures)].filter(Boolean).join("\n\n"),
+   );
++  return {
++    findings: Object.fromEntries(sections.map((section) => [section.ruleId, section.findings.length])),
++    unparsed: failures.map((failure) => failure.path),
++  };
+ }
+diff --git a/workflow/tests/workflow.test.ts b/workflow/tests/workflow.test.ts
+new file mode 100644
+index 0000000..cc6297c
+--- /dev/null
++++ b/workflow/tests/workflow.test.ts
+@@ -0,0 +1,51 @@
++import assert from "node:assert/strict";
++import { describe, test } from "node:test";
++import { runWorkflow } from "codemod/testing";
++
++const workflow = new URL("../src/workflow.ts", import.meta.url);
++
++describe("codebase roaster workflow", () => {
++  test("an empty catch clause is reported as reliability/empty-catch", async () => {
++    const run = await runWorkflow(workflow, {
++      target: { "src/a.ts": "try { run(); } catch (error) {}\n" },
++    });
++    assert.equal(run.output?.findings["reliability/empty-catch"], 1);
++  });
++
++  test("a file with no hotspots gives a clean run", async () => {
++    const run = await runWorkflow(workflow, { target: { "src/a.ts": "export const one = 1;\n" } });
++    assert.deepEqual(run.output?.findings, {});
++  });
++
++  test("files under node_modules are not analyzed", async () => {
++    const run = await runWorkflow(workflow, {
++      target: { "node_modules/pkg/a.js": "try { run(); } catch (error) {}\n" },
++    });
++    assert.deepEqual(run.output?.findings, {});
++  });
++
++  test("Rust unwrap density is reported as rust/unwrap-expect-density", async () => {
++    const run = await runWorkflow(workflow, {
++      target: { "src/main.rs": "fn main() { a().unwrap(); b().unwrap(); c().expect(\"c\"); }\n" },
++    });
++    assert.equal(run.output?.findings["rust/unwrap-expect-density"], 1);
++  });
++
++  test("each slice family runs as its own step", async () => {
++    const run = await runWorkflow(workflow, { target: { "src/a.ts": "" } });
++    assert.deepEqual(
++      run.steps.map((step) => step.label),
++      [
++        "Analyze complexity",
++        "Analyze coupling",
++        "Analyze reliability",
++        "Analyze rust",
++        "Analyze sensitive",
++        "Analyze state",
++        "Analyze structure",
++        "Analyze testing",
++        "Analyze types",
++      ],
++    );
++  });
++});
+-- 
+2.43.0
+

@@ -1,0 +1,16 @@
+{
+  "name": "codebase-roaster-workflow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.ts\"",
+    "validate": "codemod workflow validate -w src/workflow.ts"
+  },
+  "dependencies": {
+    "codemod": "2.0.0-alpha.3"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

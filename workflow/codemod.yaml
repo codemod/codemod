@@ -1,0 +1,7 @@
+schema_version: "1.0"
+name: "codebase-roaster"
+version: "0.1.0"
+description: "Deterministic read-only syntax-hotspot roasts for JavaScript, TypeScript, and Rust"
+author: "Dev Agrawal"
+license: "MIT"
+workflow: "src/workflow.ts"

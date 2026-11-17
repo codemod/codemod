@@ -1,0 +1,45 @@
+CODEBASE ROASTER — syntax hotspots
+
+[complexity/high-branching] High function-local branching
+Fact: 2 function(s) meet their language threshold of at least 12 explicit branch sites (if, loop, match arm, switch case/default, catch, or ternary); up to 10 sites are shown.
+Evidence:
+- src/slices/typescript/barrel-fanout.ts:94:1 — function_declaration contains 13 function-local syntactic branch sites and ends at 116:2; nested functions are excluded.
+- src/slices/typescript/import-fanout.ts:112:8 — function_declaration contains 13 function-local syntactic branch sites and ends at 134:2; nested functions are excluded.
+Remediation: Separate independent decisions, extract cohesive paths, or replace repeated condition selection with a clearer data-driven structure.
+Roast: The decision tree is applying for forest status.
+
+[complexity/long-parameter-list] Long parameter lists
+Fact: 1 function or signature site(s) declare more than 5 direct formal parameters; up to 10 exact sites are shown.
+Evidence:
+- src/cli/discovery.ts:58:1 — function_declaration declares 6 direct formal parameters and ends at 106:2; the threshold is more than 5.
+Remediation: Group genuinely cohesive inputs behind a named value object, or split responsibilities that require unrelated inputs.
+Roast: The arguments arrived in a convoy.
+
+[coupling/import-fanout] High static import fan-out
+Fact: 1 file(s) meet both literal static source thresholds; up to 10 are shown. No source is resolved and dynamic import, require, import-equals, and nonliteral forms do not count.
+Evidence:
+- src/slices/all-slices.ts:1:1 — file has exactly 20 distinct decoded and canonicalized literal static import/re-export sources, including exactly 20 project-relative sources (thresholds: at least 20 total and 12 relative).
+Remediation: Split the file around cohesive responsibilities, or introduce a focused local facade only where it clarifies a stable dependency boundary; preserve initialization order and module side effects with focused tests.
+Roast: This file collects imports like frequent-flyer miles.
+
+[reliability/await-in-loop] Await syntax in repeated loop regions
+Fact: 5 await_expression site(s) occur in syntactically repeatedly evaluated loop regions; this is syntax-only and makes no runtime, performance, or sequential-dependence claim, and up to 10 sites are shown.
+Evidence:
+- src/cli/discovery.ts:94:7 — await_expression ending at 94:102 is in the body region of the nearest for-of loop at 89:3; nested runtime functions and nested loops have separate attribution.
+- src/cli/discovery.ts:137:17 — await_expression ending at 137:48 is in the body region of the nearest for-of loop at 132:3; nested runtime functions and nested loops have separate attribution.
+- tests/discovery.test.ts:21:7 — await_expression ending at 21:41 is in the body region of the nearest for-of loop at 20:5; nested runtime functions and nested loops have separate attribution.
+- tests/discovery.test.ts:22:7 — await_expression ending at 22:74 is in the body region of the nearest for-of loop at 20:5; nested runtime functions and nested loops have separate attribution.
+- tests/discovery.test.ts:27:7 — await_expression ending at 27:93 is in the body region of the nearest for-of loop at 26:5; nested runtime functions and nested loops have separate attribution.
+Remediation: Review whether each repeated await is intentional; when semantics permit, restructure the work so concurrency or explicit sequencing is visible.
+Roast: This loop renews its pause on every turn.
+
+[types/double-assertion] Double assertions through unknown
+Fact: 2 TypeScript expression(s) use nested “as unknown as Target” syntax; parenthesized expression or bridge nodes are included, assertions through other bridge types are excluded, and up to 10 sites are shown.
+Evidence:
+- src/engine/parser.ts:58:20 — expression ending at 60:4 uses the exact nested “as unknown as {
+    field(fieldName: string): SgNode | null;
+  }” syntax.
+- tests/engine.test.ts:208:17 — expression ending at 212:31 uses the exact nested “as unknown as SourceFile[]” syntax.
+Remediation: Validate or narrow the value at its trust boundary, or repair the source and target type relationship; retain an assertion only when the runtime invariant is documented and tested.
+Roast: The compiler received a two-step confidence trick.
+Done

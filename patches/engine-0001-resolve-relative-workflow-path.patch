@@ -1,0 +1,54 @@
+diff --git a/crates/workflow/src/build.rs b/crates/workflow/src/build.rs
+index fccdce09..c8c5e6e5 100644
+--- a/crates/workflow/src/build.rs
++++ b/crates/workflow/src/build.rs
+@@ -785,6 +785,11 @@ pub fn check_imports(file: &Path, source: &str, built: &Built) -> Result<(), Bui
+         return Ok(());
+     }
+     let name = file.display().to_string();
++    // The resolver joins a relative importer onto its base directory, which
++    // would repeat the workflow's directory: resolve from the absolute path.
++    let file = std::path::absolute(file)
++        .map_err(|e| error_at(&name, source, 0, format!("cannot resolve imports: {e}")))?;
++    let importer = file.to_string_lossy().to_string();
+     let base_dir = file
+         .parent()
+         .map(Path::to_path_buf)
+@@ -799,7 +804,7 @@ pub fn check_imports(file: &Path, source: &str, built: &Built) -> Result<(), Bui
+     for import in &built.body_imports {
+         let at = |message: String| error_at(&name, source, import.offset, message);
+         let resolved = resolver
+-            .resolve(&name, &import.source)
++            .resolve(&importer, &import.source)
+             .map_err(|e| at(format!("cannot resolve '{}': {e}", import.source)))?;
+         let chain = walk.effectful(Path::new(&resolved)).map_err(at)?;
+         if let Some(chain) = chain {
+diff --git a/crates/workflow/tests/engine.rs b/crates/workflow/tests/engine.rs
+index 863e9df5..6fdc3380 100644
+--- a/crates/workflow/tests/engine.rs
++++ b/crates/workflow/tests/engine.rs
+@@ -664,6 +664,24 @@ export const rewrite = () => step(forEachFile("**/*.ts", (file) => { file.write(
+     assert!(codemod_workflow::load_workflow(&path).is_ok());
+ }
+ 
++#[test]
++fn a_workflow_loaded_by_a_relative_path_resolves_imports_from_its_own_directory() {
++    let h = Harness::new();
++    h.bundle_file("src/helper.ts", "export const answer = 42;\n");
++    std::fs::write(
++        h.bundle.path().join("workflow.ts"),
++        "import { answer } from \"./src/helper.ts\";\nexport default async function main() { return answer; }\n",
++    )
++    .unwrap();
++    let cwd = std::env::current_dir().unwrap();
++    let up: std::path::PathBuf = cwd.components().skip(1).map(|_| "..").collect();
++    let relative = up
++        .join(h.bundle.path().strip_prefix("/").unwrap())
++        .join("workflow.ts");
++
++    assert!(codemod_workflow::load_workflow(&relative).is_ok());
++}
++
+ #[test]
+ fn importing_the_workflow_module_as_a_namespace_is_a_build_error() {
+     let error = build_error(

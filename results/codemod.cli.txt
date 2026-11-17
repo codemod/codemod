@@ -1,0 +1,156 @@
+CODEBASE ROASTER — syntax hotspots
+
+[complexity/deep-nesting] Deep control-flow nesting
+Fact: 32 control-flow site(s) exceed their language threshold (JavaScript/TypeScript: depth 5 or greater; Rust: depth 6 or greater); nested functions start their own depth and up to 10 sites are shown.
+Evidence:
+- crates/ai/src/tools/bash.rs:245:37 — if_expression is at function-local control-flow depth 6, ends at 251:38, and is inside function_item at 155:5.
+- crates/ai/src/tools/bash.rs:247:41 — if_expression is at function-local control-flow depth 7, ends at 250:42, and is inside function_item at 155:5.
+- crates/ai/src/tools/ckg.rs:529:33 — match_expression is at function-local control-flow depth 6, ends at 541:34, and is inside function_item at 477:5.
+- crates/ai/src/tools/mcp.rs:388:33 — if_expression is at function-local control-flow depth 6, ends at 392:34, and is inside function_item at 369:5.
+- crates/ai/src/tools/mcp.rs:395:33 — if_expression is at function-local control-flow depth 6, ends at 401:34, and is inside function_item at 369:5.
+- crates/cli/src/commands/cache.rs:215:25 — if_expression is at function-local control-flow depth 6, ends at 224:26, and is inside function_item at 186:1.
+- crates/cli/src/commands/init.rs:1597:33 — if_expression is at function-local control-flow depth 6, ends at 1607:34, and is inside function_item at 1542:1.
+- crates/cli/src/commands/init.rs:1600:37 — if_expression is at function-local control-flow depth 7, ends at 1606:38, and is inside function_item at 1542:1.
+- crates/cli/src/commands/init.rs:1635:33 — if_expression is at function-local control-flow depth 6, ends at 1641:34, and is inside function_item at 1542:1.
+- crates/cli/src/commands/jssg/run.rs:292:37 — if_expression is at function-local control-flow depth 6, ends at 298:38, and is inside closure_expression at 223:28.
+Remediation: Use guard clauses or extract focused helpers so the control flow has fewer simultaneously nested conditions.
+Roast: The exit is five decisions uphill.
+
+[complexity/high-branching] High function-local branching
+Fact: 89 function(s) meet their language threshold of at least 12 explicit branch sites (if, loop, match arm, switch case/default, catch, or ternary); up to 10 sites are shown.
+Evidence:
+- crates/ai/src/execute.rs:395:1 — function_item contains 12 function-local syntactic branch sites and ends at 532:2; nested functions are excluded.
+- crates/ai/src/tools/bash.rs:155:5 — function_item contains 18 function-local syntactic branch sites and ends at 290:6; nested functions are excluded.
+- crates/ai/src/tools/bash.rs:358:5 — function_item contains 16 function-local syntactic branch sites and ends at 460:6; nested functions are excluded.
+- crates/ai/src/tools/ckg.rs:477:5 — function_item contains 14 function-local syntactic branch sites and ends at 571:6; nested functions are excluded.
+- crates/ai/src/tools/glob.rs:205:5 — function_item contains 17 function-local syntactic branch sites and ends at 288:6; nested functions are excluded.
+- crates/ai/src/tools/json_edit.rs:288:5 — function_item contains 17 function-local syntactic branch sites and ends at 368:6; nested functions are excluded.
+- crates/cli/report-ui/src/components/feedback-button.tsx:102:8 — function_declaration contains 14 function-local syntactic branch sites and ends at 504:2; nested functions are excluded.
+- crates/cli/src/commands/ai/cli_tools.rs:280:1 — function_item contains 22 function-local syntactic branch sites and ends at 307:2; nested functions are excluded.
+- crates/cli/src/commands/ai/mod.rs:190:1 — function_item contains 13 function-local syntactic branch sites and ends at 259:2; nested functions are excluded.
+- crates/cli/src/commands/ai/mod.rs:261:1 — function_item contains 12 function-local syntactic branch sites and ends at 282:2; nested functions are excluded.
+Remediation: Separate independent decisions, extract cohesive paths, or replace repeated condition selection with a clearer data-driven structure.
+Roast: Every condition opened another checkout lane.
+
+[complexity/long-parameter-list] Long parameter lists
+Fact: 3 function or signature site(s) declare more than 5 direct formal parameters; up to 10 exact sites are shown.
+Evidence:
+- crates/scheduler/npm/tests/scheduler.test.ts:132:1 — function_declaration declares 6 direct formal parameters and ends at 152:2; the threshold is more than 5.
+- packages/jssg-types/src/llrt/crypto.d.ts:782:7 — method_signature declares 7 direct formal parameters and ends at 800:28; the threshold is more than 5.
+- packages/jssg-types/src/llrt/dgram.d.ts:162:5 — method_signature declares 6 direct formal parameters and ends at 169:12; the threshold is more than 5.
+Remediation: Group genuinely cohesive inputs behind a named value object, or split responsibilities that require unrelated inputs.
+Roast: The call site needs a seating chart before passing arguments.
+
+[complexity/oversized-function] Oversized functions
+Fact: 219 function(s) exceed their language threshold (JavaScript/TypeScript: more than 60 lines; Rust: more than 80 lines); up to 10 exact sites are shown.
+Evidence:
+- crates/ai/src/execute.rs:395:1 — function_item spans 138 source lines and ends at 532:2; the threshold is more than 80 lines.
+- crates/ai/src/memory/controller.rs:86:1 — function_item spans 85 source lines and ends at 170:2; the threshold is more than 80 lines.
+- crates/ai/src/tools/bash.rs:155:5 — function_item spans 136 source lines and ends at 290:6; the threshold is more than 80 lines.
+- crates/ai/src/tools/bash.rs:358:5 — function_item spans 103 source lines and ends at 460:6; the threshold is more than 80 lines.
+- crates/ai/src/tools/ckg.rs:477:5 — function_item spans 95 source lines and ends at 571:6; the threshold is more than 80 lines.
+- crates/ai/src/tools/glob.rs:107:5 — function_item spans 95 source lines and ends at 201:6; the threshold is more than 80 lines.
+- crates/ai/src/tools/glob.rs:205:5 — function_item spans 84 source lines and ends at 288:6; the threshold is more than 80 lines.
+- crates/ai/src/tools/json_edit.rs:288:5 — function_item spans 81 source lines and ends at 368:6; the threshold is more than 80 lines.
+- crates/cli/report-ui/src/components/feedback-button.tsx:102:8 — function_declaration spans 403 source lines and ends at 504:2; the threshold is more than 60 lines.
+- crates/cli/report-ui/src/components/share-button.tsx:27:8 — function_declaration spans 239 source lines and ends at 265:2; the threshold is more than 60 lines.
+Remediation: Split distinct responsibilities into smaller functions while keeping behavior and caller-owned effects explicit.
+Roast: Scrolling is now part of the execution model.
+
+[coupling/barrel-fanout] High static re-export fan-out
+Fact: 1 file(s) re-export from at least 8 distinct literal static sources; up to 10 are shown. Sources are not resolved, and imports, local exports, dynamic import, require, import-equals, and nonliteral forms do not count.
+Evidence:
+- packages/jssg-types/src/modules/langs.d.ts:2:3 — file has exactly 22 distinct decoded and canonicalized literal static re-export sources (threshold: at least 8).
+Remediation: Group exports around cohesive public entry points, keeping compatibility shims explicit and preserving module initialization and type-only boundaries with focused tests.
+Roast: These re-exports need crowd control.
+
+[reliability/await-in-loop] Await syntax in repeated loop regions
+Fact: 2 await_expression site(s) occur in syntactically repeatedly evaluated loop regions; this is syntax-only and makes no runtime, performance, or sequential-dependence claim, and up to 10 sites are shown.
+Evidence:
+- crates/cli/report-ui/src/components/feedback-button.tsx:215:31 — await_expression ending at 215:50 is in the body region of the nearest while loop at 214:5; nested runtime functions and nested loops have separate attribution.
+- crates/codemod-sandbox/tests/ast-grep.ts:105:7 — await_expression ending at 112:8 is in the body region of the nearest for-of loop at 103:3; nested runtime functions and nested loops have separate attribution.
+Remediation: Review whether each repeated await is intentional; when semantics permit, restructure the work so concurrency or explicit sequencing is visible.
+Roast: Each iteration stops by the same waiting room.
+
+[reliability/empty-catch] Empty catch clauses
+Fact: 1 catch clause(s) contain no executable statements; up to 10 exact source ranges are shown.
+Evidence:
+- crates/cli/report-ui/src/components/registry-button.tsx:20:5 — catch clause ending at 22:4 contains no executable statements (comments do not count).
+Remediation: Handle the failure explicitly, rethrow it, or document and test why ignoring this specific failure is safe.
+Roast: The error arrived; nobody signed for it.
+
+[rust/unsafe-usage] Rust unsafe regions
+Fact: 59 outermost unsafe region(s) appear outside test-only code; nested unsafe syntax is counted with its outer region and up to 10 sites are shown.
+Evidence:
+- crates/codemod-sandbox/src/ast_grep/sg_node.rs:87:1 — impl_item creates an outermost unsafe region ending at 89:2.
+- crates/codemod-sandbox/src/ast_grep/sg_node.rs:105:13 — unsafe_block creates an outermost unsafe region ending at 105:55.
+- crates/codemod-sandbox/src/ast_grep/sg_node.rs:278:27 — unsafe_block creates an outermost unsafe region ending at 278:62.
+- crates/codemod-sandbox/src/ast_grep/sg_node.rs:428:1 — impl_item creates an outermost unsafe region ending at 430:2.
+- crates/codemod-sandbox/src/ast_grep/sg_node.rs:532:21 — unsafe_block creates an outermost unsafe region ending at 532:63.
+- crates/codemod-sandbox/src/ast_grep/sg_node.rs:549:21 — unsafe_block creates an outermost unsafe region ending at 549:63.
+- crates/codemod-sandbox/src/ast_grep/sg_node.rs:568:21 — unsafe_block creates an outermost unsafe region ending at 568:63.
+- crates/codemod-sandbox/src/ast_grep/sg_node.rs:585:21 — unsafe_block creates an outermost unsafe region ending at 585:63.
+- crates/codemod-sandbox/src/ast_grep/sg_node.rs:600:21 — unsafe_block creates an outermost unsafe region ending at 600:63.
+- crates/codemod-sandbox/src/ast_grep/sg_node.rs:620:21 — unsafe_block creates an outermost unsafe region ending at 620:63.
+Remediation: Keep each unsafe region as small as practical and document the invariants that make its operations sound.
+Roast: The borrow checker has left this part as an exercise for the reader.
+
+[rust/unwrap-expect-density] Repeated Rust unwrap and expect calls
+Fact: 11 function(s) contain at least 3 exact .unwrap() or .expect(...) calls outside test-only code; up to 10 sites are shown.
+Evidence:
+- crates/cli/src/auth/oidc.rs:347:1 — function_item contains 5 exact .unwrap() or .expect(...) calls and ends at 418:2; the threshold is at least 3 calls.
+- crates/cli/src/dirty_git_check.rs:78:9 — closure_expression contains 5 exact .unwrap() or .expect(...) calls and ends at 156:10; the threshold is at least 3 calls.
+- crates/cli/src/progress_bar.rs:106:56 — closure_expression contains 16 exact .unwrap() or .expect(...) calls and ends at 349:6; the threshold is at least 3 calls.
+- crates/cli/src/report_server.rs:124:1 — function_item contains 17 exact .unwrap() or .expect(...) calls and ends at 284:2; the threshold is at least 3 calls.
+- crates/codemod-sandbox/src/ast_grep/serde.rs:67:5 — function_item contains 3 exact .unwrap() or .expect(...) calls and ends at 102:6; the threshold is at least 3 calls.
+- crates/codemod-sandbox/src/utils/quickjs_wasm.rs:4:1 — function_item contains 3 exact .unwrap() or .expect(...) calls and ends at 53:2; the threshold is at least 3 calls.
+- crates/codemod-sandbox/src/workflow_global/mod.rs:166:5 — function_item contains 3 exact .unwrap() or .expect(...) calls and ends at 210:6; the threshold is at least 3 calls.
+- crates/codemod-sandbox/src/workflow_global/mod.rs:294:5 — function_item contains 3 exact .unwrap() or .expect(...) calls and ends at 346:6; the threshold is at least 3 calls.
+- crates/core/src/workflow_runtime.rs:408:1 — function_item contains 7 exact .unwrap() or .expect(...) calls and ends at 513:2; the threshold is at least 3 calls.
+- crates/language-python/src/db.rs:36:5 — function_item contains 4 exact .unwrap() or .expect(...) calls and ends at 100:6; the threshold is at least 3 calls.
+Remediation: Handle the failure cases explicitly or propagate them with ? where the caller can make the appropriate decision.
+Roast: The happy path has been promoted from assumption to architecture.
+
+[state/parameter-mutation] Parameter-name writes
+Fact: 1 bare-identifier write site(s) lexically match conservative direct identifier parameters in the same runtime function; binding identity and shadowing are not resolved, and up to 10 sites are shown.
+Evidence:
+- packages/jssg-utils/src/javascript/exports/imports.ts:1895:5 — assignment_expression ending at 1895:50 writes a bare identifier spelled options, matching an eligible direct parameter of function_declaration at 1823:8; bindings and same-function block/catch shadowing are not resolved.
+Remediation: Prefer a clearly named local value for evolving state, or document why reassignment of the incoming parameter name is intentional.
+Roast: An incoming value became an in-place draft.
+
+[structure/oversized-module] Oversized modules
+Fact: 3 program(s) meet both syntax thresholds; each spans more than 800 full source lines and has at least 20 counted direct declarations, and up to 10 are shown.
+Evidence:
+- crates/scheduler/npm/types.ts:1:1 — program spans 841 full source lines, ends at 842:1, and has 48 counted direct top-level declarations (thresholds: more than 800 lines and at least 20 declarations).
+- packages/jssg-utils/src/javascript/exports/imports.ts:1:1 — program spans 2628 full source lines, ends at 2629:1, and has 93 counted direct top-level declarations (thresholds: more than 800 lines and at least 20 declarations).
+- packages/jssg-utils/tests/imports.test.ts:1:1 — program spans 2477 full source lines, ends at 2478:1, and has 142 counted direct top-level declarations (thresholds: more than 800 lines and at least 20 declarations).
+Remediation: Split cohesive responsibilities behind explicit module boundaries, preserving exports and behavior with focused tests while moving one responsibility at a time.
+Roast: The exports are considering a census.
+
+[types/double-assertion] Double assertions through unknown
+Fact: 50 TypeScript expression(s) use nested “as unknown as Target” syntax; parenthesized expression or bridge nodes are included, assertions through other bridge types are excluded, and up to 10 sites are shown.
+Evidence:
+- packages/jssg-utils/src/javascript/exports/bindings.ts:19:10 — expression ending at 19:33 uses the exact nested “as unknown as Node” syntax.
+- packages/jssg-utils/src/javascript/exports/bindings.ts:173:10 — expression ending at 173:49 uses the exact nested “as unknown as SgNode<T> | null” syntax.
+- packages/jssg-utils/src/javascript/exports/imports.ts:117:19 — expression ending at 117:49 uses the exact nested “as unknown as SgNode<TS>” syntax.
+- packages/jssg-utils/src/javascript/exports/imports.ts:156:21 — expression ending at 156:64 uses the exact nested “as unknown as SgNode<TS, "program">” syntax.
+- packages/jssg-utils/src/javascript/exports/imports.ts:514:13 — expression ending at 514:59 uses the exact nested “as unknown as SgNode<T, "identifier">” syntax.
+- packages/jssg-utils/src/javascript/exports/imports.ts:528:13 — expression ending at 528:55 uses the exact nested “as unknown as SgNode<T, "identifier">” syntax.
+- packages/jssg-utils/src/javascript/exports/imports.ts:549:11 — expression ending at 549:59 uses the exact nested “as unknown as SgNode<T, "identifier">” syntax.
+- packages/jssg-utils/src/javascript/exports/imports.ts:572:15 — expression ending at 572:61 uses the exact nested “as unknown as SgNode<T, "identifier">” syntax.
+- packages/jssg-utils/src/javascript/exports/imports.ts:622:21 — expression ending at 622:64 uses the exact nested “as unknown as SgNode<TS, "program">” syntax.
+- packages/jssg-utils/src/javascript/exports/imports.ts:741:10 — expression ending at 746:30 uses the exact nested “as unknown as SgNode<T>[]” syntax.
+Remediation: Validate or narrow the value at its trust boundary, or repair the source and target type relationship; retain an assertion only when the runtime invariant is documented and tested.
+Roast: One assertion was not convincing enough.
+
+[types/explicit-any-density] Dense explicit any syntax
+Fact: 6 file(s) have at least 5 explicit “any” type nodes and at least one per 100 full program source lines; the comparison uses exact integer arithmetic and up to 10 files are shown.
+Evidence:
+- packages/jssg-types/src/llrt/child_process.d.ts:153:52 — file has exactly 6 explicit predefined_type nodes whose text is “any” across 447 full program source lines; 6 × 100 >= 447.
+- packages/jssg-types/src/llrt/console.d.ts:72:27 — file has exactly 14 explicit predefined_type nodes whose text is “any” across 210 full program source lines; 14 × 100 >= 210.
+- packages/jssg-types/src/llrt/dgram.d.ts:152:43 — file has exactly 8 explicit predefined_type nodes whose text is “any” across 381 full program source lines; 8 × 100 >= 381.
+- packages/jssg-types/src/llrt/net.d.ts:159:52 — file has exactly 12 explicit predefined_type nodes whose text is “any” across 488 full program source lines; 12 × 100 >= 488.
+- packages/jssg-types/src/llrt/stream.d.ts:108:54 — file has exactly 21 explicit predefined_type nodes whose text is “any” across 366 full program source lines; 21 × 100 >= 366.
+- packages/jssg-types/src/llrt/stream/web.d.ts:1:74 — file has exactly 59 explicit predefined_type nodes whose text is “any” across 526 full program source lines; 59 × 100 >= 526.
+Remediation: Replace each explicit any at a known trust boundary with a specific type or unknown plus validation and narrowing; keep intentional escape hatches narrow, documented, and tested.
+Roast: The type system left five forwarding addresses and none knew the shape.
