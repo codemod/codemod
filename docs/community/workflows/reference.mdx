@@ -344,7 +344,8 @@ await step("Format", shell("npx prettier --write src"));
 | Variable | Value |
 |---|---|
 | `CODEMOD_PATH` | The workflow's directory (prefer `import.meta.dirname` in `workflow.ts`) |
-| `CODEMOD_OUTPUT` | A file the command can write `key=value` lines to (`key@=value` adds to a list); a value is JSON, or else a string. They arrive as `result.values` |
+| `CODEMOD_OUTPUT` | A file the command can write `key=value` lines to (`key@=value` adds to a list). A line splits at its first `=`; a value is JSON, or else a string. They arrive as `result.values` |
+| `STATE_OUTPUTS` | The same file as `CODEMOD_OUTPUT`, under its workflow.yaml name |
 
 Give a command values with `env` or in the command itself.
 

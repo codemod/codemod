@@ -750,19 +750,21 @@ state:
 |--------|---------|---------|
 | `KEY=VAL` | Set state key to value | `count=10` |
 | `KEY@=VAL` | Append value to array | `shards@={"team":"core","shardId":"1"}` |
-| Dot notation | Set nested fields | `config.retries=5` |
+| `KEY=null` | Remove the key | `count=null` |
 | JSON values | Use valid JSON | `user={"name":"Alice","id":123}` |
 
 <Info>
-State updates must be valid JSON if not primitive. Updates are applied only if the task exits successfully.
+A line splits at its first `=`, so a value may contain `=`. A value that parses as JSON is stored as JSON (`10` is a number, `true` a boolean); anything else is stored as a string. Updates are applied only if the step exits successfully.
 </Info>
 
-When you run a nested `codemod:` step, its child steps share the parent workflow
-run's persisted state. Each child step reads that state before evaluating its `if`
-condition and executing its action, so later steps can use earlier steps' persisted
-updates written to `$STATE_OUTPUTS` by shell steps. JSSG transforms cannot read or
-set workflow state; `codemod workflow upgrade` flags each transform step in a workflow
-that uses state.
+`$STATE_OUTPUTS` is the same file as `$CODEMOD_OUTPUT` in TypeScript workflows, so
+scripts written for either name work.
+
+State belongs to one workflow run. A nested `codemod:` step runs the other codemod
+with its own state: it doesn't see the parent's state, and what it sets doesn't
+reach the parent. Pass values to it with `params` instead. JSSG transforms cannot
+read or set workflow state; `codemod workflow upgrade` flags each transform step in
+a workflow that uses state.
 
 ---
 

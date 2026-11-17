@@ -2,7 +2,8 @@
 //!
 //! The command gets `CODEMOD_PATH` and `CODEMOD_OUTPUT`, a file it can write
 //! `key=value` or `key@=value` (append) lines to. They come back on the
-//! step's result as `values`, so a later step can be given them.
+//! step's result as `values`, so a later step can be given them. The same
+//! file is also `STATE_OUTPUTS`, its name in workflow.yaml.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -58,10 +59,13 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let values_file = scratch.path().join("output");
     std::fs::write(&values_file, "")
         .map_err(|e| format!("cannot prepare the step's output file: {e}"))?;
-    env.insert(
-        "CODEMOD_OUTPUT".into(),
-        values_file.to_string_lossy().into_owned(),
-    );
+    let values_path = values_file.to_string_lossy().into_owned();
+    // `STATE_OUTPUTS` is the YAML engine's name for the same file, so
+    // scripts written for workflow.yaml keep working, on every platform.
+    if !request.env.contains_key("STATE_OUTPUTS") {
+        env.insert("STATE_OUTPUTS".into(), values_path.clone());
+    }
+    env.insert("CODEMOD_OUTPUT".into(), values_path);
 
     let command = match &request.cwd {
         Some(cwd) if !request.command.starts_with("#!") => {
@@ -102,18 +106,22 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     Ok(TaskOutcome::new(result))
 }
 
-/// Read `key=value` (set) and `key@=value` (append to a list) lines. Values
-/// are JSON, falling back to plain strings.
+/// Read `key=value` (set) and `key@=value` (append to a list) lines. A line
+/// splits at its first `=`, so a value may contain `=` and `@=`. Values are
+/// JSON, falling back to plain strings.
 pub(crate) fn parse_values(text: &str) -> BTreeMap<String, Value> {
     let mut changes: BTreeMap<String, Value> = BTreeMap::new();
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let (key, append, raw) = if let Some((key, value)) = line.split_once("@=") {
-            (key, true, value)
-        } else if let Some((key, value)) = line.split_once('=') {
-            (key, false, value)
-        } else {
+        let Some((key, raw)) = line.split_once('=') else {
             continue;
         };
+        let (key, append) = match key.strip_suffix('@') {
+            Some(key) => (key, true),
+            None => (key, false),
+        };
+        if key.is_empty() {
+            continue;
+        }
         let value = serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_string()));
         if append {
             let existing = changes.get(key).cloned();
@@ -150,6 +158,15 @@ mod tests {
         assert_eq!(
             Value::Object(values.into_iter().collect()),
             json!({ "count": 3, "name": "plain text", "files": ["b", "c"] })
+        );
+    }
+
+    #[test]
+    fn an_output_line_splits_at_its_first_equals_sign() {
+        let values = parse_values("note=a@=b\nquery=x=1\nlist@=1=2\n=5\n");
+        assert_eq!(
+            Value::Object(values.into_iter().collect()),
+            json!({ "note": "a@=b", "query": "x=1", "list": ["1=2"] })
         );
     }
 }

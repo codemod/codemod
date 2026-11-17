@@ -130,13 +130,15 @@ pub fn process_transform_result(
                 )));
             }
         }
+        // The edit is checked first, so a file that fails counts nothing.
+        let edit: Value = object.get("edit").map_err(|e| failed(e.to_string()))?;
+        let result = process_edit(&edit, sg_root_inner, modification_check)?;
         let data: Value = object.get("data").map_err(|e| failed(e.to_string()))?;
         if !data.is_undefined() && !data.is_null() {
             let context = ctx.userdata::<MetricsContext>();
             record_data(ctx, context.as_deref(), &data).map_err(|e| failed(caught(ctx, e)))?;
         }
-        let edit: Value = object.get("edit").map_err(|e| failed(e.to_string()))?;
-        return process_edit(&edit, sg_root_inner, modification_check);
+        return Ok(result);
     }
     process_edit(result_obj, sg_root_inner, modification_check)
 }

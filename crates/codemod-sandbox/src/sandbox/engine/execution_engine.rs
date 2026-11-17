@@ -1963,6 +1963,19 @@ function example() {
     }
 
     #[tokio::test]
+    async fn a_file_whose_edit_is_invalid_counts_none_of_its_data() {
+        let metrics = crate::metrics::MetricsContext::new();
+        let error = run_collecting(
+            r#"return { edit: 42, data: { seen: [{}] } };"#,
+            "const a = 1;",
+            Some(metrics.clone()),
+        )
+        .await;
+        assert!(error.is_err(), "{error:?}");
+        assert!(metrics.is_empty(), "{:?}", metrics.get_all());
+    }
+
+    #[tokio::test]
     async fn a_result_object_with_other_keys_is_an_error() {
         let error = run_returning(r#"return { content: "x" };"#, "x")
             .await

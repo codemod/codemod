@@ -76,6 +76,7 @@ struct Generator {
     /// the workflow reads state, or has more than one step that could set it.
     plumb_state: bool,
     uses_state_env: bool,
+    uses_apply_values: bool,
     /// Tasks get the run's params anyway; pass `params` explicitly only when
     /// it differs from them (defaults, template inputs).
     pass_params: bool,
@@ -130,18 +131,26 @@ fn plumbs_state(workflow: &Workflow) -> bool {
                 .as_ref()
                 .is_some_and(|s| s.from_state.is_some())
         });
+    let mut counted = HashMap::new();
     let writers: usize = workflow
         .nodes
         .iter()
-        .map(|node| writers(&node.steps, workflow, &mut Vec::new()))
-        .sum();
+        .map(|node| writers(&node.steps, workflow, &mut Vec::new(), &mut counted))
+        .fold(0, usize::saturating_add);
     reads || writers > 1
 }
 
 /// How many steps among these could set state, following template uses.
 /// `using` holds the templates being followed, so a template that uses
-/// itself (an error elsewhere) ends the walk instead of looping.
-fn writers<'a>(steps: &[Step], workflow: &'a Workflow, using: &mut Vec<&'a str>) -> usize {
+/// itself (an error elsewhere) ends the walk instead of looping; `counted`
+/// keeps each template's count, so a template is walked once however often
+/// it is used.
+fn writers<'a>(
+    steps: &[Step],
+    workflow: &'a Workflow,
+    using: &mut Vec<&'a str>,
+    counted: &mut HashMap<&'a str, usize>,
+) -> usize {
     steps
         .iter()
         .map(|step| match &step.action {
@@ -155,14 +164,18 @@ fn writers<'a>(steps: &[Step], workflow: &'a Workflow, using: &mut Vec<&'a str>)
                 else {
                     return 0;
                 };
+                if let Some(&count) = counted.get(template.id.as_str()) {
+                    return count;
+                }
                 using.push(&template.id);
-                let count = writers(&template.steps, workflow, using);
+                let count = writers(&template.steps, workflow, using, counted);
                 using.pop();
+                counted.insert(&template.id, count);
                 count
             }
             _ => 0,
         })
-        .sum()
+        .fold(0, usize::saturating_add)
 }
 
 /// Where a list of steps is being generated.
@@ -608,15 +621,9 @@ impl Generator {
                     env.iter()
                         .map(|(k, v)| format!("{}: {}", property(k), js_string(v))),
                 );
-                // The YAML engine's name for the file of `key=value` lines.
-                // Without it, a write to "$STATE_OUTPUTS" fails the command.
-                let command = if self.plumb_state || command.contains("STATE_OUTPUTS") {
-                    template(&format!(
-                        "export STATE_OUTPUTS=\"$CODEMOD_OUTPUT\"; {command}"
-                    ))
-                } else {
-                    template(command)
-                };
+                // The shell task sets `$STATE_OUTPUTS` itself, to the same
+                // file as `$CODEMOD_OUTPUT`, so the command stays as written.
+                let command = template(command);
                 if entries.is_empty() {
                     format!("shell({command})")
                 } else {
@@ -806,9 +813,10 @@ impl Generator {
             }
         };
         if self.plumb_state && matches!(step.action, StepAction::RunScript(_)) {
+            self.uses_apply_values = true;
             return (
                 notes,
-                format!("Object.assign(state, (await step({name}, {task})).values);"),
+                format!("applyValues(state, (await step({name}, {task})).values);"),
             );
         }
         (notes, format!("await step({name}, {task});"))
@@ -914,6 +922,11 @@ impl Generator {
         if self.uses_state_env {
             source.push_str(
                 "\n/** State as `CODEMOD_STATE_<KEY>` variables, JSON-encoded as before. */\nfunction stateEnv(state: State): Record<string, string> {\n  return Object.fromEntries(\n    Object.entries(state).map(([key, value]) => [`CODEMOD_STATE_${key.toUpperCase()}`, JSON.stringify(value)]),\n  );\n}\n",
+            );
+        }
+        if self.uses_apply_values {
+            source.push_str(
+                "\n/** Copy a shell step's values into state; `null` removes a key, as before. */\nfunction applyValues(state: State, values: Record<string, unknown> | undefined): void {\n  for (const [key, value] of Object.entries(values ?? {})) {\n    if (value === null) delete state[key];\n    else state[key] = value;\n  }\n}\n",
             );
         }
         if self.uses_matrix_env {

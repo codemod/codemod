@@ -306,3 +306,30 @@ nodes:
     let read = &report.steps[1].result.as_ref().unwrap()["output"];
     assert_eq!(read.as_str().unwrap().trim(), "\"NEW\"");
 }
+
+/// Writing `null` for a key removes it from state, as in the YAML engine.
+#[cfg(unix)]
+#[test]
+fn a_null_value_removes_a_state_key() {
+    let h = Harness::new();
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: detect
+    name: Detect
+    steps:
+      - name: Set
+        run: echo 'flag=1' >> "$STATE_OUTPUTS"
+      - name: Unset
+        run: echo 'flag=null' >> "$STATE_OUTPUTS"
+      - name: Read
+        run: echo "[${CODEMOD_STATE_FLAG-unset}]"
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let read = &report.steps[2].result.as_ref().unwrap()["output"];
+    assert_eq!(read.as_str().unwrap().trim(), "[unset]");
+}
