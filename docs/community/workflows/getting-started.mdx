@@ -27,7 +27,7 @@ my-app/              # a project to run it on
 
 <Steps>
   <Step title="Create the project to migrate">
-    Create `my-app` with two files that use the deprecated checks, and commit them. A run refuses to start on uncommitted changes unless you pass `--allow-dirty`, and a commit lets you see what the codemod changed with `git diff`.
+    Create `my-app` with two files that use the deprecated checks, and commit them. A run asks before it starts on uncommitted changes, and a commit lets you see what the codemod changed with `git diff`.
 
     <CodeGroup>
 
@@ -131,21 +131,21 @@ npx codemod workflow run -w ../util-is-to-native
 ```
 
 ```plaintext
-Run 22b1519c-c2e6-4c72-b76b-fc8094d5828a
+Run 8df7ea21-a840-4e2b-bd5a-618ee23b85ea
 ▸ Replace util.is* calls
 ✓ Replace util.is* calls (0.0s)
 Done
 ```
 
-`git diff` shows the three rewritten calls.
+`git diff` shows the three rewritten calls. In a terminal, a run ends by offering to show its results in your browser; the outputs on this page leave that question out.
 
 A step is durable: when it finishes, its result is saved. If a later step fails, fix it and run `npx codemod workflow resume --id <run-id>`. The steps that already finished are not run again.
 
 ## 2. Return data from the transform
 
-The workflow can't see what the transform did yet. Have the transform return data along with its edit: return `{ edit, data }` instead of a string. Each entry in `data` is a named list of rows, and the CLI adds up the rows from every file.
+The workflow can't see what the transform did yet. Have the transform return data along with its edit: return `{ edit, data }` instead of a string. Here, `data` is the number of calls it replaced in the file.
 
-```ts util-is-to-native/scripts/util-is.ts {9,13,17-20}
+```ts util-is-to-native/scripts/util-is.ts {15-18}
 import type { Codemod } from "codemod/ast-grep";
 import type TS from "codemod/ast-grep/langs/typescript";
 
@@ -154,24 +154,22 @@ const REPLACEMENTS = { isArray: "Array", isBuffer: "Buffer" };
 
 const codemod: Codemod<TS> = async (root) => {
   const edits = [];
-  const replaced = [];
   for (const [api, global] of Object.entries(REPLACEMENTS)) {
     for (const call of root.root().findAll({ rule: { pattern: `util.${api}($ARG)` } })) {
       edits.push(call.replace(`${global}.${api}(${call.getMatch("ARG")!.text()})`));
-      replaced.push({ api });
     }
   }
   if (edits.length === 0) return null;
   return {
     edit: root.root().commitEdits(edits),
-    data: { replaced },
+    data: edits.length,
   };
 };
 
 export default codemod;
 ```
 
-The step's result carries the totals as `data`: one entry per distinct row, with its count.
+The step's result lists what the transform returned as `data`: one `{ file, data }` entry for each file that returned data, sorted by path. Data can be any JSON value: a number, as here, or an object or a list.
 
 ```ts util-is-to-native/workflow.ts {4,6-8}
 import { forEachFile, jssg, step } from "codemod/workflow";
@@ -179,8 +177,8 @@ import { forEachFile, jssg, step } from "codemod/workflow";
 export default async function main() {
   const migrated = await step("Replace util.is* calls", forEachFile({ language: "typescript" }, jssg("./scripts/util-is.ts")));
 
-  for (const row of migrated.data.replaced ?? []) {
-    console.log(`util.${row.cardinality.api}: ${row.count} replaced`);
+  for (const { file, data } of migrated.data) {
+    console.log(`${file}: ${data} replaced`);
   }
 }
 ```
@@ -193,20 +191,15 @@ npx codemod workflow run -w ../util-is-to-native
 ```
 
 ```plaintext
-Run 3d89667c-4daa-4cac-8d54-0a6c9e0d5d0f
+Run da694f32-1c99-42ba-a2ba-9f100066d8d1
 ▸ Replace util.is* calls
 ✓ Replace util.is* calls (0.0s)
-util.isArray: 2 replaced
-util.isBuffer: 1 replaced
+src/check.ts: 2 replaced
+src/format.ts: 1 replaced
 Done
-
-Metrics:
-  replaced:
-    api=isArray: 2
-    api=isBuffer: 1
 ```
 
-The CLI also prints the run's totals under `Metrics` when it finishes.
+On a large project, a `jssg` step can also fold each file's data into one value as files finish, instead of keeping a list. See [Returning data](/community/jssg/metrics#folding-data-as-files-finish).
 
 Workflows have no shared state. A step returns what it found, and the workflow hands that to the steps that need it, as you do in the next sections. See [Values between steps](/community/workflows/reference#values-between-steps).
 
@@ -214,7 +207,7 @@ Workflows have no shared state. A step returns what it found, and the workflow h
 
 Use `shell` for anything a command line already does well. Here, git lists the files the migration changed, and Prettier formats them.
 
-A shell command hands values back by writing `key=value` lines to the file in `$CODEMOD_OUTPUT`. `key@=value` adds a value to a list. The values arrive in the step's result as `values`.
+A shell step's result is what the command printed: `{ stdout, stderr, exitCode }`. Parse what you need from `stdout`, here one file name per line. In a dry run, shell commands don't run and `stdout` is missing, so `?? ""` gives an empty list instead.
 
 ```ts util-is-to-native/workflow.ts {1,10-13}
 import { forEachFile, jssg, shell, step } from "codemod/workflow";
@@ -222,38 +215,42 @@ import { forEachFile, jssg, shell, step } from "codemod/workflow";
 export default async function main() {
   const migrated = await step("Replace util.is* calls", forEachFile({ language: "typescript" }, jssg("./scripts/util-is.ts")));
 
-  for (const row of migrated.data.replaced ?? []) {
-    console.log(`util.${row.cardinality.api}: ${row.count} replaced`);
+  for (const { file, data } of migrated.data) {
+    console.log(`${file}: ${data} replaced`);
   }
 
-  const changed = await step("List changed files", shell(`git diff --name-only | sed 's/^/files@=/' >> "$CODEMOD_OUTPUT"`));
-  const files = (changed.values?.files ?? []) as string[];
+  const changed = await step("List changed files", shell("git diff --name-only"));
+  const files = (changed.stdout ?? "").split("\n").filter(Boolean);
 
   await step("Format changed files", shell`npx prettier --write ${files}`);
 }
 ```
 
-Values are JSON, so TypeScript can't know their shape: `as string[]` says what you expect. The second command is a tagged template. Each `${}` value is quoted for the shell, and an array becomes one argument per item, so file names with spaces stay whole.
+The second command is a tagged template. Each `${}` value is quoted for the shell, and an array becomes one argument per item, so file names with spaces stay whole.
 
-Shell commands run in the directory you start the run from, which is why you run the workflow from inside `my-app`. Give a step `{ cwd }` to run it somewhere else in the project.
+Shell commands run in the directory you start the run from, which is why you run the workflow from inside `my-app`. To run one somewhere else in the project, pass a directory: `shell(command, { cwd })`.
+
+In a terminal, the run asks before each shell command. Answer `y`, or pass `--approve` to allow them all:
 
 ```bash
 git checkout .
-npx codemod workflow run -w ../util-is-to-native
+npx codemod workflow run -w ../util-is-to-native --approve
 ```
 
 ```plaintext
-Run 0b94862b-07c1-4d97-afdf-eb8cccaaaeb3
+Run 831cb26e-e99a-45e6-ac05-0e8f6946239b
 ▸ Replace util.is* calls
 ✓ Replace util.is* calls (0.0s)
-util.isArray: 2 replaced
-util.isBuffer: 1 replaced
+src/check.ts: 2 replaced
+src/format.ts: 1 replaced
 ▸ List changed files
+  src/check.ts
+  src/format.ts
 ✓ List changed files (0.1s)
 ▸ Format changed files
-  src/check.ts 157ms (unchanged)
-  src/format.ts 9ms (unchanged)
-✓ Format changed files (0.9s)
+  src/check.ts 650ms (unchanged)
+  src/format.ts 3ms (unchanged)
+✓ Format changed files (1.1s)
 Done
 ```
 
@@ -261,33 +258,32 @@ Done
 
 A workflow is a TypeScript function, so a decision is an `if` statement. Two decisions make this workflow safer to run on any repository:
 
-- **Stop early** when the transform found nothing to replace, so the run doesn't list or format anything.
+- **Stop early** when no file had anything to replace, so the run doesn't list or format anything.
 - **Ask first** before formatting, since Prettier may also change lines the migration didn't touch. `approval` pauses the run until a person says yes.
 
-```ts util-is-to-native/workflow.ts {1,6-10,16}
+```ts util-is-to-native/workflow.ts {1,6-9,17}
 import { approval, forEachFile, jssg, shell, step } from "codemod/workflow";
 
 export default async function main() {
   const migrated = await step("Replace util.is* calls", forEachFile({ language: "typescript" }, jssg("./scripts/util-is.ts")));
 
-  const replaced = migrated.data.replaced ?? [];
-  if (replaced.length === 0) {
+  if (migrated.data.length === 0) {
     console.log("No util.isArray or util.isBuffer calls found");
     return;
   }
-  for (const row of replaced) {
-    console.log(`util.${row.cardinality.api}: ${row.count} replaced`);
+  for (const { file, data } of migrated.data) {
+    console.log(`${file}: ${data} replaced`);
   }
 
-  const changed = await step("List changed files", shell(`git diff --name-only | sed 's/^/files@=/' >> "$CODEMOD_OUTPUT"`));
-  const files = (changed.values?.files ?? []) as string[];
+  const changed = await step("List changed files", shell("git diff --name-only"));
+  const files = (changed.stdout ?? "").split("\n").filter(Boolean);
 
   await step(approval(`Format ${files.length} changed files with Prettier?`));
   await step("Format changed files", shell`npx prettier --write ${files}`);
 }
 ```
 
-In a terminal, the run asks you directly. With `--no-interactive`, as in CI, it pauses at the approval and exits:
+In a terminal, the run asks you directly. With `--no-interactive`, as in CI, it runs the shell commands without asking, then pauses at the approval and exits:
 
 ```bash
 git checkout .
@@ -295,38 +291,40 @@ npx codemod workflow run -w ../util-is-to-native --no-interactive
 ```
 
 ```plaintext
-Run ec72f60f-8a43-42fd-9880-96d62c6b4075
+Run fb2aa2df-b7c1-40a9-81e0-787de5277b24
 ▸ Replace util.is* calls
 ✓ Replace util.is* calls (0.0s)
-util.isArray: 2 replaced
-util.isBuffer: 1 replaced
+src/check.ts: 2 replaced
+src/format.ts: 1 replaced
 ▸ List changed files
+  src/check.ts
+  src/format.ts
 ✓ List changed files (0.1s)
 ▸ approval: Format 2 changed files with Prettier?
 ‖ approval: Format 2 changed files with Prettier?: waiting for approval
 
 Waiting for approval: Format 2 changed files with Prettier?
-  Resume with: codemod workflow resume --id ec72f60f-8a43-42fd-9880-96d62c6b4075 --approve
+  Resume with: codemod workflow resume --id fb2aa2df-b7c1-40a9-81e0-787de5277b24 --approve
 ```
 
 Approve and continue. The finished steps are replayed from their saved results, marked `↺`, and not run again. The code between steps runs again, so its `console.log` lines print again:
 
 ```bash
-npx codemod workflow resume --id ec72f60f-8a43-42fd-9880-96d62c6b4075 --approve
+npx codemod workflow resume --id fb2aa2df-b7c1-40a9-81e0-787de5277b24 --approve
 ```
 
 ```plaintext
-Resuming run ec72f60f-8a43-42fd-9880-96d62c6b4075
+Resuming run fb2aa2df-b7c1-40a9-81e0-787de5277b24
 ↺ Replace util.is* calls (done earlier)
-util.isArray: 2 replaced
-util.isBuffer: 1 replaced
+src/check.ts: 2 replaced
+src/format.ts: 1 replaced
 ↺ List changed files (done earlier)
 ▸ approval: Format 2 changed files with Prettier?
 ✓ approval: Format 2 changed files with Prettier? (0.0s)
 ▸ Format changed files
-  src/check.ts 63ms (unchanged)
-  src/format.ts 5ms (unchanged)
-✓ Format changed files (0.5s)
+  src/check.ts 33ms (unchanged)
+  src/format.ts 3ms (unchanged)
+✓ Format changed files (0.3s)
 Done
 ```
 
@@ -338,7 +336,7 @@ npx codemod workflow run -w ../util-is-to-native
 ```
 
 ```plaintext
-Run 50868dd3-49cc-4c08-8198-42641fbdda79
+Run 2c97036e-6d86-4618-9e39-2112c0fa9b6b
 ▸ Replace util.is* calls
 ✓ Replace util.is* calls (0.0s)
 No util.isArray or util.isBuffer calls found
@@ -351,7 +349,7 @@ Not every change needs its own transform file. `forEachFile` also takes an inlin
 
 After the migration, `check.ts` and `format.ts` still import `node:util` but no longer use it. This step removes the import from every file where that's true:
 
-```ts util-is-to-native/workflow.ts {3,6,17-22}
+```ts util-is-to-native/workflow.ts {3,6,16-21}
 import { approval, forEachFile, jssg, shell, step } from "codemod/workflow";
 
 const SOURCES = { language: "typescript" } as const;
@@ -359,13 +357,12 @@ const SOURCES = { language: "typescript" } as const;
 export default async function main() {
   const migrated = await step("Replace util.is* calls", forEachFile(SOURCES, jssg("./scripts/util-is.ts")));
 
-  const replaced = migrated.data.replaced ?? [];
-  if (replaced.length === 0) {
+  if (migrated.data.length === 0) {
     console.log("No util.isArray or util.isBuffer calls found");
     return;
   }
-  for (const row of replaced) {
-    console.log(`util.${row.cardinality.api}: ${row.count} replaced`);
+  for (const { file, data } of migrated.data) {
+    console.log(`${file}: ${data} replaced`);
   }
 
   const cleaned = await step("Remove unused util imports", forEachFile({ ...SOURCES, containing: "node:util" }, (file) => {
@@ -375,8 +372,8 @@ export default async function main() {
   }));
   console.log(`Removed the util import from ${cleaned.outputs.length} files`);
 
-  const changed = await step("List changed files", shell(`git diff --name-only | sed 's/^/files@=/' >> "$CODEMOD_OUTPUT"`));
-  const files = (changed.values?.files ?? []) as string[];
+  const changed = await step("List changed files", shell("git diff --name-only"));
+  const files = (changed.stdout ?? "").split("\n").filter(Boolean);
 
   await step(approval(`Format ${files.length} changed files with Prettier?`));
   await step("Format changed files", shell`npx prettier --write ${files}`);
@@ -386,30 +383,34 @@ export default async function main() {
 - `containing` skips files whose text doesn't include `node:util`, before the callback runs.
 - `file.write` records the new text. When every file is done, the step checks for conflicts and writes all the changes together.
 - What the callback returns is collected in `result.outputs`, here the paths it cleaned.
-- The callback runs in its own isolate. It can read outside constants such as `SOURCES`, as frozen copies, but it can't assign to outside variables: return a value instead.
+- The callback runs in its own isolate. It can read the workflow's variables, which are copied in when the step starts, but it can't assign to them: return a value instead.
+
+Undo the commit from the last section, so there is something to migrate again, and run the workflow:
 
 ```bash
-git checkout .
+git reset --hard HEAD~1
 npx codemod workflow run -w ../util-is-to-native --approve
 ```
 
 ```plaintext
-Run 8aae5052-7d33-4b68-b0c9-b9d478bcc0ac
+Run bf2dd8a3-acef-41ea-b48b-23dc8a71af53
 ▸ Replace util.is* calls
 ✓ Replace util.is* calls (0.0s)
-util.isArray: 2 replaced
-util.isBuffer: 1 replaced
+src/check.ts: 2 replaced
+src/format.ts: 1 replaced
 ▸ Remove unused util imports
 ✓ Remove unused util imports (0.0s)
 Removed the util import from 2 files
 ▸ List changed files
+  src/check.ts
+  src/format.ts
 ✓ List changed files (0.1s)
 ▸ approval: Format 2 changed files with Prettier?
 ✓ approval: Format 2 changed files with Prettier? (0.0s)
 ▸ Format changed files
-  src/check.ts 50ms (unchanged)
-  src/format.ts 5ms (unchanged)
-✓ Format changed files (0.5s)
+  src/check.ts 36ms (unchanged)
+  src/format.ts 4ms (unchanged)
+✓ Format changed files (0.4s)
 Done
 ```
 
@@ -443,7 +444,7 @@ A workflow that:
 
 - runs a JSSG transform across a project and reads what it found from `result.data`;
 - stops when there's nothing to do, and asks before an optional step;
-- hands a shell command's output to the next step through `result.values`;
+- hands a shell command's output to the next step through `result.stdout`;
 - edits files with an inline `forEachFile` callback and collects its results.
 
 Every step's result is saved, so a run that fails or pauses picks up where it stopped.
