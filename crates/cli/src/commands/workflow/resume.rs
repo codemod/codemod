@@ -5,7 +5,7 @@ use crate::commands::run_telemetry::{nested_codemod_run_observer, persisted_work
 use crate::engine::create_engine;
 use crate::utils::path_safety::normalize_target_path;
 use crate::utils::resolve_capabilities::{resolve_capabilities, ResolveCapabilitiesArgs};
-use crate::workflow_runner::resolve_workflow_source;
+use crate::workflow_runner::{resolve_workflow_source, wait_for_run_progress};
 use crate::TelemetrySenderMutex;
 use anyhow::{Context, Result};
 use butterflow_models::{Task, TaskStatus, WorkflowStatus};
@@ -197,6 +197,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         return Ok(());
     }
 
+    // Wake as soon as the executor started above exits instead of waiting
+    // out the poll interval.
+    let mut completion = engine.completion_signal(args.id);
+
     loop {
         let status = engine
             .get_workflow_status(args.id)
@@ -247,7 +251,7 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             }
             _ => {
                 // Wait a bit before checking again
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                wait_for_run_progress(completion.as_mut(), std::time::Duration::from_secs(1)).await;
             }
         }
     }
@@ -271,6 +275,8 @@ async fn wait_for_triggered_tasks(
         return Ok(());
     }
 
+    let mut completion = engine.completion_signal(workflow_run_id);
+
     loop {
         let tasks = engine
             .get_tasks(workflow_run_id)
@@ -293,7 +299,7 @@ async fn wait_for_triggered_tasks(
             break;
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        wait_for_run_progress(completion.as_mut(), std::time::Duration::from_secs(1)).await;
     }
 
     Ok(())
