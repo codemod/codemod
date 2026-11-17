@@ -17,6 +17,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use toml_edit::{value, Array, DocumentMut, Item, Table};
 
+mod doctor;
+mod uninstall;
+
+pub use doctor::{doctor, CheckStatus, DoctorOptions, DoctorReport, DEFAULT_MCP_PROBE_TIMEOUT};
+pub use uninstall::{installed_harnesses, plan_uninstall, KeptItem, RemovedItem, UninstallPlan};
+
 const MCS_SKILL_COMPONENT_ID: &str = "codemod";
 const MCS_SKILL_DIR_NAME: &str = "codemod";
 const MCS_SKILL_VERSION: &str = "1.2.7";
@@ -777,7 +783,11 @@ pub fn install_next_steps(harness: Harness, scope: InstallScope) -> Vec<String> 
             harness.display_name()
         )
     };
-    vec![restart, try_it]
+    let doctor = format!(
+        "Something not working? Run `{}`.",
+        doctor::setup_command(harness, scope, "doctor")
+    );
+    vec![restart, try_it, doctor]
 }
 
 pub(crate) fn upsert_skill_discovery_guides_with_command_status(
@@ -4655,7 +4665,7 @@ mod tests {
             .integration_path
     }
 
-    fn runtime_paths_with_temp_roots() -> (RuntimePaths, tempfile::TempDir) {
+    pub(super) fn runtime_paths_with_temp_roots() -> (RuntimePaths, tempfile::TempDir) {
         let temp_dir = tempdir().unwrap();
         let bin_dir = temp_dir.path().join("bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
@@ -4709,7 +4719,28 @@ mod tests {
         ]
     }
 
-    fn write_fake_executable(path: &Path, script: &str) {
+    /// Everything `codemod ai` writes for a harness: skill, MCP entry, `/codemod`
+    /// command, discovery hints, update hook and install record.
+    pub(super) fn full_install(
+        harness: Harness,
+        scope: InstallScope,
+        runtime_paths: &RuntimePaths,
+    ) {
+        let request = InstallRequest { scope, force: true };
+        install_mcs_skill_bundle_with_runtime(harness, &request, runtime_paths).unwrap();
+        upsert_mcs_command_entrypoints_with_runtime(harness, scope, true, runtime_paths).unwrap();
+        upsert_skill_discovery_guides_with_runtime(harness, scope, runtime_paths).unwrap();
+        upsert_periodic_update_trigger_with_runtime(
+            harness,
+            scope,
+            PeriodicUpdatePolicy::Manual,
+            runtime_paths,
+        )
+        .unwrap();
+        persist_managed_install_state_with_runtime(harness, scope, &[], runtime_paths).unwrap();
+    }
+
+    pub(super) fn write_fake_executable(path: &Path, script: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, script).unwrap();
         #[cfg(unix)]
