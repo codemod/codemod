@@ -21,6 +21,7 @@ pub(crate) mod python;
 mod yarn;
 
 pub use cargo::{parse as cargo, Manifests as CargoManifests};
+pub(crate) use go::retractions;
 pub use go::{go_mod, go_work};
 pub use npm::parse as package_lock;
 pub use pnpm::parse as pnpm;

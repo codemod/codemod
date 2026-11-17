@@ -91,7 +91,7 @@ function flush(): void {
   }
 }
 
-/** Package releases from npm, crates.io and PyPI, oldest first. */
+/** Package releases from npm, crates.io, PyPI and the Go module proxy, oldest first. */
 export const registry = Object.freeze({
   npm: (name: string) => lookup("npm", name),
   cargo: (name: string) => lookup("cargo", name),
@@ -257,6 +257,9 @@ export function __graph() {
         throw new TypeError(
           "accepting cannot filter PyPI releases: PyPI lists no dependencies per release",
         );
+      }
+      if (accepting && this.ecosystem === "go") {
+        throw new TypeError("accepting cannot filter Go releases: they carry no dependencies");
       }
       const found = await registry[this.ecosystem](this.name);
       return found.versions

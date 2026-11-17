@@ -180,6 +180,8 @@ struct Directives {
     requires: Vec<(String, String)>,
     replaces: Vec<Replace>,
     uses: Vec<String>,
+    /// Inclusive (low, high) version intervals.
+    retracts: Vec<(String, String)>,
 }
 
 impl Directives {
@@ -208,6 +210,7 @@ impl Directives {
                 }
                 ("use", [dir, ..]) => out.uses.push(dir.clone()),
                 ("replace", args) => out.replaces.extend(replace(args)),
+                ("retract", args) => out.retracts.extend(retract(args)),
                 _ => {}
             }
         }
@@ -228,6 +231,23 @@ fn replace(args: &[String]) -> Option<Replace> {
             [] => return None,
         },
     })
+}
+
+/// `v1.0.0` or `[v1.0.0, v1.0.5]`.
+fn retract(args: &[String]) -> Option<(String, String)> {
+    let text = args.concat();
+    match text.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
+        Some(interval) => {
+            let (low, high) = interval.split_once(',')?;
+            Some((low.to_string(), high.to_string()))
+        }
+        None => Some((text.clone(), text)),
+    }
+}
+
+/// The versions a module's go.mod retracts, as inclusive intervals.
+pub(crate) fn retractions(go_mod: &str) -> Vec<(String, String)> {
+    Directives::parse(go_mod).retracts
 }
 
 /// A line's tokens: words and quoted strings, up to a `//` comment.

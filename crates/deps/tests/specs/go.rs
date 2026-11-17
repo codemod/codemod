@@ -173,3 +173,29 @@ fn only_a_major_change_breaks_a_go_module() {
         [false, true]
     );
 }
+
+#[test]
+fn a_go_release_the_latest_go_mod_retracts_is_yanked() {
+    use codemod_deps::registry::go_releases;
+    let list = "v1.14.53\nv2.0.0+incompatible\nv2.0.3+incompatible\n";
+    let latest = "module github.com/mattn/go-sqlite3\n\nretract (\n\t[v2.0.0+incompatible, v2.0.7+incompatible] // Accidental\n)\n";
+    let yanked: Vec<_> = go_releases(list, Some(latest))
+        .unwrap()
+        .into_iter()
+        .map(|release| (release.version, release.yanked))
+        .collect();
+    assert_eq!(
+        yanked,
+        [
+            ("v1.14.53".to_string(), false),
+            ("v2.0.0+incompatible".to_string(), true),
+            ("v2.0.3+incompatible".to_string(), true)
+        ]
+    );
+}
+
+#[test]
+fn a_go_version_list_with_a_line_that_is_not_a_version_cannot_be_read() {
+    use codemod_deps::registry::go_releases;
+    assert!(go_releases("not found: module example.com/x", None).is_err());
+}

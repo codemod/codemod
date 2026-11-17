@@ -8,11 +8,12 @@ import { __dependencyGraph } from "codemod/workflow";
 
 export const dependencyGraph = __dependencyGraph;
 
-/** Package releases from npm, crates.io and PyPI; only inside a step or callback, so the answer is recorded. */
+/** Package releases from npm, crates.io, PyPI and the Go module proxy; only inside a step or callback, so the answer is recorded. */
 export const registry = Object.freeze({
   npm: () => outsideStep("npm"),
   cargo: () => outsideStep("cargo"),
   pypi: () => outsideStep("pypi"),
+  go: () => outsideStep("go"),
 });
 
 function outsideStep(ecosystem: string): Promise<never> {

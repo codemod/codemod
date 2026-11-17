@@ -34,8 +34,8 @@ pub trait Registry: Send + Sync {
     ) -> Result<BTreeMap<String, Vec<Release>>, String>;
 }
 
-/// npm (abbreviated packuments), crates.io (sparse index) and PyPI (JSON
-/// API) over HTTPS,
+/// npm (abbreviated packuments), crates.io (sparse index), PyPI (JSON
+/// API) and the Go module proxy over HTTPS,
 /// kept for the life of the value. Concurrent asks for the same package
 /// share one request, and at most [`CONCURRENT_REQUESTS`] run at once across
 /// every ask, however many steps and workers ask together.
@@ -130,7 +130,8 @@ impl Registry for HttpRegistry {
 }
 
 /// A package's releases as a workflow sees them: oldest first, with
-/// dependencies grouped by kind where the registry lists them (PyPI does not).
+/// dependencies grouped by kind where the registry lists them (PyPI and the
+/// Go module proxy do not).
 pub fn describe(ecosystem: Ecosystem, name: &str, releases: &[Release]) -> serde_json::Value {
     let mut sorted: Vec<&Release> = releases.iter().collect();
     sorted.sort_by(|a, b| compare(ecosystem, &a.version, &b.version));
@@ -138,7 +139,7 @@ pub fn describe(ecosystem: Ecosystem, name: &str, releases: &[Release]) -> serde
         .into_iter()
         .map(|release| {
             let mut groups = serde_json::Map::new();
-            let listed = !matches!(ecosystem, Ecosystem::Pypi);
+            let listed = !matches!(ecosystem, Ecosystem::Pypi | Ecosystem::Go);
             for (field, kind) in [
                 ("dependencies", Kind::Prod),
                 ("peerDependencies", Kind::Peer),
@@ -180,9 +181,6 @@ async fn fetch_all(
     names: &[String],
     requests: &tokio::sync::Semaphore,
 ) -> Result<Vec<(String, Vec<Release>)>, String> {
-    if ecosystem == Ecosystem::Go {
-        return Err("Go release lookups are not supported yet".into());
-    }
     let client = reqwest::Client::builder()
         .user_agent("codemod-workflow")
         .timeout(std::time::Duration::from_secs(30))
@@ -204,7 +202,10 @@ async fn fetch_all(
                     format!("https://pypi.org/pypi/{name}/json"),
                     "application/json",
                 ),
-                Ecosystem::Go => unreachable!("rejected above"),
+                Ecosystem::Go => (
+                    format!("{GO_PROXY}/{}/@v/list", go_escape(name)),
+                    "text/plain",
+                ),
             };
             let _permit = requests.acquire().await.map_err(|e| e.to_string())?;
             let response = client
@@ -228,7 +229,10 @@ async fn fetch_all(
                 Ecosystem::Npm => npm_releases(&text),
                 Ecosystem::Cargo => crate_releases(&text),
                 Ecosystem::Pypi => pypi_releases(&text),
-                Ecosystem::Go => unreachable!("rejected above"),
+                Ecosystem::Go => {
+                    let latest = go_latest_mod(client, name, &text).await?;
+                    go_releases(&text, latest.as_deref())
+                }
             }
             .map_err(|e| format!("{url}: {e}"))?;
             Ok((name.clone(), releases))
@@ -339,4 +343,88 @@ pub fn pypi_releases(document: &str) -> Result<Vec<Release>, String> {
             })
         })
         .collect())
+}
+
+const GO_PROXY: &str = "https://proxy.golang.org";
+
+/// A module path or version as the Go module proxy spells it: each
+/// uppercase letter becomes `!` and the letter in lowercase.
+fn go_escape(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        if c.is_ascii_uppercase() {
+            out.push('!');
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The go.mod of the module's latest version, where Go reads retractions:
+/// the highest release, preferring one without `+incompatible`, else the
+/// highest prerelease. None when the module has no tagged version.
+async fn go_latest_mod(
+    client: &reqwest::Client,
+    name: &str,
+    list: &str,
+) -> Result<Option<String>, String> {
+    let mut versions: Vec<&str> = list.split_whitespace().collect();
+    versions.sort_by(|a, b| compare(Ecosystem::Go, a, b));
+    let latest = versions
+        .iter()
+        .rev()
+        .find(|v| !is_prerelease(Ecosystem::Go, v) && !v.ends_with("+incompatible"))
+        .or_else(|| {
+            versions
+                .iter()
+                .rev()
+                .find(|v| !is_prerelease(Ecosystem::Go, v))
+        })
+        .or(versions.last());
+    let Some(latest) = latest else {
+        return Ok(None);
+    };
+    let url = format!(
+        "{GO_PROXY}/{}/@v/{}.mod",
+        go_escape(name),
+        go_escape(latest)
+    );
+    let text = client
+        .get(&url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|e| format!("{url}: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("{url}: {e}"))?;
+    Ok(Some(text))
+}
+
+/// Releases from the Go module proxy's version list (one tagged version per
+/// line), each yanked when the latest version's go.mod retracts it. A line
+/// that is not a Go version is an error. Releases carry no dependencies:
+/// the proxy keeps each version's go.mod apart.
+pub fn go_releases(list: &str, latest_go_mod: Option<&str>) -> Result<Vec<Release>, String> {
+    let retracted = latest_go_mod
+        .map(crate::lockfiles::retractions)
+        .unwrap_or_default();
+    list.split_whitespace()
+        .map(|version| {
+            // Only a readable version satisfies itself.
+            if crate::semver::satisfies(Ecosystem::Go, version, version).is_none() {
+                return Err(format!("not a version list: {version}"));
+            }
+            Ok(Release {
+                version: version.to_string(),
+                yanked: retracted.iter().any(|(low, high)| {
+                    compare(Ecosystem::Go, version, low).is_ge()
+                        && compare(Ecosystem::Go, version, high).is_le()
+                }),
+                dependencies: Vec::new(),
+            })
+        })
+        .collect()
 }

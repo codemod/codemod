@@ -28,7 +28,7 @@ declare module "codemod:deps" {
      * PyPI releases have no dependency groups.
      */
     releases(options?: {
-      /** `{ react: "19.0.0" }` keeps releases whose ranges on react accept 19.0.0. Not for pypi packages. */
+      /** `{ react: "19.0.0" }` keeps releases whose ranges on react accept 19.0.0. Not for pypi or go packages. */
       accepting?: Record<string, string>;
       newerThanMine?: boolean;
       prereleases?: boolean;
@@ -146,7 +146,7 @@ declare module "codemod:deps" {
   }
 
   /**
-   * Release metadata from npm, crates.io and PyPI. Usable inside a function step or
+   * Release metadata from npm, crates.io, PyPI and the Go module proxy. Usable inside a function step or
    * a `forEachFile` / `dependencyGraph` callback, so the answer is recorded
    * with the step; in the workflow body it rejects. Lookups are cached for the
    * run and asked once per package.
@@ -156,6 +156,8 @@ declare module "codemod:deps" {
     cargo(name: string): Promise<PackageReleases>;
     /** Versions are normalized (`2.0.0.RC1` is `2.0.0rc1`), as lockfiles write them. */
     pypi(name: string): Promise<PackageReleases<ReleaseVersion>>;
+    /** Tagged versions, yanked when the latest go.mod retracts them. */
+    go(modulePath: string): Promise<PackageReleases<ReleaseVersion>>;
   };
 
   type EcosystemOption = { ecosystem?: Ecosystem };
