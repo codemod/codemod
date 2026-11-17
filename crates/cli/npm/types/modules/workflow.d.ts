@@ -401,11 +401,11 @@ declare module "codemod:workflow" {
    * ));
    * ```
    */
-  export function forEachFile(transform: Transform<JssgResult>): Task<JssgResult>;
-  export function forEachFile(
+  export function forEachFile<Data>(transform: Transform<JssgResult<Data>>): Task<JssgResult<Data>>;
+  export function forEachFile<Data>(
     selector: JssgSelector,
-    transform: Transform<JssgResult>,
-  ): Task<JssgResult>;
+    transform: Transform<JssgResult<Data>>,
+  ): Task<JssgResult<Data>>;
   export function forEachFile(transform: Transform<AstGrepResult>): Task<AstGrepResult>;
   export function forEachFile(
     selector: AstGrepSelector,
@@ -658,21 +658,31 @@ declare module "codemod:workflow" {
     dryRun?: boolean;
   }
 
-  export interface JssgResult {
+  /** One file's `data`, as the transform returned it. */
+  export interface JssgData {
+    file: string;
+    data: JsonValue;
+  }
+
+  export interface JssgResult<Data = readonly JssgData[]> {
     changes: FileChanges;
     unmodified: number;
     failures: FileFailure[];
     /**
-     * The `data` the transform returned for each file, added up: every row
-     * counts once for its name and labels.
+     * Each file's `data`, sorted by path, leaving out files that returned
+     * none; or, with a reducer, what it folded them into.
      */
-    data: { readonly [name: string]: readonly DataCount[] };
+    data: Data;
   }
 
-  /** How many rows a transform returned under one name with these labels. */
-  export interface DataCount {
-    cardinality: { readonly [label: string]: string };
-    count: number;
+  /**
+   * Folds each file's `data` into one value as the file finishes, so the
+   * step never holds every file's data at once. Files arrive in no
+   * particular order. Write `reduce` inline so the build can extract it.
+   */
+  export interface JssgReducer<T> {
+    reduce: (result: T, entry: JssgData) => T | Promise<T>;
+    initial: T;
   }
 
   /**
@@ -680,6 +690,12 @@ declare module "codemod:workflow" {
    * with `forEachFile(selector, jssg(path))`, which says which files it is
    * for. As a step on its own it runs on the files its options select.
    */
+  // `T` is unconstrained so `initial: 0` gives `number`, not `0`; the
+  // result is checked to be JSON when the step runs.
+  export function jssg<T>(
+    path: string,
+    options: JssgOptions & JssgReducer<T>,
+  ): Transform<JssgResult<T>>;
   export function jssg(path: string, options?: JssgOptions): Transform<JssgResult>;
 
   export interface AstGrepOptions {

@@ -36,7 +36,7 @@ export interface OpenOptions {
 /** An event as the engine reports it (`Event` in crates/workflow/src/events.rs). */
 export type EngineEvent = { readonly event: string } & Record<string, unknown>;
 
-/** What `Run.finish` returns: `RunReport::to_json`, with metrics and stats. */
+/** What `Run.finish` returns: `RunReport::to_json`, with stats. */
 export interface NativeReport {
   runId: string;
   status: "succeeded" | "failed" | "canceled" | "awaiting-approval" | "stopped";
@@ -52,7 +52,6 @@ export interface NativeReport {
     error: string | null;
     given: boolean;
   }[];
-  metrics: Record<string, unknown>;
   stats: { filesModified: number; filesUnmodified: number; filesWithErrors: number };
 }
 

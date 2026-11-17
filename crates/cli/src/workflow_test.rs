@@ -10,7 +10,6 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use butterflow_core::registry::RegistryClient;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use codemod_sandbox::MetricsData;
 use codemod_workflow::events::{CollectEvents, Event};
 use codemod_workflow::interaction::NonInteractive;
 use codemod_workflow::{
@@ -34,7 +33,6 @@ pub struct CaseRequest {
 pub struct CaseRun {
     pub report: RunReport,
     pub logs: Vec<LogLine>,
-    pub metrics: MetricsData,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -86,7 +84,6 @@ fn run_case_blocking(request: CaseRequest) -> Result<CaseRun> {
     Ok(CaseRun {
         report,
         logs: logs(events.take()),
-        metrics: summary.metrics(),
     })
 }
 
@@ -111,11 +108,10 @@ fn logs(events: Vec<Event>) -> Vec<LogLine> {
 
 impl CaseRun {
     /// The result the `codemod/testing` helpers read: the run's report, plus
-    /// what the run logged and measured.
+    /// what the run logged.
     pub fn to_json(&self) -> Value {
         let mut report = self.report.to_json();
         report["logs"] = json!(self.logs);
-        report["metrics"] = json!(self.metrics);
         report
     }
 }

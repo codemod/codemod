@@ -263,7 +263,6 @@ impl Run {
         let count = |counter: &std::sync::atomic::AtomicUsize| {
             counter.load(std::sync::atomic::Ordering::Relaxed)
         };
-        report["metrics"] = json!(self.inner.summary.metrics());
         report["stats"] = json!({
             "filesModified": count(&stats.files_modified),
             "filesUnmodified": count(&stats.files_unmodified),

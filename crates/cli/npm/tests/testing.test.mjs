@@ -311,6 +311,43 @@ export default async function main() {
     );
   });
 
+  test(
+    `${host}: a jssg step's data is a sorted list, or what its reducer folds`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          "transform.ts": `
+export default function transform(root: any) {
+  return { data: root.root().text().length };
+}
+`,
+          "workflow.ts": `
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  const listed = await step("List", jssg("./transform.ts"));
+  const summed = await step("Sum", jssg("./transform.ts", {
+    reduce: (total, { data }) => total + data,
+    initial: 0,
+  }));
+  return { listed: listed.data, summed: summed.data };
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, { target: { "b.ts": "bb\n", "a.ts": "a\n" } });
+      assert.equal(result.status, "succeeded", result.error);
+      assert.deepEqual(result.output, {
+        listed: [
+          { file: "a.ts", data: 2 },
+          { file: "b.ts", data: 3 },
+        ],
+        summed: 5,
+      });
+    },
+  );
+
   test(`${host}: a failing until step fails the run`, HOSTS[host], async () => {
     const path = join(
       scratch({

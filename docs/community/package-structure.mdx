@@ -64,7 +64,7 @@ npx codemod init
 <Info>
 The `src/scripts/` and `src/rules/` folders are conventional, not required. Paths in the workflow are relative to the workflow file, and `import.meta.dirname` is its directory, so keep the files it uses next to it. A `workflow.ts` at the package root also works.
 
-Detection-only **mining** packages still use this layout. The JSSG step returns `{ edit: null, data }` ([returning data](/community/jssg/metrics)) and proves behavior with `metrics.json` fixtures next to `input`/`expected`. Insights discovers data names from each selected step’s `js-ast-grep` script in the published package (not from a separate package-entry file).
+Detection-only **mining** packages still use this layout. The JSSG step returns `{ edit: null, data }` ([returning data](/community/jssg/metrics)) and proves behavior with `data.json` fixtures next to `input`/`expected`. Insights discovers data names from each selected step’s `js-ast-grep` script in the published package (not from a separate package-entry file).
 </Info>
 
 ## Package Behavior

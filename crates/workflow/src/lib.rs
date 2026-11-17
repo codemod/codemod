@@ -17,7 +17,6 @@ use butterflow_core::execution_stats::ExecutionStats;
 use butterflow_core::nested_codemod_run::NestedCodemodRunObserver;
 use butterflow_core::registry::RegistryClient;
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
-use codemod_sandbox::MetricsData;
 
 pub mod build;
 pub mod compat;
@@ -66,7 +65,7 @@ pub struct Services {
     pub package_registry: Option<Arc<dyn codemod_deps::Registry>>,
     /// Told when a `codemod(...)` step runs a registry package.
     pub nested_observer: Option<Arc<dyn NestedCodemodRunObserver>>,
-    /// Diffs, counters and metrics collected while the run progresses.
+    /// Diffs and counters collected while the run progresses.
     pub summary: Arc<Summary>,
 }
 
@@ -74,20 +73,12 @@ pub struct Services {
 #[derive(Default)]
 pub struct Summary {
     diffs: Mutex<Vec<FileDiff>>,
-    metrics: Mutex<MetricsData>,
     pub stats: ExecutionStats,
 }
 
 impl Summary {
     pub fn diffs(&self) -> Vec<FileDiff> {
         self.diffs.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-
-    pub fn metrics(&self) -> MetricsData {
-        self.metrics
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
     }
 
     pub(crate) fn add_diff(&self, diff: FileDiff) {
@@ -113,12 +104,5 @@ impl Summary {
         self.stats
             .files_with_errors
             .fetch_add(count, Ordering::Relaxed);
-    }
-
-    pub(crate) fn merge_metrics(&self, metrics: MetricsData) {
-        let mut all = self.metrics.lock().unwrap_or_else(|e| e.into_inner());
-        for (name, entries) in metrics {
-            all.entry(name).or_default().extend(entries);
-        }
     }
 }

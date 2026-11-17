@@ -155,7 +155,17 @@ export default async function main({
 
   // A transform is run on the files `forEachFile` selects.
   const migrated = await step(forEachFile(jssg("./scripts/codemod.ts")));
-  expectType<Equal<(typeof migrated.data)[string][number]["count"], number>>(true);
+  expectType<Equal<(typeof migrated.data)[number]["file"], string>>(true);
+  // A reducer's result is the step's data.
+  const counted = await step(
+    jssg("./scripts/codemod.ts", {
+      reduce: (total, { data }) => total + (typeof data === "number" ? data : 0),
+      initial: 0,
+    }),
+  );
+  expectType<Equal<typeof counted.data, number>>(true);
+  // @ts-expect-error a reducer needs an initial value
+  jssg("./scripts/codemod.ts", { reduce: (total: number) => total });
   expectType<Equal<typeof migrated.unmodified, number>>(true);
   await step(
     forEachFile(

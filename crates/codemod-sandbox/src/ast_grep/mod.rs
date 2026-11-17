@@ -440,7 +440,8 @@ fn jssg_transform_rjs<'js>(
             .await
             .map_err(|e| Exception::throw_message(&ctx2, &format!("Transform failed: {e}")))?;
 
-        let exec_result = process_transform_result(
+        // A nested transform's `data` has no step result to go to.
+        let (exec_result, _data) = process_transform_result(
             &result,
             &sg_root_inner,
             ModificationCheck::StringEquality {

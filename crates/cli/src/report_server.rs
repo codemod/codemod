@@ -699,11 +699,6 @@ fn select_feedback_agent(
 }
 
 fn build_feedback_prompt(report: &ExecutionReport) -> String {
-    let total_metric_entries = report
-        .metrics
-        .values()
-        .map(std::vec::Vec::len)
-        .sum::<usize>();
     let largest_files = report
         .diffs
         .iter()
@@ -719,7 +714,6 @@ fn build_feedback_prompt(report: &ExecutionReport) -> String {
             })
         })
         .collect::<Vec<_>>();
-    let metric_names = report.metrics.keys().take(20).collect::<Vec<_>>();
     let summary = serde_json::json!({
         "codemodName": &report.codemod_name,
         "codemodVersion": &report.codemod_version,
@@ -727,8 +721,6 @@ fn build_feedback_prompt(report: &ExecutionReport) -> String {
         "dryRun": report.dry_run,
         "targetPath": &report.target_path,
         "stats": &report.stats,
-        "metricNames": metric_names,
-        "metricEntryCount": total_metric_entries,
         "changedFileCount": report.diffs.len(),
         "changedFileShapeSample": largest_files,
         "stepCount": report.diff_groups.len(),

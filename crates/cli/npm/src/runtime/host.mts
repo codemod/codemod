@@ -142,7 +142,6 @@ export interface HostRunReport {
   /** The `until` step the run stopped after. */
   readonly stoppedAt: string | null;
   readonly steps: readonly HostStepReport[];
-  readonly metrics: Record<string, unknown>;
   readonly stats: {
     readonly filesModified: number;
     readonly filesUnmodified: number;
@@ -395,17 +394,45 @@ function host(run: NativeRun, flight: Flight, runtime: () => Runtime): Host {
       const { fn, ...task } = request;
       flight.begin();
       try {
-        if (fn) return await within(task.timeoutMs, (limit) => runInPlace(run, task, fn, limit));
-        try {
-          return await run.runTask(JSON.stringify(task));
-        } catch (error) {
-          throw payloadOf(error);
+        if (fn && task.task.kind === "jssg") {
+          return await within(task.timeoutMs, () => reduceInPlace(run, task, fn));
         }
+        if (fn) return await within(task.timeoutMs, (limit) => runInPlace(run, task, fn, limit));
+        return await runNative(run, task);
       } finally {
         flight.end();
       }
     },
   };
+}
+
+async function runNative(run: NativeRun, task: InPlaceTask): Promise<Outcome> {
+  try {
+    return await run.runTask(JSON.stringify(task));
+  } catch (error) {
+    throw payloadOf(error);
+  }
+}
+
+/**
+ * `jssg(path, { reduce, initial })`: the transform runs natively and returns
+ * every file's data, which is then folded here. Unlike the CLI, which folds
+ * each file's data as it arrives, this holds all of it until the step ends.
+ */
+async function reduceInPlace(run: NativeRun, task: InPlaceTask, fn: Callback): Promise<Outcome> {
+  const { reduce, ...content } = task.task;
+  const outcome = await runNative(run, { ...task, task: content });
+  const result = outcome.result as { data: { file: string; data: Json }[] };
+  const outer = context.getStore();
+  if (!outer) throw new Error("a step started outside its run");
+  const step = stepScope(task.position, task.label);
+  let folded = (reduce as { initial: Json }).initial;
+  for (const entry of result.data) {
+    folded = (await context.run({ ...outer, step }, () => fn(folded, entry))) as Json;
+  }
+  if (folded === undefined) folded = null;
+  checkJson(folded, "the reducer's result");
+  return { ...outcome, result: { ...result, data: folded } };
 }
 
 /** A host task rejected with `{ name, message }` as JSON in the message. */

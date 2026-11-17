@@ -7,7 +7,6 @@ use super::transform_helpers::{
 };
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
-use crate::metrics::MetricsContext;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver};
 use crate::sandbox::runtime_module::RuntimeHooksContext;
@@ -95,8 +94,6 @@ pub struct InMemoryExecutionOptions<'a, R> {
     pub target_directory: &'a str,
     /// Optional semantic provider for symbol indexing (go-to-definition, find-references)
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
-    /// Optional metrics context for tracking metrics across execution
-    pub metrics_context: Option<MetricsContext>,
     /// Optional engine-owned LLM request handler exposed through codemod:llm
     pub llm_request_handler: Option<LlmRequestHandler>,
     /// Optional cooperative cancellation flag. When set, the QuickJS
@@ -249,8 +246,6 @@ where
             },
         })?;
 
-    // Capture metrics context and shared state context for use inside async block
-    let metrics_context = options.metrics_context.clone();
     let llm_runtime_context = LlmRuntimeContext::new(options.llm_request_handler.clone());
     let runtime_hooks_context = RuntimeHooksContext::new(None, options.cancellation_flag.clone());
     let process_sandbox = options.process_sandbox.clone();
@@ -258,21 +253,11 @@ where
     let timeout_exceeded_check = Arc::clone(&timeout_exceeded);
 
     let execution = async_with!(context => |ctx| {
-        // Store metrics context in runtime userdata if provided (must be done inside async_with)
-        if let Some(ref metrics_ctx) = metrics_context {
-            ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: format!("Failed to store MetricsContext: {:?}", e),
-                },
-            })?;
-        }
-
         ctx.store_userdata(llm_runtime_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store LlmRuntimeContext: {:?}", e),
             },
         })?;
-
 
         ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -383,7 +368,7 @@ where
                     .collect();
 
                 if ast_matches.is_empty() {
-                    return Ok(ExecutionResult::Skipped);
+                    return Ok((ExecutionResult::Skipped, None));
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
@@ -499,9 +484,10 @@ where
         });
     }
 
-    result.map(|primary| CodemodOutput {
+    result.map(|(primary, data)| CodemodOutput {
         primary,
         secondary: vec![],
+        data,
     })
 }
 
@@ -545,7 +531,6 @@ mod tests {
             file_path: Some("/app/src/example.js"),
             target_directory: "/app/",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -605,7 +590,6 @@ export default function transform(root) {
             file_path: None,
             target_directory: ".",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: Some(50), // 50ms timeout for faster test
@@ -651,7 +635,6 @@ export default async function transform() {
             file_path: None,
             target_directory: ".",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: Some(50),
@@ -701,7 +684,6 @@ export default function transform(root) {
             file_path: None,
             target_directory: ".",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: Some(cancellation_flag),
             timeout_ms: Some(5_000),
@@ -752,7 +734,6 @@ export default async function transform() {
             file_path: None,
             target_directory: ".",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: Some(cancellation_flag),
             timeout_ms: Some(5_000),
@@ -809,7 +790,6 @@ export default function transform(root) {
             file_path: None,
             target_directory: ".",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -958,7 +938,6 @@ export default function transform(root, options) {
             file_path: Some("/app/src/main.ts"),
             target_directory: "/app",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -1033,7 +1012,6 @@ export default function transform(root) {
             file_path: None,
             target_directory: ".",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -1111,7 +1089,6 @@ export default function transform(root) {
             file_path: Some("/app/main.ts"),
             target_directory: "/app",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -1188,7 +1165,6 @@ export default function transform(root) {
             file_path: Some("/app/main.ts"),
             target_directory: "/app",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -1266,7 +1242,6 @@ export default function transform(root) {
             file_path: Some("/app/main.ts"),
             target_directory: "/app",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -1366,7 +1341,6 @@ export default function transform(root) {
             file_path: Some("/app/main.ts"),
             target_directory: "/app",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -1733,7 +1707,6 @@ export default function transform(root) {
                 file_path: Some(path.as_str()),
                 target_directory: "/app",
                 semantic_provider: None,
-                metrics_context: None,
                 llm_request_handler: None,
                 cancellation_flag: None,
                 timeout_ms: None,
@@ -1805,7 +1778,6 @@ export default function transform(root) {
             file_path: Some("/app/main.ts"),
             target_directory: "/app",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -1914,7 +1886,6 @@ export default function transform(root) {
             file_path: Some("/app/main.ts"),
             target_directory: "/app",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -2006,7 +1977,6 @@ export default function transform(root) {
             file_path: Some("/app/main.ts"),
             target_directory: "/app",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -2075,7 +2045,6 @@ export default function transform(root) {
             file_path: Some("/app/main.ts"),
             target_directory: "/app",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,
@@ -2114,7 +2083,6 @@ export default function transform(root) {
             file_path: Some("/app/main.ts"),
             target_directory: "/app",
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             cancellation_flag: None,
             timeout_ms: None,

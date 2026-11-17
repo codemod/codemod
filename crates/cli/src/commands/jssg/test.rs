@@ -1,8 +1,6 @@
 use anyhow::Result;
 use clap::Args;
-use codemod_sandbox::metrics::MetricEntry;
 use codemod_sandbox::sandbox::engine::{CodemodOutput, JssgExecutionOptions};
-use codemod_sandbox::MetricsData;
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
@@ -13,7 +11,6 @@ use std::sync::{Arc, Mutex};
 
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_sandbox::CodemodLang;
-use codemod_sandbox::MetricsContext;
 use codemod_sandbox::{
     sandbox::{
         engine::{execute_codemod_with_quickjs, language_data::get_extensions_for_language},
@@ -32,23 +29,28 @@ use crate::{TelemetrySenderMutex, CLI_VERSION};
 
 use super::config::{ResolvedTestConfig, TestConfig};
 
+/// What a test case's transform returned as `data`, by input file.
+type DataEntries = Vec<(String, serde_json::Value)>;
+
 #[derive(Clone)]
-struct PendingMetricsSnapshot {
-    metrics_context: MetricsContext,
+struct PendingDataSnapshot {
+    entries: DataEntries,
     output_path: PathBuf,
     snapshot_path: Option<PathBuf>,
 }
 
-struct SharedMetricsState {
-    metrics_context: MetricsContext,
+/// The `data` of a test case's files, written to `data.json` once its last
+/// input file is done.
+struct SharedDataState {
+    entries: DataEntries,
     remaining_entrypoints: usize,
     skip_snapshot: bool,
 }
 
-impl SharedMetricsState {
+impl SharedDataState {
     fn new(entrypoint_count: usize) -> Self {
         Self {
-            metrics_context: MetricsContext::new(),
+            entries: Vec::new(),
             remaining_entrypoints: entrypoint_count.max(1),
             skip_snapshot: false,
         }
@@ -254,7 +256,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
     let base_config_clone = base_config.clone();
     let args_clone = args.clone();
     let current_dir_clone = current_dir.clone();
-    let shared_metrics = Arc::new(Mutex::new(HashMap::<PathBuf, SharedMetricsState>::new()));
+    let shared_data = Arc::new(Mutex::new(HashMap::<PathBuf, SharedDataState>::new()));
     let semantic_provider: Option<Arc<dyn SemanticProvider>> =
         Some(Arc::new(LazySemanticProvider::file_scope()));
     let update_snapshots = args.update_snapshots;
@@ -270,7 +272,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
             let args = args_clone.clone();
             let current_dir = current_dir_clone.clone();
             let semantic_provider = semantic_provider.clone();
-            let shared_metrics = shared_metrics.clone();
+            let shared_data = shared_data.clone();
             let runtime_event_output = runtime_event_output.clone();
 
             Box::pin(async move {
@@ -281,10 +283,10 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 let target_directory = workspace_root
                     .clone()
                     .unwrap_or_else(|| test_case_dir.to_path_buf());
-                let metrics_output_path = input_path
+                let data_output_path = input_path
                     .parent()
                     .unwrap_or(input_path.as_path())
-                    .join("metrics.json");
+                    .join("data.json");
                 let per_test_config =
                     match TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))
                     {
@@ -309,16 +311,11 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     .parse()
                     .map_err(|e: String| anyhow::anyhow!("{}", e))?;
 
-                let metrics_context = {
-                    let mut shared_metrics = shared_metrics
-                        .lock()
-                        .map_err(|_| anyhow::anyhow!("shared metrics lock poisoned"))?;
-                    shared_metrics
-                        .entry(metrics_output_path.clone())
-                        .or_insert_with(|| SharedMetricsState::new(request.entrypoint_count))
-                        .metrics_context
-                        .clone()
-                };
+                shared_data
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("shared data lock poisoned"))?
+                    .entry(data_output_path.clone())
+                    .or_insert_with(|| SharedDataState::new(request.entrypoint_count));
 
                 // For directory snapshot tests with --semantic-workspace,
                 // create a workspace-scoped provider using the temp dir
@@ -359,7 +356,6 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     matrix_values: None,
                     capabilities,
                     semantic_provider,
-                    metrics_context: Some(metrics_context.clone()),
                     llm_request_handler: None,
                     runtime_event_callback: Some(runtime_event_callback),
                     cancellation_flag: None,
@@ -368,15 +364,24 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     target_directory: &target_directory,
                     pending_files: None,
                 };
+                let file_name = input_path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let mut data = None;
                 let execution_result = execute_codemod_with_quickjs(options)
                     .await
-                    .map(|CodemodOutput { primary, .. }| map_execution_result(primary, input_code))
+                    .map(|output: CodemodOutput| {
+                        data = output.data;
+                        map_execution_result(output.primary, input_code)
+                    })
                     .map_err(anyhow::Error::from);
 
-                let pending_snapshot = finish_metrics_collection(
-                    shared_metrics.as_ref(),
-                    &metrics_output_path,
-                    Some(test_case_dir.join("metrics.json")),
+                let pending_snapshot = finish_data_collection(
+                    shared_data.as_ref(),
+                    &data_output_path,
+                    Some(test_case_dir.join("data.json")),
+                    data.map(|data| (file_name, data)),
                     execution_result.is_err(),
                 );
 
@@ -384,9 +389,9 @@ async fn handler_impl(args: &Command) -> Result<()> {
 
                 if let Some(snapshot) = pending_snapshot? {
                     if workspace_root.is_some() {
-                        write_metrics_output(&snapshot)?;
+                        write_data_output(&snapshot)?;
                     }
-                    handle_metrics_snapshot(&snapshot, update_snapshots)?;
+                    handle_data_snapshot(&snapshot, update_snapshots)?;
                 }
 
                 execution_result
@@ -417,20 +422,22 @@ async fn handler_impl(args: &Command) -> Result<()> {
     Ok(())
 }
 
-fn finish_metrics_collection(
-    shared_metrics: &Mutex<HashMap<PathBuf, SharedMetricsState>>,
-    metrics_output_path: &Path,
+fn finish_data_collection(
+    shared_data: &Mutex<HashMap<PathBuf, SharedDataState>>,
+    data_output_path: &Path,
     snapshot_path: Option<PathBuf>,
+    entry: Option<(String, serde_json::Value)>,
     should_skip_snapshot: bool,
-) -> Result<Option<PendingMetricsSnapshot>> {
-    let mut shared_metrics = shared_metrics
+) -> Result<Option<PendingDataSnapshot>> {
+    let mut shared_data = shared_data
         .lock()
-        .map_err(|_| anyhow::anyhow!("shared metrics lock poisoned"))?;
+        .map_err(|_| anyhow::anyhow!("shared data lock poisoned"))?;
 
-    let Some(state) = shared_metrics.get_mut(metrics_output_path) else {
+    let Some(state) = shared_data.get_mut(data_output_path) else {
         return Ok(None);
     };
 
+    state.entries.extend(entry);
     state.skip_snapshot |= should_skip_snapshot;
     state.remaining_entrypoints = state.remaining_entrypoints.saturating_sub(1);
 
@@ -438,60 +445,56 @@ fn finish_metrics_collection(
         return Ok(None);
     }
 
-    let state = shared_metrics
-        .remove(metrics_output_path)
-        .expect("metrics state should exist when finalizing");
+    let state = shared_data
+        .remove(data_output_path)
+        .expect("data state should exist when finalizing");
 
     if state.skip_snapshot {
         return Ok(None);
     }
 
-    Ok(Some(PendingMetricsSnapshot {
-        metrics_context: state.metrics_context,
-        output_path: metrics_output_path.to_path_buf(),
+    Ok(Some(PendingDataSnapshot {
+        entries: state.entries,
+        output_path: data_output_path.to_path_buf(),
         snapshot_path,
     }))
 }
 
-fn handle_metrics_snapshot(
-    snapshot: &PendingMetricsSnapshot,
-    update_snapshots: bool,
-) -> Result<()> {
-    let metrics_data = snapshot.metrics_context.get_all();
-    let metrics_path = snapshot
+fn handle_data_snapshot(snapshot: &PendingDataSnapshot, update_snapshots: bool) -> Result<()> {
+    let data_path = snapshot
         .snapshot_path
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("snapshot path missing for single-file metrics"))?;
+        .ok_or_else(|| anyhow::anyhow!("snapshot path missing for single-file data"))?;
 
-    if !metrics_data.is_empty() {
-        let actual_json = metrics_to_canonical_json(&metrics_data)?;
+    if !snapshot.entries.is_empty() {
+        let actual_json = data_to_canonical_json(&snapshot.entries)?;
 
-        if metrics_path.exists() {
-            let expected_json = std::fs::read_to_string(metrics_path)?;
+        if data_path.exists() {
+            let expected_json = std::fs::read_to_string(data_path)?;
             let normalized_expected_json = normalize_line_endings(&expected_json);
             let normalized_actual_json = normalize_line_endings(&actual_json);
 
             if normalized_actual_json != normalized_expected_json {
                 if update_snapshots {
-                    std::fs::write(metrics_path, &actual_json)?;
+                    std::fs::write(data_path, &actual_json)?;
                 } else {
                     anyhow::bail!(
-                        "Metrics mismatch:\n--- expected\n+++ actual\n{}",
-                        generate_metrics_diff(&normalized_expected_json, &normalized_actual_json)
+                        "Data mismatch:\n--- expected\n+++ actual\n{}",
+                        generate_data_diff(&normalized_expected_json, &normalized_actual_json)
                     );
                 }
             }
         } else {
-            std::fs::write(metrics_path, &actual_json)?;
+            std::fs::write(data_path, &actual_json)?;
         }
-    } else if metrics_path.exists() {
+    } else if data_path.exists() {
         if update_snapshots {
-            std::fs::remove_file(metrics_path)?;
+            std::fs::remove_file(data_path)?;
         } else {
             anyhow::bail!(
-                "Metrics snapshot exists at {} but codemod produced no metrics. \
+                "Data snapshot exists at {} but the codemod returned no data. \
                  Run with --update-snapshots to remove the stale snapshot.",
-                metrics_path.display()
+                data_path.display()
             );
         }
     }
@@ -499,12 +502,12 @@ fn handle_metrics_snapshot(
     Ok(())
 }
 
-fn write_metrics_output(snapshot: &PendingMetricsSnapshot) -> Result<()> {
-    let metrics_data = snapshot.metrics_context.get_all();
-
-    if !metrics_data.is_empty() {
-        let actual_json = metrics_to_canonical_json(&metrics_data)?;
-        std::fs::write(&snapshot.output_path, actual_json)?;
+fn write_data_output(snapshot: &PendingDataSnapshot) -> Result<()> {
+    if !snapshot.entries.is_empty() {
+        std::fs::write(
+            &snapshot.output_path,
+            data_to_canonical_json(&snapshot.entries)?,
+        )?;
     } else if snapshot.output_path.exists() {
         std::fs::remove_file(&snapshot.output_path)?;
     }
@@ -517,15 +520,12 @@ fn normalize_line_endings(content: &str) -> String {
 }
 
 fn classify_and_sanitize_error(error_message: &str) -> (&'static str, String) {
-    if error_message.contains("Metrics mismatch:") {
-        return ("metrics_mismatch", "Metrics snapshot mismatch".to_string());
+    if error_message.contains("Data mismatch:") {
+        return ("data_mismatch", "Data snapshot mismatch".to_string());
     }
 
-    if error_message.contains("Metrics snapshot exists at") {
-        return (
-            "stale_metrics_snapshot",
-            "Stale metrics snapshot".to_string(),
-        );
+    if error_message.contains("Data snapshot exists at") {
+        return ("stale_data_snapshot", "Stale data snapshot".to_string());
     }
 
     if error_message.contains("Codemod file '") && error_message.contains(" does not exist") {
@@ -555,37 +555,23 @@ fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
     format!("{truncated}...")
 }
 
-/// Serialize MetricsData to a canonical JSON string using RFC 8785 (JCS).
-/// Deterministic regardless of HashMap iteration order.
-fn metrics_to_canonical_json(metrics: &MetricsData) -> Result<String> {
-    let normalized_metrics = normalize_metrics_data(metrics);
-    let json_value = serde_json::to_value(normalized_metrics)?;
+/// The step result's shape, `[{ file, data }]` in file order, as canonical
+/// JSON (RFC 8785) printed readably, so object keys never reorder.
+fn data_to_canonical_json(entries: &DataEntries) -> Result<String> {
+    let mut entries = entries.clone();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let json_value = serde_json::Value::Array(
+        entries
+            .into_iter()
+            .map(|(file, data)| serde_json::json!({ "file": file, "data": data }))
+            .collect(),
+    );
     let canonical = String::from_utf8(serde_json_canonicalizer::to_vec(&json_value)?)?;
-    // Re-parse and pretty-print the canonicalized JSON
     let reparsed: serde_json::Value = serde_json::from_str(&canonical)?;
-    let pretty = serde_json::to_string_pretty(&reparsed)?;
-    Ok(pretty)
+    Ok(serde_json::to_string_pretty(&reparsed)?)
 }
 
-fn normalize_metrics_data(metrics: &MetricsData) -> MetricsData {
-    let mut normalized = metrics.clone();
-    for entries in normalized.values_mut() {
-        entries.sort_by_key(metric_entry_sort_key);
-    }
-    normalized
-}
-
-fn metric_entry_sort_key(entry: &MetricEntry) -> (Vec<(String, String)>, u64) {
-    let mut cardinality_pairs: Vec<(String, String)> = entry
-        .cardinality
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    cardinality_pairs.sort();
-    (cardinality_pairs, entry.count)
-}
-
-fn generate_metrics_diff(expected: &str, actual: &str) -> String {
+fn generate_data_diff(expected: &str, actual: &str) -> String {
     use similar::{ChangeTag, TextDiff};
     use std::fmt::Write;
 
@@ -611,13 +597,11 @@ fn generate_metrics_diff(expected: &str, actual: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_and_sanitize_error, finish_metrics_collection, generate_metrics_diff,
-        handle_metrics_snapshot, metric_entry_sort_key, metrics_to_canonical_json,
-        normalize_line_endings, write_metrics_output, PendingMetricsSnapshot, SharedMetricsState,
+        classify_and_sanitize_error, data_to_canonical_json, finish_data_collection,
+        generate_data_diff, handle_data_snapshot, normalize_line_endings, PendingDataSnapshot,
+        SharedDataState,
     };
-    use codemod_sandbox::metrics::Cardinality;
-    use codemod_sandbox::metrics::MetricEntry;
-    use codemod_sandbox::{MetricsContext, MetricsData};
+    use serde_json::json;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Mutex;
@@ -625,182 +609,81 @@ mod tests {
 
     #[test]
     fn normalize_line_endings_converts_crlf_to_lf() {
-        let input = "{\r\n  \"moment-to-temporal\": []\r\n}\r\n";
-        let expected = "{\n  \"moment-to-temporal\": []\n}\n";
-        assert_eq!(normalize_line_endings(input), expected);
+        assert_eq!(normalize_line_endings("[\r\n]\r\n"), "[\n]\n");
     }
 
     #[test]
-    fn metrics_diff_ignores_line_ending_only_changes() {
-        let expected = "{\r\n  \"count\": 1\r\n}\r\n";
-        let actual = "{\n  \"count\": 1\n}\n";
-        let diff = generate_metrics_diff(
-            &normalize_line_endings(expected),
-            &normalize_line_endings(actual),
-        );
+    fn data_diff_reports_changed_lines() {
+        let diff = generate_data_diff("{\n  \"count\": 1\n}\n", "{\n  \"count\": 2\n}\n");
         assert!(
-            diff.is_empty(),
-            "expected no diff for line-ending-only changes, got: {diff}"
+            diff.contains("-  \"count\": 1") && diff.contains("+  \"count\": 2"),
+            "{diff}"
         );
     }
 
     #[test]
-    fn metrics_diff_reports_actual_content_changes() {
-        let expected = "{\r\n  \"count\": 1\r\n}\r\n";
-        let actual = "{\n  \"count\": 2\n}\n";
-        let diff = generate_metrics_diff(
-            &normalize_line_endings(expected),
-            &normalize_line_endings(actual),
-        );
-        assert!(
-            diff.contains("-  \"count\": 1"),
-            "expected removed line in diff, got: {diff}"
-        );
-        assert!(
-            diff.contains("+  \"count\": 2"),
-            "expected inserted line in diff, got: {diff}"
-        );
-    }
-
-    #[test]
-    fn metric_entry_sort_key_sorts_cardinality_pairs() {
-        let entry = MetricEntry {
-            cardinality: HashMap::from([
-                ("to".to_string(), "b".to_string()),
-                ("from".to_string(), "a".to_string()),
-            ]),
-            count: 2,
-        };
-
-        let key = metric_entry_sort_key(&entry);
+    fn the_data_snapshot_lists_files_in_path_order() {
+        let entries = vec![
+            ("b.ts".to_string(), json!({ "z": 1, "a": 2 })),
+            ("a.ts".to_string(), json!([1])),
+        ];
+        let written: serde_json::Value =
+            serde_json::from_str(&data_to_canonical_json(&entries).unwrap()).unwrap();
         assert_eq!(
-            key,
-            (
-                vec![
-                    ("from".to_string(), "a".to_string()),
-                    ("to".to_string(), "b".to_string())
-                ],
-                2
-            )
+            written,
+            json!([{ "file": "a.ts", "data": [1] }, { "file": "b.ts", "data": { "a": 2, "z": 1 } }])
         );
     }
 
     #[test]
-    fn metrics_canonical_json_ignores_entry_order() {
-        let entry_a = MetricEntry {
-            cardinality: HashMap::from([
-                ("from".to_string(), "Cold App Start".to_string()),
-                ("to".to_string(), "Cold Start".to_string()),
-            ]),
-            count: 1,
-        };
-        let entry_b = MetricEntry {
-            cardinality: HashMap::from([
-                ("from".to_string(), "Warm App Start".to_string()),
-                ("to".to_string(), "Warm Start".to_string()),
-            ]),
-            count: 1,
-        };
-
-        let metrics_a: MetricsData = HashMap::from([(
-            "rename-metric".to_string(),
-            vec![entry_a.clone(), entry_b.clone()],
-        )]);
-        let metrics_b: MetricsData =
-            HashMap::from([("rename-metric".to_string(), vec![entry_b, entry_a])]);
-
-        let canonical_a = metrics_to_canonical_json(&metrics_a).unwrap();
-        let canonical_b = metrics_to_canonical_json(&metrics_b).unwrap();
-
-        assert_eq!(canonical_a, canonical_b);
-    }
-
-    #[test]
-    fn error_classification_redacts_metrics_diff_payload() {
-        let input = "Metrics mismatch:\n--- expected\n+++ actual\n-{\"code\":\"secret\"}";
-        let (category, message) = classify_and_sanitize_error(input);
-        assert_eq!(category, "metrics_mismatch");
-        assert_eq!(message, "Metrics snapshot mismatch");
+    fn error_classification_redacts_the_data_diff() {
+        let input = "Data mismatch:\n--- expected\n+++ actual\n-{\"code\":\"secret\"}";
+        assert_eq!(
+            classify_and_sanitize_error(input),
+            ("data_mismatch", "Data snapshot mismatch".to_string())
+        );
     }
 
     #[test]
     fn error_classification_truncates_generic_errors() {
-        let long_message = "x".repeat(260);
-        let (category, message) = classify_and_sanitize_error(&long_message);
+        let (category, message) = classify_and_sanitize_error(&"x".repeat(260));
         assert_eq!(category, "command_error");
         assert_eq!(message.len(), 203);
-        assert!(message.ends_with("..."));
     }
 
     #[test]
-    fn directory_metrics_snapshot_finalizes_once_after_last_entrypoint() {
-        let fixture_root = PathBuf::from("/tmp/fixture");
-        let shared_metrics = Mutex::new(HashMap::from([(
-            fixture_root.clone(),
-            SharedMetricsState::new(2),
-        )]));
+    fn a_directory_case_snapshots_once_with_every_files_data() {
+        let root = PathBuf::from("/tmp/fixture");
+        let shared = Mutex::new(HashMap::from([(root.clone(), SharedDataState::new(2))]));
 
-        let metrics_context = {
-            let shared_metrics = shared_metrics.lock().unwrap();
-            shared_metrics
-                .get(&fixture_root)
+        let first =
+            finish_data_collection(&shared, &root, None, Some(("a.ts".into(), json!(1))), false);
+        assert!(first.unwrap().is_none());
+        let last =
+            finish_data_collection(&shared, &root, None, Some(("b.ts".into(), json!(2))), false)
                 .unwrap()
-                .metrics_context
-                .clone()
-        };
-        metrics_context.increment("rename-metric", Cardinality::new(Vec::new()), 1);
-
-        let first = finish_metrics_collection(&shared_metrics, &fixture_root, None, false).unwrap();
-        assert!(first.is_none());
-
-        let second =
-            finish_metrics_collection(&shared_metrics, &fixture_root, None, false).unwrap();
-        let snapshot = second.expect("expected final snapshot on last entrypoint");
-        assert_eq!(snapshot.output_path, fixture_root);
-        assert!(snapshot.snapshot_path.is_none());
-        assert_eq!(snapshot.metrics_context.get("rename-metric")[0].count, 1);
-        assert!(shared_metrics.lock().unwrap().is_empty());
+                .expect("the last file finishes the snapshot");
+        assert_eq!(last.entries.len(), 2);
     }
 
     #[test]
-    fn handle_metrics_snapshot_writes_metrics_json() {
-        let tempdir = tempdir().unwrap();
-        let metrics_path = tempdir.path().join("metrics.json");
-        let metrics_context = MetricsContext::new();
-        metrics_context.increment("rename-metric", Cardinality::new(Vec::new()), 2);
-
-        handle_metrics_snapshot(
-            &PendingMetricsSnapshot {
-                metrics_context,
-                output_path: metrics_path.clone(),
-                snapshot_path: Some(metrics_path.clone()),
+    fn a_missing_data_json_is_written() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("data.json");
+        handle_data_snapshot(
+            &PendingDataSnapshot {
+                entries: vec![("input.ts".into(), json!({ "calls": 2 }))],
+                output_path: path.clone(),
+                snapshot_path: Some(path.clone()),
             },
             false,
         )
         .unwrap();
-
-        let written = std::fs::read_to_string(metrics_path).unwrap();
-        assert!(written.contains("\"rename-metric\""));
-        assert!(written.contains("\"count\": 2"));
-    }
-
-    #[test]
-    fn write_metrics_output_writes_aggregated_workspace_file() {
-        let tempdir = tempdir().unwrap();
-        let metrics_path = tempdir.path().join("src").join("metrics.json");
-        std::fs::create_dir_all(metrics_path.parent().unwrap()).unwrap();
-        let metrics_context = MetricsContext::new();
-        metrics_context.increment("rename-metric", Cardinality::new(Vec::new()), 2);
-
-        write_metrics_output(&PendingMetricsSnapshot {
-            metrics_context,
-            output_path: metrics_path.clone(),
-            snapshot_path: None,
-        })
-        .unwrap();
-
-        let written = std::fs::read_to_string(metrics_path).unwrap();
-        assert!(written.contains("\"rename-metric\""));
-        assert!(written.contains("\"count\": 2"));
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(
+            written,
+            json!([{ "file": "input.ts", "data": { "calls": 2 } }])
+        );
     }
 }

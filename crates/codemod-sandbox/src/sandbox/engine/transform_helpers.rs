@@ -1,6 +1,5 @@
 use crate::ast_grep::serde::JsValue;
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootInner};
-use crate::metrics::{record_data, MetricsContext};
 use crate::sandbox::engine::execution_engine::{ExecutionResult, ModifiedResult};
 use crate::sandbox::errors::ExecutionError;
 use rquickjs::{Ctx, IntoJs, Object, Value};
@@ -105,15 +104,15 @@ pub fn build_transform_options<'js>(
 
 /// Process the result value returned by a transform function: the new
 /// content (a string), no change (`null` or `undefined`), or
-/// `{ edit, data }`, where `edit` is either of those and `data` is added to
-/// the run's `MetricsContext`, when the caller keeps one.
+/// `{ edit, data }`, where `edit` is either of those and `data` is any JSON
+/// value the transform hands back for this file.
 ///
 /// Uses `ModificationCheck` to determine whether content was actually modified.
 pub fn process_transform_result(
     result_obj: &Value<'_>,
     sg_root_inner: &Arc<SgRootInner>,
     modification_check: ModificationCheck<'_>,
-) -> Result<ExecutionResult, ExecutionError> {
+) -> Result<(ExecutionResult, Option<serde_json::Value>), ExecutionError> {
     let failed = |message: String| ExecutionError::Runtime {
         source: crate::sandbox::errors::RuntimeError::ExecutionFailed { message },
     };
@@ -130,17 +129,33 @@ pub fn process_transform_result(
                 )));
             }
         }
-        // The edit is checked first, so a file that fails counts nothing.
+        // The edit is checked first, so a file that fails returns no data.
         let edit: Value = object.get("edit").map_err(|e| failed(e.to_string()))?;
         let result = process_edit(&edit, sg_root_inner, modification_check)?;
         let data: Value = object.get("data").map_err(|e| failed(e.to_string()))?;
-        if !data.is_undefined() && !data.is_null() {
-            let context = ctx.userdata::<MetricsContext>();
-            record_data(ctx, context.as_deref(), &data).map_err(|e| failed(caught(ctx, e)))?;
-        }
-        return Ok(result);
+        let data = if data.is_undefined() || data.is_null() {
+            None
+        } else {
+            Some(data_json(ctx, data).map_err(failed)?)
+        };
+        return Ok((result, data));
     }
-    process_edit(result_obj, sg_root_inner, modification_check)
+    Ok((
+        process_edit(result_obj, sg_root_inner, modification_check)?,
+        None,
+    ))
+}
+
+/// `data` as JSON, the form it leaves the transform in.
+fn data_json<'js>(ctx: &Ctx<'js>, data: Value<'js>) -> Result<serde_json::Value, String> {
+    let type_name = data.type_name();
+    let text = ctx
+        .json_stringify(data)
+        .map_err(|e| format!("A transform's `data` must be JSON: {}", caught(ctx, e)))?
+        .ok_or_else(|| format!("A transform's `data` must be JSON. Received {type_name}"))?
+        .to_string()
+        .map_err(|e| e.to_string())?;
+    serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
 /// The message of a thrown JavaScript error.

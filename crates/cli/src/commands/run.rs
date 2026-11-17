@@ -12,7 +12,7 @@ use crate::CLI_VERSION;
 use anyhow::{anyhow, Result};
 use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata};
 use butterflow_core::registry::{RegistryError, RegistryPackageMetadata};
-use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
+use butterflow_core::report::{convert_diffs, ExecutionReport};
 use butterflow_core::structured_log::OutputFormat;
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
@@ -377,7 +377,6 @@ pub async fn handler(
         return Err(anyhow!(error_msg));
     }
 
-    let metrics_data = outcome.summary.metrics();
     let files_modified = outcome.files_modified();
     let files_unmodified = outcome.files_unmodified();
     let files_with_errors = outcome.files_with_errors();
@@ -408,10 +407,9 @@ pub async fn handler(
         }
     }
 
-    if crate::utils::metrics::should_show_report(
+    if crate::utils::report_prompt::should_show_report(
         args.report,
         args.flags.no_interactive,
-        &metrics_data,
         files_modified,
     ) {
         let report = ExecutionReport::build(
@@ -424,7 +422,6 @@ pub async fn handler(
             files_modified,
             files_unmodified,
             files_with_errors,
-            convert_metrics(&metrics_data),
             convert_diffs(&outcome.summary.diffs(), &target_path.display().to_string()),
         )
         .with_registry_link_url(Some(
@@ -435,10 +432,6 @@ pub async fn handler(
         ));
 
         crate::report_server::serve_report(report).await?;
-    } else if args.flags.format == OutputFormat::Text {
-        crate::utils::metrics::print_metrics(&metrics_data);
-    } else {
-        crate::utils::metrics::print_metrics_jsonl(&metrics_data);
     }
 
     Ok(())

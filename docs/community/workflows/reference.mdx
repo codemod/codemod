@@ -156,7 +156,7 @@ Changes are recorded, not written immediately. When every file is done, the step
 - A callback that throws fails only that file; the error appears in `result.failures`, and the file and its error are logged under the step.
 - When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again.
 - When the callback fails on every file it ran on, the step fails, with the first file's error.
-- To count what a callback found, return it: outputs are values, so add them up after the step. (A [JSSG transform](/community/jssg/metrics) returns `{ edit, data }` instead, and its step's result carries the totals as `data`.)
+- To count what a callback found, return it: outputs are values, so add them up after the step. (A [JSSG transform](/community/jssg/metrics) returns `{ edit, data }` instead, and its step's `data` lists what each file returned.)
 
 ```ts
 export default async function main() {
