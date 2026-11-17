@@ -121,6 +121,41 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     RUNTIME.with(|runtime| tokio::task::LocalSet::new().block_on(runtime, future))
 }
 
+/// Files being transformed at once, across every step in the process. Independent steps run
+/// together and each walks with a thread per core, so without this a 14-step workflow runs
+/// 14 times as many transforms as there are cores and they slow each other down.
+struct ActiveFiles {
+    running: Mutex<usize>,
+    freed: std::sync::Condvar,
+    limit: usize,
+}
+
+static ACTIVE_FILES: std::sync::LazyLock<ActiveFiles> = std::sync::LazyLock::new(|| ActiveFiles {
+    running: Mutex::new(0),
+    freed: std::sync::Condvar::new(),
+    limit: std::thread::available_parallelism().map_or(1, |n| n.get()),
+});
+
+struct ActiveFile;
+
+impl ActiveFile {
+    fn start() -> Self {
+        let mut running = ACTIVE_FILES.running.lock().unwrap();
+        while *running >= ACTIVE_FILES.limit {
+            running = ACTIVE_FILES.freed.wait(running).unwrap();
+        }
+        *running += 1;
+        ActiveFile
+    }
+}
+
+impl Drop for ActiveFile {
+    fn drop(&mut self) {
+        *ACTIVE_FILES.running.lock().unwrap() -= 1;
+        ACTIVE_FILES.freed.notify_one();
+    }
+}
+
 pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     if !request.script_path.is_file() {
         return Err(format!(
@@ -215,6 +250,9 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
         {
             return;
         }
+        // Taken before the file, so a transform waiting on another file never holds back
+        // the one that has it.
+        let _active = ActiveFile::start();
         let Ok((content, taken)) = pending.take(file_path) else {
             skipped.fetch_add(1, Ordering::SeqCst);
             return;
