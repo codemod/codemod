@@ -37,6 +37,8 @@ use crate::Services;
 
 /// Not under `codemod/` or `codemod:`: those names are the public modules.
 pub(crate) const ORCHESTRATOR_MODULE: &str = "codemod-internal:orchestrator";
+/// `semver` for the body and isolates; see `js/semver.ts`.
+pub(crate) const SEMVER_MODULE: &str = "codemod-internal:semver";
 const WORKFLOW_MODULE: &str = "workflow.js";
 
 /// LLRT modules left out of the workflow body: they read the clock, the
@@ -474,14 +476,17 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             // The body's codemod modules: `codemod/<name>`, or `codemod:<name>`.
             CodemodModuleResolver::new(&["ast-grep", "workflow"]),
             llrt_resolver,
-            BuiltinResolver::default().with_module(ORCHESTRATOR_MODULE),
+            BuiltinResolver::default()
+                .with_module(ORCHESTRATOR_MODULE)
+                .with_module(SEMVER_MODULE),
             QuickJSResolver::new(Arc::new(packages)),
         ),
         (
             llrt_loader.with_module("codemod/ast-grep", AstGrepModule),
             BuiltinLoader::default()
                 .with_module(FLOW_MODULE, crate::js::workflow_module())
-                .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator()),
+                .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator())
+                .with_module(SEMVER_MODULE, crate::js::semver_module()),
             QuickJSLoader,
         ),
     );
@@ -634,6 +639,11 @@ fn install_host<'js>(
                 })
             },
         )?,
+    )?;
+
+    object.set(
+        "semver",
+        Function::new(ctx.clone(), crate::deps_host::semver)?,
     )?;
 
     let starter = Arc::clone(run);

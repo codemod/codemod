@@ -16,6 +16,8 @@ interface RawHost {
   start(request: string): number;
   /** Evaluate a workflow.yaml `${{ }}` expression; returns JSON. */
   evaluate(kind: string, expression: string, scope: string): string;
+  /** `semver.*` (`semver.ts`): compare versions and ranges; returns JSON. */
+  semver(op: string, ecosystem: string, a: string, b: string): string;
   /** The real time, in milliseconds since the epoch. */
   now(): number;
   /** The body's clock: the run's start time, moved on as steps finish. */
@@ -32,6 +34,23 @@ interface RawHost {
   stop(): void;
 }
 
+interface DependencyHost {
+  /** One batch of lookups: `{ ok: true, found: { name: releases } }` or `{ ok: false, error }`. */
+  releases(ecosystem: string, names: string): Promise<string>;
+  semver(op: string, ecosystem: string, a: string, b: string): string;
+}
+
+interface GraphHost {
+  /** The lockfiles read, as JSON. */
+  lockfiles: string;
+  node(id: number): string;
+  /** `"all"`, `"workspaces"` or `"named"`, with the name. */
+  nodes(which: string, name: string): string;
+  /** `"out"` or `"in"` with a node id, or `"named"` with a package name; kinds comma-separated. */
+  edges(direction: string, key: string, kinds: string): string;
+  chains(from: string, to: string, kinds: string): string;
+}
+
 // `var` is how a global is declared; these are properties of `globalThis`.
 /* eslint-disable no-var */
 declare var __workflowHost: RawHost;
@@ -41,4 +60,10 @@ declare var __workflowSettle: (id: number, ok: boolean, payload: string) => void
 declare var __workflowReplayNext: () => boolean;
 /** No step starts from here on. */
 declare var __workflowClose: () => void;
+/** In isolates (crates/workflow/src/deps_host.rs): `registry` and `semver`. */
+declare var __dependencyHost: DependencyHost;
+/** In dependencyGraph isolates (tasks/dependency_graph.rs): the graph, over node ids and JSON. */
+declare var __graphHost: GraphHost;
+/** In dependencyGraph isolates: the live graph handed to the callback. */
+declare var __dependencyGraph: unknown;
 /* eslint-enable no-var */

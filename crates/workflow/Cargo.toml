@@ -16,6 +16,7 @@ butterflow-state = { workspace = true }
 chrono = { workspace = true }
 codemod-agents = { workspace = true }
 codemod-ai = { path = "../ai" }
+codemod-deps = { path = "../deps" }
 codemod-llrt-capabilities = { workspace = true }
 codemod-sandbox = { path = "../codemod-sandbox", features = ["native"] }
 ignore = { workspace = true }

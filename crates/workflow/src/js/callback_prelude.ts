@@ -69,3 +69,32 @@ export async function __runStep(): Promise<string> {
     return JSON.stringify({ ok: false, error: message });
   }
 }
+
+/** Run a dependencyGraph callback with the live graph; never throws. Nodes and edges become text. */
+export async function __runGraph(): Promise<string> {
+  try {
+    let result = __plain(await __cb(globalThis.__dependencyGraph));
+    if (result === undefined) result = null;
+    __checkJson(result, "the step's result");
+    return JSON.stringify({ ok: true, result });
+  } catch (error) {
+    return JSON.stringify({ ok: false, error: __describe(error) });
+  }
+}
+
+/** Graph nodes and edges (class instances with toJSON) into plain values. */
+function __plain(value: unknown): unknown {
+  if (value && typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if ("toJSON" in value && typeof value.toJSON === "function" && prototype !== Object.prototype) {
+      return value.toJSON();
+    }
+    if (Array.isArray(value)) return value.map(__plain);
+    if (prototype === Object.prototype) {
+      const plain: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(value)) plain[key] = __plain(item);
+      return plain;
+    }
+  }
+  return value;
+}
