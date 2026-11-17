@@ -8,7 +8,7 @@ not active work: read "Where this stands" first.
 
 - Goal (Nov 8, Dev's words): replace the YAML workflow engine with the TypeScript orchestration
   prototype; "i need stronger proof... of simplicity and performance". This folder is that proof.
-- The prototype is `prototype/typescript-orchestration` (draft PR #2411). Its code, including the
+- The prototype is `prototype/typescript-orchestration` (draft PR #2411, now closed). Its code, including the
   QuickJS-only work and the patches here, is already on that branch on GitHub (head b71f40b).
 - **Since then the direction changed.** Mo's code-first engine (`engine/code-first`, #2485, published
   as `codemod@2.0.0-alpha.3`) became workflow v2, and work moved there. The useful carry-overs:
@@ -46,8 +46,7 @@ PR branch).
 
 ## Decisions waiting on Dev
 
-1. Close draft #2411, or keep it open as a reference until workflow v2 is on npm. Nothing on it is
-   needed for v2.
+None. #2411 is already closed; its branch stays as the reference. Nothing on it is needed for v2.
 
 ## Next steps if picked up
 
