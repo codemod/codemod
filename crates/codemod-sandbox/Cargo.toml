@@ -17,6 +17,7 @@ tokio = { version = "1.0", features = [
 ], optional = true }
 bytes = "1.0"
 dashmap = "6"
+wasmtime = { version = "42", default-features = false, features = ["cranelift", "runtime", "std", "parallel-compilation"], optional = true }
 vfs = { version = "0.12", optional = true, default-features = false }
 sha2 = "0.10"
 oxc_resolver = "11.13.1"
@@ -56,6 +57,7 @@ ast-grep-dynamic = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+wat = "1"
 
 [features]
 default = ["native", "real-fs"]
@@ -75,6 +77,7 @@ wasm = [
 ]
 native = [
   "real-fs",
+  "wasmtime",
   "ast-grep-core/tree-sitter",
   "ast-grep-config/tree-sitter",
   "ast-grep-language",

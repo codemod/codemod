@@ -8,6 +8,8 @@ pub mod metrics;
 mod plugins;
 pub mod sandbox;
 pub mod utils;
+#[cfg(feature = "native")]
+pub mod wasm_host;
 
 #[cfg(feature = "native")]
 pub use ast_grep::{

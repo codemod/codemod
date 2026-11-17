@@ -73,6 +73,10 @@ impl CodemodModuleResolver {
 
 impl Resolver for CodemodModuleResolver {
     fn resolve(&mut self, _ctx: &Ctx<'_>, base: &str, name: &str) -> Result<String> {
+        #[cfg(feature = "native")]
+        if name == crate::wasm_host::HOST_MODULE {
+            return Ok(name.to_string());
+        }
         let Some(rest) = name
             .strip_prefix("codemod/")
             .or_else(|| name.strip_prefix("codemod:"))
@@ -114,6 +118,10 @@ macro_rules! with_codemod_modules {
         let mut loader = $loader
             .with_module("codemod/ast-grep", $crate::AstGrepModule)
             .with_module(
+                $crate::wasm_host::HOST_MODULE,
+                $crate::wasm_host::WasmModule,
+            )
+            .with_module(
                 "codemod/runtime",
                 $crate::sandbox::runtime_module::RuntimeModule,
             );
@@ -133,6 +141,10 @@ pub struct QuickJSLoader;
 impl Loader for QuickJSLoader {
     fn load<'js>(&mut self, ctx: &Ctx<'js>, name: &str) -> Result<Module<'js, module::Declared>> {
         let path = std::path::Path::new(name);
+        #[cfg(feature = "native")]
+        if path.extension().is_some_and(|ext| ext == "wasm") && path.is_file() {
+            return crate::wasm_host::declare(ctx, name);
+        }
         if path.exists() && path.is_file() {
             let source = std::fs::read_to_string(path).map_err(|_| Error::new_loading(name))?;
 
