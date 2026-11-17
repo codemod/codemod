@@ -722,30 +722,35 @@ impl<'js> SgNodeRjs<'js> {
     pub fn matches(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
         let lang = get_language(&self.root.grep);
         let matcher = convert_matcher(matcher, lang, &ctx)?;
+        let matcher = &*matcher;
         Ok(self.inner_node.matches(&matcher))
     }
 
     pub fn inside(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
         let lang = get_language(&self.root.grep);
         let matcher = convert_matcher(matcher, lang, &ctx)?;
+        let matcher = &*matcher;
         Ok(self.inner_node.inside(&matcher))
     }
 
     pub fn has(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
         let lang = get_language(&self.root.grep);
         let matcher = convert_matcher(matcher, lang, &ctx)?;
+        let matcher = &*matcher;
         Ok(self.inner_node.has(&matcher))
     }
 
     pub fn precedes(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
         let lang = get_language(&self.root.grep);
         let matcher = convert_matcher(matcher, lang, &ctx)?;
+        let matcher = &*matcher;
         Ok(self.inner_node.precedes(&matcher))
     }
 
     pub fn follows(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<bool> {
         let lang = get_language(&self.root.grep);
         let matcher = convert_matcher(matcher, lang, &ctx)?;
+        let matcher = &*matcher;
         Ok(self.inner_node.follows(&matcher))
     }
 
@@ -797,6 +802,7 @@ impl<'js> SgNodeRjs<'js> {
     pub fn find(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<Value<'js>> {
         let lang = get_language(&self.root.grep);
         let matcher = convert_matcher(matcher, lang, &ctx)?;
+        let matcher = &*matcher;
         match self.inner_node.find(&matcher) {
             Some(node_match) => {
                 let static_node_match: NodeMatch<'static, TSDoc> =
@@ -816,6 +822,7 @@ impl<'js> SgNodeRjs<'js> {
     pub fn find_all(&self, matcher: Value<'js>, ctx: Ctx<'js>) -> Result<Vec<SgNodeRjs<'js>>> {
         let lang = get_language(&self.root.grep);
         let matcher = convert_matcher(matcher, lang, &ctx)?;
+        let matcher = &*matcher;
         Ok(self
             .inner_node
             .find_all(&matcher)

@@ -16,6 +16,9 @@ use ast_grep_core::{
 use ast_grep_language::SupportLang;
 use rquickjs::{Ctx, Exception, FromJs, Result as QResult, Value};
 use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 use std::str::FromStr;
 
 use super::serde::JsValue;
@@ -50,23 +53,53 @@ impl Matcher for JsMatcherRjs {
     }
 }
 
+thread_local! {
+    // Compiled matchers by language and pattern or rule JSON. A transform passes the same few
+    // patterns and rules for every file, and compiling a rule (its regexes above all) costs far
+    // more than matching it. Matchers hold no per-file state, so sharing them is safe.
+    static MATCHERS: RefCell<HashMap<String, Rc<JsMatcherRjs>>> = RefCell::new(HashMap::new());
+}
+
+const MATCHER_CACHE_LIMIT: usize = 4096;
+
+fn cached_matcher(
+    key: String,
+    compile: impl FnOnce() -> Result<JsMatcherRjs, String>,
+) -> Result<Rc<JsMatcherRjs>, String> {
+    if let Some(matcher) = MATCHERS.with(|m| m.borrow().get(&key).cloned()) {
+        return Ok(matcher);
+    }
+    let matcher = Rc::new(compile()?);
+    MATCHERS.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= MATCHER_CACHE_LIMIT {
+            m.clear();
+        }
+        m.insert(key, matcher.clone());
+    });
+    Ok(matcher)
+}
+
 // Convert a JavaScript value to an appropriate ast-grep matcher
 pub fn convert_matcher<'js>(
     value: Value<'js>,
     lang: SupportLang,
     ctx: &Ctx<'js>,
-) -> QResult<JsMatcherRjs> {
+) -> QResult<Rc<JsMatcherRjs>> {
     if value.is_string() {
         let pattern_str = value.as_string().unwrap().to_string()?;
-        let pattern = Pattern::new(&pattern_str, lang);
-        return Ok(JsMatcherRjs::Pattern(pattern));
+        let key = format!("p\0{lang}\0{pattern_str}");
+        return cached_matcher(key, || Ok(JsMatcherRjs::Pattern(Pattern::new(&pattern_str, lang))))
+            .map_err(|e| Exception::throw_type(ctx, &e));
     } else if value.is_number() {
         let kind_id = value.as_number().unwrap() as u16;
         let kind_matcher = KindMatcher::from_id(kind_id);
-        return Ok(JsMatcherRjs::Kind(kind_matcher));
+        return Ok(Rc::new(JsMatcherRjs::Kind(kind_matcher)));
     } else if value.is_object() {
         let js_value = JsValue::from_js(ctx, value)?;
-        return rule_matcher(js_value.0, lang).map_err(|e| Exception::throw_type(ctx, &e));
+        let key = format!("r\0{lang}\0{}", js_value.0);
+        return cached_matcher(key, || rule_matcher(js_value.0, lang))
+            .map_err(|e| Exception::throw_type(ctx, &e));
     }
 
     Err(Exception::throw_type(
