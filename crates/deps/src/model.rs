@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub enum Ecosystem {
     Npm,
     Cargo,
+    Pypi,
 }
 
 impl Ecosystem {
@@ -17,6 +18,7 @@ impl Ecosystem {
         match self {
             Self::Npm => "npm",
             Self::Cargo => "cargo",
+            Self::Pypi => "pypi",
         }
     }
 
@@ -24,6 +26,7 @@ impl Ecosystem {
         match text {
             "npm" => Some(Self::Npm),
             "cargo" => Some(Self::Cargo),
+            "pypi" => Some(Self::Pypi),
             _ => None,
         }
     }

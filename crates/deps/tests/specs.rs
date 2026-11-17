@@ -497,3 +497,6 @@ snapshots:
         Vec::<String>::new()
     );
 }
+
+#[path = "specs/python.rs"]
+mod python;
