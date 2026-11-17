@@ -50,7 +50,7 @@ impl CodemodModuleResolver {
     /// The modules every transform gets, and `llm` when `llm` is set (it
     /// makes network requests, so it needs the fetch capability).
     pub fn offering(llm: bool) -> Self {
-        let mut modules = vec!["ast-grep", "workflow", "metrics", "runtime"];
+        let mut modules = vec!["ast-grep", "workflow", "runtime"];
         if llm {
             modules.push("llm");
         }
@@ -73,6 +73,9 @@ impl Resolver for CodemodModuleResolver {
                 "it needs the fetch capability: add `fetch` to `capabilities` in codemod.yaml, or pass --allow-fetch".to_string(),
             ),
             Some(_) => unavailable("it is not available in this part of a workflow".to_string()),
+            None if rest == "metrics" => unavailable(
+                "it was removed: a transform reports counts by returning `{ edit, data }`".to_string(),
+            ),
             None if rest.starts_with("ast-grep/langs/") || rest.starts_with("langs/") => unavailable(
                 "it has types only: import it with `import type`".to_string(),
             ),
@@ -97,7 +100,6 @@ macro_rules! with_codemod_modules {
                 "codemod/workflow",
                 $crate::workflow_global::WorkflowGlobalModule,
             )
-            .with_module("codemod/metrics", $crate::metrics::MetricsModule)
             .with_module(
                 "codemod/runtime",
                 $crate::sandbox::runtime_module::RuntimeModule,

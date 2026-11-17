@@ -1761,7 +1761,7 @@ function example() {
             Err(ExecutionError::Runtime { source }) => {
                 assert!(source
                     .to_string()
-                    .contains("must return either a string or null/undefined"));
+                    .contains("must return a string, null/undefined, or { edit, data }"));
             }
             Ok(output) => panic!(
                 "Expected runtime error for invalid return type, got: {:?}",
@@ -1849,34 +1849,16 @@ function example() {
     }
 
     #[tokio::test]
-    async fn test_execute_codemod_with_metrics() {
+    async fn a_transforms_returned_data_counts_each_row() {
         use crate::metrics::MetricsContext;
 
         // Create a metrics context for this test
         let metrics_ctx = MetricsContext::new();
 
-        // Simpler codemod that just counts console.log calls
         let codemod_content = r#"
-import { useMetricAtom } from "codemod:metrics";
-
-const callMetric = useMetricAtom("call-count");
-
 export default function transform(root) {
-  const rootNode = root.root();
-
-  // Find all console.log calls
-  const calls = rootNode.findAll({
-    rule: {
-      pattern: "console.log($$$ARGS)",
-    },
-  });
-
-  // Count each call
-  for (const call of calls) {
-    callMetric.increment({ method: "console.log" });
-  }
-
-  return null;
+  const calls = root.root().findAll({ rule: { pattern: "console.log($$$ARGS)" } });
+  return { edit: null, data: { "call-count": calls.map(() => ({ method: "console.log" })) } };
 }
         "#
         .trim();
@@ -1953,25 +1935,107 @@ function example() {
         );
     }
 
+    async fn run_returning(body: &str, content: &str) -> Result<CodemodOutput, ExecutionError> {
+        let script = format!("export default function transform(root) {{ {body} }}");
+        let (temp_dir, codemod_path) = setup_test_codemod(&script);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        execute_codemod_with_quickjs(JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content,
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: Some(crate::metrics::MetricsContext::new()),
+            llm_request_handler: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: Path::new("."),
+            pending_files: None,
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_returned_edit_with_data_still_edits_the_file() {
+        let output = run_returning(
+            r#"return { edit: "const b = 1;", data: { seen: [{}] } };"#,
+            "const a = 1;",
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(output.primary, ExecutionResult::Modified(ref m) if m.content == "const b = 1;"),
+            "{output:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_result_object_with_other_keys_is_an_error() {
+        let error = run_returning(r#"return { content: "x" };"#, "x")
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("takes only `edit` and `data`"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn importing_the_removed_metrics_module_says_what_replaced_it() {
+        let script = r#"import { useMetricAtom } from "codemod:metrics";
+export default function transform() { return null; }"#;
+        let (temp_dir, codemod_path) = setup_test_codemod(script);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let error = execute_codemod_with_quickjs(JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "x",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            metrics_context: None,
+            llm_request_handler: None,
+            shared_state_context: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: Path::new("."),
+            pending_files: None,
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("returning `{ edit, data }`"),
+            "{error}"
+        );
+    }
+
     #[tokio::test]
     async fn codemod_modules_import_as_codemod_slash_and_the_older_colon_spelling() {
-        use crate::metrics::MetricsContext;
-
-        let metrics_ctx = MetricsContext::new();
-        // Both spellings name one module: an atom from each counts into the
-        // same metric, and the module objects are the same.
+        // Both spellings name one module: the module objects are the same.
         let codemod_content = r#"
-import { useMetricAtom } from "codemod/metrics";
-import * as colon from "codemod:metrics";
 import { parse } from "codemod/ast-grep";
 import { parse as parseColon } from "codemod:ast-grep";
 import { progress } from "codemod/runtime";
+import * as colon from "codemod:runtime";
 
 export default function transform(root) {
   if (parse !== parseColon) throw new Error("two ast-grep modules");
+  if (progress !== colon.progress) throw new Error("two runtime modules");
   progress("visiting");
-  useMetricAtom("calls").increment({ via: "slash" });
-  colon.useMetricAtom("calls").increment({ via: "colon" });
   return parse("javascript", root.root().text().replace("old", "new")).root().text();
 }
         "#
@@ -1990,7 +2054,7 @@ export default function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: Some(metrics_ctx.clone()),
+            metrics_context: None,
             llm_request_handler: None,
             shared_state_context: None,
             runtime_event_callback: None,
@@ -2010,8 +2074,6 @@ export default function transform(root) {
             },
             Err(e) => panic!("expected success, got {e:?}"),
         }
-        let calls = metrics_ctx.get_all().remove("calls").unwrap();
-        assert_eq!(calls.len(), 2, "{calls:?}");
     }
 
     #[tokio::test]

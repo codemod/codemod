@@ -1,97 +1,94 @@
 ---
-title: "Metrics"
-description: "Track and aggregate data across codemod executions"
+title: "Returning data"
+description: "Count what a transform finds by returning it with the edit"
 ---
 
-Metrics allow you to collect and aggregate data while running codemods. This is useful for:
+A transform can return data along with its edit. The CLI adds up the data from every file. This is useful for:
 
-- **Codebase analysis**: Count occurrences of patterns, prop usages, component instances
-- **Migration tracking**: Track what needs to be migrated before making changes
-- **Read-only codemods**: Gather insights without modifying code
+- **Codebase analysis**: count patterns, prop usages, component instances
+- **Migration tracking**: see what needs to change before changing it
+- **Read-only codemods**: gather insights without modifying code
 
-## Basic Usage
+## Basic usage
 
-Import `useMetricAtom` from `codemod/metrics` to create a metric tracker:
-
-```typescript
-import { useMetricAtom } from "codemod/metrics";
-
-const metric = useMetricAtom("my-metric");
-
-// Increment with cardinality dimensions
-metric.increment({ category: "buttons", variant: "primary" });
-
-// Increment by a specific amount
-metric.increment({ category: "buttons" }, 5);
-
-// Increment without cardinality (simple counter)
-metric.increment();
-```
-
-## Cardinality
-
-Cardinality dimensions are key-value pairs that let you group and filter metrics. When you call `increment()`, you pass an object with string keys and values:
+Return `{ edit, data }` instead of a string:
 
 ```typescript
-metric.increment({
-  propName: "className",
-  propValue: "container",
-  component: "Button"
-});
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
+
+const codemod: Codemod<TSX> = async (root) => {
+  const buttons = root.root().findAll({ rule: { pattern: "<Button $$$ />" } });
+  return {
+    edit: null, // leave the file as it is; a string replaces it
+    data: {
+      buttons: buttons.map(() => ({ variant: "primary" })),
+    },
+  };
+};
+
+export default codemod;
 ```
 
-This creates a unique metric entry for each combination of cardinality values. You can later group by any dimension (e.g., all entries where `component=Button`).
+- `edit`: the new file content, or `null`/missing to leave the file unchanged. Returning a plain string or `null` still works.
+- `data`: named lists of rows. Each row counts once.
+- A row's labels are strings, numbers or booleans; they are compared as strings. `null` and `undefined` labels are left out.
+- To count something five times, return five rows.
+- Other keys on the result are an error, so a typo doesn't go unnoticed.
+
+## Labels
+
+Labels let you group and filter counts. Rows with the same labels are added up:
+
+```typescript
+return {
+  data: {
+    "prop-usage": [
+      { propName: "className", component: "Button" },
+      { propName: "className", component: "Button" },
+      { propName: "onClick", component: "Link" },
+    ],
+  },
+};
+```
+
+gives `className, Button: 2` and `onClick, Link: 1`. You can then group by any label, for example all rows where `component=Button`.
 
 <Tip>
-Use cardinality to capture context about what you're counting. For example, when counting prop usages, include both the prop name and the component it belongs to.
+Use labels to capture context about what you're counting. When counting prop usages, include both the prop name and the component it belongs to.
 </Tip>
 
-## Example: Counting Prop Usage
+## Example: counting prop usage
 
 This read-only codemod counts how many times each prop is used on `Button` components:
 
 ```typescript
 import type { Codemod } from "codemod/ast-grep";
 import type TSX from "codemod/ast-grep/langs/tsx";
-import { useMetricAtom } from "codemod/metrics";
-
-const propUsageMetric = useMetricAtom("prop-usage");
 
 const codemod: Codemod<TSX> = async (root) => {
-  const rootNode = root.root();
-
-  const jsxAttrs = rootNode.findAll({
+  const attributes = root.root().findAll({
     rule: {
       kind: "jsx_attribute",
       inside: {
-        any: [
-          { kind: "jsx_opening_element" },
-          { kind: "jsx_self_closing_element" },
-        ],
-        has: {
-          field: "name",
-          kind: "identifier",
-          regex: "^Button$"
-        },
+        any: [{ kind: "jsx_opening_element" }, { kind: "jsx_self_closing_element" }],
+        has: { field: "name", kind: "identifier", regex: "^Button$" },
       },
     },
   });
 
-  for (const attr of jsxAttrs) {
-    const name = attr?.find({ rule: { kind: "property_identifier" } });
-    const propName = name?.text();
-    if (propName) {
-      propUsageMetric.increment({ propName });
-    }
-  }
+  const props = attributes
+    .map((attribute) => attribute.find({ rule: { kind: "property_identifier" } })?.text())
+    .filter((propName) => propName !== undefined)
+    .map((propName) => ({ propName }));
 
-  return null;
+  return { edit: null, data: { "prop-usage": props } };
 };
 
 export default codemod;
 ```
 
-Running this codemod produces output like:
+Running it prints the totals:
 
 ```
 Metrics:
@@ -102,8 +99,27 @@ Metrics:
     propName=variant: 12
 ```
 
+## In a workflow
+
+A `jssg` step's result carries the totals of its files as `data`, and the run report adds up every step:
+
+```typescript
+import { step, forEachFile, jssg } from "codemod/workflow";
+
+export default async function main() {
+  const scan = await step("Scan", forEachFile(jssg("scripts/codemod.ts")));
+  scan.data["prop-usage"]; // [{ cardinality: { propName: "onClick" }, count: 42 }, ...]
+}
+```
+
+`forEachFile` callbacks don't edit through their return value, so they report what they found as their outputs (`result.outputs`).
+
 ## Insights
 
-Insights binds each dashboard query to one workflow step and loads that step’s `js-ast-grep` script from the published package. Metric names must be statically visible in that script (`useMetricAtom` + `increment`)—not only in a different package file or helper import. This is the selected step’s script, not necessarily the package entry (for example `scripts/codemod.ts`). For scale (transforms or mining), see [Performant codemods](/community/jssg/advanced/performance#performant-codemods).
+Insights binds each dashboard query to one workflow step and loads that step's `js-ast-grep` script from the published package. Data names must be visible in that script as literal keys of the returned `data` object, not only in a different package file or helper import. This is the selected step's script, not necessarily the package entry (for example `scripts/codemod.ts`). For scale (transforms or mining), see [Performant codemods](/community/jssg/advanced/performance#performant-codemods).
 
-Insights runs the selected step on its own, so that step must compute its metric from the repository directly. Don't rely on files written by an earlier step (for example, a `collect` step that writes JSON shards for an `analyze` step); the widget will return no results.
+Insights runs the selected step on its own, so that step must compute its data from the repository directly. Don't rely on files written by an earlier step (for example, a `collect` step that writes JSON shards for an `analyze` step); the widget will return no results.
+
+<Note>
+`useMetricAtom` from `codemod/metrics` was removed in workflow v2. Replace `atom.increment(labels)` with a row in the returned `data`, and `atom.increment(labels, n)` with `n` rows.
+</Note>

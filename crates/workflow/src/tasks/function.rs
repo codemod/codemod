@@ -95,7 +95,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     })?;
 
     let outcome: Outcome = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    isolates.metrics(task);
+    isolates.data(task);
     if let Some(message) = failure {
         return Err(message);
     }

@@ -1,6 +1,3 @@
-// oxlint-disable triple-slash-reference
-/// <reference path="./metrics.d.ts" />
-
 /**
  * In a workflow, as in Node.js: where the workflow file is, also inside its
  * steps and `forEachFile` callbacks.
@@ -269,8 +266,6 @@ declare module "codemod:workflow" {
   // runs again on every resume: there, `Date`, `Math.random` and
   // `crypto.randomUUID` are replay-safe, and modules that read files, the
   // network, the environment or the clock are build errors.
-
-  import type { MetricEntry } from "codemod:metrics";
 
   /** A JSON value: what step results, captured variables and state may hold. */
   export type JsonValue =
@@ -555,8 +550,6 @@ declare module "codemod:workflow" {
      * callback throws on every file, the step fails instead.
      */
     failures: FileFailure[];
-    /** What callbacks recorded with `codemod/metrics`, by metric name. */
-    metrics: Record<string, MetricEntry[]>;
     /** What callbacks set with `setState`. */
     state?: StateChanges;
   }
@@ -567,8 +560,8 @@ declare module "codemod:workflow" {
    *
    * Write the callback inline. Variables from outside it arrive as frozen
    * copies and must be JSON; assigning to them is a build error. Imports
-   * (`codemod/ast-grep`, `codemod/metrics`, packages, files next to the
-   * workflow) are available inside.
+   * (`codemod/ast-grep`, packages, files next to the workflow) are
+   * available inside.
    *
    * @example
    * ```ts
@@ -723,8 +716,19 @@ declare module "codemod:workflow" {
     changes: FileChanges;
     unmodified: number;
     failures: FileFailure[];
+    /**
+     * The `data` the transform returned for each file, added up: every row
+     * counts once for its name and labels.
+     */
+    data: { readonly [name: string]: readonly DataCount[] };
     /** What the transform set with `setState`. */
     state?: StateChanges;
+  }
+
+  /** How many rows a transform returned under one name with these labels. */
+  export interface DataCount {
+    cardinality: { readonly [label: string]: string };
+    count: number;
   }
 
   /**

@@ -63,11 +63,11 @@ A prefilter that still matches most of the repo is a parse tax. Prefer syntax-sh
 
 ### Insights (mining)
 
-Insights binds each dashboard query to one workflow step and loads that step’s `js-ast-grep` script from the published package. Metric names must be statically visible in that script (`useMetricAtom` + `increment`)—not only in a different package file or helper import. This is the selected step’s script, not necessarily the package entry. For mining, `return null`.
+Insights binds each dashboard query to one workflow step and loads that step’s `js-ast-grep` script from the published package. Data names must be visible in that script as literal keys of the returned `data` object, not only in a different package file or helper import. This is the selected step’s script, not necessarily the package entry. For mining, return `{ edit: null, data }`.
 
-CLI workflows may use multiple JSSG steps or a shared language step so one parse serves several analyses. That does not apply to Insights: keep the metric emit in the bound step’s script, with a once-built sharded index when analysis is project-wide.
+CLI workflows may use multiple JSSG steps or a shared language step so one parse serves several analyses. That does not apply to Insights: keep the returned data in the bound step’s script, with a once-built sharded index when analysis is project-wide.
 
-See [Metrics](/community/jssg/metrics) for the `useMetricAtom` API.
+See [Returning data](/community/jssg/metrics) for the `{ edit, data }` result.
 
 ### Verify wall clock before you ship
 
@@ -79,7 +79,7 @@ See [Metrics](/community/jssg/metrics) for the `useMetricAtom` API.
    - For a standalone script with no workflow filters, `codemod jssg run --language <lang>` is enough (`--language`, not `-l`; `-l` is only valid for `jssg test`).
 3. Optionally time a deliberate per-file full-repo walk so you know what quadratic looks like.
 
-The package should sit near the no-op, not 10–100× it. Check edit or metric **counts** on that corpus, not only that the command exits 0.
+The package should sit near the no-op, not 10–100× it. Check edit or data **counts** on that corpus, not only that the command exits 0.
 
 ## Best Practices
 

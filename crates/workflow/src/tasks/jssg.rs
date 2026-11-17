@@ -83,6 +83,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         "changes": applied,
         "unmodified": outcome.unmodified,
         "failures": failures,
+        "data": outcome.metrics,
     }))
     .with_state(state)
     .with_failures(outcome.failures.len(), total))

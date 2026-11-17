@@ -2,7 +2,6 @@ use super::codemod_lang::CodemodLang;
 use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use crate::llm::LlmRuntimeContext;
-use crate::metrics::MetricsContext;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver};
 use crate::sandbox::runtime_module::RuntimeHooksContext;
@@ -268,15 +267,6 @@ where
                 })?;
         }
 
-        // Selector extraction may evaluate the codemod's full module graph.
-        // Install a disposable metrics context so modules that import
-        // `codemod:metrics` can initialize without requiring transform execution.
-        ctx.store_userdata(MetricsContext::new())
-            .map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: format!("Failed to store MetricsContext: {:?}", e),
-                },
-            })?;
         ctx.store_userdata(LlmRuntimeContext::default())
             .map_err(|e| ExecutionError::Runtime {
                 source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -614,43 +604,6 @@ mod tests {
         assert!(
             result.is_some(),
             "const arrow getSelector exports should be supported"
-        );
-    }
-
-    #[tokio::test]
-    async fn selector_extraction_supports_top_level_metrics_imports() {
-        let dir = tempdir().unwrap();
-        let script_path = dir.path().join("codemod.js");
-        std::fs::write(
-            &script_path,
-            r#"
-            import { useMetricAtom } from "codemod:metrics";
-
-            const selectorMetric = useMetricAtom("selector_metric");
-
-            export const getSelector = () => {
-                selectorMetric.increment();
-                return { rule: { kind: "string_fragment" } };
-            };
-            export default function codemod() {}
-            "#,
-        )
-        .unwrap();
-
-        let resolver = Arc::new(OxcResolver::new(dir.path().to_path_buf(), None).unwrap());
-        let result = extract_selector_with_quickjs(SelectorEngineOptions {
-            script_path: &script_path,
-            language: "tsx".parse::<CodemodLang>().unwrap(),
-            resolver,
-            capabilities: None,
-            target_directory: Some(dir.path()),
-        })
-        .await
-        .unwrap();
-
-        assert!(
-            result.is_some(),
-            "selector extraction should support top-level metrics imports"
         );
     }
 

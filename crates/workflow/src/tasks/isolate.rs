@@ -81,8 +81,9 @@ impl StepIsolates {
         self.shared_state.changes_since(&self.initial_state)
     }
 
-    /// Metrics the step's code recorded, also added to the run summary.
-    pub fn metrics(&self, task: &TaskContext<'_>) -> Value {
+    /// What the step's transforms and callbacks returned as `data`, added up;
+    /// also added to the run summary.
+    pub fn data(&self, task: &TaskContext<'_>) -> Value {
         let metrics = self.metrics.get_all();
         if !metrics.is_empty() {
             task.run.services.summary.merge_metrics(metrics.clone());

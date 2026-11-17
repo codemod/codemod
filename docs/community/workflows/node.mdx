@@ -63,7 +63,7 @@ The first argument is a workflow file or a package directory. In a package direc
 
 ## Import workflows yourself
 
-Workflows import `codemod/workflow`, `codemod/ast-grep`, `codemod/metrics`, `codemod/runtime` and `codemod/llm`. These are exports of the `codemod` package, so Node.js, Bun, Vite and Vitest resolve them like any other import, once the package is installed:
+Workflows import `codemod/workflow`, `codemod/ast-grep`, `codemod/runtime` and `codemod/llm`. These are exports of the `codemod` package, so Node.js, Bun, Vite and Vitest resolve them like any other import, once the package is installed:
 
 ```ts
 const workflow = await import("./workflow.ts");
@@ -91,7 +91,7 @@ const report = await runWorkflow(await import("./workflow.ts"), {
 
 Both hosts run the same orchestrator: `step()`, replay on resume, `until` and `given` work the same way. Tasks the engine owns run in the engine on both: `jssg`, `astGrep`, `shell`, `shard`, `codemod`, `agent` and the git steps, and so do selecting files for `forEachFile` and writing what callbacks change.
 
-A workflow file is checked as the CLI checks it before it runs: a callback that assigns to an outer variable, `fs` in the workflow body, and the other things the CLI refuses are errors here too, so a workflow that passes its tests also runs with the CLI. State, metrics, `codemod/runtime` logs and failures behave the same in steps and callbacks on both.
+A workflow file is checked as the CLI checks it before it runs: a callback that assigns to an outer variable, `fs` in the workflow body, and the other things the CLI refuses are errors here too, so a workflow that passes its tests also runs with the CLI. State, `codemod/runtime` logs and failures behave the same in steps and callbacks on both.
 
 On the Node.js host:
 

@@ -257,11 +257,4 @@ impl HostedRun {
             total,
         });
     }
-
-    /// Add metrics a step recorded to the run summary.
-    pub fn add_metrics(&self, metrics: Value) -> Result<(), String> {
-        let metrics = serde_json::from_value(metrics).map_err(|e| format!("bad metrics: {e}"))?;
-        self.context.services.summary.merge_metrics(metrics);
-        Ok(())
-    }
 }

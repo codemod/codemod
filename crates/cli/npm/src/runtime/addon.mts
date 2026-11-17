@@ -99,8 +99,6 @@ export interface NativeRun {
     label: string,
     files: string,
   ): Promise<{ changes: Json; failures: { path: string; error: string }[] }>;
-  /** Add metrics a step recorded to the run summary, as JSON. */
-  addMetrics(metrics: string): void;
   /** Events since the last call. */
   takeEvents(): EngineEvent[];
   /** Record how the run ended, given how its body ended (JSON, or `"null"`). */

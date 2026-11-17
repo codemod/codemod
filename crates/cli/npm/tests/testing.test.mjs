@@ -409,25 +409,21 @@ export default async function main() {
     },
   );
 
-  test(`${host}: metrics, runtime logs and reported failures`, HOSTS[host], async () => {
+  test(`${host}: runtime logs and reported failures`, HOSTS[host], async () => {
     const path = join(
       scratch({
         "workflow.ts": `
 import { step, forEachFile } from "codemod/workflow";
-import { useMetricAtom } from "codemod/metrics";
 import { warn, failFile } from "codemod/runtime";
 export default async function main() {
   const found = await step("Scan", forEachFile("**/*.ts", (file) => {
-    const metric = useMetricAtom("seen");
-    metric.increment({ count: 3 }, 2.9);
-    metric.increment({ count: 3 }, -5);
     warn("careful", { file: file.path });
     if (file.path === "b.ts") {
       try { failFile("not this one"); } catch {}
     }
     return file.path;
   }));
-  return { outputs: found.outputs, failures: found.failures, metrics: found.metrics };
+  return { outputs: found.outputs, failures: found.failures };
 }
 `,
       }),
@@ -440,9 +436,6 @@ export default async function main() {
     // Some files failed: the step finished, as partial.
     assert.equal(result.step("Scan").status, "partial");
     assert.equal(result.step("Scan").error, "1 of 2 files failed");
-    assert.deepEqual(result.output.metrics, {
-      seen: [{ cardinality: { count: "3" }, count: 4 }],
-    });
     const warnings = result.logs.map((log) => log.line).filter((line) => line.includes("careful"));
     assert.deepEqual(warnings.sort(), [
       '[warn] careful {"file":"a.ts"}',

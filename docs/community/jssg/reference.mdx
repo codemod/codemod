@@ -29,7 +29,6 @@ Built-in codemod modules:
 - `codemod/ast-grep` — parsing, traversal, pattern matching
 - `codemod/llm` — engine-owned text generation for codemods that declare the `fetch` capability
 - `codemod/workflow` — shared state and workflow integration
-- `codemod/metrics` — metrics collection across files
 - `codemod/runtime` — progress, warning, cancellation, and explicit failure hooks
 
 These are also exports of the `codemod` npm package, so editors and Node.js resolve them like any other import. Code written for older CLI versions imports them as `codemod:ast-grep`, `codemod:workflow`, and so on; that spelling still works and names the same modules. Code that imports `codemod/*` needs a CLI version that knows the new spelling, which `npx codemod` always fetches.

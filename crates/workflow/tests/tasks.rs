@@ -174,6 +174,34 @@ export default async function main() {
 }
 
 #[test]
+fn a_jssg_steps_returned_data_is_added_up_on_its_result_and_the_run() {
+    let h = Harness::new();
+    h.write("src/a.ts", "foo(); foo();\n");
+    h.write("src/b.ts", "foo();\n");
+    h.bundle_file(
+        "scripts/transform.ts",
+        r#"
+export default function transform(root: any) {
+  const calls = root.root().findAll({ rule: { pattern: "foo()" } });
+  return { data: { calls: calls.map(() => ({ name: "foo" })) } };
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  return (await step(jssg("./scripts/transform.ts", { include: "src/**/*.ts" }))).data;
+}
+"#,
+        Value::Null,
+    );
+    let calls = json!([{ "cardinality": { "name": "foo" }, "count": 3 }]);
+    assert_eq!(output(&report).unwrap()["calls"], calls);
+    assert_eq!(json!(h.summary.metrics()["calls"]), calls);
+}
+
+#[test]
 fn jssg_transform_logs_become_step_logs_grouped_by_file() {
     let h = Harness::new();
     h.write("src/a.ts", "const a = 1;\n");

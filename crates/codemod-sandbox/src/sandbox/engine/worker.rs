@@ -4,8 +4,8 @@
 //! [`execute_codemod_with_quickjs`](super::execute_codemod_with_quickjs)
 //! builds a fresh runtime for every file. A [`Worker`] builds one async
 //! QuickJS context with the same modules (`codemod:ast-grep`,
-//! `codemod:workflow`, `codemod:metrics`, `codemod:runtime`, `codemod:llm`
-//! when fetch is granted, and the LLRT modules the capabilities allow), plus
+//! `codemod:workflow`, `codemod:runtime`, `codemod:llm` when fetch is
+//! granted, and the LLRT modules the capabilities allow), plus
 //! in-memory modules and relative or package imports, and keeps it for as
 //! many calls as the host makes.
 

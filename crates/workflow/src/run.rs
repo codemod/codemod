@@ -474,7 +474,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
     runtime.set_loader(
         (
             // The body's codemod modules: `codemod/<name>`, or `codemod:<name>`.
-            CodemodModuleResolver::new(&["ast-grep", "workflow", "metrics"]),
+            CodemodModuleResolver::new(&["ast-grep", "workflow"]),
             llrt_resolver,
             BuiltinResolver::default().with_module(ORCHESTRATOR_MODULE),
             QuickJSResolver::new(Arc::new(packages)),
@@ -483,8 +483,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             llrt_loader.with_module("codemod/ast-grep", AstGrepModule),
             BuiltinLoader::default()
                 .with_module(FLOW_MODULE, crate::js::workflow_module())
-                .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator())
-                .with_module("codemod/metrics", crate::js::body_metrics()),
+                .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator()),
             QuickJSLoader,
         ),
     );

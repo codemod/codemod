@@ -210,7 +210,7 @@ nodes:
 
 A codemod package can depend on `codemod` directly: its scripts and `npx codemod` then run that
 CLI, pinned to your `package.json`, and editors get the matching types for writing codemods and
-workflows, the `codemod:*` modules (`codemod/workflow`, `codemod/ast-grep`, `codemod/metrics`, ...)
+workflows, the `codemod:*` modules (`codemod/workflow`, `codemod/ast-grep`, `codemod/runtime`, ...)
 and the per-language node types:
 
 ```bash

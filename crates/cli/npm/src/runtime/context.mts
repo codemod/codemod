@@ -11,12 +11,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { NativeRun } from "./addon.mts";
 import type { Json, Runtime } from "./orchestrator.mts";
 
-/** One count of a metric, for one combination of labels. */
-export type MetricEntry = {
-  cardinality: Record<string, string>;
-  count: number;
-};
-
 /** What a step or `forEachFile` callback sees and leaves behind. */
 export interface StepScope {
   position: number;
@@ -31,8 +25,6 @@ export interface StepScope {
   removed: Set<string>;
   /** Step outputs set here. */
   outputs: Map<string, string>;
-  /** Metrics by name, then by their labels as JSON. */
-  metrics: Map<string, Map<string, MetricEntry>>;
   /** A failure reported with `failFile` or `failStep`. */
   failure: string | undefined;
   /** `parse()`'s default language. */
@@ -80,7 +72,6 @@ export function stepScope(
     unpersisted: new Set(),
     removed: new Set(),
     outputs: new Map(),
-    metrics: new Map(),
     failure: undefined,
     language,
   };
@@ -99,11 +90,4 @@ export function stateChanges(scope: StepScope): Record<string, Json> {
   }
   for (const key of scope.removed) changes[key] = null;
   return changes;
-}
-
-/** The metrics a step recorded, as the engine reports them. */
-export function metricsOf(scope: StepScope): Record<string, MetricEntry[]> {
-  const data: Record<string, MetricEntry[]> = {};
-  for (const [name, entries] of scope.metrics) data[name] = [...entries.values()];
-  return data;
 }
