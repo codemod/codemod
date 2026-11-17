@@ -6,8 +6,19 @@ description: "Track and aggregate data across codemod executions"
 Metrics allow you to collect and aggregate data while running codemods. This is useful for:
 
 - **Codebase analysis**: Count occurrences of patterns, prop usages, component instances
-- **Migration tracking**: Track what needs to be migrated before making changes
+- **Migration tracking**: Track what was rewritten (and in which shapes) while applying transforms
 - **Read-only codemods**: Gather insights without modifying code
+
+## When to emit metrics
+
+Prefer **one metric name per `js-ast-grep` step**, with **cardinality dimensions** for the variants you care about—not a separate metric for every edge case.
+
+| Package type | Expectation |
+| --- | --- |
+| Transform / migration step | Emit at least one `useMetricAtom` in that step’s script. Increment when you apply a real edit. Use cardinality for shape (e.g. `shape=no-options`, `kind=call-rewrite`). |
+| Read-only mining / Insights | Emit metrics and `return null`. Metric names must be statically visible in the selected step script. |
+
+Keep the metric count small. Encode differences as cardinality keys/values on the same atom. Snapshot `metrics.json` next to fixtures that produce counts (`jssg test -u`).
 
 ## Basic Usage
 

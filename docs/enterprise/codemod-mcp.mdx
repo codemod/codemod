@@ -110,13 +110,16 @@ Tool names follow the pattern `<area>_<action>`. Tools with a `:read` scope don'
 | --- | --- | --- |
 | `insights_dashboard_list` | `insights:read` | List Insights dashboards |
 | `insights_dashboard_get` | `insights:read` | Get a dashboard with its cached widget data |
-| `insights_dashboard_preview_widget` | `insights:read` | Preview an Insights widget. Waits up to 90 seconds and returns `ready`, `error`, or `pending` |
+| `insights_dashboard_widget_schema` | `insights:read` | Read Insights formats before writing. Use `part: "capabilities"` first (enum index and guidance), then `dashboard` / `widget` / `query` for JSON Schema |
+| `insights_dashboard_preview_widget` | `insights:read` | Preview an Insights widget. Waits up to 90 seconds and returns `ready`, `error`, or `pending`, plus advisory `fitnessWarnings` when present—fix those before save |
+| `insights_dashboard_start_widget_preview` | `insights:read` | Start a bounded sample preview (shared evaluation budget). Prefer this for general find/search before a full run |
+| `insights_dashboard_resume_widget_preview` | `insights:read` | Resume a bounded preview session by at most one batch |
 | `insights_dashboard_list_recommended` | `insights:read` | List recommended dashboards |
 | `insights_dashboard_describe_package_metrics` | `insights:read` | Describe a package's metrics |
 | `insights_dashboard_get_packages_with_jssg` | `insights:read` | List packages usable as widget sources |
 | `insights_dashboard_get_package_default_template` | `insights:read` | Get a package's default dashboard template |
-| `insights_dashboard_create` | `insights:write` | Create an Insights dashboard. **Asks first when supported** |
-| `insights_dashboard_update` | `insights:write` | Update an Insights dashboard. **Asks first when supported** |
+| `insights_dashboard_create` | `insights:write` | Create an Insights dashboard. **Asks first when supported**. Returns `fitnessWarnings` as a post-save backstop |
+| `insights_dashboard_update` | `insights:write` | Update an Insights dashboard. **Asks first when supported**. Returns `fitnessWarnings` as a post-save backstop |
 | `insights_dashboard_promote_recommended` | `insights:write` | Promote a recommended dashboard. **Asks first when supported** |
 
 ### Repositories and code
