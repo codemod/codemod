@@ -49,14 +49,17 @@ Anything with third-party security findings or org-internal data went to **app**
 - **Doc:** [HANDOFF.md](https://github.com/codemod/codemod/blob/handoff/workflow-v2-tutorial/HANDOFF.md)
 
 ### Engine performance (worker pool, memory, matcher)
-- **Where:** cm `claude/project-thread-bffawz` @ `38b9616` (that session could only push to this name)
+- **Where:** cm `claude/project-thread-bffawz` @ `4cd1920` (that session could only push to this name)
 - **PR:** none. Built on `engine/code-first` @ `6536221`. Nothing shown to Mo yet.
-- **State:** five perf commits, one per optimization, plus the harness and results under
-  `bench/engine-perf/`. Memory on cal.com down from about 600 MB to 190 MB. A second benchmark pass
-  (per-step cap numbers) was still running; its results get pushed to the same branch.
-- **Decision for Dev:** whether to propose the pool to Mo and with what isolation contract; send the
-  mem, kinds and rules changes first as three small PRs (recommended); cap vs one shared pool per run
-  (wait for the second pass).
+- **State:** one commit per optimization, plus the harness and results under `bench/engine-perf/`.
+  Both benchmark passes are done. Pool plus rule cache is 2 to 4x faster than Mo's head and matches or
+  beats Dev's prototype (audit on cal.com 9.8 s vs 10.4 s), with identical diffs. Ranked: worker pool
+  1.3 to 3.6x; rule cache about 1.15x alone and 20 to 40% more on top of the pool; memory fix no speed
+  change but 40 to 70% lower peak memory; kind skip no gain; per-step cap made the audit 15% slower
+  (recommend dropping it).
+- **Decision for Dev:** the pool shares module-level state between files on one worker. Recommended: a
+  written rule that module code runs once per worker, plus a switch to turn the pool off. Then whether
+  and how to propose it to Mo.
 - **Doc:** [HANDOFF.md](https://github.com/codemod/codemod/blob/claude/project-thread-bffawz/HANDOFF.md)
 
 ### Blog post benchmark data
