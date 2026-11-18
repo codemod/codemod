@@ -1,0 +1,72 @@
+
+util-is on taxonomy  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all5                       0.07  2.80x     0.2       46  3 0
+  all4                       0.10  2.04x     0.2       40  3 0
+  rules                      0.20  1.05x     0.6       48  3 0
+  cap                        0.20  1.04x     0.7       47  3 0
+  mo                         0.21  1.00x     0.7       40  3 0
+  kinds                      0.21  0.99x     0.7       47  3 0
+
+util-is on excalidraw  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all5                       0.53  2.55x     1.9       62  3 0
+  all4                       0.56  2.40x     2.0       54  3 0
+  rules                      1.29  1.05x     4.8       73  3 0
+  kinds                      1.36  1.00x     5.1       71  3 0
+  mo                         1.36  1.00x     5.2       66  3 0
+  cap                        1.36  1.00x     5.2       72  3 0
+
+react-19 on taxonomy  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all5                       0.30  3.61x     0.8       50  3 0
+  all4                       0.32  3.42x     0.9       43  3 0
+  rules                      0.92  1.18x     3.3       53  3 0
+  mo                         1.08  1.00x     3.9       45  3 0
+  kinds                      1.09  0.99x     4.0       52  3 0
+  cap                        1.09  0.99x     4.0       52  3 0
+
+react-19 on excalidraw  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                       4.18  2.21x    15.8       75  3 0
+  all5                       4.19  2.21x    15.8       83  3 0
+  rules                      7.92  1.17x    30.7      106  3 0
+  cap                        8.98  1.03x    35.0      103  3 0
+  kinds                      8.99  1.03x    35.2      106  3 0
+  mo                         9.24  1.00x    35.8       98  3 0
+
+debarrel on taxonomy  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                       0.14  3.13x     0.4       45  3 0
+  all5                       0.15  2.82x     0.4       52  3 0
+  kinds                      0.41  1.04x     1.5       54  3 0
+  rules                      0.41  1.04x     1.4       54  3 0
+  cap                        0.41  1.03x     1.4       53  3 0
+  mo                         0.43  1.00x     1.4       46  3 0
+
+debarrel on excalidraw  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                       6.10  1.25x    23.5      115  3 0
+  all5                       6.13  1.25x    23.4      123  3 0
+  rules                      7.44  1.03x    28.9      128  3 0
+  mo                         7.66  1.00x    29.2      123  3 0
+  cap                        7.68  1.00x    29.7      130  3 0
+  kinds                      7.79  0.98x    28.7      132  3 0
+
+audit on taxonomy  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                       0.25  4.18x     0.7       74  3 0
+  all5                       0.31  3.34x     0.8       81  3 0
+  rules                      0.99  1.05x     3.5       89  3 0
+  kinds                      1.04  1.00x     3.7       89  3 0
+  mo                         1.04  1.00x     3.7       81  3 0
+  cap                        1.21  0.86x     3.8       87  3 0
+
+audit on excalidraw  (diffs all identical)
+  arm                      wall s  vs mo   cpu s  peak MB  n exit
+  all4                       3.78  2.27x    14.4      268  3 0
+  all5                       4.52  1.90x    15.0      275  3 0
+  kinds                      8.01  1.07x    30.5      437  3 0
+  rules                      8.33  1.03x    31.7      443  3 0
+  mo                         8.56  1.00x    32.8      434  3 0
+  cap                       10.08  0.85x    32.8      443  3 0

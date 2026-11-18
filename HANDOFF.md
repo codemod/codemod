@@ -33,9 +33,11 @@ Yes. The pool is commit `03dbdae5`, at about 370 lines.
 
 On top of it, a per-thread rule cache and the kind skip make it 2.1x to 3.3x faster than Mo's head. That matches or beats Dev's prototype on every JS-transform cell.
 
-Dev's prototype still wins clearly on the 14-step audit workflow (2.8x vs 1.8x on excalidraw). The likely reason is that Mo runs all 14 steps at once with 4 threads each, on 4 cores.
+Dev's prototype won on the 14-step audit workflow in the first pass, on taxonomy (6.2x vs 2.9x) and excalidraw (2.8x vs 1.8x).
 
-The fifth commit (cap) targets that case. Its numbers are still being collected.
+In the second pass, on audit for cal.com, the stack edged it out: 9.8 s for mem+pool+kinds+rules against 10.4 s for the prototype.
+
+The fifth commit, cap, was built to cut oversubscription when many steps run at once. It made things worse, so it should be dropped. See the ranked table.
 
 **3. Memory**
 
@@ -162,6 +164,65 @@ Mo's peak memory grows with the number of steps: 83, 126 and 330 MB for 1, 2 and
   - This is the strongest argument for the cap commit, or for one shared worker pool per run instead of per step.
   - One rough run: all5 (all4 + cap) gave audit on excalidraw in 6.3 s and 14 s of CPU, against all4's 7.6 s and 20 s.
 
+## Second pass (after a machine restart): pure single changes, pairs, the cap, audit on cal.com
+
+The machine was faster after the restart. For example, `mo` react-19 on excalidraw took 14.0 s in the first pass and 8.4 to 9.2 s in the second.
+
+So compare arms only within a pass. Ratios against `mo` are the stable number.
+
+Full tables:
+
+- `results/summary-singles.txt`
+- `results/summary-pairs.txt`
+- `results/summary-auditcal.txt`
+
+All diffs were identical.
+
+**Speedup vs `mo`, second pass (higher is faster)**
+
+| Cell | kinds | rules | cap | mem+pool | pool+kinds | pool+rules | all4 | all5 (all4+cap) |
+|---|---|---|---|---|---|---|---|---|
+| util-is, excalidraw | 1.00 | 1.05 | 1.00 | 2.00 | 2.00 | 2.36 | 2.31 to 2.40 | 2.55 |
+| react-19, taxonomy | 0.99 | 1.18 | 0.99 | 2.54 | 2.48 | 3.48 | 3.42 to 3.69 | 3.61 |
+| react-19, excalidraw | 1.03 | 1.17 | 1.03 | 1.75 | 1.76 | 2.15 | 2.20 to 2.21 | 2.21 |
+| debarrel, excalidraw | 0.98 | 1.03 | 1.00 | 1.31 | 1.35 | 1.28 | 1.25 to 1.29 | 1.25 |
+| audit, taxonomy | 1.00 | 1.05 | **0.86** | 3.58 | 3.25 | 3.71 | 3.93 to 4.18 | 3.34 |
+| audit, excalidraw | 1.07 | 1.03 | **0.85** | 2.00 | 2.07 | 2.20 | 2.26 to 2.27 | 1.90 |
+
+all4 appears in two groups, so its column gives the range of the two runs.
+
+**Audit on cal.com** (wall, CPU, peak MB):
+
+| Arm | Wall | CPU | Peak |
+|---|---|---|---|
+| mo | 44.0 s | 167 s | 594 MB |
+| mem | 42.1 s | — | 182 MB |
+| pool | 12.2 s | — | 552 MB |
+| all4 | **9.8 s** | 37 s | 174 MB |
+| ts (Dev's prototype) | 10.4 s | — | 156 MB |
+| all5 | 12.5 s | — | 175 MB |
+| cap | 52.6 s | — | 606 MB |
+| v1 | 42.1 s | — | 58 MB |
+
+**What the second pass shows**
+
+- **Rules and the pool:** the rule cache saves about the same absolute time with or without the pool (about 1 s on react-19, excalidraw). Once the pool has removed startup cost, that same second is a much bigger share of what's left. This is the "matters more together" case: react-19 goes from 1.17x with rules alone to 2.15x with pool+rules, against 1.75x for the pool alone.
+- **Kinds:** about zero, alone or paired, on these workloads. It is harmless, but it is not a perf reason to ship anything.
+- **Cap:** hurts audit by 14 to 16% alone and makes all5 slower than all4 on audit. A likely cause is that blocked walker threads stop overlapping file reads with transform work. Recommendation: drop it.
+- **Memory fix:** it costs nothing in time anywhere. It cuts peak memory wherever many steps run at once: audit on excalidraw goes from 428 to 265 MB, and on cal.com from 594 to 174 MB.
+
+## Ranked table
+
+Ranked by measured speed gain. Ratios are from the second pass.
+
+| Rank | Change | Speed vs mo | Memory | Size | Behaviour risk | Depends on / unlocks |
+|---|---|---|---|---|---|---|
+| 1 | pool | 1.3x to 3.6x alone | unchanged, a little up per thread | about 370 lines, lifetime-sensitive | **High:** module state shared across files on a thread | Unlocks most of the rules gain |
+| 2 | rules | 1.03x to 1.18x alone; adds about 20 to 40% on top of the pool for rule-heavy transforms | negligible | 45 lines | Low; wasm key fix needed | Worth most with the pool |
+| 3 | mem | about 1.0x | **-40% to -70% peak** with many steps | 24 lines | Low | Independent; keeps the pool's memory in check |
+| 4 | kinds | about 1.0x | none | 11 lines | None | Nothing measurable here |
+| 5 | cap | **0.85x to 1.0x** | none | 38 lines | Low | Drop |
+
 ## CPU profile (perf, DWARF call graphs, react-19 on excalidraw, mem+pool build)
 
 See `bench/engine-perf/profiles/perf-react19-excalidraw-inclusive.txt`.
@@ -251,7 +312,6 @@ The memory profile is in `profiles/heaptrack-audit-2steps-peaks.txt`.
 - Dry-run mode.
 - Long runs for memory growth.
 - The Solid migration assistant workflows. The v2 SMA needs the state-removal port first.
-- The cap and pure single-change arms are in the second pass, still running when this was written.
 
 ## How to rerun
 
@@ -295,12 +355,13 @@ Expect pushback, since it is a state channel. The alternative, resetting globals
 
 Recommendation: send mem, kinds and rules as three small PRs before the pool. They are low risk and easy to review, and rules needs the wasm key fix first.
 
-**3. Cap vs a single shared pool per run.**
+**3. What to do about many steps at once.**
 
-Recommendation: wait for the second-pass numbers.
+The cap made things worse, so drop it.
 
-- If cap closes most of the audit gap with Dev's prototype, it is the cheap answer.
-- If not, the next step is one worker pool per run shared across steps, as in Dev's prototype. That is a larger change to how steps are scheduled.
+With the memory fix, peak memory on audit on cal.com is 174 MB, against 156 MB for Dev's prototype and 58 MB for v1.
+
+Recommendation: stop here for now. Revisit a shared pool per run only if very wide workflows (dozens of steps) matter.
 
 **4. How to present v1 vs v2.**
 
@@ -308,7 +369,7 @@ Mo's engine without these changes is roughly v1 speed, with much higher memory o
 
 ## Next steps
 
-1. Finish the second pass (audit on cal.com, pure kinds/rules/cap, pairs) and add the numbers here. The local runner is `harness/perfrun2.sh`.
+1. Drop the cap commit (`c5a18d71`) before any PR. It is kept on this branch only so its numbers can be reproduced.
 2. Fix the rules cache key for wasm. Add spec-style tests:
    - module state with the pool: a test that documents the contract;
    - a rule object reused across files gives the same matches.
