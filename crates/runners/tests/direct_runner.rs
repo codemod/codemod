@@ -93,7 +93,7 @@ async fn captures_original_line_endings_and_logs_each_line() {
 #[cfg(windows)]
 #[tokio::test]
 async fn preserves_cmd_crlf_line_endings() {
-    let output = run("echo out\n>&2 echo err").await.unwrap();
+    let output = run("echo out\n(echo err)1>&2").await.unwrap();
     assert_eq!(output.stdout, "out\r\n");
     assert_eq!(output.stderr, "err\r\n");
     assert!(!output.cut);
