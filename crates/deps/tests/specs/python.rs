@@ -163,6 +163,36 @@ fn an_optional_dependency_in_poetry_lock_is_an_optional_edge_with_its_range() {
     );
 }
 
+#[test]
+fn a_poetry_dependency_resolves_to_the_locked_version_its_range_accepts() {
+    let lock = r#"
+[[package]]
+name = "foo"
+version = "1.0"
+
+[[package]]
+name = "foo"
+version = "2.0"
+
+[[package]]
+name = "bar"
+version = "1.0"
+
+[package.dependencies]
+foo = ">=2"
+"#;
+    let pyproject = "[tool.poetry]\nname = \"app\"\nversion = \"1.0.0\"\n\n[tool.poetry.dependencies]\nfoo = \"^2\"\n";
+    let graph = lockfiles::poetry(lock, &|path| {
+        (path == "pyproject.toml").then(|| pyproject.to_string())
+    })
+    .unwrap();
+    let walk = Walk::new(graph);
+    assert_eq!(
+        described(&walk, walk.declaring("foo", &[])),
+        ["bar@1.0 prod foo@2.0 >=2", "app@1.0.0 prod foo@2.0 ^2"]
+    );
+}
+
 const PIPFILE_LOCK: &str = r#"{
   "_meta": { "pipfile-spec": 6 },
   "default": {

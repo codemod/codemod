@@ -17,6 +17,7 @@ use toml::Value;
 
 use super::{ReadFile, UNVERSIONED};
 use crate::model::{Ecosystem, Graph, Kind};
+use crate::semver::satisfies;
 
 /// What a dependency without a range accepts.
 const ANY: &str = "*";
@@ -137,7 +138,7 @@ pub fn poetry(text: &str, read: ReadFile) -> Result<Graph, String> {
                 .collect::<Vec<_>>()
                 .join(" || ");
             let name = normalize(&name);
-            let to = resolve(&graph, &by_name, &name, None);
+            let to = resolve_range(&graph, &by_name, &name, &range);
             let kind = if optional { Kind::Optional } else { Kind::Prod };
             graph.edge(from, to, &name, Some(range), kind);
         }
@@ -160,7 +161,7 @@ pub fn poetry(text: &str, read: ReadFile) -> Result<Graph, String> {
             ".",
         );
         for (name, range, kind) in pyproject_dependencies(&manifest) {
-            let to = resolve(&graph, &by_name, &name, None);
+            let to = resolve_range(&graph, &by_name, &name, &range);
             graph.edge(root, to, &name, Some(range), kind);
         }
     }
@@ -324,6 +325,22 @@ fn resolve(
                 .iter()
                 .find(|&&id| graph.nodes[id].version == version)
         })
+        .or(candidates.first())
+        .copied()
+}
+
+/// The installed package a dependency on `name` with `range` resolves to:
+/// the first one whose version satisfies the range, otherwise the first.
+fn resolve_range(
+    graph: &Graph,
+    by_name: &HashMap<String, Vec<usize>>,
+    name: &str,
+    range: &str,
+) -> Option<usize> {
+    let candidates = by_name.get(name)?;
+    candidates
+        .iter()
+        .find(|&&id| satisfies(Ecosystem::Pypi, range, &graph.nodes[id].version) == Some(true))
         .or(candidates.first())
         .copied()
 }
