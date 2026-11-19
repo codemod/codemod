@@ -23,7 +23,7 @@ use codemod_sandbox::sandbox::engine::quickjs_adapters::{
 };
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::AstGrepModule;
-use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
+use rquickjs::loader::{BuiltinLoader, BuiltinResolver, Resolver};
 use rquickjs::promise::PromiseState;
 use rquickjs::{CatchResultExt, Context, Ctx, Function, Module, Object, Promise, Runtime, Value};
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,20 @@ pub(crate) const ORCHESTRATOR_MODULE: &str = "codemod-internal:orchestrator";
 /// `semver` for the body and isolates; see `js/semver.ts`.
 pub(crate) const SEMVER_MODULE: &str = "codemod-internal:semver";
 const WORKFLOW_MODULE: &str = "workflow.js";
+const PATH_SHIM_MODULE: &str = "codemod-internal:path";
+
+struct BodyPathResolver;
+
+impl Resolver for BodyPathResolver {
+    fn resolve(&mut self, _ctx: &Ctx<'_>, base: &str, name: &str) -> rquickjs::Result<String> {
+        if base != PATH_SHIM_MODULE && matches!(name, "path" | "node:path") {
+            Ok(PATH_SHIM_MODULE.into())
+        } else {
+            // The shim itself imports the original LLRT module.
+            Err(rquickjs::Error::new_resolving(base, name))
+        }
+    }
+}
 
 /// LLRT modules left out of the workflow body: they read the clock, the
 /// environment or the machine, or schedule work. Steps and callbacks have them.
@@ -475,6 +489,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
         (
             // The body's codemod modules: `codemod/<name>`, or `codemod:<name>`.
             CodemodModuleResolver::new(&["ast-grep", "workflow"]),
+            BodyPathResolver,
             llrt_resolver,
             BuiltinResolver::default()
                 .with_module(ORCHESTRATOR_MODULE)
@@ -486,7 +501,8 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             BuiltinLoader::default()
                 .with_module(FLOW_MODULE, crate::js::workflow_module())
                 .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator())
-                .with_module(SEMVER_MODULE, crate::js::semver_module()),
+                .with_module(SEMVER_MODULE, crate::js::semver_module())
+                .with_module(PATH_SHIM_MODULE, include_str!("js/path.js")),
             QuickJSLoader,
         ),
     );

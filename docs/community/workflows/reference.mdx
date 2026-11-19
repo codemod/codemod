@@ -254,7 +254,7 @@ parse("tsx", text);                 // the original JSSG form
 
 The body is the code outside steps and callbacks. It runs again on every resume, and a step's saved result is reused only when the body calls that same step again, so the body has to come out the same each time:
 
-- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, and npm packages or local files whose imports only reach these.
+- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, and npm packages or local files whose imports only reach these. In the QuickJS workflow body, you can import `sep` and `delimiter` by name from `node:path` (or `path`); Node's `path.posix` and `path.win32` are not available there.
 - **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
 - **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
 - **`console.log`** goes to the run's output.
