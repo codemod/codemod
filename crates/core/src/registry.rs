@@ -63,6 +63,9 @@ pub enum RegistryError {
     #[error("Invalid package: missing {file} in {path}")]
     MissingPackageFile { file: String, path: String },
 
+    #[error("Invalid package: no runnable workflow in {path}: {reason}")]
+    MissingWorkflow { path: String, reason: String },
+
     #[error("HTTP request failed")]
     HttpError(#[from] reqwest::Error),
 
@@ -859,16 +862,16 @@ fn is_package_cached(package_dir: &Path) -> Result<bool> {
         return Ok(false);
     }
 
-    // Check for required files
-    let codemod_yaml = package_dir.join("codemod.yaml");
-    let workflow_yaml = package_dir.join("workflow.yaml");
-
-    Ok(codemod_yaml.exists() && workflow_yaml.exists())
+    // A cache entry is reusable when it is a valid package; anything else is
+    // re-downloaded.
+    Ok(validate_package_structure(package_dir).is_ok())
 }
 
+/// A package is valid when it has a `codemod.yaml` and a workflow that can be
+/// run: the default workflow `codemod.yaml` declares, or, when it declares
+/// none, one of the default workflow files (workflow.ts, workflow.yaml, ...).
 fn validate_package_structure(package_dir: &Path) -> Result<()> {
     let codemod_yaml = package_dir.join("codemod.yaml");
-    let workflow_yaml = package_dir.join("workflow.yaml");
 
     if !codemod_yaml.exists() {
         return Err(RegistryError::MissingPackageFile {
@@ -877,12 +880,12 @@ fn validate_package_structure(package_dir: &Path) -> Result<()> {
         });
     }
 
-    if !workflow_yaml.exists() {
-        return Err(RegistryError::MissingPackageFile {
-            file: "workflow.yaml".to_string(),
+    crate::package_workflows::locate_workflow(package_dir, None).map_err(|reason| {
+        RegistryError::MissingWorkflow {
             path: package_dir.display().to_string(),
-        });
-    }
+            reason,
+        }
+    })?;
 
     debug!("Package structure validated");
     Ok(())
@@ -1428,6 +1431,88 @@ mod tests {
             }
         }))
         .unwrap()
+    }
+
+    fn write_package(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("package dir");
+        for (name, contents) in files {
+            let path = dir.path().join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("create parent");
+            }
+            fs::write(path, contents).expect("write package file");
+        }
+        dir
+    }
+
+    #[test]
+    fn code_first_package_without_workflow_yaml_is_valid_and_cached() {
+        let package = write_package(&[
+            (
+                "codemod.yaml",
+                "name: demo\nworkflows:\n  - name: main\n    path: workflow.ts\n",
+            ),
+            ("workflow.ts", "export default {};\n"),
+        ]);
+        validate_package_structure(package.path()).expect("code-first package is valid");
+        assert!(is_package_cached(package.path()).unwrap());
+    }
+
+    #[test]
+    fn package_without_declared_workflows_uses_default_workflow_files() {
+        let package = write_package(&[
+            ("codemod.yaml", "name: demo\n"),
+            ("workflow.ts", "export default {};\n"),
+        ]);
+        validate_package_structure(package.path()).expect("workflow.ts is found");
+        assert!(is_package_cached(package.path()).unwrap());
+    }
+
+    #[test]
+    fn yaml_package_is_still_valid_and_cached() {
+        let package = write_package(&[
+            ("codemod.yaml", "name: demo\n"),
+            ("workflow.yaml", "version: '1'\n"),
+        ]);
+        validate_package_structure(package.path()).expect("YAML package is valid");
+        assert!(is_package_cached(package.path()).unwrap());
+    }
+
+    #[test]
+    fn package_without_any_workflow_is_rejected() {
+        let package = write_package(&[("codemod.yaml", "name: demo\n")]);
+        let error = validate_package_structure(package.path()).unwrap_err();
+        assert!(
+            matches!(error, RegistryError::MissingWorkflow { .. }),
+            "unexpected error: {error}"
+        );
+        assert!(error.to_string().contains("no runnable workflow"));
+        assert!(!is_package_cached(package.path()).unwrap());
+    }
+
+    #[test]
+    fn package_whose_declared_workflow_is_missing_is_rejected() {
+        let package = write_package(&[
+            (
+                "codemod.yaml",
+                "name: demo\nworkflows:\n  - name: main\n    path: workflow.ts\n",
+            ),
+            // A stray workflow.yaml does not stand in for the declared workflow.
+            ("workflow.yaml", "version: '1'\n"),
+        ]);
+        let error = validate_package_structure(package.path()).unwrap_err();
+        assert!(error.to_string().contains("workflow.ts"), "{error}");
+        assert!(!is_package_cached(package.path()).unwrap());
+    }
+
+    #[test]
+    fn package_without_codemod_yaml_is_rejected() {
+        let package = write_package(&[("workflow.ts", "export default {};\n")]);
+        let error = validate_package_structure(package.path()).unwrap_err();
+        assert!(matches!(
+            error,
+            RegistryError::MissingPackageFile { ref file, .. } if file == "codemod.yaml"
+        ));
     }
 
     fn package_archive() -> Vec<u8> {
