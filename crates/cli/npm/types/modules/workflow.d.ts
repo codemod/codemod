@@ -134,6 +134,8 @@ declare module "codemod:workflow" {
     target: string;
     /** Whether this is a dry run: file changes are computed but not written. */
     dryRun: boolean;
+    /** The platform running the workflow, e.g. `"win32"`, `"darwin"`, or `"linux"`. */
+    readonly platform: string;
   }
 
   /**

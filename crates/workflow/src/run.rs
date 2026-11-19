@@ -517,6 +517,13 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
                 "params": run.params,
                 "target": run.target,
                 "dryRun": run.dry_run,
+                // Use Node.js platform names on both hosts.
+                "platform": match std::env::consts::OS {
+                    "windows" => "win32",
+                    "macos" => "darwin",
+                    "solaris" | "illumos" => "sunos",
+                    os => os,
+                },
             });
             let input = ctx.json_parse(input.to_string())?;
             main.call((input,))
