@@ -139,7 +139,7 @@ nodes:
     steps:
       - name: Needs a custom name
         if: params.customName != "null" && params.customName != ""
-        run: exit 1
+        run: echo unexpected
       - name: Always
         run: echo always
 "#,
