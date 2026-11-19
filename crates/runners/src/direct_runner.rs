@@ -228,7 +228,7 @@ struct Captured {
 }
 
 /// Read `stream` to its end, a line at a time, keeping its last
-/// [`KEPT_OUTPUT`] bytes in whole lines.
+/// [`KEPT_OUTPUT`] bytes.
 fn collect(
     stream: impl std::io::Read,
     tag: &str,
@@ -260,23 +260,24 @@ fn collect(
             }
         }
 
-        while kept + line.len() > KEPT_OUTPUT {
+        // A single line longer than the limit keeps its end.
+        let tail = end_of(&line, KEPT_OUTPUT);
+        if tail.len() < line.len() {
+            cut = true;
+        }
+        // Older lines make room; the oldest kept one may lose only its start.
+        while kept + tail.len() > KEPT_OUTPUT {
             let Some(oldest) = lines.pop_front() else {
                 break;
             };
             kept -= oldest.len();
             cut = true;
+            let rest = end_of(&oldest, KEPT_OUTPUT.saturating_sub(kept + tail.len()));
+            if !rest.is_empty() {
+                kept += rest.len();
+                lines.push_front(rest.to_owned());
+            }
         }
-        // A single line longer than the limit keeps its end, cut at a
-        // character boundary.
-        let mut start = line.len().saturating_sub(KEPT_OUTPUT);
-        if start > 0 {
-            cut = true;
-        }
-        while !line.is_char_boundary(start) {
-            start += 1;
-        }
-        let tail = &line[start..];
         kept += tail.len();
         lines.push_back(tail.to_owned());
         bytes.clear();
@@ -286,6 +287,15 @@ fn collect(
         text.push_str(&line);
     }
     Captured { text, cut }
+}
+
+/// The last `limit` bytes of `text` or fewer, starting at a character.
+fn end_of(text: &str, limit: usize) -> &str {
+    let mut start = text.len().saturating_sub(limit);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
 }
 
 /// Stop a command and every process it started: ask them to exit, then kill
@@ -369,7 +379,7 @@ impl Runner for DirectRunner {
         output_callback: Option<OutputCallback>,
     ) -> Result<CommandOutput> {
         // Check if the command starts with a shebang line
-        if command.starts_with("#!/") {
+        if command.starts_with("#!") {
             // Create a temporary file for the script
             let temp_dir = std::env::temp_dir();
             let file_name = format!("butterflow-script-{}.sh", uuid::Uuid::new_v4());

@@ -265,13 +265,18 @@ fn batch_command_starts(line: &str, lookup: &mut Lookup) -> Vec<usize> {
     // conditional when the operator before it is `&&` or `||`.
     let mut commands = vec![(0, line.len(), false)];
     let mut in_quotes = false;
+    // The byte a `^` escaped: an escaped `>` is text, not a redirect.
+    let mut escaped = None;
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
             b'"' => in_quotes = !in_quotes,
-            b'^' if !in_quotes => i += 1,
+            b'^' if !in_quotes => {
+                i += 1;
+                escaped = Some(i);
+            }
             // `>&` and `<&` redirect to a handle, as in `2>&1`.
-            b'&' if i > 0 && matches!(bytes[i - 1], b'>' | b'<') => {}
+            b'&' if i > 0 && escaped != Some(i - 1) && matches!(bytes[i - 1], b'>' | b'<') => {}
             op @ (b'&' | b'|') if !in_quotes => {
                 let operator = i;
                 let doubled = bytes.get(i + 1) == Some(&op);
@@ -444,6 +449,15 @@ mod tests {
         assert_eq!(
             tools.script("faketool a && faketool b || realtool c & faketool d | faketool e"),
             ["call faketool a && call faketool b || realtool c & call faketool d | faketool e"]
+        );
+    }
+
+    #[test]
+    fn calls_a_batch_command_after_an_escaped_redirect_character() {
+        let tools = Tools::new();
+        assert_eq!(
+            tools.script("echo ^>& faketool\necho ^<& faketool"),
+            ["echo ^>& call faketool", "echo ^<& call faketool"]
         );
     }
 

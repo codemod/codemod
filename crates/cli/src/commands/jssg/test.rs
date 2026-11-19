@@ -35,7 +35,6 @@ type DataEntries = Vec<(String, serde_json::Value)>;
 #[derive(Clone)]
 struct PendingDataSnapshot {
     entries: DataEntries,
-    output_path: PathBuf,
     snapshot_path: Option<PathBuf>,
 }
 
@@ -268,6 +267,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
             let input_path = request.input_path;
             let logical_input_path = request.logical_input_path;
             let workspace_root = request.workspace_root;
+            let test_case_root = request.test_case_root;
             let base_config = base_config_clone.clone();
             let args = args_clone.clone();
             let current_dir = current_dir_clone.clone();
@@ -283,10 +283,17 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 let target_directory = workspace_root
                     .clone()
                     .unwrap_or_else(|| test_case_dir.to_path_buf());
-                let data_output_path = input_path
-                    .parent()
-                    .unwrap_or(input_path.as_path())
-                    .join("data.json");
+                // A directory case keeps one data.json next to input/ and
+                // expected/, named by path, outside the compared tree.
+                let data_output_path = if workspace_root.is_some() {
+                    test_case_root.join("data.json")
+                } else {
+                    test_case_dir.join("data.json")
+                };
+                reject_metrics_snapshot(test_case_dir)?;
+                if let Some(data_dir) = data_output_path.parent() {
+                    reject_metrics_snapshot(data_dir)?;
+                }
                 let per_test_config =
                     match TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))
                     {
@@ -377,7 +384,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 let pending_snapshot = finish_data_collection(
                     shared_data.as_ref(),
                     &data_output_path,
-                    Some(test_case_dir.join("data.json")),
+                    Some(data_output_path.clone()),
                     data.map(|data| (file_name, data)),
                     execution_result.is_err(),
                 );
@@ -385,9 +392,6 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 runtime_event_output.flush(&runtime_event_buffer);
 
                 if let Some(snapshot) = pending_snapshot? {
-                    if workspace_root.is_some() {
-                        write_data_output(&snapshot)?;
-                    }
                     handle_data_snapshot(&snapshot, update_snapshots)?;
                 }
 
@@ -416,6 +420,20 @@ async fn handler_impl(args: &Command) -> Result<()> {
         std::process::exit(1);
     }
 
+    Ok(())
+}
+
+/// A `metrics.json` from before workflow v2 would otherwise be ignored
+/// without a word, and its check lost.
+fn reject_metrics_snapshot(test_case_dir: &Path) -> Result<()> {
+    let old = test_case_dir.join("metrics.json");
+    if old.exists() {
+        anyhow::bail!(
+            "{} is no longer checked: transforms return data, snapshotted as data.json. \
+             Delete metrics.json and run with --update-snapshots to write data.json.",
+            old.display()
+        );
+    }
     Ok(())
 }
 
@@ -462,7 +480,6 @@ fn finish_data_collection(
 
     Ok(Some(PendingDataSnapshot {
         entries: state.entries,
-        output_path: data_output_path.to_path_buf(),
         snapshot_path,
     }))
 }
@@ -504,19 +521,6 @@ fn handle_data_snapshot(snapshot: &PendingDataSnapshot, update_snapshots: bool) 
                 data_path.display()
             );
         }
-    }
-
-    Ok(())
-}
-
-fn write_data_output(snapshot: &PendingDataSnapshot) -> Result<()> {
-    if !snapshot.entries.is_empty() {
-        std::fs::write(
-            &snapshot.output_path,
-            data_to_canonical_json(&snapshot.entries)?,
-        )?;
-    } else if snapshot.output_path.exists() {
-        std::fs::remove_file(&snapshot.output_path)?;
     }
 
     Ok(())
@@ -606,7 +610,7 @@ mod tests {
     use super::{
         classify_and_sanitize_error, data_file_name, data_to_canonical_json,
         finish_data_collection, generate_data_diff, handle_data_snapshot, normalize_line_endings,
-        PendingDataSnapshot, SharedDataState,
+        reject_metrics_snapshot, PendingDataSnapshot, SharedDataState,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -689,7 +693,6 @@ mod tests {
         handle_data_snapshot(
             &PendingDataSnapshot {
                 entries: vec![("input.ts".into(), json!({ "calls": 2 }))],
-                output_path: path.clone(),
                 snapshot_path: Some(path.clone()),
             },
             false,
@@ -701,5 +704,13 @@ mod tests {
             written,
             json!([{ "file": "input.ts", "data": { "calls": 2 } }])
         );
+    }
+
+    #[test]
+    fn an_old_metrics_json_fails_the_case() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("metrics.json"), "{}").unwrap();
+        let error = reject_metrics_snapshot(dir.path()).unwrap_err().to_string();
+        assert!(error.contains("no longer checked"), "{error}");
     }
 }

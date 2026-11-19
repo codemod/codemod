@@ -437,7 +437,14 @@ async function reduceInPlace(run: NativeRun, task: InPlaceTask, fn: Callback): P
     const step = stepScope(task.position, task.label);
     // A copy, so a reducer that changes its accumulator can't change a retry's.
     let folded = structuredClone((reduce as { initial: Json }).initial);
+    let sinceTurn = 0;
     for (const entry of prepared.data) {
+      // As in forEachFile: a reducer that never waits would keep the event
+      // loop to itself, so a cancel could not arrive.
+      if (++sinceTurn >= 64) {
+        sinceTurn = 0;
+        await new Promise((turn) => setImmediate(turn));
+      }
       limit.check();
       if (run.refusesSteps()) throw new CanceledError();
       folded = (await context.run({ ...outer, step }, () => fn(folded, entry))) as Json;

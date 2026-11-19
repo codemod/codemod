@@ -540,8 +540,6 @@ impl TestRunner {
             fixed_results: HashMap::new(),
             stopped_early: false,
         };
-        let entrypoint_counts = Self::directory_entrypoint_counts(test_case);
-
         let mut deferred_deletions: Vec<PathBuf> = Vec::new();
 
         for relative_path in &test_case.entrypoint_files {
@@ -553,7 +551,6 @@ impl TestRunner {
                 execution_fn,
                 options,
                 capabilities.clone(),
-                &entrypoint_counts,
                 &mut deferred_deletions,
             )
             .await?
@@ -591,7 +588,6 @@ impl TestRunner {
         execution_fn: &ExecutionFn<'a>,
         options: &TestOptions,
         capabilities: Option<HashSet<LlrtSupportedModules>>,
-        entrypoint_counts: &HashMap<PathBuf, usize>,
         deferred_deletions: &mut Vec<PathBuf>,
     ) -> Result<Option<Result<()>>> {
         let actual_path = workspace_root.join(relative_path);
@@ -608,12 +604,6 @@ impl TestRunner {
             &options.expect_errors,
         );
 
-        let metrics_group = relative_path
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .to_path_buf();
-        let entrypoint_count = entrypoint_counts.get(&metrics_group).copied().unwrap_or(1);
-
         let execution_result = timeout(
             options.timeout,
             execution_fn(
@@ -623,7 +613,8 @@ impl TestRunner {
                     logical_input_path: Some(input_dir.join(relative_path)),
                     workspace_root: Some(workspace_root.to_path_buf()),
                     test_case_root: test_case.path.clone(),
-                    entrypoint_count,
+                    // One data snapshot per case, after its last entrypoint.
+                    entrypoint_count: test_case.entrypoint_files.len(),
                 },
                 capabilities,
             ),
@@ -677,18 +668,6 @@ impl TestRunner {
                 .cloned(),
         );
         known_paths
-    }
-
-    fn directory_entrypoint_counts(test_case: &FileSystemTestCase) -> HashMap<PathBuf, usize> {
-        let mut counts = HashMap::new();
-        for relative_path in &test_case.entrypoint_files {
-            let key = relative_path
-                .parent()
-                .unwrap_or_else(|| Path::new(""))
-                .to_path_buf();
-            *counts.entry(key).or_insert(0) += 1;
-        }
-        counts
     }
 
     fn evaluate_directory_assertion(

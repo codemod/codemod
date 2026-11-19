@@ -385,8 +385,9 @@ fn a_script_with_its_own_interpreter_can_write_state() {
     let printed = last_printed(
         r#"      - name: Pick
         run: |
-          #!/bin/sh
-          echo "picked=yes" >> "$STATE_OUTPUTS"
+          #!/usr/bin/env python3
+          import os
+          open(os.environ["STATE_OUTPUTS"], "a").write("picked=yes\n")
       - name: Read
         run: echo "$CODEMOD_STATE_PICKED"
 "#,
@@ -400,11 +401,12 @@ fn a_script_with_its_own_interpreter_may_contain_any_line() {
     let printed = last_printed(
         r#"      - name: Pick
         run: |
-          #!/bin/sh
-          choice=yes
-          cat > /dev/null <<'CODEMOD_SCRIPT_END'
+          #!/usr/bin/env python3
+          import os
+          end = """
           CODEMOD_SCRIPT_END
-          echo "picked=$choice" >> "$STATE_OUTPUTS"
+          """
+          open(os.environ["STATE_OUTPUTS"], "a").write("picked=yes\n")
       - name: Read
         run: echo "$CODEMOD_STATE_PICKED"
 "#,

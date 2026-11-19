@@ -348,7 +348,8 @@ await step("Format", shell("npx prettier --write src"));
 A `shell` step's result is what the command printed, as text, and its exit code: `{ stdout, stderr, exitCode }`. Parse what you need from it, for example JSON printed on the last line:
 
 ```ts
-const { stdout } = await step("Detect", shell`node -p "JSON.stringify({ major: 19 })"`);
+// A dry run skips the command, so `stdout` may be undefined.
+const { stdout = "{}" } = await step("Detect", shell`node -p "JSON.stringify({ major: 19 })"`);
 const { major } = JSON.parse(stdout.trim().split("\n").at(-1)!);
 ```
 
@@ -432,7 +433,7 @@ Workflows have no state. A step gets what it needs from the workflow and returns
 import { step, shell, forEachFile, jssg } from "codemod/workflow";
 
 const detect = await step("Detect", shell`npm pkg get dependencies.react`);
-const version = JSON.parse(detect.stdout); // "^19.0.0"
+const version = JSON.parse(detect.stdout ?? "null"); // "^19.0.0"
 
 const migrated = await step(
   "Migrate",

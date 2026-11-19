@@ -28,15 +28,14 @@ export default async function main() {
     'echo "$GREETING" && echo careful >&2 && echo \'{"count":2}\'',
     { env: { GREETING: "hi" } },
   ));
-  const lines = stdout.trim().split("\n");
-  return { first: lines[0], parsed: JSON.parse(lines.at(-1)), stderr, exitCode };
+  return { stdout, stderr, exitCode };
 }
 "#,
         Value::Null,
     );
     assert_eq!(
         output(&report).unwrap(),
-        json!({ "first": "hi", "parsed": { "count": 2 }, "stderr": "careful\n", "exitCode": 0 })
+        json!({ "stdout": "hi\n{\"count\":2}\n", "stderr": "careful\n", "exitCode": 0 })
     );
 }
 

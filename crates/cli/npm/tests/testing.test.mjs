@@ -228,6 +228,37 @@ export default async function main() {
   assert.deepEqual(result.files, { "a.ts": "a\n", "b.ts": "b\n" });
 });
 
+test("node: a cancel reaches a jssg reducer that never waits", HOSTS.node, async () => {
+  const path = join(
+    scratch({
+      "transform.ts": `
+export default function transform(root: any) {
+  return { edit: null, data: 1 };
+}
+`,
+      "workflow.ts": `
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  return step("Count", jssg("./transform.ts", {
+    reduce: (total) => {
+      if (total === 0) globalThis.cancelSoon();
+      return total + 1;
+    },
+    initial: 0,
+  }));
+}
+`,
+    }),
+    "workflow.ts",
+  );
+  const controller = new AbortController();
+  globalThis.cancelSoon = () => setTimeout(() => controller.abort(), 0);
+  const target = Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`f${i}.ts`, "x\n"]));
+  const result = await run(path, { target, host: "node", signal: controller.signal });
+  delete globalThis.cancelSoon;
+  assert.equal(result.status, "canceled", result.error);
+});
+
 test("node: a retried jssg reducer starts from its initial value again", HOSTS.node, async () => {
   const path = join(
     scratch({

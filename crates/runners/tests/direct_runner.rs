@@ -103,9 +103,23 @@ async fn preserves_cmd_crlf_line_endings() {
 #[tokio::test]
 async fn keeps_the_end_of_output_that_is_too_long() {
     let output = run("yes line | head -n 400000\necho last").await.unwrap();
+    let all = format!("{}last\n", "line\n".repeat(400_000));
+    let kept = butterflow_runners::direct_runner::KEPT_OUTPUT;
     assert!(output.cut);
-    assert!(output.stdout.len() <= butterflow_runners::direct_runner::KEPT_OUTPUT);
-    assert!(output.stdout.ends_with("line\nlast\n"));
+    assert_eq!(output.stdout, all[all.len() - kept..]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn keeps_the_last_mib_when_a_long_line_is_followed_by_a_short_one() {
+    let output = run("head -c 1048575 /dev/zero | tr '\\0' a; echo; echo X")
+        .await
+        .unwrap();
+    assert_eq!(
+        output.stdout.len(),
+        butterflow_runners::direct_runner::KEPT_OUTPUT
+    );
+    assert!(output.stdout.ends_with("aa\nX\n"));
 }
 
 #[cfg(unix)]
@@ -198,4 +212,18 @@ async fn keeps_non_ascii_text_on_windows() {
     .await;
     std::fs::remove_file(&path).ok();
     assert_eq!(lines(&output.unwrap().stdout), ["found"]);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_line_that_is_not_utf8_keeps_the_rest_of_the_output() {
+    let output = run(r#"printf 'a\n\377\n{"ok":1}\n'"#).await.unwrap();
+    assert_eq!(output.stdout, "a\n\u{FFFD}\n{\"ok\":1}\n");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_script_whose_interpreter_follows_a_space_runs_with_that_interpreter() {
+    let output = run("#! /bin/cat\nnot a shell command\n").await.unwrap();
+    assert_eq!(output.stdout, "#! /bin/cat\nnot a shell command\n");
 }
