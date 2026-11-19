@@ -54,17 +54,12 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let mut env = child_env(task);
     env.extend(request.env.clone());
 
-    let command = match &request.cwd {
-        Some(cwd) if !request.command.starts_with("#!") => {
-            let dir = run.target.join(cwd);
-            format!(
-                "cd {} && {}",
-                shell_quote(&dir.to_string_lossy()),
-                request.command
-            )
-        }
-        _ => request.command.clone(),
+    let target_dir = if run.target.is_file() {
+        run.target.parent().unwrap_or(&run.target)
+    } else {
+        &run.target
     };
+    let cwd = target_dir.join(request.cwd.as_deref().unwrap_or(""));
 
     let events = Arc::clone(&run.events);
     let position = task.position;
@@ -76,12 +71,15 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             .unwrap_or(line);
         events.emit(crate::events::Event::StepLog { position, line });
     });
-    let runner = DirectRunner::with_quiet(true).with_cancel(Arc::clone(&task.cancel));
-    let output =
-        block_on(runner.run_command(&command, &env, Some(on_line))).map_err(|e| match e {
+    let runner = DirectRunner::with_quiet(true)
+        .with_cancel(Arc::clone(&task.cancel))
+        .with_cwd(cwd);
+    let output = block_on(runner.run_command(&request.command, &env, Some(on_line))).map_err(
+        |e| match e {
             butterflow_models::Error::Canceled => TaskError::Canceled,
             other => TaskError::Failed(other.to_string()),
-        })?;
+        },
+    )?;
 
     if output.cut {
         task.log(format!(
@@ -118,12 +116,4 @@ fn last_lines(text: &str, count: usize) -> String {
         ":\n{}",
         lines[lines.len().saturating_sub(count)..].join("\n")
     )
-}
-
-fn shell_quote(text: &str) -> String {
-    if cfg!(windows) {
-        format!("\"{text}\"")
-    } else {
-        format!("'{}'", text.replace('\'', "'\\''"))
-    }
 }

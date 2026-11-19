@@ -18,6 +18,39 @@ fn approving() -> Harness {
 }
 
 #[test]
+fn shell_runs_in_the_target_by_default() {
+    let h = Harness::new();
+    h.write("cwd-marker.txt", "target");
+    let report = h.start(
+        r#"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  return (await step(shell("echo ok < cwd-marker.txt"))).exitCode;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(0));
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_honors_cwd_for_shebang_scripts() {
+    let h = Harness::new();
+    h.write("sub dir/cwd-marker.txt", "subdir");
+    let report = h.start(
+        r##"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  return (await step(shell("#!/bin/sh\ncat cwd-marker.txt", { cwd: "sub dir" }))).stdout;
+}
+"##,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!("subdir"));
+}
+
+#[test]
 fn a_shell_step_returns_what_the_command_printed() {
     let h = Harness::new();
     let report = h.start(

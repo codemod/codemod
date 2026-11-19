@@ -345,6 +345,8 @@ await step("Format", shell("npx prettier --write src"));
 
 `shell` commands get `CODEMOD_PATH`, the workflow's directory (prefer `import.meta.dirname` in `workflow.ts`). Give a command values with `env` or in the command itself.
 
+Commands, including scripts that start with a shebang, run in the selected target directory by default (or the parent directory for a file target). Set `cwd` to run in a different directory relative to that directory.
+
 A `shell` step's result is what the command printed, as text, and its exit code: `{ stdout, stderr, exitCode }`. Parse what you need from it, for example JSON printed on the last line:
 
 ```ts
