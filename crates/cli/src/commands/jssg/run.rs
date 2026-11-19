@@ -8,7 +8,7 @@ use crate::CLI_VERSION;
 use crate::{capabilities_security_callback::capabilities_security_callback, dirty_git_check};
 use anyhow::Result;
 use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
-use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
+use butterflow_core::report::{convert_diffs, ExecutionReport};
 use butterflow_core::utils::generate_execution_id;
 use butterflow_core::utils::parse_params;
 use butterflow_core::{execution::CodemodExecutionConfig, execution::PreRunCallback};
@@ -18,7 +18,6 @@ use codemod_sandbox::sandbox::{
     engine::execute_codemod_with_quickjs, filesystem::RealFileSystem, resolvers::OxcResolver,
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use codemod_sandbox::MetricsContext;
 use codemod_telemetry::send_event::BaseEvent;
 use language_core::SemanticProvider;
 use log::{debug, error, warn};
@@ -107,9 +106,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
     let dirty_check = dirty_git_check::dirty_check(args.no_interactive);
     dirty_check(&target_directory, args.allow_dirty, None)?;
-
-    // Create a new metrics context for this execution run
-    let metrics_context = MetricsContext::new();
 
     // Verify the JavaScript file exists
     if !js_file_path.exists() {
@@ -202,7 +198,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .clone()
         .parse()
         .unwrap_or_else(|_| panic!("Invalid language: {}", args.language));
-    let metrics_context_clone = metrics_context.clone();
     let runtime_event_output = super::RuntimeEventOutput::stdout();
 
     // Create diff config for dry-run mode
@@ -252,7 +247,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                 matrix_values: None,
                 capabilities: capabilities_for_closure.clone(),
                 semantic_provider: semantic_provider.clone(),
-                metrics_context: Some(metrics_context_clone.clone()),
                 llm_request_handler: None,
                 runtime_event_callback: Some(runtime_event_callback),
                 cancellation_flag: None,
@@ -265,7 +259,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
 
             // Execute the codemod on this file
             match execute_codemod_with_quickjs(options).await {
-                Ok(CodemodOutput { primary, secondary }) => {
+                Ok(CodemodOutput {
+                    primary, secondary, ..
+                }) => {
                     // Collect all file changes: primary + secondary from jssgTransform
                     let mut all_changes: Vec<(
                         std::path::PathBuf,
@@ -393,8 +389,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         runtime_event_output.flush(&runtime_event_buffer);
     });
 
-    let metrics_data = metrics_context.get_all();
-
     let duration_ms = started.elapsed().as_millis() as f64;
     let seconds = duration_ms / 1000.0;
     println!("✨ Done in {seconds:.3}s");
@@ -412,10 +406,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         .unwrap_or_default();
     let files_modified = collected_diffs.len();
 
-    if crate::utils::metrics::should_show_report(
+    if crate::utils::report_prompt::should_show_report(
         args.report,
         args.no_interactive,
-        &metrics_data,
         files_modified,
     ) {
         let registry_client = create_registry_client(None)?;
@@ -429,7 +422,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             files_modified,
             0,
             0,
-            convert_metrics(&metrics_data),
             convert_diffs(
                 &collected_diffs,
                 &target_directory_for_report.display().to_string(),
@@ -442,8 +434,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
         ));
 
         crate::report_server::serve_report(report).await?;
-    } else {
-        crate::utils::metrics::print_metrics(&metrics_data);
     }
 
     // Generate a 20-byte execution ID (160 bits of entropy for collision resistance)

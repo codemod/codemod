@@ -160,7 +160,8 @@ Learn more about [using Codemod packages in workflows](/community/workflows/refe
 ### Package Naming
 
 - Use descriptive names that indicate the codemod's purpose
-- Follow the naming convention: `/^[a-z0-9-_/]+$/`
+- Follow publish validation: `^(@[A-Za-z0-9\-_.]+/)?[A-Za-z0-9\-_]+$` (optional `@scope/`, then letters, numbers, hyphens, underscores — **no dots in the name**)
+- For version migrations, hyphenate versions in the id (`lib-1-2-to-1-3`), never `1.2-to-1.3`
 - Include framework/library names when relevant
 
 **When to use scoped package names:**
@@ -179,6 +180,8 @@ For individual developers or one-off codemods, unscoped package names are usuall
 - Increment major version for breaking changes
 - Increment minor version for new features
 - Increment patch version for bug fixes
+- Keep `version` in sync in both `codemod.yaml` and `package.json`
+- Before republishing after any material change (transforms, fixtures, workflow, README, name, or other package metadata), bump the version — do not reuse a published version with different contents
 
 ### Documentation
 

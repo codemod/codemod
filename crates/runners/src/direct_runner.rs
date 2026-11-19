@@ -78,7 +78,7 @@ impl DirectRunner {
         command: &str,
         env: &HashMap<String, String>,
         output_callback: Option<OutputCallback>,
-    ) -> Result<String> {
+    ) -> Result<CommandOutput> {
         use std::os::windows::process::CommandExt;
 
         let script =
@@ -107,118 +107,64 @@ impl DirectRunner {
         _command: &str,
         _env: &HashMap<String, String>,
         _output_callback: Option<OutputCallback>,
-    ) -> Result<String> {
+    ) -> Result<CommandOutput> {
         unreachable!("cmd scripts only run on Windows")
     }
 
-    /// Execute a command with streaming output
+    /// Run `cmd`, passing each line of its output to `output_callback`
+    /// tagged `[stdout] ` or `[stderr] `, and keep both streams.
     async fn execute_with_streaming(
         &self,
         mut cmd: Command,
         output_callback: Option<OutputCallback>,
-    ) -> Result<String> {
+    ) -> Result<CommandOutput> {
         #[cfg(unix)]
-        {
+        let (child, stdout, stderr) = {
             use std::os::unix::io::FromRawFd;
 
-            // A command started on another thread while this pipe is being
-            // set up would inherit it and keep it open: this command's
-            // output would not end, and so the command would not be done,
-            // until that one exits. The pipe is closed on exec, and commands
-            // are started one at a time for the moment before that is set.
+            // A command started on another thread while these pipes are
+            // being set up would inherit them and keep them open: this
+            // command's output would not end, and so the command would not
+            // be done, until that one exits. The pipes are closed on exec,
+            // and commands are started one at a time for the moment before
+            // that is set.
             static STARTING: std::sync::Mutex<()> = std::sync::Mutex::new(());
             let starting = STARTING.lock().unwrap_or_else(|e| e.into_inner());
 
-            let mut pipe_fds = [0i32; 2];
-            if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } == -1 {
-                return Err(Error::Runtime("Failed to create output pipe".to_string()));
-            }
-            let read_fd = pipe_fds[0];
-            let write_fd = pipe_fds[1];
-            for fd in pipe_fds {
-                unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
-            }
-            let stdout_file = unsafe { std::fs::File::from_raw_fd(write_fd) };
-            let stderr_file = stdout_file.try_clone();
-
-            let child = stderr_file
-                .map_err(|e| Error::Runtime(format!("Failed to clone output pipe: {e}")))
-                .and_then(|stderr_file| {
-                    cmd.stdout(Stdio::from(stdout_file))
-                        .stderr(Stdio::from(stderr_file));
-                    cmd.spawn()
-                        .map_err(|e| Error::Runtime(format!("Failed to spawn command: {e}")))
-                });
+            let pipe = || -> Result<(std::fs::File, std::fs::File)> {
+                let mut fds = [0i32; 2];
+                if unsafe { libc::pipe(fds.as_mut_ptr()) } == -1 {
+                    return Err(Error::Runtime("Failed to create output pipe".to_string()));
+                }
+                for fd in fds {
+                    unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+                }
+                // SAFETY: both descriptors were just opened and are owned here.
+                Ok(unsafe {
+                    (
+                        std::fs::File::from_raw_fd(fds[0]),
+                        std::fs::File::from_raw_fd(fds[1]),
+                    )
+                })
+            };
+            let (stdout_read, stdout_write) = pipe()?;
+            let (stderr_read, stderr_write) = pipe()?;
+            cmd.stdout(Stdio::from(stdout_write))
+                .stderr(Stdio::from(stderr_write));
+            let child = cmd
+                .spawn()
+                .map_err(|e| Error::Runtime(format!("Failed to spawn command: {e}")));
+            // Dropping the command closes this side's write ends.
             drop(cmd);
             drop(starting);
-            let child = match child {
-                Ok(child) => child,
-                Err(error) => {
-                    unsafe { libc::close(read_fd) };
-                    return Err(error);
-                }
-            };
-
-            let quiet = self.quiet;
-            let callback = output_callback;
-            let reader_handle = std::thread::spawn(move || {
-                let read_file = unsafe { std::fs::File::from_raw_fd(read_fd) };
-                let reader = BufReader::new(read_file);
-                let mut collected_output = String::new();
-                for line in reader.lines() {
-                    match line {
-                        Ok(line) => {
-                            if let Some(callback) = &callback {
-                                callback(format!("[stdio] {}", line));
-                            }
-                            if !quiet {
-                                println!("{}", line);
-                            }
-                            collected_output.push_str(&line);
-                            collected_output.push('\n');
-                        }
-                        Err(e) => {
-                            if !quiet {
-                                eprintln!("Error reading process output: {}", e);
-                            }
-                            break;
-                        }
-                    }
-                }
-                collected_output
-            });
-
-            // A stopped command's output is not waited for: something it
-            // started may still hold the pipe open.
-            let Some(exit_status) = self.wait(child).await? else {
-                return Err(Error::Canceled);
-            };
-
-            let combined_output = reader_handle
-                .join()
-                .map_err(|_| Error::Runtime("Failed to join output reader".to_string()))?;
-
-            if !exit_status.success() {
-                return Err(Error::ShellCommandFailed {
-                    exit_code: exit_status.code().unwrap_or(-1),
-                    output: combined_output,
-                });
-            }
-
-            Ok(combined_output)
-        }
-
+            (child?, stdout_read, stderr_read)
+        };
         #[cfg(not(unix))]
-        {
-            // Configure the command to pipe stdout and stderr
+        let (child, stdout, stderr) = {
             cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-            // Spawn the command
             let mut child = cmd
                 .spawn()
                 .map_err(|e| Error::Runtime(format!("Failed to spawn command: {e}")))?;
-
-            // Get handles to stdout and stderr
             let stdout = child
                 .stdout
                 .take()
@@ -227,89 +173,119 @@ impl DirectRunner {
                 .stderr
                 .take()
                 .ok_or_else(|| Error::Runtime("Failed to capture stderr".to_string()))?;
+            (child, stdout, stderr)
+        };
 
-            // Create readers
-            let stdout_reader = BufReader::new(stdout);
-            let stderr_reader = BufReader::new(stderr);
+        let quiet = self.quiet;
+        let stdout_handle = {
+            let callback = output_callback.clone();
+            std::thread::spawn(move || collect(stdout, "stdout", callback, quiet))
+        };
+        let stderr_handle =
+            std::thread::spawn(move || collect(stderr, "stderr", output_callback, quiet));
 
-            let quiet = self.quiet;
-            let stdout_callback = output_callback.clone();
-
-            // Handle stdout in a separate task
-            let stdout_handle = std::thread::spawn(move || {
-                let mut collected_output = String::new();
-                for line in stdout_reader.lines() {
-                    match line {
-                        Ok(line) => {
-                            if let Some(callback) = &stdout_callback {
-                                callback(format!("[stdout] {}", line));
-                            }
-                            if !quiet {
-                                println!("{}", line);
-                            }
-                            collected_output.push_str(&line);
-                            collected_output.push('\n');
-                        }
-                        Err(e) => {
-                            if !quiet {
-                                eprintln!("Error reading stdout: {}", e);
-                            }
-                            break;
-                        }
-                    }
-                }
-                collected_output
-            });
-
-            // Handle stderr in a separate task
-            let stderr_callback = output_callback;
-            let stderr_handle = std::thread::spawn(move || {
-                let mut collected_output = String::new();
-                for line in stderr_reader.lines() {
-                    match line {
-                        Ok(line) => {
-                            if let Some(callback) = &stderr_callback {
-                                callback(format!("[stderr] {}", line));
-                            }
-                            if !quiet {
-                                eprintln!("{}", line);
-                            }
-                            collected_output.push_str(&line);
-                            collected_output.push('\n');
-                        }
-                        Err(e) => {
-                            if !quiet {
-                                eprintln!("Error reading stderr: {}", e);
-                            }
-                            break;
-                        }
-                    }
-                }
-                collected_output
-            });
-
-            // Wait for the process to complete and collect outputs
-            let Some(exit_status) = self.wait(child).await? else {
-                return Err(Error::Canceled);
-            };
-
-            let stdout_output = stdout_handle
+        // A stopped command's output is not waited for: something it
+        // started may still hold the pipes open.
+        let Some(exit_status) = self.wait(child).await? else {
+            return Err(Error::Canceled);
+        };
+        let join = |handle: std::thread::JoinHandle<Captured>| {
+            handle
                 .join()
-                .map_err(|_| Error::Runtime("Failed to join stdout reader".to_string()))?;
-            let stderr_output = stderr_handle
-                .join()
-                .map_err(|_| Error::Runtime("Failed to join stderr reader".to_string()))?;
-
-            if !exit_status.success() {
-                return Err(Error::ShellCommandFailed {
-                    exit_code: exit_status.code().unwrap_or(-1),
-                    output: stderr_output,
-                });
-            }
-
-            Ok(stdout_output)
-        }
+                .map_err(|_| Error::Runtime("Failed to join output reader".to_string()))
+        };
+        let stdout = join(stdout_handle)?;
+        let stderr = join(stderr_handle)?;
+        Ok(CommandOutput {
+            stdout: stdout.text,
+            stderr: stderr.text,
+            exit_code: exit_status.code().unwrap_or(-1),
+            cut: stdout.cut || stderr.cut,
+        })
     }
+}
+
+/// What a command printed, and how it exited. A command that exits with an
+/// error is not an error here; the caller decides.
+/// Captured text preserves line endings and replaces invalid UTF-8 with U+FFFD.
+#[derive(Debug, Clone, Default)]
+pub struct CommandOutput {
+    pub stdout: String,
+    pub stderr: String,
+    /// `-1` when the command was ended by a signal.
+    pub exit_code: i32,
+    /// Whether either stream was longer than [`KEPT_OUTPUT`] and lost its start.
+    pub cut: bool,
+}
+
+/// How much of each stream is kept: its end, where a command usually
+/// reports its result.
+pub const KEPT_OUTPUT: usize = 1024 * 1024;
+
+struct Captured {
+    text: String,
+    cut: bool,
+}
+
+/// Read `stream` to its end, a line at a time, keeping its last
+/// [`KEPT_OUTPUT`] bytes in whole lines.
+fn collect(
+    stream: impl std::io::Read,
+    tag: &str,
+    callback: Option<OutputCallback>,
+    quiet: bool,
+) -> Captured {
+    let mut lines: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut kept = 0;
+    let mut cut = false;
+    let mut reader = BufReader::new(stream);
+    let mut bytes = Vec::new();
+    while let Ok(1..) = reader.read_until(b'\n', &mut bytes) {
+        let line = String::from_utf8_lossy(&bytes);
+        if callback.is_some() || !quiet {
+            // Logs are line-oriented, unlike the captured text.
+            let message = line
+                .strip_suffix("\r\n")
+                .or_else(|| line.strip_suffix('\n'))
+                .unwrap_or(&line);
+            if let Some(callback) = &callback {
+                callback(format!("[{tag}] {message}"));
+            }
+            if !quiet {
+                if tag == "stderr" {
+                    eprintln!("{message}");
+                } else {
+                    println!("{message}");
+                }
+            }
+        }
+
+        while kept + line.len() > KEPT_OUTPUT {
+            let Some(oldest) = lines.pop_front() else {
+                break;
+            };
+            kept -= oldest.len();
+            cut = true;
+        }
+        // A single line longer than the limit keeps its end, cut at a
+        // character boundary.
+        let mut start = line.len().saturating_sub(KEPT_OUTPUT);
+        if start > 0 {
+            cut = true;
+        }
+        while !line.is_char_boundary(start) {
+            start += 1;
+        }
+        let tail = &line[start..];
+        kept += tail.len();
+        lines.push_back(tail.to_owned());
+        bytes.clear();
+    }
+    let mut text = String::with_capacity(kept);
+    for line in lines {
+        text.push_str(&line);
+    }
+    Captured { text, cut }
 }
 
 /// Stop a command and every process it started: ask them to exit, then kill
@@ -391,7 +367,7 @@ impl Runner for DirectRunner {
         command: &str,
         env: &HashMap<String, String>,
         output_callback: Option<OutputCallback>,
-    ) -> Result<String> {
+    ) -> Result<CommandOutput> {
         // Check if the command starts with a shebang line
         if command.starts_with("#!/") {
             // Create a temporary file for the script

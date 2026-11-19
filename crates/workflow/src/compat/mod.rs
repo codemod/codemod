@@ -12,8 +12,10 @@
 //!   `from_state`), concurrently;
 //! - workflow state is a plain object local to the run, `state`. A shell
 //!   step gets it as `CODEMOD_STATE_<KEY>` variables, and the lines it writes
-//!   to `$STATE_OUTPUTS` come back on its result as `values`, which are
-//!   copied into `state`. The engine has no workflow state; a jssg transform
+//!   to `$STATE_OUTPUTS` are printed at the end of its stdout, from where
+//!   `applyStateOutputs` copies them into `state`. This shell transport
+//!   requires POSIX; workflows that use it fail before starting on Windows.
+//!   The engine has no workflow state; a jssg transform
 //!   can neither read nor set it, so the YAML engine's `getState`/`setState`
 //!   in a transform cannot be translated;
 //! - `${{ }}` expressions become TypeScript where that is exact, and
@@ -76,7 +78,10 @@ struct Generator {
     /// the workflow reads state, or has more than one step that could set it.
     plumb_state: bool,
     uses_state_env: bool,
-    uses_apply_values: bool,
+    /// Whether a generated command needs the POSIX `$STATE_OUTPUTS` wrapper.
+    uses_posix_state_outputs: bool,
+    /// Whether the source calls `applyStateOutputs`.
+    uses_state_outputs: bool,
     /// Tasks get the run's params anyway; pass `params` explicitly only when
     /// it differs from them (defaults, template inputs).
     pass_params: bool,
@@ -312,6 +317,17 @@ impl Generator {
             );
         } else {
             main.push_str("export default async function main() {\n");
+        }
+        if self.uses_posix_state_outputs {
+            // Check the execution host, not the host that ran `workflow upgrade`.
+            // An external script may use STATE_OUTPUTS without naming it in YAML.
+            main.push_str(concat!(
+                "  if (shellPathSeparator === \"\\\\\") {\n",
+                "    throw new Error(\"This translated YAML workflow requires POSIX shell state ",
+                "output ($STATE_OUTPUTS), which is not supported on Windows. ",
+                "Run it on a POSIX host or migrate its shell steps to workflow.ts.\");\n",
+                "  }\n",
+            ));
         }
         if uses_state {
             main.push_str("  const state: State = {};\n");
@@ -599,6 +615,7 @@ impl Generator {
         let task = match &step.action {
             StepAction::RunScript(command) => {
                 self.import("shell");
+                let literal_echo = is_literal_echo(command);
                 let mut env: Vec<(String, String)> = scope
                     .env
                     .iter()
@@ -609,7 +626,7 @@ impl Generator {
                     .collect();
                 env.sort();
                 let mut entries: Vec<String> = Vec::new();
-                if self.plumb_state {
+                if self.plumb_state && !literal_echo {
                     self.uses_state_env = true;
                     entries.push("...stateEnv(state)".into());
                 }
@@ -621,14 +638,29 @@ impl Generator {
                     env.iter()
                         .map(|(k, v)| format!("{}: {}", property(k), js_string(v))),
                 );
-                // The shell task sets `$STATE_OUTPUTS` itself, to the same
-                // file as `$CODEMOD_OUTPUT`, so the command stays as written.
-                let command = template(command);
-                if entries.is_empty() {
+                // External scripts can write state without referencing it in YAML.
+                // Only omit the wrapper for commands we know cannot write state.
+                let capture_outputs = !literal_echo
+                    && (self.plumb_state || command.to_ascii_uppercase().contains("STATE_OUTPUTS"));
+                let command = if capture_outputs {
+                    self.uses_posix_state_outputs = true;
+                    template(&with_state_outputs(command))
+                } else {
+                    template(command)
+                };
+                let task = if entries.is_empty() {
                     format!("shell({command})")
                 } else {
                     format!("shell({command}, {{ env: {{ {} }} }})", entries.join(", "))
+                };
+                if capture_outputs && self.plumb_state {
+                    self.uses_state_outputs = true;
+                    return (
+                        notes,
+                        format!("applyStateOutputs(state, await step({name}, {task}));"),
+                    );
                 }
+                task
             }
             StepAction::AstGrep(ast_grep) => {
                 self.import("forEachFile");
@@ -812,13 +844,6 @@ impl Generator {
                 return (notes, statement);
             }
         };
-        if self.plumb_state && matches!(step.action, StepAction::RunScript(_)) {
-            self.uses_apply_values = true;
-            return (
-                notes,
-                format!("applyValues(state, (await step({name}, {task})).values);"),
-            );
-        }
         (notes, format!("await step({name}, {task});"))
     }
 
@@ -897,6 +922,9 @@ impl Generator {
         if self.uses_context {
             source.push_str("import type { WorkflowContext } from \"codemod/workflow\";\n");
         }
+        if self.uses_posix_state_outputs {
+            source.push_str("import { sep as shellPathSeparator } from \"node:path\";\n");
+        }
         source.push('\n');
         let mut aliases = String::new();
         if mentions(&self.body, "Params") {
@@ -905,7 +933,7 @@ impl Generator {
         if mentions(&self.body, "Matrix") || self.uses_matrix_env {
             aliases.push_str("type Matrix = Record<string, any> | null;\n");
         }
-        if mentions(&self.body, "State") {
+        if mentions(&self.body, "State") || self.uses_state_outputs || self.uses_state_env {
             // workflow.yaml declares no types for state, so it is read as `any`.
             aliases.push_str("type State = Record<string, any>;\n");
         }
@@ -924,10 +952,8 @@ impl Generator {
                 "\n/** State as `CODEMOD_STATE_<KEY>` variables, JSON-encoded as before. */\nfunction stateEnv(state: State): Record<string, string> {\n  return Object.fromEntries(\n    Object.entries(state).map(([key, value]) => [`CODEMOD_STATE_${key.toUpperCase()}`, JSON.stringify(value)]),\n  );\n}\n",
             );
         }
-        if self.uses_apply_values {
-            source.push_str(
-                "\n/** Copy a shell step's values into state; `null` removes a key, as before. */\nfunction applyValues(state: State, values: Record<string, unknown> | undefined): void {\n  for (const [key, value] of Object.entries(values ?? {})) {\n    if (value === null) delete state[key];\n    else state[key] = value;\n  }\n}\n",
-            );
+        if self.uses_state_outputs {
+            source.push_str(&STATE_OUTPUTS_HELPER.replace("{marker}", STATE_MARKER));
         }
         if self.uses_matrix_env {
             source.push_str(
@@ -940,6 +966,86 @@ impl Generator {
         }
     }
 }
+
+/// A literal `echo` is a builtin of both sh and cmd. Do not attempt to recognize
+/// shell syntax here: variables, redirects, command separators, etc. can all
+/// make a command stateful.
+fn is_literal_echo(command: &str) -> bool {
+    command.strip_prefix("echo ").is_some_and(|text| {
+        !text.trim().is_empty()
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'.' | b'_' | b'-'))
+    })
+}
+
+/// Marks where a translated step's `$STATE_OUTPUTS` lines start in its stdout.
+const STATE_MARKER: &str = "::codemod-state-outputs::";
+
+/// `command` with `$STATE_OUTPUTS` set to a file, as the YAML engine ran it.
+/// What the command writes there is printed after [`STATE_MARKER`], last,
+/// for `applyStateOutputs` to read; the exit code is the command's.
+fn with_state_outputs(command: &str) -> String {
+    let run = if command.starts_with("#!") {
+        // A script naming its interpreter runs from a file, as it did. The
+        // heredoc ends at the first line equal to its delimiter, so the
+        // delimiter is one the script has no line of.
+        let mut end = "CODEMOD_SCRIPT_END".to_string();
+        while command.lines().any(|line| line == end) {
+            end.push('_');
+        }
+        format!(
+            "cat > \"$CODEMOD_STATE_DIR/script\" <<'{end}'\n{command}\n{end}\nchmod +x \"$CODEMOD_STATE_DIR/script\"\n\"$CODEMOD_STATE_DIR/script\""
+        )
+    } else {
+        // A subshell, so an `exit` in the command still prints the lines.
+        format!("(\n{command}\n)")
+    };
+    format!(
+        "CODEMOD_STATE_DIR=\"$(mktemp -d)\" || exit 1\nexport STATE_OUTPUTS=\"$CODEMOD_STATE_DIR/outputs\"\n: > \"$STATE_OUTPUTS\"\n{run}\ncodemod_status=$?\nprintf '\\n%s\\n' '{STATE_MARKER}'\ncat \"$STATE_OUTPUTS\"\nrm -rf \"$CODEMOD_STATE_DIR\"\nexit $codemod_status"
+    )
+}
+
+/// Reads the lines `with_state_outputs` printed into `state`, as the YAML
+/// engine did: `key=value` sets, `key@=value` appends, a value is JSON or
+/// else a string, and `key=null` removes the key.
+const STATE_OUTPUTS_HELPER: &str = r#"
+/** Copies what a step wrote to `$STATE_OUTPUTS` into `state`. */
+function applyStateOutputs(state: State, result: { stdout?: string }): void {
+  const stdout = result.stdout ?? "";
+  const start = stdout.lastIndexOf("\n{marker}\n");
+  if (start < 0) {
+    // The wrapper always prints the marker; stdout keeps only its last 1 MiB.
+    if (result.stdout === undefined) return;
+    throw new Error("the step wrote more than 1 MiB to $STATE_OUTPUTS, so its state lines were cut");
+  }
+  for (const line of stdout.slice(start + "\n{marker}\n".length).split("\n")) {
+    if (!line.trim()) continue;
+    const equals = line.indexOf("=");
+    const append = equals > 0 && line[equals - 1] === "@";
+    const key = line.slice(0, append ? equals - 1 : Math.max(equals, 0));
+    if (!key || key.trim() !== key) {
+      console.warn(`skipped a $STATE_OUTPUTS line that is not key=value: ${line}`);
+      continue;
+    }
+    const text = line.slice(equals + 1);
+    let value: unknown;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      value = text;
+    }
+    if (append) {
+      const list = state[key] ?? [];
+      state[key] = [...(Array.isArray(list) ? list : [list]), value];
+    } else if (value === null) {
+      delete state[key];
+    } else {
+      state[key] = value;
+    }
+  }
+}
+"#;
 
 fn workflow_templates(_workflow: &Workflow) -> HashMap<String, String> {
     HashMap::new()

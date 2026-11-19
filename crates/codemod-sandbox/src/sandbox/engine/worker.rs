@@ -27,7 +27,6 @@ use super::pending_files::PendingFiles;
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::DefaultParseLanguage;
 use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
-use crate::metrics::MetricsContext;
 use crate::sandbox::errors::{ExecutionError, RuntimeError};
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::sandbox::runtime_module::{RuntimeEventCallback, RuntimeFailure, RuntimeHooksContext};
@@ -46,7 +45,6 @@ pub struct WorkerOptions<R> {
     /// name (`workflow` for `codemod/workflow`); importing a codemod module
     /// that is not here, and not offered to every transform, is an error.
     pub codemod_modules: Vec<(&'static str, String)>,
-    pub metrics: MetricsContext,
     /// Handles `codemod:llm` requests; the module exists only when fetch is granted.
     pub llm_request_handler: Option<LlmRequestHandler>,
     /// Receives `codemod:runtime` events and `console` output.
@@ -173,8 +171,6 @@ impl Worker {
                 })
                 .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(TargetDirectory(target.clone()))
-                    .map_err(|e| fail(format!("{e:?}")))?;
-                ctx.store_userdata(options.metrics.clone())
                     .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(llm.clone())
                     .map_err(|e| fail(format!("{e:?}")))?;

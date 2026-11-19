@@ -1030,7 +1030,8 @@ impl TestRunner {
     }
 
     fn should_ignore_snapshot_path(relative_path: &Path) -> bool {
-        relative_path == Path::new("metrics.json")
+        // data.json is the jssg data snapshot; metrics.json is its old name.
+        relative_path == Path::new("data.json") || relative_path == Path::new("metrics.json")
     }
 
     /// Apply a transformation output, writing content to the (possibly renamed) path.

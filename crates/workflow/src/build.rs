@@ -236,6 +236,7 @@ enum Isolated {
     Callback,
     GraphCallback,
     FunctionStep,
+    Reducer,
 }
 
 impl Isolated {
@@ -244,8 +245,35 @@ impl Isolated {
             Isolated::Callback => "forEachFile callback",
             Isolated::GraphCallback => "dependencyGraph callback",
             Isolated::FunctionStep => "function step",
+            Isolated::Reducer => "jssg reducer",
         }
     }
+}
+
+/// The span of the inline function given as `reduce` in `jssg(path, { reduce })`,
+/// or where a `reduce` that is not one starts.
+fn reducer(options: &oxc::ast::ast::ObjectExpression<'_>) -> Result<Option<Span>, u32> {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKey};
+    for property in &options.properties {
+        let ObjectPropertyKind::ObjectProperty(property) = property else {
+            continue;
+        };
+        let named = match &property.key {
+            PropertyKey::StaticIdentifier(id) => id.name == "reduce",
+            PropertyKey::StringLiteral(s) => s.value == "reduce",
+            _ => false,
+        };
+        if !named {
+            continue;
+        }
+        return match &property.value {
+            _ if property.method => Err(property.span.start),
+            Expression::ArrowFunctionExpression(f) => Ok(Some(f.span)),
+            Expression::FunctionExpression(f) => Ok(Some(f.span)),
+            other => Err(other.span().start),
+        };
+    }
+    Ok(None)
 }
 
 /// `codemod/workflow` exports that were removed with workflow state.
@@ -489,6 +517,18 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                     }
                                     .to_string(),
                                 ));
+                            }
+                        }
+                    }
+                    Some("jssg") => {
+                        if let Some(Argument::ObjectExpression(options)) = call.arguments.get(1) {
+                            if let Some(span) = reducer(options).map_err(|at| {
+                                analysis.error(
+                                    at,
+                                    "jssg's reduce must be written inline, as reduce: (result, file) => ..., so the build can extract it".to_string(),
+                                )
+                            })? {
+                                sites.push((span, Isolated::Reducer));
                             }
                         }
                     }
