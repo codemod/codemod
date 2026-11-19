@@ -313,6 +313,33 @@ export default async function main() {
 }
 
 #[test]
+fn a_jssg_reducer_stops_at_the_first_fail_step_even_if_it_catches_it() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+import { failStep } from "codemod/runtime";
+export default async function main() {
+  const counted = jssg("./scripts/transform.ts", {
+    include: "src/**/*.ts",
+    reduce: (total, { data }) => {
+      globalThis.calls = (globalThis.calls ?? 0) + 1;
+      try { failStep(`reducer call ${globalThis.calls}`); } catch {}
+      return total + data.calls;
+    },
+    initial: 0,
+  });
+  return (await step(counted)).data;
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.ends_with("reducer call 1"), "{error}");
+}
+
+#[test]
 fn a_jssg_reducer_can_use_semver() {
     let h = Harness::new();
     counting_foo_calls(&h);

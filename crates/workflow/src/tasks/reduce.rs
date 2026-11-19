@@ -66,6 +66,7 @@ impl Fold {
         } = self;
         let json = block_on(async move {
             let sandbox = isolate::start(options, registry).await?;
+            let worker = &sandbox;
             let json = async_with!(sandbox.context => |ctx| {
                 let run = async {
                     let declared = Module::declare(ctx.clone(), name.as_str(), module.as_str())?;
@@ -80,18 +81,22 @@ impl Fold {
                     while let Ok(entry) = entries.recv() {
                         let promise: Promise = one.call((entry.as_str(),))?;
                         promise.into_future::<()>().await?;
+                        // A `failStep` the reducer caught still fails the
+                        // step, and no later file runs it again.
+                        if let Some(failure) = worker.take_side_effects().failure {
+                            return Ok(Err(failure.message));
+                        }
                     }
                     let end: Function = evaluated.get("__reduceEnd")?;
-                    end.call::<_, String>(())
+                    end.call::<_, String>(()).map(Ok)
                 };
                 run.await.catch(&ctx).map_err(|e| format!("the reducer failed: {e}"))
             })
             .await;
-            // A `failStep` the reducer caught still fails the step.
             if let Some(failure) = sandbox.take_side_effects().failure {
                 return Err(failure.message);
             }
-            json
+            json?
         })?;
         serde_json::from_str(&json).map_err(|e| e.to_string())
     }
