@@ -87,6 +87,9 @@ struct Generator {
     pass_params: bool,
     names: HashMap<String, String>,
     taken: BTreeSet<String>,
+    /// Transforms and shard functions the workflow imports, in the order
+    /// first used: (local name, import specifier).
+    transforms: Vec<(String, String)>,
 }
 
 /// One node, generated before deciding how `main` runs it.
@@ -195,6 +198,27 @@ impl Generator {
     fn import(&mut self, name: &'static str) -> &'static str {
         self.imports.insert(name);
         name
+    }
+
+    /// The local name of the transform (or shard function) at `path`,
+    /// relative to the workflow, imported once however often it is used.
+    fn transform(&mut self, path: &str, suffix: &str) -> String {
+        let specifier = crate::transforms::import_specifier(path);
+        if let Some((name, _)) = self.transforms.iter().find(|(_, s)| *s == specifier) {
+            return name.clone();
+        }
+        let name = format!(
+            "{}{suffix}",
+            crate::transforms::binding_name(&specifier, "imported")
+        );
+        let mut unique = name.clone();
+        let mut n = 2;
+        while !self.taken.insert(unique.clone()) {
+            unique = format!("{name}{n}");
+            n += 1;
+        }
+        self.transforms.push((unique.clone(), specifier));
+        unique
     }
 
     fn warn(&mut self, message: String) -> String {
@@ -721,9 +745,10 @@ impl Generator {
                     // workflow.yaml's default, where forEachFile's is the package's.
                     selector.push(("language", js_string("typescript")));
                 }
+                let transform = self.transform(&js.js_file, "Transform");
                 for_each_file(
                     &selector,
-                    with_options(format!("jssg({}", js_string(&js.js_file)), &fields),
+                    with_options(format!("jssg({transform}"), &fields),
                 )
             }
             StepAction::Codemod(codemod) => {
@@ -811,7 +836,8 @@ impl Generator {
                             object(&method)
                         }
                         ShardMethod::Function(function) => {
-                            object(&[("function", js_string(&function.function))])
+                            let function = self.transform(&function.function, "Shards");
+                            object(&[("function", function)])
                         }
                     },
                 ));
@@ -822,7 +848,8 @@ impl Generator {
                     fields.push(("filePattern", js_string(pattern)));
                 }
                 if let Some(js) = &shard.js_ast_grep {
-                    let mut js_fields = vec![("path", js_string(&js.js_file))];
+                    let transform = self.transform(&js.js_file, "Transform");
+                    let mut js_fields = vec![("transform", transform)];
                     js_fields.extend(self.jssg_fields(
                         js,
                         &Scope {
@@ -927,6 +954,10 @@ impl Generator {
         );
         if self.uses_context {
             source.push_str("import type { WorkflowContext } from \"codemod/workflow\";\n");
+        }
+        // The engine runs these files; the workflow only names them.
+        for (name, specifier) in &self.transforms {
+            let _ = writeln!(source, "import {name} from {};", js_string(specifier));
         }
         source.push('\n');
         let mut aliases = String::new();
@@ -1141,7 +1172,7 @@ fn object(fields: &[(&str, String)]) -> String {
     format!("{{ {} }}", parts.join(", "))
 }
 
-/// `call` (an open call such as `jssg("a.ts"`) closed with its options.
+/// `call` (an open call such as `jssg(transform`) closed with its options.
 /// Long option objects go on several lines.
 fn with_options(call: String, fields: &[(&str, String)]) -> String {
     if fields.is_empty() {

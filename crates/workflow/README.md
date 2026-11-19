@@ -7,6 +7,7 @@ through a translation to the same TypeScript. User docs:
 ```ts
 import { step, forEachFile, jssg } from "codemod/workflow";
 import { parse } from "codemod/ast-grep";
+import codemod from "./scripts/codemod.ts";
 
 export default async function main() {
   const usages = await step("Find moment imports",
@@ -15,7 +16,7 @@ export default async function main() {
       return found.length ? file.path : undefined;
     }),
   );
-  await step(forEachFile(jssg("./scripts/codemod.ts", { files: usages.outputs })));
+  await step(forEachFile(jssg(codemod, { files: usages.outputs })));
 }
 ```
 

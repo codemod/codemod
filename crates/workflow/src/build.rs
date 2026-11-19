@@ -250,7 +250,7 @@ impl Isolated {
     }
 }
 
-/// The span of the inline function given as `reduce` in `jssg(path, { reduce })`,
+/// The span of the inline function given as `reduce` in `jssg(transform, { reduce })`,
 /// or where a `reduce` that is not one starts.
 fn reducer(options: &oxc::ast::ast::ObjectExpression<'_>) -> Result<Option<Span>, u32> {
     use oxc::ast::ast::{ObjectPropertyKind, PropertyKey};
@@ -434,6 +434,14 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
             },
             _ => {}
         }
+    }
+
+    // Transforms given to `jssg` and `shard` are imported, but not loaded:
+    // their imports are dropped, and the arguments become references to
+    // their files.
+    let transforms = crate::transforms::analyze(file, source, &program, &semantic)?;
+    for symbol in transforms.imports.keys() {
+        analysis.imports.remove(symbol);
     }
 
     // Functions to extract, in source order: forEachFile callbacks and
@@ -671,13 +679,23 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
         body_lines.push((at, format!("import {module:?};")));
     }
     body_lines.sort();
-    let body_lines: Vec<String> = std::iter::once(format!(
+    let mut body_lines: Vec<String> = std::iter::once(format!(
         "import {{ __callback as __flowCallback }} from {FLOW_MODULE:?};"
     ))
     .chain(body_lines.into_iter().map(|(_, line)| line))
     .collect();
     for span in import_spans {
         splices.push((span, String::new()));
+    }
+    if !transforms.replacements.is_empty() {
+        body_lines.insert(
+            1,
+            format!(
+                "import {{ __transform as {} }} from {FLOW_MODULE:?};",
+                crate::transforms::TRANSFORM_REFERENCE
+            ),
+        );
+        splices.extend(transforms.replacements.iter().cloned());
     }
 
     let mut main = source.to_string();
@@ -1149,7 +1167,7 @@ fn content_id(source: &str) -> String {
     format!("cb_{hex}")
 }
 
-fn error_at(file: &str, source: &str, offset: u32, message: String) -> BuildError {
+pub(crate) fn error_at(file: &str, source: &str, offset: u32, message: String) -> BuildError {
     let before = &source[..(offset as usize).min(source.len())];
     let line = before.matches('\n').count() + 1;
     let column = before.len() - before.rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
@@ -1169,8 +1187,14 @@ pub struct Inspection {
     pub calls: Vec<String>,
     /// `installSkill({ package, path })` calls whose options are literals.
     pub install_skills: Vec<InstalledSkill>,
-    /// String-literal paths passed to `jssg`, `astGrep` and shard functions.
+    /// Files the workflow names, relative to it, in source order: rule
+    /// files given to `astGrep`, and the imported transforms and shard
+    /// functions given to `jssg` and `shard`.
     pub files: Vec<String>,
+    /// Imports of transforms and shard functions, as written
+    /// (`./scripts/codemod.ts`): they stay imports when the workflow is
+    /// bundled, since the engine runs those files itself.
+    pub transforms: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1221,7 +1245,12 @@ pub fn inspect(file: &str, source: &str) -> Result<Inspection, BuildError> {
         _ => None,
     };
 
-    let mut inspection = Inspection::default();
+    let transforms = crate::transforms::analyze(file, source, &program, &semantic)?;
+    let mut inspection = Inspection {
+        files: transforms.files,
+        transforms: transforms.specifiers,
+        ..Inspection::default()
+    };
     for node in semantic.nodes().iter() {
         let AstKind::CallExpression(call) = node.kind() else {
             continue;
@@ -1237,55 +1266,35 @@ pub fn inspect(file: &str, source: &str) -> Result<Inspection, BuildError> {
             continue;
         };
         inspection.calls.push(name.clone());
-        let first = call.arguments.first().and_then(|a| a.as_expression());
-        match name.as_str() {
-            "jssg" | "astGrep" => {
-                if let Some(path) = first.and_then(string_of) {
-                    inspection.files.push(path);
-                }
+        if name != "installSkill" {
+            continue;
+        }
+        let Some(Expression::ObjectExpression(object)) =
+            call.arguments.first().and_then(|a| a.as_expression())
+        else {
+            continue;
+        };
+        let mut package = None;
+        let mut path = None;
+        for property in &object.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = property else {
+                continue;
+            };
+            let key = match &property.key {
+                PropertyKey::StaticIdentifier(id) => id.name.to_string(),
+                PropertyKey::StringLiteral(s) => s.value.to_string(),
+                _ => continue,
+            };
+            match key.as_str() {
+                "package" => package = string_of(&property.value),
+                "path" => path = string_of(&property.value),
+                _ => {}
             }
-            "installSkill" | "shard" => {
-                let Some(Expression::ObjectExpression(object)) = first else {
-                    continue;
-                };
-                let mut package = None;
-                let mut path = None;
-                for property in &object.properties {
-                    let ObjectPropertyKind::ObjectProperty(property) = property else {
-                        continue;
-                    };
-                    let key = match &property.key {
-                        PropertyKey::StaticIdentifier(id) => id.name.to_string(),
-                        PropertyKey::StringLiteral(s) => s.value.to_string(),
-                        _ => continue,
-                    };
-                    match (name.as_str(), key.as_str()) {
-                        ("installSkill", "package") => package = string_of(&property.value),
-                        ("installSkill", "path") => path = string_of(&property.value),
-                        ("shard", "method") => {
-                            if let Expression::ObjectExpression(method) = &property.value {
-                                for inner in &method.properties {
-                                    if let ObjectPropertyKind::ObjectProperty(inner) = inner {
-                                        let is_function = matches!(&inner.key, PropertyKey::StaticIdentifier(id) if id.name == "function");
-                                        if is_function {
-                                            if let Some(file) = string_of(&inner.value) {
-                                                inspection.files.push(file);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(package) = package {
-                    inspection
-                        .install_skills
-                        .push(InstalledSkill { package, path });
-                }
-            }
-            _ => {}
+        }
+        if let Some(package) = package {
+            inspection
+                .install_skills
+                .push(InstalledSkill { package, path });
         }
     }
     Ok(inspection)

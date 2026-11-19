@@ -150,6 +150,7 @@ nodes:
         source,
         r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
 import { forEachFile, jssg, step } from "codemod/workflow";
+import workflowTransform from "./src/workflow.ts";
 
 export default async function main() {
   // Apply AST Transformations
@@ -157,7 +158,7 @@ export default async function main() {
     include: ["**/*.js", "**/*.ts"],
     exclude: ["**/node_modules/**"],
     language: "typescript",
-  }, jssg("src/workflow.ts")));
+  }, jssg(workflowTransform)));
 }
 "#
     );
@@ -187,7 +188,8 @@ nodes:
     .source;
     for expected in [
         // workflow.yaml parses as TypeScript unless told otherwise.
-        r#"await step("Transform", forEachFile({ language: "typescript" }, jssg("scripts/codemod.ts")));"#,
+        r#"import codemodTransform from "./scripts/codemod.ts";"#,
+        r#"await step("Transform", forEachFile({ language: "typescript" }, jssg(codemodTransform)));"#,
         r#"await step("Rules", forEachFile(astGrep("rules/config.yml")));"#,
         r#"forEachFile({ include: ["src/**"] }, astGrep("rules/config.yml"))"#,
     ] {
@@ -320,11 +322,12 @@ fn the_documented_features_translate_and_build() {
 
     expect("\"pr_size\": 20");
     expect("\"mode\": \"safe\"");
-    expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", jssg: { path: \"scripts/codemod.ts\", language: \"tsx\", params }, previous: state[\"shards\"] }));");
+    expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", jssg: { transform: codemodTransform, language: \"tsx\", params }, previous: state[\"shards\"] }));");
     expect("(state[\"shards\"] ?? []).map((matrix: Matrix, index: number) => applyNodeFor(params, state, matrix, index))");
     expect("await step(approval(\"Run 'Apply transforms'?\"));");
     expect("const branchName = `codemod-apply-${index}`;");
-    expect("forEachFile({ language: \"tsx\" }, jssg(\"scripts/codemod.ts\", {\n    files: matrix?._meta_files,\n    params,\n    matrix: matrix ?? undefined,\n  }))");
+    expect("import codemodTransform from \"./scripts/codemod.ts\";");
+    expect("forEachFile({ language: \"tsx\" }, jssg(codemodTransform, {\n    files: matrix?._meta_files,\n    params,\n    matrix: matrix ?? undefined,\n  }))");
     expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state })) {");
     expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state })) {");

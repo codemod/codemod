@@ -110,7 +110,7 @@ function __plain(value: unknown): unknown {
 
 let __folded: unknown;
 
-/** Start a `jssg(path, { reduce, initial })` fold; `initial` is JSON. */
+/** Start a `jssg(transform, { reduce, initial })` fold; `initial` is JSON. */
 export function __reduceStart(initial: string): void {
   __folded = JSON.parse(initial);
 }

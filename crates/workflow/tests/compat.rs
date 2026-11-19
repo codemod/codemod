@@ -272,6 +272,48 @@ nodes:
         .all(|s| s.status == StepStatus::Succeeded));
 }
 
+/// The YAML names its shard function by path; the translation imports it.
+#[test]
+fn a_yaml_shard_function_runs_from_its_import() {
+    let h = Harness::new();
+    for name in ["a", "b"] {
+        h.write(&format!("src/{name}.ts"), "y = 'OLD'\n");
+    }
+    h.bundle_file(
+        "scripts/shard.js",
+        r#"
+export default function shard(input) {
+  return [{ name: "all", _meta_shard: 0, _meta_files: input.files }];
+}
+"#,
+    );
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: evaluate
+    name: Evaluate shards
+    steps:
+      - name: Build shards
+        shard:
+          method:
+            function: ./scripts/shard.js
+          target: src
+          file_pattern: "**/*.ts"
+          output_state: shards
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let shards = report.steps[0].result.as_ref().unwrap();
+    assert_eq!(
+        shards[0]["_meta_files"].as_array().unwrap().len(),
+        2,
+        "{shards}"
+    );
+}
+
 #[test]
 fn a_manual_node_waits_for_approval() {
     let store = Arc::new(MemoryStore::default());

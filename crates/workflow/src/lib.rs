@@ -29,6 +29,7 @@ pub mod interaction;
 mod js;
 mod run;
 mod tasks;
+mod transforms;
 
 pub use build::{build, inspect, BuildError, Built, Inspection, InstalledSkill, FLOW_MODULE};
 pub use butterflow_core::package_workflows::{
@@ -44,6 +45,7 @@ pub use engine::{
 pub use hosted::{HostedRun, OpenRequest, PreparedJssg, SelectedFiles};
 pub use js::orchestrator_version;
 pub use run::{Ending, RunError, TestPlan};
+pub use transforms::rewrite_transforms;
 
 /// Services tasks call into, supplied by the host application.
 #[derive(Default)]

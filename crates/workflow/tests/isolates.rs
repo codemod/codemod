@@ -496,9 +496,10 @@ fn a_jssg_reducer_must_be_written_inline() {
         &h,
         r#"
 import { step, jssg } from "codemod/workflow";
+import transform from "./transform.ts";
 const add = (total: number) => total + 1;
 export default async function main() {
-  await step(jssg("./transform.ts", { reduce: add, initial: 0 }));
+  await step(jssg(transform, { reduce: add, initial: 0 }));
 }
 "#,
     );
@@ -511,8 +512,9 @@ fn a_jssg_reducer_needs_an_initial_value() {
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
+import transform from "./transform.ts";
 export default async function main() {
-  await step(jssg("./transform.ts", { reduce: (total) => total }));
+  await step(jssg(transform, { reduce: (total) => total }));
 }
 "#,
         Value::Null,

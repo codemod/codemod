@@ -1,4 +1,5 @@
-//! `jssg(path, options)`: run a JSSG transform file over the target.
+//! `jssg(transform, options)`: run a JSSG transform file over the target.
+//! The workflow imports the transform; the build passes its file here as `path`.
 
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;

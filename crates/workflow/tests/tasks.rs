@@ -154,8 +154,9 @@ export default function transform(root: any, options: any) {
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
+import transform from "./scripts/transform.ts";
 export default async function main() {
-  const result = await step(jssg("./scripts/transform.ts", { include: "src/**/*.ts" }));
+  const result = await step(jssg(transform, { include: "src/**/*.ts" }));
   return { result };
 }
 "#,
@@ -195,8 +196,9 @@ fn a_jssg_step_returns_each_files_data_in_path_order() {
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
+import transform from "./scripts/transform.ts";
 export default async function main() {
-  return (await step(jssg("./scripts/transform.ts", { include: "src/**/*.ts" }))).data;
+  return (await step(jssg(transform, { include: "src/**/*.ts" }))).data;
 }
 "#,
         Value::Null,
@@ -226,8 +228,8 @@ export default function transform(root: any) {
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
+import script from "./scripts/nullable.ts";
 export default async function main() {
-  const script = "./scripts/nullable.ts";
   const include = "src/**/*.ts";
   const listed = await step("List", jssg(script, { include }));
   const counted = await step("Count nulls", jssg(script, {
@@ -253,8 +255,9 @@ fn a_jssg_reducer_folds_each_files_data_into_the_result() {
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
+import transform from "./scripts/transform.ts";
 export default async function main() {
-  const counted = jssg("./scripts/transform.ts", {
+  const counted = jssg(transform, {
     include: "src/**/*.ts",
     reduce: (total, { data }) => total + data.calls,
     initial: 0,
@@ -274,8 +277,9 @@ fn a_failing_jssg_reducer_fails_the_step() {
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
+import transform from "./scripts/transform.ts";
 export default async function main() {
-  const counted = jssg("./scripts/transform.ts", {
+  const counted = jssg(transform, {
     include: "src/**/*.ts",
     reduce: () => { throw new Error("cannot add"); },
     initial: 0,
@@ -295,9 +299,10 @@ fn a_jssg_reducer_that_calls_fail_step_fails_the_step_even_if_it_catches_it() {
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
+import transform from "./scripts/transform.ts";
 import { failStep } from "codemod/runtime";
 export default async function main() {
-  const counted = jssg("./scripts/transform.ts", {
+  const counted = jssg(transform, {
     include: "src/**/*.ts",
     reduce: (total, { data }) => {
       try { failStep("cannot add"); } catch {}
@@ -320,9 +325,10 @@ fn a_jssg_reducer_can_use_semver() {
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
+import transform from "./scripts/transform.ts";
 import { semver } from "codemod/deps";
 export default async function main() {
-  const counted = jssg("./scripts/transform.ts", {
+  const counted = jssg(transform, {
     include: "src/**/*.ts",
     reduce: (total, { data }) => total + (semver.gt("2.0.0", "1.0.0") ? data.calls : 0),
     initial: 0,
@@ -356,8 +362,9 @@ export default function transform(root: any) {
     h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
+import transform from "./scripts/transform.ts";
 export default async function main() {
-  await step("Scan", jssg("./scripts/transform.ts", { include: "src/**/*.ts" }));
+  await step("Scan", jssg(transform, { include: "src/**/*.ts" }));
 }
 "#,
         Value::Null,
@@ -411,8 +418,9 @@ export default function transform(root: any) {
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
+import transform from "./scripts/transform.ts";
 export default async function main() {
-  return await step("Scan", jssg("./scripts/transform.ts", { include: "src/**/*.ts" }));
+  return await step("Scan", jssg(transform, { include: "src/**/*.ts" }));
 }
 "#,
         Value::Null,
@@ -453,8 +461,9 @@ export default function transform() { return null; }
         format!(
             r#"
 import {{ step, jssg }} from "codemod/workflow";
+import transform from "./scripts/transform.ts";
 export default async function main() {{
-  return await step("Scan", jssg("./scripts/transform.ts", {{ include: "{include}" }}));
+  return await step("Scan", jssg(transform, {{ include: "{include}" }}));
 }}
 "#
         )
@@ -496,8 +505,9 @@ export default function transform(root: any) {
         format!(
             r#"
 import {{ step, jssg }} from "codemod/workflow";
+import transform from "./scripts/transform.ts";
 export default async function main() {{
-  await step(jssg("./scripts/transform.ts", {{ include: "src/**/*.ts"{options} }}));
+  await step(jssg(transform, {{ include: "src/**/*.ts"{options} }}));
 }}
 "#
         )
@@ -763,8 +773,9 @@ export default async function transform(root: any) {
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
+import transform from "./scripts/transform.ts";
 export default async function main() {
-  return step(jssg("./scripts/transform.ts", { include: "src/parts/*.ts" }));
+  return step(jssg(transform, { include: "src/parts/*.ts" }));
 }
 "#,
         Value::Null,
@@ -817,10 +828,11 @@ fn for_each_file_runs_a_jssg_transform_on_the_files_its_selector_picks() {
     let report = h.start(
         r#"
 import { step, forEachFile, jssg } from "codemod/workflow";
+import mark from "./scripts/mark.ts";
 export default async function main() {
   const selector = { include: "src/**/*.ts", exclude: "**/skip.ts", language: "tsx" };
-  const one = await step("Selected", forEachFile(selector, jssg("scripts/mark.ts")));
-  const transform = jssg("scripts/mark.ts", { include: "lib/**", language: "typescript" });
+  const one = await step("Selected", forEachFile(selector, jssg(mark)));
+  const transform = jssg(mark, { include: "lib/**", language: "typescript" });
   const two = await step("Its own", forEachFile(transform));
   return [one.changes.written, two.changes.written];
 }
@@ -844,8 +856,9 @@ fn for_each_file_gives_a_jssg_transform_the_package_language() {
     h.bundle_file("scripts/mark.ts", MARK);
     let workflow = r#"
 import { step, forEachFile, jssg } from "codemod/workflow";
+import mark from "./scripts/mark.ts";
 export default async function main() {
-  return (await step(forEachFile(jssg("scripts/mark.ts")))).changes.written;
+  return (await step(forEachFile(jssg(mark)))).changes.written;
 }
 "#;
     // No manifest: TypeScript, as `jssg` on its own.
@@ -908,17 +921,17 @@ fn for_each_file_refuses_what_a_transform_cannot_take() {
     );
     let failed = |call: &str| {
         let source = format!(
-            "import {{ step, forEachFile, jssg, astGrep, shell }} from \"codemod/workflow\";\nexport default async function main() {{ await step({call}); }}\n"
+            "import {{ step, forEachFile, jssg, astGrep, shell }} from \"codemod/workflow\";\nimport t from \"./t.ts\";\nexport default async function main() {{ await step({call}); }}\n"
         );
         output(&h.start(&source, Value::Null)).unwrap_err()
     };
     for (call, message) in [
         (
-            r#"forEachFile({ include: "a/**" }, jssg("t.ts", { include: "b/**" }))"#,
+            r#"forEachFile({ include: "a/**" }, jssg(t, { include: "b/**" }))"#,
             "'include' is given twice, in the selector and in jssg(...)",
         ),
         (
-            r#"forEachFile({ containing: "x" }, jssg("t.ts"))"#,
+            r#"forEachFile({ containing: "x" }, jssg(t))"#,
             "selector.containing is for callbacks, not for jssg(...)",
         ),
         (
@@ -1444,5 +1457,107 @@ export default async function main() {
     assert_eq!(
         output(&report).unwrap(),
         json!({ "__proto__": { "a": 1 }, "b": 2 })
+    );
+}
+
+#[test]
+fn an_imported_transform_runs_without_the_body_loading_it() {
+    let h = Harness::new();
+    h.write("src/a.ts", "var a = 1;\n");
+    // The module throws when the workflow body evaluates it.
+    h.bundle_file(
+        "scripts/codemod.ts",
+        r#"
+if ((globalThis as any).__workflowHost !== undefined) throw new Error("loaded by the body");
+export default function transform(root: any, options: any) {
+  return root.root().text().replace("var", options.params.keyword);
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, forEachFile, jssg } from "codemod/workflow";
+import codemod from "./scripts/codemod.ts";
+export default async function main() {
+  const result = await step("Migrate", forEachFile("src/**/*.ts", jssg(codemod, { params: { keyword: "let" } })));
+  return result.changes.written;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(["src/a.ts"]));
+    assert_eq!(h.read("src/a.ts"), "let a = 1;\n");
+    // The step is labeled and keyed by the file, as a path was.
+    assert_eq!(report.steps[0].label, "Migrate");
+}
+
+#[test]
+fn shard_steps_run_an_imported_shard_function_and_transform() {
+    let h = Harness::new();
+    for name in ["a", "b", "c"] {
+        h.write(&format!("src/{name}.ts"), "var x = 1;\n");
+    }
+    h.write("src/clean.ts", "let y = 2;\n");
+    h.bundle_file(
+        "scripts/shard.ts",
+        r#"
+export default function shardFiles(input: { files: string[] }) {
+  return input.files.map((file, index) => ({ name: `one-${index}`, _meta_shard: index, _meta_files: [file] }));
+}
+"#,
+    );
+    h.bundle_file(
+        "scripts/codemod.ts",
+        r#"
+export default function transform(root: any) {
+  const text = root.root().text();
+  return text.includes("var") ? text.replace("var", "let") : null;
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, shard } from "codemod/workflow";
+import shardFiles from "./scripts/shard.ts";
+import codemod from "./scripts/codemod.ts";
+export default async function main() {
+  const shards = await step(shard({
+    method: { function: shardFiles },
+    target: "src",
+    jssg: { transform: codemod, include: "**/*.ts" },
+  }));
+  return shards.map((s: any) => s._meta_files).flat().sort();
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!(["src/a.ts", "src/b.ts", "src/c.ts"])
+    );
+}
+
+#[test]
+fn a_transform_path_that_reaches_jssg_at_run_time_is_refused() {
+    let h = Harness::new();
+    h.bundle_file("scripts/codemod.ts", "export default () => null;\n");
+    // `jssg` under another name is not seen by the build; the task refuses
+    // the path when the body runs.
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+const run = jssg;
+export default async function main() {
+  await step(run("./scripts/codemod.ts" as any));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains(
+            "jssg takes an imported transform, not a file path: import codemod from \"./scripts/codemod.ts\""
+        ),
+        "{error}"
     );
 }

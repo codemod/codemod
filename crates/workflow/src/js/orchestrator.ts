@@ -189,7 +189,7 @@ export interface ForEachFileTask {
 export interface HostTask {
   readonly [TASK]: "host";
   readonly content: TaskContent;
-  /** `jssg(path, { reduce, initial })`: folds each file's data into one result. */
+  /** `jssg(transform, { reduce, initial })`: folds each file's data into one result. */
   readonly reducer?: Reducer;
 }
 
@@ -225,6 +225,15 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
   /** Inserted by the build in place of an extracted callback. */
   function __callback(id: string, captures: () => Json): CallbackReference {
     return { __flowCallback: id, captures };
+  }
+
+  /**
+   * Inserted by the build in place of a transform imported for `jssg` or
+   * `shard`: the file the import names, relative to the workflow. The
+   * workflow never loads the transform's code.
+   */
+  function __transform(path: string): TransformReference {
+    return Object.freeze({ [TRANSFORM]: path });
   }
 
   /** A callback the build extracted, or one given as a function on hosts that run them in place. */
@@ -369,8 +378,9 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     return hostTask("shell", { ...options, command });
   }
 
-  /** Run a JSSG transform file over the target. */
-  function jssg(path: string, options: object = {}): HostTask {
+  /** Run an imported JSSG transform over the target. */
+  function jssg(transform: unknown, options: object = {}): HostTask {
+    const path = transformPath(transform, "jssg");
     if (!isRecord(options) || !("reduce" in options)) {
       if (isRecord(options) && "initial" in options) {
         throw new TypeError("jssg: initial is the starting value of reduce; give reduce too");
@@ -401,7 +411,26 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
 
   /** Split files into shards. */
   function shard(options: object): HostTask {
-    return hostTask("shard", options);
+    if (!isRecord(options)) return hostTask("shard", options);
+    let request: Record<string, unknown> = options;
+    const { method, jssg: transform } = options;
+    if (isRecord(method) && "function" in method) {
+      const path = transformPath(method.function, "shard's method.function");
+      request = { ...request, method: { ...method, function: path } };
+    }
+    if (isRecord(transform)) {
+      if ("path" in transform) {
+        throw new TypeError(
+          "shard's jssg takes the transform as `transform`, imported, not a file path as `path`",
+        );
+      }
+      const { transform: given, ...rest } = transform;
+      request = {
+        ...request,
+        jssg: { ...rest, path: transformPath(given, "shard's jssg.transform") },
+      };
+    }
+    return hostTask("shard", request);
   }
 
   /** Run another codemod package (registry name or local path). */
@@ -464,6 +493,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
   return {
     callbackOf,
     __callback,
+    __transform,
     forEachFile,
     dependencyGraph,
     shell,
@@ -480,6 +510,33 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     commit,
     pullRequest,
   };
+}
+
+/** Marks a transform reference; shared by every copy of this module. */
+const TRANSFORM = Symbol.for("codemod.transform");
+
+/** An imported transform, as the build passes it on: the file it names. */
+export interface TransformReference {
+  readonly [TRANSFORM]: string;
+}
+
+/** The file a transform reference names, or why the value is not one. */
+function transformPath(value: unknown, what: string): string {
+  const path = isRecord(value) ? (value as Partial<TransformReference>)[TRANSFORM] : undefined;
+  if (typeof path === "string") return path;
+  if (typeof value === "string") {
+    throw new TypeError(
+      `${what} takes an imported transform, not a file path: import codemod from ${JSON.stringify(value.startsWith(".") ? value : `./${value}`)}, then pass codemod`,
+    );
+  }
+  if (typeof value === "function") {
+    throw new TypeError(
+      `${what} was given the transform's code: the workflow was loaded without the codemod build, which turns imported transforms into references to their files. Run it with the codemod CLI, or with runWorkflow(path) from codemod/host or codemod/testing`,
+    );
+  }
+  throw new TypeError(
+    `${what} takes an imported transform (import codemod from "./scripts/codemod.ts")`,
+  );
 }
 
 /** Tasks that wait: their step records when the wait began. */

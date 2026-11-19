@@ -1,4 +1,4 @@
-//! `jssg(path, { reduce, initial })`: each file's `data` is folded into one
+//! `jssg(transform, { reduce, initial })`: each file's `data` is folded into one
 //! result as the file finishes, in an isolate of its own, so the step never
 //! holds every file's data at once.
 
