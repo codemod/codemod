@@ -358,6 +358,8 @@ A command that exits with an error fails the step, and the error ends with what 
 
 Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
 
+If a `codemod()` step resolves a preview-only registry package during an apply run, the step fails before starting that package. Rerun the workflow with `--dry-run` to preview it. This also applies to packages called by nested workflows.
+
 ### Coding agents
 
 `agent(prompt, options)` runs a coding agent installed on the machine, without asking it questions, in the run's target directory:

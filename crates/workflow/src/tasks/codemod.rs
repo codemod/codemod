@@ -14,6 +14,7 @@ use crate::run::{execute, Ending};
 use butterflow_core::nested_codemod_run::{
     NestedCodemodRun, NestedCodemodRunEvent, NestedCodemodRunOutcome,
 };
+use butterflow_core::registry::ResolvedPackage;
 use butterflow_state::run_store::StepStatus;
 
 #[derive(Deserialize)]
@@ -64,6 +65,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         })?;
         let package = block_on(registry.resolve_package(&request.source, None, false, None))
             .map_err(|e| TaskError::Failed(format!("cannot resolve '{}': {e}", request.source)))?;
+        require_preview_if_restricted(&package, &request.source, run.dry_run)?;
         nested_run = package
             .registry_metadata
             .as_ref()
@@ -151,6 +153,19 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     }
 }
 
+fn require_preview_if_restricted(
+    package: &ResolvedPackage,
+    source: &str,
+    dry_run: bool,
+) -> Result<(), TaskError> {
+    if package.dry_run_only && !dry_run {
+        return Err(TaskError::Failed(format!(
+            "codemod '{source}' is preview-only; rerun the workflow with --dry-run"
+        )));
+    }
+    Ok(())
+}
+
 fn is_local(source: &str) -> bool {
     source.starts_with("./") || source.starts_with("../") || source.starts_with('/')
 }
@@ -215,5 +230,33 @@ impl EventSink for NestedEvents {
             Event::RunStarted { .. } | Event::RunFinished { .. } => return,
         };
         self.parent.emit(Event::StepLog { position, line });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use butterflow_core::registry::PackageSpec;
+
+    #[test]
+    fn nested_registry_preview_restriction_rejects_apply_but_allows_dry_run() {
+        let mut package = ResolvedPackage {
+            spec: PackageSpec {
+                scope: None,
+                name: "child".into(),
+                version: None,
+            },
+            version: "1.0.0".into(),
+            package_dir: "unused".into(),
+            dry_run_only: true,
+            registry_metadata: None,
+        };
+        assert!(matches!(
+            require_preview_if_restricted(&package, "child", false),
+            Err(TaskError::Failed(message)) if message.contains("child") && message.contains("--dry-run")
+        ));
+        assert!(require_preview_if_restricted(&package, "child", true).is_ok());
+        package.dry_run_only = false;
+        assert!(require_preview_if_restricted(&package, "child", false).is_ok());
     }
 }
