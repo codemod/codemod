@@ -69,3 +69,60 @@ export async function __runStep(): Promise<string> {
     return JSON.stringify({ ok: false, error: message });
   }
 }
+
+/** Run a dependencyGraph callback with the live graph; never throws. Nodes and edges become text. */
+export async function __runGraph(): Promise<string> {
+  try {
+    let result = __plain(await __cb(globalThis.__dependencyGraph));
+    if (result === undefined) result = null;
+    __checkJson(result, "the step's result");
+    return JSON.stringify({ ok: true, result });
+  } catch (error) {
+    return JSON.stringify({ ok: false, error: __describe(error) });
+  }
+}
+
+/** Graph nodes and edges (class instances with toJSON) into plain values. */
+function __plain(value: unknown): unknown {
+  if (value && typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if ("toJSON" in value && typeof value.toJSON === "function" && prototype !== Object.prototype) {
+      return value.toJSON();
+    }
+    if (Array.isArray(value)) return value.map(__plain);
+    if (prototype === Object.prototype) {
+      const plain: Record<string, unknown> = {};
+      // defineProperty keeps a `__proto__` key as data, where assigning it
+      // would set the object's prototype.
+      for (const [key, item] of Object.entries(value)) {
+        Object.defineProperty(plain, key, {
+          value: __plain(item),
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
+      return plain;
+    }
+  }
+  return value;
+}
+
+let __folded: unknown;
+
+/** Start a `jssg(path, { reduce, initial })` fold; `initial` is JSON. */
+export function __reduceStart(initial: string): void {
+  __folded = JSON.parse(initial);
+}
+
+/** Fold one file's `{ file, data }` (as JSON) into the result. */
+export async function __reduceOne(entry: string): Promise<void> {
+  __folded = await __cb(__folded, JSON.parse(entry));
+}
+
+/** The folded result, as JSON. */
+export function __reduceEnd(): string {
+  const result = __folded === undefined ? null : __folded;
+  __checkJson(result, "the reducer's result");
+  return JSON.stringify(result);
+}

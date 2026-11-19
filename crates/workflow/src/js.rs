@@ -44,6 +44,19 @@ javascript! {
     pub(crate) fn workflow_module = include_str!("js/workflow.ts"), "workflow.ts"
 }
 javascript! {
+    /// `codemod-internal:semver`: `semver` for the body and isolates.
+    pub(crate) fn semver_module = include_str!("js/semver.ts"), "semver.ts"
+}
+javascript! {
+    /// `codemod-internal:dependencies`: `registry`, `semver` and the graph in isolates.
+    pub(crate) fn dependencies_module = include_str!("js/dependencies.ts"), "dependencies.ts"
+}
+javascript! {
+    /// `codemod/workflow` in isolates, for files steps and callbacks import:
+    /// `registry` and `semver`, and the body-only functions as errors.
+    pub(crate) fn isolate_workflow_module = include_str!("js/isolate_workflow.ts"), "isolate_workflow.ts"
+}
+javascript! {
     /// Replay-safe globals of the workflow body; a script, not a module.
     pub(crate) fn body_globals = include_str!("js/body_globals.ts"), "body_globals.ts"
 }
@@ -65,6 +78,9 @@ mod tests {
             super::orchestrator(),
             super::workflow_module(),
             super::body_globals(),
+            super::semver_module(),
+            super::dependencies_module(),
+            super::isolate_workflow_module(),
         ] {
             assert!(!js.is_empty());
             assert!(!js.contains("interface "), "types are left in:\n{js}");

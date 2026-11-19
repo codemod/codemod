@@ -16,7 +16,7 @@ pub trait Runner: Send + Sync {
         command: &str,
         env: &HashMap<String, String>,
         output_callback: Option<OutputCallback>,
-    ) -> Result<String>;
+    ) -> Result<direct_runner::CommandOutput>;
 }
 
 #[cfg(any(windows, test))]

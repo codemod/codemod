@@ -9,7 +9,6 @@ use super::transform_helpers::{
 };
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
 use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
-use crate::metrics::MetricsContext;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::sandbox::runtime_module::{
@@ -167,6 +166,8 @@ pub struct FileChange {
 pub struct CodemodOutput {
     pub primary: ExecutionResult,
     pub secondary: Vec<FileChange>,
+    /// The `data` the transform returned for this file, as JSON.
+    pub data: Option<serde_json::Value>,
 }
 
 /// Shared accumulator for file changes produced by `jssgTransform`.
@@ -247,8 +248,6 @@ pub struct JssgExecutionOptions<'a, R> {
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
     /// Optional semantic provider for symbol indexing (go-to-definition, find-references)
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
-    /// Optional metrics context for tracking metrics across execution
-    pub metrics_context: Option<MetricsContext>,
     /// Optional engine-owned LLM request handler exposed through codemod:llm
     pub llm_request_handler: Option<LlmRequestHandler>,
     /// Optional runtime event callback for codemod:runtime hook emissions
@@ -460,8 +459,6 @@ where
             },
         })?;
 
-    // Capture metrics context and shared state context for use inside async block
-    let metrics_context = options.metrics_context.clone();
     let llm_runtime_context = LlmRuntimeContext::new(
         llm_capability_enabled
             .then(|| options.llm_request_handler.clone())
@@ -516,21 +513,11 @@ where
             },
         })?;
 
-        // Store metrics context in runtime userdata if provided (must be done inside async_with)
-        if let Some(ref metrics_ctx) = metrics_context {
-            ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: format!("Failed to store MetricsContext: {:?}", e),
-                },
-            })?;
-        }
-
         ctx.store_userdata(llm_runtime_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store LlmRuntimeContext: {:?}", e),
             },
         })?;
-
 
         ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -647,7 +634,7 @@ where
                     .collect();
 
                 if ast_matches.is_empty() {
-                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![] });
+                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![], data: None });
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
@@ -690,7 +677,7 @@ where
                 .catch(&ctx)
                 .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
-            let primary = process_transform_result(
+            let (primary, data) = process_transform_result(
                 &result_obj,
                 &sg_root_inner,
                 ModificationCheck::StringEquality { original_content: options.content },
@@ -700,7 +687,7 @@ where
                 .map(|guard| guard.clone())
                 .unwrap_or_default();
 
-            Ok(CodemodOutput { primary, secondary })
+            Ok(CodemodOutput { primary, secondary, data })
         };
         execution.await
     })
@@ -726,8 +713,6 @@ pub(super) fn map_transform_execution_error(
 pub struct SimpleJsExecutionOptions<'a, R> {
     pub script_path: &'a Path,
     pub resolver: Arc<R>,
-    /// Optional metrics context for tracking metrics across execution
-    pub metrics_context: Option<MetricsContext>,
 }
 
 /// Execute a standalone JavaScript file with QuickJS (like node script.js)
@@ -783,20 +768,10 @@ where
             },
         })?;
 
-    let metrics_context = options.metrics_context.clone();
     let runtime_hooks_context = RuntimeHooksContext::default();
 
     // Execute JavaScript code
     async_with!(context => |ctx| {
-        if let Some(ref metrics_ctx) = metrics_context {
-            ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: format!("Failed to store MetricsContext: {:?}", e),
-                },
-            })?;
-        }
-
-
         ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store RuntimeHooksContext: {:?}", e),
@@ -962,7 +937,6 @@ where
     let runtime_hooks_context = RuntimeHooksContext::default();
 
     async_with!(context => |ctx| {
-
         ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store RuntimeHooksContext: {:?}", e),
@@ -1163,7 +1137,6 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1237,7 +1210,6 @@ export default async function transform() {
             matrix_values: None,
             capabilities: Some([LlrtSupportedModules::Fetch].into_iter().collect()),
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: Some(handler),
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1307,7 +1279,6 @@ export default async function transform() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: Some(handler),
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1382,7 +1353,6 @@ export default function transform(root, options) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1452,7 +1422,6 @@ export default function transform() {
             matrix_values: None,
             capabilities: Some([LlrtSupportedModules::ChildProcess].into_iter().collect()),
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1496,7 +1465,6 @@ export default function transform(root, options) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1559,7 +1527,6 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1612,7 +1579,6 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1665,7 +1631,6 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1710,7 +1675,6 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1760,7 +1724,6 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1812,92 +1775,6 @@ function example() {
         }
     }
 
-    #[tokio::test]
-    async fn a_transforms_returned_data_counts_each_row() {
-        use crate::metrics::MetricsContext;
-
-        // Create a metrics context for this test
-        let metrics_ctx = MetricsContext::new();
-
-        let codemod_content = r#"
-export default function transform(root) {
-  const calls = root.root().findAll({ rule: { pattern: "console.log($$$ARGS)" } });
-  return { edit: null, data: { "call-count": calls.map(() => ({ method: "console.log" })) } };
-}
-        "#
-        .trim();
-
-        let (_temp_dir, codemod_path) = setup_test_codemod(codemod_content);
-        let resolver = Arc::new(OxcResolver::new(_temp_dir.path().to_path_buf(), None).unwrap());
-
-        // Test with JS content that has console.log calls
-        let content = r#"
-function example() {
-    console.log("Hello");
-    console.log("World");
-    console.log(1, 2, 3);
-}
-        "#
-        .trim();
-
-        let file_path = Path::new("test.js");
-
-        let options = JssgExecutionOptions {
-            script_path: &codemod_path,
-            resolver,
-            language: js_lang(),
-            file_path,
-            content,
-            selector_config: None,
-            params: None,
-            matrix_values: None,
-            capabilities: None,
-            semantic_provider: None,
-            metrics_context: Some(metrics_ctx.clone()),
-            llm_request_handler: None,
-            runtime_event_callback: None,
-            cancellation_flag: None,
-            test_mode: false,
-            dry_run: false,
-            target_directory: Path::new("."),
-            pending_files: None,
-        };
-
-        let result = execute_codemod_with_quickjs(options).await;
-
-        // Should return Unmodified since we return null
-        match result {
-            Ok(output) => match output.primary {
-                ExecutionResult::Unmodified => {
-                    // Expected
-                }
-                other => panic!("Expected unmodified result, got: {:?}", other),
-            },
-            Err(e) => panic!("Expected success, got error: {:?}", e),
-        }
-
-        // Now check the metrics
-        let all_metrics = metrics_ctx.get_all();
-        assert!(
-            all_metrics.contains_key("call-count"),
-            "call-count metric should exist"
-        );
-
-        let call_count_entries = all_metrics.get("call-count").unwrap();
-        let console_log_entry = call_count_entries
-            .iter()
-            .find(|e| e.cardinality.get("method") == Some(&"console.log".to_string()));
-        assert!(
-            console_log_entry.is_some(),
-            "Should have a console.log metric entry"
-        );
-        assert_eq!(
-            console_log_entry.unwrap().count,
-            3,
-            "Should have counted 3 console.log calls"
-        );
-    }
-
     async fn run_returning(body: &str, content: &str) -> Result<CodemodOutput, ExecutionError> {
         let script = format!("export default function transform(root) {{ {body} }}");
         let (temp_dir, codemod_path) = setup_test_codemod(&script);
@@ -1913,7 +1790,6 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: Some(crate::metrics::MetricsContext::new()),
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -1926,9 +1802,23 @@ function example() {
     }
 
     #[tokio::test]
+    async fn a_transform_hands_back_any_json_as_data() {
+        let output = run_returning(
+            r#"return { data: { calls: root.root().findAll({ rule: { pattern: "f()" } }).length, tags: ["a", null] } };"#,
+            "f(); f();",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            output.data,
+            Some(serde_json::json!({ "calls": 2, "tags": ["a", null] }))
+        );
+    }
+
+    #[tokio::test]
     async fn a_returned_edit_with_data_still_edits_the_file() {
         let output = run_returning(
-            r#"return { edit: "const b = 1;", data: { seen: [{}] } };"#,
+            r#"return { edit: "const b = 1;", data: 1 };"#,
             "const a = 1;",
         )
         .await
@@ -1937,6 +1827,14 @@ function example() {
             matches!(output.primary, ExecutionResult::Modified(ref m) if m.content == "const b = 1;"),
             "{output:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn data_that_is_not_json_is_an_error() {
+        let error = run_returning(r#"return { data: () => 1 };"#, "x")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("`data` must be JSON"), "{error}");
     }
 
     #[tokio::test]
@@ -1967,7 +1865,6 @@ export default function transform() { return null; }"#;
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -2015,7 +1912,6 @@ export default function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -2071,7 +1967,6 @@ export default function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: Some(runtime_event_callback),
             cancellation_flag: None,
@@ -2119,7 +2014,6 @@ export default function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -2167,7 +2061,6 @@ export default function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -2215,7 +2108,6 @@ export default async function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,
@@ -2333,7 +2225,6 @@ export default function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
             runtime_event_callback: None,
             cancellation_flag: None,

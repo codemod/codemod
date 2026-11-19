@@ -16,6 +16,7 @@ butterflow-core = { workspace = true }
 butterflow-state = { workspace = true }
 butterflow-runners = { workspace = true }
 codemod-sandbox = { workspace = true }
+codemod-deps = { path = "../deps" }
 codemod-workflow = { workspace = true }
 codemod-agents = { workspace = true }
 codemod-telemetry = { workspace = true }

@@ -27,7 +27,6 @@ use super::pending_files::PendingFiles;
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
 use crate::ast_grep::DefaultParseLanguage;
 use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
-use crate::metrics::MetricsContext;
 use crate::sandbox::errors::{ExecutionError, RuntimeError};
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::sandbox::runtime_module::{RuntimeEventCallback, RuntimeFailure, RuntimeHooksContext};
@@ -42,7 +41,9 @@ pub struct WorkerOptions<R> {
     pub resolver: Arc<R>,
     /// In-memory modules, by name, as JavaScript source.
     pub modules: Vec<(String, String)>,
-    pub metrics: MetricsContext,
+    /// The in-memory module `codemod/workflow` resolves to; without one,
+    /// importing it is an error.
+    pub workflow_module: Option<String>,
     /// Handles `codemod:llm` requests; the module exists only when fetch is granted.
     pub llm_request_handler: Option<LlmRequestHandler>,
     /// Receives `codemod:runtime` events and `console` output.
@@ -110,6 +111,7 @@ impl Worker {
 
         let (resolver, loader, globals) = module_builder.builder.build();
         let (codemod_resolver, loader) = crate::with_codemod_modules!(loader, llm: fetch);
+        let codemod_resolver = codemod_resolver.with_workflow(options.workflow_module.clone());
 
         let mut memory_resolver = BuiltinResolver::default();
         let mut memory_loader = BuiltinLoader::default();
@@ -168,8 +170,6 @@ impl Worker {
                 })
                 .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(TargetDirectory(target.clone()))
-                    .map_err(|e| fail(format!("{e:?}")))?;
-                ctx.store_userdata(options.metrics.clone())
                     .map_err(|e| fail(format!("{e:?}")))?;
                 ctx.store_userdata(llm.clone())
                     .map_err(|e| fail(format!("{e:?}")))?;

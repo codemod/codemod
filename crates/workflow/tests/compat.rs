@@ -19,6 +19,58 @@ export default function transform(root: any, options: any) {
 "#;
 
 #[test]
+fn two_plain_yaml_shell_steps_use_the_native_shell_without_a_state_wrapper() {
+    let h = Harness::new();
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: echo
+    name: Echo
+    steps:
+      - name: First
+        run: echo first
+      - name: Second
+        run: echo second
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(report.steps.len(), 2);
+    for (step, expected) in report.steps.iter().zip(["first", "second"]) {
+        let stdout = &step.result.as_ref().unwrap()["stdout"];
+        assert_eq!(stdout.as_str().unwrap().trim(), expected);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn yaml_shell_state_is_rejected_before_any_step_runs_on_windows() {
+    let h = Harness::new();
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: stateful
+    name: Stateful
+    steps:
+      - name: First
+        run: echo first
+      - name: Record
+        run: echo seen=true >> "%STATE_OUTPUTS%"
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("not supported on Windows"), "{error}");
+    assert!(error.contains("$STATE_OUTPUTS"), "{error}");
+    assert!(report.steps.is_empty(), "{:?}", report.steps);
+}
+
+#[cfg(not(windows))]
+#[test]
 fn a_yaml_workflow_runs_with_params_state_and_conditions() {
     let h = Harness::new();
     h.write("src/a.ts", "const a = 'OLD';\n");
@@ -63,10 +115,6 @@ nodes:
     assert_eq!(h.read("src/b.ts"), "const b = 'NEW';\n");
     let labels: Vec<&str> = report.steps.iter().map(|s| s.label.as_str()).collect();
     assert_eq!(labels, ["Apply", "Count", "Runs when two files changed"]);
-    assert_eq!(
-        report.steps[2].result.as_ref().unwrap()["values"]["done"],
-        json!(true)
-    );
 }
 
 /// The YAML engine skipped a step whose condition could not be evaluated,
@@ -103,6 +151,7 @@ nodes:
 }
 
 /// A node whose only use of the params is handing them to a template.
+#[cfg(not(windows))]
 #[test]
 fn a_node_that_only_uses_a_template_still_gets_the_params() {
     let h = Harness::new();
@@ -130,10 +179,10 @@ nodes:
     );
     let report = h.start_loaded(workflow, Value::Null, false);
     assert!(output(&report).is_ok(), "{:?}", report.ending);
-    assert_eq!(
-        report.steps[0].result.as_ref().unwrap()["values"]["said"],
-        json!("world")
-    );
+    let stdout = report.steps[0].result.as_ref().unwrap()["stdout"]
+        .as_str()
+        .unwrap();
+    assert!(stdout.ends_with("said=world\n"), "{stdout}");
 }
 
 #[test]
@@ -280,6 +329,7 @@ fn invalid_yaml_reports_the_validation_error() {
 
 /// What a shell step writes to `$STATE_OUTPUTS` reaches a shell step in a
 /// later node as `CODEMOD_STATE_<KEY>`, JSON-encoded, as in the YAML engine.
+#[cfg(not(windows))]
 #[test]
 fn state_a_shell_step_writes_reaches_a_later_shell_step() {
     let h = Harness::new();
@@ -303,6 +353,131 @@ nodes:
     );
     let report = h.start_loaded(workflow, Value::Null, false);
     assert!(output(&report).is_ok(), "{:?}", report.ending);
-    let read = &report.steps[1].result.as_ref().unwrap()["output"];
-    assert_eq!(read.as_str().unwrap().trim(), "\"NEW\"");
+    let read = &report.steps[1].result.as_ref().unwrap()["stdout"];
+    assert_eq!(printed(read), "\"NEW\"");
+}
+
+/// Runs a node of these YAML steps; what the last one printed, trimmed.
+#[cfg(not(windows))]
+fn last_printed(steps: &str) -> String {
+    let h = Harness::new();
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        &format!("version: \"1\"\nnodes:\n  - id: only\n    name: Only\n    steps:\n{steps}"),
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let last = report.steps.last().unwrap().result.as_ref().unwrap();
+    printed(&last["stdout"])
+}
+
+/// What a translated step printed, without the state lines added after it.
+#[cfg(not(windows))]
+fn printed(stdout: &Value) -> String {
+    let stdout = stdout.as_str().unwrap();
+    let own = stdout.split("::codemod-state-outputs::").next().unwrap();
+    own.trim().to_string()
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_script_with_its_own_interpreter_can_write_state() {
+    let printed = last_printed(
+        r#"      - name: Pick
+        run: |
+          #!/bin/sh
+          echo "picked=yes" >> "$STATE_OUTPUTS"
+      - name: Read
+        run: echo "$CODEMOD_STATE_PICKED"
+"#,
+    );
+    assert_eq!(printed, "\"yes\"");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_script_with_its_own_interpreter_may_contain_any_line() {
+    let printed = last_printed(
+        r#"      - name: Pick
+        run: |
+          #!/bin/sh
+          choice=yes
+          cat > /dev/null <<'CODEMOD_SCRIPT_END'
+          CODEMOD_SCRIPT_END
+          echo "picked=$choice" >> "$STATE_OUTPUTS"
+      - name: Read
+        run: echo "$CODEMOD_STATE_PICKED"
+"#,
+    );
+    assert_eq!(printed, "\"yes\"");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_state_line_is_split_at_its_first_equals_sign() {
+    let printed = last_printed(
+        r#"      - name: Note
+        run: echo 'note=a@=b' >> "$STATE_OUTPUTS"
+      - name: Read
+        run: echo "$CODEMOD_STATE_NOTE"
+"#,
+    );
+    assert_eq!(printed, "\"a@=b\"");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn setting_state_to_null_removes_the_key() {
+    let printed = last_printed(
+        r#"      - name: Set
+        run: echo 'flag=1' >> "$STATE_OUTPUTS"
+      - name: Clear
+        run: echo 'flag=null' >> "$STATE_OUTPUTS"
+      - name: Read
+        run: echo "[${CODEMOD_STATE_FLAG-unset}]"
+"#,
+    );
+    assert_eq!(printed, "[unset]");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn state_lines_longer_than_a_step_keeps_fail_the_run() {
+    let h = Harness::new();
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: only
+    name: Only
+    steps:
+      - name: Write
+        run: yes 'key@=value' | head -n 200000 >> "$STATE_OUTPUTS"
+      - name: Read
+        run: echo "${CODEMOD_STATE_KEY-unset}" | head -c 20
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("more than 1 MiB to $STATE_OUTPUTS"),
+        "{error}"
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_multi_line_command_with_an_expression_keeps_its_lines_as_written() {
+    let printed = last_printed(
+        r#"      - name: Pick
+        run: echo 'who=world' >> "$STATE_OUTPUTS"
+      - name: Heredoc
+        run: |
+          cat <<END
+          hello ${{ state.who }}
+          END
+"#,
+    );
+    assert!(printed.starts_with("hello world"), "{printed}");
 }

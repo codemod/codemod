@@ -77,7 +77,7 @@ npm install --save-dev codemod
 | `shard` | `shard({ ... })`, its result passed to the steps that use it |
 | `if:` | An `if` statement whose condition runs through `__evaluate(...)`, the YAML engine's own evaluator, so it means exactly what it did |
 | `${{ params.name }}` | `params.name` |
-| `${{ state.name }}` | `state.name`, a local object. Shell steps get it as `CODEMOD_STATE_<KEY>` variables, and the lines they write to `$STATE_OUTPUTS` are copied into it from `result.values`. JSSG transforms that call `getState` or `setState` cannot be translated; `upgrade` flags them |
+| `${{ state.name }}` | `state.name`, a local object. Shell steps get it as `CODEMOD_STATE_<KEY>` variables, and the lines they write to `$STATE_OUTPUTS` are printed at the end of their stdout and copied into it by `applyStateOutputs`. JSSG transforms that call `getState` or `setState` cannot be translated; `upgrade` flags them |
 | `trigger: manual` | `await step(approval("<node name>"))` |
 | `branch_name`, `pull_request`, step `commit` | `branch`, `pullRequest` and `commit` steps |
 | `templates` and `use:` | Functions |
@@ -118,6 +118,7 @@ Most codemods run exactly as before. These are the differences, for both `workfl
 - **Semantic analysis is on by default for `jssg` steps.** Transforms get file-scope semantic analysis, as they do with `codemod jssg run` and `codemod jssg test`, so `definition()` and `references()` work in workflows too. Before, they returned nothing in workflows. Turn it off with `semantic_analysis: none` (YAML) or `semanticAnalysis: "none"` (TypeScript).
 - **A step `if:` that fails to evaluate is reported.** The step is still skipped, as before, and the run's log says why.
 - **`runtime: docker` and `runtime: podman` are not supported.** Their steps run directly on the machine.
+- **Shell state output requires a POSIX shell.** On Windows, a translated workflow that needs `$STATE_OUTPUTS` fails before any step runs. Run it on a POSIX system, or port the workflow so steps pass results directly.
 - **`state.schema` is accepted but not checked.**
 - **Runs are resumed by id:** `codemod workflow resume --id <run-id>`. A manual node waits as an approval step; resume it with `--approve`. Runs started with an earlier CLI version can't be resumed.
 - **`codemod workflow tui` was removed.** Runs show their progress in the terminal.

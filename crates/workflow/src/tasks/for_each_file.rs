@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use butterflow_core::execution::{self, language_globs};
+use codemod_deps::Registry;
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::WorkerOptions;
 use rquickjs::{async_with, CatchResultExt, Function, Module, Promise};
@@ -18,7 +19,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::changes::{self, Change, PlannedChange};
-use super::isolate::{module_name, StepIsolates};
+use super::isolate::{self, module_name, StepIsolates};
 use super::{block_on, TaskContext, TaskOutcome};
 use crate::run::RunContext;
 
@@ -106,6 +107,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
                     let options = isolates.worker_options(task, selector.language.clone());
                     let job = Job {
                         options,
+                        registry: isolates.registry.clone(),
                         name: &name,
                         module,
                         captures: &captures,
@@ -160,7 +162,6 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     task.log_failures(&failures);
     every_file_failed(&failures, total)?;
     let changes = changes::commit(task, &planned, run.dry_run)?;
-    isolates.data(task);
     let failed = failures.len();
     let failures: Vec<Value> = failures
         .into_iter()
@@ -304,6 +305,7 @@ type WorkerResult = Result<Vec<(usize, Result<FileOutcome, String>)>, String>;
 
 struct Job<'a> {
     options: WorkerOptions<OxcResolver>,
+    registry: Option<Arc<dyn Registry>>,
     name: &'a str,
     module: &'a str,
     captures: &'a str,
@@ -318,6 +320,7 @@ struct Job<'a> {
 fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
     let Job {
         options,
+        registry,
         name,
         module,
         captures,
@@ -329,9 +332,7 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         workflow_path,
     } = job;
     block_on(async move {
-        let sandbox = codemod_sandbox::Worker::new(options)
-            .await
-            .map_err(|e| format!("could not start the callback runtime: {e}"))?;
+        let sandbox = isolate::start(options, registry).await?;
         let sandbox = &sandbox;
         async_with!(sandbox.context => |ctx| {
             let setup = async {

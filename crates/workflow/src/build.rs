@@ -224,16 +224,46 @@ struct CallbackParts {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Isolated {
     Callback,
+    GraphCallback,
     FunctionStep,
+    Reducer,
 }
 
 impl Isolated {
     fn noun(self) -> &'static str {
         match self {
             Isolated::Callback => "forEachFile callback",
+            Isolated::GraphCallback => "dependencyGraph callback",
             Isolated::FunctionStep => "function step",
+            Isolated::Reducer => "jssg reducer",
         }
     }
+}
+
+/// The span of the inline function given as `reduce` in `jssg(path, { reduce })`,
+/// or where a `reduce` that is not one starts.
+fn reducer(options: &oxc::ast::ast::ObjectExpression<'_>) -> Result<Option<Span>, u32> {
+    use oxc::ast::ast::{ObjectPropertyKind, PropertyKey};
+    for property in &options.properties {
+        let ObjectPropertyKind::ObjectProperty(property) = property else {
+            continue;
+        };
+        let named = match &property.key {
+            PropertyKey::StaticIdentifier(id) => id.name == "reduce",
+            PropertyKey::StringLiteral(s) => s.value == "reduce",
+            _ => false,
+        };
+        if !named {
+            continue;
+        }
+        return match &property.value {
+            _ if property.method => Err(property.span.start),
+            Expression::ArrowFunctionExpression(f) => Ok(Some(f.span)),
+            Expression::FunctionExpression(f) => Ok(Some(f.span)),
+            other => Err(other.span().start),
+        };
+    }
+    Ok(None)
 }
 
 /// `codemod/workflow` exports that were removed with workflow state.
@@ -246,6 +276,10 @@ const REMOVED_STATE_API: &[&str] = &[
     "getStepOutput",
     "getOrSetStepOutput",
 ];
+
+/// `codemod:workflow` exports that steps and callbacks import from
+/// `codemod-internal:dependencies`, which runs in the isolate.
+const ISOLATE_DEPENDENCY_API: &[&str] = &["registry", "semver"];
 
 pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
     let allocator = Allocator::default();
@@ -426,39 +460,60 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                         .flatten()
                 });
                 match workflow_function.as_deref() {
-                    Some("forEachFile") => match call.arguments.last() {
-                        Some(Argument::ArrowFunctionExpression(f)) => {
-                            sites.push((f.span, Isolated::Callback))
-                        }
-                        Some(Argument::FunctionExpression(f)) => {
-                            sites.push((f.span, Isolated::Callback))
-                        }
-                        // `jssg(...)` or `astGrep(...)`, or a variable holding one.
-                        Some(Argument::CallExpression(_)) => {}
-                        Some(Argument::Identifier(id))
-                            if !scoping
-                                .get_reference(id.reference_id())
-                                .symbol_id()
-                                .is_some_and(|symbol| {
-                                    scoping
-                                        .symbol_flags(symbol)
-                                        .intersects(SymbolFlags::Function | SymbolFlags::Class)
-                                        || analysis.function_valued.contains(&symbol)
-                                }) => {}
-                        Some(other) => {
-                            return Err(analysis.error(
+                    Some(task @ ("forEachFile" | "dependencyGraph")) => {
+                        let kind = if task == "forEachFile" {
+                            Isolated::Callback
+                        } else {
+                            Isolated::GraphCallback
+                        };
+                        match call.arguments.last() {
+                            Some(Argument::ArrowFunctionExpression(f)) => {
+                                sites.push((f.span, kind))
+                            }
+                            Some(Argument::FunctionExpression(f)) => sites.push((f.span, kind)),
+                            // `jssg(...)` or `astGrep(...)`, or a variable holding one.
+                            Some(Argument::CallExpression(_)) if task == "forEachFile" => {}
+                            Some(Argument::Identifier(id))
+                                if task == "forEachFile"
+                                    && !scoping
+                                        .get_reference(id.reference_id())
+                                        .symbol_id()
+                                        .is_some_and(|symbol| {
+                                            scoping.symbol_flags(symbol).intersects(
+                                                SymbolFlags::Function | SymbolFlags::Class,
+                                            ) || analysis.function_valued.contains(&symbol)
+                                        }) => {}
+                            Some(other) => {
+                                return Err(analysis.error(
                                     other.span().start,
-                                    "forEachFile's callback must be written inline as a function, so the build can extract it".to_string(),
+                                    format!("{task}'s callback must be written inline as a function, so the build can extract it"),
                                 ));
-                        }
-                        None => {
-                            return Err(analysis.error(
-                                call.span.start,
-                                "forEachFile takes a callback, jssg(...) or astGrep(...), optionally after a selector"
+                            }
+                            None => {
+                                return Err(analysis.error(
+                                    call.span.start,
+                                    if task == "forEachFile" {
+                                        "forEachFile takes a callback, jssg(...) or astGrep(...), optionally after a selector"
+                                    } else {
+                                        "dependencyGraph takes options and a callback"
+                                    }
                                     .to_string(),
-                            ));
+                                ));
+                            }
                         }
-                    },
+                    }
+                    Some("jssg") => {
+                        if let Some(Argument::ObjectExpression(options)) = call.arguments.get(1) {
+                            if let Some(span) = reducer(options).map_err(|at| {
+                                analysis.error(
+                                    at,
+                                    "jssg's reduce must be written inline, as reduce: (result, file) => ..., so the build can extract it".to_string(),
+                                )
+                            })? {
+                                sites.push((span, Isolated::Reducer));
+                            }
+                        }
+                    }
                     Some("step") => {
                         for argument in call.arguments.iter().take(2) {
                             match argument {
@@ -755,6 +810,16 @@ impl Analysis<'_> {
     ) -> Result<(), BuildError> {
         let name = self.name(symbol);
         if let Some(import) = self.imports.get(&symbol) {
+            let imported = import.imported.as_deref().unwrap_or_default();
+            if is_flow_module(&import.source) && ISOLATE_DEPENDENCY_API.contains(&imported) {
+                let target = format!("{:?}", crate::deps_host::DEPENDENCIES_MODULE);
+                let line = import
+                    .line
+                    .replace(&format!("\"{}\"", import.source), &target)
+                    .replace(&format!("'{}'", import.source), &target);
+                parts.imports.insert((import.at, line));
+                return Ok(());
+            }
             if is_flow_module(&import.source) {
                 return Err(self.error(
                     at.start,
@@ -803,6 +868,11 @@ pub fn check_imports(file: &Path, source: &str, built: &Built) -> Result<(), Bui
         return Ok(());
     }
     let name = file.display().to_string();
+    // The resolver joins a relative importer onto its base directory, which
+    // would repeat the workflow's directory: resolve from the absolute path.
+    let file = std::path::absolute(file)
+        .map_err(|e| error_at(&name, source, 0, format!("cannot resolve imports: {e}")))?;
+    let importer = file.to_string_lossy().to_string();
     let base_dir = file
         .parent()
         .map(Path::to_path_buf)
@@ -817,7 +887,7 @@ pub fn check_imports(file: &Path, source: &str, built: &Built) -> Result<(), Bui
     for import in &built.body_imports {
         let at = |message: String| error_at(&name, source, import.offset, message);
         let resolved = resolver
-            .resolve(&name, &import.source)
+            .resolve(&importer, &import.source)
             .map_err(|e| at(format!("cannot resolve '{}': {e}", import.source)))?;
         let chain = walk.effectful(Path::new(&resolved)).map_err(at)?;
         if let Some(chain) = chain {

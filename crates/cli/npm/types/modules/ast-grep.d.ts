@@ -590,23 +590,24 @@ declare module "codemod:ast-grep" {
   export type Transform<T extends TypesMap> = Codemod<T>;
 
   /**
-   * Rows a transform reports, by name: each row counts once for its name and
-   * its labels, and the counts add up across files into the step's `data`
-   * and the run's report. `null` and `undefined` labels are left out; other
-   * values count as `String(value)`.
+   * Any JSON a transform reports about its file. A `jssg` step's `data`
+   * lists it per file, or folds it with the step's reducer. Explicit `null`
+   * is reported; missing or `undefined` data is omitted.
    *
    * @example
    * ```ts
-   * return { edit: null, data: { "prop-usage": props.map((p) => ({ propName: p.text() })) } };
+   * return { edit: null, data: { props: props.map((p) => p.text()) } };
    * ```
    */
-  export type TransformData = {
-    readonly [name: string]: readonly {
-      readonly [label: string]: string | number | boolean | null | undefined;
-    }[];
-  };
+  export type TransformData =
+    | string
+    | number
+    | boolean
+    | null
+    | readonly TransformData[]
+    | { readonly [key: string]: TransformData };
 
-  /** The new text (`edit`, or `null` for no change), and rows to count. */
+  /** The new text (`edit`, or `null` for no change), and data to report. */
   export type TransformResult = { edit?: string | null; data?: TransformData };
 
   export type Codemod<T extends TypesMap> = (

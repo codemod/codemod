@@ -1,16 +1,16 @@
-//! `shell(command, { env, cwd })`.
+//! `shell(command, { env, cwd, allowFailure })`.
 //!
-//! The command gets `CODEMOD_PATH` and `CODEMOD_OUTPUT`, a file it can write
-//! `key=value` or `key@=value` (append) lines to. They come back on the
-//! step's result as `values`, so a later step can be given them.
+//! The step's result is what the command printed and how it exited:
+//! `{ stdout, stderr, exitCode }`. The workflow parses what it needs, such
+//! as JSON on stdout's last line.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use butterflow_runners::direct_runner::DirectRunner;
+use butterflow_runners::direct_runner::{DirectRunner, KEPT_OUTPUT};
 use butterflow_runners::Runner;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use super::{block_on, child_env, TaskContext, TaskError, TaskOutcome, TaskResult};
 use crate::interaction::{Approval, Decision};
@@ -23,6 +23,9 @@ pub(crate) struct Request {
     env: BTreeMap<String, String>,
     /// Directory to run in, relative to the target.
     cwd: Option<String>,
+    /// Return a failing command's result instead of failing the step.
+    #[serde(default)]
+    allow_failure: bool,
 }
 
 pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
@@ -51,18 +54,6 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let mut env = child_env(task);
     env.extend(request.env.clone());
 
-    let scratch = tempfile::Builder::new()
-        .prefix("codemod-step-")
-        .tempdir()
-        .map_err(|e| format!("cannot create a temporary directory: {e}"))?;
-    let values_file = scratch.path().join("output");
-    std::fs::write(&values_file, "")
-        .map_err(|e| format!("cannot prepare the step's output file: {e}"))?;
-    env.insert(
-        "CODEMOD_OUTPUT".into(),
-        values_file.to_string_lossy().into_owned(),
-    );
-
     let command = match &request.cwd {
         Some(cwd) if !request.command.starts_with("#!") => {
             let dir = run.target.join(cwd);
@@ -80,8 +71,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let on_line: butterflow_runners::OutputCallback = Arc::new(move |line: String| {
         // The runner tags each line with its stream; stdout needs no tag in step logs.
         let line = line
-            .strip_prefix("[stdio] ")
-            .or_else(|| line.strip_prefix("[stdout] "))
+            .strip_prefix("[stdout] ")
             .map(str::to_string)
             .unwrap_or(line);
         events.emit(crate::events::Event::StepLog { position, line });
@@ -93,42 +83,41 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             other => TaskError::Failed(other.to_string()),
         })?;
 
-    let written = std::fs::read_to_string(&values_file).unwrap_or_default();
-    let values = parse_values(&written);
-    let mut result = json!({ "output": output });
-    if !values.is_empty() {
-        result["values"] = json!(values);
+    if output.cut {
+        task.log(format!(
+            "the command printed more than {} MiB; the result keeps the end of it",
+            KEPT_OUTPUT / (1024 * 1024)
+        ));
     }
-    Ok(TaskOutcome::new(result))
+    if output.exit_code != 0 && !request.allow_failure {
+        let printed = if output.stderr.trim().is_empty() {
+            &output.stdout
+        } else {
+            &output.stderr
+        };
+        return Err(TaskError::Failed(format!(
+            "the command exited with code {}{}",
+            output.exit_code,
+            last_lines(printed, 20)
+        )));
+    }
+    Ok(TaskOutcome::new(json!({
+        "stdout": output.stdout,
+        "stderr": output.stderr,
+        "exitCode": output.exit_code,
+    })))
 }
 
-/// Read `key=value` (set) and `key@=value` (append to a list) lines. Values
-/// are JSON, falling back to plain strings.
-pub(crate) fn parse_values(text: &str) -> BTreeMap<String, Value> {
-    let mut changes: BTreeMap<String, Value> = BTreeMap::new();
-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let (key, append, raw) = if let Some((key, value)) = line.split_once("@=") {
-            (key, true, value)
-        } else if let Some((key, value)) = line.split_once('=') {
-            (key, false, value)
-        } else {
-            continue;
-        };
-        let value = serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_string()));
-        if append {
-            let existing = changes.get(key).cloned();
-            let mut list = match existing {
-                Some(Value::Array(items)) => items,
-                Some(Value::Null) | None => Vec::new(),
-                Some(other) => vec![other],
-            };
-            list.push(value);
-            changes.insert(key.to_string(), Value::Array(list));
-        } else {
-            changes.insert(key.to_string(), value);
-        }
+/// The last `count` lines of `text`, on lines of their own after a colon.
+fn last_lines(text: &str, count: usize) -> String {
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    if lines.is_empty() {
+        return String::new();
     }
-    changes
+    format!(
+        ":\n{}",
+        lines[lines.len().saturating_sub(count)..].join("\n")
+    )
 }
 
 fn shell_quote(text: &str) -> String {
@@ -136,20 +125,5 @@ fn shell_quote(text: &str) -> String {
         format!("\"{text}\"")
     } else {
         format!("'{}'", text.replace('\'', "'\\''"))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn output_lines_set_and_append_values() {
-        let values =
-            parse_values("count=3\nname=plain text\nfiles@=\"b\"\nfiles@=\"c\"\nmalformed\n");
-        assert_eq!(
-            Value::Object(values.into_iter().collect()),
-            json!({ "count": 3, "name": "plain text", "files": ["b", "c"] })
-        );
     }
 }

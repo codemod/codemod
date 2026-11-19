@@ -18,38 +18,56 @@ fn approving() -> Harness {
 }
 
 #[test]
-fn a_shell_steps_output_lines_come_back_as_values() {
+fn a_shell_step_returns_what_the_command_printed() {
     let h = Harness::new();
     let report = h.start(
         r#"
 import { step, shell } from "codemod/workflow";
 export default async function main() {
-  const run = await step(shell(
-    'echo "count=2" >> "$CODEMOD_OUTPUT" && echo "items@=\"a\"" >> "$CODEMOD_OUTPUT" && echo "$GREETING"',
+  const { stdout, stderr, exitCode } = await step(shell(
+    'echo "$GREETING" && echo careful >&2 && echo \'{"count":2}\'',
     { env: { GREETING: "hi" } },
   ));
-  return run;
+  const lines = stdout.trim().split("\n");
+  return { first: lines[0], parsed: JSON.parse(lines.at(-1)), stderr, exitCode };
 }
 "#,
         Value::Null,
     );
-    let result = output(&report).unwrap();
-    assert_eq!(result["output"].as_str().unwrap().trim(), "hi");
-    assert_eq!(result["values"], json!({ "count": 2, "items": ["a"] }));
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "first": "hi", "parsed": { "count": 2 }, "stderr": "careful\n", "exitCode": 0 })
+    );
 }
 
 #[test]
-fn a_failing_shell_command_fails_the_step() {
+fn a_failing_shell_command_fails_the_step_with_what_it_printed() {
     let h = Harness::new();
     let report = h.start(
         r#"
 import { step, shell } from "codemod/workflow";
-export default async function main() { await step("Fail", shell("echo nope && exit 3")); }
+export default async function main() { await step("Fail", shell("echo nope >&2 && exit 3")); }
 "#,
         Value::Null,
     );
     let error = output(&report).unwrap_err();
     assert!(error.contains("step 'Fail' failed"), "{error}");
+    assert!(error.contains("exited with code 3:\nnope"), "{error}");
+}
+
+#[test]
+fn a_shell_step_that_allows_failure_returns_the_exit_code() {
+    let h = Harness::new();
+    let report = h.start(
+        r#"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  return (await step(shell("exit 3", { allowFailure: true }))).exitCode;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(3));
 }
 
 #[test]
@@ -155,20 +173,25 @@ export default async function main() {
     assert_eq!(h.engine_summary_diffs(), 1);
 }
 
-#[test]
-fn a_jssg_steps_returned_data_is_added_up_on_its_result_and_the_run() {
-    let h = Harness::new();
-    h.write("src/a.ts", "foo(); foo();\n");
+fn counting_foo_calls(h: &Harness) {
     h.write("src/b.ts", "foo();\n");
+    h.write("src/a.ts", "foo(); foo();\n");
+    h.write("src/c.ts", "bar();\n");
     h.bundle_file(
         "scripts/transform.ts",
         r#"
 export default function transform(root: any) {
-  const calls = root.root().findAll({ rule: { pattern: "foo()" } });
-  return { data: { calls: calls.map(() => ({ name: "foo" })) } };
+  const calls = root.root().findAll({ rule: { pattern: "foo()" } }).length;
+  return { data: calls ? { calls } : undefined };
 }
 "#,
     );
+}
+
+#[test]
+fn a_jssg_step_returns_each_files_data_in_path_order() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
@@ -178,9 +201,137 @@ export default async function main() {
 "#,
         Value::Null,
     );
-    let calls = json!([{ "cardinality": { "name": "foo" }, "count": 3 }]);
-    assert_eq!(output(&report).unwrap()["calls"], calls);
-    assert_eq!(json!(h.summary.metrics()["calls"]), calls);
+    assert_eq!(
+        output(&report).unwrap(),
+        json!([
+            { "file": "src/a.ts", "data": { "calls": 2 } },
+            { "file": "src/b.ts", "data": { "calls": 1 } }
+        ])
+    );
+}
+
+#[test]
+fn a_jssg_step_collects_json_null_but_not_undefined() {
+    let h = Harness::new();
+    h.write("src/explicit.ts", "const value = null;\n");
+    h.write("src/omitted.ts", "const value = undefined;\n");
+    h.bundle_file(
+        "scripts/nullable.ts",
+        r#"
+export default function transform(root: any) {
+  return { data: root.relativeFilename().endsWith("explicit.ts") ? null : undefined };
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  const script = "./scripts/nullable.ts";
+  const include = "src/**/*.ts";
+  const listed = await step("List", jssg(script, { include }));
+  const counted = await step("Count nulls", jssg(script, {
+    include,
+    reduce: (count, { data }) => count + (data === null ? 1 : 0),
+    initial: 0,
+  }));
+  return { entries: listed.data, nulls: counted.data };
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "entries": [{ "file": "src/explicit.ts", "data": null }], "nulls": 1 })
+    );
+}
+
+#[test]
+fn a_jssg_reducer_folds_each_files_data_into_the_result() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  const counted = jssg("./scripts/transform.ts", {
+    include: "src/**/*.ts",
+    reduce: (total, { data }) => total + data.calls,
+    initial: 0,
+  });
+  return (await step(counted)).data;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(3));
+}
+
+#[test]
+fn a_failing_jssg_reducer_fails_the_step() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  const counted = jssg("./scripts/transform.ts", {
+    include: "src/**/*.ts",
+    reduce: () => { throw new Error("cannot add"); },
+    initial: 0,
+  });
+  return (await step(counted)).data;
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).unwrap_err().contains("cannot add"));
+}
+
+#[test]
+fn a_jssg_reducer_that_calls_fail_step_fails_the_step_even_if_it_catches_it() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+import { failStep } from "codemod/runtime";
+export default async function main() {
+  const counted = jssg("./scripts/transform.ts", {
+    include: "src/**/*.ts",
+    reduce: (total, { data }) => {
+      try { failStep("cannot add"); } catch {}
+      return total + data.calls;
+    },
+    initial: 0,
+  });
+  return (await step(counted)).data;
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).unwrap_err().contains("cannot add"));
+}
+
+#[test]
+fn a_jssg_reducer_can_use_semver() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
+    let report = h.start(
+        r#"
+import { step, jssg, semver } from "codemod/workflow";
+export default async function main() {
+  const counted = jssg("./scripts/transform.ts", {
+    include: "src/**/*.ts",
+    reduce: (total, { data }) => total + (semver.gt("2.0.0", "1.0.0") ? data.calls : 0),
+    initial: 0,
+  });
+  return (await step(counted)).data;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(3));
 }
 
 #[test]
@@ -899,7 +1050,7 @@ export default async function main() {
     dirname: import.meta.dirname,
     filename: import.meta.filename,
   })));
-  return { here, url: import.meta.url, echoed: echoed.output, seen: seen.outputs };
+  return { here, url: import.meta.url, echoed: echoed.stdout, seen: seen.outputs };
 }
 "#,
     );
@@ -920,5 +1071,368 @@ export default async function main() {
     assert_eq!(
         result["seen"],
         json!([{ "path": "a.py", "dirname": src, "filename": format!("{src}/workflow.ts") }])
+    );
+}
+
+const YARN_LOCK: &str = r#"
+"app@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "app@workspace:."
+
+"table@npm:^3.0.0":
+  version: 3.2.5
+  resolution: "table@npm:3.2.5"
+  dependencies:
+    dnd: "npm:^13.0.0"
+
+"dnd@npm:^13.0.0":
+  version: 13.0.0
+  resolution: "dnd@npm:13.0.0"
+  peerDependencies:
+    react: ^16.8.5 || ^17.0.0 || ^18.0.0
+"#;
+
+fn yarn_target(h: &Harness) {
+    h.write("yarn.lock", YARN_LOCK);
+    h.write(
+        "package.json",
+        r#"{ "name": "app", "dependencies": { "table": "^3.0.0" } }"#,
+    );
+}
+
+/// dnd's releases, counting how often the registry is asked.
+#[derive(Default)]
+struct FakeRegistry(std::sync::atomic::AtomicUsize);
+
+impl codemod_deps::Registry for FakeRegistry {
+    fn releases(
+        &self,
+        _: codemod_deps::Ecosystem,
+        names: &[String],
+        _: &std::sync::atomic::AtomicBool,
+    ) -> Result<std::collections::BTreeMap<String, Vec<codemod_deps::Release>>, String> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let release = |version: &str, react: &str| codemod_deps::Release {
+            version: version.into(),
+            yanked: false,
+            dependencies: vec![("react".into(), react.into(), codemod_deps::Kind::Peer)],
+        };
+        let dnd = vec![
+            release("13.0.0", "^16.8.5 || ^17.0.0 || ^18.0.0"),
+            release("13.1.0", "^16.8.5 || ^17.0.0 || ^18.0.0"),
+            release("14.0.0", "^18.0.0 || ^19.0.0"),
+        ];
+        Ok(names
+            .iter()
+            .map(|name| {
+                (
+                    name.clone(),
+                    if name == "dnd" {
+                        dnd.clone()
+                    } else {
+                        Vec::new()
+                    },
+                )
+            })
+            .collect())
+    }
+}
+
+fn with_registry(registry: Arc<FakeRegistry>) -> Harness {
+    Harness::with_services(
+        Arc::new(MemoryStore::default()),
+        Arc::new(NonInteractive { approve_all: false }),
+        Services {
+            package_registry: Some(registry),
+            ..Services::default()
+        },
+    )
+}
+
+#[test]
+fn a_dependency_graph_callback_walks_the_targets_lockfiles_through_a_live_handle() {
+    let h = Harness::new();
+    yarn_target(&h);
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod/workflow";
+export default async function main() {
+  return await step(dependencyGraph({}, (g) => g.node("dnd").workspacesReaching().map((r) => r.chain)));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!([["app@0.0.0-use.local", "table@3.2.5", "dnd@13.0.0"]])
+    );
+}
+
+#[test]
+fn node_releases_keep_newer_versions_whose_ranges_accept_the_asked_version() {
+    let h = with_registry(Arc::default());
+    yarn_target(&h);
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod/workflow";
+export default async function main() {
+  return await step(dependencyGraph({}, async (g) => {
+    const releases = await g.node("dnd").releases({ accepting: { react: "19.0.0" }, newerThanMine: true });
+    return releases.map((r) => `${r.version}${r.breaking ? " breaking" : ""}`);
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(["14.0.0 breaking"]));
+}
+
+#[test]
+fn a_resumed_run_replays_a_dependency_graph_step_without_asking_the_registry_again() {
+    let registry = Arc::new(FakeRegistry::default());
+    let h = with_registry(registry.clone());
+    yarn_target(&h);
+    let workflow = |later: &str| {
+        format!(
+            r#"
+import {{ step, dependencyGraph, registry }} from "codemod/workflow";
+export default async function main() {{
+  const dnd = await step(dependencyGraph({{}}, async () => (await registry.npm("dnd")).versions.length));
+  await step("Later", () => {{ {later} }});
+  return dnd;
+}}
+"#
+        )
+    };
+    let failed = h.start(&workflow(r#"throw new Error("not yet");"#), Value::Null);
+    h.resume(&failed, Some(&workflow("return 1;")));
+    assert_eq!(registry.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_for_each_file_callback_can_await_a_registry_lookup() {
+    let h = with_registry(Arc::default());
+    h.write("a.txt", "dnd");
+    let report = h.start(
+        r#"
+import { step, forEachFile, registry } from "codemod/workflow";
+export default async function main() {
+  const found = await step(forEachFile("*.txt", async (file) => (await registry.npm(file.text)).versions.length));
+  return found.outputs;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([3]));
+}
+
+#[test]
+fn a_function_step_can_await_a_registry_lookup() {
+    let h = with_registry(Arc::default());
+    let report = h.start(
+        r#"
+import { step, registry } from "codemod/workflow";
+export default async function main() {
+  return await step("Look up dnd", async () => (await registry.npm("dnd")).versions.length);
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(3));
+}
+
+#[test]
+fn a_registry_lookup_outside_a_step_fails_because_it_would_not_be_recorded() {
+    let h = with_registry(Arc::default());
+    let report = h.start(
+        r#"
+import { registry } from "codemod/workflow";
+export default async function main() { await registry.npm("dnd"); }
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("must run inside a step"), "{error}");
+}
+
+#[test]
+fn a_dependency_graph_step_fails_when_the_target_has_no_lockfile() {
+    let h = Harness::new();
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod/workflow";
+export default async function main() { await step("Deps", dependencyGraph({}, (g) => g.workspaces())); }
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("step 'Deps' failed: no lockfile"), "{error}");
+}
+
+#[test]
+fn a_dependency_graph_callback_commits_what_it_changes_with_jssg_transform() {
+    let h = Harness::new();
+    yarn_target(&h);
+    h.write("a.ts", "const version = 0;\n");
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  await step(dependencyGraph({}, async (g) => {
+    const dnd = g.node("dnd").version;
+    await jssgTransform((root) => root.root().text().replace("0", JSON.stringify(dnd)), `${target}/a.ts`, "typescript");
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("a.ts"), "const version = \"13.0.0\";\n");
+}
+
+#[test]
+fn a_dependency_graph_lists_lockfiles_it_could_not_read() {
+    let h = Harness::new();
+    yarn_target(&h);
+    h.write(
+        "examples/old/yarn.lock",
+        "# yarn lockfile v1\n\na@^1:\n  version \"1.0.0\"\n",
+    );
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod/workflow";
+export default async function main() {
+  return await step(dependencyGraph({}, (g) => ({ read: g.lockfiles, skipped: g.skipped })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "read": ["yarn.lock"],
+            "skipped": [{ "lockfile": "examples/old/yarn.lock", "error": "Yarn v1 lockfiles are not read yet" }]
+        })
+    );
+}
+
+#[test]
+fn a_helper_file_a_step_imports_can_use_registry_and_semver() {
+    let h = with_registry(Arc::default());
+    h.bundle_file(
+        "lib/releases.ts",
+        r#"
+import { registry, semver, step } from "codemod/workflow";
+export async function newest(name: string) {
+  const { versions } = await registry.npm(name);
+  return versions.map((r) => r.version).sort((a, b) => semver.compare(a, b)).at(-1);
+}
+// Shared with the workflow body: importing body-only functions still works.
+export const run = (name: string) => step(name, async () => newest(name));
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { newest } from "./lib/releases.ts";
+export default async function main() {
+  return await step("Newest dnd", async () => newest("dnd"));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!("14.0.0"));
+}
+
+#[test]
+fn a_body_only_function_called_inside_a_step_says_so() {
+    let h = Harness::new();
+    h.bundle_file(
+        "lib/nested.ts",
+        r#"
+import { step, shell } from "codemod/workflow";
+export const nested = () => step("Inner", shell("true"));
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { nested } from "./lib/nested.ts";
+export default async function main() {
+  await step("Outer", async () => nested());
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("shell() can only be called in the workflow body"),
+        "{error}"
+    );
+}
+
+/// A registry that answers only when its lookup is canceled.
+struct HangingRegistry;
+
+impl codemod_deps::Registry for HangingRegistry {
+    fn releases(
+        &self,
+        _: codemod_deps::Ecosystem,
+        _: &[String],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<std::collections::BTreeMap<String, Vec<codemod_deps::Release>>, String> {
+        let started = std::time::Instant::now();
+        while !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            if started.elapsed() > std::time::Duration::from_secs(20) {
+                return Err("never canceled".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Err("the registry lookup was canceled".into())
+    }
+}
+
+#[test]
+fn a_step_that_runs_out_of_time_stops_its_registry_lookup() {
+    let h = Harness::with_services(
+        Arc::new(MemoryStore::default()),
+        Arc::new(NonInteractive { approve_all: false }),
+        Services {
+            package_registry: Some(Arc::new(HangingRegistry)),
+            ..Services::default()
+        },
+    );
+    let started = std::time::Instant::now();
+    let report = h.start(
+        r#"
+import { step, registry } from "codemod/workflow";
+export default async function main() {
+  await step("Look up", async () => (await registry.npm("dnd")).versions.length, { timeout: "300ms" });
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("timed out"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
+
+#[test]
+fn a_dependency_graph_result_keeps_a_proto_key_as_data() {
+    let h = Harness::new();
+    yarn_target(&h);
+    let report = h.start(
+        r#"
+import { step, dependencyGraph } from "codemod/workflow";
+export default async function main() {
+  return await step(dependencyGraph({}, () => JSON.parse('{"__proto__": {"a": 1}, "b": 2}')));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "__proto__": { "a": 1 }, "b": 2 })
     );
 }

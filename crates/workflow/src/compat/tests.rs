@@ -49,12 +49,14 @@ fn a_linear_shell_workflow_becomes_a_sequence_of_awaits() {
     let source = translated(&text).source;
     assert!(
         source.contains(
-            "export default async function main() {\n  const state: State = {};\n  await setupNode(state);\n  await transformNode(state);\n  await cleanupNode(state);\n}"
+            "  const state: State = {};\n  await setupNode(state);\n  await transformNode(state);\n  await cleanupNode(state);\n}"
         ),
         "{source}"
     );
     assert!(
-        source.contains(r#"Object.assign(state, (await step("Initialize", shell("export STATE_OUTPUTS=\"$CODEMOD_OUTPUT\"; $CODEMOD_PATH/scripts/setup.sh", { env: { ...stateEnv(state) } }))).values);"#),
+        source.contains(
+            r#"applyStateOutputs(state, await step("Initialize", shell("CODEMOD_STATE_DIR="#
+        ) && source.contains(r#"(\n$CODEMOD_PATH/scripts/setup.sh\n)"#),
         "{source}"
     );
     for unused in [
@@ -162,7 +164,7 @@ nodes:
     )
     .source;
     assert!(
-        source.contains("await Promise.all([aNode(state), bNode(state)]);"),
+        source.contains("await Promise.all([aNode(), bNode()]);"),
         "{source}"
     );
 }
@@ -272,7 +274,7 @@ fn the_documented_features_translate_and_build() {
     expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state })) {");
     expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state })) {");
-    expect("shell(\"export STATE_OUTPUTS=\\\"$CODEMOD_OUTPUT\\\"; echo fast\", { env: { ...stateEnv(state), ...matrixEnv(matrix), CI: \"true\" } })");
+    expect("shell(\"echo fast\", { env: { ...matrixEnv(matrix), CI: \"true\" } })");
     expect("await lintFixTemplate({ ...params, ...{\"target_glob\":\"src/**\"} }, matrix, state);");
     expect("await step(pullRequest({ title: `refactor: migrate ${matrix?.name}`, draft: true, branch: branchName }));");
     expect("agent(`Summarize ${matrix?.team}`)");
@@ -341,10 +343,10 @@ nodes:
 "#,
     );
     assert!(
-        source.contains(r#"Object.assign(state, (await step("Version", shell("export STATE_OUTPUTS=\"$CODEMOD_OUTPUT\"; echo \"version=19\" >> \"$STATE_OUTPUTS\"", { env: { ...stateEnv(state) } }))).values);"#),
+        source.contains(r#"applyStateOutputs(state, await step("Version", shell("#),
         "{source}"
     );
-    assert!(source.contains("echo ${state.version}`"), "{source}");
+    assert!(source.contains("(\\necho ${state.version}\\n)"), "{source}");
 }
 
 #[test]
@@ -371,7 +373,45 @@ nodes:
 "#,
     );
     assert!(
-        source.contains(r#"Object.assign(state, (await step("Count", shell("#),
+        source.contains(r#"applyStateOutputs(state, await step("Count", shell("#),
+        "{source}"
+    );
+}
+
+#[test]
+fn a_template_nested_ten_deep_still_carries_state() {
+    let mut yaml = String::from(
+        r#"
+version: "1"
+templates:
+  - id: t0
+    name: T0
+    steps:
+      - name: Count
+        run: echo "count=1" >> "$STATE_OUTPUTS"
+      - name: Again
+        run: echo "count=2" >> "$STATE_OUTPUTS"
+"#,
+    );
+    for level in 1..=10 {
+        yaml.push_str(&format!(
+            "  - id: t{level}\n    name: T{level}\n    steps:\n      - name: Use{level}\n        use:\n          template: t{}\n",
+            level - 1
+        ));
+    }
+    yaml.push_str(
+        r#"nodes:
+  - id: deep
+    name: Deep
+    steps:
+      - name: Top
+        use:
+          template: t10
+"#,
+    );
+    let source = source_of(&yaml);
+    assert!(
+        source.contains(r#"applyStateOutputs(state, await step("Count", shell("#),
         "{source}"
     );
 }
@@ -418,4 +458,49 @@ nodes:
         "{source}"
     );
     assert!(!source.contains("State"), "{source}");
+}
+
+#[test]
+fn a_potentially_stateful_script_with_a_plain_step_still_gets_the_wrapper() {
+    let source = source_of(
+        r#"
+version: "1"
+nodes:
+  - id: only
+    name: Only
+    steps:
+      - name: Announce
+        run: echo starting
+      - name: Run script
+        run: ./record-version.sh
+"#,
+    );
+    assert!(
+        source.contains(r#"applyStateOutputs(state, await step("Run script", shell("#),
+        "{source}"
+    );
+    // A script can use STATE_OUTPUTS even if the YAML does not mention it.
+    let guard = source.find("not supported on Windows").unwrap();
+    let first_step = source.find(r#"await step("Announce","#).unwrap();
+    assert!(guard < first_step, "{source}");
+}
+
+#[test]
+fn templates_used_many_times_over_are_walked_once() {
+    let mut yaml = String::from(
+        "version: \"1\"\ntemplates:\n  - id: t0\n    name: T0\n    steps:\n      - name: Count\n        run: echo \"count=1\" >> \"$STATE_OUTPUTS\"\n",
+    );
+    // Each template uses the one before it twice: 2^40 uses, walked once each.
+    for level in 1..=40 {
+        yaml.push_str(&format!(
+            "  - id: t{level}\n    name: T{level}\n    steps:\n      - name: A{level}\n        use:\n          template: t{prev}\n      - name: B{level}\n        use:\n          template: t{prev}\n",
+            prev = level - 1
+        ));
+    }
+    yaml.push_str("nodes:\n  - id: top\n    name: Top\n    steps:\n      - name: Top\n        use:\n          template: t40\n");
+    let source = source_of(&yaml);
+    assert!(
+        source.contains("applyStateOutputs(state, await step(\"Count\""),
+        "{source}"
+    );
 }
