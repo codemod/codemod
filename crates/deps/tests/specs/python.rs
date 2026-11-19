@@ -225,6 +225,36 @@ fn a_python_range_that_is_not_pep_440_cannot_be_read() {
 }
 
 #[test]
+fn poetry_carets_and_tildes_read_prerelease_and_epoch_operands() {
+    use codemod_deps::semver::satisfies;
+    let check = |range, version| satisfies(Ecosystem::Pypi, range, version);
+    assert_eq!(
+        [
+            check("^1.2rc1", "1.3"),
+            check("^1.2rc1", "1.2rc2"),
+            check("^1.2rc1", "2.0"),
+            check("^1.0.0a1", "1.0.0"),
+            check("~1.2rc1", "1.2.5"),
+            check("~1.2rc1", "1.3"),
+            check("~=2.0rc1", "2.1"),
+            check("^1!2.0", "1!2.5"),
+            check("^1!2.0", "2.5"),
+        ],
+        [
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(true),
+            Some(false),
+        ]
+    );
+}
+
+#[test]
 fn a_poetry_range_whose_upper_bound_overflows_cannot_be_read() {
     use codemod_deps::semver::satisfies;
     let max = u64::MAX;

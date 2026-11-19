@@ -104,22 +104,26 @@ mod pypi {
     }
 
     /// One clause as PEP 440 specifiers: Poetry's `^1.2` is `>=1.2,<2`,
-    /// `~1.2` is `>=1.2,<1.3`, and a bare `1.2` is `==1.2`.
+    /// `~1.2` is `>=1.2,<1.3`, and a bare `1.2` is `==1.2`. The operand of
+    /// `^` and `~` is any PEP 440 version (`^1.2rc1`, `~1!2.0`); the upper
+    /// bound comes from its release numbers and keeps its epoch.
     fn specifiers(clause: &str) -> Option<Vec<String>> {
         if clause.is_empty() || clause == "*" {
             return Some(Vec::new());
         }
         if let Some(lower) = clause.strip_prefix('^') {
-            let parts = numbers(lower)?;
+            let lower = version(lower)?;
+            let parts = lower.release();
             let at = parts.iter().position(|&p| p != 0);
-            return between(lower, &parts, at.unwrap_or(parts.len() - 1));
+            return between(&lower, at.unwrap_or(parts.len() - 1));
         }
         if let Some(lower) = clause
             .strip_prefix('~')
             .filter(|rest| !rest.starts_with('='))
         {
-            let parts = numbers(lower)?;
-            return between(lower, &parts, usize::from(parts.len() > 1));
+            let lower = version(lower)?;
+            let at = usize::from(lower.release().len() > 1);
+            return between(&lower, at);
         }
         if clause.starts_with(|c: char| c.is_ascii_digit()) {
             return Some(vec![format!("=={clause}")]);
@@ -127,15 +131,14 @@ mod pypi {
         Some(vec![clause.to_string()])
     }
 
-    fn numbers(version: &str) -> Option<Vec<u64>> {
-        version.split('.').map(|part| part.parse().ok()).collect()
-    }
-
-    /// `>=lower` and below `lower` with the part at `at` raised by one;
-    /// `None` when that part cannot be raised, so the clause cannot be read.
-    fn between(lower: &str, parts: &[u64], at: usize) -> Option<Vec<String>> {
-        let mut upper: Vec<String> = parts[..at].iter().map(u64::to_string).collect();
-        upper.push(parts[at].checked_add(1)?.to_string());
-        Some(vec![format!(">={lower}"), format!("<{}", upper.join("."))])
+    /// `>=lower` and below `lower`'s release with the part at `at` raised
+    /// by one; `None` when that part cannot be raised, so the clause cannot
+    /// be read.
+    fn between(lower: &Version, at: usize) -> Option<Vec<String>> {
+        let parts = lower.release();
+        let mut upper = parts[..at].to_vec();
+        upper.push(parts[at].checked_add(1)?);
+        let upper = Version::new(upper).with_epoch(lower.epoch());
+        Some(vec![format!(">={lower}"), format!("<{upper}")])
     }
 }
