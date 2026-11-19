@@ -416,6 +416,48 @@ fn a_script_with_its_own_interpreter_may_contain_any_line() {
 
 #[cfg(not(windows))]
 #[test]
+fn a_param_cannot_end_a_script_with_its_own_interpreter_early() {
+    let h = Harness::new();
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: only
+    name: Only
+    steps:
+      - name: Pick
+        run: |
+          #!/usr/bin/env python3
+          import os
+          text = """${{ params.text }}"""
+          open(os.environ["STATE_OUTPUTS"], "a").write("lines=%d\n" % len(text.splitlines()))
+"#,
+    );
+    let params = json!({ "text": "hello\nCODEMOD_SCRIPT_END\nworld" });
+    let report = h.start_loaded(workflow, params, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let stdout = report.steps[0].result.as_ref().unwrap()["stdout"]
+        .as_str()
+        .unwrap();
+    assert!(stdout.ends_with("lines=3\n"), "{stdout}");
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_state_line_ending_in_crlf_keeps_its_value_without_the_cr() {
+    let printed = last_printed(
+        r#"      - name: Pick
+        run: printf 'who=world\r\n' >> "$STATE_OUTPUTS"
+      - name: Read
+        run: echo "$CODEMOD_STATE_WHO"
+"#,
+    );
+    assert_eq!(printed, "\"world\"");
+}
+
+#[cfg(not(windows))]
+#[test]
 fn a_state_line_is_split_at_its_first_equals_sign() {
     let printed = last_printed(
         r#"      - name: Note

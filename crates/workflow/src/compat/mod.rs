@@ -82,6 +82,8 @@ struct Generator {
     uses_posix_state_outputs: bool,
     /// Whether the source calls `applyStateOutputs`.
     uses_state_outputs: bool,
+    /// Whether the source calls `scriptWithStateOutputs`.
+    uses_script_state_outputs: bool,
     /// Tasks get the run's params anyway; pass `params` explicitly only when
     /// it differs from them (defaults, template inputs).
     pass_params: bool,
@@ -648,9 +650,15 @@ impl Generator {
                 // Only omit the wrapper for commands we know cannot write state.
                 let capture_outputs = !literal_echo
                     && (self.plumb_state || command.to_ascii_uppercase().contains("STATE_OUTPUTS"));
-                let command = if capture_outputs {
+                let command = if capture_outputs && command.starts_with("#!") {
+                    // The heredoc's delimiter is picked once params are in.
                     self.uses_posix_state_outputs = true;
-                    template(&with_state_outputs(command))
+                    self.uses_script_state_outputs = true;
+                    format!("scriptWithStateOutputs({})", template(command))
+                } else if capture_outputs {
+                    self.uses_posix_state_outputs = true;
+                    // A subshell, so an `exit` in the command still prints the lines.
+                    template(&with_state_outputs(&format!("(\n{command}\n)")))
                 } else {
                     template(command)
                 };
@@ -958,6 +966,9 @@ impl Generator {
         if self.uses_state_outputs {
             source.push_str(&STATE_OUTPUTS_HELPER.replace("{marker}", STATE_MARKER));
         }
+        if self.uses_script_state_outputs {
+            source.push_str(&script_state_outputs_helper());
+        }
         if self.uses_matrix_env {
             source.push_str(
                 "\n/** Matrix values as environment variables, JSON-encoded as before. */\nfunction matrixEnv(matrix: Matrix): Record<string, string> {\n  return Object.fromEntries(\n    Object.entries(matrix ?? {}).map(([key, value]) => [key, JSON.stringify(value)]),\n  );\n}\n",
@@ -985,27 +996,38 @@ fn is_literal_echo(command: &str) -> bool {
 /// Marks where a translated step's `$STATE_OUTPUTS` lines start in its stdout.
 const STATE_MARKER: &str = "::codemod-state-outputs::";
 
-/// `command` with `$STATE_OUTPUTS` set to a file, as the YAML engine ran it.
+/// `run` with `$STATE_OUTPUTS` set to a file, as the YAML engine ran it.
 /// What the command writes there is printed after [`STATE_MARKER`], last,
 /// for `applyStateOutputs` to read; the exit code is the command's.
-fn with_state_outputs(command: &str) -> String {
-    let run = if command.starts_with("#!") {
-        // A script naming its interpreter runs from a file, as it did. The
-        // heredoc ends at the first line equal to its delimiter, so the
-        // delimiter is one the script has no line of.
-        let mut end = "CODEMOD_SCRIPT_END".to_string();
-        while command.lines().any(|line| line == end) {
-            end.push('_');
-        }
-        format!(
-            "cat > \"$CODEMOD_STATE_DIR/script\" <<'{end}'\n{command}\n{end}\nchmod +x \"$CODEMOD_STATE_DIR/script\"\n\"$CODEMOD_STATE_DIR/script\""
-        )
-    } else {
-        // A subshell, so an `exit` in the command still prints the lines.
-        format!("(\n{command}\n)")
-    };
+fn with_state_outputs(run: &str) -> String {
     format!(
         "CODEMOD_STATE_DIR=\"$(mktemp -d)\" || exit 1\nexport STATE_OUTPUTS=\"$CODEMOD_STATE_DIR/outputs\"\n: > \"$STATE_OUTPUTS\"\n{run}\ncodemod_status=$?\nprintf '\\n%s\\n' '{STATE_MARKER}'\ncat \"$STATE_OUTPUTS\"\nrm -rf \"$CODEMOD_STATE_DIR\"\nexit $codemod_status"
+    )
+}
+
+/// `scriptWithStateOutputs`: a script naming its interpreter runs from a
+/// file, as it did, under [`with_state_outputs`]. The heredoc ends at the
+/// first line equal to its delimiter, and params can add lines, so the
+/// delimiter is picked at run time from the lines the script has then.
+fn script_state_outputs_helper() -> String {
+    const HOLE: char = '\u{1}';
+    let wrapper = with_state_outputs(&format!(
+        "cat > \"$CODEMOD_STATE_DIR/script\" <<'{HOLE}end{HOLE}'\n{HOLE}script{HOLE}\n{HOLE}end{HOLE}\nchmod +x \"$CODEMOD_STATE_DIR/script\"\n\"$CODEMOD_STATE_DIR/script\""
+    ));
+    let parts: Vec<String> = wrapper
+        .split(HOLE)
+        .enumerate()
+        .map(|(i, part)| {
+            if i % 2 == 1 {
+                part.to_string()
+            } else {
+                js_string(part)
+            }
+        })
+        .collect();
+    format!(
+        "\n/** `script` run from a file with `$STATE_OUTPUTS` set, as the YAML engine ran it. */\nfunction scriptWithStateOutputs(script: string): string {{\n  let end = \"CODEMOD_SCRIPT_END\";\n  while (script.split(\"\\n\").includes(end)) end += \"_\";\n  return {};\n}}\n",
+        parts.join(" + ")
     )
 }
 
@@ -1022,7 +1044,7 @@ function applyStateOutputs(state: State, result: { stdout?: string }): void {
     if (result.stdout === undefined) return;
     throw new Error("the step wrote more than 1 MiB to $STATE_OUTPUTS, so its state lines were cut");
   }
-  for (const line of stdout.slice(start + "\n{marker}\n".length).split("\n")) {
+  for (const line of stdout.slice(start + "\n{marker}\n".length).split(/\r?\n/)) {
     if (!line.trim()) continue;
     const equals = line.indexOf("=");
     const append = equals > 0 && line[equals - 1] === "@";
