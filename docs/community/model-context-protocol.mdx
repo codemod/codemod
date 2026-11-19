@@ -84,9 +84,13 @@ The Codemod MCP server provides these guidance resources for AI assistants:
 - **`codemod-maintainer-monorepo-instructions`** - Maintainer guidance for codemod monorepos and version-hop workspaces
 - **`sharding-instructions`** - Docs-backed sharding guidance
 
-For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code. Follow the Performant codemods section inside `jssg-gotchas` (no per-file full-repo walks; time a no-op against the real package on the same entry path). For Insights metrics, return `{ edit: null, data }` from each Insights-bound step script.
+For codemod authoring, start by reading `codemod-creation-workflow-instructions`, then read `jssg-gotchas` and `ast-grep-gotchas` before writing source-transform code. For JavaScript, TypeScript, or Java transforms, also read `jssg-utils-instructions` and prefer `@jssg/utils` over hand-written import gates, style helpers, or renames. Decide whether each step needs [semantic analysis](/community/jssg/semantic-analysis) when matching generic method names, renaming symbols, or following aliases. Set `semanticAnalysis` in `workflow.ts` or `semantic_analysis` in legacy YAML.
+
+Follow the Performant codemods section inside `jssg-gotchas`: avoid per-file full-repo walks and time a no-op against the real package on the same entry path. To count edits, [return `{ edit, data }`](/community/jssg/metrics), using one named list per step where practical and labels for variants. Snapshot `metrics.json` for standalone JSSG fixtures that produce counts. For Insights mining, return `{ edit: null, data }` from the selected transform.
 
 When registry discovery does not find an exact package, agents should scaffold with direct `codemod init`. In non-interactive flows, agents should pass only values supplied by the user or task and rely on the CLI defaults/auth-derived author handling for optional metadata.
+
+Registry package names must satisfy `^(@[A-Za-z0-9\-_.]+/)?[A-Za-z0-9\-_]+$`: optional `@scope/`, then **no dots** in the name (hyphenate versions like `lib-1-2-to-1-3`).
 
 ## Why use Codemod MCP?
 

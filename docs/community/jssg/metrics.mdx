@@ -6,8 +6,19 @@ description: "Count what a transform finds by returning it with the edit"
 A transform can return data along with its edit. The CLI adds up the data from every file. This is useful for:
 
 - **Codebase analysis**: count patterns, prop usages, component instances
-- **Migration tracking**: see what needs to change before changing it
+- **Migration tracking**: count what your codemod rewrote, grouped by the shape of the change
 - **Read-only codemods**: gather insights without modifying code
+
+## When to return data
+
+Prefer **one named list per transform step**, with labels for variants instead of a separate list for every edge case.
+
+| Package type | Expectation |
+| --- | --- |
+| Transform / migration step | Return `{ edit, data }` with a row for each change you make. Use labels such as `shape: "no-options"` or `kind: "call-rewrite"`. |
+| Read-only mining / Insights | Return `{ edit: null, data }` from the selected transform so it counts matches without changing files. |
+
+For standalone JSSG tests, snapshot the counts in `metrics.json` next to the fixtures with `codemod jssg test -u`.
 
 ## Basic usage
 
