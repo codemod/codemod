@@ -37,7 +37,7 @@ Everything below runs through the Codemod CLI. For work on the user's Codemod pl
 | Implement the transform once a package exists | `npx codemod ai docs jssg` |
 | Need Node/LLRT APIs, capability-gated modules, or multi-file JSSG work | `npx codemod ai docs jssg-runtime-capabilities` |
 | JS/TS/Java transforms (imports, style, renames, bindings) — read before hand-rolling | `npx codemod ai docs jssg-utils` |
-| Symbol origin, aliases, generic method names, cross-file rename, or metrics (`useMetricAtom`, cardinality) | `npx codemod ai docs jssg` |
+| Symbol origin, aliases, generic method names, cross-file rename, or transform data (`{ edit, data }`, labels) | `npx codemod ai docs jssg` |
 | Run or discover codemods, or need exact command syntax | `npx codemod ai docs codemod-cli` |
 | Maintain a codemod monorepo or a multi-hop version series | `npx codemod ai docs codemod-maintainer-monorepo` |
 | Split a large migration into multiple PRs | `npx codemod ai docs sharding` |
@@ -66,14 +66,14 @@ That workflow's outputs are: a public-by-default migration plan (with author nam
 - Do not use regex, line splitting, whole-file `.replace(...)`, or Python, shell, or Node `fs` rewrites for those formats, and do not use JSSG only as a file walker around such rewrites. Do not add a shell step to reach a related file when JSSG can make that hop. Use raw text only for unsupported plain-text formats, document the fallback, and cover it with fixtures.
 - Run `npx codemod ai dump-ast` before broadening heuristics and `npx codemod ai node-types` when node kinds or fields are unclear.
 - Prefer `@jssg/utils` over hand-rolled import pattern lists, style string building, and bare identifier renames. Add the dependency when used.
-- Enable `semantic_analysis` on `js-ast-grep` steps when matching generic method names, renaming symbols, or following aliases; use binding-aware checks (`importBindingOf` / `renameReferences` / `definition`) instead of filename-level import gates alone.
-- Emit metrics from each transform `js-ast-grep` step (`useMetricAtom` in that script). Prefer one metric per step with cardinality dimensions; snapshot `metrics.json`. Mining/Insights packages still `return null` after incrementing.
+- Use `semanticAnalysis` in `workflow.ts` (`semantic_analysis` in legacy YAML) when matching generic method names, renaming symbols, or following aliases; use binding-aware checks (`importBindingOf` / `renameReferences` / `definition`) instead of filename-level import gates alone.
+- Count edits by returning `{ edit, data }` from each transform step. Prefer one named list per step with labels for variants; snapshot `metrics.json` in standalone JSSG fixtures. For mining/Insights packages, return `{ edit: null, data }`.
 - Registry package `name` (in `codemod.yaml` / `package.json`): optional `@scope/`, then only `[A-Za-z0-9\-_]`. **No dots** — hyphenate version segments (`pkg-1-2-to-1-3`, not `1.2-to-1.3`).
 - Keep each transform focused on one exact change. For SDK/library version bumps, follow `sdk-migration` (one multi-step package per bump by default). For other authoring, prefer one focused package unless the request is clearly open-ended.
 - Inspect only 1-3 representative repo files before you settle the transform shape.
 - In non-interactive `codemod init`, pass only flags the user or task gave you. Do not invent `--author`, `--license`, `--description`, or `--git-repository-url`; leave missing metadata to CLI defaults and the publish-time auth fallback.
 - Define positive, negative, edge, and no-op fixtures before deep implementation, then replace the starter transform, README, and fixtures.
-- Before stopping, make the transform, fixtures, README, `codemod.yaml`, `workflow.yaml`, and `package.json` scripts describe the same migration and target files. Keep workflow `base_path`/`include`/`exclude` globs explicit and aligned with `codemod.yaml` `targets.languages`. Do not leave stale metadata after a rename or other package-surface change.
+- Before stopping, make the transform, fixtures, README, `codemod.yaml`, workflow entry point, and `package.json` scripts describe the same migration and target files. Keep the workflow's file selectors explicit and aligned with `codemod.yaml` `targets.languages`. Do not leave stale metadata after a rename or other package-surface change.
 - After any material change to an existing package (transforms, fixtures, workflow, README, name, keywords, or other publishable metadata), bump `version` in both `codemod.yaml` and `package.json` (semver: patch for fixes, minor for new steps/features, major for breaking package behavior). Bump before republishing; do not republish the same version with different contents.
 - Keep the scaffold's package manager in scripts and README commands, and the repository's dependency and lockfile conventions.
 - Do not stop while `validate_codemod_package` reports starter scaffold markers, missing package surface updates, missing real test cases, or failing default tests.
