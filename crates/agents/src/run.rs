@@ -359,18 +359,18 @@ fn strip_ansi(text: &str) -> String {
 /// The agent and the commands it runs get their own process group, so
 /// stopping the agent stops them too.
 #[cfg(unix)]
-fn new_process_group(command: &mut Command) {
+pub(crate) fn new_process_group(command: &mut Command) {
     use std::os::unix::process::CommandExt;
     command.process_group(0);
 }
 
 #[cfg(not(unix))]
-fn new_process_group(_command: &mut Command) {}
+pub(crate) fn new_process_group(_command: &mut Command) {}
 
 /// End the agent's process group: SIGTERM, then SIGKILL for whatever is
 /// left of the group after [`STOP`], whether or not the agent itself is.
 #[cfg(unix)]
-fn stop_group(child: &mut Child) {
+pub(crate) fn stop_group(child: &mut Child) {
     let group = child.id() as libc::pid_t;
     // Whether the group still had a process to signal; signal 0 only asks.
     // SAFETY: signalling a process group we created.
@@ -390,7 +390,7 @@ fn stop_group(child: &mut Child) {
 }
 
 #[cfg(not(unix))]
-fn stop_group(child: &mut Child) {
+pub(crate) fn stop_group(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
 }

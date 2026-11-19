@@ -2,10 +2,13 @@
 //! changed between versions. Answers are cached per executable.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+use crate::run::{new_process_group, stop_group};
 
 type Key = (PathBuf, Vec<String>);
 
@@ -26,7 +29,7 @@ pub(crate) fn help_text(executable: &Path, help_args: &[&str]) -> String {
     if let Some(text) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return text.clone();
     }
-    let text = run_help(executable, help_args).unwrap_or_default();
+    let text = run_help(executable, help_args, Duration::from_secs(10)).unwrap_or_default();
     cache
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -34,31 +37,64 @@ pub(crate) fn help_text(executable: &Path, help_args: &[&str]) -> String {
     text
 }
 
-fn run_help(executable: &Path, help_args: &[&str]) -> Option<String> {
-    let mut child = Command::new(executable)
+fn run_help(executable: &Path, help_args: &[&str], timeout: Duration) -> Option<String> {
+    let mut command = Command::new(executable);
+    command
         .args(help_args)
         .env("NO_COLOR", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
+        .stderr(Stdio::piped());
+    new_process_group(&mut command);
+    let mut child = command.spawn().ok()?;
+    let deadline = Instant::now() + timeout;
+    let stdout = read_output(child.stdout.take().expect("piped stdout"));
+    let stderr = read_output(child.stderr.take().expect("piped stderr"));
+    let result = (|| {
+        let remaining = || deadline.saturating_duration_since(Instant::now());
+        let stdout = stdout.recv_timeout(remaining()).ok()?.ok()?;
+        let stderr = stderr.recv_timeout(remaining()).ok()?.ok()?;
+        loop {
+            if child.try_wait().ok()?.is_some() {
+                return Some(format!(
+                    "{}\n{}",
+                    String::from_utf8_lossy(&stdout),
+                    String::from_utf8_lossy(&stderr)
+                ));
             }
+            let remaining = deadline.checked_duration_since(Instant::now())?;
+            std::thread::sleep(remaining.min(Duration::from_millis(50)));
         }
+    })();
+    // The child may have exited while a descendant still owns a pipe.
+    stop_group(&mut child);
+    result
+}
+
+fn read_output(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<std::io::Result<Vec<u8>>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = pipe.read_to_end(&mut output).map(|_| output);
+        let _ = sender.send(result);
+    });
+    receiver
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_help_deadline_applies_to_inherited_output_pipes() {
+        let script = "printf '%s\\n' --supported; sleep 7 & exit 0";
+        let start = Instant::now();
+        assert!(run_help(
+            Path::new("/bin/sh"),
+            &["-c", script],
+            Duration::from_millis(200)
+        )
+        .is_none());
+        assert!(start.elapsed() < Duration::from_secs(6));
     }
-    let output = child.wait_with_output().ok()?;
-    Some(format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    ))
 }

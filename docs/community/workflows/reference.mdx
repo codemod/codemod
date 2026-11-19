@@ -364,6 +364,8 @@ If a `codemod()` step resolves a preview-only registry package during an apply r
 
 ### Coding agents
 
+Some adapters check the installed agent’s help output to detect supported options. That check has its own timeout and falls back to defaults if the help command does not finish.
+
 `agent(prompt, options)` runs a coding agent installed on the machine, without asking it questions, in the run's target directory:
 
 ```ts
