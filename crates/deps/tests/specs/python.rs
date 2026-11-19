@@ -364,3 +364,18 @@ fn a_pypi_release_is_yanked_only_when_every_file_is() {
         [("1.0".to_string(), false), ("1.1".to_string(), true)]
     );
 }
+
+#[test]
+fn a_pypi_release_without_files_is_left_out() {
+    use codemod_deps::registry::pypi_releases;
+    let document = r#"{ "releases": {
+        "1.0": [{ "yanked": false }],
+        "2.0": []
+    } }"#;
+    let versions: Vec<_> = pypi_releases(document)
+        .unwrap()
+        .into_iter()
+        .map(|release| release.version)
+        .collect();
+    assert_eq!(versions, ["1.0"]);
+}

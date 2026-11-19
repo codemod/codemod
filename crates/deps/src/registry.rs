@@ -308,7 +308,8 @@ pub fn crate_releases(index: &str) -> Result<Vec<Release>, String> {
 }
 
 /// Releases from PyPI's JSON API. A release is yanked when every file of
-/// it is. PyPI lists dependencies only per file, so releases carry none.
+/// it is; one with no files cannot be installed and is left out. PyPI
+/// lists dependencies only per file, so releases carry none.
 pub fn pypi_releases(document: &str) -> Result<Vec<Release>, String> {
     let doc: serde_json::Value =
         serde_json::from_str(document).map_err(|e| format!("not a project document: {e}"))?;
@@ -318,16 +319,15 @@ pub fn pypi_releases(document: &str) -> Result<Vec<Release>, String> {
         .ok_or("not a project document")?;
     Ok(releases
         .iter()
-        .map(|(version, files)| {
-            let files = files.as_array().map(Vec::as_slice).unwrap_or_default();
-            Release {
+        .filter_map(|(version, files)| {
+            let files = files.as_array().filter(|files| !files.is_empty())?;
+            Some(Release {
                 version: version.clone(),
-                yanked: !files.is_empty()
-                    && files
-                        .iter()
-                        .all(|file| file["yanked"].as_bool() == Some(true)),
+                yanked: files
+                    .iter()
+                    .all(|file| file["yanked"].as_bool() == Some(true)),
                 dependencies: Vec::new(),
-            }
+            })
         })
         .collect())
 }
