@@ -2,13 +2,15 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use butterflow_state::run_store::{LocalStore, MemoryStore, RunStore, StepRecord};
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_workflow::events::CollectEvents;
 use codemod_workflow::interaction::NonInteractive;
-use codemod_workflow::{Ending, Engine, HostedRun, OpenRequest, Services, Summary, TestPlan};
+use codemod_workflow::{
+    Ending, Engine, HostedRun, OpenRequest, PreparedJssg, Services, Summary, TestPlan,
+};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use serde::Deserialize;
@@ -45,6 +47,37 @@ struct Inner {
 #[napi]
 pub struct Run {
     inner: Arc<Inner>,
+}
+
+/// A native transform prepared for a reducer; dropping it discards the edits.
+#[napi]
+pub struct PreparedTransform {
+    inner: Arc<Inner>,
+    prepared: Mutex<Option<PreparedJssg>>,
+    data: Value,
+}
+
+#[napi]
+impl PreparedTransform {
+    #[napi(getter)]
+    pub fn data(&self) -> Value {
+        self.data.clone()
+    }
+
+    #[napi]
+    pub async fn commit(&self, data: String) -> Result<Value> {
+        let data: Value = serde_json::from_str(&data).map_err(to_napi)?;
+        let prepared = self
+            .prepared
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .ok_or_else(|| Error::from_reason("the transform has already been committed"))?;
+        let inner = Arc::clone(&self.inner);
+        off_thread(move || inner.run.commit_jssg(prepared, data))
+            .await?
+            .map_err(Error::from_reason)
+    }
 }
 
 #[napi]
@@ -222,6 +255,20 @@ impl Run {
         serde_json::from_str(&json).map_err(to_napi)
     }
 
+    /// Prepare a native transform, deferring all planned edits to `commit`.
+    #[napi]
+    pub async fn prepare_jssg(&self, request: String) -> Result<PreparedTransform> {
+        let inner = Arc::clone(&self.inner);
+        let (prepared, data) = off_thread(move || inner.run.prepare_jssg(&request))
+            .await?
+            .map_err(Error::from_reason)?;
+        Ok(PreparedTransform {
+            inner: Arc::clone(&self.inner),
+            prepared: Mutex::new(Some(prepared)),
+            data,
+        })
+    }
+
     /// The files a `forEachFile` selector picks: `{ language, files: [[path, text]] }`.
     #[napi]
     pub async fn select_files(&self, selector: String) -> Result<Value> {
@@ -263,7 +310,6 @@ impl Run {
         let count = |counter: &std::sync::atomic::AtomicUsize| {
             counter.load(std::sync::atomic::Ordering::Relaxed)
         };
-        report["metrics"] = json!(self.inner.summary.metrics());
         report["stats"] = json!({
             "filesModified": count(&stats.files_modified),
             "filesUnmodified": count(&stats.files_unmodified),

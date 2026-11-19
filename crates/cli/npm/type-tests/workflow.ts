@@ -155,7 +155,17 @@ export default async function main({
 
   // A transform is run on the files `forEachFile` selects.
   const migrated = await step(forEachFile(jssg("./scripts/codemod.ts")));
-  expectType<Equal<(typeof migrated.data)[string][number]["count"], number>>(true);
+  expectType<Equal<(typeof migrated.data)[number]["file"], string>>(true);
+  // A reducer's result is the step's data.
+  const counted = await step(
+    jssg("./scripts/codemod.ts", {
+      reduce: (total, { data }) => total + (typeof data === "number" ? data : 0),
+      initial: 0,
+    }),
+  );
+  expectType<Equal<typeof counted.data, number>>(true);
+  // @ts-expect-error a reducer needs an initial value
+  jssg("./scripts/codemod.ts", { reduce: (total: number) => total });
   expectType<Equal<typeof migrated.unmodified, number>>(true);
   await step(
     forEachFile(
@@ -174,8 +184,9 @@ export default async function main({
   forEachFile(shell("echo hi"));
 
   const ran = await step(shell("echo hi", { cwd: target, env: { A: "1" } }));
-  expectType<Equal<typeof ran.output, string | undefined>>(true);
-  if (!ran.skipped) expectType<Equal<typeof ran.output, string>>(true);
+  expectType<Equal<typeof ran.stdout, string | undefined>>(true);
+  if (!ran.skipped) expectType<Equal<typeof ran.exitCode, number>>(true);
+  await step(shell("exit 3", { allowFailure: true }));
   const tagged = await step(shell`${target}/scripts/setup.sh ${["a b", 1, true]}`);
   expectType<Equal<typeof tagged, typeof ran>>(true);
   await step(shell({ cwd: target })`npm run build`);
@@ -212,22 +223,22 @@ export default async function main({
 
   // ── values between steps ─────────────────────────────────────────────
 
-  // A shell step returns values; a later step gets them as params.
+  // A shell step's output is parsed by the workflow; a later step gets it as params.
   const detected = await step(shell("./detect.sh"));
-  expectType<Equal<(typeof detected.values & {})["anything"], JsonValue>>(true);
-  await step(jssg("scripts/codemod.ts", { params: { ...detected.values } }));
+  await step(jssg("scripts/codemod.ts", { params: JSON.parse(detected.stdout ?? "{}") }));
   // @ts-expect-error steps take no state
   void step(shell("true"), { state: { target: "react-19" } });
 
   return { files: found.outputs.length };
 }
 
-import type { Frozen, JsonValue } from "codemod/workflow";
+import type { Frozen } from "codemod/workflow";
 
-// A transform returns its edit and rows to count.
+// A transform returns its edit and any JSON as data.
 export const counts: Codemod<TS> = async (root) => ({
   edit: null,
   data: { calls: [{ file: root.filename(), deep: true, depth: 2 }] },
 });
-// @ts-expect-error each row is an object of labels
-export const notRows: Codemod<TS> = async () => ({ data: { calls: [1] } });
+export const aNumber: Codemod<TS> = async () => ({ data: 1 });
+// @ts-expect-error data is JSON
+export const notJson: Codemod<TS> = async () => ({ data: () => 1 });

@@ -64,7 +64,7 @@ npx codemod init
 <Info>
 The `src/scripts/` and `src/rules/` folders are conventional, not required. Paths in the workflow are relative to the workflow file, and `import.meta.dirname` is its directory, so keep the files it uses next to it. A `workflow.ts` at the package root also works.
 
-Detection-only **mining** packages still use this layout. The JSSG step returns `{ edit: null, data }` ([returning data](/community/jssg/metrics)) and proves behavior with `metrics.json` fixtures next to `input`/`expected`. Insights discovers data names from each selected step’s `js-ast-grep` script in the published package (not from a separate package-entry file).
+Detection-only **mining** packages still use this layout. The JSSG step returns `{ edit: null, data }` ([returning data](/community/jssg/metrics)) and proves behavior with `data.json` fixtures next to `input`/`expected`. Insights discovers data names from each selected step’s `js-ast-grep` script in the published package (not from a separate package-entry file).
 </Info>
 
 ## Package Behavior
@@ -191,17 +191,18 @@ Codemod workflow schema version.
 <ParamField path="name" type="string" required>
 Codemod package name (unique within scope).
 
-**Naming rules:** `/^[a-z0-9-_/]+$/` (lowercase letters, numbers, hyphens, underscores, and `/` for scope separation only)
+**Naming rules:** `^(@[A-Za-z0-9\-_.]+/)?[A-Za-z0-9\-_]+$` — optional `@scope/` (scope may include dots), then letters, numbers, hyphens, or underscores only.
 
-**Not allowed:** uppercase letters, dots, commas, spaces, or other special characters
+**Not allowed in the name segment:** dots, commas, spaces, or other special characters. Version bumps in the package id must use hyphens (`react-18-to-19`, `temporal-ts-sdk-1-24-to-1-25`), not semver dots (`…-1.24-to-1.25` fails publish).
 
 Valid examples:
 - <code>remove-console-logs</code>
+- <code>temporal-ts-sdk-1-24-to-1-25</code>
 - <code>@scope/remove-console-logs</code> (using `@organization-or-project-scope/name` provides better discoverability in the [Codemod Registry](https://go.codemod.com/registry))
 </ParamField>
 
 <ParamField path="version" type="string" required default="0.1.0">
-Semantic version of the package.
+Semantic version of the package. Keep this in sync with `package.json`. Bump it (and republish) after any material package change — do not reuse a published version with different contents.
 </ParamField>
 
 <ParamField path="description" type="string" required>

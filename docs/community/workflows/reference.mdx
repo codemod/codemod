@@ -156,7 +156,7 @@ Changes are recorded, not written immediately. When every file is done, the step
 - A callback that throws fails only that file; the error appears in `result.failures`, and the file and its error are logged under the step.
 - When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again.
 - When the callback fails on every file it ran on, the step fails, with the first file's error.
-- To count what a callback found, return it: outputs are values, so add them up after the step. (A [JSSG transform](/community/jssg/metrics) returns `{ edit, data }` instead, and its step's result carries the totals as `data`.)
+- To count what a callback found, return it: outputs are values, so add them up after the step. (A [JSSG transform](/community/jssg/metrics) returns `{ edit, data }` instead, and its step's `data` lists what each file returned.)
 
 ```ts
 export default async function main() {
@@ -343,15 +343,16 @@ await step("Format", shell("npx prettier --write src"));
 
 `import.meta.dirname` is the directory of the workflow file, `import.meta.filename` the file itself, and `import.meta.url` its `file:` URL, as in Node.js. They hold the same values inside steps and `forEachFile` callbacks, and after the package is published and installed.
 
-`shell` commands get these environment variables:
+`shell` commands get `CODEMOD_PATH`, the workflow's directory (prefer `import.meta.dirname` in `workflow.ts`). Give a command values with `env` or in the command itself.
 
-| Variable | Value |
-|---|---|
-| `CODEMOD_PATH` | The workflow's directory (prefer `import.meta.dirname` in `workflow.ts`) |
-| `CODEMOD_OUTPUT` | A file the command can write `key=value` lines to (`key@=value` adds to a list). A line splits at its first `=`; a value is JSON, or else a string. They arrive as `result.values` |
-| `STATE_OUTPUTS` | The same file as `CODEMOD_OUTPUT`, under its workflow.yaml name |
+A `shell` step's result is what the command printed, as text, and its exit code: `{ stdout, stderr, exitCode }`. Parse what you need from it, for example JSON printed on the last line:
 
-Give a command values with `env` or in the command itself.
+```ts
+const { stdout } = await step("Detect", shell`node -p "JSON.stringify({ major: 19 })"`);
+const { major } = JSON.parse(stdout.trim().split("\n").at(-1)!);
+```
+
+A command that exits with an error fails the step, and the error ends with what it printed on stderr. Pass `allowFailure: true` to get the result instead and check `exitCode` yourself. Each stream keeps its last 1 MiB of bytes. The result preserves line endings and replaces invalid UTF-8 with `�`.
 
 Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
 
@@ -430,21 +431,21 @@ Workflows have no state. A step gets what it needs from the workflow and returns
 ```ts
 import { step, shell, forEachFile, jssg } from "codemod/workflow";
 
-const detect = await step("Detect", shell('echo "version=19" >> "$CODEMOD_OUTPUT"'));
-detect.values; // { version: 19 }
+const detect = await step("Detect", shell`npm pkg get dependencies.react`);
+const version = JSON.parse(detect.stdout); // "^19.0.0"
 
 const migrated = await step(
   "Migrate",
-  forEachFile(jssg("scripts/codemod.ts", { params: { version: detect.values?.version ?? 18 } })),
+  forEachFile(jssg("scripts/codemod.ts", { params: { version } })),
 );
-migrated.data; // what the transform returned as `data`, added up
+migrated.data; // [{ file, data }] for each file whose transform returned `data`
 ```
 
 | Step | Values in | Values out |
 |---|---|---|
 | Function step, `forEachFile` callback | Variables it captures | Its return value; `result.outputs` for callbacks |
 | `jssg` | `params` | `{ edit, data }`; `result.data` |
-| `shell` | `env`, or the command text | `$CODEMOD_OUTPUT` lines; `result.values` |
+| `shell` | `env`, or the command text | What it prints; `result.stdout` |
 
 `getState`, `setState`, `unsetState`, `acquireLock` and the step-output functions were removed. Importing one is a build error that says what replaced it, and a step given a `state` option fails.
 

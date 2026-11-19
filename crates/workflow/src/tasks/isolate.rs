@@ -10,9 +10,8 @@ use std::sync::Arc;
 use codemod_deps::Registry;
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::sandbox::runtime_module::{RuntimeEvent, RuntimeEventKind};
-use codemod_sandbox::{MetricsContext, Worker, WorkerOptions};
+use codemod_sandbox::{Worker, WorkerOptions};
 use rquickjs::async_with;
-use serde_json::Value;
 
 use super::TaskContext;
 use crate::deps_host::{self, DEPENDENCIES_MODULE};
@@ -24,7 +23,6 @@ const ISOLATE_WORKFLOW_MODULE: &str = "codemod-internal:isolate-workflow";
 /// Shared by every worker of one step.
 pub(crate) struct StepIsolates {
     pub resolver: Arc<OxcResolver>,
-    pub metrics: MetricsContext,
     pub registry: Option<Arc<dyn Registry>>,
 }
 
@@ -34,7 +32,6 @@ impl StepIsolates {
             .map_err(|e| format!("cannot resolve imports from the workflow directory: {e}"))?;
         Ok(Self {
             resolver: Arc::new(resolver),
-            metrics: MetricsContext::new(),
             registry: task.run.services.package_registry.clone(),
         })
     }
@@ -75,7 +72,6 @@ impl StepIsolates {
             // Files a step or callback imports may import `registry` and
             // `semver` from `codemod/workflow`.
             workflow_module: Some(ISOLATE_WORKFLOW_MODULE.to_string()),
-            metrics: self.metrics.clone(),
             llm_request_handler: None,
             runtime_event_callback: Some(Arc::new(move |event: RuntimeEvent| {
                 if event.kind != RuntimeEventKind::SetCurrentUnit {
@@ -90,16 +86,6 @@ impl StepIsolates {
             target_directory: run.target.clone(),
             default_language,
         }
-    }
-
-    /// What the step's transforms and callbacks returned as `data`, added up;
-    /// also added to the run summary.
-    pub fn data(&self, task: &TaskContext<'_>) -> Value {
-        let metrics = self.metrics.get_all();
-        if !metrics.is_empty() {
-            task.run.services.summary.merge_metrics(metrics.clone());
-        }
-        serde_json::to_value(&metrics).unwrap_or(Value::Null)
     }
 }
 

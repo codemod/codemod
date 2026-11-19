@@ -142,7 +142,6 @@ export interface HostRunReport {
   /** The `until` step the run stopped after. */
   readonly stoppedAt: string | null;
   readonly steps: readonly HostStepReport[];
-  readonly metrics: Record<string, unknown>;
   readonly stats: {
     readonly filesModified: number;
     readonly filesUnmodified: number;
@@ -395,17 +394,63 @@ function host(run: NativeRun, flight: Flight, runtime: () => Runtime): Host {
       const { fn, ...task } = request;
       flight.begin();
       try {
-        if (fn) return await within(task.timeoutMs, (limit) => runInPlace(run, task, fn, limit));
-        try {
-          return await run.runTask(JSON.stringify(task));
-        } catch (error) {
-          throw payloadOf(error);
+        if (fn && task.task.kind === "jssg") {
+          return await reduceInPlace(run, task, fn);
         }
+        if (fn) return await within(task.timeoutMs, (limit) => runInPlace(run, task, fn, limit));
+        return await runNative(run, task);
       } finally {
         flight.end();
       }
     },
   };
+}
+
+async function runNative(run: NativeRun, task: InPlaceTask): Promise<Outcome> {
+  try {
+    return await run.runTask(JSON.stringify(task));
+  } catch (error) {
+    throw payloadOf(error);
+  }
+}
+
+/**
+ * `jssg(path, { reduce, initial })`: the transform runs natively and returns
+ * every file's data, which is then folded here before applying any edits.
+ */
+async function reduceInPlace(run: NativeRun, task: InPlaceTask, fn: Callback): Promise<Outcome> {
+  const { reduce, ...content } = task.task;
+  const outer = context.getStore();
+  if (!outer) throw new Error("a step started outside its run");
+  const { prepared, folded } = await within(task.timeoutMs, async (limit) => {
+    const prepared = await run
+      .prepareJssg(JSON.stringify({ ...task, task: content }))
+      .catch((error: unknown) => {
+        throw payloadOf(error);
+      });
+    const step = stepScope(task.position, task.label);
+    // A copy, so a reducer that changes its accumulator can't change a retry's.
+    let folded = structuredClone((reduce as { initial: Json }).initial);
+    for (const entry of prepared.data) {
+      limit.check();
+      if (run.refusesSteps()) throw new CanceledError();
+      folded = (await context.run({ ...outer, step }, () => fn(folded, entry))) as Json;
+      // A failure reported with failStep() stands even if the reducer caught it.
+      if (step.failure !== undefined) throw new Error(step.failure);
+    }
+    if (folded === undefined) folded = null;
+    checkJson(folded, "the reducer's result");
+    const data = JSON.stringify(folded);
+    limit.check();
+    return { prepared, folded: data };
+  });
+  // Once the deadline has been met, wait for the commit instead of racing it
+  // with the timer: a step must not report a timeout after applying its edits.
+  try {
+    return await prepared.commit(folded);
+  } catch (error) {
+    throw payloadOf(error);
+  }
 }
 
 /** A host task rejected with `{ name, message }` as JSON in the message. */
@@ -430,6 +475,8 @@ type InPlaceTask = Omit<StartRequest, "fn">;
 /** Set when a step's time is up, for work that can stop between two things. */
 interface Limit {
   expired: boolean;
+  /** Also checks elapsed time when synchronous work has delayed the timer. */
+  check(): void;
 }
 
 /**
@@ -438,13 +485,24 @@ interface Limit {
  * the work to stop where it can, and whatever it still does is discarded.
  */
 async function within<T>(ms: number | undefined, work: (limit: Limit) => Promise<T>): Promise<T> {
-  const limit: Limit = { expired: false };
+  const started = performance.now();
+  const timeout = (ms: number) => ({
+    name: "Error",
+    message: `timed out after ${describeDuration(ms)}`,
+  });
+  const limit: Limit = {
+    expired: false,
+    check() {
+      if (ms !== undefined && (limit.expired || performance.now() - started >= ms))
+        throw timeout(ms);
+    },
+  };
   if (ms === undefined) return work(limit);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       limit.expired = true;
-      reject({ name: "Error", message: `timed out after ${describeDuration(ms)}` });
+      reject(timeout(ms));
     }, ms);
   });
   try {

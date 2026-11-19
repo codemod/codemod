@@ -132,9 +132,9 @@ Workflows have no shared state. A transform gets values through `options.params`
 | Need | Use |
 |---|---|
 | Give a transform a value | `jssg(path, { params: { ... } })`, read with `options.params` |
-| Count or label what a transform saw | Return `{ edit, data }`; the step's `result.data` adds the rows up |
+| Report what a transform saw | Return `{ edit, data }`; the step's `result.data` lists each file's data, or a reducer folds it ([returning data](/community/jssg/metrics)) |
 | Collect a value from every file | A `forEachFile` callback that returns it; the step's `result.outputs` lists them in path order |
-| A shell command's values | Lines written to `$CODEMOD_OUTPUT`; the step's `result.values` |
+| A shell command's values | What it prints; parse the step's `result.stdout` |
 
 <Info>
 `getState`, `setState`, `unsetState` and `acquireLock` were removed from `codemod/workflow`. Importing them is a build error that names what replaced them.

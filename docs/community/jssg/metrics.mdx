@@ -1,13 +1,22 @@
 ---
 title: "Returning data"
-description: "Count what a transform finds by returning it with the edit"
+description: "Hand back what a transform finds in each file, and analyze it in the workflow"
 ---
 
-A transform can return data along with its edit. The CLI adds up the data from every file. This is useful for:
+A transform can return data along with its edit. The data can be any JSON value, and the workflow gets every file's data back to analyze however it likes. This is useful for:
 
-- **Codebase analysis**: count patterns, prop usages, component instances
-- **Migration tracking**: see what needs to change before changing it
+- **Codebase analysis**: find patterns, prop usages, component instances
+- **Migration tracking**: record what your codemod rewrote, grouped by the shape of the change
 - **Read-only codemods**: gather insights without modifying code
+
+## When to return data
+
+| Package type | Expectation |
+| --- | --- |
+| Transform / migration step | Return `{ edit, data }` with an entry for each change you make. Add a field for the variant, such as `shape: "no-options"` or `kind: "call-rewrite"`, so the workflow can group them. |
+| Read-only mining / Insights | Return `{ edit: null, data }` so the transform reports matches without changing files. |
+
+For standalone JSSG tests, the data is snapshotted in `data.json` next to the fixtures (see [Testing](#testing)).
 
 ## Basic usage
 
@@ -21,9 +30,7 @@ const codemod: Codemod<TSX> = async (root) => {
   const buttons = root.root().findAll({ rule: { pattern: "<Button $$$ />" } });
   return {
     edit: null, // leave the file as it is; a string replaces it
-    data: {
-      buttons: buttons.map(() => ({ variant: "primary" })),
-    },
+    data: { buttons: buttons.length },
   };
 };
 
@@ -31,95 +38,52 @@ export default codemod;
 ```
 
 - `edit`: the new file content, or `null`/missing to leave the file unchanged. Returning a plain string or `null` still works.
-- `data`: named lists of rows. Each row counts once.
-- A row's labels are strings, numbers or booleans; they are compared as strings. `null` and `undefined` labels are left out.
-- To count something five times, return five rows.
-- Other keys on the result are an error, so a typo doesn't go unnoticed.
-
-## Labels
-
-Labels let you group and filter counts. Rows with the same labels are added up:
-
-```typescript
-return {
-  data: {
-    "prop-usage": [
-      { propName: "className", component: "Button" },
-      { propName: "className", component: "Button" },
-      { propName: "onClick", component: "Link" },
-    ],
-  },
-};
-```
-
-gives `className, Button: 2` and `onClick, Link: 1`. You can then group by any label, for example all rows where `component=Button`.
-
-<Tip>
-Use labels to capture context about what you're counting. When counting prop usages, include both the prop name and the component it belongs to.
-</Tip>
-
-## Example: counting prop usage
-
-This read-only codemod counts how many times each prop is used on `Button` components:
-
-```typescript
-import type { Codemod } from "codemod/ast-grep";
-import type TSX from "codemod/ast-grep/langs/tsx";
-
-const codemod: Codemod<TSX> = async (root) => {
-  const attributes = root.root().findAll({
-    rule: {
-      kind: "jsx_attribute",
-      inside: {
-        any: [{ kind: "jsx_opening_element" }, { kind: "jsx_self_closing_element" }],
-        has: { field: "name", kind: "identifier", regex: "^Button$" },
-      },
-    },
-  });
-
-  const props = attributes
-    .map((attribute) => attribute.find({ rule: { kind: "property_identifier" } })?.text())
-    .filter((propName) => propName !== undefined)
-    .map((propName) => ({ propName }));
-
-  return { edit: null, data: { "prop-usage": props } };
-};
-
-export default codemod;
-```
-
-Running it prints the totals:
-
-```
-Metrics:
-  prop-usage:
-    propName=onClick: 42
-    propName=className: 38
-    propName=disabled: 15
-    propName=variant: 12
-```
+- `data`: any JSON value, including `null`. To skip a file's data, leave `data` out or set it to `undefined`.
+- Data that isn't JSON (a function, a `BigInt`) is an error, and so are other keys on the result, so a typo doesn't go unnoticed.
 
 ## In a workflow
 
-A `jssg` step's result carries the totals of its files as `data`, and the run report adds up every step:
+A `jssg` step's result lists each file's data as `data`, sorted by path. Files that returned no data are left out:
 
 ```typescript
-import { step, forEachFile, jssg } from "codemod/workflow";
+import { step, jssg } from "codemod/workflow";
 
 export default async function main() {
-  const scan = await step("Scan", forEachFile(jssg("scripts/codemod.ts")));
-  scan.data["prop-usage"]; // [{ cardinality: { propName: "onClick" }, count: 42 }, ...]
+  const scan = await step("Scan", jssg("scripts/codemod.ts"));
+  // [{ file: "src/a.tsx", data: { buttons: 2 } }, { file: "src/b.tsx", data: { buttons: 1 } }]
+  const total = scan.data.reduce((sum, { data }) => sum + data.buttons, 0);
+  return { total };
 }
 ```
 
-`forEachFile` callbacks don't edit through their return value, so they report what they found as their outputs (`result.outputs`).
+## Folding data as files finish
 
-## Insights
+On a large repository the list can get big. Pass `reduce` and `initial` to fold each file's data into one value as the file finishes, so the step never holds every file's data at once:
 
-Insights binds each dashboard query to one workflow step and loads that step's `js-ast-grep` script from the published package. Data names must be visible in that script as literal keys of the returned `data` object, not only in a different package file or helper import. This is the selected step's script, not necessarily the package entry (for example `scripts/codemod.ts`). For scale (transforms or mining), see [Performant codemods](/community/jssg/advanced/performance#performant-codemods).
+```typescript
+const scan = await step(
+  "Scan",
+  jssg("scripts/codemod.ts", {
+    reduce: (total, { file, data }) => total + data.buttons,
+    initial: 0,
+  }),
+);
+scan.data; // 3
+```
 
-Insights runs the selected step on its own, so that step must compute its data from the repository directly. Don't rely on files written by an earlier step (for example, a `collect` step that writes JSON shards for an `analyze` step); the widget will return no results.
+- The reducer gets `{ file, data }` for each file that returned data, in no particular order.
+- It can read the workflow's variables, the way `forEachFile` callbacks do, as long as their values are JSON.
+- Write it inline in the `jssg(...)` call, as an arrow or `function` expression, so the build can extract it.
+- Its result must be JSON. If it throws, the step fails.
+
+A reducer only saves memory. `reduce: (all, entry) => [...all, entry], initial: []` gives the same list as no reducer, just not sorted by path.
+
+If a reducer fails or times out, the step discards the pending transform edits. A retry can start from the unchanged files.
+
+## Testing
+
+`codemod jssg test` snapshots the data next to `input` and `expected` as `data.json`, in the same `[{ file, data }]` shape. A missing `data.json` is written on the first run; `--update-snapshots` rewrites a changed one.
 
 <Note>
-`useMetricAtom` from `codemod/metrics` was removed in workflow v2. Replace `atom.increment(labels)` with a row in the returned `data`, and `atom.increment(labels, n)` with `n` rows.
+In workflow v2, `useMetricAtom` from `codemod/metrics` and the CLI's metric totals were removed. Return what you counted in `data` and add it up in the workflow, or with a reducer.
 </Note>

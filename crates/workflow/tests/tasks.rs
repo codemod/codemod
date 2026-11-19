@@ -18,38 +18,56 @@ fn approving() -> Harness {
 }
 
 #[test]
-fn a_shell_steps_output_lines_come_back_as_values() {
+fn a_shell_step_returns_what_the_command_printed() {
     let h = Harness::new();
     let report = h.start(
         r#"
 import { step, shell } from "codemod/workflow";
 export default async function main() {
-  const run = await step(shell(
-    'echo "count=2" >> "$CODEMOD_OUTPUT" && echo "items@=\"a\"" >> "$CODEMOD_OUTPUT" && echo "$GREETING"',
+  const { stdout, stderr, exitCode } = await step(shell(
+    'echo "$GREETING" && echo careful >&2 && echo \'{"count":2}\'',
     { env: { GREETING: "hi" } },
   ));
-  return run;
+  const lines = stdout.trim().split("\n");
+  return { first: lines[0], parsed: JSON.parse(lines.at(-1)), stderr, exitCode };
 }
 "#,
         Value::Null,
     );
-    let result = output(&report).unwrap();
-    assert_eq!(result["output"].as_str().unwrap().trim(), "hi");
-    assert_eq!(result["values"], json!({ "count": 2, "items": ["a"] }));
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "first": "hi", "parsed": { "count": 2 }, "stderr": "careful\n", "exitCode": 0 })
+    );
 }
 
 #[test]
-fn a_failing_shell_command_fails_the_step() {
+fn a_failing_shell_command_fails_the_step_with_what_it_printed() {
     let h = Harness::new();
     let report = h.start(
         r#"
 import { step, shell } from "codemod/workflow";
-export default async function main() { await step("Fail", shell("echo nope && exit 3")); }
+export default async function main() { await step("Fail", shell("echo nope >&2 && exit 3")); }
 "#,
         Value::Null,
     );
     let error = output(&report).unwrap_err();
     assert!(error.contains("step 'Fail' failed"), "{error}");
+    assert!(error.contains("exited with code 3:\nnope"), "{error}");
+}
+
+#[test]
+fn a_shell_step_that_allows_failure_returns_the_exit_code() {
+    let h = Harness::new();
+    let report = h.start(
+        r#"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  return (await step(shell("exit 3", { allowFailure: true }))).exitCode;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(3));
 }
 
 #[test]
@@ -155,20 +173,25 @@ export default async function main() {
     assert_eq!(h.engine_summary_diffs(), 1);
 }
 
-#[test]
-fn a_jssg_steps_returned_data_is_added_up_on_its_result_and_the_run() {
-    let h = Harness::new();
-    h.write("src/a.ts", "foo(); foo();\n");
+fn counting_foo_calls(h: &Harness) {
     h.write("src/b.ts", "foo();\n");
+    h.write("src/a.ts", "foo(); foo();\n");
+    h.write("src/c.ts", "bar();\n");
     h.bundle_file(
         "scripts/transform.ts",
         r#"
 export default function transform(root: any) {
-  const calls = root.root().findAll({ rule: { pattern: "foo()" } });
-  return { data: { calls: calls.map(() => ({ name: "foo" })) } };
+  const calls = root.root().findAll({ rule: { pattern: "foo()" } }).length;
+  return { data: calls ? { calls } : undefined };
 }
 "#,
     );
+}
+
+#[test]
+fn a_jssg_step_returns_each_files_data_in_path_order() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
     let report = h.start(
         r#"
 import { step, jssg } from "codemod/workflow";
@@ -178,9 +201,137 @@ export default async function main() {
 "#,
         Value::Null,
     );
-    let calls = json!([{ "cardinality": { "name": "foo" }, "count": 3 }]);
-    assert_eq!(output(&report).unwrap()["calls"], calls);
-    assert_eq!(json!(h.summary.metrics()["calls"]), calls);
+    assert_eq!(
+        output(&report).unwrap(),
+        json!([
+            { "file": "src/a.ts", "data": { "calls": 2 } },
+            { "file": "src/b.ts", "data": { "calls": 1 } }
+        ])
+    );
+}
+
+#[test]
+fn a_jssg_step_collects_json_null_but_not_undefined() {
+    let h = Harness::new();
+    h.write("src/explicit.ts", "const value = null;\n");
+    h.write("src/omitted.ts", "const value = undefined;\n");
+    h.bundle_file(
+        "scripts/nullable.ts",
+        r#"
+export default function transform(root: any) {
+  return { data: root.relativeFilename().endsWith("explicit.ts") ? null : undefined };
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  const script = "./scripts/nullable.ts";
+  const include = "src/**/*.ts";
+  const listed = await step("List", jssg(script, { include }));
+  const counted = await step("Count nulls", jssg(script, {
+    include,
+    reduce: (count, { data }) => count + (data === null ? 1 : 0),
+    initial: 0,
+  }));
+  return { entries: listed.data, nulls: counted.data };
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "entries": [{ "file": "src/explicit.ts", "data": null }], "nulls": 1 })
+    );
+}
+
+#[test]
+fn a_jssg_reducer_folds_each_files_data_into_the_result() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  const counted = jssg("./scripts/transform.ts", {
+    include: "src/**/*.ts",
+    reduce: (total, { data }) => total + data.calls,
+    initial: 0,
+  });
+  return (await step(counted)).data;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(3));
+}
+
+#[test]
+fn a_failing_jssg_reducer_fails_the_step() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  const counted = jssg("./scripts/transform.ts", {
+    include: "src/**/*.ts",
+    reduce: () => { throw new Error("cannot add"); },
+    initial: 0,
+  });
+  return (await step(counted)).data;
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).unwrap_err().contains("cannot add"));
+}
+
+#[test]
+fn a_jssg_reducer_that_calls_fail_step_fails_the_step_even_if_it_catches_it() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+import { failStep } from "codemod/runtime";
+export default async function main() {
+  const counted = jssg("./scripts/transform.ts", {
+    include: "src/**/*.ts",
+    reduce: (total, { data }) => {
+      try { failStep("cannot add"); } catch {}
+      return total + data.calls;
+    },
+    initial: 0,
+  });
+  return (await step(counted)).data;
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).unwrap_err().contains("cannot add"));
+}
+
+#[test]
+fn a_jssg_reducer_can_use_semver() {
+    let h = Harness::new();
+    counting_foo_calls(&h);
+    let report = h.start(
+        r#"
+import { step, jssg, semver } from "codemod/workflow";
+export default async function main() {
+  const counted = jssg("./scripts/transform.ts", {
+    include: "src/**/*.ts",
+    reduce: (total, { data }) => total + (semver.gt("2.0.0", "1.0.0") ? data.calls : 0),
+    initial: 0,
+  });
+  return (await step(counted)).data;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(3));
 }
 
 #[test]
@@ -899,7 +1050,7 @@ export default async function main() {
     dirname: import.meta.dirname,
     filename: import.meta.filename,
   })));
-  return { here, url: import.meta.url, echoed: echoed.output, seen: seen.outputs };
+  return { here, url: import.meta.url, echoed: echoed.stdout, seen: seen.outputs };
 }
 "#,
     );

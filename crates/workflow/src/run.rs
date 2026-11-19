@@ -416,17 +416,17 @@ struct HostRequest {
 }
 
 /// Stops one step's task when its time is up, or when the run is canceled.
-struct StepClock {
+pub(crate) struct StepClock {
     /// What the task watches instead of the run's flag.
-    cancel: Arc<AtomicBool>,
-    expired: Arc<AtomicBool>,
+    pub(crate) cancel: Arc<AtomicBool>,
+    pub(crate) expired: Arc<AtomicBool>,
     _stop: mpsc::Sender<()>,
 }
 
 impl StepClock {
     const POLL: Duration = Duration::from_millis(50);
 
-    fn start(run: Arc<AtomicBool>, timeout: Duration) -> Self {
+    pub(crate) fn start(run: Arc<AtomicBool>, timeout: Duration) -> Self {
         let cancel = Arc::new(AtomicBool::new(run.load(Ordering::SeqCst)));
         let expired = Arc::new(AtomicBool::new(false));
         let (stop, stopped) = mpsc::channel::<()>();

@@ -70,10 +70,14 @@ pub fn condition(text: &str) -> String {
     format!("evaluate(\"condition\", {}, {SCOPE})", js_string(trimmed))
 }
 
+// Line breaks are escaped too: the generated source is indented line by
+// line, which would otherwise indent the command's own lines.
 fn escape_template(text: &str) -> String {
     text.replace('\\', "\\\\")
         .replace('`', "\\`")
         .replace("${", "\\${")
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
 }
 
 /// `params.a.b`, `matrix.x` or `state.x.y` as TypeScript; `None` for
