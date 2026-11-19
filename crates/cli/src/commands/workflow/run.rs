@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use butterflow_core::report::{convert_diffs, convert_metrics, ExecutionReport};
+use butterflow_core::report::{convert_diffs, ExecutionReport};
 use butterflow_core::structured_log::OutputFormat;
 use butterflow_core::utils;
 use butterflow_core::utils::generate_execution_id;
@@ -154,11 +154,9 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     })
     .await?;
 
-    let metrics = outcome.summary.metrics();
-    if crate::utils::metrics::should_show_report(
+    if crate::utils::report_prompt::should_show_report(
         args.report,
         args.flags.no_interactive,
-        &metrics,
         outcome.files_modified(),
     ) {
         let report = ExecutionReport::build(
@@ -171,7 +169,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             outcome.files_modified(),
             outcome.files_unmodified(),
             outcome.files_with_errors(),
-            convert_metrics(&metrics),
             convert_diffs(&outcome.summary.diffs(), &target_path.display().to_string()),
         )
         .with_registry_link_url(Some(
@@ -180,10 +177,6 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             ),
         ));
         crate::report_server::serve_report(report).await?;
-    } else if format == OutputFormat::Text {
-        crate::utils::metrics::print_metrics(&metrics);
-    } else {
-        crate::utils::metrics::print_metrics_jsonl(&metrics);
     }
 
     telemetry

@@ -20,7 +20,6 @@ use codemod_sandbox::sandbox::runtime_module::{
     RuntimeEvent, RuntimeEventCallback, RuntimeEventKind,
 };
 use codemod_sandbox::utils::project_discovery::find_tsconfig;
-use codemod_sandbox::{MetricsContext, MetricsData};
 use language_core::SemanticProvider;
 use semantic_factory::LazySemanticProvider;
 use serde_json::Value;
@@ -59,6 +58,9 @@ pub struct JssgRunRequest {
     /// Receives what the transform logged (`console`, `codemod/runtime`)
     /// for each file, once the file is done, so files never interleave.
     pub on_log: Option<JssgLogCallback>,
+    /// Receives each file's `data` (the file relative to the target, and
+    /// the value) as soon as the file is done, from whichever thread ran it.
+    pub on_data: Option<JssgDataCallback>,
 }
 
 /// What a transform logged while processing one file.
@@ -74,6 +76,8 @@ pub struct JssgLog {
 }
 
 pub type JssgLogCallback = Arc<dyn Fn(Vec<JssgLog>) + Send + Sync>;
+
+pub type JssgDataCallback = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
 /// One file the transform changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,7 +96,6 @@ pub struct JssgRunOutcome {
     pub skipped: usize,
     /// Files the transform's selector matched.
     pub matched: Vec<PathBuf>,
-    pub metrics: MetricsData,
     pub warnings: Vec<String>,
 }
 
@@ -176,7 +179,6 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
         }
     };
 
-    let metrics = MetricsContext::new();
     // Every file's text goes through here, so a file changed more than once
     // (by its own transform, and by other files' `jssgTransform` calls) ends
     // up with all of the changes.
@@ -238,7 +240,6 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             matrix_values: request.matrix.clone(),
             capabilities: request.capabilities.clone(),
             semantic_provider: semantic.clone(),
-            metrics_context: Some(metrics.clone()),
             llm_request_handler: None,
             runtime_event_callback,
             cancellation_flag: request.cancel.clone(),
@@ -254,7 +255,14 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
             }
         }
         match result {
-            Ok(CodemodOutput { primary, secondary }) => {
+            Ok(CodemodOutput {
+                primary,
+                secondary,
+                data,
+            }) => {
+                if let (Some(on_data), Some(data)) = (&request.on_data, data) {
+                    on_data(&relative, data);
+                }
                 match primary {
                     ExecutionResult::Modified(modified) => {
                         matched.lock().unwrap().push(file_path.to_path_buf());
@@ -328,7 +336,6 @@ pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     outcome.matched.sort();
     outcome.unmodified = unmodified.load(Ordering::SeqCst);
     outcome.skipped = skipped.load(Ordering::SeqCst);
-    outcome.metrics = metrics.get_all();
 
     // Worth saying only when the transform then ran: with no file to run on
     // nothing was lost, and when it fails on the files their errors say why.

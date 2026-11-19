@@ -107,3 +107,22 @@ function __plain(value: unknown): unknown {
   }
   return value;
 }
+
+let __folded: unknown;
+
+/** Start a `jssg(path, { reduce, initial })` fold; `initial` is JSON. */
+export function __reduceStart(initial: string): void {
+  __folded = JSON.parse(initial);
+}
+
+/** Fold one file's `{ file, data }` (as JSON) into the result. */
+export async function __reduceOne(entry: string): Promise<void> {
+  __folded = await __cb(__folded, JSON.parse(entry));
+}
+
+/** The folded result, as JSON. */
+export function __reduceEnd(): string {
+  const result = __folded === undefined ? null : __folded;
+  __checkJson(result, "the reducer's result");
+  return JSON.stringify(result);
+}

@@ -176,8 +176,6 @@ export interface WorkflowRun {
   readonly steps: readonly StepRun[];
   /** Console output, from steps, callbacks and the workflow body. */
   readonly logs: readonly LogLine[];
-  /** Metrics the transforms recorded. */
-  readonly metrics: Record<string, unknown>;
   /** The first step with this label. Throws when there is none. */
   step(label: string): StepRun;
   /** A unified diff of every file the run changed. */
@@ -215,7 +213,6 @@ interface RunResult {
   stoppedAt: string | null;
   steps: StepRun[];
   logs: LogLine[];
-  metrics: Record<string, unknown>;
 }
 
 /** The test `codemod workflow harness` reads on stdin (`CaseRequest` in the CLI). */
@@ -365,7 +362,6 @@ class Run implements WorkflowRun {
   readonly changes: { readonly [path: string]: string | null };
   readonly steps: readonly StepRun[];
   readonly logs: readonly LogLine[];
-  readonly metrics: Record<string, unknown>;
   /** Every file before the run; not listed with the run's own properties. */
   declare private readonly before: FileTree;
 
@@ -380,7 +376,6 @@ class Run implements WorkflowRun {
     this.changes = Object.freeze(changes(before, files));
     this.steps = Object.freeze(result.steps.map((step) => Object.freeze(step)));
     this.logs = Object.freeze(result.logs.map((log) => Object.freeze(log)));
-    this.metrics = result.metrics;
     Object.defineProperty(this, "before", { value: before, enumerable: false });
   }
 
@@ -456,7 +451,6 @@ function harness(spec: HarnessSpec, signal: AbortSignalLike | undefined): Promis
           stoppedAt: null,
           steps: [],
           logs: [],
-          metrics: {},
         });
       } else {
         reject(error);

@@ -162,7 +162,6 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     task.log_failures(&failures);
     every_file_failed(&failures, total)?;
     let changes = changes::commit(task, &planned, run.dry_run)?;
-    isolates.data(task);
     let failed = failures.len();
     let failures: Vec<Value> = failures
         .into_iter()

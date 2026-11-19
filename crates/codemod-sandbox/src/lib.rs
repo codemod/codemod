@@ -3,7 +3,6 @@ pub mod capabilities;
 /// The codemod runtime modules and how code names them.
 pub use codemod_llrt_capabilities::codemod_modules;
 pub mod llm;
-pub mod metrics;
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 mod plugins;
 pub mod sandbox;
@@ -20,7 +19,6 @@ pub mod matchers {
     pub use crate::ast_grep::sg_node::splice_edits;
     pub use crate::ast_grep::utils::{json_matcher, JsMatcherRjs as Matcher};
 }
-pub use metrics::{MetricsContext, MetricsData};
 #[cfg(feature = "native")]
 pub use sandbox::engine::codemod_lang::CodemodLang;
 #[cfg(feature = "jssg-in-memory")]

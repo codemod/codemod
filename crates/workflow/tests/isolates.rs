@@ -488,3 +488,35 @@ export default async function main() {}
         "{error}"
     );
 }
+
+#[test]
+fn a_jssg_reducer_must_be_written_inline() {
+    let h = Harness::new();
+    let error = load_error(
+        &h,
+        r#"
+import { step, jssg } from "codemod/workflow";
+const add = (total: number) => total + 1;
+export default async function main() {
+  await step(jssg("./transform.ts", { reduce: add, initial: 0 }));
+}
+"#,
+    );
+    assert!(error.contains("reduce must be written inline"), "{error}");
+}
+
+#[test]
+fn a_jssg_reducer_needs_an_initial_value() {
+    let h = Harness::new();
+    let report = h.start(
+        r#"
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  await step(jssg("./transform.ts", { reduce: (total) => total }));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("reduce needs an initial value"), "{error}");
+}

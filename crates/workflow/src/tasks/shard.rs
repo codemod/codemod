@@ -122,7 +122,7 @@ fn prescan(
     if let Some(shard_target) = shard_target {
         request.base_path = Some(shard_target.to_string());
     }
-    let outcome = jssg::execute(task, &request, true)?;
+    let outcome = jssg::execute(task, &request, true, None)?;
     let target = &task.run.target;
     let to_relative = |path: &Path| relative(target, path);
     let modified: Vec<String> = outcome

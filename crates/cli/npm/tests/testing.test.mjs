@@ -158,6 +158,110 @@ test("CODEMOD_UPDATE_FIXTURES rewrites the expected directory and file", () => {
 
 // The same tests on both hosts: Node (in this process) and the engine's
 // QuickJS runtime (through the CLI).
+test(
+  "node: a jssg reducer that calls failStep fails the step even if it catches it",
+  HOSTS.node,
+  async () => {
+    const path = join(
+      scratch({
+        "transform.ts": `
+export default function transform(root: any) {
+  return { edit: "const edited = true;\\n", data: 1 };
+}
+`,
+        "workflow.ts": `
+import { step, jssg } from "codemod/workflow";
+import { failStep } from "codemod/runtime";
+export default async function main() {
+  return (await step("Count", jssg("./transform.ts", {
+    reduce: (total, { data }) => {
+      try { failStep("cannot add"); } catch {}
+      return total + data;
+    },
+    initial: 0,
+  }))).data;
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await run(path, { target: { "a.ts": "a\n" }, host: "node" });
+    assert.equal(result.status, "failed");
+    assert.match(result.error, /cannot add/);
+    assert.deepEqual(result.files, { "a.ts": "a\n" });
+  },
+);
+
+test("node: a jssg reducer that runs out of time folds no more files", HOSTS.node, async () => {
+  const path = join(
+    scratch({
+      "transform.ts": `
+export default function transform(root: any) {
+  return { edit: "const edited = true;\\n", data: 1 };
+}
+`,
+      "workflow.ts": `
+import { step, jssg, sleep } from "codemod/workflow";
+const seen = [];
+export default async function main() {
+  try {
+    await step("Slow", jssg("./transform.ts", {
+      reduce: async (total, { file }) => {
+        seen.push(file);
+        await new Promise((done) => setTimeout(done, 300));
+        return total + 1;
+      },
+      initial: 0,
+    }), { timeout: 100 });
+  } catch {}
+  await sleep("500ms");
+  return seen;
+}
+`,
+    }),
+    "workflow.ts",
+  );
+  const result = await run(path, { target: { "a.ts": "a\n", "b.ts": "b\n" }, host: "node" });
+  assert.equal(result.status, "succeeded", result.error);
+  assert.match(result.steps.find(({ label }) => label === "Slow")?.error, /timed out/);
+  assert.deepEqual(result.output, ["a.ts"]);
+  assert.deepEqual(result.files, { "a.ts": "a\n", "b.ts": "b\n" });
+});
+
+test("node: a retried jssg reducer starts from its initial value again", HOSTS.node, async () => {
+  const path = join(
+    scratch({
+      "transform.ts": `
+export default function transform(root: any) {
+  const original = root.root().text();
+  return { edit: original + "// edited once\\n", data: original.length };
+}
+`,
+      "workflow.ts": `
+import { step, jssg } from "codemod/workflow";
+const tries = [];
+export default async function main() {
+  const seen = await step("Seen", jssg("./transform.ts", {
+    reduce: (files, { file, data }) => {
+      files.push({ file, data });
+      tries.push(file);
+      if (tries.length === 1) throw new Error("once");
+      return files;
+    },
+    initial: [],
+  }), { retries: 1 });
+  return seen.data;
+}
+`,
+    }),
+    "workflow.ts",
+  );
+  const result = await run(path, { target: { "a.ts": "a\n" }, host: "node" });
+  assert.equal(result.status, "succeeded", result.error);
+  assert.deepEqual(result.output, [{ file: "a.ts", data: 2 }]);
+  assert.deepEqual(result.files, { "a.ts": "a\n// edited once\n" });
+});
+
 for (const host of Object.keys(HOSTS)) {
   const runWorkflow = (workflow, options) => run(workflow, { ...options, host });
 
@@ -311,6 +415,43 @@ export default async function main() {
     );
   });
 
+  test(
+    `${host}: a jssg step's data is a sorted list, or what its reducer folds`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          "transform.ts": `
+export default function transform(root: any) {
+  return { data: root.root().text().length };
+}
+`,
+          "workflow.ts": `
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  const listed = await step("List", jssg("./transform.ts"));
+  const summed = await step("Sum", jssg("./transform.ts", {
+    reduce: (total, { data }) => total + data,
+    initial: 0,
+  }));
+  return { listed: listed.data, summed: summed.data };
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, { target: { "b.ts": "bb\n", "a.ts": "a\n" } });
+      assert.equal(result.status, "succeeded", result.error);
+      assert.deepEqual(result.output, {
+        listed: [
+          { file: "a.ts", data: 2 },
+          { file: "b.ts", data: 3 },
+        ],
+        summed: 5,
+      });
+    },
+  );
+
   test(`${host}: a failing until step fails the run`, HOSTS[host], async () => {
     const path = join(
       scratch({
@@ -341,7 +482,7 @@ export default async function main() {
 import { step, shell } from "codemod/workflow";
 export default async function main() {
   const echoed = await step("Echo", shell\`sh \${import.meta.dirname}/scripts/echo.sh \${"two words"} \${["it's", 3]}\`);
-  return { dirname: import.meta.dirname, output: echoed.output };
+  return { dirname: import.meta.dirname, output: echoed.stdout };
 }
 `,
       });

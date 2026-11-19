@@ -189,6 +189,13 @@ export interface ForEachFileTask {
 export interface HostTask {
   readonly [TASK]: "host";
   readonly content: TaskContent;
+  /** `jssg(path, { reduce, initial })`: folds each file's data into one result. */
+  readonly reducer?: Reducer;
+}
+
+export interface Reducer {
+  callback: Extracted;
+  initial: Json;
 }
 
 export interface DependencyGraphTask {
@@ -292,7 +299,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     const content: TaskContent = { ...transform.content, ...selected };
     // Without a language, the package's (codemod.yaml), as for callbacks.
     if (kind === "jssg" && content.language === undefined) content.packageLanguage = true;
-    return Object.freeze({ [TASK]: "host" as const, content });
+    return Object.freeze({ [TASK]: "host" as const, content, reducer: transform.reducer });
   }
 
   /**
@@ -364,7 +371,27 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
 
   /** Run a JSSG transform file over the target. */
   function jssg(path: string, options: object = {}): HostTask {
-    return hostTask("jssg", { ...options, path });
+    if (!isRecord(options) || !("reduce" in options)) {
+      if (isRecord(options) && "initial" in options) {
+        throw new TypeError("jssg: initial is the starting value of reduce; give reduce too");
+      }
+      return hostTask("jssg", { ...options, path });
+    }
+    const { reduce, initial, ...rest } = options;
+    const callback = callbackOf(reduce);
+    if (!callback) {
+      throw new TypeError(
+        typeof reduce === "function"
+          ? "jssg: reduce was not extracted by the build; run the workflow through the codemod-workflow build"
+          : "jssg: reduce must be a function, written inline as reduce: (result, file) => ...",
+      );
+    }
+    if (initial === undefined) {
+      throw new TypeError("jssg: reduce needs an initial value, as { reduce, initial }");
+    }
+    checkJson(initial, "jssg: initial");
+    const task = hostTask("jssg", { ...rest, path });
+    return Object.freeze({ ...task, reducer: { callback, initial: initial as Json } });
   }
 
   /** Apply an ast-grep YAML rule file. */
@@ -724,6 +751,14 @@ export function createRuntime(host: Host) {
       }) as TaskContent;
     } else if (isTask(task) && task[TASK] === "host") {
       content = task.content;
+      if (task.reducer) {
+        const { callback, initial } = task.reducer;
+        content = {
+          ...content,
+          reduce: { callback: callback.id, captures: capturesOf(callback), initial },
+        };
+        fn = callback.fn;
+      }
     } else {
       throw new TypeError(`${described}: expected a task such as forEachFile(...) or a function`);
     }
