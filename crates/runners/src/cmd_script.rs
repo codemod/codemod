@@ -270,6 +270,8 @@ fn batch_command_starts(line: &str, lookup: &mut Lookup) -> Vec<usize> {
         match bytes[i] {
             b'"' => in_quotes = !in_quotes,
             b'^' if !in_quotes => i += 1,
+            // `>&` and `<&` redirect to a handle, as in `2>&1`.
+            b'&' if i > 0 && matches!(bytes[i - 1], b'>' | b'<') => {}
             op @ (b'&' | b'|') if !in_quotes => {
                 let operator = i;
                 let doubled = bytes.get(i + 1) == Some(&op);
@@ -454,6 +456,8 @@ mod tests {
             "call faketool",
             "echo \"a & faketool\"",
             "echo a ^& faketool",
+            "realtool x 2>&1",
+            "(echo err)1>&2",
             "%TOOL% x",
             "if exist x faketool",
         ];
