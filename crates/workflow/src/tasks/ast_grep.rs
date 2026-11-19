@@ -30,6 +30,14 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         )));
     }
     let base_path = changes::base_path(request.base_path.as_deref())?;
+    if let Some(base) = &base_path {
+        if relative(&run.target, base).is_none() {
+            return Err(TaskError::Failed(format!(
+                "basePath '{}' must stay inside the target",
+                base.display()
+            )));
+        }
+    }
 
     let planned = Mutex::new(Vec::<PlannedChange>::new());
     let failures = Mutex::new(Vec::<(String, String)>::new());
@@ -59,7 +67,13 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             if !path.is_file() || task.canceled() {
                 return;
             }
-            let display = relative(&run.target, path).unwrap_or_else(|| path.display().to_string());
+            let Some(display) = relative(&run.target, path) else {
+                failures.lock().unwrap().push((
+                    path.display().to_string(),
+                    "the scan path must stay inside the target".into(),
+                ));
+                return;
+            };
             let original = std::fs::read_to_string(path).unwrap_or_default();
             match scan_file_with_combined_scan(path, &scan.combined_scan, true) {
                 Ok((found, modified, content)) => {

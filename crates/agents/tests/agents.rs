@@ -381,6 +381,27 @@ fn canceling_stops_the_agent_and_what_it_started() {
 }
 
 #[test]
+fn canceling_stops_an_agent_that_closed_its_output_pipes() {
+    let cwd = TempDir::new().unwrap();
+    let fake = Fake::new(&format!(
+        "{SESSION_STARTED}\nexec >/dev/null 2>&1\nprintf '%s' \"$$\" >pid\nexec sleep 30"
+    ));
+    let (result, _) = run_codex(&fake, cwd.path(), true, None);
+    assert!(matches!(result, Err(RunError::Canceled { .. })));
+    let pid: libc::pid_t = std::fs::read_to_string(cwd.path().join("pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    // SAFETY: signal 0 only checks the stand-in's process ID.
+    let alive = unsafe { libc::kill(pid, 0) == 0 };
+    if alive {
+        // SAFETY: clean up the stand-in if the regression recurs.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    assert!(!alive, "the agent must be terminated and reaped");
+}
+
+#[test]
 fn stopping_kills_what_ignores_the_request_to_stop() {
     let cwd = TempDir::new().unwrap();
     let marker = cwd.path().join("still-running");

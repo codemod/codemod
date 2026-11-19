@@ -54,7 +54,7 @@ A workflow file contains three kinds of code, each with its own rules:
 | Inside a `forEachFile` callback | Once per file, in parallel, in isolates | Outside variables arrive as frozen copies; changes go through the file object |
 
 - **Steps are durable.** Each step's result is saved as soon as the step finishes. If a run fails or is canceled, `codemod workflow resume` replays the finished steps from their saved results and continues from the step that failed.
-- **A step starts when you call `step()`.** `await` waits for it. `Promise.all([step(a), step(b)])` runs two steps at the same time.
+- **A step starts when you call `step()`.** `await` waits for it. `Promise.all([step(a), step(b)])` runs two steps at the same time. Git steps are the exception: see [Git steps](#git-steps).
 - **Each step is identified by its label and content.** On resume, a step is skipped and its saved result reused when a step with the same label and the same content (the task, its options and the outside values it uses) already finished in this run. Every other step runs: the one that failed, a step you added, and a finished step you changed. So you can fix a run by editing the workflow, and where you add or move steps does not matter. Steps with the same label and content take the saved results in the order they are called.
 
 ## `step(label?, task, options?)`
@@ -148,6 +148,9 @@ Files are selected as `jssg` and `astGrep` select theirs: `.gitignore` is respec
 | `file.delete()` | Remove the file |
 
 Changes are recorded, not written immediately. When every file is done, the step checks for conflicts and applies all changes together. Nothing is written when two files are renamed to the same path, when a file changed on disk since the step read it (another step or command edited it meanwhile), or when the run was canceled. If writing fails part-way, what was written is put back.
+
+File changes, including rename destinations, must stay inside the target after resolving symlinks.
+An `astGrep` step also rejects a `basePath` that resolves outside the target.
 
 ### The callback
 
@@ -251,7 +254,7 @@ parse("tsx", text);                 // the original JSSG form
 
 The body is the code outside steps and callbacks. It runs again on every resume, and a step's saved result is reused only when the body calls that same step again, so the body has to come out the same each time:
 
-- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, and npm packages or local files whose imports only reach these.
+- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, and npm packages or local files whose imports only reach these. In the QuickJS workflow body, you can import `sep` and `delimiter` by name from `node:path` (or `path`); Node's `path.posix` and `path.win32` are not available there.
 - **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
 - **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
 - **`console.log`** goes to the run's output.
@@ -269,9 +272,26 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 | `installSkill({ package, path, harness, scope, force })` | Install a package's agent skill. |
 | `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback` on it. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: what the callback returns. |
 | `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
-| `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. These only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped. |
+| `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. See [Git steps](#git-steps). |
 
 Paths given to `jssg`, `astGrep` and shard functions are relative to the workflow file.
+
+### Git steps
+
+`branch`, `commit` and `pullRequest` only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped.
+
+They all work on the run's one checkout, so they can't run in parallel. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`, before it touches git. So does one inside a `codemod(...)` step that runs alongside other steps. To open one pull request per shard, run the shards one after another:
+
+```ts
+for (const current of shards) {
+  await step(branch(`codemod-${current.name}`));
+  await step(forEachFile({ language: "tsx" }, jssg("./codemod.ts", { files: current._meta_files })));
+  await step(commit(`refactor: migrate ${current.name}`));
+  await step(pullRequest({ title: `refactor: migrate ${current.name}` }));
+}
+```
+
+Steps without git can still run in parallel, before or after. Separate checkouts per shard are planned as an explicit API.
 
 ### Dependencies
 
@@ -349,6 +369,8 @@ await step("Format", shell("npx prettier --write src"));
 
 `shell` commands get `CODEMOD_PATH`, the workflow's directory (prefer `import.meta.dirname` in `workflow.ts`). Give a command values with `env` or in the command itself.
 
+Commands, including scripts that start with a shebang, run in the selected target directory by default (or the parent directory for a file target). Set `cwd` to run in a different directory relative to that directory.
+
 A `shell` step's result is what the command printed, as text, and its exit code: `{ stdout, stderr, exitCode }`. Parse what you need from it, for example JSON printed on the last line:
 
 ```ts
@@ -360,7 +382,11 @@ A command that exits with an error fails the step, and the error ends with what 
 
 Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
 
+If a `codemod()` step resolves a preview-only registry package during an apply run, the step fails before starting that package. Rerun the workflow with `--dry-run` to preview it. This also applies to packages called by nested workflows.
+
 ### Coding agents
+
+Some adapters check the installed agent’s help output to detect supported options. That check has its own timeout and falls back to defaults if the help command does not finish.
 
 `agent(prompt, options)` runs a coding agent installed on the machine, without asking it questions, in the run's target directory:
 
@@ -387,6 +413,7 @@ Its result holds the agent's final answer (`result`), its `sessionId`, `model` a
 | `timeoutSeconds` | Stop the agent after this long |
 
 When the agent fails, is stopped or runs out of time, the step fails; the step's output then says which session the agent had started and what it had used, when the agent reported them.
+On Windows, stopping an agent also stops the processes it started.
 
 Supported agents, by the id `agent` takes:
 
@@ -524,7 +551,7 @@ When a run ends early, the steps still running finish first and are recorded, so
 
 - **A step fails:** the run ends as failed once the steps started alongside it are done.
 - **A step waits for an approval** nobody can give: the run pauses there, also when the workflow catches the error. No step starts after it; resume with `--approve`.
-- **The run is canceled** (Ctrl-C, `workflow cancel`, or the process being terminated): steps stop where they can (a shell command is terminated, file changes not yet written are dropped), and the run can be resumed.
+- **The run is canceled** (Ctrl-C, `workflow cancel`, or the process being terminated): steps stop where they can (running shell commands and agents are terminated, file changes not yet written are dropped), and the run can be resumed.
 
 ## Installing codemod in a package
 

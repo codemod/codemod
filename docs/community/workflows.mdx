@@ -24,7 +24,7 @@ export default async function main() {
 
 `step(task)` marks durable work. When a step finishes, its result is recorded. If a run fails, fix the step that failed and run `codemod workflow resume`: the steps that already finished are not run again.
 
-Steps start when you call `step()`, so `Promise.all` runs steps in parallel.
+Steps start when you call `step()`, so `Promise.all` runs steps in parallel. Git steps (`branch`, `commit`, `pullRequest`) are the exception: they share one checkout, so they run one at a time.
 
 ### Per-file work
 

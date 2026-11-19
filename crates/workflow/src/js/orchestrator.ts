@@ -67,6 +67,11 @@ export interface StartRequest {
   timeoutMs?: number;
   /** When the step began to wait (`sleep`, `waitForEvent`). */
   since?: number;
+  /**
+   * Other steps were still running when this one was issued. Managed git
+   * steps share one checkout, so the engine refuses them then.
+   */
+  alongside?: boolean;
 }
 
 /** What a task resolves to: `TaskOutcome` in `crates/workflow/src/tasks/mod.rs`. */
@@ -654,6 +659,10 @@ export function createRuntime(host: Host) {
   // results, the clock and promise races as it did then.
   const replaying: Replay[] = [];
 
+  // Steps issued and not yet settled. A step issued while this is above
+  // zero runs alongside others (`StartRequest.alongside`).
+  let running = 0;
+
   /**
    * Settle the next replayed step. The host calls it whenever the workflow
    * has nothing left to run, until it returns false.
@@ -702,7 +711,11 @@ export function createRuntime(host: Host) {
    */
   function step(...args: unknown[]): Promise<Json> {
     const label = typeof args[0] === "string" ? (args.shift() as string) : undefined;
-    return runStep(label, args[0], args[1]).then(freeze);
+    const alongside = running > 0;
+    running++;
+    return runStep(label, args[0], args[1], alongside)
+      .finally(() => running--)
+      .then(freeze);
   }
 
   /** Wait for a time, as a step: a resumed run waits for what is left. */
@@ -719,6 +732,7 @@ export function createRuntime(host: Host) {
     label: string | undefined,
     task: unknown,
     options: unknown,
+    alongside: boolean,
   ): Promise<Json> {
     const described = label === undefined ? "step" : `step '${label}'`;
     const policy = policyOf(options, described);
@@ -834,6 +848,7 @@ export function createRuntime(host: Host) {
       fn,
       ...(policy.timeout !== undefined && { timeoutMs: policy.timeout }),
       ...(since !== undefined && { since }),
+      ...(alongside && { alongside }),
     };
     let outcome: Outcome;
     for (;;) {

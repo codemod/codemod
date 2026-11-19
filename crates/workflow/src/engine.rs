@@ -413,6 +413,7 @@ impl Engine {
             services: Arc::clone(&self.services),
             cancel,
             commit_lock: Arc::new(Mutex::new(())),
+            alongside: false,
             test,
             stopped: AtomicBool::new(false),
             interruption: Mutex::new(None),

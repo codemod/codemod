@@ -254,6 +254,7 @@ impl HostedRun {
                     .map_or(&self.context.cancel, |clock| &clock.cancel),
             ),
             since: None,
+            alongside: false,
         };
         let dry_run = request.task.dry_run || self.context.dry_run;
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -307,6 +308,7 @@ impl HostedRun {
             label: prepared.label,
             cancel: Arc::clone(&self.context.cancel),
             since: None,
+            alongside: false,
         };
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let outcome = jssg::finish(&task, prepared.outcome, data, prepared.dry_run)
@@ -353,6 +355,7 @@ impl HostedRun {
             label,
             cancel: Arc::clone(&self.context.cancel),
             since: None,
+            alongside: false,
         };
         let (changes, failures) = for_each_file::commit_effects(&task, files)?;
         Ok(json!({ "changes": changes, "failures": failures }))
