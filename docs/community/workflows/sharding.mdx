@@ -46,7 +46,7 @@ In `workflow.yaml`, the same pattern is a `shard` step with `output_state`, foll
 
 Files are filtered before they reach any shard method:
 
-- With `jssg`, the transform runs in dry-run mode on the files matching its `include` under `target`, and only files it would change are kept. If it changes none, files its selector matches are used instead.
+- With `jssg`, the transform runs in dry-run mode on the files matching its `include` under `target`, and only files it would change are kept. If it changes none, files its selector matches are used instead. If the transform fails on every file, the shard step fails.
 - Without `jssg`, every file matching `filePattern` under `target` is eligible.
 
 <ParamField path="target" type="string" default=".">

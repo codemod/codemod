@@ -665,6 +665,36 @@ export default async function main() { return step(codemod("./loop")); }
 }
 
 #[test]
+fn a_shard_prescan_fails_when_the_transform_fails_on_every_file() {
+    let h = Harness::new();
+    h.write("src/a.ts", "const a = 1;\n");
+    h.bundle_file(
+        "transform.ts",
+        "export default function transform() { throw new Error('prescan failure'); }",
+    );
+    let report = h.start(
+        r#"
+import { step, shard } from "codemod/workflow";
+export default async function main() {
+  return step(shard({
+    method: { type: "directory", maxFilesPerShard: 10 },
+    target: "src",
+    filePattern: "**/*.ts",
+    jssg: { path: "./transform.ts", include: "**/*.ts" },
+  }));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("shard prescan failed on every file"),
+        "{error}"
+    );
+    assert!(error.contains("prescan failure"), "{error}");
+}
+
+#[test]
 fn git_steps_are_skipped_unless_managed_git_is_on() {
     let h = approving();
     let report = h.start(
