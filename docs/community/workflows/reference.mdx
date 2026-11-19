@@ -150,6 +150,7 @@ Files are selected as `jssg` and `astGrep` select theirs: `.gitignore` is respec
 Changes are recorded, not written immediately. When every file is done, the step checks for conflicts and applies all changes together. Nothing is written when two files are renamed to the same path, when a file changed on disk since the step read it (another step or command edited it meanwhile), or when the run was canceled. If writing fails part-way, what was written is put back.
 
 File changes, including rename destinations, must stay inside the target after resolving symlinks.
+An `astGrep` step also rejects a `basePath` that resolves outside the target.
 
 ### The callback
 

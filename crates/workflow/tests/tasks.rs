@@ -781,6 +781,33 @@ export default async function main() {
     assert_eq!(h.read("a.ts"), "const a = 1;\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn ast_grep_refuses_a_base_path_symlink_outside_the_target() {
+    let h = Harness::new();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("a.ts"), "const a = 1;\n").unwrap();
+    std::os::unix::fs::symlink(outside.path(), h.target.path().join("link")).unwrap();
+    h.bundle_file(
+        "rules.yml",
+        "id: r\nlanguage: typescript\nrule:\n  pattern: const a = 1\nfix: const a = 2\n",
+    );
+    let report = h.start(
+        r#"
+import { step, astGrep } from "codemod/workflow";
+export default async function main() {
+  await step(astGrep("rules.yml", { basePath: "link" }));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("basePath 'link' must stay inside the target"),
+        "{error}"
+    );
+}
+
 #[test]
 fn renames_are_compared_by_the_file_they_name() {
     let h = Harness::new();
