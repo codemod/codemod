@@ -492,9 +492,42 @@ snapshots:
   react@18.3.1: {}
 "#;
     let graph = lockfiles::pnpm(lock, &|_| Some(r#"{ "name": "app" }"#.into())).unwrap();
+    let table = graph.find(Ecosystem::Npm, "table", "3.2.5").unwrap();
+    let edges: Vec<usize> = (0..graph.edges.len())
+        .filter(|&index| graph.edges[index].from == table)
+        .collect();
     assert_eq!(
-        chains_to(graph, "react", &[Kind::Prod]),
-        Vec::<String>::new()
+        described(&Walk::new(graph), edges),
+        ["table@3.2.5 peer react@18.3.1 ^18"]
+    );
+}
+
+#[test]
+fn a_pnpm_optional_dependency_also_declared_as_a_peer_stays_optional() {
+    let lock = r#"
+lockfileVersion: '6.0'
+dependencies:
+  table:
+    specifier: ^3.0.0
+    version: 3.2.5(x@1.0.0)
+packages:
+  /table@3.2.5(x@1.0.0):
+    resolution: {integrity: sha512-t}
+    optionalDependencies:
+      x: 1.0.0
+    peerDependencies:
+      x: ^1
+  /x@1.0.0:
+    resolution: {integrity: sha512-x}
+"#;
+    let graph = lockfiles::pnpm(lock, &|_| Some(r#"{ "name": "app" }"#.into())).unwrap();
+    let table = graph.find(Ecosystem::Npm, "table", "3.2.5").unwrap();
+    let edges: Vec<usize> = (0..graph.edges.len())
+        .filter(|&index| graph.edges[index].from == table)
+        .collect();
+    assert_eq!(
+        described(&Walk::new(graph), edges),
+        ["table@3.2.5 optional x@1.0.0 ?", "table@3.2.5 peer x ^1"]
     );
 }
 

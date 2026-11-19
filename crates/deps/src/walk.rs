@@ -55,8 +55,9 @@ impl Walk {
         self.filter(&self.out[id], kinds)
     }
 
-    /// Edges installed onto a node. Peer edges name a package without
-    /// resolving it; [`Walk::declaring`] finds those.
+    /// Edges installed onto a node. A peer edge lands here only when pnpm
+    /// records the peer it was installed with; [`Walk::declaring`] also finds
+    /// peer declarations the lockfile does not resolve.
     pub fn dependents(&self, id: usize, kinds: &[Kind]) -> Vec<usize> {
         self.filter(&self.into[id], kinds)
     }

@@ -302,7 +302,7 @@ const usesMui = await step(
 |---|---|
 | `g.workspaces()` | The repository's own packages |
 | `g.nodes(name?)`, `g.node(name, version?)` | Installed packages, each a `name@version` node |
-| `g.dependents(name, { kinds })` | Edges that declare a dependency on `name`, resolved or not (peer edges never resolve) |
+| `g.dependents(name, { kinds })` | Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the peer it was installed with) |
 | `g.chains({ from, to, kinds })` | Shortest chains from each `from` node (default: every workspace) to a `to` node |
 | `node.dependencies({ kinds })`, `node.dependents({ kinds })` | Edges out of and into one node |
 | `node.workspacesReaching({ kinds })` | Each workspace that reaches the node, with its chain |

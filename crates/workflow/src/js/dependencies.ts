@@ -285,7 +285,7 @@ export function __graph() {
 
   class DependencyEdge {
     readonly from: PackageNode;
-    /** The installed node; null for peer edges and ranges the lockfile does not resolve. */
+    /** The installed node; null when the lockfile does not resolve it, as for most peer edges. */
     readonly to: PackageNode | null;
     readonly name: string;
     /** Declared range; null when the lockfile keeps none (third-party crates in Cargo.lock). */
@@ -341,7 +341,7 @@ export function __graph() {
     node: (name: string, version?: string): PackageNode | undefined =>
       graph.nodes(name).find((node) => version === undefined || node.version === version),
 
-    /** Edges that declare a dependency on `name`, resolved or not (peer edges are never resolved). */
+    /** Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the installed peer). */
     dependents: (name: string, options?: KindOptions): DependencyEdge[] =>
       edges("named", name, options),
 
