@@ -392,6 +392,7 @@ Its result holds the agent's final answer (`result`), its `sessionId`, `model` a
 | `timeoutSeconds` | Stop the agent after this long |
 
 When the agent fails, is stopped or runs out of time, the step fails; the step's output then says which session the agent had started and what it had used, when the agent reported them.
+On Windows, stopping an agent also stops the processes it started.
 
 Supported agents, by the id `agent` takes:
 

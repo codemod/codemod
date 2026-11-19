@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::run::{new_process_group, stop_group};
+use crate::run::spawn_group;
 
 type Key = (PathBuf, Vec<String>);
 
@@ -45,8 +45,7 @@ fn run_help(executable: &Path, help_args: &[&str], timeout: Duration) -> Option<
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    new_process_group(&mut command);
-    let mut child = command.spawn().ok()?;
+    let (mut child, group) = spawn_group(&mut command).ok()?;
     let deadline = Instant::now() + timeout;
     let stdout = read_output(child.stdout.take().expect("piped stdout"));
     let stderr = read_output(child.stderr.take().expect("piped stderr"));
@@ -67,7 +66,7 @@ fn run_help(executable: &Path, help_args: &[&str], timeout: Duration) -> Option<
         }
     })();
     // The child may have exited while a descendant still owns a pipe.
-    stop_group(&mut child);
+    group.stop(&mut child);
     result
 }
 
