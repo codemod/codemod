@@ -33,7 +33,7 @@
 import "../register.mts";
 
 import { isAbsolute, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 import type { JsonValue } from "../testing/index.mts";
 import { addon } from "./addon.mts";
@@ -59,6 +59,7 @@ import type {
   Selector,
   StartRequest,
 } from "./orchestrator.mts";
+import { workflowUrl } from "./transforms.mts";
 import { callbackId } from "./workflow.mts";
 
 /** A `URL` (`new URL("./workflow.ts", import.meta.url)`); only `file:` URLs are paths. */
@@ -308,7 +309,9 @@ function locate(
       `${path} is not a TypeScript workflow; run YAML workflows with the codemod CLI, or upgrade them with \`codemod workflow upgrade\``,
     );
   }
-  return { path, load: () => import(pathToFileURL(path).href) };
+  // Marked for the load hook, which drops the imports of transforms the
+  // workflow gives `jssg` and `shard` (see transforms.mts).
+  return { path, load: () => import(workflowUrl(path)) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -421,7 +424,7 @@ async function runNative(run: NativeRun, task: InPlaceTask): Promise<Outcome> {
 }
 
 /**
- * `jssg(path, { reduce, initial })`: the transform runs natively and returns
+ * `jssg(transform, { reduce, initial })`: the transform runs natively and returns
  * every file's data, which is then folded here before applying any edits.
  */
 async function reduceInPlace(run: NativeRun, task: InPlaceTask, fn: Callback): Promise<Outcome> {

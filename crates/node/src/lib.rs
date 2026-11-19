@@ -28,3 +28,14 @@ pub fn resolve_workflow(source: String, name: Option<String>) -> napi::Result<St
         .map(|path| path.to_string_lossy().into_owned())
         .map_err(napi::Error::from_reason)
 }
+
+/// The workflow source as Node.js should load it: transforms imported for
+/// `jssg` and `shard` replaced by references to their files, and their
+/// imports dropped, as the codemod CLI's build does. `None` when the
+/// workflow imports no transforms. Throws the build's error for a
+/// transform the build cannot read.
+#[napi_derive::napi]
+pub fn rewrite_workflow(file: String, source: String) -> napi::Result<Option<String>> {
+    codemod_workflow::rewrite_transforms(&file, &source)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}

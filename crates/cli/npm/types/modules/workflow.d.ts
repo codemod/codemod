@@ -395,11 +395,14 @@ declare module "codemod:workflow" {
    *
    * @example
    * ```ts
-   * await step("Migrate imports", forEachFile(jssg("scripts/codemod.ts")));
-   * await step("Apply rules", forEachFile("src/**\/*.ts", astGrep("rules/config.yml")));
+   * import codemod from "./scripts/codemod.ts";
+   * import components from "./scripts/components.ts";
+   *
+   * await step("Migrate imports", forEachFile(jssg(codemod)));
+   * await step("Apply rules", forEachFile("src/**\/*.ts", astGrep("./rules/config.yml")));
    * await step("Migrate components", forEachFile(
    *   { include: "src/**\/*.tsx", exclude: "**\/*.test.tsx", language: "tsx" },
-   *   jssg("scripts/components.ts", { params: { strict: true } }),
+   *   jssg(components, { params: { strict: true } }),
    * ));
    * ```
    */
@@ -533,17 +536,36 @@ declare module "codemod:workflow" {
   }
 
   /**
-   * A JSSG transform file; `path` is relative to the workflow file. Run it
-   * with `forEachFile(selector, jssg(path))`, which says which files it is
+   * A JSSG transform: the default export of a transform file, imported into
+   * the workflow (`import codemod from "./scripts/codemod.ts"`). The workflow
+   * does not run it; the engine does, on each file.
+   */
+  export type JssgTransform = (...args: never[]) => unknown;
+
+  /**
+   * Runs an imported JSSG transform. Run it with
+   * `forEachFile(selector, jssg(transform))`, which says which files it is
    * for. As a step on its own it runs on the files its options select.
+   *
+   * The transform is imported from a file of the package, by its default
+   * export: the build passes the engine that file and includes it when
+   * publishing. Only give the import to `jssg` (or `shard`); the workflow
+   * does not load its code.
+   *
+   * @example
+   * ```ts
+   * import codemod from "./scripts/codemod.ts";
+   *
+   * await step("Migrate", forEachFile(jssg(codemod, { params: { strict: true } })));
+   * ```
    */
   // `T` is unconstrained so `initial: 0` gives `number`, not `0`; the
   // result is checked to be JSON when the step runs.
   export function jssg<T>(
-    path: string,
+    transform: JssgTransform,
     options: JssgOptions & JssgReducer<T>,
   ): Transform<JssgResult<T>>;
-  export function jssg(path: string, options?: JssgOptions): Transform<JssgResult>;
+  export function jssg(transform: JssgTransform, options?: JssgOptions): Transform<JssgResult>;
 
   export interface AstGrepOptions {
     include?: Globs;
@@ -559,10 +581,11 @@ declare module "codemod:workflow" {
   }
 
   /**
-   * An ast-grep YAML rule file; `path` is relative to the workflow file.
-   * Apply it with `forEachFile(selector, astGrep(path))`, which says which
-   * files it is for. As a step on its own it runs on the files its options
-   * select.
+   * An ast-grep YAML rule file; `path` is relative to the workflow file and
+   * written in the call (`astGrep("./rules/config.yml")`), so the build can
+   * include the file when publishing. Apply it with
+   * `forEachFile(selector, astGrep(path))`, which says which files it is
+   * for. As a step on its own it runs on the files its options select.
    */
   export function astGrep(path: string, options?: AstGrepOptions): Transform<AstGrepResult>;
 
@@ -575,9 +598,16 @@ declare module "codemod:workflow" {
         minShardSize?: number;
       }
     | {
-        /** A JS/TS file whose default export receives a `ShardInput` and returns `ShardResult[]`. */
-        function: string;
+        /**
+         * A shard function, imported from a file of the package by its
+         * default export (`import shardFiles from "./scripts/shard.ts"`):
+         * it receives a `ShardInput` and returns `ShardResult[]`.
+         */
+        function: ShardFunction;
       };
+
+  /** The default export of a shard function file. */
+  export type ShardFunction = (input: ShardInput) => unknown;
 
   export interface ShardOptions {
     method: ShardMethod;
@@ -585,8 +615,8 @@ declare module "codemod:workflow" {
     target?: string;
     /** Glob for eligible files when `jssg` is not set. */
     filePattern?: string;
-    /** Keep only the files this transform would change. */
-    jssg?: JssgOptions & { path: string };
+    /** Keep only the files this imported transform would change. */
+    jssg?: JssgOptions & { transform: JssgTransform };
     /** An earlier result of this step, so existing assignments are kept. */
     previous?: readonly ShardResult[];
   }

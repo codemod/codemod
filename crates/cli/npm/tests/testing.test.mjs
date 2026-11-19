@@ -171,9 +171,10 @@ export default function transform(root: any) {
 `,
         "workflow.ts": `
 import { step, jssg } from "codemod/workflow";
+import transform from "./transform.ts";
 import { failStep } from "codemod/runtime";
 export default async function main() {
-  return (await step("Count", jssg("./transform.ts", {
+  return (await step("Count", jssg(transform, {
     reduce: (total, { data }) => {
       try { failStep("cannot add"); } catch {}
       return total + data;
@@ -192,6 +193,31 @@ export default async function main() {
   },
 );
 
+test(
+  "node: a workflow module imported without the host gives jssg the transform's code",
+  HOSTS.node,
+  async () => {
+    const path = join(
+      scratch({
+        "transform.ts": "export default function transform() { return null; }\n",
+        "workflow.ts": `
+import { step, jssg } from "codemod/workflow";
+import transform from "./transform.ts";
+export default async function main() {
+  await step(jssg(transform));
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    // Imported by the test itself, so the host's load hook does not see it.
+    const module = await import(pathToFileURL(path).href);
+    const result = await run(module, { path, target: { "a.ts": "a\n" }, host: "node" });
+    assert.equal(result.status, "failed");
+    assert.match(result.error, /jssg was given the transform's code/);
+  },
+);
+
 test("node: a jssg reducer that runs out of time folds no more files", HOSTS.node, async () => {
   const path = join(
     scratch({
@@ -202,10 +228,11 @@ export default function transform(root: any) {
 `,
       "workflow.ts": `
 import { step, jssg, sleep } from "codemod/workflow";
+import transform from "./transform.ts";
 const seen = [];
 export default async function main() {
   try {
-    await step("Slow", jssg("./transform.ts", {
+    await step("Slow", jssg(transform, {
       reduce: async (total, { file }) => {
         seen.push(file);
         await new Promise((done) => setTimeout(done, 300));
@@ -239,9 +266,10 @@ export default function transform(root: any) {
 `,
       "workflow.ts": `
 import { step, jssg } from "codemod/workflow";
+import transform from "./transform.ts";
 const tries = [];
 export default async function main() {
-  const seen = await step("Seen", jssg("./transform.ts", {
+  const seen = await step("Seen", jssg(transform, {
     reduce: (files, { file, data }) => {
       files.push({ file, data });
       tries.push(file);
@@ -436,9 +464,10 @@ export default function transform(root: any) {
 `,
           "workflow.ts": `
 import { step, jssg } from "codemod/workflow";
+import transform from "./transform.ts";
 export default async function main() {
-  const listed = await step("List", jssg("./transform.ts"));
-  const summed = await step("Sum", jssg("./transform.ts", {
+  const listed = await step("List", jssg(transform));
+  const summed = await step("Sum", jssg(transform, {
     reduce: (total, { data }) => total + data,
     initial: 0,
   }));
@@ -459,6 +488,59 @@ export default async function main() {
       });
     },
   );
+
+  test(
+    `${host}: an imported transform runs on the files, and the body does not load it`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          // Marks the process that evaluates it: the transform runs in the
+          // engine's own runtime, never in the workflow body.
+          "scripts/codemod.ts": `
+(globalThis as any).__codemodTransformLoaded = true;
+export const KEYWORD = "let";
+export default function transform(root: any, options: any) {
+  return root.root().text().replace("var", options.params.keyword);
+}
+`,
+          "workflow.ts": `
+import { step, forEachFile, jssg } from "codemod/workflow";
+import codemod from "./scripts/codemod.ts";
+export default async function main() {
+  const migrated = await step("Migrate", forEachFile("**/*.ts", jssg(codemod, { params: { keyword: "let" } })));
+  return migrated.changes.written;
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, { target: { "a.ts": "var a = 1;\n" } });
+      assert.equal(result.status, "succeeded", result.error);
+      assert.deepEqual(result.output, ["a.ts"]);
+      assert.deepEqual(result.files, { "a.ts": "let a = 1;\n" });
+      assert.equal(globalThis.__codemodTransformLoaded, undefined);
+    },
+  );
+
+  test(`${host}: a path given to jssg does not build`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "scripts/codemod.ts": "export default () => null;\n",
+        "workflow.ts": `
+import { step, jssg } from "codemod/workflow";
+export default async function main() {
+  await step(jssg("./scripts/codemod.ts"));
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    await assert.rejects(
+      runWorkflow(path, { target: { "a.ts": "a\n" } }),
+      /jssg takes an imported transform, not a file path: add import codemod from/,
+    );
+  });
 
   test(`${host}: a failing until step fails the run`, HOSTS[host], async () => {
     const path = join(

@@ -17,6 +17,7 @@
 import module from "node:module";
 
 import { CODEMOD_MODULES, resolveCodemodModule } from "./runtime/modules.mts";
+import { loadWorkflow } from "./runtime/transforms.mts";
 
 export { resolveCodemodModule };
 
@@ -66,6 +67,11 @@ function register(): void {
       resolve(specifier, context, nextResolve) {
         const url = resolveCodemodModule(specifier);
         return url ? { url, shortCircuit: true } : nextResolve(specifier, context);
+      },
+      // The workflow file `codemod/host` imports: its imported transforms
+      // become references to their files, as in the CLI's build.
+      load(url, context, nextLoad) {
+        return loadWorkflow(url, nextLoad(url, context));
       },
     });
     return;

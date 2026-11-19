@@ -116,6 +116,12 @@ export interface Addon {
   orchestratorVersion(): string;
   /** The workflow file a path names: the file, or a package directory's workflow. */
   resolveWorkflow(source: string, name: string | null): string;
+  /**
+   * A workflow's source with its imported transforms replaced by references
+   * to their files (as the CLI's build does), or null when it has none.
+   * Throws the build's error for a transform the build cannot read.
+   */
+  rewriteWorkflow?(file: string, source: string): string | null;
   /** Parse `source` as `language`; returns an `SgRoot`. */
   parse(language: string, source: string, filename?: string, relativeFilename?: string): unknown;
   languageFromPath(path: string): string | null;

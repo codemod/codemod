@@ -19,6 +19,7 @@ export function callbackId(fn: Callback): string {
 
 export const {
   __callback,
+  __transform,
   forEachFile,
   shell,
   jssg,
