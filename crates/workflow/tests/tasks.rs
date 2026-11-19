@@ -319,7 +319,8 @@ fn a_jssg_reducer_can_use_semver() {
     counting_foo_calls(&h);
     let report = h.start(
         r#"
-import { step, jssg, semver } from "codemod/workflow";
+import { step, jssg } from "codemod/workflow";
+import { semver } from "codemod/deps";
 export default async function main() {
   const counted = jssg("./scripts/transform.ts", {
     include: "src/**/*.ts",
