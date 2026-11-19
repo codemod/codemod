@@ -37,11 +37,12 @@ export default codemod;
 
 ```ts workflow.ts
 import { step, forEachFile, jssg } from "codemod/workflow";
+import codemod from "./codemod.ts";
 
 export default async function main({ params }: { params: Record<string, string> }) {
   // Run parameters (--param key=value) reach the transform as options.params.
   // Values passed in `params` here are merged over them.
-  await step(forEachFile({ language: "tsx" }, jssg("./codemod.ts", {
+  await step(forEachFile({ language: "tsx" }, jssg(codemod, {
     params: { library: params.library ?? "next-intl", prSize: "50" },
   })));
 }
@@ -109,11 +110,12 @@ Pass values with the `matrix` option of the `jssg` task. A common pattern is one
 
 ```ts workflow.ts
 import { step, shard, forEachFile, jssg } from "codemod/workflow";
+import codemod from "./codemod.ts";
 
 export default async function main() {
   const shards = await step(shard({ method: { type: "codeowner", maxFilesPerShard: 30 }, filePattern: "**/*.tsx" }));
   await Promise.all(shards.map((current) =>
-    step(`Migrate ${current.name}`, forEachFile({ language: "tsx" }, jssg("./codemod.ts", {
+    step(`Migrate ${current.name}`, forEachFile({ language: "tsx" }, jssg(codemod, {
       files: current._meta_files,
       matrix: { team: current.team, shardId: current.name },
     }))),
@@ -131,7 +133,7 @@ Workflows have no shared state. A transform gets values through `options.params`
 
 | Need | Use |
 |---|---|
-| Give a transform a value | `jssg(path, { params: { ... } })`, read with `options.params` |
+| Give a transform a value | `jssg(codemod, { params: { ... } })`, read with `options.params` |
 | Report what a transform saw | Return `{ edit, data }`; the step's `result.data` lists each file's data, or a reducer folds it ([returning data](/community/jssg/metrics)) |
 | Collect a value from every file | A `forEachFile` callback that returns it; the step's `result.outputs` lists them in path order |
 | A shell command's values | What it prints; parse the step's `result.stdout` |
@@ -148,6 +150,7 @@ A step that needs something found across the repository runs after a step that f
 ```ts workflow.ts
 import { step, forEachFile, jssg } from "codemod/workflow";
 import { parse } from "codemod/ast-grep";
+import updateImports from "./scripts/update-imports.ts";
 
 export default async function main() {
   // Pass 1: every file returns the components it exports.
@@ -157,7 +160,7 @@ export default async function main() {
   const components = scan.outputs.flat();
 
   // Pass 2: the transform gets the list as a parameter.
-  await step("Update imports", forEachFile({ language: "tsx" }, jssg("./scripts/update-imports.ts", {
+  await step("Update imports", forEachFile({ language: "tsx" }, jssg(updateImports, {
     params: { components },
   })));
 }

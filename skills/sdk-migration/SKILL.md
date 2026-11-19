@@ -153,15 +153,17 @@ Proceed to build/publish only after the user explicitly confirms the `codemod` /
 
 ```ts
 import { jssg, step } from "codemod/workflow";
+import firstApi from "./scripts/first-api.ts";
+import secondApi from "./scripts/second-api.ts";
 
 export default async function workflow() {
-  await step("Migrate first API", jssg("./scripts/first-api.ts", {
+  await step("Migrate first API", jssg(firstApi, {
     language: "typescript",
     semanticAnalysis: "file",
     include: ["**/*.{ts,tsx}"],
     exclude: ["**/node_modules/**", "**/dist/**"],
   }));
-  await step("Migrate second API", jssg("./scripts/second-api.ts", {
+  await step("Migrate second API", jssg(secondApi, {
     language: "typescript",
     semanticAnalysis: "file",
     include: ["**/*.{ts,tsx}"],

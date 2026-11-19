@@ -98,11 +98,12 @@ workflows:
 
 ```ts src/workflow.ts expandable
 import { step, forEachFile, jssg, agent } from "codemod/workflow";
+import codemod from "./scripts/codemod.ts";
 
 export default async function main({ params }: { params: { run_ai_step?: string } }) {
   await step(
     "Move inner components to module scope",
-    forEachFile({ language: "tsx" }, jssg("./scripts/codemod.ts")),
+    forEachFile({ language: "tsx" }, jssg(codemod)),
   );
 
   if (params.run_ai_step === "true") {

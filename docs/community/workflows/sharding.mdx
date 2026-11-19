@@ -13,12 +13,13 @@ The `shard` task splits a large migration into groups of files ("shards"), for e
 
 ```ts workflow.ts
 import { step, shard, forEachFile, jssg, approval, branch, commit, pullRequest } from "codemod/workflow";
+import codemod from "./scripts/codemod.ts";
 
 export default async function main() {
   const shards = await step("Build shards", shard({
     method: { type: "directory", maxFilesPerShard: 20 },
     target: "./src",
-    jssg: { path: "scripts/codemod.ts", language: "tsx", include: ["**/*.{ts,tsx}"] },
+    jssg: { transform: codemod, language: "tsx", include: ["**/*.{ts,tsx}"] },
   }));
 
   await Promise.all(shards.map(async (current, index) => {
@@ -26,7 +27,7 @@ export default async function main() {
     await step(branch(`codemod-migrate-${index}`));
     await step(`Migrate ${current.name}`, forEachFile(
       { language: "tsx" },
-      jssg("scripts/codemod.ts", { files: current._meta_files }),
+      jssg(codemod, { files: current._meta_files }),
     ));
     await step(commit(`refactor: migrate ${current.name}`));
     await step(pullRequest({ title: `refactor: migrate ${current.name}` }));
@@ -58,7 +59,7 @@ Files are filtered before they reach any shard method:
 </ParamField>
 
 <ParamField path="jssg" type="object">
-  A JSSG transform used to pre-filter files: `path` plus the [`jssg` task options](/community/workflows/reference#tasks).
+  A JSSG transform used to pre-filter files: the imported transform as `transform`, plus the [`jssg` task options](/community/workflows/reference#transforms).
 </ParamField>
 
 <ParamField path="previous" type="array">
@@ -103,15 +104,20 @@ Each shard has `name` (`"{team}-{index}"`, for example `"platform-team-0"`), `te
 
 ## Custom shard functions
 
-For grouping that the built-in methods can't express, such as dependency-aware clustering, point `method.function` at a JS/TS file. It receives the pre-filtered file list and returns the shards; the engine handles file selection.
+For grouping that the built-in methods can't express, such as dependency-aware clustering, import a shard function, the default export of a JS/TS file, and give it as `method.function`. It receives the pre-filtered file list and returns the shards; the engine handles file selection. As with [transforms](/community/workflows/reference#transforms), the workflow does not load the file: the engine runs it, and publishing includes it.
 
 ```ts
+import shardByDeps from "./scripts/shard-by-deps.ts";
+import codemod from "./scripts/codemod.ts";
+
 shard({
-  method: { function: "scripts/shard-by-deps.ts" },
+  method: { function: shardByDeps },
   target: "./src",
-  jssg: { path: "scripts/codemod.ts", language: "tsx", include: ["**/*.{ts,tsx}"] },
+  jssg: { transform: codemod, language: "tsx", include: ["**/*.{ts,tsx}"] },
 })
 ```
+
+Write `shard`'s options, its `method` and its `jssg` inline, as objects: the build reads the shard function and the transform from them, and a file path there is a build error.
 
 ```ts scripts/shard-by-deps.ts
 import { parse } from "codemod/ast-grep";

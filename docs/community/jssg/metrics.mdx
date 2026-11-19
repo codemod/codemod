@@ -47,9 +47,10 @@ A `jssg` step's result lists each file's data as `data`, sorted by path. Files t
 
 ```typescript
 import { step, jssg } from "codemod/workflow";
+import codemod from "./scripts/codemod.ts";
 
 export default async function main() {
-  const scan = await step("Scan", jssg("scripts/codemod.ts"));
+  const scan = await step("Scan", jssg(codemod));
   // [{ file: "src/a.tsx", data: { buttons: 2 } }, { file: "src/b.tsx", data: { buttons: 1 } }]
   const total = scan.data.reduce((sum, { data }) => sum + data.buttons, 0);
   return { total };
@@ -63,7 +64,7 @@ On a large repository the list can get big. Pass `reduce` and `initial` to fold 
 ```typescript
 const scan = await step(
   "Scan",
-  jssg("scripts/codemod.ts", {
+  jssg(codemod, {
     reduce: (total, { file, data }) => total + data.buttons,
     initial: 0,
   }),

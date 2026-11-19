@@ -40,6 +40,7 @@ becomes:
 
 ```ts workflow.ts
 import { forEachFile, jssg, step } from "codemod/workflow";
+import codemodTransform from "./scripts/codemod.ts";
 
 export default async function main() {
   // Apply AST Transformations
@@ -47,11 +48,11 @@ export default async function main() {
     include: ["**/*.ts", "**/*.js"],
     exclude: ["**/node_modules/**"],
     language: "typescript",
-  }, jssg("scripts/codemod.ts")));
+  }, jssg(codemodTransform)));
 }
 ```
 
-Your transform files don't change.
+Your transform files don't change: the workflow imports each one and gives it to `jssg`, and the engine runs it from its file as before.
 
 If `upgrade` suggests it, add the `codemod` package as a dev dependency, so your editor type-checks `workflow.ts`:
 
@@ -66,14 +67,14 @@ npm install --save-dev codemod
 | A node | An `async` function. A workflow with one plain node runs its steps in `main` |
 | `depends_on` | Functions called in order; independent nodes run at the same time |
 | A step | `await step("<step name>", <task>)` |
-| `js-ast-grep` | `forEachFile({ include, exclude, language }, jssg(path, { ... }))` |
+| `js-ast-grep` | `import transform from "./<js_file>"` and `forEachFile({ include, exclude, language }, jssg(transform, { ... }))` |
 | `ast-grep` | `forEachFile({ include, exclude }, astGrep(configFile, { ... }))` |
 | `run` | `shell(command, { env })` |
 | `codemod` | `codemod(source, { params })` |
 | `ai` | `agent(prompt, { ... })` |
 | `install-skill` | `installSkill({ ... })` |
 | `matrix` (`values` or `from_state`) | One call per value, run at the same time |
-| `shard` | `shard({ ... })`, its result passed to the steps that use it |
+| `shard` | `shard({ ... })`, its result passed to the steps that use it. A shard `function` and the shard's `js-ast-grep` transform are imported |
 | `if:` | An `if` statement whose condition runs through `__evaluate(...)`, the YAML engine's own evaluator, so it means exactly what it did |
 | `${{ params.name }}` | `params.name` |
 | `${{ state.name }}` | `state.name`, a local object. Shell steps get it as `CODEMOD_STATE_<KEY>` variables, and the lines they write to `$STATE_OUTPUTS` are printed at the end of their stdout and copied into it by `applyStateOutputs`. JSSG transforms that call `getState` or `setState` cannot be translated; `upgrade` flags them |
@@ -125,3 +126,23 @@ Most codemods run exactly as before. These are the differences, for both `workfl
 ## Publishing workflow.ts codemods
 
 Older CLI versions run `workflow.yaml` only. People who run a `workflow.ts` codemod need a CLI version that runs TypeScript workflows, which `npx codemod` always fetches.
+
+Publishing includes every transform and shard function the workflow imports for `jssg` and `shard`, and every rule file whose path it gives `astGrep`. That is why those are build errors when the build cannot read them: a path computed at run time would be missing from the published package.
+
+## Workflows written for earlier previews
+
+**Breaking change:** `jssg` no longer takes a file path. A `workflow.ts` written for an earlier preview with `jssg("./scripts/codemod.ts")` fails to build with:
+
+```text
+jssg takes an imported transform, not a file path: add import codemod from "./scripts/codemod.ts" at the top of the workflow and write jssg(codemod)
+```
+
+Import the transform and pass it instead:
+
+```ts
+import codemod from "./scripts/codemod.ts";
+
+await step(forEachFile(jssg(codemod)));
+```
+
+The same goes for shards: `method: { function: "./scripts/shard.ts" }` becomes an imported shard function, and `jssg: { path: "./scripts/codemod.ts" }` becomes `jssg: { transform: codemod }`. `workflow.yaml` files need no change: the translation imports their transforms. If your editor flags `.ts` in the import, add `"allowImportingTsExtensions": true` to `tsconfig.json`, as packages from `codemod init` have.
