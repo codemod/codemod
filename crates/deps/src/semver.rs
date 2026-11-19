@@ -63,7 +63,14 @@ pub fn compare(ecosystem: Ecosystem, a: &str, b: &str) -> Ordering {
 
 /// Whether going from `from` to `to` is a breaking change under caret rules:
 /// the left-most non-zero component changes (so 0.29 to 0.30 is breaking).
-pub fn is_breaking(from: &str, to: &str) -> bool {
+/// Python versions compare their epoch and release numbers, so `0.1rc1` to
+/// `0.1` is not breaking.
+pub fn is_breaking(ecosystem: Ecosystem, from: &str, to: &str) -> bool {
+    if ecosystem == Ecosystem::Pypi {
+        if let Some((from, to)) = pypi::version(from).zip(pypi::version(to)) {
+            return pypi::breaking_part(&from) != pypi::breaking_part(&to);
+        }
+    }
     fn breaking_part(version: &str) -> Vec<&str> {
         let parts: Vec<&str> = version.split(['.', '-', '+']).take(3).collect();
         match parts.iter().position(|part| *part != "0") {
@@ -81,6 +88,17 @@ mod pypi {
 
     pub(super) fn version(text: &str) -> Option<Version> {
         Version::from_str(text).ok()
+    }
+
+    /// The epoch and the release numbers (padded to three) up to the
+    /// left-most non-zero one.
+    pub(super) fn breaking_part(version: &Version) -> (u64, Vec<u64>) {
+        let mut parts: Vec<u64> = version.release().iter().copied().take(3).collect();
+        parts.resize(3, 0);
+        if let Some(index) = parts.iter().position(|&part| part != 0) {
+            parts.truncate(index + 1);
+        }
+        (version.epoch(), parts)
     }
 
     /// A PEP 440 specifier set, or a Poetry constraint: alternatives joined

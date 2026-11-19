@@ -316,6 +316,24 @@ fn poetry_carets_and_tildes_read_prerelease_and_epoch_operands() {
 }
 
 #[test]
+fn a_python_prerelease_promotion_is_not_breaking() {
+    use codemod_deps::semver::is_breaking;
+    let check = |from, to| is_breaking(Ecosystem::Pypi, from, to);
+    assert_eq!(
+        [
+            check("0.1rc1", "0.1"),
+            check("1.0.0a1", "1.0.0"),
+            check("1.2", "1.2.post1"),
+            check("1.0", "1.0.0"),
+            check("1.2", "2.0rc1"),
+            check("0.1", "0.2"),
+            check("1.0", "1!1.0"),
+        ],
+        [false, false, false, false, true, true, true]
+    );
+}
+
+#[test]
 fn a_poetry_range_whose_upper_bound_overflows_cannot_be_read() {
     use codemod_deps::semver::satisfies;
     let max = u64::MAX;
