@@ -38,7 +38,7 @@ import type TS from "codemod/ast-grep/langs/typescript";
 
 const REPLACEMENTS = { isArray: "Array", isBuffer: "Buffer" };
 
-const codemod: Codemod<TS> = (root) => {
+const codemod: Codemod<TS> = async (root) => {
   const edits = [];
   for (const [api, global] of Object.entries(REPLACEMENTS)) {
     for (const call of root.root().findAll({ rule: { pattern: `util.${api}($ARG)` } })) {
