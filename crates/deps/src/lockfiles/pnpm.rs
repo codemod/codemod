@@ -133,7 +133,8 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
     // v9: resolved edges in snapshots, declared ranges in packages.
     // v6: `packages` holds resolved versions only, so the range stays unknown.
     // Both list the peers a copy was installed with among its dependencies:
-    // those become resolved peer edges, with the peer's declared range.
+    // those become resolved peer edges, with the peer's declared range. An
+    // optional dependency stays optional, even when also declared as a peer.
     let mut resolved_peers: HashSet<(usize, String)> = HashSet::new();
     let resolved_edges = if snapshots.is_empty() {
         &packages
@@ -179,7 +180,7 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
             for (dependency, version) in yaml_pairs(entry.get(field)) {
                 let to = target(&graph, ".", &dependency, &version);
                 match peers.get(&dependency) {
-                    Some(range) if !declared.contains_key(&dependency) => {
+                    Some(range) if kind == Kind::Prod && !declared.contains_key(&dependency) => {
                         graph.edge(from, to, &dependency, Some(range.clone()), Kind::Peer);
                         resolved_peers.insert((from, dependency));
                     }
