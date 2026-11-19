@@ -303,6 +303,14 @@ for (const host of Object.keys(HOSTS)) {
     },
   );
 
+  test(`${host}: the workflow context has the execution platform`, HOSTS[host], async () => {
+    const dir = scratch({
+      "workflow.ts": `export default function main({ platform }) { return platform; }`,
+    });
+    const result = await run(join(dir, "workflow.ts"), { target: {}, host });
+    assert.equal(result.output, process.platform);
+  });
+
   test(`${host}: given replaces a step's result without running it`, HOSTS[host], async () => {
     const run = await runWorkflow(workflow(), {
       target: { "a.ts": "old\n" },

@@ -306,15 +306,21 @@ impl Generator {
             || nodes.iter().any(|node| node.uses_params);
         let uses_state = !workflow.templates.is_empty() || nodes.iter().any(|node| node.uses_state);
         let mut main = String::new();
+        let platform_field = if self.uses_posix_state_outputs {
+            ", platform"
+        } else {
+            ""
+        };
         if has_defaults {
             self.uses_context = true;
-            main.push_str("export default async function main({ params: input }: WorkflowContext<Params>) {\n");
+            let _ = writeln!(main, "export default async function main({{ params: input{platform_field} }}: WorkflowContext<Params>) {{");
             main.push_str("  const params: Params = { ...DEFAULT_PARAMS, ...input };\n");
         } else if uses_params {
             self.uses_context = true;
-            main.push_str(
-                "export default async function main({ params }: WorkflowContext<Params>) {\n",
-            );
+            let _ = writeln!(main, "export default async function main({{ params{platform_field} }}: WorkflowContext<Params>) {{");
+        } else if self.uses_posix_state_outputs {
+            self.uses_context = true;
+            main.push_str("export default async function main({ platform }: WorkflowContext) {\n");
         } else {
             main.push_str("export default async function main() {\n");
         }
@@ -322,7 +328,7 @@ impl Generator {
             // Check the execution host, not the host that ran `workflow upgrade`.
             // An external script may use STATE_OUTPUTS without naming it in YAML.
             main.push_str(concat!(
-                "  if (shellPathSeparator === \"\\\\\") {\n",
+                "  if (platform === \"win32\") {\n",
                 "    throw new Error(\"This translated YAML workflow requires POSIX shell state ",
                 "output ($STATE_OUTPUTS), which is not supported on Windows. ",
                 "Run it on a POSIX host or migrate its shell steps to workflow.ts.\");\n",
@@ -921,9 +927,6 @@ impl Generator {
         );
         if self.uses_context {
             source.push_str("import type { WorkflowContext } from \"codemod/workflow\";\n");
-        }
-        if self.uses_posix_state_outputs {
-            source.push_str("import { sep as shellPathSeparator } from \"node:path\";\n");
         }
         source.push('\n');
         let mut aliases = String::new();

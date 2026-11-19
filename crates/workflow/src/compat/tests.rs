@@ -17,6 +17,60 @@ fn translated(yaml: &str) -> Translated {
     result
 }
 
+#[test]
+fn shell_state_guard_uses_the_platform_passed_to_main() {
+    use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
+    use rquickjs::{CatchResultExt, Context, Function, Module, Promise, Runtime};
+
+    let source = translated(
+        r#"
+version: "1"
+nodes:
+  - id: stateful
+    name: Stateful
+    steps:
+      - name: First
+        run: echo first
+      - name: Record
+        run: echo seen=true >> "$STATE_OUTPUTS"
+"#,
+    )
+    .source;
+    let built = build("workflow.ts", &source).unwrap();
+    let runtime = Runtime::new().unwrap();
+    let workflow = crate::build::FLOW_MODULE;
+    runtime.set_loader(
+        BuiltinResolver::default().with_module(workflow),
+        BuiltinLoader::default().with_module(
+            workflow,
+            "export const shell = command => command;\n\
+             export const step = label => { throw new Error(`started ${label}`); };",
+        ),
+    );
+    Context::full(&runtime).unwrap().with(|ctx| {
+        let (module, ready) = Module::declare(ctx.clone(), "workflow.js", built.main.as_str())
+            .unwrap()
+            .eval()
+            .unwrap();
+        ready.finish::<()>().unwrap();
+        let main: Function = module.get("default").unwrap();
+        for (platform, expected) in [
+            (
+                "win32",
+                "$STATE_OUTPUTS), which is not supported on Windows",
+            ),
+            ("linux", "started First"),
+        ] {
+            let input = ctx
+                .json_parse(format!(r#"{{"platform":"{platform}"}}"#))
+                .unwrap();
+            let result: Promise = main.call((input,)).unwrap();
+            let error = result.finish::<()>().catch(&ctx).unwrap_err().to_string();
+            assert!(error.contains(expected), "{error}");
+        }
+    });
+}
+
 fn fill_template(text: &str) -> String {
     text.replace("{language}", "typescript")
         .replace("{include_patterns}", "            - \"**/*.ts\"")
