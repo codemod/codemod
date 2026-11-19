@@ -1313,14 +1313,14 @@ fn a_dependency_graph_reads_only_root_lockfiles_and_lists_ones_it_could_not_read
 import { step } from "codemod/workflow";
 import { dependencyGraph } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph({}, (g) => ({ read: g.lockfiles, skipped: g.skipped.map((s) => s.lockfile) })));
+  return await step(dependencyGraph({}, (g) => ({ read: g.lockfiles, skipped: g.skipped.map((s) => [s.lockfile, typeof s.error === "string" && s.error.length > 0]) })));
 }
 "#,
         Value::Null,
     );
     assert_eq!(
         output(&report).unwrap(),
-        json!({ "read": ["yarn.lock"], "skipped": ["pnpm-lock.yaml"] })
+        json!({ "read": ["yarn.lock"], "skipped": [["pnpm-lock.yaml", true]] })
     );
 }
 
