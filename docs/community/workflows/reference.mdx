@@ -563,6 +563,7 @@ Then `npx tsc` checks `workflow.ts` along with your transforms (add `"include": 
 - Step results are typed and read-only. `forEachFile` collects what the callback returns: returning `file.path` or `undefined` gives `outputs: readonly string[]`.
 - A step result or callback return value that is not JSON is a type error, for example a `Set`, a `Map`, a `Date`, a function, or a `Promise` returned from an `async` callback.
 - Type the default export's argument with `WorkflowContext`: `main({ params }: WorkflowContext<{ replacement?: string }>)`.
+- Use `WorkflowContext.platform` to read the platform running the workflow (`"win32"`, `"darwin"`, or `"linux"`), even if you generated the workflow on a different platform.
 - Type `parse` with a language map: `parse<TS>(file)`, where `TS` is imported from `codemod/ast-grep/langs/typescript`.
 
 The callback rules that depend on scope, such as assigning to an outside variable, are checked by `codemod workflow validate`, not by TypeScript.
