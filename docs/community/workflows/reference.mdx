@@ -522,7 +522,7 @@ When a run ends early, the steps still running finish first and are recorded, so
 
 - **A step fails:** the run ends as failed once the steps started alongside it are done.
 - **A step waits for an approval** nobody can give: the run pauses there, also when the workflow catches the error. No step starts after it; resume with `--approve`.
-- **The run is canceled** (Ctrl-C, `workflow cancel`, or the process being terminated): steps stop where they can (a shell command is terminated, file changes not yet written are dropped), and the run can be resumed.
+- **The run is canceled** (Ctrl-C, `workflow cancel`, or the process being terminated): steps stop where they can (running shell commands and agents are terminated, file changes not yet written are dropped), and the run can be resumed.
 
 ## Installing codemod in a package
 

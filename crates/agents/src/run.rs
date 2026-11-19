@@ -247,12 +247,11 @@ impl Run<'_> {
             emit(events, &mut transcript);
         };
 
-        if pipes_open {
-            // The agent is still running, or left something that holds its
-            // pipes. The readers are not joined: a process that left the
-            // group can keep a pipe open, and they end when it closes.
-            stop_group(&mut child);
-        } else {
+        // EOF does not imply that the agent or its descendants have exited.
+        stop_group(&mut child);
+        // A process that left the group can keep a pipe open. Don't wait
+        // indefinitely for the readers in that case.
+        if !pipes_open {
             for reader in readers.into_iter().flatten() {
                 let _ = reader.join();
             }
