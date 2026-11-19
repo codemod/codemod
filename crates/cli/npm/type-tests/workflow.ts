@@ -232,7 +232,7 @@ export default async function main({
   return { files: found.outputs.length };
 }
 
-import type { Frozen, JsonValue } from "codemod/workflow";
+import type { Frozen } from "codemod/workflow";
 
 // A transform returns its edit and any JSON as data.
 export const counts: Codemod<TS> = async (root) => ({

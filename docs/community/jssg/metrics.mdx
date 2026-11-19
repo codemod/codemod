@@ -6,8 +6,17 @@ description: "Hand back what a transform finds in each file, and analyze it in t
 A transform can return data along with its edit. The data can be any JSON value, and the workflow gets every file's data back to analyze however it likes. This is useful for:
 
 - **Codebase analysis**: find patterns, prop usages, component instances
-- **Migration tracking**: see what needs to change before changing it
+- **Migration tracking**: record what your codemod rewrote, grouped by the shape of the change
 - **Read-only codemods**: gather insights without modifying code
+
+## When to return data
+
+| Package type | Expectation |
+| --- | --- |
+| Transform / migration step | Return `{ edit, data }` with an entry for each change you make. Add a field for the variant, such as `shape: "no-options"` or `kind: "call-rewrite"`, so the workflow can group them. |
+| Read-only mining / Insights | Return `{ edit: null, data }` so the transform reports matches without changing files. |
+
+For standalone JSSG tests, the data is snapshotted in `data.json` next to the fixtures (see [Testing](#testing)).
 
 ## Basic usage
 
