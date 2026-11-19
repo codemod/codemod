@@ -16,7 +16,8 @@ use rquickjs::{Ctx, Function, Object};
 pub const DEPENDENCIES_MODULE: &str = "codemod-internal:dependencies";
 
 pub(crate) fn ecosystem(name: &str) -> Result<Ecosystem, String> {
-    Ecosystem::parse(name).ok_or_else(|| format!("unknown ecosystem '{name}'; use npm or cargo"))
+    Ecosystem::parse(name)
+        .ok_or_else(|| format!("unknown ecosystem '{name}'; use npm, cargo or pypi"))
 }
 
 /// Each named package's releases, as the JSON `registry.npm(name)` resolves to.
@@ -50,7 +51,7 @@ pub(crate) fn semver(
     let value = match op.as_str() {
         "satisfies" => serde_json::json!(versions::satisfies(ecosystem, &b, &a)),
         "compare" => serde_json::json!(versions::compare(ecosystem, &a, &b) as i8),
-        "breaking" => serde_json::json!(versions::is_breaking(&a, &b)),
+        "breaking" => serde_json::json!(versions::is_breaking(ecosystem, &a, &b)),
         "prerelease" => serde_json::json!(versions::is_prerelease(ecosystem, &a)),
         _ => serde_json::Value::Null,
     };

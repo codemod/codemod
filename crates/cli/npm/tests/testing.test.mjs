@@ -713,7 +713,8 @@ test(
     const path = join(
       scratch({
         "workflow.ts": `
-import { step, dependencyGraph, registry, semver } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { dependencyGraph, registry, semver } from "codemod/deps";
 export default async function main() {
   void registry;
   void semver;

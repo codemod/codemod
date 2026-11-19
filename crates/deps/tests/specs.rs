@@ -530,3 +530,6 @@ packages:
         ["table@3.2.5 optional x@1.0.0 ?", "table@3.2.5 peer x ^1"]
     );
 }
+
+#[path = "specs/python.rs"]
+mod python;

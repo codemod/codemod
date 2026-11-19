@@ -47,6 +47,16 @@ pub fn is_flow_module(specifier: &str) -> bool {
     codemod_module(specifier) == Some("workflow")
 }
 
+/// Specifier of the dependency module: `dependencyGraph`, `registry` and
+/// `semver`.
+pub const DEPS_MODULE: &str = "codemod/deps";
+
+/// Whether a specifier names the dependency module (`codemod/deps`, or
+/// `codemod:deps`).
+pub fn is_deps_module(specifier: &str) -> bool {
+    codemod_module(specifier) == Some("deps")
+}
+
 /// Prelude appended to every extracted callback module.
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -107,7 +117,7 @@ const PURE_BUILTINS: &[&str] = &[
 pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
     match codemod_module(specifier) {
         Some("workflow") => return Ok(ModuleClass::Workflow),
-        Some("ast-grep") => return Ok(ModuleClass::Pure),
+        Some("ast-grep" | "deps") => return Ok(ModuleClass::Pure),
         Some(_) => return Ok(ModuleClass::StepsOnly),
         None => {}
     }
@@ -277,9 +287,8 @@ const REMOVED_STATE_API: &[&str] = &[
     "getOrSetStepOutput",
 ];
 
-/// `codemod:workflow` exports that steps and callbacks import from
-/// `codemod-internal:dependencies`, which runs in the isolate.
-const ISOLATE_DEPENDENCY_API: &[&str] = &["registry", "semver"];
+/// Exports that moved from `codemod/workflow` to `codemod/deps`.
+const MOVED_TO_DEPS: &[&str] = &["dependencyGraph", "registry", "semver"];
 
 pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
     let allocator = Allocator::default();
@@ -343,6 +352,14 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                     s.span.start,
                                     format!(
                                         "'{imported}' was removed: workflows have no state. Give a step what it needs (a function step's variables, jssg `params`, shell `env`) and read what it found from its result"
+                                    ),
+                                ));
+                            }
+                            if module == FLOW_MODULE && MOVED_TO_DEPS.contains(&imported.as_str()) {
+                                return Err(analysis.error(
+                                    s.span.start,
+                                    format!(
+                                        "'{imported}' moved to \"{DEPS_MODULE}\": import {{ {imported} }} from \"{DEPS_MODULE}\""
                                     ),
                                 ));
                             }
@@ -455,9 +472,10 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                     continue;
                 };
                 let workflow_function = analysis.imports.get(&symbol).and_then(|import| {
-                    is_flow_module(&import.source)
-                        .then(|| import.imported.clone())
-                        .flatten()
+                    let imported = import.imported.as_deref()?;
+                    (is_flow_module(&import.source)
+                        || is_deps_module(&import.source) && imported == "dependencyGraph")
+                        .then(|| imported.to_string())
                 });
                 match workflow_function.as_deref() {
                     Some(task @ ("forEachFile" | "dependencyGraph")) => {
@@ -811,16 +829,11 @@ impl Analysis<'_> {
         let name = self.name(symbol);
         if let Some(import) = self.imports.get(&symbol) {
             let imported = import.imported.as_deref().unwrap_or_default();
-            if is_flow_module(&import.source) && ISOLATE_DEPENDENCY_API.contains(&imported) {
-                let target = format!("{:?}", crate::deps_host::DEPENDENCIES_MODULE);
-                let line = import
-                    .line
-                    .replace(&format!("\"{}\"", import.source), &target)
-                    .replace(&format!("'{}'", import.source), &target);
-                parts.imports.insert((import.at, line));
-                return Ok(());
-            }
-            if is_flow_module(&import.source) {
+            // Other imports are copied as written: in an isolate,
+            // `codemod/deps` gives `registry` and `semver` that run there.
+            if is_flow_module(&import.source)
+                || is_deps_module(&import.source) && imported == "dependencyGraph"
+            {
                 return Err(self.error(
                     at.start,
                     format!(

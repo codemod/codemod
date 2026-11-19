@@ -5,6 +5,7 @@
 // Paths of the built files, next to the built form of this one.
 const MODULES: Readonly<Record<string, string>> = {
   "codemod:workflow": "./workflow.mjs",
+  "codemod:deps": "./deps.mjs",
   "codemod:ast-grep": "./ast-grep.mjs",
   "codemod:runtime": "./runtime.mjs",
   "codemod:llm": "./llm.mjs",

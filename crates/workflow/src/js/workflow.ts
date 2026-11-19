@@ -5,7 +5,6 @@
 
 import { createRuntime } from "codemod-internal:orchestrator";
 import type { Outcome } from "codemod-internal:orchestrator";
-import { makeSemver } from "codemod-internal:semver";
 
 export { AwaitingApprovalError, CanceledError, StepError } from "codemod-internal:orchestrator";
 
@@ -57,8 +56,9 @@ globalThis.__workflowClose = runtime.close;
 export const {
   __callback,
   __evaluate,
+  // `codemod/deps` exports it as `dependencyGraph`.
+  dependencyGraph: __dependencyGraph,
   forEachFile,
-  dependencyGraph,
   shell,
   jssg,
   astGrep,
@@ -74,24 +74,3 @@ export const {
   sleep,
   waitForEvent,
 } = runtime;
-
-// `registry` and `semver` in the body. Inside steps and callbacks the build
-// imports them from `codemod-internal:dependencies` instead, which runs in
-// the isolate.
-
-/** Package releases from npm and crates.io; only inside a step or callback, so the answer is recorded. */
-export const registry = Object.freeze({
-  npm: () => outsideStep("npm"),
-  cargo: () => outsideStep("cargo"),
-});
-
-function outsideStep(ecosystem: string): Promise<never> {
-  return Promise.reject(
-    new Error(`registry.${ecosystem}(...) must run inside a step, so its answer is recorded`),
-  );
-}
-
-/** Versions and ranges, by npm rules or (with `{ ecosystem: "cargo" }`) Cargo's. */
-export const semver = makeSemver((op, ecosystem, a, b) =>
-  JSON.parse(raw.semver(op, ecosystem, a, b)),
-);
