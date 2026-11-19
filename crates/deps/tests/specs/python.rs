@@ -193,6 +193,37 @@ foo = ">=2"
     );
 }
 
+#[test]
+fn a_poetry_project_dependency_with_several_constraints_keeps_their_ranges_and_kind() {
+    let lock = "[[package]]\nname = \"foo\"\nversion = \"2.0\"\n\n[[package]]\nname = \"bar\"\nversion = \"1.0\"\n";
+    let pyproject = r#"
+[tool.poetry]
+name = "app"
+version = "1.0.0"
+
+[tool.poetry.dependencies]
+foo = [
+    { version = "^1", python = "<3.10" },
+    { version = "^2", python = ">=3.10" },
+]
+bar = [
+    { version = "^1", python = "<3.10", optional = true },
+    { version = "^1.1", python = ">=3.10", optional = true },
+]
+"#;
+    let graph = lockfiles::poetry(lock, &|path| {
+        (path == "pyproject.toml").then(|| pyproject.to_string())
+    })
+    .unwrap();
+    assert_eq!(
+        workspace_dependencies(graph, &[]),
+        [
+            "app@1.0.0 optional bar@1.0 ^1 || ^1.1",
+            "app@1.0.0 prod foo@2.0 ^1 || ^2"
+        ]
+    );
+}
+
 const PIPFILE_LOCK: &str = r#"{
   "_meta": { "pipfile-spec": 6 },
   "default": {
