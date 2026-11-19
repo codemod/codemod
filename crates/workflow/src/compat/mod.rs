@@ -9,7 +9,8 @@
 //!   same time;
 //! - each step becomes `await step("<name>", <task>)`;
 //! - matrix nodes run once per value (`values`, or the array in state for
-//!   `from_state`), concurrently;
+//!   `from_state`), concurrently, or one value at a time when the node uses
+//!   git steps: those share one checkout and refuse to run alongside others;
 //! - workflow state is a plain object local to the run, `state`. A shell
 //!   step gets it as `CODEMOD_STATE_<KEY>` variables, and the lines it writes
 //!   to `$STATE_OUTPUTS` are printed at the end of its stdout, from where
@@ -98,6 +99,8 @@ struct NodeCode {
     inner: String,
     /// Matrix values (`values` or state) when the node runs once per value.
     matrix: Option<String>,
+    /// The node has git steps, so its matrix values run one at a time.
+    uses_git: bool,
     uses_params: bool,
     uses_state: bool,
 }
@@ -183,6 +186,48 @@ fn writers<'a>(
         .fold(0, usize::saturating_add)
 }
 
+/// Whether a node has git steps: a branch, a pull request, or a step commit,
+/// its own or in a template it uses.
+fn node_uses_git(node: &Node, workflow: &Workflow) -> bool {
+    node.branch_name.is_some()
+        || node.pull_request.is_some()
+        || steps_commit(&node.steps, workflow, &mut Vec::new(), &mut HashMap::new())
+}
+
+/// Whether steps commit, themselves or in the templates they use. Like
+/// `writers`, a template is walked once however often it is used.
+fn steps_commit<'a>(
+    steps: &[Step],
+    workflow: &'a Workflow,
+    using: &mut Vec<&'a str>,
+    checked: &mut HashMap<&'a str, bool>,
+) -> bool {
+    steps.iter().any(|step| {
+        if step.commit.is_some() {
+            return true;
+        }
+        let StepAction::UseTemplate(used) = &step.action else {
+            return false;
+        };
+        let Some(template) = workflow
+            .templates
+            .iter()
+            .find(|template| template.id == used.template)
+            .filter(|template| !using.contains(&template.id.as_str()))
+        else {
+            return false;
+        };
+        if let Some(&commits) = checked.get(template.id.as_str()) {
+            return commits;
+        }
+        using.push(&template.id);
+        let commits = steps_commit(&template.steps, workflow, using, checked);
+        using.pop();
+        checked.insert(&template.id, commits);
+        commits
+    })
+}
+
 /// Where a list of steps is being generated.
 struct Scope<'a> {
     env: &'a HashMap<String, String>,
@@ -264,7 +309,14 @@ impl Generator {
         self.plumb_state = plumbs_state(workflow);
 
         let order = topological(&workflow.nodes);
-        let nodes: Vec<NodeCode> = order.iter().map(|node| self.node_code(node)).collect();
+        let nodes: Vec<NodeCode> = order
+            .iter()
+            .map(|node| {
+                let mut code = self.node_code(node);
+                code.uses_git = node_uses_git(node, workflow);
+                code
+            })
+            .collect();
 
         let mut templates_text = String::new();
         for template_def in &workflow.templates {
@@ -402,11 +454,19 @@ impl Generator {
                     Some(source) => {
                         let instance = format!("{}For", code.function);
                         let pass: String = names.iter().map(|name| format!("{name}, ")).collect();
-                        let _ = writeln!(
-                            self.body,
-                            "async function {}({params}) {{\n  await Promise.all(\n    {source}.map((matrix: Matrix, index: number) => {instance}({pass}matrix, index)),\n  );\n}}\n",
-                            code.function
-                        );
+                        if code.uses_git {
+                            let _ = writeln!(
+                                self.body,
+                                "async function {}({params}) {{\n  // Git steps share one checkout: one value at a time.\n  const values: Matrix[] = {source};\n  for (let index = 0; index < values.length; index++) {{\n    await {instance}({pass}values[index], index);\n  }}\n}}\n",
+                                code.function
+                            );
+                        } else {
+                            let _ = writeln!(
+                                self.body,
+                                "async function {}({params}) {{\n  await Promise.all(\n    {source}.map((matrix: Matrix, index: number) => {instance}({pass}matrix, index)),\n  );\n}}\n",
+                                code.function
+                            );
+                        }
                         let declare: String = declared(&names)
                             .into_iter()
                             .map(|param| format!("{param}, "))
@@ -547,6 +607,7 @@ impl Generator {
                     .is_some_and(|source| mentions(source, "state")),
             inner,
             matrix: matrix_source,
+            uses_git: false,
         }
     }
 

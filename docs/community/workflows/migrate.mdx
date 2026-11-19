@@ -74,7 +74,7 @@ npm install --save-dev codemod
 | `codemod` | `codemod(source, { params })` |
 | `ai` | `agent(prompt, { ... })` |
 | `install-skill` | `installSkill({ ... })` |
-| `matrix` (`values` or `from_state`) | One call per value, run at the same time |
+| `matrix` (`values` or `from_state`) | One call per value, run at the same time; one at a time when the node uses git (`branch_name`, `pull_request`, step `commit`) |
 | `shard` | `shard({ ... })`, its result passed to the steps that use it |
 | `if:` | An `if` statement whose condition runs through `__evaluate(...)`, the YAML engine's own evaluator, so it means exactly what it did |
 | `${{ params.name }}` | `params.name` |

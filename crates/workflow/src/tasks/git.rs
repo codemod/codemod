@@ -9,6 +9,26 @@ use serde_json::json;
 use super::{block_on, TaskContext, TaskError, TaskOutcome, TaskResult};
 use crate::interaction::{Approval, Decision};
 
+/// Managed git steps share the run's one checkout, so they refuse to run
+/// alongside other steps: a shard could otherwise commit on another shard's
+/// branch, or commit its files. Checked whether or not managed git is on, so
+/// a workflow that would race under `--managed-git` fails the same way in a
+/// local run and in tests.
+fn exclusive(task: &TaskContext<'_>, kind: &str) -> Result<(), TaskError> {
+    if !task.alongside && !task.run.alongside {
+        return Ok(());
+    }
+    let started = if task.alongside {
+        format!("`{kind}` was started while other steps were still running")
+    } else {
+        format!("`{kind}` is in a codemod step that ran alongside other steps")
+    };
+    Err(TaskError::Failed(format!(
+        "managed git steps can't run in parallel: they share one checkout. {started}. \
+         Run these shards one at a time: await each one's steps before starting the next"
+    )))
+}
+
 fn skipped(task: &TaskContext<'_>) -> Option<TaskResult> {
     if task.run.dry_run || !task.run.services.managed_git {
         task.log("skipped: managed git is off");
@@ -27,6 +47,7 @@ pub(crate) struct Branch {
 }
 
 pub(crate) fn branch(task: &TaskContext<'_>, request: Branch) -> TaskResult {
+    exclusive(task, "branch")?;
     if let Some(result) = skipped(task) {
         return result;
     }
@@ -45,6 +66,7 @@ pub(crate) struct Commit {
 }
 
 pub(crate) fn commit(task: &TaskContext<'_>, request: Commit) -> TaskResult {
+    exclusive(task, "commit")?;
     if let Some(result) = skipped(task) {
         return result;
     }
@@ -71,6 +93,7 @@ pub(crate) struct PullRequest {
 }
 
 pub(crate) fn pull_request(task: &TaskContext<'_>, request: PullRequest) -> TaskResult {
+    exclusive(task, "pullRequest")?;
     if let Some(result) = skipped(task) {
         return result;
     }

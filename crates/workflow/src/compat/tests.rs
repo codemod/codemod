@@ -321,7 +321,10 @@ fn the_documented_features_translate_and_build() {
     expect("\"pr_size\": 20");
     expect("\"mode\": \"safe\"");
     expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", jssg: { path: \"scripts/codemod.ts\", language: \"tsx\", params }, previous: state[\"shards\"] }));");
-    expect("(state[\"shards\"] ?? []).map((matrix: Matrix, index: number) => applyNodeFor(params, state, matrix, index))");
+    // Git steps share one checkout: the matrix with a pull request runs one
+    // value at a time; the one without runs its values together.
+    expect("const values: Matrix[] = (state[\"shards\"] ?? []);\n  for (let index = 0; index < values.length; index++) {\n    await applyNodeFor(params, state, values[index], index);\n  }");
+    expect(".map((matrix: Matrix, index: number) => reportNodeFor(params, matrix, index))");
     expect("await step(approval(\"Run 'Apply transforms'?\"));");
     expect("const branchName = `codemod-apply-${index}`;");
     expect("forEachFile({ language: \"tsx\" }, jssg(\"scripts/codemod.ts\", {\n    files: matrix?._meta_files,\n    params,\n    matrix: matrix ?? undefined,\n  }))");

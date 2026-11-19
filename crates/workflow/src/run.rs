@@ -159,6 +159,10 @@ pub(crate) struct RunContext {
     /// Serializes file commits from steps running at the same time, in this
     /// run and in the codemods nested in it.
     pub commit_lock: Arc<Mutex<()>>,
+    /// For a nested codemod: the step running it, or one of its own parents,
+    /// ran alongside other steps. Its managed git steps are refused then, as
+    /// they share the checkout with those steps.
+    pub alongside: bool,
     /// The codemod packages being run, outermost first, for cycle detection:
     /// the run's own workflow directory, then each nested codemod.
     pub chain: Vec<String>,
@@ -217,11 +221,13 @@ pub struct TestPlan {
 impl RunContext {
     /// The context of a codemod nested in this run's step at `position`: its
     /// own workflow, params and step history, everything else shared. It
-    /// stops when that step does (`cancel`).
+    /// stops when that step does (`cancel`). `alongside`: that step ran
+    /// alongside other steps.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn child(
         &self,
         position: u64,
+        alongside: bool,
         workflow_path: PathBuf,
         package_dir: PathBuf,
         params: serde_json::Value,
@@ -248,6 +254,7 @@ impl RunContext {
             services: Arc::clone(&self.services),
             cancel,
             commit_lock: Arc::clone(&self.commit_lock),
+            alongside: self.alongside || alongside,
             chain,
             test: None,
             stopped: AtomicBool::new(false),
@@ -427,6 +434,9 @@ struct HostRequest {
     /// When the step began to wait (`sleep`, `waitForEvent`).
     #[serde(default)]
     since: Option<i64>,
+    /// Other steps were still running when the step was issued.
+    #[serde(default)]
+    alongside: bool,
 }
 
 /// Stops one step's task when its time is up, or when the run is canceled.
@@ -720,6 +730,7 @@ pub(crate) fn run_host_task(run: &Arc<RunContext>, request: &str) -> Result<Stri
             None => Arc::clone(&run.cancel),
         },
         since: request.since,
+        alongside: request.alongside,
     };
     let result = tasks::dispatch(&task, request.task).map_err(|error| {
         // Stopped by its clock, the task reports a cancel; the run goes on.

@@ -54,7 +54,7 @@ A workflow file contains three kinds of code, each with its own rules:
 | Inside a `forEachFile` callback | Once per file, in parallel, in isolates | Outside variables arrive as frozen copies; changes go through the file object |
 
 - **Steps are durable.** Each step's result is saved as soon as the step finishes. If a run fails or is canceled, `codemod workflow resume` replays the finished steps from their saved results and continues from the step that failed.
-- **A step starts when you call `step()`.** `await` waits for it. `Promise.all([step(a), step(b)])` runs two steps at the same time.
+- **A step starts when you call `step()`.** `await` waits for it. `Promise.all([step(a), step(b)])` runs two steps at the same time. Git steps are the exception: see [Git steps](#git-steps).
 - **Each step is identified by its label and content.** On resume, a step is skipped and its saved result reused when a step with the same label and the same content (the task, its options and the outside values it uses) already finished in this run. Every other step runs: the one that failed, a step you added, and a finished step you changed. So you can fix a run by editing the workflow, and where you add or move steps does not matter. Steps with the same label and content take the saved results in the order they are called.
 
 ## `step(label?, task, options?)`
@@ -272,9 +272,26 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 | `installSkill({ package, path, harness, scope, force })` | Install a package's agent skill. |
 | `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback` on it. See [Dependencies](#dependencies). Result: what the callback returns. |
 | `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
-| `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. These only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped. |
+| `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. See [Git steps](#git-steps). |
 
 Paths given to `jssg`, `astGrep` and shard functions are relative to the workflow file.
+
+### Git steps
+
+`branch`, `commit` and `pullRequest` only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped.
+
+They all work on the run's one checkout, so they can't run in parallel. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`, before it touches git. So does one inside a `codemod(...)` step that runs alongside other steps. To open one pull request per shard, run the shards one after another:
+
+```ts
+for (const current of shards) {
+  await step(branch(`codemod-${current.name}`));
+  await step(forEachFile({ language: "tsx" }, jssg("./codemod.ts", { files: current._meta_files })));
+  await step(commit(`refactor: migrate ${current.name}`));
+  await step(pullRequest({ title: `refactor: migrate ${current.name}` }));
+}
+```
+
+Steps without git can still run in parallel, before or after. Separate checkouts per shard are planned as an explicit API.
 
 ### Dependencies
 

@@ -716,6 +716,161 @@ export default async function main() {
     );
 }
 
+/// A harness with managed git on, whose target is a git repository with one
+/// commit on `main`.
+fn managed_git() -> Harness {
+    let h = Harness::with_services(
+        Arc::new(MemoryStore::default()),
+        Arc::new(NonInteractive { approve_all: true }),
+        Services {
+            managed_git: true,
+            ..Services::default()
+        },
+    );
+    h.write("README.md", "base\n");
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "test@example.com"],
+        &["config", "user.name", "Test"],
+        &["config", "commit.gpgsign", "false"],
+        &["add", "."],
+        &["commit", "-q", "-m", "base"],
+    ] {
+        git(&h, args);
+    }
+    h
+}
+
+fn git(h: &Harness, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(h.target.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+const PARALLEL_SHARDS: &str = r#"
+import { step, approval, branch, commit, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await Promise.all(["a", "b"].map(async (name) => {
+    await step(approval(`Migrate ${name}?`));
+    await step(branch(`codemod-${name}`));
+    await step(forEachFile("README.md", (file) => { file.write(file.text + name + "\n"); }));
+    await step(commit(`migrate ${name}`));
+  }));
+}
+"#;
+
+#[test]
+fn managed_git_steps_refuse_to_run_in_parallel() {
+    let starts_with_branch =
+        PARALLEL_SHARDS.replace("    await step(approval(`Migrate ${name}?`));\n", "");
+    for source in [PARALLEL_SHARDS, starts_with_branch.as_str()] {
+        let h = managed_git();
+        let report = h.start(source, Value::Null);
+        let error = output(&report).unwrap_err();
+        assert!(
+            error.contains("managed git steps can't run in parallel"),
+            "{error}"
+        );
+        // No commit landed anywhere, on any shard's branch.
+        assert_eq!(git(&h, &["rev-list", "--all", "--count"]), "1", "{source}");
+    }
+}
+
+#[test]
+fn parallel_git_steps_are_refused_even_with_managed_git_off() {
+    let h = approving();
+    let report = h.start(PARALLEL_SHARDS, Value::Null);
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("managed git steps can't run in parallel"),
+        "{error}"
+    );
+}
+
+#[test]
+fn managed_git_steps_run_one_shard_after_another() {
+    let h = managed_git();
+    let report = h.start(
+        r#"
+import { step, shell, branch, commit, forEachFile } from "codemod/workflow";
+export default async function main() {
+  // Steps without git still run together.
+  await Promise.all([
+    step(shell("echo one > one.txt")),
+    step(shell("echo two > two.txt")),
+  ]);
+  for (const name of ["a", "b"]) {
+    await step(branch(`codemod-${name}`));
+    await step(forEachFile("README.md", (file) => { file.write(file.text + name + "\n"); }));
+    await step(commit(`migrate ${name}`));
+  }
+}
+"#,
+        Value::Null,
+    );
+    output(&report).unwrap();
+    assert_eq!(
+        git(&h, &["log", "-1", "--format=%s", "codemod-a"]),
+        "migrate a"
+    );
+    assert_eq!(git(&h, &["show", "codemod-a:README.md"]), "base\na");
+    assert_eq!(
+        git(&h, &["log", "-1", "--format=%s", "codemod-b"]),
+        "migrate b"
+    );
+    assert_eq!(git(&h, &["show", "codemod-b:README.md"]), "base\na\nb");
+    assert_eq!(git(&h, &["show", "codemod-a:one.txt"]), "one");
+}
+
+#[test]
+fn a_nested_codemod_run_alongside_other_steps_refuses_managed_git() {
+    let h = managed_git();
+    h.bundle_file(
+        "child/workflow.ts",
+        r#"
+import { step, branch } from "codemod/workflow";
+export default async function main() {
+  await step(branch("codemod-child"));
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, codemod, shell } from "codemod/workflow";
+export default async function main() {
+  await Promise.all([step(shell("echo hi")), step(codemod("./child"))]);
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("in a codemod step that ran alongside other steps"),
+        "{error}"
+    );
+    assert_eq!(git(&h, &["branch", "--list", "codemod-child"]), "");
+
+    // Alone, the same codemod checks out its branch.
+    let report = h.start(
+        r#"
+import { step, codemod } from "codemod/workflow";
+export default async function main() {
+  await step(codemod("./child"));
+}
+"#,
+        Value::Null,
+    );
+    output(&report).unwrap();
+    assert_eq!(
+        git(&h, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "codemod-child"
+    );
+}
+
 #[test]
 fn shard_steps_can_be_disabled() {
     let h = Harness::with_services(
