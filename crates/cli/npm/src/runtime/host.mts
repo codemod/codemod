@@ -79,6 +79,7 @@ export interface WorkflowModule {
     params: Record<string, JsonValue>;
     target: string;
     dryRun: boolean;
+    platform: string;
   }) => unknown;
 }
 
@@ -208,7 +209,12 @@ export async function runWorkflow(
 
   let body: BodyEnding;
   try {
-    const input = { params: run.params, target: run.target, dryRun: run.dryRun };
+    const input = {
+      params: run.params,
+      target: run.target,
+      dryRun: run.dryRun,
+      platform: process.platform,
+    };
     const ended = context
       .run(scope, async () => main(input))
       .then((output): BodyEnding => ({ status: "succeeded", detail: toJson(output) }));
