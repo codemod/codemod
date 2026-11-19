@@ -35,6 +35,28 @@ export default async function main() {
 
 #[cfg(unix)]
 #[test]
+fn rename_cannot_write_through_an_external_symlink() {
+    let h = Harness::new();
+    let outside = tempfile::tempdir().unwrap();
+    h.write("a.txt", "original");
+    std::os::unix::fs::symlink(outside.path(), h.target.path().join("link")).unwrap();
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step(forEachFile("a.txt", (file) => file.rename("link/new/file.txt")));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("must stay inside the target"), "{error}");
+    assert_eq!(h.read("a.txt"), "original");
+    assert!(!outside.path().join("new").exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn shell_honors_cwd_for_shebang_scripts() {
     let h = Harness::new();
     h.write("sub dir/cwd-marker.txt", "subdir");
