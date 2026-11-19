@@ -17,6 +17,8 @@ npx codemod workflow upgrade --dry-run
 npx codemod workflow upgrade
 ```
 
+You can also pass a single workflow file, for example `npx codemod workflow upgrade workflows/main.yaml`. If the package manifest points to that file, upgrade updates the entry to the new TypeScript file.
+
 `upgrade` writes `workflow.ts` next to `workflow.yaml`, points `codemod.yaml` at it, and removes the YAML file. Keep the YAML file with `--keep-yaml`. In a repository with many packages, run it once at the root to convert them all.
 
 For example, this `workflow.yaml`:

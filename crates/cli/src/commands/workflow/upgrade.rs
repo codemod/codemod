@@ -213,14 +213,22 @@ fn plan(path: &Path) -> Result<(PathBuf, Vec<Conversion>)> {
     if path.is_file() {
         // One workflow of a package: its codemod.yaml entry, if it has one,
         // moves with it.
-        let package_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-        let entry = manifest_entries(&package_dir)
-            .ok()
-            .flatten()
-            .unwrap_or_default()
-            .into_iter()
-            .find(|entry| same_file(&package_dir.join(entry), path));
-        return Ok((package_dir, vec![conversion(path, entry)]));
+        let canonical = path.canonicalize()?;
+        let parent = canonical.parent().unwrap_or(Path::new("."));
+        if let Some(package_dir) = parent
+            .ancestors()
+            .find(|dir| dir.join("codemod.yaml").is_file())
+        {
+            let entry = manifest_entries(package_dir)?
+                .unwrap_or_default()
+                .into_iter()
+                .find(|entry| same_file(&package_dir.join(entry), path));
+            return Ok((
+                package_dir.to_path_buf(),
+                vec![conversion(&canonical, entry)],
+            ));
+        }
+        return Ok((parent.to_path_buf(), vec![conversion(&canonical, None)]));
     }
     if !path.is_dir() {
         return Err(anyhow!("{} does not exist", path.display()));
@@ -420,6 +428,35 @@ mod tests {
         let manifest = std::fs::read_to_string(dir.path().join("codemod.yaml")).unwrap();
         assert!(manifest.contains("workflow: workflow.ts"), "{manifest}");
         assert!(codemod_workflow::load_workflow(&dir.path().join("workflow.ts")).is_ok());
+    }
+
+    #[test]
+    fn upgrading_an_explicit_nested_workflow_updates_its_package_manifest() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let manifest = dir.path().join("codemod.yaml");
+        std::fs::write(
+            &manifest,
+            "schema_version: \"1.0\"\nname: demo\nversion: 0.1.0\ndescription: d\nauthor: a\nworkflow: flows/main.yaml\n",
+        )
+        .unwrap();
+        std::fs::create_dir(dir.path().join("flows")).unwrap();
+        let yaml = dir.path().join("flows/main.yaml");
+        std::fs::write(
+            &yaml,
+            "version: \"1\"\nnodes:\n  - id: a\n    name: A\n    steps:\n      - name: Hello\n        run: echo hi\n",
+        )
+        .unwrap();
+        handler(&Command {
+            path: Some(yaml.clone()),
+            keep_yaml: false,
+            dry_run: false,
+        })
+        .unwrap();
+        assert!(!yaml.exists());
+        assert_eq!(
+            butterflow_core::package_workflows::locate_workflow(dir.path(), None).unwrap(),
+            yaml.with_extension("ts").canonicalize().unwrap()
+        );
     }
 
     #[test]
