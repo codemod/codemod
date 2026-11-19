@@ -13,8 +13,9 @@
 //! - workflow state is a plain object local to the run, `state`. A shell
 //!   step gets it as `CODEMOD_STATE_<KEY>` variables, and the lines it writes
 //!   to `$STATE_OUTPUTS` are printed at the end of its stdout, from where
-//!   `applyStateOutputs` copies them into `state`. The engine has no workflow
-//!   state; a jssg transform
+//!   `applyStateOutputs` copies them into `state`. This shell transport
+//!   requires POSIX; workflows that use it fail before starting on Windows.
+//!   The engine has no workflow state; a jssg transform
 //!   can neither read nor set it, so the YAML engine's `getState`/`setState`
 //!   in a transform cannot be translated;
 //! - `${{ }}` expressions become TypeScript where that is exact, and
@@ -77,6 +78,8 @@ struct Generator {
     /// the workflow reads state, or has more than one step that could set it.
     plumb_state: bool,
     uses_state_env: bool,
+    /// Whether a generated command needs the POSIX `$STATE_OUTPUTS` wrapper.
+    uses_posix_state_outputs: bool,
     /// Whether the source calls `applyStateOutputs`.
     uses_state_outputs: bool,
     /// Tasks get the run's params anyway; pass `params` explicitly only when
@@ -314,6 +317,17 @@ impl Generator {
             );
         } else {
             main.push_str("export default async function main() {\n");
+        }
+        if self.uses_posix_state_outputs {
+            // Check the execution host, not the host that ran `workflow upgrade`.
+            // An external script may use STATE_OUTPUTS without naming it in YAML.
+            main.push_str(concat!(
+                "  if (shellPathSeparator === \"\\\\\") {\n",
+                "    throw new Error(\"This translated YAML workflow requires POSIX shell state ",
+                "output ($STATE_OUTPUTS), which is not supported on Windows. ",
+                "Run it on a POSIX host or migrate its shell steps to workflow.ts.\");\n",
+                "  }\n",
+            ));
         }
         if uses_state {
             main.push_str("  const state: State = {};\n");
@@ -601,6 +615,7 @@ impl Generator {
         let task = match &step.action {
             StepAction::RunScript(command) => {
                 self.import("shell");
+                let literal_echo = is_literal_echo(command);
                 let mut env: Vec<(String, String)> = scope
                     .env
                     .iter()
@@ -611,7 +626,7 @@ impl Generator {
                     .collect();
                 env.sort();
                 let mut entries: Vec<String> = Vec::new();
-                if self.plumb_state {
+                if self.plumb_state && !literal_echo {
                     self.uses_state_env = true;
                     entries.push("...stateEnv(state)".into());
                 }
@@ -623,17 +638,29 @@ impl Generator {
                     env.iter()
                         .map(|(k, v)| format!("{}: {}", property(k), js_string(v))),
                 );
-                // Without `$STATE_OUTPUTS` set, a write to it fails the command.
-                let command = if self.plumb_state || command.contains("STATE_OUTPUTS") {
+                // External scripts can write state without referencing it in YAML.
+                // Only omit the wrapper for commands we know cannot write state.
+                let capture_outputs = !literal_echo
+                    && (self.plumb_state || command.to_ascii_uppercase().contains("STATE_OUTPUTS"));
+                let command = if capture_outputs {
+                    self.uses_posix_state_outputs = true;
                     template(&with_state_outputs(command))
                 } else {
                     template(command)
                 };
-                if entries.is_empty() {
+                let task = if entries.is_empty() {
                     format!("shell({command})")
                 } else {
                     format!("shell({command}, {{ env: {{ {} }} }})", entries.join(", "))
+                };
+                if capture_outputs && self.plumb_state {
+                    self.uses_state_outputs = true;
+                    return (
+                        notes,
+                        format!("applyStateOutputs(state, await step({name}, {task}));"),
+                    );
                 }
+                task
             }
             StepAction::AstGrep(ast_grep) => {
                 self.import("forEachFile");
@@ -817,13 +844,6 @@ impl Generator {
                 return (notes, statement);
             }
         };
-        if self.plumb_state && matches!(step.action, StepAction::RunScript(_)) {
-            self.uses_state_outputs = true;
-            return (
-                notes,
-                format!("applyStateOutputs(state, await step({name}, {task}));"),
-            );
-        }
         (notes, format!("await step({name}, {task});"))
     }
 
@@ -902,6 +922,9 @@ impl Generator {
         if self.uses_context {
             source.push_str("import type { WorkflowContext } from \"codemod/workflow\";\n");
         }
+        if self.uses_posix_state_outputs {
+            source.push_str("import { sep as shellPathSeparator } from \"node:path\";\n");
+        }
         source.push('\n');
         let mut aliases = String::new();
         if mentions(&self.body, "Params") {
@@ -942,6 +965,18 @@ impl Generator {
             warnings: self.warnings,
         }
     }
+}
+
+/// A literal `echo` is a builtin of both sh and cmd. Do not attempt to recognize
+/// shell syntax here: variables, redirects, command separators, etc. can all
+/// make a command stateful.
+fn is_literal_echo(command: &str) -> bool {
+    command.strip_prefix("echo ").is_some_and(|text| {
+        !text.trim().is_empty()
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'.' | b'_' | b'-'))
+    })
 }
 
 /// Marks where a translated step's `$STATE_OUTPUTS` lines start in its stdout.

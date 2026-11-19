@@ -310,7 +310,7 @@ Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to
 
 ### `registry` and `semver`
 
-`registry.npm(name)` and `registry.cargo(name)` resolve to `{ ecosystem, name, versions }`, oldest first, with each release's `dependencies`, `peerDependencies` and `optionalDependencies`. They work inside a function step or a `forEachFile` or `dependencyGraph` callback, so the answer is recorded with the step and a resumed run does not ask again; in the workflow body they reject. Each package is fetched once per run, and lookups started together are fetched together:
+`registry.npm(name)` and `registry.cargo(name)` resolve to `{ ecosystem, name, versions }`, oldest first, with each release's `dependencies`, `peerDependencies` and `optionalDependencies`. They work inside a function step or a `forEachFile` or `dependencyGraph` callback, and in the files those import, so the answer is recorded with the step and a resumed run does not ask again; in the workflow body they reject. Canceling the run, or a step's `timeout`, stops a lookup in progress. Each package is fetched once per run, and lookups started together are fetched together:
 
 ```ts
 import { step, registry, semver } from "codemod/workflow";
@@ -352,7 +352,7 @@ const { stdout } = await step("Detect", shell`node -p "JSON.stringify({ major: 1
 const { major } = JSON.parse(stdout.trim().split("\n").at(-1)!);
 ```
 
-A command that exits with an error fails the step, and the error ends with what it printed on stderr. Pass `allowFailure: true` to get the result instead and check `exitCode` yourself. Each of `stdout` and `stderr` keeps its last 1 MiB.
+A command that exits with an error fails the step, and the error ends with what it printed on stderr. Pass `allowFailure: true` to get the result instead and check `exitCode` yourself. Each stream keeps its last 1 MiB of bytes. The result preserves line endings and replaces invalid UTF-8 with `�`.
 
 Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
 

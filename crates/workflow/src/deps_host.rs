@@ -3,6 +3,7 @@
 //! `js/dependencies.ts` (`codemod-internal:dependencies`) runs.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use codemod_deps::registry::describe;
@@ -23,10 +24,11 @@ pub(crate) fn releases(
     registry: Option<&dyn Registry>,
     ecosystem_name: &str,
     names: &[String],
+    cancel: &AtomicBool,
 ) -> Result<BTreeMap<String, serde_json::Value>, String> {
     let ecosystem = ecosystem(ecosystem_name)?;
     let registry = registry.ok_or("no package registry is available to this run")?;
-    let found = registry.releases(ecosystem, names)?;
+    let found = registry.releases(ecosystem, names, cancel)?;
     Ok(names
         .iter()
         .map(|name| {
@@ -55,11 +57,16 @@ pub(crate) fn semver(
     Ok(value.to_string())
 }
 
-/// Install `__dependencyHost` in an isolate:
+/// Install `__dependencyHost` in an isolate. Lookups stop when `cancel` is
+/// set (the run is canceled, or the step runs out of time):
 ///   releases(ecosystem, namesJson): Promise<string>  one batch of lookups:
 ///                                    `{ ok, found: { name: releases } }` or `{ ok: false, error }`
 ///   semver(op, ecosystem, a, b): string
-pub(crate) fn install(ctx: &Ctx<'_>, registry: Option<Arc<dyn Registry>>) -> rquickjs::Result<()> {
+pub(crate) fn install(
+    ctx: &Ctx<'_>,
+    registry: Option<Arc<dyn Registry>>,
+    cancel: Arc<AtomicBool>,
+) -> rquickjs::Result<()> {
     let host = Object::new(ctx.clone())?;
     host.set(
         "releases",
@@ -67,11 +74,12 @@ pub(crate) fn install(ctx: &Ctx<'_>, registry: Option<Arc<dyn Registry>>) -> rqu
             ctx.clone(),
             Async(move |ecosystem: String, names: String| {
                 let registry = registry.clone();
+                let cancel = Arc::clone(&cancel);
                 async move {
                     let lookup = tokio::task::spawn_blocking(move || {
                         let names: Vec<String> = serde_json::from_str(&names)
                             .map_err(|e| format!("bad registry lookup: {e}"))?;
-                        releases(registry.as_deref(), &ecosystem, &names)
+                        releases(registry.as_deref(), &ecosystem, &names, &cancel)
                     })
                     .await
                     .unwrap_or_else(|e| Err(format!("the registry lookup stopped: {e}")));

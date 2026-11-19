@@ -591,8 +591,8 @@ declare module "codemod:ast-grep" {
 
   /**
    * Any JSON a transform reports about its file. A `jssg` step's `data`
-   * lists it per file, or folds it with the step's reducer; `null` and
-   * `undefined` mean nothing to report.
+   * lists it per file, or folds it with the step's reducer. Explicit `null`
+   * is reported; missing or `undefined` data is omitted.
    *
    * @example
    * ```ts

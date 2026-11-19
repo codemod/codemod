@@ -51,21 +51,7 @@ pub(crate) struct Request {
 pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let dry_run = request.dry_run || task.run.dry_run;
     let (outcome, data) = match &request.reduce {
-        None => {
-            let collected = Arc::new(Mutex::new(Vec::new()));
-            let collect = Arc::clone(&collected);
-            let on_data: JssgDataCallback = Arc::new(move |file, data| {
-                collect
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .push(json!({ "file": file, "data": data }));
-            });
-            let outcome = execute(task, &request, dry_run, Some(on_data))?;
-            let mut data =
-                std::mem::take(&mut *collected.lock().unwrap_or_else(|e| e.into_inner()));
-            data.sort_by(|a, b| a["file"].as_str().cmp(&b["file"].as_str()));
-            (outcome, Value::Array(data))
-        }
+        None => collect(task, &request, dry_run)?,
         Some(reduce) => {
             let fold = Fold::new(task, reduce)?;
             // A slow reducer holds the transform back rather than letting
@@ -87,6 +73,36 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         }
     };
 
+    finish(task, outcome, data, dry_run)
+}
+
+/// Run the transform and collect its data in file order, without committing.
+pub(crate) fn collect(
+    task: &TaskContext<'_>,
+    request: &Request,
+    dry_run: bool,
+) -> Result<(JssgRunOutcome, Value), TaskError> {
+    let collected = Arc::new(Mutex::new(Vec::new()));
+    let collect = Arc::clone(&collected);
+    let on_data: JssgDataCallback = Arc::new(move |file, data| {
+        collect
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(json!({ "file": file, "data": data }));
+    });
+    let outcome = execute(task, request, dry_run, Some(on_data))?;
+    let mut data = std::mem::take(&mut *collected.lock().unwrap_or_else(|e| e.into_inner()));
+    data.sort_by(|a, b| a["file"].as_str().cmp(&b["file"].as_str()));
+    Ok((outcome, Value::Array(data)))
+}
+
+/// Finalize a transform only after its reducer (if any) has succeeded.
+pub(crate) fn finish(
+    task: &TaskContext<'_>,
+    outcome: JssgRunOutcome,
+    data: Value,
+    dry_run: bool,
+) -> TaskResult {
     let planned = plan(task, &outcome.changes)?;
     let applied = changes::commit(task, &planned, dry_run)?;
     let summary = &task.run.services.summary;
@@ -110,7 +126,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         .iter()
         .map(|(path, error)| json!({ "path": path, "error": error }))
         .collect();
-    if !outcome.failures.is_empty() && outcome.changes.is_empty() && outcome.unmodified == 0 {
+    if all_failed(&outcome) {
         return Err(TaskError::Failed(format!(
             "the transform failed on every file; first error: {}",
             outcome.failures[0].1
@@ -124,6 +140,10 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         "data": data,
     }))
     .with_failures(outcome.failures.len(), total))
+}
+
+pub(crate) fn all_failed(outcome: &JssgRunOutcome) -> bool {
+    !outcome.failures.is_empty() && outcome.changes.is_empty() && outcome.unmodified == 0
 }
 
 /// Run the transform without applying anything.

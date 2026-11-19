@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use serde_yaml::Value;
 
-use super::{package_json, split_name_version, yaml_pairs, yaml_string, ReadFile};
+use super::{
+    package_json, package_json_version, split_name_version, yaml_pairs, yaml_string, ReadFile,
+};
 use crate::model::{join, Ecosystem, Graph, Kind};
 
 const SECTIONS: [(&str, Kind); 3] = [
@@ -49,10 +51,17 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
     // Workspaces first, so `link:` versions resolve to them.
     let mut workspaces: HashMap<String, usize> = HashMap::new();
     for path in importers.keys().filter_map(yaml_string) {
-        let name = read(&manifest(&path))
-            .and_then(|text| package_json(&text).0)
+        let package = read(&manifest(&path));
+        let name = package
+            .as_deref()
+            .and_then(|text| package_json(text).0)
             .unwrap_or_else(|| format!("<{path}>"));
-        let id = graph.workspace(Ecosystem::Npm, &name, "workspace", &path);
+        // pnpm-lock.yaml keeps no workspace versions; package.json does.
+        let version = package
+            .as_deref()
+            .and_then(package_json_version)
+            .unwrap_or_else(|| super::UNVERSIONED.to_string());
+        let id = graph.workspace(Ecosystem::Npm, &name, &version, &path);
         workspaces.insert(path, id);
     }
     for key in snapshots

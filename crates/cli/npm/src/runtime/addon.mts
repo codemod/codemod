@@ -88,6 +88,11 @@ export interface NativeRun {
   evaluate(kind: string, expression: string, scope: string): unknown;
   /** Run a host task (a `StartRequest` as JSON). Rejects with `{ name, message }` as JSON in the message. */
   runTask(request: string): Promise<Outcome>;
+  /** Collect JSSG data without writing edits; only `commit` applies them. */
+  prepareJssg(request: string): Promise<{
+    readonly data: { file: string; data: Json }[];
+    commit(data: string): Promise<Outcome>;
+  }>;
   /** The files a `forEachFile` selector (as JSON) picks. */
   selectFiles(
     selector: string,

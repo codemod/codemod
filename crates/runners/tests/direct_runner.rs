@@ -46,6 +46,61 @@ async fn keeps_stdout_and_stderr_apart() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn captures_original_line_endings_and_logs_each_line() {
+    use std::sync::{Arc, Mutex};
+
+    let env = std::env::vars().collect();
+    let logs = Arc::new(Mutex::new(Vec::new()));
+    let output = DirectRunner::with_quiet(true)
+        .run_command(
+            r"printf 'first\r\n\nbad\377 byte\r\nlast\r'; printf 'bad\376\nfinal' >&2",
+            &env,
+            Some(Arc::new({
+                let logs = Arc::clone(&logs);
+                move |message| logs.lock().unwrap().push(message)
+            })),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(output.exit_code, 0);
+    assert!(!output.cut);
+    assert_eq!(output.stdout, "first\r\n\nbad\u{fffd} byte\r\nlast\r");
+    assert_eq!(output.stderr, "bad\u{fffd}\nfinal");
+
+    let logs = logs.lock().unwrap();
+    let stream_logs = |tag| {
+        logs.iter()
+            .filter(|line| line.starts_with(tag))
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        stream_logs("[stdout] "),
+        [
+            "[stdout] first",
+            "[stdout] ",
+            "[stdout] bad\u{fffd} byte",
+            "[stdout] last\r"
+        ]
+    );
+    assert_eq!(
+        stream_logs("[stderr] "),
+        ["[stderr] bad\u{fffd}", "[stderr] final"]
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn preserves_cmd_crlf_line_endings() {
+    let output = run("echo out\n>&2 echo err").await.unwrap();
+    assert_eq!(output.stdout, "out\r\n");
+    assert_eq!(output.stderr, "err\r\n");
+    assert!(!output.cut);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn keeps_the_end_of_output_that_is_too_long() {
     let output = run("yes line | head -n 400000\necho last").await.unwrap();
     assert!(output.cut);
@@ -65,6 +120,21 @@ async fn keeps_the_end_of_a_single_line_that_is_too_long() {
         butterflow_runners::direct_runner::KEPT_OUTPUT
     );
     assert!(output.stdout.ends_with("aab\n"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cuts_an_unterminated_line_at_a_utf8_boundary() {
+    use butterflow_runners::direct_runner::KEPT_OUTPUT;
+
+    let command = format!(
+        r"printf '\303\251'; head -c {} /dev/zero | tr '\0' a",
+        KEPT_OUTPUT - 1
+    );
+    let output = run(&command).await.unwrap();
+
+    assert!(output.cut);
+    assert_eq!(output.stdout, "a".repeat(KEPT_OUTPUT - 1));
 }
 
 // cmd's echo prints the quotes it is given; sh's removes them. Either way the

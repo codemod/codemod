@@ -166,7 +166,7 @@ test(
       scratch({
         "transform.ts": `
 export default function transform(root: any) {
-  return { data: 1 };
+  return { edit: "const edited = true;\\n", data: 1 };
 }
 `,
         "workflow.ts": `
@@ -188,6 +188,7 @@ export default async function main() {
     const result = await run(path, { target: { "a.ts": "a\n" }, host: "node" });
     assert.equal(result.status, "failed");
     assert.match(result.error, /cannot add/);
+    assert.deepEqual(result.files, { "a.ts": "a\n" });
   },
 );
 
@@ -196,7 +197,7 @@ test("node: a jssg reducer that runs out of time folds no more files", HOSTS.nod
     scratch({
       "transform.ts": `
 export default function transform(root: any) {
-  return { data: 1 };
+  return { edit: "const edited = true;\\n", data: 1 };
 }
 `,
       "workflow.ts": `
@@ -222,7 +223,9 @@ export default async function main() {
   );
   const result = await run(path, { target: { "a.ts": "a\n", "b.ts": "b\n" }, host: "node" });
   assert.equal(result.status, "succeeded", result.error);
+  assert.match(result.steps.find(({ label }) => label === "Slow")?.error, /timed out/);
   assert.deepEqual(result.output, ["a.ts"]);
+  assert.deepEqual(result.files, { "a.ts": "a\n", "b.ts": "b\n" });
 });
 
 test("node: a retried jssg reducer starts from its initial value again", HOSTS.node, async () => {
@@ -230,7 +233,8 @@ test("node: a retried jssg reducer starts from its initial value again", HOSTS.n
     scratch({
       "transform.ts": `
 export default function transform(root: any) {
-  return { data: root.root().text().length };
+  const original = root.root().text();
+  return { edit: original + "// edited once\\n", data: original.length };
 }
 `,
       "workflow.ts": `
@@ -238,8 +242,8 @@ import { step, jssg } from "codemod/workflow";
 const tries = [];
 export default async function main() {
   const seen = await step("Seen", jssg("./transform.ts", {
-    reduce: (files, { file }) => {
-      files.push(file);
+    reduce: (files, { file, data }) => {
+      files.push({ file, data });
       tries.push(file);
       if (tries.length === 1) throw new Error("once");
       return files;
@@ -254,7 +258,8 @@ export default async function main() {
   );
   const result = await run(path, { target: { "a.ts": "a\n" }, host: "node" });
   assert.equal(result.status, "succeeded", result.error);
-  assert.deepEqual(result.output, ["a.ts"]);
+  assert.deepEqual(result.output, [{ file: "a.ts", data: 2 }]);
+  assert.deepEqual(result.files, { "a.ts": "a\n// edited once\n" });
 });
 
 for (const host of Object.keys(HOSTS)) {

@@ -105,7 +105,8 @@ pub fn build_transform_options<'js>(
 /// Process the result value returned by a transform function: the new
 /// content (a string), no change (`null` or `undefined`), or
 /// `{ edit, data }`, where `edit` is either of those and `data` is any JSON
-/// value the transform hands back for this file.
+/// value the transform hands back for this file. Missing or `undefined` data
+/// is omitted; explicit `null` is returned as JSON data.
 ///
 /// Uses `ModificationCheck` to determine whether content was actually modified.
 pub fn process_transform_result(
@@ -133,7 +134,7 @@ pub fn process_transform_result(
         let edit: Value = object.get("edit").map_err(|e| failed(e.to_string()))?;
         let result = process_edit(&edit, sg_root_inner, modification_check)?;
         let data: Value = object.get("data").map_err(|e| failed(e.to_string()))?;
-        let data = if data.is_undefined() || data.is_null() {
+        let data = if data.is_undefined() {
             None
         } else {
             Some(data_json(ctx, data).map_err(failed)?)
@@ -229,5 +230,43 @@ fn process_edit(
                 message: format!("Codemod transform functions must return a string, null/undefined, or {{ edit, data }}. Received {type_name}"),
             },
         })
+    }
+}
+
+#[cfg(all(test, feature = "native"))]
+mod tests {
+    use super::*;
+    use crate::ast_grep::sg_node::SgRootRjs;
+
+    #[test]
+    fn explicit_null_data_is_distinct_from_no_data() {
+        let runtime = rquickjs::Runtime::new().unwrap();
+        let context = rquickjs::Context::full(&runtime).unwrap();
+        let original_content = "const x = 1;";
+        let root =
+            SgRootRjs::try_new("typescript".into(), original_content.into(), None, None).unwrap();
+
+        context.with(|ctx| {
+            for (source, expected) in [
+                (
+                    "({ edit: null, data: null })",
+                    Some(serde_json::Value::Null),
+                ),
+                ("({ edit: null, data: undefined })", None),
+                ("({ edit: null })", None),
+                ("null", None),
+                ("undefined", None),
+            ] {
+                let value = ctx.eval::<Value, _>(source).unwrap();
+                let (edit, data) = process_transform_result(
+                    &value,
+                    &root.inner,
+                    ModificationCheck::StringEquality { original_content },
+                )
+                .unwrap();
+                assert!(matches!(edit, ExecutionResult::Unmodified), "{source}");
+                assert_eq!(data, expected, "{source}");
+            }
+        });
     }
 }

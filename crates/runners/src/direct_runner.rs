@@ -207,6 +207,7 @@ impl DirectRunner {
 
 /// What a command printed, and how it exited. A command that exits with an
 /// error is not an error here; the caller decides.
+/// Captured text preserves line endings and replaces invalid UTF-8 with U+FFFD.
 #[derive(Debug, Clone, Default)]
 pub struct CommandOutput {
     pub stdout: String,
@@ -237,42 +238,52 @@ fn collect(
     let mut lines: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     let mut kept = 0;
     let mut cut = false;
-    for line in BufReader::new(stream).lines() {
-        let Ok(line) = line else { break };
-        if let Some(callback) = &callback {
-            callback(format!("[{tag}] {line}"));
-        }
-        if !quiet {
-            if tag == "stderr" {
-                eprintln!("{line}");
-            } else {
-                println!("{line}");
+    let mut reader = BufReader::new(stream);
+    let mut bytes = Vec::new();
+    while let Ok(1..) = reader.read_until(b'\n', &mut bytes) {
+        let line = String::from_utf8_lossy(&bytes);
+        if callback.is_some() || !quiet {
+            // Logs are line-oriented, unlike the captured text.
+            let message = line
+                .strip_suffix("\r\n")
+                .or_else(|| line.strip_suffix('\n'))
+                .unwrap_or(&line);
+            if let Some(callback) = &callback {
+                callback(format!("[{tag}] {message}"));
+            }
+            if !quiet {
+                if tag == "stderr" {
+                    eprintln!("{message}");
+                } else {
+                    println!("{message}");
+                }
             }
         }
-        kept += line.len() + 1;
-        lines.push_back(line);
-        while kept > KEPT_OUTPUT && lines.len() > 1 {
-            kept -= lines.pop_front().map_or(0, |line| line.len() + 1);
+
+        while kept + line.len() > KEPT_OUTPUT {
+            let Some(oldest) = lines.pop_front() else {
+                break;
+            };
+            kept -= oldest.len();
             cut = true;
         }
         // A single line longer than the limit keeps its end, cut at a
         // character boundary.
-        if kept > KEPT_OUTPUT {
-            if let Some(line) = lines.back_mut() {
-                let mut start = line.len() + 1 - KEPT_OUTPUT;
-                while !line.is_char_boundary(start) {
-                    start += 1;
-                }
-                line.drain(..start);
-                kept = line.len() + 1;
-                cut = true;
-            }
+        let mut start = line.len().saturating_sub(KEPT_OUTPUT);
+        if start > 0 {
+            cut = true;
         }
+        while !line.is_char_boundary(start) {
+            start += 1;
+        }
+        let tail = &line[start..];
+        kept += tail.len();
+        lines.push_back(tail.to_owned());
+        bytes.clear();
     }
     let mut text = String::with_capacity(kept);
     for line in lines {
         text.push_str(&line);
-        text.push('\n');
     }
     Captured { text, cut }
 }

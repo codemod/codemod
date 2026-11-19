@@ -17,6 +17,9 @@ use super::TaskContext;
 use crate::deps_host::{self, DEPENDENCIES_MODULE};
 use crate::events::Event;
 
+/// `codemod/workflow` in isolates.
+const ISOLATE_WORKFLOW_MODULE: &str = "codemod-internal:isolate-workflow";
+
 /// Shared by every worker of one step.
 pub(crate) struct StepIsolates {
     pub resolver: Arc<OxcResolver>,
@@ -61,7 +64,14 @@ impl StepIsolates {
                     DEPENDENCIES_MODULE.to_string(),
                     crate::js::dependencies_module().to_string(),
                 ),
+                (
+                    ISOLATE_WORKFLOW_MODULE.to_string(),
+                    crate::js::isolate_workflow_module().to_string(),
+                ),
             ],
+            // Files a step or callback imports may import `registry` and
+            // `semver` from `codemod/workflow`.
+            workflow_module: Some(ISOLATE_WORKFLOW_MODULE.to_string()),
             llm_request_handler: None,
             runtime_event_callback: Some(Arc::new(move |event: RuntimeEvent| {
                 if event.kind != RuntimeEventKind::SetCurrentUnit {
@@ -95,11 +105,12 @@ pub(crate) async fn start(
     options: WorkerOptions<OxcResolver>,
     registry: Option<Arc<dyn Registry>>,
 ) -> Result<Worker, String> {
+    let cancel = Arc::clone(&options.cancel);
     let worker = Worker::new(options)
         .await
         .map_err(|e| format!("could not start the step's runtime: {e}"))?;
     async_with!(worker.context => |ctx| {
-        deps_host::install(&ctx, registry).map_err(|e| e.to_string())
+        deps_host::install(&ctx, registry, cancel).map_err(|e| e.to_string())
     })
     .await?;
     Ok(worker)

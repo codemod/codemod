@@ -29,7 +29,7 @@ export default codemod;
 ```
 
 - `edit`: the new file content, or `null`/missing to leave the file unchanged. Returning a plain string or `null` still works.
-- `data`: any JSON value. `null` or missing means the file has nothing to report.
+- `data`: any JSON value, including `null`. To skip a file's data, leave `data` out or set it to `undefined`.
 - Data that isn't JSON (a function, a `BigInt`) is an error, and so are other keys on the result, so a typo doesn't go unnoticed.
 
 ## In a workflow
@@ -68,6 +68,8 @@ scan.data; // 3
 - Its result must be JSON. If it throws, the step fails.
 
 A reducer only saves memory. `reduce: (all, entry) => [...all, entry], initial: []` gives the same list as no reducer, just not sorted by path.
+
+If a reducer fails or times out, the step discards the pending transform edits. A retry can start from the unchanged files.
 
 ## Testing
 

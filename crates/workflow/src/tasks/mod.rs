@@ -22,7 +22,7 @@ mod function;
 mod git;
 mod install_skill;
 pub(crate) mod isolate;
-mod jssg;
+pub(crate) mod jssg;
 mod reduce;
 mod shard;
 mod shell;

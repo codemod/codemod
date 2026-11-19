@@ -49,7 +49,7 @@ fn a_linear_shell_workflow_becomes_a_sequence_of_awaits() {
     let source = translated(&text).source;
     assert!(
         source.contains(
-            "export default async function main() {\n  const state: State = {};\n  await setupNode(state);\n  await transformNode(state);\n  await cleanupNode(state);\n}"
+            "  const state: State = {};\n  await setupNode(state);\n  await transformNode(state);\n  await cleanupNode(state);\n}"
         ),
         "{source}"
     );
@@ -164,7 +164,7 @@ nodes:
     )
     .source;
     assert!(
-        source.contains("await Promise.all([aNode(state), bNode(state)]);"),
+        source.contains("await Promise.all([aNode(), bNode()]);"),
         "{source}"
     );
 }
@@ -274,8 +274,7 @@ fn the_documented_features_translate_and_build() {
     expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state })) {");
     expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state })) {");
-    expect("(\\necho fast\\n)");
-    expect("\", { env: { ...stateEnv(state), ...matrixEnv(matrix), CI: \"true\" } })");
+    expect("shell(\"echo fast\", { env: { ...matrixEnv(matrix), CI: \"true\" } })");
     expect("await lintFixTemplate({ ...params, ...{\"target_glob\":\"src/**\"} }, matrix, state);");
     expect("await step(pullRequest({ title: `refactor: migrate ${matrix?.name}`, draft: true, branch: branchName }));");
     expect("agent(`Summarize ${matrix?.team}`)");
@@ -459,6 +458,31 @@ nodes:
         "{source}"
     );
     assert!(!source.contains("State"), "{source}");
+}
+
+#[test]
+fn a_potentially_stateful_script_with_a_plain_step_still_gets_the_wrapper() {
+    let source = source_of(
+        r#"
+version: "1"
+nodes:
+  - id: only
+    name: Only
+    steps:
+      - name: Announce
+        run: echo starting
+      - name: Run script
+        run: ./record-version.sh
+"#,
+    );
+    assert!(
+        source.contains(r#"applyStateOutputs(state, await step("Run script", shell("#),
+        "{source}"
+    );
+    // A script can use STATE_OUTPUTS even if the YAML does not mention it.
+    let guard = source.find("not supported on Windows").unwrap();
+    let first_step = source.find(r#"await step("Announce","#).unwrap();
+    assert!(guard < first_step, "{source}");
 }
 
 #[test]

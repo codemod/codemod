@@ -41,7 +41,7 @@ pub use engine::{
     cancel_run, is_typescript, load_workflow, send_event, Canceled, Engine, EngineError,
     LoadedWorkflow, RunReport, StartRequest, StopHandle,
 };
-pub use hosted::{HostedRun, OpenRequest, SelectedFiles};
+pub use hosted::{HostedRun, OpenRequest, PreparedJssg, SelectedFiles};
 pub use js::orchestrator_version;
 pub use run::{Ending, RunError, TestPlan};
 
