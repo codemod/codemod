@@ -451,7 +451,7 @@ declare module "codemod:workflow" {
   /** One declared dependency. */
   export interface DependencyEdge {
     readonly from: PackageNode;
-    /** The installed node; null for peer edges and ranges the lockfile does not resolve. */
+    /** The installed node; null when the lockfile does not resolve it, as for most peer edges. */
     readonly to: PackageNode | null;
     readonly name: string;
     /** Declared range; null when the lockfile keeps none (third-party crates in Cargo.lock). */
@@ -492,8 +492,8 @@ declare module "codemod:workflow" {
     readonly lockfiles: readonly string[];
     /**
      * Lockfiles found but not read, with why. Without a `lockfiles` option,
-     * one that cannot be read (a Yarn v1 lockfile in an example, say) is
-     * left out instead of failing the step.
+     * a root lockfile that cannot be read is left out instead of failing the
+     * step.
      */
     readonly skipped: readonly { readonly lockfile: string; readonly error: string }[];
     /** The repository's own packages. */
@@ -502,7 +502,7 @@ declare module "codemod:workflow" {
     nodes(name?: string): PackageNode[];
     /** One node by name, and by version when several are installed. */
     node(name: string, version?: string): PackageNode | undefined;
-    /** Edges that declare a dependency on `name`, resolved or not (peer edges never resolve). */
+    /** Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the installed peer). */
     dependents(name: string, options?: KindsOption): DependencyEdge[];
     /** Shortest chains from each `from` node (default: every workspace) to any `to` node. */
     chains(options: {
@@ -514,7 +514,8 @@ declare module "codemod:workflow" {
 
   /**
    * Reads the target's lockfiles (yarn.lock, pnpm-lock.yaml, package-lock.json,
-   * Cargo.lock; default: any of them) into a graph and runs `callback` on it in
+   * Cargo.lock; default: those at the target's root, so nested ones need a
+   * `lockfiles` glob) into a graph and runs `callback` on it in
    * its own isolate, where it may await `registry` lookups. Nodes and edges in
    * the result are recorded as `name@version` text and `RecordedEdge`.
    *
