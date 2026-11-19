@@ -492,8 +492,12 @@ snapshots:
   react@18.3.1: {}
 "#;
     let graph = lockfiles::pnpm(lock, &|_| Some(r#"{ "name": "app" }"#.into())).unwrap();
+    let table = graph.find(Ecosystem::Npm, "table", "3.2.5").unwrap();
+    let edges: Vec<usize> = (0..graph.edges.len())
+        .filter(|&index| graph.edges[index].from == table)
+        .collect();
     assert_eq!(
-        chains_to(graph, "react", &[Kind::Prod]),
-        Vec::<String>::new()
+        described(&Walk::new(graph), edges),
+        ["table@3.2.5 peer react@18.3.1 ^18"]
     );
 }
