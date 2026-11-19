@@ -41,6 +41,7 @@
                 "group": "Workflows",
                 "root": "community/workflows",
                 "pages": [
+                  "community/workflows/getting-started",
                   "community/workflows/reference",
                   "community/workflows/testing",
                   "community/workflows/node",
