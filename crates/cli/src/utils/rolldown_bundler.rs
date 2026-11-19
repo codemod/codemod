@@ -16,6 +16,9 @@ pub struct RolldownBundlerConfig {
     pub source_maps: bool,
     /// Treat Rolldown unresolved import diagnostics as bundle failures
     pub fail_on_unresolved_imports: bool,
+    /// Imports to leave as written, besides the modules the runtime provides:
+    /// a workflow's transforms, which the engine runs from their own files.
+    pub externals: Vec<String>,
 }
 
 /// Result of bundling operation
@@ -87,7 +90,12 @@ impl RolldownBundler {
             // What the runtime provides stays an import. Left to resolution,
             // `codemod/ast-grep` would be found in an installed `codemod`
             // package and its Node.js files bundled.
-            external: Some(IsExternal::from(supported_runtime_external_modules())),
+            external: Some(IsExternal::from(
+                supported_runtime_external_modules()
+                    .into_iter()
+                    .chain(self.config.externals.iter().cloned())
+                    .collect::<Vec<_>>(),
+            )),
             ..Default::default()
         };
 
@@ -152,6 +160,7 @@ mod tests {
             output_path: None,
             source_maps: false,
             fail_on_unresolved_imports: false,
+            externals: Vec::new(),
         };
 
         let bundler = RolldownBundler::new(config.clone());
@@ -196,6 +205,7 @@ mod tests {
             output_path: None,
             source_maps: false,
             fail_on_unresolved_imports: false,
+            externals: Vec::new(),
         };
 
         let bundler = RolldownBundler::new(config);

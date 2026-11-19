@@ -207,9 +207,9 @@ fn find_js_files_in_workflow(workflow: &Workflow, package_path: &Path) -> Result
 }
 
 /// Check that a workflow.ts builds, and find the files to bundle for it,
-/// relative to the package: the workflow itself, and the transform files it
-/// passes to `jssg(...)`. Bundling takes in what they import from
-/// `node_modules`, which is not published.
+/// relative to the package: the workflow itself, and the transforms and
+/// shard functions it imports for `jssg(...)` and `shard(...)`. Bundling
+/// takes in what they import from `node_modules`, which is not published.
 fn typescript_workflow_scripts(package_path: &Path, workflow_path: &Path) -> Result<Vec<String>> {
     codemod_workflow::load_workflow(workflow_path).map_err(|e| anyhow!("Invalid workflow: {e}"))?;
     let source = fs::read_to_string(workflow_path)?;
@@ -263,12 +263,23 @@ async fn bundle_js_file(package_path: &Path, js_file: &str) -> Result<String> {
 
     debug!("Bundling JS file: {}", js_file_path.display());
 
+    // A workflow's transforms stay imports of their own files, which are
+    // bundled on their own: the engine runs them, the workflow only names them.
+    let externals = fs::read_to_string(&js_file_path)
+        .ok()
+        .and_then(|source| {
+            codemod_workflow::inspect(&js_file_path.display().to_string(), &source).ok()
+        })
+        .map(|inspection| inspection.transforms)
+        .unwrap_or_default();
+
     let config = RolldownBundlerConfig {
         entry_path: js_file_path.clone(),
         base_dir: Some(package_path.to_path_buf()),
         output_path: None, // Return code directly, don't write to file
         source_maps: false,
         fail_on_unresolved_imports: true,
+        externals,
     };
 
     let bundler = RolldownBundler::new(config);
@@ -947,9 +958,10 @@ nodes:
             temp_dir.path().join("workflow.ts"),
             r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
 import { jssg, step } from "codemod/workflow";
+import workflowTransform from "./src/workflow.ts";
 
 export default async function main() {
-  await step("Rewrite", jssg("src/workflow.ts", { include: ["**/*.ts"], language: "typescript" }));
+  await step("Rewrite", jssg(workflowTransform, { include: ["**/*.ts"], language: "typescript" }));
 }
 "#,
         )
@@ -976,6 +988,7 @@ export default async function main() {
         let archive = flate2::read::GzDecoder::new(fs::File::open(&bundle).unwrap());
         let mut tar = tar::Archive::new(archive);
         let mut transform = String::new();
+        let mut workflow = String::new();
         let mut names = Vec::new();
         for entry in tar.entries().unwrap() {
             let mut entry = entry.unwrap();
@@ -983,10 +996,81 @@ export default async function main() {
             if name == "src/workflow.ts" {
                 std::io::Read::read_to_string(&mut entry, &mut transform).unwrap();
             }
+            if name == "workflow.ts" {
+                std::io::Read::read_to_string(&mut entry, &mut workflow).unwrap();
+            }
             names.push(name);
         }
         assert!(names.contains(&"workflow.ts".to_string()), "{names:?}");
         assert!(transform.contains("bundled-helper"), "{transform}");
+        // The workflow's bundle still imports its transform, which is not
+        // bundled into it.
+        assert!(workflow.contains("\"./src/workflow.ts\""), "{workflow}");
+        assert!(!workflow.contains("bundled-helper"), "{workflow}");
+
+        // What a consumer installs runs: the transform comes from its own file.
+        let installed = tempdir().unwrap();
+        let archive = flate2::read::GzDecoder::new(fs::File::open(&bundle).unwrap());
+        tar::Archive::new(archive).unpack(installed.path()).unwrap();
+        let target = tempdir().unwrap();
+        fs::write(target.path().join("a.ts"), "const a = 1;\n").unwrap();
+        let loaded = codemod_workflow::load_workflow(&installed.path().join("workflow.ts"))
+            .unwrap_or_else(|e| panic!("the bundle does not build: {e}\n{workflow}"));
+        let engine = codemod_workflow::Engine::new(
+            std::sync::Arc::new(codemod_workflow::MemoryStore::default()),
+            std::sync::Arc::new(codemod_workflow::events::CollectEvents::default()),
+            std::sync::Arc::new(codemod_workflow::interaction::NonInteractive {
+                approve_all: false,
+            }),
+            codemod_workflow::Services::default(),
+        );
+        let target_path = target.path().to_path_buf();
+        let report = tokio::task::spawn_blocking(move || {
+            engine.start(codemod_workflow::StartRequest {
+                workflow: loaded,
+                target: target_path,
+                params: serde_json::Value::Null,
+                name: None,
+                dry_run: false,
+                test: None,
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(report.ending, codemod_workflow::Ending::Succeeded(_)),
+            "{:?}",
+            report.ending
+        );
+        assert_eq!(
+            fs::read_to_string(target.path().join("a.ts")).unwrap(),
+            "bundled-helper"
+        );
+    }
+
+    /// A path the build cannot read would be missing from the package:
+    /// publishing refuses it, with the build's error.
+    #[test]
+    fn a_workflow_ts_package_with_a_transform_path_is_refused() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("workflow.ts", "example");
+        fs::write(
+            temp_dir.path().join("workflow.ts"),
+            r#"import { jssg, step } from "codemod/workflow";
+export default async function main({ params }: { params: { name: string } }) {
+  await step(jssg(`./transforms/${params.name}.ts` as any));
+}
+"#,
+        )
+        .unwrap();
+        let error = validate_package_structure(temp_dir.path(), &manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("jssg takes an imported transform, not a file path"),
+            "{error}"
+        );
     }
 
     #[test]
