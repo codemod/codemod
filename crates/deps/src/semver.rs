@@ -112,14 +112,14 @@ mod pypi {
         if let Some(lower) = clause.strip_prefix('^') {
             let parts = numbers(lower)?;
             let at = parts.iter().position(|&p| p != 0);
-            return Some(between(lower, &parts, at.unwrap_or(parts.len() - 1)));
+            return between(lower, &parts, at.unwrap_or(parts.len() - 1));
         }
         if let Some(lower) = clause
             .strip_prefix('~')
             .filter(|rest| !rest.starts_with('='))
         {
             let parts = numbers(lower)?;
-            return Some(between(lower, &parts, usize::from(parts.len() > 1)));
+            return between(lower, &parts, usize::from(parts.len() > 1));
         }
         if clause.starts_with(|c: char| c.is_ascii_digit()) {
             return Some(vec![format!("=={clause}")]);
@@ -131,10 +131,11 @@ mod pypi {
         version.split('.').map(|part| part.parse().ok()).collect()
     }
 
-    /// `>=lower` and below `lower` with the part at `at` raised by one.
-    fn between(lower: &str, parts: &[u64], at: usize) -> Vec<String> {
+    /// `>=lower` and below `lower` with the part at `at` raised by one;
+    /// `None` when that part cannot be raised, so the clause cannot be read.
+    fn between(lower: &str, parts: &[u64], at: usize) -> Option<Vec<String>> {
         let mut upper: Vec<String> = parts[..at].iter().map(u64::to_string).collect();
-        upper.push((parts[at] + 1).to_string());
-        vec![format!(">={lower}"), format!("<{}", upper.join("."))]
+        upper.push(parts[at].checked_add(1)?.to_string());
+        Some(vec![format!(">={lower}"), format!("<{}", upper.join("."))])
     }
 }

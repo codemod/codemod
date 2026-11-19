@@ -225,6 +225,20 @@ fn a_python_range_that_is_not_pep_440_cannot_be_read() {
 }
 
 #[test]
+fn a_poetry_range_whose_upper_bound_overflows_cannot_be_read() {
+    use codemod_deps::semver::satisfies;
+    let max = u64::MAX;
+    assert_eq!(
+        [
+            satisfies(Ecosystem::Pypi, &format!("^{max}"), "1.0"),
+            satisfies(Ecosystem::Pypi, &format!("~{max}"), "1.0"),
+            satisfies(Ecosystem::Pypi, &format!("~1.{max}"), "1.0"),
+        ],
+        [None, None, None]
+    );
+}
+
+#[test]
 fn a_pypi_release_is_yanked_only_when_every_file_is() {
     use codemod_deps::registry::pypi_releases;
     let document = r#"{ "releases": {
