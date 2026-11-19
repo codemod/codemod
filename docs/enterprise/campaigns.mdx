@@ -31,9 +31,9 @@ A workflow defines what transformations to run and how they're orchestrated:
 
 - **Nodes** are the primary execution units that represent a stage in your migration. Nodes can depend on other nodes, run automatically or require manual approval, and fan out across matrix dimensions.
 - **Steps** are atomic actions within a node. Each step performs one transformation or command (e.g., run a JSSG codemod, execute a shell script, call an AI agent).
-- **Tasks** are runtime instances of nodes. When a Campaign runs, the engine creates tasks for each node. For [matrix strategies](/community/workflows/reference#matrix-strategy), a single node can spawn multiple parallel tasks (e.g., one per team or shard).
+- **Tasks** are runtime instances of nodes. When a Campaign runs, the engine creates tasks for each node. For [matrix strategies](/community/workflows/yaml#matrix-strategy), a single node can spawn multiple parallel tasks (e.g., one per team or shard).
 
-In Codemod Campaigns, each task executes on its own branch. Nodes can define step-level commit checkpoints and pull request metadata, and a task that ends with commits will push its branch and open a pull request. See [Workflow reference](/community/workflows/reference#nodes) and [available step fields](/community/workflows/reference#common-step-fields).
+In Codemod Campaigns, each task executes on its own branch. Nodes can define step-level commit checkpoints and pull request metadata, and a task that ends with commits will push its branch and open a pull request. See [Workflow reference](/community/workflows/yaml#nodes) and [available step fields](/community/workflows/yaml#common-step-fields).
 
 ```
 Workflow Definition          Runtime Execution

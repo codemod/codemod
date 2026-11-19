@@ -1740,7 +1740,9 @@ impl ServerHandler for CodemodMcpServer {
                 .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG test execution, and Codemod package validation. Available tools: dump_ast, get_node_types, run_jssg_tests, validate_codemod_package. Available resources: jssg-instructions, jssg-gotchas, ast-grep-gotchas, jssg-utils-instructions, jssg-runtime-capabilities-instructions, codemod-cli-instructions, sharding-instructions, codemod-troubleshooting-instructions, codemod-creation-workflow-instructions, codemod-maintainer-monorepo-instructions. For codemod authoring, read codemod-creation-workflow-instructions first, then read jssg-gotchas and ast-grep-gotchas before writing source-transform code. For JavaScript/TypeScript/Java transforms, also read jssg-utils-instructions before hand-rolling import gates, file style, or renames—prefer @jssg/utils helpers. Decide semantic_analysis on each js-ast-grep step when matching generic method names, renaming symbols, or following aliases; use binding-aware checks instead of identifier regex alone. Each transform js-ast-grep step should emit metrics with useMetricAtom in that step script (prefer one metric per step with cardinality dimensions; snapshot metrics.json in fixtures). jssg-gotchas includes Performant codemods for transforms and mining (do not rebuild a repo index per file; time a no-op vs the real package on the same entry path). For Insights mining packages, put useMetricAtom in the selected step js-ast-grep script from the published package and return null. If registry search finds no exact existing package, run direct codemod init immediately; in non-interactive flows, pass only user- or task-provided metadata flags and rely on CLI defaults/auth-derived author handling for the rest. Call validate_codemod_package before you stop work on a codemod package. Registry package names must match ^(@[A-Za-z0-9\\-_.]+/)?[A-Za-z0-9\\-_]+$ — no dots in the name segment (use 1-24-to-1-25, not 1.24-to-1.25). Use dump_ast when pattern shape is unclear. If you discover a Codemod platform gap, ask the user for explicit consent before submitting anonymous feedback. With consent, run `codemod ai feedback --category <category> --message <short message>` using categories like jssg, workflow, ai-docs, mcp, cli, registry, package-validation, or other. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.".to_string()),
+            instructions: Some("This server provides AST dumping, tree-sitter node types, JSSG test execution, and Codemod package validation. Available tools: dump_ast, get_node_types, run_jssg_tests, validate_codemod_package. Available resources: jssg-instructions, jssg-gotchas, ast-grep-gotchas, jssg-utils-instructions, jssg-runtime-capabilities-instructions, codemod-cli-instructions, sharding-instructions, codemod-troubleshooting-instructions, codemod-creation-workflow-instructions, codemod-maintainer-monorepo-instructions. For codemod authoring, read codemod-creation-workflow-instructions first, then read jssg-gotchas and ast-grep-gotchas before writing source-transform code. For JavaScript/TypeScript/Java transforms, also read jssg-utils-instructions before hand-rolling import gates, file style, or renames—prefer @jssg/utils helpers. Decide whether each JSSG step needs semantic analysis (semanticAnalysis in workflow.ts; semantic_analysis in legacy YAML) when matching generic method names, renaming symbols, or following aliases; use binding-aware checks instead of identifier regex alone. \
+                Transforms can return { edit, data }, where data is any JSON value. To count edits, return an entry per real edit with a field such as kind so the workflow can group by variant. The JSSG step's data is [{ file, data }] sorted by path, or the reducer's folded value. Snapshot data.json in standalone JSSG fixtures. For read-only mining, return { edit: null, data }; for Insights mining, do this in the selected transform in the published package. \
+                jssg-gotchas includes Performant codemods for transforms and mining (do not rebuild a repo index per file; time a no-op vs the real package on the same entry path). If registry search finds no exact existing package, run direct codemod init immediately; in non-interactive flows, pass only user- or task-provided metadata flags and rely on CLI defaults/auth-derived author handling for the rest. Call validate_codemod_package before you stop work on a codemod package. Registry package names must match ^(@[A-Za-z0-9\\-_.]+/)?[A-Za-z0-9\\-_]+$ — no dots in the name segment (use 1-24-to-1-25, not 1.24-to-1.25). Use dump_ast when pattern shape is unclear. If you discover a Codemod platform gap, ask the user for explicit consent before submitting anonymous feedback. With consent, run `codemod ai feedback --category <category> --message <short message>` using categories like jssg, workflow, ai-docs, mcp, cli, registry, package-validation, or other. Do not include source code, secrets, auth tokens, private repository paths, user identity, or long transcripts.".to_string()),
         }
     }
 
@@ -1985,8 +1987,14 @@ mod tests {
         assert!(instructions.contains("jssg-utils-instructions"));
         assert!(instructions.contains("@jssg/utils"));
         assert!(instructions.contains("semantic_analysis"));
-        assert!(instructions.contains("useMetricAtom"));
-        assert!(instructions.contains("cardinality"));
+        assert!(instructions.contains("semanticAnalysis"));
+        assert!(instructions.contains("{ edit, data }"));
+        assert!(instructions.contains("{ edit: null, data }"));
+        assert!(instructions.contains("data is any JSON value"));
+        assert!(instructions.contains("group by variant"));
+        assert!(instructions.contains("[{ file, data }] sorted by path"));
+        assert!(instructions.contains("Snapshot data.json"));
+        assert!(!instructions.contains("useMetricAtom"));
         assert!(instructions.contains("no dots in the name segment"));
         assert!(instructions.contains("codemod-creation-workflow-instructions"));
         assert!(
@@ -2122,7 +2130,7 @@ mod tests {
         // Unique to advanced/performance.mdx (hub only links here).
         assert!(jssg_gotchas.contains("Verify wall clock before you ship"));
         assert!(jssg_gotchas.contains("fresh QuickJS runtime"));
-        assert!(jssg_gotchas.contains("useMetricAtom"));
+        assert!(jssg_gotchas.contains("{ edit, data }"));
         assert!(ast_grep_gotchas.contains("Canonical ast-grep Usage Documentation"));
     }
 

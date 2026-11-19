@@ -1,20 +1,25 @@
-// console.log() will be matched by pattern!
-// click diff tab to see rewrite.
+// sprintf() calls are rewritten to the bounded snprintf().
+#include <stdio.h>
 
-function tryAstGrep() {
-    console.log('matched in metavar!')
+void greet(const char *name) {
+    char message[64];
+    sprintf(message, "Hello, %s!", name);
+    puts(message);
 }
-  
-const multiLineExpression =
-  console
-    .log({
-      also: 'matched',
-      multi: 'line',
-      expression: 'console.log("you can\'t trick me!")',
-    })
 
-if (true) {
-  const notThis = 'console.log("not me")'
-} else {
-  console.debug('matched by YAML')
+void report(int count, double ratio) {
+    char line[32];
+    sprintf(line, "%d items (%.2f)", count, ratio);
+    puts(line);
+
+    // Already bounded: left alone.
+    char summary[32];
+    snprintf(summary, sizeof(summary), "%d items", count);
+    puts(summary);
+}
+
+void read_name(void) {
+    char name[16];
+    gets(name);
+    greet(name);
 }

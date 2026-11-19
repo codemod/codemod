@@ -236,14 +236,13 @@ pub async fn run_test(config: TestConfig<'_>) -> Result<Option<String>, String> 
         matrix_values: None,
         capabilities: None,
         semantic_provider: provider,
-        metrics_context: None,
         llm_request_handler: None,
-        shared_state_context: None,
         runtime_event_callback: None,
         cancellation_flag: None,
         test_mode: false,
         dry_run: false,
         target_directory: target_path.parent().unwrap_or(target_path.as_path()),
+        pending_files: None,
     };
 
     let result = execute_codemod_with_quickjs(options).await;

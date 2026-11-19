@@ -315,7 +315,7 @@ impl RegistryClient {
     }
 
     /// Resolves a package from a local directory.
-    pub(crate) fn resolve_local_package_at(&self, path: &Path) -> Result<ResolvedPackage> {
+    pub fn resolve_local_package_at(&self, path: &Path) -> Result<ResolvedPackage> {
         let path = path.to_path_buf();
 
         if !path.exists() {

@@ -1,10 +1,13 @@
 # Codemod Studio uses ast-grep to match and rewrite code.
 # https://ast-grep.github.io/guide/rule-config.html#rule
-id: replace-io-with-logger
+id: replace-io-puts-with-logger
 language: elixir
 rule:
-  any:
-    - pattern: IO.puts($ARG)
-    - pattern: IO.inspect($$$ARGS)
-fix: |
-  Logger.info($ARG)$ARGS
+  pattern: IO.puts($ARG)
+fix: Logger.info($ARG)
+---
+id: replace-io-inspect-with-logger
+language: elixir
+rule:
+  pattern: IO.inspect($$$ARGS)
+fix: Logger.debug($$$ARGS)

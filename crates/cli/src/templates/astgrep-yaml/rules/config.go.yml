@@ -1,27 +1,13 @@
 # Codemod Studio uses ast-grep to match and rewrite code.
 # https://ast-grep.github.io/guide/rule-config.html#rule
-id: replace-fmt-with-logger
+id: replace-fmt-println-with-log
 language: go
 rule:
-  any:
-    - kind: call_expression
-      has:
-        field: function
-        all:
-          - has:
-              field: operand
-              regex: ^fmt$
-          - has:
-              field: field
-              regex: ^Println$
-    - kind: call_expression
-      has:
-        field: function
-        all:
-          - has:
-              field: operand
-              regex: ^fmt$
-          - has:
-              field: field
-              regex: ^Printf$
-fix: log.Info($$$)
+  pattern: fmt.Println($$$ARGS)
+fix: log.Println($$$ARGS)
+---
+id: replace-fmt-printf-with-log
+language: go
+rule:
+  pattern: fmt.Printf($$$ARGS)
+fix: log.Printf($$$ARGS)

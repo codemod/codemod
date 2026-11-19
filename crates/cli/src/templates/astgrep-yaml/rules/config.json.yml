@@ -3,17 +3,18 @@
 id: snake-case-to-camel-case
 language: json
 rule:
-  kind: string
+  # The text of a key, without its quotes
+  kind: string_content
+  pattern: $KEY
+  regex: ^[a-z][a-z0-9]*(_[a-z0-9]+)+$
   inside:
-    kind: pair
-    field: key
-  regex: "^\"[a-z][a-z0-9]*(_[a-z0-9]+)+\"$"
+    kind: string
+    inside:
+      kind: pair
+      field: key
 transform:
   CAMEL_CASE:
     convert:
+      source: $KEY
       toCase: camelCase
-      source: $0
-      # Remove quotes and underscores, then convert
-      replace: "^\"(.*)\"$"
-      by: $1
-fix: '"$CAMEL_CASE"'
+fix: $CAMEL_CASE

@@ -1,40 +1,19 @@
 # Convert deprecated MySQL functions to modern PDO equivalents
 # This helps modernize legacy PHP codebases
-id: mysql-to-pdo-conversion
+id: mysql-query-to-pdo
 language: php
 rule:
-  any:
-    - kind: function_call_expression
-      all:
-        - has:
-            field: function
-            kind: name
-            regex: ^mysql_query$
-    - kind: function_call_expression
-      all:
-        - has:
-            field: function
-            kind: name
-            regex: ^mysql_fetch_array$
-    - kind: function_call_expression
-      all:
-        - has:
-            field: function
-            kind: name
-            regex: ^mysql_fetch_assoc$
-    - kind: function_call_expression
-      all:
-        - has:
-            field: function
-            kind: name
-            regex: ^mysql_connect$
-    - kind: function_call_expression
-      all:
-        - has:
-            field: function
-            kind: name
-            regex: ^mysql_close$
-fix: |
-  # Note: ast-grep fix doesn't support conditional logic
-  # Use the napi script for proper transformation logic
-  $pdo->modernMethod()
+  pattern: mysql_query($$$ARGS)
+fix: $pdo->query($$$ARGS)
+---
+id: mysql-fetch-array-to-pdo
+language: php
+rule:
+  pattern: mysql_fetch_array($RESULT)
+fix: $RESULT->fetch(PDO::FETCH_BOTH)
+---
+id: mysql-fetch-assoc-to-pdo
+language: php
+rule:
+  pattern: mysql_fetch_assoc($RESULT)
+fix: $RESULT->fetch(PDO::FETCH_ASSOC)

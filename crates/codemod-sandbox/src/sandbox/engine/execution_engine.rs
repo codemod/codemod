@@ -8,16 +8,13 @@ use super::transform_helpers::{
     build_transform_options, process_transform_result, ModificationCheck,
 };
 use crate::ast_grep::sg_node::{SgNodeRjs, SgRootRjs};
-use crate::ast_grep::AstGrepModule;
-use crate::llm::{LlmModule, LlmRequestHandler, LlmRuntimeContext};
-use crate::metrics::{MetricsContext, MetricsModule};
+use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::ModuleResolver;
 use crate::sandbox::runtime_module::{
-    RuntimeEvent, RuntimeEventCallback, RuntimeEventKind, RuntimeHooksContext, RuntimeModule,
+    RuntimeEvent, RuntimeEventCallback, RuntimeEventKind, RuntimeHooksContext,
 };
 use crate::utils::quickjs_utils::maybe_promise;
-use crate::workflow_global::{SharedStateContext, WorkflowGlobalModule};
 use ast_grep_config::RuleConfig;
 use ast_grep_core::matcher::MatcherExt;
 use ast_grep_core::AstGrep;
@@ -48,11 +45,21 @@ unsafe impl<'js> rquickjs::JsLifetime<'js> for ExecutionModeFlag {
 #[derive(Debug, Clone, Copy)]
 pub struct DryRunExecutionFlag(pub bool);
 
+/// Marks a context that runs workflow callbacks (function steps and
+/// `forEachFile` callbacks). File changes there go through the step's commit,
+/// so roots made by `parse()` cannot write or rename files themselves.
+#[derive(Debug, Clone, Copy)]
+pub struct CallbackIsolate;
+
+unsafe impl<'js> rquickjs::JsLifetime<'js> for CallbackIsolate {
+    type Changed<'to> = CallbackIsolate;
+}
+
 unsafe impl<'js> rquickjs::JsLifetime<'js> for DryRunExecutionFlag {
     type Changed<'to> = DryRunExecutionFlag;
 }
 
-fn install_console_bridge(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
+pub(crate) fn install_console_bridge(ctx: &Ctx<'_>) -> rquickjs::Result<()> {
     let console = Object::new(ctx.clone())?;
     console.set("log", Function::new(ctx.clone(), console_log)?)?;
     console.set("info", Function::new(ctx.clone(), console_log)?)?;
@@ -159,6 +166,8 @@ pub struct FileChange {
 pub struct CodemodOutput {
     pub primary: ExecutionResult,
     pub secondary: Vec<FileChange>,
+    /// The `data` the transform returned for this file, as JSON.
+    pub data: Option<serde_json::Value>,
 }
 
 /// Shared accumulator for file changes produced by `jssgTransform`.
@@ -167,6 +176,9 @@ pub struct CodemodOutput {
 #[derive(Debug, Clone, Default)]
 pub struct JssgFileChanges {
     pub changes: Arc<Mutex<Vec<FileChange>>>,
+    /// The step's unwritten files, when the caller keeps them: `jssgTransform`
+    /// then reads and updates a file through it.
+    pub pending: Option<super::PendingFiles>,
 }
 
 unsafe impl<'js> rquickjs::JsLifetime<'js> for JssgFileChanges {
@@ -236,12 +248,8 @@ pub struct JssgExecutionOptions<'a, R> {
     pub capabilities: Option<HashSet<LlrtSupportedModules>>,
     /// Optional semantic provider for symbol indexing (go-to-definition, find-references)
     pub semantic_provider: Option<Arc<dyn SemanticProvider>>,
-    /// Optional metrics context for tracking metrics across execution
-    pub metrics_context: Option<MetricsContext>,
     /// Optional engine-owned LLM request handler exposed through codemod:llm
     pub llm_request_handler: Option<LlmRequestHandler>,
-    /// Optional shared state context for cross-thread state communication
-    pub shared_state_context: Option<SharedStateContext>,
     /// Optional runtime event callback for codemod:runtime hook emissions
     pub runtime_event_callback: Option<RuntimeEventCallback>,
     /// Optional cancellation flag exposed to codemod:runtime.isCanceled()
@@ -253,6 +261,9 @@ pub struct JssgExecutionOptions<'a, R> {
     /// The target directory the codemod is running against.
     /// Used to validate that `jssgTransform` and `rename()` only access files within this directory.
     pub target_directory: &'a Path,
+    /// The step's unwritten files, shared by every file's execution, so that
+    /// changes several files make to one file with `jssgTransform` add up.
+    pub pending_files: Option<super::PendingFiles>,
 }
 
 struct DryRunDiskFetcher {
@@ -417,30 +428,10 @@ where
         None
     };
 
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+    let (mut built_in_resolver, built_in_loader, global_attachment) =
         module_builder.builder.build();
-    // Add AstGrepModule
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
-
-    // Add WorkflowGlobalModule (step outputs)
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
-
-    // Add MetricsModule (metrics tracking)
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
-
-    // Engine-owned model access can make network requests, so expose it only
-    // when the caller explicitly grants the fetch capability.
-    if llm_capability_enabled {
-        built_in_resolver = built_in_resolver.add_name("codemod:llm");
-        built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
-    }
-
-    // Add RuntimeModule (progress/failure hooks)
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+    let (codemod_resolver, mut built_in_loader) =
+        crate::with_codemod_modules!(built_in_loader, llm: llm_capability_enabled);
 
     if curated_fs_target.is_some() {
         built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
@@ -455,7 +446,7 @@ where
     // Combine resolvers and loaders
     runtime
         .set_loader(
-            (built_in_resolver, fs_resolver),
+            (codemod_resolver, built_in_resolver, fs_resolver),
             (built_in_loader, fs_loader),
         )
         .await;
@@ -468,14 +459,11 @@ where
             },
         })?;
 
-    // Capture metrics context and shared state context for use inside async block
-    let metrics_context = options.metrics_context.clone();
     let llm_runtime_context = LlmRuntimeContext::new(
         llm_capability_enabled
             .then(|| options.llm_request_handler.clone())
             .flatten(),
     );
-    let shared_state_context = options.shared_state_context.clone();
     let runtime_hooks_context = RuntimeHooksContext::new(
         options.runtime_event_callback.clone(),
         options.cancellation_flag.clone(),
@@ -498,7 +486,10 @@ where
         })?;
 
         // Store shared accumulator for jssgTransform file changes
-        let jssg_file_changes = JssgFileChanges::default();
+        let jssg_file_changes = JssgFileChanges {
+            pending: options.pending_files.clone(),
+            ..JssgFileChanges::default()
+        };
         ctx.store_userdata(jssg_file_changes.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store JssgFileChanges: {:?}", e),
@@ -522,25 +513,9 @@ where
             },
         })?;
 
-        // Store metrics context in runtime userdata if provided (must be done inside async_with)
-        if let Some(ref metrics_ctx) = metrics_context {
-            ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: format!("Failed to store MetricsContext: {:?}", e),
-                },
-            })?;
-        }
-
         ctx.store_userdata(llm_runtime_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store LlmRuntimeContext: {:?}", e),
-            },
-        })?;
-
-        // Always store a SharedStateContext so codemod:workflow functions work
-        ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: format!("Failed to store SharedStateContext: {:?}", e),
             },
         })?;
 
@@ -659,7 +634,7 @@ where
                     .collect();
 
                 if ast_matches.is_empty() {
-                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![] });
+                    return Ok(CodemodOutput { primary: ExecutionResult::Skipped, secondary: vec![], data: None });
                 }
 
                 Some(ast_matches.into_iter().map(|node_match| SgNodeRjs {
@@ -702,7 +677,7 @@ where
                 .catch(&ctx)
                 .map_err(|e| map_transform_execution_error(&runtime_hooks_context, e))?;
 
-            let primary = process_transform_result(
+            let (primary, data) = process_transform_result(
                 &result_obj,
                 &sg_root_inner,
                 ModificationCheck::StringEquality { original_content: options.content },
@@ -712,7 +687,7 @@ where
                 .map(|guard| guard.clone())
                 .unwrap_or_default();
 
-            Ok(CodemodOutput { primary, secondary })
+            Ok(CodemodOutput { primary, secondary, data })
         };
         execution.await
     })
@@ -738,10 +713,6 @@ pub(super) fn map_transform_execution_error(
 pub struct SimpleJsExecutionOptions<'a, R> {
     pub script_path: &'a Path,
     pub resolver: Arc<R>,
-    /// Optional metrics context for tracking metrics across execution
-    pub metrics_context: Option<MetricsContext>,
-    /// Optional shared state context for cross-thread state communication
-    pub shared_state_context: Option<SharedStateContext>,
 }
 
 /// Execute a standalone JavaScript file with QuickJS (like node script.js)
@@ -775,28 +746,16 @@ where
     module_builder.enable_fs();
     module_builder.enable_child_process();
 
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
-        module_builder.builder.build();
-
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
-
-    // Add WorkflowGlobalModule (step outputs)
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+    let (built_in_resolver, built_in_loader, global_attachment) = module_builder.builder.build();
+    let (codemod_resolver, built_in_loader) =
+        crate::with_codemod_modules!(built_in_loader, llm: false);
 
     let fs_resolver = QuickJSResolver::new(Arc::clone(&options.resolver));
     let fs_loader = QuickJSLoader;
 
     runtime
         .set_loader(
-            (built_in_resolver, fs_resolver),
+            (codemod_resolver, built_in_resolver, fs_resolver),
             (built_in_loader, fs_loader),
         )
         .await;
@@ -809,27 +768,10 @@ where
             },
         })?;
 
-    let metrics_context = options.metrics_context.clone();
-    let shared_state_context = options.shared_state_context.clone();
     let runtime_hooks_context = RuntimeHooksContext::default();
 
     // Execute JavaScript code
     async_with!(context => |ctx| {
-        if let Some(ref metrics_ctx) = metrics_context {
-            ctx.store_userdata(metrics_ctx.clone()).map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: format!("Failed to store MetricsContext: {:?}", e),
-                },
-            })?;
-        }
-
-        // Always store a SharedStateContext so codemod:workflow functions work
-        ctx.store_userdata(shared_state_context.unwrap_or_default()).map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: format!("Failed to store SharedStateContext: {:?}", e),
-            },
-        })?;
-
         ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store RuntimeHooksContext: {:?}", e),
@@ -961,20 +903,10 @@ where
         None
     };
 
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+    let (mut built_in_resolver, built_in_loader, global_attachment) =
         module_builder.builder.build();
-
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
-
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
+    let (codemod_resolver, mut built_in_loader) =
+        crate::with_codemod_modules!(built_in_loader, llm: false);
 
     if curated_fs_target.is_some() {
         built_in_resolver = built_in_resolver.add_name("fs").add_name("fs/promises");
@@ -988,7 +920,7 @@ where
 
     runtime
         .set_loader(
-            (built_in_resolver, fs_resolver),
+            (codemod_resolver, built_in_resolver, fs_resolver),
             (built_in_loader, fs_loader),
         )
         .await;
@@ -1005,13 +937,6 @@ where
     let runtime_hooks_context = RuntimeHooksContext::default();
 
     async_with!(context => |ctx| {
-        // Store a default SharedStateContext so codemod:workflow functions work
-        ctx.store_userdata(SharedStateContext::default()).map_err(|e| ExecutionError::Runtime {
-            source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                message: format!("Failed to store SharedStateContext: {:?}", e),
-            },
-        })?;
-
         ctx.store_userdata(runtime_hooks_context.clone()).map_err(|e| ExecutionError::Runtime {
             source: crate::sandbox::errors::RuntimeError::InitializationFailed {
                 message: format!("Failed to store RuntimeHooksContext: {:?}", e),
@@ -1212,14 +1137,13 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1286,14 +1210,13 @@ export default async function transform() {
             matrix_values: None,
             capabilities: Some([LlrtSupportedModules::Fetch].into_iter().collect()),
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: Some(handler),
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let output = execute_codemod_with_quickjs(options)
@@ -1356,14 +1279,13 @@ export default async function transform() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: Some(handler),
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let error = execute_codemod_with_quickjs(options)
@@ -1431,14 +1353,13 @@ export default function transform(root, options) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: true,
             target_directory: &target_dir,
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options)
@@ -1501,14 +1422,13 @@ export default function transform() {
             matrix_values: None,
             capabilities: Some([LlrtSupportedModules::ChildProcess].into_iter().collect()),
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: true,
             target_directory: temp_dir.path(),
+            pending_files: None,
         };
 
         execute_codemod_with_quickjs(options)
@@ -1545,14 +1465,13 @@ export default function transform(root, options) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: &target_dir,
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options)
@@ -1608,14 +1527,13 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1661,14 +1579,13 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1714,14 +1631,13 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1759,14 +1675,13 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1775,7 +1690,7 @@ function example() {
             Err(ExecutionError::Runtime { source }) => {
                 assert!(source
                     .to_string()
-                    .contains("must return either a string or null/undefined"));
+                    .contains("must return a string, null/undefined, or { edit, data }"));
             }
             Ok(output) => panic!(
                 "Expected runtime error for invalid return type, got: {:?}",
@@ -1809,14 +1724,13 @@ function example() {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -1861,108 +1775,161 @@ function example() {
         }
     }
 
-    #[tokio::test]
-    async fn test_execute_codemod_with_metrics() {
-        use crate::metrics::MetricsContext;
-
-        // Create a metrics context for this test
-        let metrics_ctx = MetricsContext::new();
-
-        // Simpler codemod that just counts console.log calls
-        let codemod_content = r#"
-import { useMetricAtom } from "codemod:metrics";
-
-const callMetric = useMetricAtom("call-count");
-
-export default function transform(root) {
-  const rootNode = root.root();
-
-  // Find all console.log calls
-  const calls = rootNode.findAll({
-    rule: {
-      pattern: "console.log($$$ARGS)",
-    },
-  });
-
-  // Count each call
-  for (const call of calls) {
-    callMetric.increment({ method: "console.log" });
-  }
-
-  return null;
-}
-        "#
-        .trim();
-
-        let (_temp_dir, codemod_path) = setup_test_codemod(codemod_content);
-        let resolver = Arc::new(OxcResolver::new(_temp_dir.path().to_path_buf(), None).unwrap());
-
-        // Test with JS content that has console.log calls
-        let content = r#"
-function example() {
-    console.log("Hello");
-    console.log("World");
-    console.log(1, 2, 3);
-}
-        "#
-        .trim();
-
-        let file_path = Path::new("test.js");
-
-        let options = JssgExecutionOptions {
+    async fn run_returning(body: &str, content: &str) -> Result<CodemodOutput, ExecutionError> {
+        let script = format!("export default function transform(root) {{ {body} }}");
+        let (temp_dir, codemod_path) = setup_test_codemod(&script);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        execute_codemod_with_quickjs(JssgExecutionOptions {
             script_path: &codemod_path,
             resolver,
             language: js_lang(),
-            file_path,
+            file_path: Path::new("test.js"),
             content,
             selector_config: None,
             params: None,
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: Some(metrics_ctx.clone()),
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_transform_hands_back_any_json_as_data() {
+        let output = run_returning(
+            r#"return { data: { calls: root.root().findAll({ rule: { pattern: "f()" } }).length, tags: ["a", null] } };"#,
+            "f(); f();",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            output.data,
+            Some(serde_json::json!({ "calls": 2, "tags": ["a", null] }))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_returned_edit_with_data_still_edits_the_file() {
+        let output = run_returning(
+            r#"return { edit: "const b = 1;", data: 1 };"#,
+            "const a = 1;",
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(output.primary, ExecutionResult::Modified(ref m) if m.content == "const b = 1;"),
+            "{output:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn data_that_is_not_json_is_an_error() {
+        let error = run_returning(r#"return { data: () => 1 };"#, "x")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("`data` must be JSON"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_result_object_with_other_keys_is_an_error() {
+        let error = run_returning(r#"return { content: "x" };"#, "x")
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("takes only `edit` and `data`"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn importing_the_removed_metrics_module_says_what_replaced_it() {
+        let script = r#"import { useMetricAtom } from "codemod:metrics";
+export default function transform() { return null; }"#;
+        let (temp_dir, codemod_path) = setup_test_codemod(script);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let error = execute_codemod_with_quickjs(JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "x",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            llm_request_handler: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: Path::new("."),
+            pending_files: None,
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("returning `{ edit, data }`"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn codemod_modules_import_as_codemod_slash_and_the_older_colon_spelling() {
+        // Both spellings name one module: the module objects are the same.
+        let codemod_content = r#"
+import { parse } from "codemod/ast-grep";
+import { parse as parseColon } from "codemod:ast-grep";
+import { progress } from "codemod/runtime";
+import * as colon from "codemod:runtime";
+
+export default function transform(root) {
+  if (parse !== parseColon) throw new Error("two ast-grep modules");
+  if (progress !== colon.progress) throw new Error("two runtime modules");
+  progress("visiting");
+  return parse("javascript", root.root().text().replace("old", "new")).root().text();
+}
+        "#
+        .trim();
+
+        let (temp_dir, codemod_path) = setup_test_codemod(codemod_content);
+        let resolver = Arc::new(OxcResolver::new(temp_dir.path().to_path_buf(), None).unwrap());
+        let options = JssgExecutionOptions {
+            script_path: &codemod_path,
+            resolver,
+            language: js_lang(),
+            file_path: Path::new("test.js"),
+            content: "const old = 1;",
+            selector_config: None,
+            params: None,
+            matrix_values: None,
+            capabilities: None,
+            semantic_provider: None,
+            llm_request_handler: None,
+            runtime_event_callback: None,
+            cancellation_flag: None,
+            test_mode: false,
+            dry_run: false,
+            target_directory: Path::new("."),
+            pending_files: None,
         };
 
-        let result = execute_codemod_with_quickjs(options).await;
-
-        // Should return Unmodified since we return null
-        match result {
+        match execute_codemod_with_quickjs(options).await {
             Ok(output) => match output.primary {
-                ExecutionResult::Unmodified => {
-                    // Expected
+                ExecutionResult::Modified(modified) => {
+                    assert_eq!(modified.content, "const new = 1;")
                 }
-                other => panic!("Expected unmodified result, got: {:?}", other),
+                other => panic!("expected a modified result, got {other:?}"),
             },
-            Err(e) => panic!("Expected success, got error: {:?}", e),
+            Err(e) => panic!("expected success, got {e:?}"),
         }
-
-        // Now check the metrics
-        let all_metrics = metrics_ctx.get_all();
-        assert!(
-            all_metrics.contains_key("call-count"),
-            "call-count metric should exist"
-        );
-
-        let call_count_entries = all_metrics.get("call-count").unwrap();
-        let console_log_entry = call_count_entries
-            .iter()
-            .find(|e| e.cardinality.get("method") == Some(&"console.log".to_string()));
-        assert!(
-            console_log_entry.is_some(),
-            "Should have a console.log metric entry"
-        );
-        assert_eq!(
-            console_log_entry.unwrap().count,
-            3,
-            "Should have counted 3 console.log calls"
-        );
     }
 
     #[tokio::test]
@@ -2000,14 +1967,13 @@ export default function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: Some(runtime_event_callback),
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -2048,14 +2014,13 @@ export default function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -2096,14 +2061,13 @@ export default function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -2144,14 +2108,13 @@ export default async function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
 
         let result = execute_codemod_with_quickjs(options).await;
@@ -2262,14 +2225,13 @@ export default function transform(root) {
             matrix_values: None,
             capabilities: None,
             semantic_provider: None,
-            metrics_context: None,
             llm_request_handler: None,
-            shared_state_context: None,
             runtime_event_callback: None,
             cancellation_flag: None,
             test_mode: false,
             dry_run: false,
             target_directory: Path::new("."),
+            pending_files: None,
         };
         execute_codemod_with_quickjs(options)
             .await

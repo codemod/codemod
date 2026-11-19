@@ -96,7 +96,8 @@ pub struct ExecutionReport {
     pub arch: String,
     /// Execution statistics
     pub stats: ReportStats,
-    /// Metrics collected during execution (metric_name -> entries)
+    /// Always empty: transforms return data to their workflow instead. Kept
+    /// because shared reports are read in this shape.
     pub metrics: HashMap<String, Vec<ReportMetricEntry>>,
     /// File diffs from the execution, consolidated by file path
     pub diffs: Vec<ReportFileDiff>,
@@ -120,7 +121,6 @@ impl ExecutionReport {
         files_modified: usize,
         files_unmodified: usize,
         files_with_errors: usize,
-        metrics: HashMap<String, Vec<ReportMetricEntry>>,
         report_diffs: ReportDiffs,
     ) -> Self {
         let total_additions: usize = report_diffs.consolidated.iter().map(|d| d.additions).sum();
@@ -145,7 +145,7 @@ impl ExecutionReport {
                 total_additions,
                 total_deletions,
             },
-            metrics,
+            metrics: HashMap::new(),
             diffs: report_diffs.consolidated,
             diff_groups: report_diffs.by_step,
             registry_link_url: None,
@@ -195,25 +195,6 @@ impl ExecutionReport {
 
         stripped
     }
-}
-
-/// Convert MetricsData (from codemod-sandbox) into report-compatible format
-pub fn convert_metrics(
-    metrics_data: &HashMap<String, Vec<codemod_sandbox::metrics::MetricEntry>>,
-) -> HashMap<String, Vec<ReportMetricEntry>> {
-    metrics_data
-        .iter()
-        .map(|(name, entries)| {
-            let report_entries = entries
-                .iter()
-                .map(|e| ReportMetricEntry {
-                    cardinality: e.cardinality.clone(),
-                    count: e.count,
-                })
-                .collect();
-            (name.clone(), report_entries)
-        })
-        .collect()
 }
 
 /// Convert a list of FileDiffs into report-compatible format.
@@ -377,7 +358,6 @@ mod tests {
         ReportFileDiff,
     };
     use crate::diff::FileDiff;
-    use std::collections::HashMap;
     use std::path::Path;
 
     #[test]
@@ -548,7 +528,6 @@ mod tests {
             4,
             2,
             1,
-            HashMap::new(),
             ReportDiffs {
                 consolidated: vec![ReportFileDiff {
                     path: "src/app.ts".to_string(),

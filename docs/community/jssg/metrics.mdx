@@ -1,120 +1,89 @@
 ---
-title: "Metrics"
-description: "Track and aggregate data across codemod executions"
+title: "Returning data"
+description: "Hand back what a transform finds in each file, and analyze it in the workflow"
 ---
 
-Metrics allow you to collect and aggregate data while running codemods. This is useful for:
+A transform can return data along with its edit. The data can be any JSON value, and the workflow gets every file's data back to analyze however it likes. This is useful for:
 
-- **Codebase analysis**: Count occurrences of patterns, prop usages, component instances
-- **Migration tracking**: Track what was rewritten (and in which shapes) while applying transforms
-- **Read-only codemods**: Gather insights without modifying code
+- **Codebase analysis**: find patterns, prop usages, component instances
+- **Migration tracking**: record what your codemod rewrote, grouped by the shape of the change
+- **Read-only codemods**: gather insights without modifying code
 
-## When to emit metrics
-
-Prefer **one metric name per `js-ast-grep` step**, with **cardinality dimensions** for the variants you care about—not a separate metric for every edge case.
+## When to return data
 
 | Package type | Expectation |
 | --- | --- |
-| Transform / migration step | Emit at least one `useMetricAtom` in that step’s script. Increment when you apply a real edit. Use cardinality for shape (e.g. `shape=no-options`, `kind=call-rewrite`). |
-| Read-only mining / Insights | Emit metrics and `return null`. Metric names must be statically visible in the selected step script. |
+| Transform / migration step | Return `{ edit, data }` with an entry for each change you make. Add a field for the variant, such as `shape: "no-options"` or `kind: "call-rewrite"`, so the workflow can group them. |
+| Read-only mining / Insights | Return `{ edit: null, data }` so the transform reports matches without changing files. |
 
-Keep the metric count small. Encode differences as cardinality keys/values on the same atom. Snapshot `metrics.json` next to fixtures that produce counts (`jssg test -u`).
+For standalone JSSG tests, the data is snapshotted in `data.json` next to the fixtures (see [Testing](#testing)).
 
-## Basic Usage
+## Basic usage
 
-Import `useMetricAtom` from `codemod:metrics` to create a metric tracker:
-
-```typescript
-import { useMetricAtom } from "codemod:metrics";
-
-const metric = useMetricAtom("my-metric");
-
-// Increment with cardinality dimensions
-metric.increment({ category: "buttons", variant: "primary" });
-
-// Increment by a specific amount
-metric.increment({ category: "buttons" }, 5);
-
-// Increment without cardinality (simple counter)
-metric.increment();
-```
-
-## Cardinality
-
-Cardinality dimensions are key-value pairs that let you group and filter metrics. When you call `increment()`, you pass an object with string keys and values:
+Return `{ edit, data }` instead of a string:
 
 ```typescript
-metric.increment({
-  propName: "className",
-  propValue: "container",
-  component: "Button"
-});
-```
-
-This creates a unique metric entry for each combination of cardinality values. You can later group by any dimension (e.g., all entries where `component=Button`).
-
-<Tip>
-Use cardinality to capture context about what you're counting. For example, when counting prop usages, include both the prop name and the component it belongs to.
-</Tip>
-
-## Example: Counting Prop Usage
-
-This read-only codemod counts how many times each prop is used on `Button` components:
-
-```typescript
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
-import { useMetricAtom } from "codemod:metrics";
-
-const propUsageMetric = useMetricAtom("prop-usage");
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = async (root) => {
-  const rootNode = root.root();
-
-  const jsxAttrs = rootNode.findAll({
-    rule: {
-      kind: "jsx_attribute",
-      inside: {
-        any: [
-          { kind: "jsx_opening_element" },
-          { kind: "jsx_self_closing_element" },
-        ],
-        has: {
-          field: "name",
-          kind: "identifier",
-          regex: "^Button$"
-        },
-      },
-    },
-  });
-
-  for (const attr of jsxAttrs) {
-    const name = attr?.find({ rule: { kind: "property_identifier" } });
-    const propName = name?.text();
-    if (propName) {
-      propUsageMetric.increment({ propName });
-    }
-  }
-
-  return null;
+  const buttons = root.root().findAll({ rule: { pattern: "<Button $$$ />" } });
+  return {
+    edit: null, // leave the file as it is; a string replaces it
+    data: { buttons: buttons.length },
+  };
 };
 
 export default codemod;
 ```
 
-Running this codemod produces output like:
+- `edit`: the new file content, or `null`/missing to leave the file unchanged. Returning a plain string or `null` still works.
+- `data`: any JSON value, including `null`. To skip a file's data, leave `data` out or set it to `undefined`.
+- Data that isn't JSON (a function, a `BigInt`) is an error, and so are other keys on the result, so a typo doesn't go unnoticed.
 
+## In a workflow
+
+A `jssg` step's result lists each file's data as `data`, sorted by path. Files that returned no data are left out:
+
+```typescript
+import { step, jssg } from "codemod/workflow";
+
+export default async function main() {
+  const scan = await step("Scan", jssg("scripts/codemod.ts"));
+  // [{ file: "src/a.tsx", data: { buttons: 2 } }, { file: "src/b.tsx", data: { buttons: 1 } }]
+  const total = scan.data.reduce((sum, { data }) => sum + data.buttons, 0);
+  return { total };
+}
 ```
-Metrics:
-  prop-usage:
-    propName=onClick: 42
-    propName=className: 38
-    propName=disabled: 15
-    propName=variant: 12
+
+## Folding data as files finish
+
+On a large repository the list can get big. Pass `reduce` and `initial` to fold each file's data into one value as the file finishes, so the step never holds every file's data at once:
+
+```typescript
+const scan = await step(
+  "Scan",
+  jssg("scripts/codemod.ts", {
+    reduce: (total, { file, data }) => total + data.buttons,
+    initial: 0,
+  }),
+);
+scan.data; // 3
 ```
 
-## Insights
+- The reducer gets `{ file, data }` for each file that returned data, in no particular order.
+- It can read the workflow's variables, the way `forEachFile` callbacks do, as long as their values are JSON.
+- Write it inline in the `jssg(...)` call, as an arrow or `function` expression, so the build can extract it.
+- Its result must be JSON. If it throws, the step fails.
 
-Insights binds each dashboard query to one workflow step and loads that step’s `js-ast-grep` script from the published package. Metric names must be statically visible in that script (`useMetricAtom` + `increment`)—not only in a different package file or helper import. This is the selected step’s script, not necessarily the package entry (for example `scripts/codemod.ts`). For scale (transforms or mining), see [Performant codemods](/community/jssg/advanced/performance#performant-codemods).
+A reducer only saves memory. `reduce: (all, entry) => [...all, entry], initial: []` gives the same list as no reducer, just not sorted by path.
 
-Insights runs the selected step on its own, so that step must compute its metric from the repository directly. Don't rely on files written by an earlier step (for example, a `collect` step that writes JSON shards for an `analyze` step); the widget will return no results.
+If a reducer fails or times out, the step discards the pending transform edits. A retry can start from the unchanged files.
+
+## Testing
+
+`codemod jssg test` snapshots the data next to `input` and `expected` as `data.json`, in the same `[{ file, data }]` shape. A missing `data.json` is written on the first run; `--update-snapshots` rewrites a changed one.
+
+<Note>
+In workflow v2, `useMetricAtom` from `codemod/metrics` and the CLI's metric totals were removed. Return what you counted in `data` and add it up in the workflow, or with a reducer.
+</Note>

@@ -1,12 +1,10 @@
 use super::codemod_lang::CodemodLang;
 use super::curated_fs::{CuratedFsConfig, CuratedFsModule, CuratedFsPromisesModule};
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
-use crate::ast_grep::AstGrepModule;
-use crate::llm::{LlmModule, LlmRuntimeContext};
-use crate::metrics::{MetricsContext, MetricsModule};
+use crate::llm::LlmRuntimeContext;
 use crate::sandbox::errors::ExecutionError;
 use crate::sandbox::resolvers::{InMemoryLoader, InMemoryResolver, ModuleResolver};
-use crate::sandbox::runtime_module::{RuntimeHooksContext, RuntimeModule};
+use crate::sandbox::runtime_module::RuntimeHooksContext;
 use crate::utils::quickjs_utils::maybe_promise;
 use ast_grep_config::{RuleConfig, SerializableRuleConfig};
 use codemod_llrt_capabilities::module_builder::LlrtModuleBuilder;
@@ -22,7 +20,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::ast_grep::serde::JsValue;
-use crate::workflow_global::WorkflowGlobalModule;
 
 pub struct SelectorEngineOptions<'a, R> {
     pub script_path: &'a Path,
@@ -222,30 +219,10 @@ where
         None
     };
 
-    let (mut built_in_resolver, mut built_in_loader, global_attachment) =
+    let (mut built_in_resolver, built_in_loader, global_attachment) =
         module_builder.builder.build();
-
-    // Add AstGrepModule
-    built_in_resolver = built_in_resolver.add_name("codemod:ast-grep");
-    built_in_loader = built_in_loader.with_module("codemod:ast-grep", AstGrepModule);
-
-    // Add WorkflowGlobalModule (step outputs)
-    built_in_resolver = built_in_resolver.add_name("codemod:workflow");
-    built_in_loader = built_in_loader.with_module("codemod:workflow", WorkflowGlobalModule);
-
-    // Add MetricsModule (metrics tracking)
-    built_in_resolver = built_in_resolver.add_name("codemod:metrics");
-    built_in_loader = built_in_loader.with_module("codemod:metrics", MetricsModule);
-
-    // Selector extraction evaluates the codemod's module graph, so it must
-    // expose the same runtime imports as normal codemod execution.
-    built_in_resolver = built_in_resolver.add_name("codemod:runtime");
-    built_in_loader = built_in_loader.with_module("codemod:runtime", RuntimeModule);
-
-    if llm_capability_enabled {
-        built_in_resolver = built_in_resolver.add_name("codemod:llm");
-        built_in_loader = built_in_loader.with_module("codemod:llm", LlmModule);
-    }
+    let (codemod_resolver, mut built_in_loader) =
+        crate::with_codemod_modules!(built_in_loader, llm: llm_capability_enabled);
 
     // Register the curated `fs` / `fs/promises` modules when applicable.
     if curated_fs_config.is_some() {
@@ -258,7 +235,7 @@ where
     // Combine resolvers and loaders
     runtime
         .set_loader(
-            (built_in_resolver, module_resolver),
+            (codemod_resolver, built_in_resolver, module_resolver),
             (built_in_loader, module_loader),
         )
         .await;
@@ -290,15 +267,6 @@ where
                 })?;
         }
 
-        // Selector extraction may evaluate the codemod's full module graph.
-        // Install a disposable metrics context so modules that import
-        // `codemod:metrics` can initialize without requiring transform execution.
-        ctx.store_userdata(MetricsContext::new())
-            .map_err(|e| ExecutionError::Runtime {
-                source: crate::sandbox::errors::RuntimeError::InitializationFailed {
-                    message: format!("Failed to store MetricsContext: {:?}", e),
-                },
-            })?;
         ctx.store_userdata(LlmRuntimeContext::default())
             .map_err(|e| ExecutionError::Runtime {
                 source: crate::sandbox::errors::RuntimeError::InitializationFailed {
@@ -636,43 +604,6 @@ mod tests {
         assert!(
             result.is_some(),
             "const arrow getSelector exports should be supported"
-        );
-    }
-
-    #[tokio::test]
-    async fn selector_extraction_supports_top_level_metrics_imports() {
-        let dir = tempdir().unwrap();
-        let script_path = dir.path().join("codemod.js");
-        std::fs::write(
-            &script_path,
-            r#"
-            import { useMetricAtom } from "codemod:metrics";
-
-            const selectorMetric = useMetricAtom("selector_metric");
-
-            export const getSelector = () => {
-                selectorMetric.increment();
-                return { rule: { kind: "string_fragment" } };
-            };
-            export default function codemod() {}
-            "#,
-        )
-        .unwrap();
-
-        let resolver = Arc::new(OxcResolver::new(dir.path().to_path_buf(), None).unwrap());
-        let result = extract_selector_with_quickjs(SelectorEngineOptions {
-            script_path: &script_path,
-            language: "tsx".parse::<CodemodLang>().unwrap(),
-            resolver,
-            capabilities: None,
-            target_directory: Some(dir.path()),
-        })
-        .await
-        .unwrap();
-
-        assert!(
-            result.is_some(),
-            "selector extraction should support top-level metrics imports"
         );
     }
 

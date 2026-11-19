@@ -57,19 +57,40 @@ pub fn convert_matcher<'js>(
         return Ok(JsMatcherRjs::Kind(kind_matcher));
     } else if value.is_object() {
         let js_value = JsValue::from_js(ctx, value)?;
-        let serde_value: SerializableRuleCore = serde_json::from_value(js_value.0)
-            .map_err(|e| Exception::throw_type(ctx, &e.to_string()))?;
-        let env = DeserializeEnv::new(lang);
-        let config = serde_value
-            .get_matcher(env)
-            .map_err(|e| Exception::throw_type(ctx, &e.to_string()))?;
-        return Ok(JsMatcherRjs::Config(config));
+        return rule_matcher(js_value.0, lang).map_err(|e| Exception::throw_type(ctx, &e));
     }
 
     Err(Exception::throw_type(
         ctx,
         "Matcher must be an object with a 'pattern' or 'kind' property",
     ))
+}
+
+/// A matcher from a rule object (`{ rule: { pattern: ... } }`, as JSON).
+pub fn rule_matcher(rule: serde_json::Value, lang: SupportLang) -> Result<JsMatcherRjs, String> {
+    let serde_value: SerializableRuleCore =
+        serde_json::from_value(rule).map_err(|e| e.to_string())?;
+    let env = DeserializeEnv::new(lang);
+    let config = serde_value.get_matcher(env).map_err(|e| e.to_string())?;
+    Ok(JsMatcherRjs::Config(config))
+}
+
+/// A matcher from a JSON value: a pattern string, a kind id, or a rule object.
+pub fn json_matcher(value: serde_json::Value, lang: SupportLang) -> Result<JsMatcherRjs, String> {
+    match value {
+        serde_json::Value::String(pattern) => {
+            Ok(JsMatcherRjs::Pattern(Pattern::new(&pattern, lang)))
+        }
+        serde_json::Value::Number(kind) => {
+            let kind = kind
+                .as_u64()
+                .and_then(|kind| u16::try_from(kind).ok())
+                .ok_or_else(|| format!("{kind} is not a node kind id"))?;
+            Ok(JsMatcherRjs::Kind(KindMatcher::from_id(kind)))
+        }
+        rule @ serde_json::Value::Object(_) => rule_matcher(rule, lang),
+        _ => Err("Matcher must be an object with a 'pattern' or 'kind' property".to_string()),
+    }
 }
 
 pub fn detect_language_from_extension(extension: &str) -> Result<&'static str, AstGrepError> {

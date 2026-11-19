@@ -1,0 +1,29 @@
+{
+  // Type-checks the engine's own JavaScript. Nothing is emitted: the engine
+  // strips the types itself when it loads these files (crates/workflow/src/js.rs).
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "types": [],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "moduleDetection": "force",
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "codemod-internal:orchestrator": ["./orchestrator.ts"],
+      "codemod-internal:semver": ["./semver.ts"],
+      "codemod-internal:dependencies": ["./dependencies.ts"],
+      "codemod/workflow": ["./workflow.ts"]
+    },
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    // Only syntax that disappears when types are removed.
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": ["./*.ts"]
+}

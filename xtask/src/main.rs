@@ -1,18 +1,10 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
-    io::Write,
-    path::Path,
-};
+use std::{fs::File, io::Write, path::Path};
 
-use butterflow_models::{StateDiff, Task, TaskDiff, Workflow, WorkflowRun, WorkflowRunDiff};
+use butterflow_models::Workflow;
 use clap::{Parser, Subcommand};
 use serde_json::to_writer_pretty;
-use ts_export::export_recursive;
-use ts_rs::Config;
 
 mod tree_sitter_compress;
-mod ts_export;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -25,8 +17,6 @@ struct Args {
 enum Commands {
     /// Generate a JSON schema for the workflow object.
     Schema,
-    /// Generate a TypeScript definition for the workflow object.
-    Ts,
     /// Compress tree-sitter grammar node types to AI-friendly format.
     CompressTreeSitter,
 }
@@ -49,33 +39,6 @@ async fn main() {
             };
             to_writer_pretty(&mut json_file, &schema).unwrap();
             json_file.write_all(b"\n").unwrap();
-        }
-        Commands::Ts => {
-            let Ok(xtask_path) = std::env::var("CARGO_MANIFEST_DIR") else {
-                panic!("Cannot find CARGO_MANIFEST_DIR");
-            };
-            let schema_out_dir = Path::new(&xtask_path)
-                .parent()
-                .unwrap()
-                .join("crates/scheduler/npm");
-
-            let ts_schema_path = schema_out_dir.join("types.ts");
-            let mut ts_file = File::create(&ts_schema_path).unwrap();
-            let mut type_hash_map = HashMap::new();
-            let mut type_names = HashSet::new();
-            let config = Config::default();
-            export_recursive::<Workflow>(&mut type_hash_map, &mut type_names, &config);
-            export_recursive::<Task>(&mut type_hash_map, &mut type_names, &config);
-            export_recursive::<WorkflowRun>(&mut type_hash_map, &mut type_names, &config);
-            export_recursive::<TaskDiff>(&mut type_hash_map, &mut type_names, &config);
-            export_recursive::<StateDiff>(&mut type_hash_map, &mut type_names, &config);
-            export_recursive::<WorkflowRunDiff>(&mut type_hash_map, &mut type_names, &config);
-            let mut type_hash_map = type_hash_map.into_iter().collect::<Vec<_>>();
-            type_hash_map.sort_by_key(|(k, _)| *k);
-            for (_, ts_def) in type_hash_map {
-                ts_file.write_all(ts_def.as_bytes()).unwrap();
-                ts_file.write_all(b"\n").unwrap();
-            }
         }
         Commands::CompressTreeSitter => {
             if let Err(e) = tree_sitter_compress::compress_tree_sitter_grammar().await {

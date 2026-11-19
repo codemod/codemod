@@ -1,44 +1,29 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Args;
-use uuid::Uuid;
+use codemod_workflow::{cancel_run, Canceled};
 
-use crate::engine::create_engine;
+use crate::workflow_exec::store;
 
 #[derive(Args, Debug)]
 pub struct Command {
     /// Workflow run ID
     #[arg(short, long)]
-    id: Uuid,
+    id: String,
 }
 
-/// Cancel a workflow
+/// Cancel a workflow run. A run in progress (in this or another terminal)
+/// stops after the step it is on; any other unfinished run is marked
+/// canceled.
 pub async fn handler(args: &Command) -> Result<()> {
-    let (engine, _) = create_engine(
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
-        None,
-        None,
-        false,
-        None,
-        false,
-        Default::default(),
-        None,
-        None,
-        None,
-    )?;
-
-    println!("Canceling workflow run {}...", args.id);
-
-    // Cancel workflow
-    engine
-        .cancel_workflow(args.id)
-        .await
-        .context("Failed to cancel workflow")?;
-
-    println!("✅ Workflow run canceled successfully");
-
+    match cancel_run(store().as_ref(), &args.id)? {
+        Canceled::Requested => println!(
+            "Asked run {} to stop; it stops after the step it is on.",
+            args.id
+        ),
+        Canceled::Marked => println!("Run {} canceled.", args.id),
+        Canceled::AlreadyFinished(status) => {
+            println!("Run {} already {}.", args.id, status.as_str())
+        }
+    }
     Ok(())
 }

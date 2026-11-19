@@ -6,7 +6,6 @@ use std::fmt;
 use std::io::{self, IsTerminal, Write};
 use std::sync::Arc;
 mod agent_log_renderer;
-mod agent_select;
 mod ascii_art;
 mod auth;
 mod auth_provider;
@@ -21,9 +20,9 @@ mod pro_dry_run;
 mod progress_bar;
 mod report_server;
 mod suitability;
-mod tui;
 mod utils;
-mod workflow_runner;
+mod workflow_exec;
+mod workflow_test;
 use crate::auth::TokenStorage;
 use ascii_art::print_ascii_art;
 use codemod_telemetry::{
@@ -135,8 +134,15 @@ enum WorkflowCommands {
     /// Cancel a workflow run
     Cancel(commands::workflow::cancel::Command),
 
-    /// Browse and interact with workflow runs in the terminal
-    Tui(commands::workflow::tui::Command),
+    /// Send an event to a workflow run that waits for it
+    Send(commands::workflow::send::Command),
+
+    /// Convert workflow.yaml files to workflow.ts
+    Upgrade(commands::workflow::upgrade::Command),
+
+    /// Run one workflow test from a JSON spec on stdin (used by `codemod/testing`)
+    #[command(hide = true)]
+    Harness(commands::workflow::harness::Command),
 }
 
 #[derive(Subcommand, Debug)]
@@ -412,7 +418,7 @@ async fn handle_implicit_run_command(
 async fn main() {
     if let Err(error) = run_cli().await {
         if error
-            .downcast_ref::<workflow_runner::WorkflowFailureAlreadyReported>()
+            .downcast_ref::<workflow_exec::WorkflowFailureAlreadyReported>()
             .is_none()
             && error.downcast_ref::<NoCommandAlreadyReported>().is_none()
         {
@@ -529,8 +535,14 @@ async fn dispatch_command(cli: &Cli, telemetry_sender: TelemetrySenderMutex) -> 
             WorkflowCommands::Cancel(args) => {
                 commands::workflow::cancel::handler(args).await?;
             }
-            WorkflowCommands::Tui(args) => {
-                commands::workflow::tui::handler(args, telemetry_sender.clone()).await?;
+            WorkflowCommands::Send(args) => {
+                commands::workflow::send::handler(args).await?;
+            }
+            WorkflowCommands::Upgrade(args) => {
+                commands::workflow::upgrade::handler(args)?;
+            }
+            WorkflowCommands::Harness(args) => {
+                commands::workflow::harness::handler(args).await?;
             }
         },
         Some(Commands::Jssg(args)) => match &args.command {
@@ -884,27 +896,9 @@ mod tests {
     }
 
     #[test]
-    fn parser_accepts_init_with_skill_flag() {
-        let parse_result = Cli::try_parse_from([
-            "codemod",
-            "init",
-            "my-with-skill",
-            "--no-interactive",
-            "--project-type",
-            "ast-grep-js",
-            "--with-skill",
-            "--language",
-            "typescript",
-            "--description",
-            "With skill package",
-            "--author",
-            "Author <author@example.com>",
-            "--license",
-            "MIT",
-            "--package-manager",
-            "npm",
-        ]);
-        assert!(parse_result.is_ok());
+    fn parser_rejects_init_with_skill_flag() {
+        let parse_result = Cli::try_parse_from(["codemod", "init", "my-codemod", "--with-skill"]);
+        assert!(parse_result.is_err());
     }
 
     #[test]

@@ -10,7 +10,7 @@ description: Use when working on JSSG, Codemod's JavaScript/TypeScript sandbox, 
 - Rust sandbox: `crates/codemod-sandbox/src`
 - TypeScript runtime glue: `crates/codemod-sandbox/js`
 - Sandbox package tests: `crates/codemod-sandbox/tests`
-- Type declarations: `packages/jssg-types/src`
+- Type declarations: `crates/cli/npm/types` (shipped in the `codemod` npm package; `packages/jssg-types` mirrors them at pack time)
 - Author utilities: `packages/jssg-utils/src`
 
 ## Rules
@@ -35,4 +35,4 @@ description: Use when working on JSSG, Codemod's JavaScript/TypeScript sandbox, 
 - Sandbox package: `pnpm --filter @codemod.com/codemod-sandbox test`
 - Sandbox build: `pnpm --filter @codemod.com/codemod-sandbox build`
 - JSSG utils: `pnpm --filter @jssg/utils test`
-- Type declarations: `pnpm --filter @codemod.com/jssg-types typecheck`
+- Type declarations: `pnpm --filter codemod typecheck`

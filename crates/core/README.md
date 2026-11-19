@@ -2,6 +2,8 @@
 
 Butterflow is a lightweight, self-hostable workflow engine designed for running large-scale code transformation jobs. Similar to GitHub Actions but with a focus on local execution and code transformations like codemods and grep operations.
 
+> **Workflow v2:** the engine has no workflow state. A `workflow.yaml` is translated into a TypeScript workflow (`codemod workflow upgrade`), where state is a plain object local to the run: shell steps still get it as `CODEMOD_STATE_<KEY>` variables and still write `key=value` lines to `$STATE_OUTPUTS`, but the generated workflow reads those lines, not the engine. See `docs/community/workflows/migrate.mdx`. The state sections below describe the YAML engine.
+
 ## Installation
 
 ### Building from Source

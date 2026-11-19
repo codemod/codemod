@@ -1,0 +1,5 @@
+{"type":"system","subtype":"session_start","uuid":"u0","session_id":"q-123","cwd":"/work","tools":["write_file"],"model":"qwen3-coder-plus","permission_mode":"yolo"}
+{"type":"assistant","uuid":"u1","session_id":"q-123","message":{"id":"m1","role":"assistant","model":"qwen3-coder-plus","content":[{"type":"tool_use","id":"t1","name":"write_file","input":{"file_path":"hello.txt","content":"hi"}}],"usage":{"input_tokens":500,"output_tokens":30}},"parent_tool_use_id":null}
+{"type":"user","uuid":"u2","session_id":"q-123","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok","is_error":false}]},"parent_tool_use_id":null}
+{"type":"assistant","uuid":"u3","session_id":"q-123","message":{"id":"m2","role":"assistant","model":"qwen3-coder-plus","content":[{"type":"text","text":"DONE"}],"usage":{"input_tokens":600,"output_tokens":2}},"parent_tool_use_id":null}
+{"type":"result","subtype":"success","uuid":"u4","session_id":"q-123","is_error":false,"duration_ms":2000,"duration_api_ms":1800,"num_turns":2,"result":"DONE","usage":{"input_tokens":1100,"output_tokens":32}}

@@ -4,6 +4,10 @@ title: "Testing"
 
 Test your JSSG codemod using snapshot testing with single-file fixtures or full directory snapshots.
 
+<Tip>
+  These tests run one transform file. To run the same fixtures through the whole workflow, with every step it runs, use a [workflow test file](/community/workflows/testing).
+</Tip>
+
 ## Test structure
 
 JSSG tests support two fixture layouts:
@@ -155,7 +159,7 @@ function Component() {
 - Single-file fixtures update the matching `expected.*` file
 - Directory fixtures update changed files, create missing expected files, and remove stale expected files that should no longer exist
 
-`metrics.json` snapshots continue to be handled separately from directory tree comparisons.
+`data.json` snapshots of the returned data are handled separately from directory tree comparisons.
 
 ## Troubleshooting
 

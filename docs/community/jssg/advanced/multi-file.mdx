@@ -10,8 +10,8 @@ Coordinate changes beyond a single file: secondary-file transforms, renames, and
 Use multi-repo orchestration when your codemod must coordinate changes across multiple repositories—such as updating shared libraries, enforcing consistency, or applying repo-specific logic. This approach streamlines large-scale migrations and ensures changes are applied uniformly.
 
 ```ts
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 
 const codemod: Codemod<TSX> = async (root, options) => {
   const filePath = root.filename();
@@ -37,10 +37,10 @@ Sometimes a codemod needs to modify multiple files in a coordinated way. For exa
 Use `jssgTransform()` to apply a transform function to another file from within your main transform. The secondary file's changes are collected and applied atomically alongside the primary file's changes.
 
 ```ts
-import { jssgTransform } from "codemod:ast-grep";
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
-import type CSS from "codemod:ast-grep/langs/css";
+import { jssgTransform } from "codemod/ast-grep";
+import type { Codemod, Edit } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
+import type CSS from "codemod/ast-grep/langs/css";
 
 const migrateStyles: Codemod<CSS> = async (root) => {
   // Rename the file from .less to .css

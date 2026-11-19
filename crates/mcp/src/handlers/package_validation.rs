@@ -293,9 +293,14 @@ impl PackageValidationHandler {
         let workflow_resolution = workflow_path_for_package(&package_root);
         let workflow_path = workflow_resolution.path.clone();
         let files = collect_file_presence(&package_root, &workflow_path);
-        let package_kind = infer_validation_package_kind(&package_root, &files);
+        let package_kind = infer_validation_package_kind(&package_root, &workflow_path, &files);
         let workflow_valid = validate_workflow_at_path(&workflow_path).is_ok();
-        let transform_path = package_root.join("scripts/codemod.ts");
+        let transform_path = transform_file(&package_root, &workflow_path);
+        let transform_name = transform_path
+            .strip_prefix(&package_root)
+            .unwrap_or(&transform_path)
+            .display()
+            .to_string();
         let readme_path = package_root.join("README.md");
         let tests_path = package_root.join("tests");
 
@@ -410,7 +415,7 @@ impl PackageValidationHandler {
             issues.push(issue(
                 "error",
                 "starter_transform_present",
-                "scripts/codemod.ts still contains the starter transform scaffold.",
+                &format!("{transform_name} still contains the starter transform scaffold."),
                 Some(transform_path.clone()),
             ));
         }
@@ -450,7 +455,7 @@ impl PackageValidationHandler {
                 "error",
                 "risky_regex_transform_detected",
                 &format!(
-                    "scripts/codemod.ts uses regex or string operations in likely raw-source transform logic at lines {}.",
+                    "{transform_name} uses regex or string operations in likely raw-source transform logic at lines {}.",
                     format_line_list(&transform_risks.risky_regex_lines)
                 ),
                 Some(transform_path.clone()),
@@ -513,6 +518,22 @@ impl PackageValidationHandler {
     }
 }
 
+/// Where the package's transform is: `scripts/codemod.ts`, or a
+/// `workflow.ts` that holds it in a `forEachFile` callback, as `codemod init`
+/// writes it.
+fn transform_file(package_root: &Path, workflow_path: &Path) -> PathBuf {
+    let script = package_root.join("scripts/codemod.ts");
+    if script.is_file() || !is_typescript_workflow(workflow_path) {
+        script
+    } else {
+        workflow_path.to_path_buf()
+    }
+}
+
+fn is_typescript_workflow(workflow_path: &Path) -> bool {
+    workflow_path.extension().is_some_and(|ext| ext == "ts") && workflow_path.is_file()
+}
+
 fn canonicalize_package_root(path: Option<&str>) -> Result<PathBuf> {
     let root = path
         .filter(|value| !value.trim().is_empty())
@@ -534,17 +555,27 @@ fn collect_file_presence(package_root: &Path, workflow_path: &Path) -> PackageFi
 
 fn infer_validation_package_kind(
     package_root: &Path,
+    workflow_path: &Path,
     files: &PackageFilePresence,
 ) -> ValidationPackageKind {
-    let has_rules = package_root.join("rules").is_dir();
-    let has_shell_scripts = package_root.join("scripts/transform.sh").is_file();
+    // Rules and scripts are at the package root, or next to the workflow
+    // (`src/workflow.ts` with `src/rules/` and `src/scripts/`).
+    let workflow_dir = workflow_path.parent().unwrap_or(package_root);
+    let dirs = [package_root, workflow_dir];
+    let has_rules = dirs.iter().any(|dir| dir.join("rules").is_dir());
+    let has_shell_scripts = dirs
+        .iter()
+        .any(|dir| dir.join("scripts/transform.sh").is_file());
     let has_authored_skill = package_root.join("agents/skill").is_dir();
+    // A TypeScript package's workflow.ts can hold the transform itself.
+    let has_transform =
+        files.scripts_codemod_ts || (files.package_json && is_typescript_workflow(workflow_path));
 
-    if has_rules && (files.scripts_codemod_ts || has_shell_scripts) {
+    if has_rules && (has_transform || has_shell_scripts) {
         return ValidationPackageKind::Hybrid;
     }
 
-    if files.scripts_codemod_ts {
+    if has_transform {
         return ValidationPackageKind::Jssg;
     }
 
@@ -567,11 +598,21 @@ fn infer_validation_package_kind(
     ValidationPackageKind::Unknown
 }
 
+/// `workflow.ts` (or `src/workflow.ts`) when the package has one, otherwise
+/// `workflow.yaml`.
+fn default_workflow_file(package_root: &Path) -> &'static str {
+    ["workflow.ts", "src/workflow.ts"]
+        .into_iter()
+        .find(|file| package_root.join(file).is_file())
+        .unwrap_or("workflow.yaml")
+}
+
 fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
+    let default_file = default_workflow_file(package_root);
     let manifest_path = package_root.join("codemod.yaml");
     let Some(content) = read_file_if_exists(&manifest_path) else {
         return WorkflowPathResolution {
-            path: package_root.join("workflow.yaml"),
+            path: package_root.join(default_file),
             codemod_yaml_invalid: false,
             workflow_path_invalid: false,
         };
@@ -579,16 +620,28 @@ fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
 
     let Ok(manifest) = serde_yaml::from_str::<YamlValue>(&content) else {
         return WorkflowPathResolution {
-            path: package_root.join("workflow.yaml"),
+            path: package_root.join(default_file),
             codemod_yaml_invalid: true,
             workflow_path_invalid: false,
         };
     };
+    let listed = manifest
+        .get("workflows")
+        .and_then(|value| value.as_sequence())
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| entry.get("default").and_then(|d| d.as_bool()) == Some(true))
+                .or_else(|| entries.first())
+        })
+        .and_then(|entry| entry.get("path"))
+        .and_then(|value| value.as_str());
     let workflow = manifest
         .get("workflow")
         .and_then(|value| value.as_str())
+        .or(listed)
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or("workflow.yaml");
+        .unwrap_or(default_file);
 
     let workflow_path = Path::new(workflow);
     let unsafe_workflow_path = workflow_path.is_absolute()
@@ -598,7 +651,7 @@ fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
 
     WorkflowPathResolution {
         path: if unsafe_workflow_path {
-            package_root.join("workflow.yaml")
+            package_root.join(default_file)
         } else {
             package_root.join(workflow_path)
         },
@@ -608,6 +661,11 @@ fn workflow_path_for_package(package_root: &Path) -> WorkflowPathResolution {
 }
 
 fn validate_workflow_at_path(workflow_path: &Path) -> Result<()> {
+    if codemod_workflow::is_typescript(workflow_path) {
+        return codemod_workflow::load_workflow(workflow_path)
+            .map(|_| ())
+            .map_err(|e| anyhow::anyhow!("Workflow validation failed: {e}"));
+    }
     let workflow = parse_workflow_file(workflow_path)
         .with_context(|| format!("Failed to parse workflow {}", workflow_path.display()))?;
     let parent_dir = workflow_path
@@ -800,9 +858,11 @@ fn push_missing_file_issues(
             package_root.join("README.md"),
         ),
         (
-            !requirements.scripts_codemod_ts || files.scripts_codemod_ts,
+            !requirements.scripts_codemod_ts
+                || files.scripts_codemod_ts
+                || is_typescript_workflow(workflow_path),
             "missing_transform_script",
-            "scripts/codemod.ts is missing.",
+            "scripts/codemod.ts is missing (a workflow.ts may hold the transform itself).",
             package_root.join("scripts/codemod.ts"),
         ),
         (
@@ -1242,6 +1302,84 @@ mod tests {
         assert!(response.generic_readme_detected);
         assert!(response.test_cases.starter_fixtures_detected);
         assert!(!response.ready);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_package_with_its_workflow_rules_and_scripts_in_src_is_recognized() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("src/rules")).unwrap();
+        fs::create_dir_all(dir.join("src/scripts")).unwrap();
+        fs::create_dir_all(dir.join("agents/skill/p")).unwrap();
+        fs::write(
+            dir.join("src/workflow.ts"),
+            "export default async function main() {}\n",
+        )
+        .unwrap();
+        fs::write(dir.join("src/scripts/transform.sh"), "").unwrap();
+        fs::write(dir.join("package.json"), "{}\n").unwrap();
+
+        // Found without codemod.yaml naming it.
+        let workflow = workflow_path_for_package(&dir).path;
+        assert_eq!(workflow, dir.join("src/workflow.ts"));
+        let files = collect_file_presence(&dir, &workflow);
+        assert_eq!(
+            infer_validation_package_kind(&dir, &workflow, &files),
+            ValidationPackageKind::Hybrid
+        );
+
+        // Without rules, the workflow holds the transform: a JSSG package,
+        // though it also has a skill.
+        fs::remove_dir_all(dir.join("src/rules")).unwrap();
+        fs::remove_dir_all(dir.join("src/scripts")).unwrap();
+        assert_eq!(
+            infer_validation_package_kind(&dir, &workflow, &files),
+            ValidationPackageKind::Jssg
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_workflow_ts_holds_the_transform_without_scripts_codemod_ts() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(dir.join("tests/fixtures")).unwrap();
+        fs::write(dir.join("codemod.yaml"), "workflow: workflow.ts\n").unwrap();
+        fs::write(
+            dir.join("workflow.ts"),
+            format!(
+                "import {{ forEachFile, step }} from \"codemod/workflow\";\nexport default async function main() {{\n  await step(forEachFile(\"**/*.ts\", (file) => {{\n    // {STARTER_TRANSFORM_MARKER}\n  }}));\n}}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(dir.join("package.json"), "{\"scripts\":{}}\n").unwrap();
+        fs::write(dir.join("README.md"), "# Example\n").unwrap();
+
+        let handler = PackageValidationHandler::new();
+        let response = handler
+            .validate_package(ValidateCodemodPackageRequest {
+                package_path: Some(dir.display().to_string()),
+                run_default_test: false,
+                run_check_types: false,
+                command_timeout_seconds: 5,
+            })
+            .await
+            .unwrap();
+
+        assert!(response
+            .issues
+            .iter()
+            .all(|issue| issue.code != "missing_transform_script"));
+        assert!(response.starter_transform_detected);
+        let starter = response
+            .issues
+            .iter()
+            .find(|issue| issue.code == "starter_transform_present")
+            .unwrap();
+        assert!(
+            starter.message.starts_with("workflow.ts "),
+            "{}",
+            starter.message
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -12,7 +12,8 @@
   "repository": "https://github.com/codemod/codemod",
   "license": "Apache-2.0",
   "files": [
-    "codemod.exe"
+    "codemod.exe",
+    "codemod.node"
   ],
   "engines": {
     "node": ">= 10"

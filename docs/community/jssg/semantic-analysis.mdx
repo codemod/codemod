@@ -7,7 +7,7 @@ Semantic analysis enables your codemods to understand symbol relationships in co
 
 ## When to enable it
 
-Pattern matching alone is not enough when **symbol origin** matters. Enable `semantic_analysis` on the `js-ast-grep` step (usually `file` first; `workspace` when you need cross-file resolution) before you ship if any of these are true:
+Pattern matching alone is not enough when **symbol origin** matters. Use the `jssg` task's `semanticAnalysis` option in `workflow.ts` (`"file"` by default; `"workspace"` when you need cross-file resolution). In legacy YAML, set `semantic_analysis` on the `js-ast-grep` step. Check symbol origin before you ship if any of these are true:
 
 | Risk | Example | What to do |
 | --- | --- | --- |
@@ -209,6 +209,8 @@ Configure semantic analysis mode. Can be:
 - `"file"` — Single-file analysis (default)
 - `"workspace"` — Workspace-wide analysis using the target path
 - `{ mode: "workspace", root: "./path" }` — Workspace-wide with custom root
+
+In `workflow.ts`, the `jssg` task's `semanticAnalysis` option takes the same values, and `"none"` turns analysis off.
 </ParamField>
 
 **Run the workflow:**
@@ -856,7 +858,7 @@ for (const fileRef of refs) {
 <AccordionGroup>
 <Accordion title="Semantic methods return null/empty">
 **Possible causes:**
-- No semantic analysis configured in workflow (add `semantic_analysis: workspace`)
+- Semantic analysis is turned off for the step (`semanticAnalysis: "none"`), or the symbol is in another file and the step uses the default file scope (use `semanticAnalysis: "workspace"`, or `semantic_analysis: workspace` in `workflow.yaml`)
 - The language isn't supported (only JavaScript/TypeScript and Python)
 - The symbol couldn't be resolved (external library, syntax error)
 

@@ -1,0 +1,4 @@
+{"role":"assistant","content":"Creating the file.","tool_calls":[{"type":"function","id":"tc1","function":{"name":"WriteFile","arguments":"{\"path\":\"hello.txt\",\"content\":\"hi\"}"}}]}
+{"role":"tool","tool_call_id":"tc1","content":"Wrote 2 bytes"}
+{"role":"assistant","content":"DONE"}
+{"role":"meta","type":"session.resume_hint","session_id":"k-123","command":"kimi -r k-123"}

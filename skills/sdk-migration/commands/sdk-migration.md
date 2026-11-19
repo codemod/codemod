@@ -19,8 +19,8 @@ Non-negotiable:
 - Registry `name`: letters/numbers/hyphens/underscores only (optional `@scope/`). **No dots** — hyphenate versions (`sdk-1-24-to-1-25`, not `1.24-to-1.25`)
 - Scaffold in a dedicated workspace — not inside unrelated product repos unless asked
 - Read `npx codemod ai docs codemod-creation-workflow`, then `jssg-gotchas`, `ast-grep-gotchas`, `jssg-utils`, and `jssg` (covers semantic analysis + metrics), before writing transforms
-- Prefer `@jssg/utils` for import gates / style / renames; enable `semantic_analysis` when symbol origin or generic method names matter
-- Each `js-ast-grep` step emits metrics (`useMetricAtom` in that script; prefer one metric per step with cardinality; snapshot `metrics.json`)
+- Prefer `@jssg/utils` for import gates / style / renames; use `semanticAnalysis` in `workflow.ts` when symbol origin or generic method names matter
+- Count real edits with `{ edit, data }` from the transform. Return one entry per edit with a field such as `kind` so the workflow can group by variant. Snapshot `data.json` in standalone JSSG fixtures.
 - Stay AST-first with `js-ast-grep` for parser-backed formats
 - Fixtures are the coverage map of the whole migration: depth for wired steps (positive / negative / edge / no-op per distinct surface) plus backlog fixtures for deferred-automatable breaks
 - Do not publish until `workflow validate`, `validate_codemod_package`, and package tests pass

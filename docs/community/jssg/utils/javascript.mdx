@@ -66,8 +66,8 @@ Returns `null` if the import is not found. A namespace import is returned only w
 **Example**
 
 ```typescript
-import type { Codemod } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 import { getImport } from "@jssg/utils/javascript/imports";
 
 const codemod: Codemod<TSX> = async (root) => {
@@ -132,8 +132,8 @@ parameters, and identifiers in TypeScript parameter default values are excluded.
 **Example**
 
 ```typescript
-import type { Transform } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Transform } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 import { getAllImports } from "@jssg/utils/javascript/imports";
 
 const transform: Transform<TSX> = async (root) => {
@@ -227,8 +227,8 @@ Add an import to the program. Smart behavior:
 **Example**
 
 ```typescript
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod, Edit } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 import { addImport } from "@jssg/utils/javascript/imports";
 
 const codemod: Codemod<TSX> = async (root) => {
@@ -296,8 +296,8 @@ Remove an import from the program. Smart behavior:
 **Example**
 
 ```typescript
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod, Edit } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 import { removeImport } from "@jssg/utils/javascript/imports";
 
 const codemod: Codemod<TSX> = async (root) => {
@@ -350,8 +350,8 @@ Replace named specifiers of an existing import or `require` in place. The whole 
 **Example**
 
 ```typescript
-import type { Codemod, Edit } from "codemod:ast-grep";
-import type TSX from "codemod:ast-grep/langs/tsx";
+import type { Codemod, Edit } from "codemod/ast-grep";
+import type TSX from "codemod/ast-grep/langs/tsx";
 import { updateImport } from "@jssg/utils/javascript/imports";
 
 const codemod: Codemod<TSX> = async (root) => {

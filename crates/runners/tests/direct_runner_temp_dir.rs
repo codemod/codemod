@@ -22,6 +22,6 @@ async fn runs_from_a_temp_dir_with_cmd_metacharacters() {
     let left_behind = std::fs::read_dir(&temp).unwrap().count();
     std::fs::remove_dir_all(&temp).ok();
 
-    assert_eq!(output.unwrap().trim_end(), "ok");
+    assert_eq!(output.unwrap().stdout.trim_end(), "ok");
     assert_eq!(left_behind, 0, "the temporary script is removed");
 }

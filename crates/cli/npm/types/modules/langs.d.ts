@@ -1,0 +1,87 @@
+declare module "codemod:ast-grep/langs/angular" {
+  export { default } from "codemod/langs/angular";
+}
+
+declare module "codemod:ast-grep/langs/c" {
+  export { default } from "codemod/langs/c";
+}
+
+declare module "codemod:ast-grep/langs/c_sharp" {
+  export { default } from "codemod/langs/c_sharp";
+}
+
+declare module "codemod:ast-grep/langs/cpp" {
+  export { default } from "codemod/langs/cpp";
+}
+
+declare module "codemod:ast-grep/langs/css" {
+  export { default } from "codemod/langs/css";
+}
+
+declare module "codemod:ast-grep/langs/elixir" {
+  export { default } from "codemod/langs/elixir";
+}
+
+declare module "codemod:ast-grep/langs/go" {
+  export { default } from "codemod/langs/go";
+}
+
+declare module "codemod:ast-grep/langs/html" {
+  export { default } from "codemod/langs/html";
+}
+
+declare module "codemod:ast-grep/langs/xml" {
+  export { default } from "codemod/langs/xml";
+}
+
+declare module "codemod:ast-grep/langs/json" {
+  export { default } from "codemod/langs/json";
+}
+
+declare module "codemod:ast-grep/langs/java" {
+  export { default } from "codemod/langs/java";
+}
+
+declare module "codemod:ast-grep/langs/javascript" {
+  export { default } from "codemod/langs/javascript";
+}
+
+declare module "codemod:ast-grep/langs/kotlin" {
+  export { default } from "codemod/langs/kotlin";
+}
+
+declare module "codemod:ast-grep/langs/php" {
+  export { default } from "codemod/langs/php";
+}
+
+declare module "codemod:ast-grep/langs/python" {
+  export { default } from "codemod/langs/python";
+}
+
+declare module "codemod:ast-grep/langs/ruby" {
+  export { default } from "codemod/langs/ruby";
+}
+
+declare module "codemod:ast-grep/langs/rust" {
+  export { default } from "codemod/langs/rust";
+}
+
+declare module "codemod:ast-grep/langs/scala" {
+  export { default } from "codemod/langs/scala";
+}
+
+declare module "codemod:ast-grep/langs/tsx" {
+  export { default } from "codemod/langs/tsx";
+}
+
+declare module "codemod:ast-grep/langs/typescript" {
+  export { default } from "codemod/langs/typescript";
+}
+
+declare module "codemod:ast-grep/langs/toml" {
+  export { default } from "codemod/langs/toml";
+}
+
+declare module "codemod:ast-grep/langs/yaml" {
+  export { default } from "codemod/langs/yaml";
+}

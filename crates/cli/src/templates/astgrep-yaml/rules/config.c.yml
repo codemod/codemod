@@ -1,10 +1,9 @@
 # Codemod Studio uses ast-grep to match and rewrite code.
 # https://ast-grep.github.io/guide/rule-config.html#rule
-id: replace-console-log
-language: typescript
+id: replace-gets
+language: c
 rule:
-  any:
-    - pattern: console.log($ARG)
-    - pattern: console.debug($ARG)
-fix:
-  logger.log($ARG)
+  pattern:
+    context: "void f(void) { gets($BUF); }"
+    selector: call_expression
+fix: fgets($BUF, sizeof($BUF), stdin)

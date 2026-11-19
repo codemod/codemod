@@ -1,0 +1,28 @@
+[package]
+name = "codemod-node"
+description = "Node.js and Bun host for code-first workflows: the engine and the ast-grep API as a native addon"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+ast-grep-core = { workspace = true }
+butterflow-state = { workspace = true }
+codemod-llrt-capabilities = { workspace = true }
+codemod-sandbox = { path = "../codemod-sandbox", features = ["native"] }
+codemod-workflow = { workspace = true }
+napi = { version = "3", default-features = false, features = ["napi8", "dyn-symbols", "serde-json", "tokio_rt"] }
+napi-derive = "3"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[build-dependencies]
+napi-build = "2"

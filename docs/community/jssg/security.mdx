@@ -31,7 +31,7 @@ Unlike `fetch` and `child_process`, the `fs` module is **always available** but 
 </CardGroup>
 
 ```ts scripts/codemod.ts
-import type { Codemod } from "codemod:ast-grep";
+import type { Codemod } from "codemod/ast-grep";
 import { readFileSync } from "fs";
 
 const codemod: Codemod = (root) => {
@@ -156,7 +156,7 @@ Use these exact strings in the `capabilities` array:
 No `capabilities` entry needed — this just works:
 
 ```ts scripts/codemod.ts
-import type { Codemod } from "codemod:ast-grep";
+import type { Codemod } from "codemod/ast-grep";
 import { readFileSync, writeFileSync } from "fs";
 
 const codemod: Codemod = (root) => {
@@ -181,7 +181,7 @@ export default codemod;
   </Step>
   <Step title="Use fs anywhere on disk">
     ```ts scripts/codemod.ts
-    import type { Codemod } from "codemod:ast-grep";
+    import type { Codemod } from "codemod/ast-grep";
     import { readFileSync } from "fs";
 
     const codemod: Codemod = (root) => {
@@ -212,7 +212,7 @@ export default codemod;
   </Step>
   <Step title="Use fetch in your transform">
     ```ts scripts/codemod.ts
-    import type { Codemod } from "codemod:ast-grep";
+    import type { Codemod } from "codemod/ast-grep";
 
     const codemod: Codemod = async (root) => {
       // Fetch latest API definitions
@@ -242,7 +242,7 @@ export default codemod;
   </Step>
   <Step title="Spawn processes in your transform">
     ```ts scripts/codemod.ts
-    import type { Codemod } from "codemod:ast-grep";
+    import type { Codemod } from "codemod/ast-grep";
     import { execSync } from "child_process";
 
     const codemod: Codemod = (root) => {

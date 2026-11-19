@@ -2,4 +2,4 @@
 schemas/* linguist-generated=true
 
 # LLRT types pulled from awslabs/llrt
-packages/jssg-types/src/llrt/** linguist-generated=true
+crates/cli/npm/types/llrt/** linguist-generated=true

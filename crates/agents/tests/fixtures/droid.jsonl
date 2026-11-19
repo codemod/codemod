@@ -1,0 +1,6 @@
+{"type":"system","subtype":"init","cwd":"/work","session_id":"d-123","tools":[],"model":"claude-sonnet","reasoning_effort":"medium"}
+{"type":"message","role":"user","id":"u1","text":"Create hello.txt","timestamp":1,"session_id":"d-123"}
+{"type":"tool_call","id":"c1","messageId":"m1","toolName":"Create","parameters":{"file_path":"hello.txt","content":"hi"},"timestamp":2,"session_id":"d-123"}
+{"type":"tool_result","id":"c1","value":"File created","timestamp":3,"session_id":"d-123"}
+{"type":"message","role":"assistant","id":"m2","text":"DONE","timestamp":4,"session_id":"d-123"}
+{"type":"completion","finalText":"DONE","numTurns":2,"durationMs":3000,"session_id":"d-123","usage":{"input_tokens":4,"output_tokens":18}}

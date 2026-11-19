@@ -65,15 +65,15 @@ pub(crate) fn resolve_capabilities(
 /// Prompt the user to approve unsafe capabilities that were resolved from the manifest.
 /// Returns the filtered set (safe modules pass through, unsafe ones require approval).
 /// Capabilities already granted via CLI flags (`cli_granted`) are not prompted for.
-/// If `no_interactive` is true, all capabilities pass through without prompting.
+/// When nobody can be asked, unsafe capabilities not granted with flags are dropped.
 pub(crate) fn prompt_capabilities(
     capabilities: HashSet<LlrtSupportedModules>,
     cli_granted: &HashSet<LlrtSupportedModules>,
     no_interactive: bool,
     dry_run: bool,
 ) -> HashSet<LlrtSupportedModules> {
-    if no_interactive {
-        // In non-interactive mode, strip unsafe capabilities that were not
+    if !crate::utils::interactive::is_interactive(no_interactive) {
+        // Nobody to ask (`--no-interactive`, or no terminal): strip unsafe capabilities that were not
         // explicitly granted via CLI flags to avoid implicitly granting
         // dangerous permissions in CI/headless environments.
         return filter_unapproved_unsafe_capabilities(capabilities, cli_granted);

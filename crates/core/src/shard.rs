@@ -1,6 +1,4 @@
 use butterflow_models::step::{BuiltinShardType, UseShard};
-use ignore::overrides::OverrideBuilder;
-use ignore::WalkBuilder;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -352,45 +350,7 @@ pub fn collect_files_with_pattern(
     crate::utils::validate_workflow_glob_pattern(file_pattern, "shard.file_pattern")
         .map_err(|error| error.to_string())?;
 
-    let mut override_builder = OverrideBuilder::new(base_path);
-    override_builder
-        .add(file_pattern)
-        .map_err(|e| format!("Invalid file_pattern '{}': {}", file_pattern, e))?;
-    let overrides = override_builder
-        .build()
-        .map_err(|e| format!("Failed to build glob overrides: {}", e))?;
-
-    let mut builder = WalkBuilder::new(base_path);
-    builder
-        .overrides(overrides)
-        .follow_links(false)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .require_git(false)
-        .parents(true)
-        .ignore(true)
-        .hidden(false);
-
-    let walker = builder.threads(1).build();
-    let mut files = Vec::new();
-
-    for entry in walker {
-        match entry {
-            Ok(dir_entry) => {
-                if dir_entry.file_type().is_some_and(|ft| ft.is_file()) {
-                    files.push(dir_entry.into_path());
-                }
-            }
-            Err(err) => {
-                eprintln!("Walk error during shard evaluation: {}", err);
-            }
-        }
-    }
-
-    // Sort for deterministic output
-    files.sort();
-    Ok(files)
+    crate::execution::select_files(base_path, &[file_pattern.to_string()], &[])
 }
 
 /// Extract directory group key for a file path relative to the search base.
