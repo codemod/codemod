@@ -144,13 +144,13 @@ Files are selected as `astGrep` selects them: `.gitignore` is respected, hidden 
 | Member | Meaning |
 |---|---|
 | `file.path` | Path relative to the target |
-| `file.text` | Contents when the step started |
+| `file.text` | Contents when the step read the file, just before the callback runs on it |
 | `file.language` | The selector's `language`, if it has one |
 | `file.write(text)` | Replace the contents |
 | `file.rename(path)` | Move the file |
 | `file.delete()` | Remove the file |
 
-Changes are recorded, not written immediately. When every file is done, the step checks for conflicts and applies all changes together. Nothing is written when two files are renamed to the same path, when a file changed on disk since the step read it (another step or command edited it meanwhile), or when the run was canceled. If writing fails part-way, what was written is put back.
+Changes are recorded, not written immediately. When every file is done, the step checks for conflicts and applies all changes together. Nothing is written when two files are renamed to the same path, when a file changed on disk since the step read it (another step or command edited it meanwhile), or when the run was canceled. If writing fails part-way, what was written is put back. A file the callback leaves alone, or writes its own text back to, is not part of this: other steps may change it meanwhile.
 
 ### The callback
 

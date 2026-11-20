@@ -4,6 +4,11 @@
 //!
 //! Callbacks may be async. Each worker keeps up to `concurrency` files in
 //! flight, so callbacks that wait on the network overlap.
+//!
+//! Selecting only walks the target: each worker reads its files as it gets
+//! to them, and keeps a file's text only when the callback changed the file
+//! (the commit needs it to check the file did not change on disk meanwhile,
+//! and for the diff).
 
 use std::fs;
 use std::path::Path;
@@ -11,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use butterflow_core::execution::{self, language_globs};
+use butterflow_core::jssg_runner::SemanticMode;
 use codemod_deps::Registry;
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::WorkerOptions;
@@ -20,7 +26,7 @@ use serde_json::{json, Value};
 
 use super::changes::{self, Change, PlannedChange};
 use super::isolate::{self, module_name, StepIsolates};
-use super::{block_on, TaskContext, TaskOutcome};
+use super::{block_on, parallel_map, TaskContext, TaskOutcome};
 use crate::run::RunContext;
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -78,33 +84,40 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     let request: Request =
         serde_json::from_value(request).map_err(|e| format!("bad forEachFile task: {e}"))?;
     let run = task.run;
-    let (selector, files) = select_files(run, request.selector)?;
-    let total = files.len();
+    let (selector, paths) = select_paths(run, request.selector)?;
     let outcomes = run_callback(
         task,
         &request.callback,
         &request.captures,
         &selector,
-        &files,
+        &paths,
     )?;
 
+    let mut total = 0;
     let mut outputs = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
     let mut planned = Vec::new();
-    for ((path, original), outcome) in files.into_iter().zip(outcomes) {
-        match outcome.unwrap_or_else(|| Err("the file was not processed".to_string())) {
+    for (path, outcome) in paths.into_iter().zip(outcomes) {
+        let outcome = outcome.unwrap_or_else(|| Err("the file was not processed".to_string()));
+        if matches!(outcome, Ok(Ran::Skipped)) {
+            continue;
+        }
+        total += 1;
+        match outcome {
+            Ok(Ran::Skipped) => {}
             Err(error) => failures.push((path, error)),
-            Ok(outcome) => {
+            Ok(Ran::Done { outcome, original }) => {
                 if outcome.has_output {
                     outputs.push(outcome.output);
                 }
                 // A file the callback left alone is not part of the commit, so
                 // steps over other files may change it meanwhile.
-                if outcome.effects.is_empty() {
+                let Some(original) = original else {
                     continue;
-                }
+                };
                 match fold(path.clone(), original, outcome.effects) {
-                    Ok(plan) => planned.push(plan),
+                    Ok(Some(plan)) => planned.push(plan),
+                    Ok(None) => {}
                     Err(error) => failures.push((path, error)),
                 }
             }
@@ -130,16 +143,31 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     .with_failures(failed, total))
 }
 
-/// Run the extracted callback `callback` on `files`, in workers, as the
-/// selector says (language, concurrency, semantic analysis, capabilities).
-/// Gives each file's outcome, in the order of `files`; nothing is committed.
+/// What became of one selected file.
+enum Ran {
+    /// Not UTF-8, or without the selector's `containing` text: not one of
+    /// the step's files.
+    Skipped,
+    /// The callback ran. `original` is the text it was given, kept only when
+    /// it asked for changes.
+    Done {
+        outcome: FileOutcome,
+        original: Option<String>,
+    },
+}
+
+/// Run the extracted callback `callback` on the files at `paths` (relative to
+/// the target), in workers, as the selector says (language, concurrency,
+/// semantic analysis, capabilities, `containing`). Each worker reads its
+/// files. Gives each file's outcome, in the order of `paths`; nothing is
+/// committed.
 fn run_callback(
     task: &TaskContext<'_>,
     callback: &str,
     captures: &Value,
     selector: &Selector,
-    files: &[(String, String)],
-) -> Result<Vec<Option<Result<FileOutcome, String>>>, String> {
+    files: &[String],
+) -> Result<Vec<Option<Result<Ran, String>>>, String> {
     let run = task.run;
     let module = run
         .callbacks
@@ -159,13 +187,17 @@ fn run_callback(
     let mut isolates = StepIsolates::new(task)?;
     isolates.capabilities = isolate::capabilities(task, &selector.capabilities)?;
     let mode = isolate::semantic_mode(task, selector.semantic_analysis.as_ref())?;
-    let paths: Vec<_> = files
-        .iter()
-        .map(|(path, _)| {
-            let path = run.target.join(path);
-            path.canonicalize().unwrap_or(path)
-        })
-        .collect();
+    // Only a workspace-wide provider needs the files up front.
+    let paths: Vec<_> = match mode {
+        SemanticMode::Workspace(_) => files
+            .iter()
+            .map(|path| {
+                let path = run.target.join(path);
+                path.canonicalize().unwrap_or(path)
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
     isolates.semantic_provider = butterflow_core::jssg_runner::semantic_provider(&mode, &paths);
     let name = module_name(task, callback);
     let next = AtomicUsize::new(0);
@@ -175,8 +207,7 @@ fn run_callback(
         .unwrap_or(1)
         .min(files.len().div_ceil(concurrency))
         .max(1);
-    let mut outcomes: Vec<Option<Result<FileOutcome, String>>> =
-        (0..files.len()).map(|_| None).collect();
+    let mut outcomes: Vec<Option<Result<Ran, String>>> = (0..files.len()).map(|_| None).collect();
 
     let worker_results: Vec<WorkerResult> = if files.is_empty() {
         Vec::new()
@@ -192,7 +223,9 @@ fn run_callback(
                         module,
                         captures: &captures,
                         language: selector.language.as_deref(),
+                        target: &run.target,
                         files,
+                        containing: selector.containing.as_deref(),
                         next: &next,
                         concurrency,
                         cancel: &task.cancel,
@@ -223,28 +256,32 @@ fn run_callback(
 /// A file's path, and what the callback returned for it or why it failed.
 pub(crate) type FileOutput = (String, Result<Value, String>);
 
-/// What the callback returned for each of `files` (`null` for nothing),
-/// without committing what it did to them; files it failed on are errors.
+/// What the callback returned for each of the files at `paths` (relative to
+/// the target; `null` for nothing), without committing what it did to them;
+/// files it failed on are errors, files that are not UTF-8 are left out.
 /// For `shard`'s filter.
 pub(crate) fn callback_outputs(
     task: &TaskContext<'_>,
     callback: &str,
     captures: &Value,
     selector: &Selector,
-    files: &[(String, String)],
+    paths: &[String],
 ) -> Result<Vec<FileOutput>, String> {
-    let outcomes = run_callback(task, callback, captures, selector, files)?;
-    Ok(files
+    let outcomes = run_callback(task, callback, captures, selector, paths)?;
+    Ok(paths
         .iter()
         .zip(outcomes)
-        .map(|((path, _), outcome)| {
-            let output = outcome
-                .unwrap_or_else(|| Err("the file was not processed".to_string()))
-                .and_then(|outcome| match outcome.error {
-                    Some(error) if !outcome.ok => Err(error),
-                    _ => Ok(outcome.output),
-                });
-            (path.clone(), output)
+        .filter_map(|(path, outcome)| {
+            let output =
+                match outcome.unwrap_or_else(|| Err("the file was not processed".to_string())) {
+                    Ok(Ran::Skipped) => return None,
+                    Ok(Ran::Done { outcome, .. }) => match outcome.error {
+                        Some(error) if !outcome.ok => Err(error),
+                        _ => Ok(outcome.output),
+                    },
+                    Err(error) => Err(error),
+                };
+            Some((path.clone(), output))
         })
         .collect())
 }
@@ -260,12 +297,25 @@ pub(crate) fn every_file_failed(failures: &[(String, String)], total: usize) -> 
     }
 }
 
-/// The files a selector picks in the run's target, with the selector as
-/// completed from the package's languages when it names none.
+/// The files a selector picks in the run's target, with their text, and the
+/// selector as completed from the package's languages when it names none.
 pub(crate) fn select_files(
     run: &RunContext,
-    mut selector: Selector,
+    selector: Selector,
 ) -> Result<(Selector, Vec<(String, String)>), String> {
+    let (selector, paths) = select_paths(run, selector)?;
+    let files = read_selected(&run.target, paths, selector.containing.as_deref());
+    Ok((selector, files))
+}
+
+/// The paths (relative to the target) of the files the globs of a selector
+/// pick in the run's target, unread, with the selector as completed from the
+/// package's languages when it names none. Its `containing` filter is left
+/// for when the files are read.
+pub(crate) fn select_paths(
+    run: &RunContext,
+    mut selector: Selector,
+) -> Result<(Selector, Vec<String>), String> {
     let default_languages = if selector.include.is_empty() && selector.language.is_none() {
         let languages = package_languages(&run.package_dir)?;
         if languages.is_empty() {
@@ -278,8 +328,8 @@ pub(crate) fn select_files(
     if selector.language.is_none() && default_languages.len() == 1 {
         selector.language = default_languages.first().cloned();
     }
-    let files = select(&run.target, &selector, &default_languages)?;
-    Ok((selector, files))
+    let paths = select(&run.target, &selector, &default_languages)?;
+    Ok((selector, paths))
 }
 
 /// One file a callback ran on, and what it did to it.
@@ -302,7 +352,8 @@ pub(crate) fn commit_effects(
     for file in files {
         let path = file.path.clone();
         match fold(file.path, file.original, file.effects) {
-            Ok(plan) => planned.push(plan),
+            Ok(Some(plan)) => planned.push(plan),
+            Ok(None) => {}
             Err(error) => failures.push(json!({ "path": path, "error": error })),
         }
     }
@@ -333,14 +384,14 @@ pub(crate) fn package_languages(bundle_dir: &Path) -> Result<Vec<String>, String
         .unwrap_or_default())
 }
 
-/// Select files: globs and `.gitignore` first (as `jssg` and `astGrep`
-/// select theirs), then the text filter. Returns paths relative to the
-/// target with their contents, sorted by path.
+/// Select files by globs and `.gitignore` (as `jssg` and `astGrep` select
+/// theirs), without reading them. Returns paths relative to the target,
+/// sorted. The selector's text filter is [`read_selected`]'s.
 pub(crate) fn select(
     target: &Path,
     selector: &Selector,
     default_languages: &[String],
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<Vec<String>, String> {
     let include: Vec<String> = if !selector.include.is_empty() {
         selector.include.clone()
     } else {
@@ -355,27 +406,45 @@ pub(crate) fn select(
         globs
     };
 
-    let mut files = Vec::new();
-    for path in execution::select_files(target, &include, &selector.exclude)? {
-        let relative = path
-            .strip_prefix(target)
-            .map_err(|e| e.to_string())?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue; // not UTF-8
-        };
-        if let Some(needle) = &selector.containing {
-            if !text.contains(needle.as_str()) {
-                continue;
-            }
-        }
-        files.push((relative, text));
-    }
-    Ok(files)
+    execution::select_files(target, &include, &selector.exclude)?
+        .into_iter()
+        .map(|path| {
+            Ok(path
+                .strip_prefix(target)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/"))
+        })
+        .collect()
 }
 
-type WorkerResult = Result<Vec<(usize, Result<FileOutcome, String>)>, String>;
+/// The text of a selected file (`path` relative to `target`), or `None` when
+/// it is not one of the step's files: unreadable, not UTF-8, or without the
+/// `containing` text.
+fn read_selected_file(target: &Path, path: &str, containing: Option<&str>) -> Option<String> {
+    let text = fs::read_to_string(target.join(path)).ok()?;
+    match containing {
+        Some(needle) if !text.contains(needle) => None,
+        _ => Some(text),
+    }
+}
+
+/// The selected files at `paths` (relative to `target`) with their text, read
+/// in parallel; those [`read_selected_file`] leaves out are dropped.
+pub(crate) fn read_selected(
+    target: &Path,
+    paths: Vec<String>,
+    containing: Option<&str>,
+) -> Vec<(String, String)> {
+    let texts = parallel_map(&paths, |path| read_selected_file(target, path, containing));
+    paths
+        .into_iter()
+        .zip(texts)
+        .filter_map(|(path, text)| Some((path, text?)))
+        .collect()
+}
+
+type WorkerResult = Result<Vec<(usize, Result<Ran, String>)>, String>;
 
 struct Job<'a> {
     options: WorkerOptions<OxcResolver>,
@@ -384,7 +453,9 @@ struct Job<'a> {
     module: &'a str,
     captures: &'a str,
     language: Option<&'a str>,
-    files: &'a [(String, String)],
+    target: &'a Path,
+    files: &'a [String],
+    containing: Option<&'a str>,
     next: &'a AtomicUsize,
     concurrency: usize,
     cancel: &'a Arc<AtomicBool>,
@@ -399,7 +470,9 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         module,
         captures,
         language,
+        target,
         files,
+        containing,
         next,
         concurrency,
         cancel,
@@ -429,17 +502,33 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                     break;
                 }
                 let start = next.fetch_add(concurrency, Ordering::SeqCst);
-                let indices: Vec<usize> = (start..(start + concurrency).min(files.len())).collect();
-                if indices.is_empty() {
+                let range = start..(start + concurrency).min(files.len());
+                if range.is_empty() {
                     break;
                 }
-                let batch: Vec<(&str, &str)> = indices
-                    .iter()
-                    .map(|&index| (files[index].0.as_str(), files[index].1.as_str()))
-                    .collect();
-                let batch = serde_json::to_string(&batch).map_err(|e| e.to_string())?;
+                // Read this batch's files; the ones that are not the step's
+                // are done.
+                let mut indices = Vec::with_capacity(range.len());
+                let mut texts = Vec::with_capacity(range.len());
+                for index in range {
+                    match read_selected_file(target, &files[index], containing) {
+                        Some(text) => {
+                            indices.push(index);
+                            texts.push(text);
+                        }
+                        None => {
+                            results.push((index, Ok(Ran::Skipped)));
+                            progress();
+                        }
+                    }
+                }
+                if indices.is_empty() {
+                    continue;
+                }
                 let settled = async {
-                    let promise: Promise = run_batch.call((batch,))?;
+                    let paths: Vec<&str> = indices.iter().map(|&index| files[index].as_str()).collect();
+                    let batch: Vec<&str> = texts.iter().map(String::as_str).collect();
+                    let promise: Promise = run_batch.call((paths, batch))?;
                     promise.into_future::<String>().await
                 };
                 let outcomes: Result<Vec<FileOutcome>, String> = settled
@@ -452,7 +541,7 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                 let other_files = !effects.other_files.is_empty();
                 match outcomes {
                     Ok(outcomes) => {
-                        for (index, outcome) in indices.iter().zip(outcomes) {
+                        for ((index, outcome), text) in indices.iter().zip(outcomes).zip(texts) {
                             let outcome = if !outcome.ok {
                                 Err(outcome.error.unwrap_or_else(|| "the callback failed".into()))
                             } else if let Some(message) = reported.as_ref().filter(|_| indices.len() == 1) {
@@ -460,7 +549,9 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                             } else if other_files {
                                 Err("jssgTransform() is not supported in forEachFile callbacks yet; change each file from its own callback".to_string())
                             } else {
-                                Ok(outcome)
+                                // The text is only needed to commit changes.
+                                let original = (!outcome.effects.is_empty()).then_some(text);
+                                Ok(Ran::Done { outcome, original })
                             };
                             results.push((*index, outcome));
                             progress();
@@ -482,7 +573,12 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
 
 /// What a callback's effects leave of one file. `delete()` wins over
 /// whatever else the callback did; the last `write()` and `rename()` count.
-fn fold(path: String, original: String, effects: Vec<Effect>) -> Result<PlannedChange, String> {
+/// `None` when they leave it as it was (it was written its own text).
+fn fold(
+    path: String,
+    original: String,
+    effects: Vec<Effect>,
+) -> Result<Option<PlannedChange>, String> {
     let mut text = None;
     let mut rename_to = None;
     let mut deleted = false;
@@ -500,12 +596,21 @@ fn fold(path: String, original: String, effects: Vec<Effect>) -> Result<PlannedC
         }
     }
     if deleted {
-        return Ok(PlannedChange {
+        return Ok(Some(PlannedChange {
             path,
             original,
             change: Change::Delete,
-        });
+        }));
     }
-    let text = text.unwrap_or_else(|| original.clone());
-    Ok(PlannedChange::moved(path, original, text, rename_to))
+    let plan = match text {
+        Some(text) => PlannedChange::moved(path, original, text, rename_to),
+        None => {
+            let text = original.clone();
+            PlannedChange::moved(path, original, text, rename_to)
+        }
+    };
+    Ok(match &plan.change {
+        Change::Edit(text) if *text == plan.original => None,
+        _ => Some(plan),
+    })
 }
