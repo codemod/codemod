@@ -57,8 +57,8 @@ npx codemod init
 | `codemod.yaml` | Package metadata (name, version, author, etc.). `workflows` points at `src/workflow.ts`. |
 | `package.json` | The `codemod` dependency (CLI and types) and the package's scripts: `test` runs the tests with `node --test` |
 | `src/workflow.ts` | [Workflow definition](/community/workflows/reference). A transform can live here, in a `forEachFile` callback; `codemod init` writes it that way. Packages may still use a legacy [`workflow.yaml`](/community/workflows/yaml) at the package root. |
-| `src/scripts/` | Shell scripts the workflow runs, as ``shell`${import.meta.dirname}/scripts/setup.sh` ``, and transform files ([JSSG](/community/jssg)) it runs with `forEachFile(jssg("./scripts/codemod.ts"))` |
-| `src/rules/` | YAML ast-grep rule definitions, run with `forEachFile(astGrep("./rules/config.yml"))` |
+| `src/scripts/` | Shell scripts the workflow runs, as ``shell`${import.meta.dirname}/scripts/setup.sh` ``, and `forEachFile` callbacks kept in their own files, imported and run with `forEachFile(selector, migrate)` |
+| `src/rules/` | YAML ast-grep rule definitions, imported (`import rules from "./rules/config.yml"`) and run with `forEachFile(astGrep(rules))` |
 | `tests/` | `workflow.test.ts`, which runs the workflow on each fixture in `tests/fixtures` ([Testing workflows](/community/workflows/testing)); fixtures are `input.*`/`expected.*` pairs or `input/` + `expected/` directory snapshots |
 
 <Info>

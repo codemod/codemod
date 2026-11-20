@@ -1,19 +1,22 @@
-//! `astGrep(path, options)`: apply an ast-grep YAML rule file.
+//! `astGrep(rules, options)`: apply ast-grep rules. The workflow gives them
+//! as JSON, written in the workflow or imported from a YAML file, which the
+//! module loader reads as JSON.
 
 use std::sync::Mutex;
 
 use butterflow_core::execution::CodemodExecutionConfig;
-use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan};
+use codemod_sandbox::{scan_file_with_combined_scan, with_combined_scan_of};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
-use super::changes::{self, bundle_path, relative, PlannedChange};
+use super::changes::{self, relative, PlannedChange};
 use super::{Globs, TaskContext, TaskError, TaskOutcome, TaskResult};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Request {
-    path: String,
+    /// The rules, each an object of the shape of an ast-grep YAML rule.
+    rules: Vec<Value>,
     include: Option<Globs>,
     exclude: Option<Globs>,
     base_path: Option<String>,
@@ -22,13 +25,16 @@ pub(crate) struct Request {
 
 pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let run = task.run;
-    let rules = bundle_path(task, &request.path, "rule file")?;
-    if !rules.is_file() {
-        return Err(TaskError::Failed(format!(
-            "ast-grep rule file not found: {}",
-            rules.display()
-        )));
+    if request.rules.is_empty() {
+        return Err(TaskError::Failed("astGrep needs at least one rule".into()));
     }
+    // JSON is YAML: one document per rule, as in a multi-rule file.
+    let rules = request
+        .rules
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n---\n");
     let base_path = changes::base_path(request.base_path.as_deref())?;
 
     let planned = Mutex::new(Vec::<PlannedChange>::new());
@@ -36,7 +42,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
     let matches = std::sync::atomic::AtomicUsize::new(0);
     let unmodified = std::sync::atomic::AtomicUsize::new(0);
 
-    with_combined_scan(&rules.to_string_lossy(), |scan| {
+    with_combined_scan_of(&rules, |scan| {
         let languages = scan
             .rule_refs
             .iter()

@@ -23,6 +23,14 @@ const version = createHash("sha256").update(source.replaceAll("\r", "")).digest(
 
 writeIfChanged(here("../src/runtime/orchestrator.mts"), GENERATED + source);
 writeIfChanged(
+  here("../src/runtime/jssg-compat.mts"),
+  GENERATED.replace("orchestrator.ts", "jssg_compat.ts") +
+    readFileSync(here("../../../workflow/src/js/jssg_compat.ts"), "utf8").replace(
+      'from "codemod/ast-grep"',
+      'from "./ast-grep.mts"',
+    ),
+);
+writeIfChanged(
   here("../src/runtime/orchestrator-version.mts"),
   `${GENERATED}/** Identifies the orchestrator source this package was built from. */\nexport const ORCHESTRATOR_VERSION = "${version}";\n`,
 );

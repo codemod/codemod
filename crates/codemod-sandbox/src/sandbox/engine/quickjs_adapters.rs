@@ -149,6 +149,13 @@ impl Loader for QuickJSLoader {
                 .unwrap_or_else(|| std::ffi::OsStr::new("anon.ts"))
                 .to_string_lossy();
 
+            #[cfg(feature = "native")]
+            if crate::utils::yaml::is_yaml(name) {
+                let module = crate::utils::yaml::yaml_module(&source).map_err(|err| {
+                    Error::new_loading_message(name, format!("invalid YAML: {err}"))
+                })?;
+                return Module::declare(ctx.clone(), name, module.as_bytes());
+            }
             if needs_transpilation {
                 let transpiled_bytes = transpiler::transpile(source, file_name.to_string())
                     .map_err(|err| {

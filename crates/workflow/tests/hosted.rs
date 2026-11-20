@@ -21,6 +21,7 @@ fn open(h: &Harness, test: Option<TestPlan>) -> codemod_workflow::HostedRun {
             name: None,
             dry_run: false,
             test,
+            callbacks: Default::default(),
         })
         .unwrap()
 }

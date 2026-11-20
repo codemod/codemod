@@ -817,7 +817,7 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
                 if !hybrid_without_rules(&config.language) {
                     imports.push("astGrep");
                     before.push(
-                        r#"await step("Apply ast-grep rules", forEachFile(astGrep("./rules/config.yml")));"#
+                        r#"await step("Apply ast-grep rules", forEachFile(astGrep(rules)));"#
                             .to_string(),
                     );
                 }
@@ -826,12 +826,27 @@ fn create_workflow(project_path: &Path, config: &ProjectConfig) -> Result<()> {
                         .to_string(),
                 );
             }
-            with_steps(
+            let workflow = with_steps(
                 callback_workflow_template(&config.language),
                 &imports,
                 &before,
                 &after,
-            )?
+            )?;
+            if imports.contains(&"astGrep") {
+                // The rules are imported as data, next to the codemod/workflow import.
+                let line = "} from \"codemod/workflow\";\n";
+                let at = workflow
+                    .find(line)
+                    .context("workflow template does not import codemod/workflow")?
+                    + line.len();
+                format!(
+                    "{}import rules from \"./rules/config.yml\";\n{}",
+                    &workflow[..at],
+                    &workflow[at..]
+                )
+            } else {
+                workflow
+            }
         }
         (_, project_type) => {
             let template = match project_type {

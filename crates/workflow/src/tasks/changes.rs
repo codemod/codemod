@@ -94,10 +94,6 @@ pub(crate) fn normalize(path: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-pub(crate) fn is_safe_relative(path: &str) -> bool {
-    normalize(path).is_some()
-}
-
 /// A task's `basePath`: a directory under the target, or the target itself
 /// (`None`) for `.`, `./` and nothing.
 pub(crate) fn base_path(base: Option<&str>) -> Result<Option<PathBuf>, String> {
@@ -110,23 +106,6 @@ pub(crate) fn base_path(base: Option<&str>) -> Result<Option<PathBuf>, String> {
     normalize(base)
         .map(|base| Some(PathBuf::from(base)))
         .ok_or_else(|| format!("basePath '{base}' must stay inside the target"))
-}
-
-/// Resolve a path from the workflow (a transform, a rule file, a script)
-/// against the workflow's directory, refusing paths that leave it.
-pub(crate) fn bundle_path(
-    task: &TaskContext<'_>,
-    path: &str,
-    what: &str,
-) -> Result<PathBuf, String> {
-    let trimmed = path.trim();
-    let relative = trimmed.strip_prefix("./").unwrap_or(trimmed);
-    if !is_safe_relative(relative) {
-        return Err(format!(
-            "{what} '{path}' must be a relative path inside the workflow's directory"
-        ));
-    }
-    Ok(task.run.bundle_dir.join(relative))
 }
 
 /// Check the plan, then apply it unless `dry_run`. Returns
@@ -388,4 +367,41 @@ impl TaskContext<'_> {
         );
         self.run.services.summary.add_diff(diff);
     }
+}
+
+/// Files a step's isolate changed with `jssgTransform`, as a plan for
+/// [`commit`], refusing paths outside the target.
+pub(crate) fn plan(
+    task: &TaskContext<'_>,
+    changes: &[butterflow_core::jssg_runner::JssgFileChange],
+) -> Result<Vec<PlannedChange>, String> {
+    let target = &task.run.target;
+    let mut planned = Vec::new();
+    for change in changes {
+        let path = relative(target, &change.path).ok_or_else(|| {
+            format!(
+                "the step changed '{}', outside the target",
+                change.path.display()
+            )
+        })?;
+        let rename_to = change
+            .rename_to
+            .as_ref()
+            .map(|to| {
+                relative(target, to).ok_or_else(|| {
+                    format!(
+                        "the step renamed '{path}' to '{}', outside the target",
+                        to.display()
+                    )
+                })
+            })
+            .transpose()?;
+        planned.push(PlannedChange::moved(
+            path,
+            change.original.clone(),
+            change.content.clone(),
+            rename_to,
+        ));
+    }
+    Ok(planned)
 }

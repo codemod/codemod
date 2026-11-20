@@ -53,7 +53,7 @@ declare module "codemod:workflow" {
   //
   // Everything below is used from a workflow file. Workflows have no state:
   // a step gets values from the body (a function step's captured variables,
-  // jssg `params`, shell `env`) and returns what it found on its result.
+  // shell `env`) and returns what it found on its result.
   //
   // Code inside `step(() => ...)` and `forEachFile(...)` callbacks runs in
   // its own isolate, with every module the run allows (`fs`, `fetch` and
@@ -119,7 +119,7 @@ declare module "codemod:workflow" {
   const transformResult: unique symbol;
 
   /**
-   * A transform for single files, made by `jssg` or `astGrep`. Give it to
+   * A transform for single files, made by `astGrep`. Give it to
    * `forEachFile` to say which files it runs on.
    */
   export interface Transform<Result> extends Task<Result> {
@@ -278,7 +278,29 @@ declare module "codemod:workflow" {
      * callbacks that wait on the network or `codemod/llm`.
      */
     concurrency?: number;
+    /**
+     * What `definition()` and `references()` on roots `parse(file)` makes can
+     * find: `"file"` (the default) looks within each file, `"workspace"`
+     * across the selected files of the target (or under `root`), and
+     * `"none"` turns it off. Analysis runs only when they are called.
+     */
+    semanticAnalysis?: SemanticAnalysis;
+    /**
+     * Capabilities the callback needs besides the run's: `"fs"`, `"fetch"`,
+     * `"child_process"`. Interactive runs ask for those the run does not
+     * grant (`--allow-fs`, ..., or codemod.yaml); others go without. A dry
+     * run never has `fs` or `child_process`.
+     */
+    capabilities?: readonly Capability[];
   }
+
+  export type Capability = "fs" | "fetch" | "child_process";
+
+  export type SemanticAnalysis =
+    | "file"
+    | "workspace"
+    | "none"
+    | { mode: "file" | "workspace"; root?: string };
 
   /**
    * Which files `forEachFile` visits, and how: a glob, a list of globs, or an
@@ -338,13 +360,46 @@ declare module "codemod:workflow" {
   }
 
   /**
+   * A `forEachFile` callback kept in its own file, as the file's default
+   * export: annotate it with this type, then import it into the workflow
+   * and give it to `forEachFile`. `Output` is what it returns for a file,
+   * collected into the step's `outputs`.
+   *
+   * @example
+   * ```ts
+   * // scripts/migrate.ts
+   * import type { FileCallback } from "codemod/workflow";
+   * import { parse } from "codemod/ast-grep";
+   *
+   * const migrate: FileCallback<{ path: string; count: number }> = (file) => {
+   *   const root = parse(file).root();
+   *   const found = root.findAll({ rule: { pattern: "var $A = $B" } });
+   *   if (!found.length) return;
+   *   file.write(root.commitEdits(found.map((node) => node.replace(node.text().replace(/^var/, "let")))));
+   *   return { path: file.path, count: found.length };
+   * };
+   * export default migrate;
+   *
+   * // workflow.ts
+   * import migrate from "./scripts/migrate.ts";
+   * const result = await step(forEachFile({ language: "typescript" }, migrate));
+   * ```
+   */
+  export type FileCallback<Output = void> = (
+    file: WorkflowFile,
+  ) => Output | undefined | void | PromiseLike<Output | undefined | void>;
+
+  /**
    * Runs `callback` once for every selected file, in parallel, in isolates.
    * The callback may be async. Returned values are collected into `outputs`.
    *
-   * Write the callback inline. Variables from outside it arrive as frozen
-   * copies and must be JSON; assigning to them is a build error. Imports
-   * (`codemod/ast-grep`, packages, files next to the workflow) are
-   * available inside.
+   * Write the callback inline, or import it from a file of the package
+   * whose default export it is (`import migrate from "./scripts/migrate.ts"`);
+   * the workflow body does not load that file, and the step runs again on
+   * resume when the file, or a file it imports, changes. Variables from
+   * outside an inline callback arrive as frozen copies and must be JSON;
+   * assigning to them is a build error. Imports (`codemod/ast-grep`,
+   * packages, files next to the workflow) are available inside.
    *
    * @example
    * ```ts
@@ -372,15 +427,14 @@ declare module "codemod:workflow" {
   export function forEachFile<Output = undefined>(
     callback: (file: WorkflowFile) => Checked<Output>,
   ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
-
-  /**
-   * Which files `forEachFile` runs a `jssg` transform on: a glob, a list of
-   * globs, or an object. `language` is the language the files are parsed as
-   * and, without `include`, selects that language's file extensions. Without
-   * a `language`, the package's is used (`targets.languages` in codemod.yaml,
-   * when it lists one), and otherwise `typescript`.
-   */
-  export type JssgSelector = Globs | { include?: Globs; exclude?: Globs; language?: string };
+  /** A callback typed as a `FileCallback`, as one imported from its file usually is. */
+  export function forEachFile<Output>(
+    selector: FileSelector,
+    callback: FileCallback<Checked<Output>>,
+  ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
+  export function forEachFile<Output>(
+    callback: FileCallback<Checked<Output>>,
+  ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
 
   /**
    * Which files `forEachFile` applies `astGrep` rules to: a glob, a list of
@@ -389,25 +443,16 @@ declare module "codemod:workflow" {
   export type AstGrepSelector = Globs | { include?: Globs; exclude?: Globs };
 
   /**
-   * Runs a JSSG transform, or applies an ast-grep rule file, on every
-   * selected file. The selector's fields stand for the same options of
-   * `jssg` and `astGrep`, so give each in one place.
+   * Applies ast-grep rules on every selected file. The selector's fields
+   * stand for the same options of `astGrep`, so give each in one place.
    *
    * @example
    * ```ts
-   * await step("Migrate imports", forEachFile(jssg("scripts/codemod.ts")));
-   * await step("Apply rules", forEachFile("src/**\/*.ts", astGrep("rules/config.yml")));
-   * await step("Migrate components", forEachFile(
-   *   { include: "src/**\/*.tsx", exclude: "**\/*.test.tsx", language: "tsx" },
-   *   jssg("scripts/components.ts", { params: { strict: true } }),
-   * ));
+   * import rules from "./rules/config.yml";
+   *
+   * await step("Apply rules", forEachFile("src/**\/*.ts", astGrep(rules)));
    * ```
    */
-  export function forEachFile<Data>(transform: Transform<JssgResult<Data>>): Task<JssgResult<Data>>;
-  export function forEachFile<Data>(
-    selector: JssgSelector,
-    transform: Transform<JssgResult<Data>>,
-  ): Task<JssgResult<Data>>;
   export function forEachFile(transform: Transform<AstGrepResult>): Task<AstGrepResult>;
   export function forEachFile(
     selector: AstGrepSelector,
@@ -474,77 +519,6 @@ declare module "codemod:workflow" {
     options: ShellOptions,
   ): (strings: TemplateStringsArray, ...values: ShellValue[]) => ShellTask;
 
-  export type Capability = "fs" | "fetch" | "child_process";
-
-  export interface JssgOptions {
-    include?: Globs;
-    exclude?: Globs;
-    /** Directory under the target to restrict the run to. */
-    basePath?: string;
-    /** Process exactly these files, relative to the target. */
-    files?: readonly string[];
-    /** Defaults to `typescript`. */
-    language?: string;
-    /** Merged over the run's params; the transform reads them as `options.params`. */
-    params?: Readonly<Record<string, unknown>>;
-    /** The transform reads these as `options.matrixValues`. */
-    matrix?: Readonly<Record<string, unknown>>;
-    capabilities?: readonly Capability[];
-    /**
-     * Semantic analysis for `definition()` and `references()`: `"file"` (the default)
-     * analyses each file on its own, `"workspace"` the whole target (or `root`), and
-     * `"none"` turns it off.
-     */
-    semanticAnalysis?:
-      | "file"
-      | "workspace"
-      | "none"
-      | { mode: "file" | "workspace"; root?: string };
-    threads?: number;
-    /** Run the transform without applying its changes. */
-    dryRun?: boolean;
-  }
-
-  /** One file's `data`, as the transform returned it. */
-  export interface JssgData {
-    file: string;
-    data: JsonValue;
-  }
-
-  export interface JssgResult<Data = readonly JssgData[]> {
-    changes: FileChanges;
-    unmodified: number;
-    failures: FileFailure[];
-    /**
-     * Each file's `data`, sorted by path, leaving out files that returned
-     * none; or, with a reducer, what it folded them into.
-     */
-    data: Data;
-  }
-
-  /**
-   * Folds each file's `data` into one value as the file finishes, so the
-   * step never holds every file's data at once. Files arrive in no
-   * particular order. Write `reduce` inline so the build can extract it.
-   */
-  export interface JssgReducer<T> {
-    reduce: (result: T, entry: JssgData) => T | Promise<T>;
-    initial: T;
-  }
-
-  /**
-   * A JSSG transform file; `path` is relative to the workflow file. Run it
-   * with `forEachFile(selector, jssg(path))`, which says which files it is
-   * for. As a step on its own it runs on the files its options select.
-   */
-  // `T` is unconstrained so `initial: 0` gives `number`, not `0`; the
-  // result is checked to be JSON when the step runs.
-  export function jssg<T>(
-    path: string,
-    options: JssgOptions & JssgReducer<T>,
-  ): Transform<JssgResult<T>>;
-  export function jssg(path: string, options?: JssgOptions): Transform<JssgResult>;
-
   export interface AstGrepOptions {
     include?: Globs;
     exclude?: Globs;
@@ -559,12 +533,143 @@ declare module "codemod:workflow" {
   }
 
   /**
-   * An ast-grep YAML rule file; `path` is relative to the workflow file.
-   * Apply it with `forEachFile(selector, astGrep(path))`, which says which
-   * files it is for. As a step on its own it runs on the files its options
-   * select.
+   * What an ast-grep rule matches: a pattern, a node kind, a regex, how the
+   * node relates to others, or a combination. See https://ast-grep.github.io/reference/rule.html
    */
-  export function astGrep(path: string, options?: AstGrepOptions): Transform<AstGrepResult>;
+  export interface AstGrepRuleMatcher {
+    /** Code to match, with `$NAME` metavariables; or `{ context, selector, strictness }`. */
+    pattern?:
+      | string
+      | {
+          context: string;
+          selector?: string;
+          strictness?: "cst" | "smart" | "ast" | "relaxed" | "signature";
+        };
+    /** A tree-sitter node kind, such as `"call_expression"`. */
+    kind?: string;
+    /** A Rust regular expression the node's text must match. */
+    regex?: string;
+    /** Which nth child of its parent the node is. */
+    nthChild?:
+      | number
+      | string
+      | { position: number | string; reverse?: boolean; ofRule?: AstGrepRuleMatcher };
+    /** The node's range in the file. */
+    range?: {
+      start: { line: number; column: number };
+      end: { line: number; column: number };
+    };
+    /** The node is inside a node matching this. */
+    inside?: AstGrepRelation;
+    /** The node has a descendant matching this. */
+    has?: AstGrepRelation;
+    /** The node comes after a sibling matching this. */
+    follows?: AstGrepRelation;
+    /** The node comes before a sibling matching this. */
+    precedes?: AstGrepRelation;
+    /** Every rule matches. */
+    all?: readonly AstGrepRuleMatcher[];
+    /** At least one rule matches. */
+    any?: readonly AstGrepRuleMatcher[];
+    /** The rule does not match. */
+    not?: AstGrepRuleMatcher;
+    /** A utility rule, by id (from `utils`). */
+    matches?: string;
+  }
+
+  /** A relational rule (`inside`, `has`, `follows`, `precedes`). */
+  export interface AstGrepRelation extends AstGrepRuleMatcher {
+    /** How far to look: to the end, or until a node matching this. */
+    stopBy?: "neighbor" | "end" | AstGrepRuleMatcher;
+    /** The field of the parent the node is in, such as `"body"`. */
+    field?: string;
+  }
+
+  /** A rewrite of a metavariable's text, for `fix`. */
+  export type AstGrepTransformation =
+    | string
+    | {
+        substring?: { source: string; startChar?: number; endChar?: number };
+        replace?: { source: string; replace: string; by: string };
+        convert?: {
+          source: string;
+          toCase:
+            | "lowerCase"
+            | "upperCase"
+            | "capitalize"
+            | "camelCase"
+            | "snakeCase"
+            | "kebabCase"
+            | "pascalCase";
+          separatedBy?: readonly string[];
+        };
+        rewrite?: { source: string; rewriters: readonly string[]; joinBy?: string };
+      };
+
+  /**
+   * An ast-grep rule: what an ast-grep YAML rule file holds, as an object
+   * (one per document). See https://ast-grep.github.io/reference/yaml.html
+   */
+  export interface AstGrepRule {
+    id: string;
+    /** The language of the files the rule is for, such as `"typescript"`. */
+    language: string;
+    rule: AstGrepRuleMatcher;
+    /** The replacement, with `$NAME` metavariables, or how to expand the replaced range. */
+    fix?:
+      | string
+      | {
+          template: string;
+          expandStart?: AstGrepRuleMatcher;
+          expandEnd?: AstGrepRuleMatcher;
+        };
+    /** Further rules each metavariable must match. */
+    constraints?: Readonly<Record<string, AstGrepRuleMatcher>>;
+    /** Rules other rules use with `matches`. */
+    utils?: Readonly<Record<string, AstGrepRuleMatcher>>;
+    /** New metavariables computed from others, for `fix`. */
+    transform?: Readonly<Record<string, AstGrepTransformation>>;
+    /** Rules `transform`'s `rewrite` applies. */
+    rewriters?: readonly (Omit<AstGrepRule, "language"> & { language?: string })[];
+    severity?: "hint" | "info" | "warning" | "error" | "off";
+    message?: string;
+    note?: string;
+    url?: string;
+    /** Globs of the files the rule is for. */
+    files?: readonly string[];
+    /** Globs of the files the rule is not for. */
+    ignores?: readonly string[];
+    labels?: Readonly<Record<string, { style: "primary" | "secondary"; message?: string }>>;
+    metadata?: Readonly<Record<string, JsonValue>>;
+  }
+
+  /** One rule or several, as `astGrep` takes them and as an imported YAML file gives them. */
+  export type AstGrepRules = AstGrepRule | readonly AstGrepRule[];
+
+  /**
+   * Applies ast-grep rules: an object of the shape of an ast-grep YAML rule
+   * (or an array of them), written in the workflow or built at run time, or
+   * a YAML rule file imported as its content
+   * (`import rules from "./rules/config.yml"`; several documents give an
+   * array). Apply them with `forEachFile(selector, astGrep(rules))`, which
+   * says which files they are for. As a step on its own it runs on the files
+   * its options select. The rules are part of the step: a changed rule runs
+   * the step again on resume.
+   *
+   * @example
+   * ```ts
+   * import rules from "./rules/config.yml";
+   *
+   * await step(forEachFile(astGrep(rules)));
+   * await step(forEachFile("src/**\/*.js", astGrep({
+   *   id: "no-var",
+   *   language: "javascript",
+   *   rule: { pattern: "var $A = $B" },
+   *   fix: "let $A = $B;",
+   * })));
+   * ```
+   */
+  export function astGrep(rules: AstGrepRules, options?: AstGrepOptions): Transform<AstGrepResult>;
 
   export type ShardMethod =
     | {
@@ -575,23 +680,57 @@ declare module "codemod:workflow" {
         minShardSize?: number;
       }
     | {
-        /** A JS/TS file whose default export receives a `ShardInput` and returns `ShardResult[]`. */
-        function: string;
+        /**
+         * A shard function: it receives a `ShardInput` and returns
+         * `ShardResult[]`. Written inline, or imported from a file of the
+         * package whose default export it is; it runs in its own isolate,
+         * as callbacks do.
+         */
+        function: ShardFunction;
       };
+
+  /** A shard function, written inline or as a file's default export. */
+  export type ShardFunction = (
+    input: ShardInput,
+  ) => readonly ShardResult[] | PromiseLike<readonly ShardResult[]>;
 
   export interface ShardOptions {
     method: ShardMethod;
     /** Directory to scan, relative to the target. */
     target?: string;
-    /** Glob for eligible files when `jssg` is not set. */
-    filePattern?: string;
-    /** Keep only the files this transform would change. */
-    jssg?: JssgOptions & { path: string };
+    /**
+     * Which files under `target` are eligible: a glob, a list of globs, or
+     * `{ include, exclude, language }`. Without it, the files of the
+     * package's `targets.languages`; built-in methods without `files` or
+     * `filter` take every file under `target`.
+     */
+    files?: Globs | { include?: Globs; exclude?: Globs; language?: string };
+    /**
+     * Keeps the eligible files it returns `true` for, for example those the
+     * codemod would change. A `forEachFile` callback, written inline or
+     * imported, run on each file; what it does to the file is not kept.
+     */
+    filter?: (file: WorkflowFile) => boolean | undefined | PromiseLike<boolean | undefined>;
     /** An earlier result of this step, so existing assignments are kept. */
     previous?: readonly ShardResult[];
   }
 
-  /** Splits files into groups ("shards"), for example one per directory or code owner. */
+  /**
+   * Splits files into groups ("shards"), for example one per directory or
+   * code owner.
+   *
+   * @example
+   * ```ts
+   * import wouldChange from "./scripts/would-change.ts";
+   *
+   * const shards = await step(shard({
+   *   method: { type: "directory", maxFilesPerShard: 20 },
+   *   target: "./src",
+   *   files: { language: "tsx" },
+   *   filter: wouldChange,
+   * }));
+   * ```
+   */
   export function shard(options: ShardOptions): Task<ShardResult[]>;
 
   /** Runs another codemod package (registry name or local path) as part of this step. */
@@ -742,4 +881,19 @@ declare module "codemod:workflow" {
     expression: string,
     scope: Readonly<Record<string, unknown>>,
   ): any;
+}
+
+/**
+ * A YAML file, imported as its content: `import rules from "./rules.yaml"`.
+ * A file with several documents (`---`) gives an array of them. Typed for
+ * ast-grep rule files, which is what workflows import YAML for.
+ */
+declare module "*.yaml" {
+  const content: import("codemod:workflow").AstGrepRules;
+  export default content;
+}
+
+declare module "*.yml" {
+  const content: import("codemod:workflow").AstGrepRules;
+  export default content;
 }

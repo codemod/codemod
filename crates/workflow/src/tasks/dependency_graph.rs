@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 
 use super::function::side_effects;
 use super::isolate::{self, module_name, StepIsolates};
-use super::{block_on, changes, jssg, Globs, TaskContext, TaskOutcome};
+use super::{block_on, changes, Globs, TaskContext, TaskOutcome};
 use crate::deps_host::DEPENDENCIES_MODULE;
 
 #[derive(Deserialize)]
@@ -102,7 +102,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     }
     // Files the callback changed with `jssgTransform` are committed as a
     // function step's are.
-    let planned = jssg::plan(task, &changes)?;
+    let planned = changes::plan(task, &changes)?;
     changes::commit(task, &planned, task.run.dry_run)?;
     Ok(TaskOutcome::new(outcome.result))
 }

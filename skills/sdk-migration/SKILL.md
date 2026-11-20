@@ -99,10 +99,10 @@ Write a short plan that includes:
 **Default: one registry package per SDK version bump**, named like `<sdk>-<from>-to-<to>`, with a **multi-step** `src/workflow.ts`:
 
 - **Registry `name` rules (publish will reject otherwise):** optional `@scope/`, then only letters, numbers, hyphens, underscores. **No dots, no spaces.** Write versions with hyphens (`1-24-to-1-25`), never semver dots (`1.24-to-1.25` is invalid).
-- One sequential `jssg` step per independent **`codemod`** breaking change
-- Separate transform scripts, referenced from the workflow
+- One sequential `forEachFile` step per independent **`codemod`** breaking change
+- Each step's callback in its own file under `scripts/`, imported by the workflow (`import firstApi from "./scripts/first-api.ts"`)
 - Separate fixture dirs per step (e.g. `tests/<step-slug>/…`) — including dirs for `deferred-automatable` backlog items
-- Package `test` script runs `jssg test` for every **wired** (`codemod`) step only
+- Package `test` script runs the workflow on each **wired** (`codemod`) step's fixtures with `codemod/testing` (`runWorkflow` with `until` set to that step)
 
 Split into multiple packages only when:
 
@@ -152,25 +152,24 @@ Proceed to build/publish only after the user explicitly confirms the `codemod` /
 ### Multi-step workflow shape
 
 ```ts
-import { jssg, step } from "codemod/workflow";
+import { forEachFile, step } from "codemod/workflow";
+import firstApi from "./scripts/first-api.ts";
+import secondApi from "./scripts/second-api.ts";
+
+const sources = {
+  language: "typescript",
+  semanticAnalysis: "file",
+  include: ["**/*.{ts,tsx}"],
+  exclude: ["**/node_modules/**", "**/dist/**"],
+} as const;
 
 export default async function workflow() {
-  await step("Migrate first API", jssg("./scripts/first-api.ts", {
-    language: "typescript",
-    semanticAnalysis: "file",
-    include: ["**/*.{ts,tsx}"],
-    exclude: ["**/node_modules/**", "**/dist/**"],
-  }));
-  await step("Migrate second API", jssg("./scripts/second-api.ts", {
-    language: "typescript",
-    semanticAnalysis: "file",
-    include: ["**/*.{ts,tsx}"],
-    exclude: ["**/node_modules/**", "**/dist/**"],
-  }));
+  await step("Migrate first API", forEachFile(sources, firstApi));
+  await step("Migrate second API", forEachFile(sources, secondApi));
 }
 ```
 
-Use `semanticAnalysis: "workspace"` when a step must resolve cross-file imports or rename across modules. Set it to `"none"` only when the transform is a pure AST shape with no shared method names or symbol renames, and explain why in the README. In existing YAML workflows, the equivalent option is `semantic_analysis`.
+Use `semanticAnalysis: "workspace"` when a step must resolve cross-file imports or rename across modules. Set it to `"none"` only when the callback is a pure AST shape with no shared method names or symbol renames, and explain why in the README. In existing YAML workflows, the equivalent option is `semantic_analysis`.
 
 ## 2. Codemods built locally
 

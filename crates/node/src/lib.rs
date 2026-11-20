@@ -28,3 +28,22 @@ pub fn resolve_workflow(source: String, name: Option<String>) -> napi::Result<St
         .map(|path| path.to_string_lossy().into_owned())
         .map_err(napi::Error::from_reason)
 }
+
+/// The workflow source as Node.js should load it: `shard`'s functions as
+/// references to the modules the build extracted, which the engine runs in
+/// isolates, and imported `forEachFile` callbacks with the ids the build
+/// gave them. `None` when the build changes nothing Node.js runs. Throws
+/// the build's error.
+#[napi_derive::napi]
+pub fn rewrite_workflow(file: String, source: String) -> napi::Result<Option<String>> {
+    codemod_workflow::rewrite_for_node(&file, &source)
+        .map_err(|error| napi::Error::from_reason(error.to_string()))
+}
+
+/// A YAML file as the JavaScript module `import data from "./file.yaml"`
+/// loads: its content as the default export, an array when the file has
+/// several documents. As the codemod CLI's module loader does.
+#[napi_derive::napi]
+pub fn yaml_module(text: String) -> napi::Result<String> {
+    codemod_sandbox::utils::yaml::yaml_module(&text).map_err(napi::Error::from_reason)
+}
