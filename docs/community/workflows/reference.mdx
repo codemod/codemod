@@ -9,9 +9,9 @@ A workflow is a TypeScript file, `workflow.ts`, whose default export runs **step
 ## Complete example
 
 ```ts workflow.ts
-import { step, forEachFile, jssg, shell, approval } from "codemod/workflow";
+import { step, forEachFile, shell, approval } from "codemod/workflow";
 import { parse } from "codemod/ast-grep";
-import codemod from "./scripts/codemod.ts";
+import migrateCalls from "./scripts/migrate-calls.ts";
 
 const LEGACY = "moment";
 
@@ -31,8 +31,8 @@ export default async function main({ params }: { params: { replacement: string }
     file.write(file.text.replaceAll(`from "${LEGACY}"`, `from "${params.replacement}"`));
   }));
 
-  // Run an existing JSSG transform, then the formatter.
-  await step("Apply transform", forEachFile("src/**/*.ts", jssg(codemod)));
+  // A callback kept in its own file, then the formatter.
+  await step("Migrate calls", forEachFile("src/**/*.ts", migrateCalls));
   await step(approval("Run the formatter?"));
   await step("Format", shell("npx prettier --write src"));
 }
@@ -115,7 +115,7 @@ const config = await step("Read config", async () => JSON.parse(await readFile("
 
 Runs `callback` once per selected file and returns a task for `step()`. Without a selector, it visits the files of the package's `targets.languages` in `codemod.yaml`.
 
-In place of the callback it takes a [transform](#transforms): `jssg(transform)`, with a transform imported from its file, or `astGrep(rules)`.
+Per-file logic is always a callback: written inline, or [imported from its own file](#imported-callbacks). In place of the callback, `forEachFile` also takes [ast-grep rules](#ast-grep-rules): `astGrep(rules)`.
 
 ### Selector
 
@@ -134,8 +134,10 @@ Object fields:
 | `language` | Selects the language's file extensions when `include` is not set, and is the default language for `parse(file)` and `parse(text)` |
 | `containing` | Only files whose text contains this string |
 | `concurrency` | Files each worker keeps in flight (default `1`). Raise it for async callbacks that wait on the network or `codemod/llm` |
+| `semanticAnalysis` | What `definition()` and `references()` on roots `parse(file)` makes can find: `"file"` (the default) within each file, `"workspace"` across the selected files of the target (or `{ mode: "workspace", root: "src" }`), `"none"` nothing. The analysis only runs when they are called |
+| `capabilities` | What the callback needs besides the run's capabilities: `["fs"]`, `["fetch"]`, `["child_process"]`. An interactive run asks for those it does not grant (`--allow-fs`, ..., or `codemod.yaml`); a non-interactive run goes without them. A dry run never has `fs` or `child_process` |
 
-Files are selected as `jssg` and `astGrep` select theirs: `.gitignore` is respected, hidden files and directories (`.github/`) are included, and a `language` means the same extensions for all three (`"typescript"` also takes `.js` files, which that parser reads). A selector is plain data, so you can reuse and refine it: `{ ...sources, containing: "moment" }`.
+Files are selected as `astGrep` selects them: `.gitignore` is respected, hidden files and directories (`.github/`) are included, and a `language` means the same extensions for both (`"typescript"` also takes `.js` files, which that parser reads). A selector is plain data, so you can reuse and refine it: `{ ...sources, containing: "moment" }`.
 
 ### The file object
 
@@ -157,7 +159,7 @@ Changes are recorded, not written immediately. When every file is done, the step
 - A callback that throws fails only that file; the error appears in `result.failures`, and the file and its error are logged under the step.
 - When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again.
 - When the callback fails on every file it ran on, the step fails, with the first file's error.
-- To count what a callback found, return it: outputs are values, so add them up after the step. (A [JSSG transform](/community/jssg/metrics) returns `{ edit, data }` instead, and its step's `data` lists what each file returned.)
+- To count what a callback found, return it: outputs are values, so add them up after the step.
 
 ```ts
 export default async function main() {
@@ -195,30 +197,59 @@ These are build errors, reported with the file, line and column:
 - using a local variable that is reassigned after it is declared;
 - using a function or class declared inside the surrounding function (move it to module level);
 - calling `step()`, `forEachFile` or another task inside the callback;
-- passing a callback by name instead of writing it inline;
+- passing a callback by name instead of writing it inline or importing it from its file;
 - calling `forEachFile` with a callback, or `step` with a function, in a file the workflow imports: callbacks are only extracted from the workflow file itself;
 - importing `codemod/workflow` as a namespace (`import * as`): import `step`, `forEachFile` and the rest by name.
 
 A local that is not JSON (a `Set`, a `Map`, a class instance) fails when the step starts, naming the variable.
 
-## Transforms
+### Imported callbacks
 
-A transform is per-file work kept in its own file. Import a [JSSG](/community/jssg) transform by its file's default export and give it to `jssg`; `forEachFile` runs it on the files its selector picks:
+A callback can live in its own file, as that file's default export, with the same signature as an inline one. Import it and give it to `forEachFile`:
+
+```ts scripts/migrate-calls.ts
+import type { FileCallback } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+
+const migrateCalls: FileCallback<{ file: string; rewrites: number }> = (file) => {
+  const root = parse(file).root();
+  const edits = root.findAll({ rule: { pattern: "moment($A)" } }).map((node) => node.replace("dayjs()"));
+  if (!edits.length) return;
+  file.write(root.commitEdits(edits));
+  return { file: file.path, rewrites: edits.length };
+};
+
+export default migrateCalls;
+```
+
+```ts workflow.ts
+import { step, forEachFile } from "codemod/workflow";
+import migrateCalls from "./scripts/migrate-calls.ts";
+
+export default async function main() {
+  const result = await step("Migrate calls", forEachFile({ language: "tsx" }, migrateCalls));
+  result.outputs; // readonly { file: string; rewrites: number }[]
+}
+```
+
+- The build extracts it as it does an inline callback: the module it runs in imports the file. The workflow body never loads it.
+- The step is identified by the file's content and the content of the files it imports (relatively): change either and a finished step runs again on resume, as an edited inline callback does.
+- Publishing includes the file, bundled with what it imports from npm packages.
+- `FileCallback<Output>` types the function; what it returns is collected into `outputs`.
+
+These are build errors, each with the fix:
+
+- a file path where the callback goes: `forEachFile takes a callback, not a file path: export the function as the default of "./scripts/rename-imports.ts", add import renameImports from "./scripts/rename-imports.ts" at the top of the workflow, and write forEachFile(selector, renameImports)`;
+- a named or namespace import, an import from an npm package, or one without the file's extension;
+- using the imported callback for anything else, in the body or in another callback (`'migrate' is the callback imported from "./scripts/migrate.ts": only give it to forEachFile(...), or as shard's method.function or filter`).
+
+To test an imported callback, run the workflow on fixtures: see [Testing workflows](/community/workflows/testing).
+
+### ast-grep rules
 
 ```ts
-import { step, forEachFile, jssg, astGrep } from "codemod/workflow";
-import codemod from "./scripts/codemod.ts";
-import components from "./scripts/components.ts";
+import { step, forEachFile, astGrep } from "codemod/workflow";
 import rules from "./rules/config.yml";
-
-// A JSSG transform, on the package's languages (`targets.languages` in codemod.yaml).
-await step("Migrate imports", forEachFile(jssg(codemod)));
-
-// The same, on chosen files, with options for the transform.
-await step("Migrate components", forEachFile(
-  { include: "src/**/*.tsx", exclude: "**/*.test.tsx", language: "tsx" },
-  jssg(components, { params: { strict: true } }),
-));
 
 // ast-grep rules: a YAML rule file, imported as its rules.
 await step("Apply rules", forEachFile("src/**/*.ts", astGrep(rules)));
@@ -232,37 +263,19 @@ await step("Rename", forEachFile(astGrep({
 })));
 ```
 
-| Transform | What it is |
+| Task | What it is |
 |---|---|
-| `jssg(transform, options?)` | An imported [JSSG](/community/jssg) transform. Options: `params`, `matrix`, `capabilities`, `semanticAnalysis` (`"file"` by default, as in `jssg run`; also `"workspace"` or `"none"`), `threads`, `dryRun`, `basePath`, `files`. Result: `{ changes, unmodified, failures }`. |
 | `astGrep(rules, options?)` | ast-grep rules: an object of the shape of an ast-grep YAML rule (`id`, `language`, `rule`, `fix`, `constraints`, `utils`, `transform`, ...), an array of them, or an imported YAML rule file. Options: `basePath`, `threads`. Result: `{ changes, matches, failures }`. |
-
-The workflow does not load an imported transform: the build drops the import and hands the engine the file it names, which runs the transform on each file, as `codemod jssg run` does. Publishing includes the file. So:
-
-- import the transform from a file of the package, with a relative path and its extension (`"./scripts/codemod.ts"`), by its default export;
-- only give the import to `jssg` (or to `shard`, see [Sharding](/community/workflows/sharding)): using it for anything else, in the body or in a callback, is a build error;
-- a transform's other exports can still be imported by name, and are loaded as usual.
 
 `astGrep` takes rules as data. Import a YAML rule file with `import rules from "./rules/config.yml"` (no import attribute needed): the import gives the file's rule as an object, or an array when the file has several documents (`---`), and publishing includes the file. Rules can also be written in the workflow, or built from params and earlier results; they must be JSON (a function or a `RegExp` in a rule fails the step, naming it; a field left `undefined` is left out). The rules are part of the step, so a changed rule runs the step again on resume. A YAML import is data anywhere: in the body, in callbacks, and in Node.js through `codemod/host`. The `AstGrepRule` type describes a rule, and `.yaml` imports are typed as rules.
 
-The build only accepts what it can read, so a published package never misses a file. These are build errors:
+The selector is a glob, a list of globs, or an object with `include` and `exclude`; without `include`, the rules run on the files of their own languages. `astGrep` also takes `include` and `exclude` as options, and is a task itself: `step(astGrep(rules, { include }))`. Inside `forEachFile`, give each field in one place.
 
-- a path given to `jssg`, as a string or computed: `jssg takes an imported transform, not a file path: add import codemod from "./scripts/codemod.ts" at the top of the workflow and write jssg(codemod)`;
-- a path given to `astGrep`: `astGrep takes rules, not a file path: add import config from "./rules/config.yml" at the top of the workflow and write astGrep(config), so the build can include the file when publishing` (a path that only shows up at run time fails the step with the same advice);
-- a YAML file imported by name or as a namespace, or from an npm package;
-- a transform that is a named or namespace import, comes from an npm package, has no file extension, or is a function written in the workflow (`jssg((root) => ...)` is not supported yet: move it to its own file).
+These are build errors: a path given to `astGrep` (`astGrep takes rules, not a file path: add import config from "./rules/config.yml" at the top of the workflow and write astGrep(config), so the build can include the file when publishing`; a path that only shows up at run time fails the step with the same advice), and a YAML file imported by name, as a namespace, or from an npm package.
 
-To pick a transform at run time, import each one and choose between them in the call: `jssg(params.strict ? strict : loose)`.
+### jssg transforms
 
-As with a callback, a transform that fails on some files makes the step partial, and one that fails on every file fails it.
-
-The selector is a glob, a list of globs, or an object with `include`, `exclude` and, for `jssg`, `language`:
-
-- **`jssg`:** `language` is the language the files are parsed as, and without `include` it selects that language's files. Without a `language`, the package's is used (`targets.languages` in `codemod.yaml`); a package that lists none gets `typescript`, and one that lists several must name one.
-- **`astGrep`:** without `include`, the rules run on the files of their own languages.
-- `containing` and `concurrency` are for callbacks. A JSSG transform narrows its own files with [`getSelector`](/community/jssg/reference).
-
-`jssg` and `astGrep` also take `include`, `exclude` and (`jssg`) `language` as options, and are tasks themselves: `step(jssg(codemod, { include, language }))` runs on the files its options select, with `typescript` as the default language. Inside `forEachFile`, give each of these fields in one place.
+`jssg(...)` is not part of the workflow API: per-file logic is a callback. Importing `jssg` is a build error that says so. A jssg transform `(root, options) => string | null` becomes a callback in a few lines: `parse(file)` gives the root, `file.write(text)` replaces returning the text, and what the callback returns is collected. `codemod jssg run` and `codemod jssg test` still run jssg transform files on their own, and `workflow.yaml` files that run them keep working (see [Migrate](/community/workflows/migrate)).
 
 ## Parsing with `codemod/ast-grep`
 
@@ -291,8 +304,8 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 
 | Task | What it does |
 |---|---|
-| `forEachFile(selector?, jssg(transform, options))` | Run an imported [JSSG](/community/jssg) transform on the selected files. See [Transforms](#transforms). |
-| `forEachFile(selector?, astGrep(rules, options))` | Apply ast-grep rules, written in the workflow or imported from YAML, to the selected files. See [Transforms](#transforms). |
+| `forEachFile(selector?, callback)` | Run a callback, inline or imported, on every selected file. See [`forEachFile`](#foreachfileselector-callback). |
+| `forEachFile(selector?, astGrep(rules, options))` | Apply ast-grep rules, written in the workflow or imported from YAML, to the selected files. See [ast-grep rules](#ast-grep-rules). |
 | `shell(command, { env, cwd })`, ``shell`command` `` | Run a shell command. Result: `{ output }`. See [Shell commands](#shell-commands). |
 | `shard(options)` | Split files into groups. See [Sharding](/community/workflows/sharding). |
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
@@ -302,7 +315,7 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 | `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
 | `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. These only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped. |
 
-Transforms, shard functions and YAML rule files are imported, relative to the workflow file.
+Callbacks kept in files and YAML rule files are imported, relative to the workflow file: there are no file paths to pass.
 
 ### Dependencies
 
@@ -464,23 +477,22 @@ Otherwise the prompt is printed as instructions and nothing runs.
 Workflows have no state. A step gets what it needs from the workflow and returns what it found; the workflow passes that on.
 
 ```ts
-import { step, shell, forEachFile, jssg } from "codemod/workflow";
-import codemod from "./scripts/codemod.ts";
+import { step, shell, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
 
 const detect = await step("Detect", shell`npm pkg get dependencies.react`);
 const version = JSON.parse(detect.stdout); // "^19.0.0"
 
-const migrated = await step(
-  "Migrate",
-  forEachFile(jssg(codemod, { params: { version } })),
-);
-migrated.data; // [{ file, data }] for each file whose transform returned `data`
+const migrated = await step("Migrate", forEachFile({ language: "tsx" }, (file) => {
+  // `version` arrives as a frozen copy.
+  if (version.startsWith("^19")) return { file: file.path };
+}));
+migrated.outputs; // what each file's callback returned
 ```
 
 | Step | Values in | Values out |
 |---|---|---|
 | Function step, `forEachFile` callback | Variables it captures | Its return value; `result.outputs` for callbacks |
-| `jssg` | `params` | `{ edit, data }`; `result.data` |
 | `shell` | `env`, or the command text | What it prints; `result.stdout` |
 
 `getState`, `setState`, `unsetState`, `acquireLock` and the step-output functions were removed. Importing one is a build error that says what replaced it, and a step given a `state` option fails.
@@ -593,7 +605,7 @@ npm install --save-dev typescript @types/node
 }
 ```
 
-Then `npx tsc` checks `workflow.ts` along with your transforms (add `"include": ["src"]` when they are under `src/`, as `codemod init` does). The tests run in Node.js, so they get Node's types from a `tests/tsconfig.json` of their own that extends this one with `"types": ["codemod", "node"]`; the workflow keeps only `codemod`'s, since the CLI runs it without Node's APIs. Type-only imports are available as `codemod/main` (the `SgRoot`/`SgNode` types) and `codemod/langs/<language>`; `@codemod.com/jssg-types` still works and mirrors the same declarations.
+Then `npx tsc` checks `workflow.ts` along with the callbacks it imports (add `"include": ["src"]` when they are under `src/`, as `codemod init` does). The tests run in Node.js, so they get Node's types from a `tests/tsconfig.json` of their own that extends this one with `"types": ["codemod", "node"]`; the workflow keeps only `codemod`'s, since the CLI runs it without Node's APIs. Type-only imports are available as `codemod/main` (the `SgRoot`/`SgNode` types) and `codemod/langs/<language>`; `@codemod.com/jssg-types` still works and mirrors the same declarations.
 
 - Step results are typed and read-only. `forEachFile` collects what the callback returns: returning `file.path` or `undefined` gives `outputs: readonly string[]`.
 - A step result or callback return value that is not JSON is a type error, for example a `Set`, a `Map`, a `Date`, a function, or a `Promise` returned from an `async` callback.

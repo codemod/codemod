@@ -3,7 +3,11 @@ title: "Workflow Context"
 description: "Parameters, matrix values, passing values between steps, and runtime hooks for JSSG steps."
 ---
 
-Wire a transform into a workflow: user parameters, matrix sharding values, values handed between steps, and structured runtime signals.
+Wire per-file logic into a workflow: user parameters, matrix sharding values, values handed between steps, and structured runtime signals.
+
+<Note>
+In `workflow.ts`, per-file logic is a `forEachFile` callback, inline or imported from its file: `jssg(...)` is not part of the workflow API. A jssg transform file (`(root, options) => ...`) is what `codemod jssg run` and `codemod jssg test` run, and what `workflow.yaml`'s `js-ast-grep` steps run; there it gets `options.params` and `options.matrixValues` as below. A callback gets the same values as variables it captures.
+</Note>
 
 ## Parameters and Configuration
 
@@ -36,15 +40,19 @@ export default codemod;
 ```
 
 ```ts workflow.ts
-import { step, forEachFile, jssg } from "codemod/workflow";
-import codemod from "./codemod.ts";
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
 
 export default async function main({ params }: { params: Record<string, string> }) {
-  // Run parameters (--param key=value) reach the transform as options.params.
-  // Values passed in `params` here are merged over them.
-  await step(forEachFile({ language: "tsx" }, jssg(codemod, {
-    params: { library: params.library ?? "next-intl", prSize: "50" },
-  })));
+  // Run parameters (--param key=value) reach the workflow as `params`; a
+  // callback gets the values it uses as frozen copies.
+  const library = params.library ?? "next-intl";
+  await step(forEachFile({ language: "tsx" }, (file) => {
+    const root = parse(file);
+    if (library === "react-i18next") {
+      // Apply react-i18next specific transformations
+    }
+  }));
 }
 ```
 </CodeGroup>
@@ -106,36 +114,34 @@ Prefer checking sharding against a project-relative path (e.g., `path.relative(p
 
 ### Passing matrix values
 
-Pass values with the `matrix` option of the `jssg` task. A common pattern is one `jssg` step per shard:
+In `workflow.ts`, a callback gets a shard's values as variables. A common pattern is one step per shard:
 
 ```ts workflow.ts
-import { step, shard, forEachFile, jssg } from "codemod/workflow";
-import codemod from "./codemod.ts";
+import { step, shard, forEachFile } from "codemod/workflow";
 
 export default async function main() {
-  const shards = await step(shard({ method: { type: "codeowner", maxFilesPerShard: 30 }, filePattern: "**/*.tsx" }));
-  await Promise.all(shards.map((current) =>
-    step(`Migrate ${current.name}`, forEachFile({ language: "tsx" }, jssg(codemod, {
-      files: current._meta_files,
-      matrix: { team: current.team, shardId: current.name },
-    }))),
-  ));
+  const shards = await step(shard({ method: { type: "codeowner", maxFilesPerShard: 30 }, files: "**/*.tsx" }));
+  await Promise.all(shards.map((current) => {
+    const team = current.team;
+    return step(`Migrate ${current.name}`, forEachFile({ include: current._meta_files, language: "tsx" }, (file) => {
+      console.log(`Processing ${file.path} for team ${team}`);
+    }));
+  }));
 }
 ```
 
 <Note>
-**Parameters vs matrix values**: `options.params` holds run parameters, while `options.matrixValues` holds the values passed with `matrix`. In `workflow.yaml`, matrix values come from a node's matrix strategy; see the [workflow.yaml reference](/community/workflows/yaml).
+**Parameters vs matrix values**: in a jssg transform, `options.params` holds run parameters, while `options.matrixValues` holds a matrix node's values. In `workflow.yaml`, matrix values come from a node's matrix strategy; see the [workflow.yaml reference](/community/workflows/yaml).
 </Note>
 
 ## Passing Values Between Steps
 
-Workflows have no shared state. A transform gets values through `options.params` and reports what it found by returning it; a later step gets those values as its own `params`.
+Workflows have no shared state. A callback gets values as the variables it captures and reports what it found by returning it; a later step gets those values the same way.
 
 | Need | Use |
 |---|---|
-| Give a transform a value | `jssg(codemod, { params: { ... } })`, read with `options.params` |
-| Report what a transform saw | Return `{ edit, data }`; the step's `result.data` lists each file's data, or a reducer folds it ([returning data](/community/jssg/metrics)) |
-| Collect a value from every file | A `forEachFile` callback that returns it; the step's `result.outputs` lists them in path order |
+| Give a callback a value | A variable it uses, copied in when the step starts |
+| Report what a callback saw, or collect a value from every file | Return it; the step's `result.outputs` lists them in path order |
 | A shell command's values | What it prints; parse the step's `result.stdout` |
 
 <Info>
@@ -148,9 +154,9 @@ A step that needs something found across the repository runs after a step that f
 
 <CodeGroup>
 ```ts workflow.ts
-import { step, forEachFile, jssg } from "codemod/workflow";
+import { step, forEachFile } from "codemod/workflow";
 import { parse } from "codemod/ast-grep";
-import updateImports from "./scripts/update-imports.ts";
+import { updateImports } from "./scripts/update-imports.ts";
 
 export default async function main() {
   // Pass 1: every file returns the components it exports.
@@ -159,24 +165,21 @@ export default async function main() {
   ));
   const components = scan.outputs.flat();
 
-  // Pass 2: the transform gets the list as a parameter.
-  await step("Update imports", forEachFile({ language: "tsx" }, jssg(updateImports, {
-    params: { components },
-  })));
+  // Pass 2: the callback gets the list as a variable.
+  await step("Update imports", forEachFile({ language: "tsx" }, (file) => updateImports(file, components)));
 }
 ```
 
 ```ts scripts/update-imports.ts
-import type { Codemod } from "codemod/ast-grep";
-import type TSX from "codemod/ast-grep/langs/tsx";
+import { parse } from "codemod/ast-grep";
+import type { WorkflowFile } from "codemod/workflow";
 
-const codemod: Codemod<TSX> = async (root, options) => {
-  const components = new Set(options.params.components as string[]);
-  // ... rewrite imports of `components`
-  return { edit: null, data: { checked: [{ file: root.filename() }] } };
-};
-
-export default codemod;
+export function updateImports(file: WorkflowFile, components: readonly string[]) {
+  const names = new Set(components);
+  const root = parse(file);
+  // ... rewrite imports of `names`, then file.write(...)
+  return { file: file.path };
+}
 ```
 </CodeGroup>
 
