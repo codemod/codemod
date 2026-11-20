@@ -53,7 +53,7 @@ declare module "codemod:workflow" {
   //
   // Everything below is used from a workflow file. Workflows have no state:
   // a step gets values from the body (a function step's captured variables,
-  // jssg `params`, shell `env`) and returns what it found on its result.
+  // shell `env`) and returns what it found on its result.
   //
   // Code inside `step(() => ...)` and `forEachFile(...)` callbacks runs in
   // its own isolate, with every module the run allows (`fs`, `fetch` and
@@ -119,7 +119,7 @@ declare module "codemod:workflow" {
   const transformResult: unique symbol;
 
   /**
-   * A transform for single files, made by `jssg` or `astGrep`. Give it to
+   * A transform for single files, made by `astGrep`. Give it to
    * `forEachFile` to say which files it runs on.
    */
   export interface Transform<Result> extends Task<Result> {
@@ -278,7 +278,29 @@ declare module "codemod:workflow" {
      * callbacks that wait on the network or `codemod/llm`.
      */
     concurrency?: number;
+    /**
+     * What `definition()` and `references()` on roots `parse(file)` makes can
+     * find: `"file"` (the default) looks within each file, `"workspace"`
+     * across the selected files of the target (or under `root`), and
+     * `"none"` turns it off. Analysis runs only when they are called.
+     */
+    semanticAnalysis?: SemanticAnalysis;
+    /**
+     * Capabilities the callback needs besides the run's: `"fs"`, `"fetch"`,
+     * `"child_process"`. Interactive runs ask for those the run does not
+     * grant (`--allow-fs`, ..., or codemod.yaml); others go without. A dry
+     * run never has `fs` or `child_process`.
+     */
+    capabilities?: readonly Capability[];
   }
+
+  export type Capability = "fs" | "fetch" | "child_process";
+
+  export type SemanticAnalysis =
+    | "file"
+    | "workspace"
+    | "none"
+    | { mode: "file" | "workspace"; root?: string };
 
   /**
    * Which files `forEachFile` visits, and how: a glob, a list of globs, or an
@@ -338,13 +360,46 @@ declare module "codemod:workflow" {
   }
 
   /**
+   * A `forEachFile` callback kept in its own file, as the file's default
+   * export: annotate it with this type, then import it into the workflow
+   * and give it to `forEachFile`. `Output` is what it returns for a file,
+   * collected into the step's `outputs`.
+   *
+   * @example
+   * ```ts
+   * // scripts/migrate.ts
+   * import type { FileCallback } from "codemod/workflow";
+   * import { parse } from "codemod/ast-grep";
+   *
+   * const migrate: FileCallback<{ path: string; count: number }> = (file) => {
+   *   const root = parse(file).root();
+   *   const found = root.findAll({ rule: { pattern: "var $A = $B" } });
+   *   if (!found.length) return;
+   *   file.write(root.commitEdits(found.map((node) => node.replace(node.text().replace(/^var/, "let")))));
+   *   return { path: file.path, count: found.length };
+   * };
+   * export default migrate;
+   *
+   * // workflow.ts
+   * import migrate from "./scripts/migrate.ts";
+   * const result = await step(forEachFile({ language: "typescript" }, migrate));
+   * ```
+   */
+  export type FileCallback<Output = void> = (
+    file: WorkflowFile,
+  ) => Output | undefined | void | PromiseLike<Output | undefined | void>;
+
+  /**
    * Runs `callback` once for every selected file, in parallel, in isolates.
    * The callback may be async. Returned values are collected into `outputs`.
    *
-   * Write the callback inline. Variables from outside it arrive as frozen
-   * copies and must be JSON; assigning to them is a build error. Imports
-   * (`codemod/ast-grep`, packages, files next to the workflow) are
-   * available inside.
+   * Write the callback inline, or import it from a file of the package
+   * whose default export it is (`import migrate from "./scripts/migrate.ts"`);
+   * the workflow body does not load that file, and the step runs again on
+   * resume when the file, or a file it imports, changes. Variables from
+   * outside an inline callback arrive as frozen copies and must be JSON;
+   * assigning to them is a build error. Imports (`codemod/ast-grep`,
+   * packages, files next to the workflow) are available inside.
    *
    * @example
    * ```ts
@@ -372,15 +427,14 @@ declare module "codemod:workflow" {
   export function forEachFile<Output = undefined>(
     callback: (file: WorkflowFile) => Checked<Output>,
   ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
-
-  /**
-   * Which files `forEachFile` runs a `jssg` transform on: a glob, a list of
-   * globs, or an object. `language` is the language the files are parsed as
-   * and, without `include`, selects that language's file extensions. Without
-   * a `language`, the package's is used (`targets.languages` in codemod.yaml,
-   * when it lists one), and otherwise `typescript`.
-   */
-  export type JssgSelector = Globs | { include?: Globs; exclude?: Globs; language?: string };
+  /** A callback typed as a `FileCallback`, as one imported from its file usually is. */
+  export function forEachFile<Output>(
+    selector: FileSelector,
+    callback: FileCallback<Checked<Output>>,
+  ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
+  export function forEachFile<Output>(
+    callback: FileCallback<Checked<Output>>,
+  ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
 
   /**
    * Which files `forEachFile` applies `astGrep` rules to: a glob, a list of
@@ -389,29 +443,16 @@ declare module "codemod:workflow" {
   export type AstGrepSelector = Globs | { include?: Globs; exclude?: Globs };
 
   /**
-   * Runs a JSSG transform, or applies an ast-grep rule file, on every
-   * selected file. The selector's fields stand for the same options of
-   * `jssg` and `astGrep`, so give each in one place.
+   * Applies ast-grep rules on every selected file. The selector's fields
+   * stand for the same options of `astGrep`, so give each in one place.
    *
    * @example
    * ```ts
-   * import codemod from "./scripts/codemod.ts";
-   * import components from "./scripts/components.ts";
    * import rules from "./rules/config.yml";
    *
-   * await step("Migrate imports", forEachFile(jssg(codemod)));
    * await step("Apply rules", forEachFile("src/**\/*.ts", astGrep(rules)));
-   * await step("Migrate components", forEachFile(
-   *   { include: "src/**\/*.tsx", exclude: "**\/*.test.tsx", language: "tsx" },
-   *   jssg(components, { params: { strict: true } }),
-   * ));
    * ```
    */
-  export function forEachFile<Data>(transform: Transform<JssgResult<Data>>): Task<JssgResult<Data>>;
-  export function forEachFile<Data>(
-    selector: JssgSelector,
-    transform: Transform<JssgResult<Data>>,
-  ): Task<JssgResult<Data>>;
   export function forEachFile(transform: Transform<AstGrepResult>): Task<AstGrepResult>;
   export function forEachFile(
     selector: AstGrepSelector,
@@ -477,96 +518,6 @@ declare module "codemod:workflow" {
   export function shell(
     options: ShellOptions,
   ): (strings: TemplateStringsArray, ...values: ShellValue[]) => ShellTask;
-
-  export type Capability = "fs" | "fetch" | "child_process";
-
-  export interface JssgOptions {
-    include?: Globs;
-    exclude?: Globs;
-    /** Directory under the target to restrict the run to. */
-    basePath?: string;
-    /** Process exactly these files, relative to the target. */
-    files?: readonly string[];
-    /** Defaults to `typescript`. */
-    language?: string;
-    /** Merged over the run's params; the transform reads them as `options.params`. */
-    params?: Readonly<Record<string, unknown>>;
-    /** The transform reads these as `options.matrixValues`. */
-    matrix?: Readonly<Record<string, unknown>>;
-    capabilities?: readonly Capability[];
-    /**
-     * Semantic analysis for `definition()` and `references()`: `"file"` (the default)
-     * analyses each file on its own, `"workspace"` the whole target (or `root`), and
-     * `"none"` turns it off.
-     */
-    semanticAnalysis?:
-      | "file"
-      | "workspace"
-      | "none"
-      | { mode: "file" | "workspace"; root?: string };
-    threads?: number;
-    /** Run the transform without applying its changes. */
-    dryRun?: boolean;
-  }
-
-  /** One file's `data`, as the transform returned it. */
-  export interface JssgData {
-    file: string;
-    data: JsonValue;
-  }
-
-  export interface JssgResult<Data = readonly JssgData[]> {
-    changes: FileChanges;
-    unmodified: number;
-    failures: FileFailure[];
-    /**
-     * Each file's `data`, sorted by path, leaving out files that returned
-     * none; or, with a reducer, what it folded them into.
-     */
-    data: Data;
-  }
-
-  /**
-   * Folds each file's `data` into one value as the file finishes, so the
-   * step never holds every file's data at once. Files arrive in no
-   * particular order. Write `reduce` inline so the build can extract it.
-   */
-  export interface JssgReducer<T> {
-    reduce: (result: T, entry: JssgData) => T | Promise<T>;
-    initial: T;
-  }
-
-  /**
-   * A JSSG transform: the default export of a transform file, imported into
-   * the workflow (`import codemod from "./scripts/codemod.ts"`). The workflow
-   * does not run it; the engine does, on each file.
-   */
-  export type JssgTransform = (...args: never[]) => unknown;
-
-  /**
-   * Runs an imported JSSG transform. Run it with
-   * `forEachFile(selector, jssg(transform))`, which says which files it is
-   * for. As a step on its own it runs on the files its options select.
-   *
-   * The transform is imported from a file of the package, by its default
-   * export: the build passes the engine that file and includes it when
-   * publishing. Only give the import to `jssg` (or `shard`); the workflow
-   * does not load its code.
-   *
-   * @example
-   * ```ts
-   * import codemod from "./scripts/codemod.ts";
-   *
-   * await step("Migrate", forEachFile(jssg(codemod, { params: { strict: true } })));
-   * ```
-   */
-  // `T` is unconstrained so `initial: 0` gives `number`, not `0`; the
-  // result is checked to be JSON when the step runs.
-  export function jssg<T>(
-    transform: JssgTransform,
-    options: JssgOptions & JssgReducer<T>,
-  ): Transform<JssgResult<T>>;
-  export function jssg(transform: JssgTransform, options?: JssgOptions): Transform<JssgResult>;
 
   export interface AstGrepOptions {
     include?: Globs;
@@ -730,29 +681,56 @@ declare module "codemod:workflow" {
       }
     | {
         /**
-         * A shard function, imported from a file of the package by its
-         * default export (`import shardFiles from "./scripts/shard.ts"`):
-         * it receives a `ShardInput` and returns `ShardResult[]`.
+         * A shard function: it receives a `ShardInput` and returns
+         * `ShardResult[]`. Written inline, or imported from a file of the
+         * package whose default export it is; it runs in its own isolate,
+         * as callbacks do.
          */
         function: ShardFunction;
       };
 
-  /** The default export of a shard function file. */
-  export type ShardFunction = (input: ShardInput) => unknown;
+  /** A shard function, written inline or as a file's default export. */
+  export type ShardFunction = (
+    input: ShardInput,
+  ) => readonly ShardResult[] | PromiseLike<readonly ShardResult[]>;
 
   export interface ShardOptions {
     method: ShardMethod;
     /** Directory to scan, relative to the target. */
     target?: string;
-    /** Glob for eligible files when `jssg` is not set. */
-    filePattern?: string;
-    /** Keep only the files this imported transform would change. */
-    jssg?: JssgOptions & { transform: JssgTransform };
+    /**
+     * Which files under `target` are eligible: a glob, a list of globs, or
+     * `{ include, exclude, language }`. Without it, the files of the
+     * package's `targets.languages`; built-in methods without `files` or
+     * `filter` take every file under `target`.
+     */
+    files?: Globs | { include?: Globs; exclude?: Globs; language?: string };
+    /**
+     * Keeps the eligible files it returns `true` for, for example those the
+     * codemod would change. A `forEachFile` callback, written inline or
+     * imported, run on each file; what it does to the file is not kept.
+     */
+    filter?: (file: WorkflowFile) => boolean | undefined | PromiseLike<boolean | undefined>;
     /** An earlier result of this step, so existing assignments are kept. */
     previous?: readonly ShardResult[];
   }
 
-  /** Splits files into groups ("shards"), for example one per directory or code owner. */
+  /**
+   * Splits files into groups ("shards"), for example one per directory or
+   * code owner.
+   *
+   * @example
+   * ```ts
+   * import wouldChange from "./scripts/would-change.ts";
+   *
+   * const shards = await step(shard({
+   *   method: { type: "directory", maxFilesPerShard: 20 },
+   *   target: "./src",
+   *   files: { language: "tsx" },
+   *   filter: wouldChange,
+   * }));
+   * ```
+   */
   export function shard(options: ShardOptions): Task<ShardResult[]>;
 
   /** Runs another codemod package (registry name or local path) as part of this step. */

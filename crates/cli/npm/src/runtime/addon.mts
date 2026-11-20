@@ -88,11 +88,6 @@ export interface NativeRun {
   evaluate(kind: string, expression: string, scope: string): unknown;
   /** Run a host task (a `StartRequest` as JSON). Rejects with `{ name, message }` as JSON in the message. */
   runTask(request: string): Promise<Outcome>;
-  /** Collect JSSG data without writing edits; only `commit` applies them. */
-  prepareJssg(request: string): Promise<{
-    readonly data: { file: string; data: Json }[];
-    commit(data: string): Promise<Outcome>;
-  }>;
   /** The files a `forEachFile` selector (as JSON) picks. */
   selectFiles(
     selector: string,
@@ -117,9 +112,9 @@ export interface Addon {
   /** The workflow file a path names: the file, or a package directory's workflow. */
   resolveWorkflow(source: string, name: string | null): string;
   /**
-   * A workflow's source with its imported transforms replaced by references
-   * to their files (as the CLI's build does), or null when it has none.
-   * Throws the build's error for a transform the build cannot read.
+   * A workflow's source as Node.js loads it: `shard`'s functions as
+   * references to the modules the build extracted, imported callbacks with
+   * their ids; null when that changes nothing. Throws the build's error.
    */
   rewriteWorkflow?(file: string, source: string): string | null;
   /** A YAML file's text as an ES module whose default export is its content. */

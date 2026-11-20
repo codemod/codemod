@@ -13,7 +13,6 @@ import {
   commit,
   forEachFile,
   installSkill,
-  jssg,
   pullRequest,
   shard,
   shell,
@@ -23,8 +22,9 @@ import {
   type ShardResult,
   type WorkflowContext,
 } from "codemod/workflow";
-import codemodTransform from "./scripts/codemod.ts";
+import migrate from "./scripts/migrate.ts";
 import shardFiles from "./scripts/shard.ts";
+import wouldChange from "./scripts/would-change.ts";
 import rules from "./rules/config.yml";
 
 type Equal<A, B> =
@@ -145,47 +145,38 @@ export default async function main({
 
   // ── tasks ────────────────────────────────────────────────────────────
 
-  const transformed = await step(
-    jssg(codemodTransform, {
-      include: "src/**/*.ts",
-      params: { library: params.replacement ?? "dayjs" },
-      capabilities: ["fs"],
-    }),
-  );
-  expectType<Equal<typeof transformed.unmodified, number>>(true);
-  // @ts-expect-error unknown capability
-  jssg(codemodTransform, { capabilities: ["network"] });
-  // @ts-expect-error a transform is imported, not named by path
-  jssg("./scripts/codemod.ts");
-
-  // A transform is run on the files `forEachFile` selects.
-  const migrated = await step(forEachFile(jssg(codemodTransform)));
-  expectType<Equal<(typeof migrated.data)[number]["file"], string>>(true);
-  // A reducer's result is the step's data.
-  const counted = await step(
-    jssg(codemodTransform, {
-      reduce: (total, { data }) => total + (typeof data === "number" ? data : 0),
-      initial: 0,
-    }),
-  );
-  expectType<Equal<typeof counted.data, number>>(true);
-  // @ts-expect-error a reducer needs an initial value
-  jssg(codemodTransform, { reduce: (total: number) => total });
-  expectType<Equal<typeof migrated.unmodified, number>>(true);
+  // An imported callback: what it returns is the step's outputs.
+  const migrated = await step(forEachFile({ language: "typescript" }, migrate));
+  expectType<
+    Equal<typeof migrated.outputs, readonly { readonly path: string; readonly count: number }[]>
+  >(true);
   await step(
     forEachFile(
-      { include: "src/**/*.tsx", exclude: "**/*.test.tsx", language: "tsx" },
-      jssg(codemodTransform, { params: { strict: true } }),
+      {
+        include: "src/**/*.tsx",
+        exclude: "**/*.test.tsx",
+        language: "tsx",
+        semanticAnalysis: "workspace",
+        capabilities: ["fs"],
+      },
+      migrate,
     ),
   );
+  await step(
+    forEachFile({ language: "tsx", semanticAnalysis: { mode: "workspace", root: "src" } }, migrate),
+  );
+  // @ts-expect-error unknown capability
+  forEachFile({ language: "tsx", capabilities: ["network"] }, migrate);
+  // @ts-expect-error a callback is imported or written, not named by path
+  forEachFile({ language: "tsx" }, "./scripts/migrate.ts");
   const ruled = await step(forEachFile(["src/**/*.ts"], astGrep(rules)));
   expectType<Equal<typeof ruled.matches, number>>(true);
   await step(forEachFile(astGrep(rules)));
   // @ts-expect-error `containing` is for callbacks
-  forEachFile({ containing: "moment" }, jssg(codemodTransform));
+  forEachFile({ containing: "moment" }, astGrep(rules));
   // @ts-expect-error the rules name their languages
   forEachFile({ language: "tsx" }, astGrep(rules));
-  // @ts-expect-error only jssg and astGrep are transforms
+  // @ts-expect-error only callbacks and astGrep
   forEachFile(shell("echo hi"));
 
   const ran = await step(shell("echo hi", { cwd: target, env: { A: "1" } }));
@@ -231,21 +222,28 @@ export default async function main({
     shard({
       method: { type: "directory", maxFilesPerShard: 20 },
       target: "./src",
-      jssg: { transform: codemodTransform, include: ["**/*.ts"] },
+      files: { include: ["**/*.ts"] },
+      filter: wouldChange,
     }),
   );
   await Promise.all(
     shards.map((current) =>
-      step(`Migrate ${current.name}`, jssg(codemodTransform, { files: current._meta_files })),
+      step(`Migrate ${current.name}`, forEachFile({ include: current._meta_files }, migrate)),
     ),
   );
   expectType<Equal<(typeof shards)[number], Frozen<ShardResult>>>(true);
   // @ts-expect-error maxFilesPerShard is required
   shard({ method: { type: "directory" } });
-  await step(shard({ method: { function: shardFiles } }));
-  // @ts-expect-error shard functions are imported, not named by path
+  await step(shard({ method: { function: shardFiles }, files: "**/*.ts" }));
+  await step(
+    shard({
+      method: { function: ({ files }) => [{ name: "all", _meta_shard: 0, _meta_files: files }] },
+      filter: (file) => file.text.includes("moment"),
+    }),
+  );
+  // @ts-expect-error shard functions are imported or written, not named by path
   shard({ method: { function: "./scripts/shard.ts" } });
-  // @ts-expect-error shard's jssg takes an imported transform
+  // @ts-expect-error shard's jssg was removed
   shard({ method: { function: shardFiles }, jssg: { path: "./scripts/codemod.ts" } });
 
   await step(approval("Ship it?"));
@@ -262,7 +260,10 @@ export default async function main({
 
   // A shell step's output is parsed by the workflow; a later step gets it as params.
   const detected = await step(shell("./detect.sh"));
-  await step(jssg(codemodTransform, { params: JSON.parse(detected.stdout ?? "{}") }));
+  const detectedParams: { strict?: boolean } = JSON.parse(detected.stdout ?? "{}");
+  await step(
+    forEachFile({ language: "tsx" }, (file) => (detectedParams.strict ? file.path : undefined)),
+  );
   // @ts-expect-error steps take no state
   void step(shell("true"), { state: { target: "react-19" } });
 

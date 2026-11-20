@@ -9,6 +9,8 @@ const MODULES: Readonly<Record<string, string>> = {
   "codemod:ast-grep": "./ast-grep.mjs",
   "codemod:runtime": "./runtime.mjs",
   "codemod:llm": "./llm.mjs",
+  // Not public: what the YAML translation's callbacks run jssg transforms with.
+  "codemod-internal:jssg-compat": "./jssg-compat.mjs",
 };
 
 export const CODEMOD_MODULES: readonly string[] = Object.keys(MODULES);

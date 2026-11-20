@@ -3,8 +3,8 @@
 // The workflow module is imported here (or given already imported), so its
 // body, function steps and `forEachFile` callbacks run in this process: they
 // can be debugged, covered and mocked like any other code. What the engine
-// owns goes through the native addon: the run store, host tasks (`jssg`,
-// `shell`, `codemod`, ...), and selecting and committing files.
+// owns goes through the native addon: the run store, host tasks (`shell`,
+// `astGrep`, `shard`, `codemod`, ...), and selecting and committing files.
 //
 // Code here has whatever Node.js gives it: capabilities are not enforced.
 // The codemod CLI runs workflows in its own sandboxed runtime instead.
@@ -20,8 +20,9 @@
  * ```
  *
  * The workflow's body, function steps and `forEachFile` callbacks run here,
- * so they can be debugged, covered and mocked. Host tasks (`jssg`, `shell`,
- * `codemod`, ...) and the run store go through the native addon.
+ * so they can be debugged, covered and mocked. Host tasks (`shell`,
+ * `astGrep`, `shard`, `codemod`, ...) and the run store go through the
+ * native addon; `shard`'s functions run in the engine's isolates.
  *
  * Code here has whatever Node.js gives it: the capabilities codemod.yaml
  * declares are not enforced. The codemod CLI runs workflows in its own
@@ -309,8 +310,8 @@ function locate(
       `${path} is not a TypeScript workflow; run YAML workflows with the codemod CLI, or upgrade them with \`codemod workflow upgrade\``,
     );
   }
-  // Marked for the load hook, which drops the imports of transforms the
-  // workflow gives `jssg` and `shard` (see transforms.mts).
+  // Marked for the load hook, which applies the build's changes to what
+  // the engine runs (see transforms.mts).
   return { path, load: () => import(workflowUrl(path)) };
 }
 
@@ -403,9 +404,6 @@ function host(run: NativeRun, flight: Flight, runtime: () => Runtime): Host {
       const { fn, ...task } = request;
       flight.begin();
       try {
-        if (fn && task.task.kind === "jssg") {
-          return await reduceInPlace(run, task, fn);
-        }
         if (fn) return await within(task.timeoutMs, (limit) => runInPlace(run, task, fn, limit));
         return await runNative(run, task);
       } finally {
@@ -418,45 +416,6 @@ function host(run: NativeRun, flight: Flight, runtime: () => Runtime): Host {
 async function runNative(run: NativeRun, task: InPlaceTask): Promise<Outcome> {
   try {
     return await run.runTask(JSON.stringify(task));
-  } catch (error) {
-    throw payloadOf(error);
-  }
-}
-
-/**
- * `jssg(transform, { reduce, initial })`: the transform runs natively and returns
- * every file's data, which is then folded here before applying any edits.
- */
-async function reduceInPlace(run: NativeRun, task: InPlaceTask, fn: Callback): Promise<Outcome> {
-  const { reduce, ...content } = task.task;
-  const outer = context.getStore();
-  if (!outer) throw new Error("a step started outside its run");
-  const { prepared, folded } = await within(task.timeoutMs, async (limit) => {
-    const prepared = await run
-      .prepareJssg(JSON.stringify({ ...task, task: content }))
-      .catch((error: unknown) => {
-        throw payloadOf(error);
-      });
-    const step = stepScope(task.position, task.label);
-    // A copy, so a reducer that changes its accumulator can't change a retry's.
-    let folded = structuredClone((reduce as { initial: Json }).initial);
-    for (const entry of prepared.data) {
-      limit.check();
-      if (run.refusesSteps()) throw new CanceledError();
-      folded = (await context.run({ ...outer, step }, () => fn(folded, entry))) as Json;
-      // A failure reported with failStep() stands even if the reducer caught it.
-      if (step.failure !== undefined) throw new Error(step.failure);
-    }
-    if (folded === undefined) folded = null;
-    checkJson(folded, "the reducer's result");
-    const data = JSON.stringify(folded);
-    limit.check();
-    return { prepared, folded: data };
-  });
-  // Once the deadline has been met, wait for the commit instead of racing it
-  // with the timer: a step must not report a timeout after applying its edits.
-  try {
-    return await prepared.commit(folded);
   } catch (error) {
     throw payloadOf(error);
   }

@@ -1,11 +1,10 @@
-// Imported transforms in Node.js.
+// What the codemod build changes in a workflow, in Node.js.
 //
-// A workflow imports the transforms it gives `jssg` and `shard`
-// (`import codemod from "./scripts/codemod.ts"`), but never runs them: the
-// engine does, file by file. The codemod CLI's build drops those imports and
-// passes the engine references to the files. Here the workflow is loaded by
-// Node.js itself, so a load hook does the same to the workflow file the host
-// imports, through the native addon: the transform's module is not loaded.
+// Node.js runs the workflow body and its callbacks in place, but the engine
+// runs `shard`'s function and filter in its isolates, as with the CLI, and an
+// imported callback's id covers its file and the files it imports. A load
+// hook applies the build's changes for those to the workflow file the host
+// imports, through the native addon.
 //
 // Workflows also import YAML files as data (`import rules from
 // "./rules.yaml"`): the hook loads one as a module whose default export is
