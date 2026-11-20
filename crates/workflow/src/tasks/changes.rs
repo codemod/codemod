@@ -6,10 +6,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
 use serde_json::{json, Value};
 
-use super::TaskContext;
+use super::{parallel_map, TaskContext};
 
 /// What happens to one file.
 #[derive(Debug, Clone, PartialEq)]
@@ -132,14 +132,14 @@ pub(crate) fn commit(
         return Err("canceled".to_string());
     }
     check_conflicts(target, &planned)?;
-    for plan in &planned {
-        let on_disk = fs::read_to_string(target.join(&plan.path)).ok();
-        if on_disk.as_deref() != Some(plan.original.as_str()) {
-            return Err(format!(
-                "'{}' changed on disk while this step ran (another step or command edited it); nothing was written",
-                plan.path
-            ));
-        }
+    let unchanged = parallel_map(&planned, |plan| {
+        fs::read(target.join(&plan.path)).is_ok_and(|on_disk| on_disk == plan.original.as_bytes())
+    });
+    if let Some((plan, _)) = planned.iter().zip(unchanged).find(|(_, same)| !same) {
+        return Err(format!(
+            "'{}' changed on disk while this step ran (another step or command edited it); nothing was written",
+            plan.path
+        ));
     }
 
     if !dry_run {
@@ -149,27 +149,34 @@ pub(crate) fn commit(
     let mut written = Vec::new();
     let mut renamed = Vec::new();
     let mut deleted = Vec::new();
+    // (path, before, after) of each file whose text changed, for the diffs.
+    let mut diffs: Vec<(&str, &str, &str)> = Vec::new();
     for plan in &planned {
         match &plan.change {
             Change::Delete => {
                 deleted.push(plan.path.clone());
-                task.diff(&plan.path, &plan.original, "");
+                diffs.push((&plan.path, &plan.original, ""));
             }
             Change::Move { to, text } => {
                 renamed.push(json!({ "from": plan.path, "to": to }));
                 if *text != plan.original {
                     written.push(to.clone());
-                    task.diff(to, &plan.original, text);
+                    diffs.push((to, &plan.original, text));
                 }
             }
             Change::Edit(text) if *text != plan.original => {
                 written.push(plan.path.clone());
-                task.diff(&plan.path, &plan.original, text);
+                diffs.push((&plan.path, &plan.original, text));
             }
             Change::Edit(_) => {}
         }
     }
     let summary = &run.services.summary;
+    for diff in parallel_map(&diffs, |(path, before, after)| {
+        task.diff(path, before, after)
+    }) {
+        summary.add_diff(diff);
+    }
     summary.add_modified(written.len() + renamed.len() + deleted.len());
     Ok(json!({ "written": written, "renamed": renamed, "deleted": deleted }))
 }
@@ -350,8 +357,9 @@ fn apply_steps(
 }
 
 impl TaskContext<'_> {
-    pub(crate) fn diff(&self, path: &str, original: &str, text: &str) {
-        let diff = generate_unified_diff(
+    /// The diff of one file this task changed, for the run summary.
+    fn diff(&self, path: &str, original: &str, text: &str) -> FileDiff {
+        generate_unified_diff(
             Path::new(path),
             original,
             text,
@@ -364,8 +372,7 @@ impl TaskContext<'_> {
                 step_name: Some(self.label.clone()),
                 ..DiffMetadata::default()
             },
-        );
-        self.run.services.summary.add_diff(diff);
+        )
     }
 }
 

@@ -179,14 +179,17 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
         Some(dir) => format!("{dir}/{path}"),
         None => path,
     };
-    let selected: Vec<(String, String)> =
-        for_each_file::select(&base, &selector, &default_languages)?
-            .into_iter()
-            .map(|(path, text)| (under_target(path), text))
-            .collect();
+    let selected = for_each_file::select(&base, &selector, &default_languages)?;
     let Some(filter) = &request.filter else {
-        return Ok(Some(selected.into_iter().map(|(path, _)| path).collect()));
+        // Only text files: the ones a `forEachFile` callback would get.
+        return Ok(Some(
+            for_each_file::read_selected(&base, selected, None)
+                .into_iter()
+                .map(|(path, _)| under_target(path))
+                .collect(),
+        ));
     };
+    let selected: Vec<String> = selected.into_iter().map(under_target).collect();
     let outputs = for_each_file::callback_outputs(
         task,
         &filter.callback,

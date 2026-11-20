@@ -535,6 +535,81 @@ export default async function main() {
     assert_eq!(report.steps[0].status, StepStatus::Failed);
 }
 
+/// Files that are not text, or lack the `containing` text, are not the
+/// step's: the callback does not see them and they do not count.
+#[test]
+fn for_each_file_leaves_out_files_that_are_not_text_or_lack_the_containing_text() {
+    let h = Harness::new();
+    h.write("a.ts", "needle\n");
+    h.write("b.ts", "hay\n");
+    std::fs::write(h.target.path().join("c.ts"), [0xff, 0xfe, b'n', 0xff]).unwrap();
+    let workflow = |callback: &str| {
+        format!(
+            r#"
+import {{ step, forEachFile }} from "codemod/workflow";
+export default async function main() {{
+  const all = await step("All", forEachFile("*.ts", (file) => file.path));
+  const some = await step("Some", forEachFile({{ include: "*.ts", containing: "needle" }}, {callback}));
+  return {{ all: all.outputs, some: some.outputs }};
+}}
+"#
+        )
+    };
+    let report = h.start(&workflow("(file) => file.path"), Value::Null);
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "all": ["a.ts", "b.ts"], "some": ["a.ts"] })
+    );
+
+    // The one file the selector keeps failed: that is every file.
+    let report = h.start(
+        &workflow(r#"(file) => { throw new Error("no"); }"#),
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("the callback failed on every file; first error: a.ts: Error: no"),
+        "{error}"
+    );
+}
+
+/// Writing a file its own text is leaving it alone: it is not part of the
+/// commit, so a change made to it meanwhile is no conflict.
+#[test]
+fn a_callback_that_writes_a_file_its_own_text_does_not_change_it() {
+    let h = Harness::with_services(
+        Arc::new(MemoryStore::default()),
+        Arc::new(NonInteractive { approve_all: false }),
+        Services {
+            capabilities: [codemod_llrt_capabilities::types::LlrtSupportedModules::Fs].into(),
+            ..Services::default()
+        },
+    );
+    h.write("a.ts", "a\n");
+    h.write("b.ts", "b\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main({ target }) {
+  return step(forEachFile({ include: "*.ts", capabilities: ["fs"] }, async (file) => {
+    if (file.path === "a.ts") return file.write("A\n");
+    const fs = await import("fs");
+    fs.writeFileSync(`${target}/b.ts`, "changed meanwhile\n");
+    file.write(file.text);
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap()["changes"],
+        json!({ "written": ["a.ts"], "renamed": [], "deleted": [] })
+    );
+    assert_eq!(h.read("a.ts"), "A\n");
+    assert_eq!(h.read("b.ts"), "changed meanwhile\n");
+    assert_eq!(h.engine_summary_diffs(), 1);
+}
+
 #[test]
 fn a_workflow_in_src_finds_its_files_and_its_package() {
     let h = Harness::new();
