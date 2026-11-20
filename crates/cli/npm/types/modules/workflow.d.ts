@@ -397,9 +397,10 @@ declare module "codemod:workflow" {
    * ```ts
    * import codemod from "./scripts/codemod.ts";
    * import components from "./scripts/components.ts";
+   * import rules from "./rules/config.yml";
    *
    * await step("Migrate imports", forEachFile(jssg(codemod)));
-   * await step("Apply rules", forEachFile("src/**\/*.ts", astGrep("./rules/config.yml")));
+   * await step("Apply rules", forEachFile("src/**\/*.ts", astGrep(rules)));
    * await step("Migrate components", forEachFile(
    *   { include: "src/**\/*.tsx", exclude: "**\/*.test.tsx", language: "tsx" },
    *   jssg(components, { params: { strict: true } }),
@@ -581,13 +582,143 @@ declare module "codemod:workflow" {
   }
 
   /**
-   * An ast-grep YAML rule file; `path` is relative to the workflow file and
-   * written in the call (`astGrep("./rules/config.yml")`), so the build can
-   * include the file when publishing. Apply it with
-   * `forEachFile(selector, astGrep(path))`, which says which files it is
-   * for. As a step on its own it runs on the files its options select.
+   * What an ast-grep rule matches: a pattern, a node kind, a regex, how the
+   * node relates to others, or a combination. See https://ast-grep.github.io/reference/rule.html
    */
-  export function astGrep(path: string, options?: AstGrepOptions): Transform<AstGrepResult>;
+  export interface AstGrepRuleMatcher {
+    /** Code to match, with `$NAME` metavariables; or `{ context, selector, strictness }`. */
+    pattern?:
+      | string
+      | {
+          context: string;
+          selector?: string;
+          strictness?: "cst" | "smart" | "ast" | "relaxed" | "signature";
+        };
+    /** A tree-sitter node kind, such as `"call_expression"`. */
+    kind?: string;
+    /** A Rust regular expression the node's text must match. */
+    regex?: string;
+    /** Which nth child of its parent the node is. */
+    nthChild?:
+      | number
+      | string
+      | { position: number | string; reverse?: boolean; ofRule?: AstGrepRuleMatcher };
+    /** The node's range in the file. */
+    range?: {
+      start: { line: number; column: number };
+      end: { line: number; column: number };
+    };
+    /** The node is inside a node matching this. */
+    inside?: AstGrepRelation;
+    /** The node has a descendant matching this. */
+    has?: AstGrepRelation;
+    /** The node comes after a sibling matching this. */
+    follows?: AstGrepRelation;
+    /** The node comes before a sibling matching this. */
+    precedes?: AstGrepRelation;
+    /** Every rule matches. */
+    all?: readonly AstGrepRuleMatcher[];
+    /** At least one rule matches. */
+    any?: readonly AstGrepRuleMatcher[];
+    /** The rule does not match. */
+    not?: AstGrepRuleMatcher;
+    /** A utility rule, by id (from `utils`). */
+    matches?: string;
+  }
+
+  /** A relational rule (`inside`, `has`, `follows`, `precedes`). */
+  export interface AstGrepRelation extends AstGrepRuleMatcher {
+    /** How far to look: to the end, or until a node matching this. */
+    stopBy?: "neighbor" | "end" | AstGrepRuleMatcher;
+    /** The field of the parent the node is in, such as `"body"`. */
+    field?: string;
+  }
+
+  /** A rewrite of a metavariable's text, for `fix`. */
+  export type AstGrepTransformation =
+    | string
+    | {
+        substring?: { source: string; startChar?: number; endChar?: number };
+        replace?: { source: string; replace: string; by: string };
+        convert?: {
+          source: string;
+          toCase:
+            | "lowerCase"
+            | "upperCase"
+            | "capitalize"
+            | "camelCase"
+            | "snakeCase"
+            | "kebabCase"
+            | "pascalCase";
+          separatedBy?: readonly string[];
+        };
+        rewrite?: { source: string; rewriters: readonly string[]; joinBy?: string };
+      };
+
+  /**
+   * An ast-grep rule: what an ast-grep YAML rule file holds, as an object
+   * (one per document). See https://ast-grep.github.io/reference/yaml.html
+   */
+  export interface AstGrepRule {
+    id: string;
+    /** The language of the files the rule is for, such as `"typescript"`. */
+    language: string;
+    rule: AstGrepRuleMatcher;
+    /** The replacement, with `$NAME` metavariables, or how to expand the replaced range. */
+    fix?:
+      | string
+      | {
+          template: string;
+          expandStart?: AstGrepRuleMatcher;
+          expandEnd?: AstGrepRuleMatcher;
+        };
+    /** Further rules each metavariable must match. */
+    constraints?: Readonly<Record<string, AstGrepRuleMatcher>>;
+    /** Rules other rules use with `matches`. */
+    utils?: Readonly<Record<string, AstGrepRuleMatcher>>;
+    /** New metavariables computed from others, for `fix`. */
+    transform?: Readonly<Record<string, AstGrepTransformation>>;
+    /** Rules `transform`'s `rewrite` applies. */
+    rewriters?: readonly (Omit<AstGrepRule, "language"> & { language?: string })[];
+    severity?: "hint" | "info" | "warning" | "error" | "off";
+    message?: string;
+    note?: string;
+    url?: string;
+    /** Globs of the files the rule is for. */
+    files?: readonly string[];
+    /** Globs of the files the rule is not for. */
+    ignores?: readonly string[];
+    labels?: Readonly<Record<string, { style: "primary" | "secondary"; message?: string }>>;
+    metadata?: Readonly<Record<string, JsonValue>>;
+  }
+
+  /** One rule or several, as `astGrep` takes them and as an imported YAML file gives them. */
+  export type AstGrepRules = AstGrepRule | readonly AstGrepRule[];
+
+  /**
+   * Applies ast-grep rules: an object of the shape of an ast-grep YAML rule
+   * (or an array of them), written in the workflow or built at run time, or
+   * a YAML rule file imported as its content
+   * (`import rules from "./rules/config.yml"`; several documents give an
+   * array). Apply them with `forEachFile(selector, astGrep(rules))`, which
+   * says which files they are for. As a step on its own it runs on the files
+   * its options select. The rules are part of the step: a changed rule runs
+   * the step again on resume.
+   *
+   * @example
+   * ```ts
+   * import rules from "./rules/config.yml";
+   *
+   * await step(forEachFile(astGrep(rules)));
+   * await step(forEachFile("src/**\/*.js", astGrep({
+   *   id: "no-var",
+   *   language: "javascript",
+   *   rule: { pattern: "var $A = $B" },
+   *   fix: "let $A = $B;",
+   * })));
+   * ```
+   */
+  export function astGrep(rules: AstGrepRules, options?: AstGrepOptions): Transform<AstGrepResult>;
 
   export type ShardMethod =
     | {
@@ -772,4 +903,19 @@ declare module "codemod:workflow" {
     expression: string,
     scope: Readonly<Record<string, unknown>>,
   ): any;
+}
+
+/**
+ * A YAML file, imported as its content: `import rules from "./rules.yaml"`.
+ * A file with several documents (`---`) gives an array of them. Typed for
+ * ast-grep rule files, which is what workflows import YAML for.
+ */
+declare module "*.yaml" {
+  const content: import("codemod:workflow").AstGrepRules;
+  export default content;
+}
+
+declare module "*.yml" {
+  const content: import("codemod:workflow").AstGrepRules;
+  export default content;
 }

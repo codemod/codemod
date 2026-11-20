@@ -25,6 +25,7 @@ import {
 } from "codemod/workflow";
 import codemodTransform from "./scripts/codemod.ts";
 import shardFiles from "./scripts/shard.ts";
+import rules from "./rules/config.yml";
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -177,13 +178,13 @@ export default async function main({
       jssg(codemodTransform, { params: { strict: true } }),
     ),
   );
-  const ruled = await step(forEachFile(["src/**/*.ts"], astGrep("rules/config.yml")));
+  const ruled = await step(forEachFile(["src/**/*.ts"], astGrep(rules)));
   expectType<Equal<typeof ruled.matches, number>>(true);
-  await step(forEachFile(astGrep("rules/config.yml")));
+  await step(forEachFile(astGrep(rules)));
   // @ts-expect-error `containing` is for callbacks
   forEachFile({ containing: "moment" }, jssg(codemodTransform));
   // @ts-expect-error the rules name their languages
-  forEachFile({ language: "tsx" }, astGrep("rules/config.yml"));
+  forEachFile({ language: "tsx" }, astGrep(rules));
   // @ts-expect-error only jssg and astGrep are transforms
   forEachFile(shell("echo hi"));
 
@@ -197,7 +198,34 @@ export default async function main({
   // @ts-expect-error a template takes strings, numbers and booleans
   void step(shell`echo ${{ not: "a word" }}`);
 
-  await step(astGrep("rules/config.yml", { include: ["**/*.ts"] }));
+  await step(astGrep(rules, { include: ["**/*.ts"] }));
+  // Rules written in the workflow, or built from values it has.
+  await step(
+    astGrep([
+      {
+        id: "no-var",
+        language: "javascript",
+        rule: { pattern: "var $A = $B" },
+        fix: "let $A = $B;",
+      },
+      {
+        id: "rename",
+        language: "typescript",
+        rule: {
+          kind: "call_expression",
+          has: { field: "function", regex: `^${target}$`, stopBy: "end" },
+        },
+        fix: { template: "renamed()", expandEnd: { regex: ";" } },
+        constraints: { A: { not: { kind: "identifier" } } },
+        transform: { B: { convert: { source: "$A", toCase: "camelCase" } } },
+        severity: "warning",
+      },
+    ]),
+  );
+  // @ts-expect-error rules are imported or written, not named by path
+  astGrep("./rules/config.yml");
+  // @ts-expect-error a rule needs a language
+  astGrep({ id: "x", rule: { pattern: "x" } });
 
   const shards = await step(
     shard({

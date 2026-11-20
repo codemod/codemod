@@ -68,7 +68,7 @@ npm install --save-dev codemod
 | `depends_on` | Functions called in order; independent nodes run at the same time |
 | A step | `await step("<step name>", <task>)` |
 | `js-ast-grep` | `import transform from "./<js_file>"` and `forEachFile({ include, exclude, language }, jssg(transform, { ... }))` |
-| `ast-grep` | `forEachFile({ include, exclude }, astGrep(configFile, { ... }))` |
+| `ast-grep` | `import rules from "./<config_file>"` and `forEachFile({ include, exclude }, astGrep(rules, { ... }))` |
 | `run` | `shell(command, { env })` |
 | `codemod` | `codemod(source, { params })` |
 | `ai` | `agent(prompt, { ... })` |
@@ -127,7 +127,7 @@ Most codemods run exactly as before. These are the differences, for both `workfl
 
 Older CLI versions run `workflow.yaml` only. People who run a `workflow.ts` codemod need a CLI version that runs TypeScript workflows, which `npx codemod` always fetches.
 
-Publishing includes every transform and shard function the workflow imports for `jssg` and `shard`, and every rule file whose path it gives `astGrep`. That is why those are build errors when the build cannot read them: a path computed at run time would be missing from the published package.
+Publishing includes every transform and shard function the workflow imports for `jssg` and `shard`, and every YAML rule file it imports. That is why file paths are build errors: a path, especially one computed at run time, could be missing from the published package.
 
 ## Workflows written for earlier previews
 
@@ -143,6 +143,15 @@ Import the transform and pass it instead:
 import codemod from "./scripts/codemod.ts";
 
 await step(forEachFile(jssg(codemod)));
+```
+
+`astGrep` no longer takes a file path either. `astGrep("./rules/config.yml")` fails to build with `astGrep takes rules, not a file path: add import config from "./rules/config.yml" at the top of the workflow and write astGrep(config), ...`: import the YAML file, which gives its rules as data, or write the rules as objects:
+
+```ts
+import rules from "./rules/config.yml";
+
+await step(forEachFile(astGrep(rules)));
+await step(forEachFile(astGrep({ id: "no-var", language: "javascript", rule: { pattern: "var $A = $B" }, fix: "let $A = $B;" })));
 ```
 
 The same goes for shards: `method: { function: "./scripts/shard.ts" }` becomes an imported shard function, and `jssg: { path: "./scripts/codemod.ts" }` becomes `jssg: { transform: codemod }`. `workflow.yaml` files need no change: the translation imports their transforms. If your editor flags `.ts` in the import, add `"allowImportingTsExtensions": true` to `tsconfig.json`, as packages from `codemod init` have.

@@ -24,7 +24,16 @@ pub fn with_combined_scan<T>(
     f: impl for<'a> FnOnce(&CombinedScanWithRuleConfigs<'a>) -> Result<T, Box<dyn Error>>,
 ) -> Result<T, Box<dyn Error>> {
     let config_content = fs::read_to_string(config_file_path)?;
-    let rule_configs = from_yaml_string(&config_content, &Default::default())
+    with_combined_scan_of(&config_content, f)
+}
+
+/// [`with_combined_scan`] for rules given as text: YAML, with documents
+/// separated by `---`. JSON is YAML, so rules built as JSON objects work too.
+pub fn with_combined_scan_of<T>(
+    config_content: &str,
+    f: impl for<'a> FnOnce(&CombinedScanWithRuleConfigs<'a>) -> Result<T, Box<dyn Error>>,
+) -> Result<T, Box<dyn Error>> {
+    let rule_configs = from_yaml_string(config_content, &Default::default())
         .map_err(|e| AstGrepError::Config(format!("Failed to parse YAML rules: {e:?}")))?;
 
     let combined_scan = CombinedScan::new(rule_configs.iter().collect());

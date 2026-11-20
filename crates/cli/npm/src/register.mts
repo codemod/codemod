@@ -17,7 +17,7 @@
 import module from "node:module";
 
 import { CODEMOD_MODULES, resolveCodemodModule } from "./runtime/modules.mts";
-import { loadWorkflow } from "./runtime/transforms.mts";
+import { isYamlUrl, loadWorkflow, loadYaml } from "./runtime/transforms.mts";
 
 export { resolveCodemodModule };
 
@@ -70,7 +70,9 @@ function register(): void {
       },
       // The workflow file `codemod/host` imports: its imported transforms
       // become references to their files, as in the CLI's build.
+      // YAML files load as their content (`import rules from "./rules.yaml"`).
       load(url, context, nextLoad) {
+        if (isYamlUrl(url)) return loadYaml(url);
         return loadWorkflow(url, nextLoad(url, context));
       },
     });

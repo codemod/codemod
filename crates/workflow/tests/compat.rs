@@ -272,6 +272,33 @@ nodes:
         .all(|s| s.status == StepStatus::Succeeded));
 }
 
+/// The YAML names its rule file by path; the translation imports it.
+#[test]
+fn a_yaml_ast_grep_step_applies_its_imported_rule_file() {
+    let h = Harness::new();
+    h.write("src/a.js", "var x = 1;\nold();\n");
+    h.bundle_file(
+        "rules/config.yml",
+        "id: no-var\nlanguage: javascript\nrule:\n  pattern: var $A = $B\nfix: let $A = $B;\n---\nid: rename\nlanguage: javascript\nrule:\n  pattern: old()\nfix: fresh()\n",
+    );
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: apply
+    name: Apply
+    steps:
+      - name: Rules
+        ast-grep:
+          config_file: rules/config.yml
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("src/a.js"), "let x = 1;\nfresh();\n");
+}
+
 /// The YAML names its shard function by path; the translation imports it.
 #[test]
 fn a_yaml_shard_function_runs_from_its_import() {

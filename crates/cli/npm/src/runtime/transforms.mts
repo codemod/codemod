@@ -6,7 +6,12 @@
 // passes the engine references to the files. Here the workflow is loaded by
 // Node.js itself, so a load hook does the same to the workflow file the host
 // imports, through the native addon: the transform's module is not loaded.
+//
+// Workflows also import YAML files as data (`import rules from
+// "./rules.yaml"`): the hook loads one as a module whose default export is
+// its content, as the CLI's module loader does.
 
+import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { addon } from "./addon.mts";
@@ -42,4 +47,21 @@ export function loadWorkflow<T extends Loaded>(url: string, loaded: T): T {
       : new TextDecoder().decode(loaded.source as Uint8Array);
   const rewritten = native.rewriteWorkflow(fileURLToPath(url), source);
   return rewritten === null ? loaded : { ...loaded, source: rewritten };
+}
+
+/** Whether `url` is a YAML file, which Node.js cannot import by itself. */
+export function isYamlUrl(url: string): boolean {
+  return url.startsWith("file:") && /\.ya?ml$/i.test(new URL(url).pathname);
+}
+
+/** A YAML file as a module whose default export is its content. */
+export function loadYaml(url: string): { format: "module"; source: string; shortCircuit: true } {
+  const native = addon();
+  if (typeof native.yamlModule !== "function") {
+    throw new Error(
+      "this codemod native addon cannot load YAML; reinstall codemod so the addon and the package match",
+    );
+  }
+  const source = native.yamlModule(readFileSync(fileURLToPath(url), "utf8"));
+  return { format: "module", source, shortCircuit: true };
 }

@@ -263,14 +263,15 @@ async fn bundle_js_file(package_path: &Path, js_file: &str) -> Result<String> {
 
     debug!("Bundling JS file: {}", js_file_path.display());
 
-    // A workflow's transforms stay imports of their own files, which are
-    // bundled on their own: the engine runs them, the workflow only names them.
+    // A workflow's transforms and YAML files stay imports of their own files:
+    // the engine runs transforms, which are bundled on their own, and the
+    // module loader reads YAML as data.
     let externals = fs::read_to_string(&js_file_path)
         .ok()
         .and_then(|source| {
             codemod_workflow::inspect(&js_file_path.display().to_string(), &source).ok()
         })
-        .map(|inspection| inspection.transforms)
+        .map(|inspection| inspection.external_imports)
         .unwrap_or_default();
 
     let config = RolldownBundlerConfig {
@@ -1046,6 +1047,102 @@ export default async function main() {
         assert_eq!(
             fs::read_to_string(target.path().join("a.ts")).unwrap(),
             "bundled-helper"
+        );
+    }
+
+    /// Imported YAML rules are published as they are, the workflow's bundle
+    /// still imports them, and the installed package runs them.
+    #[tokio::test]
+    async fn a_workflow_ts_package_publishes_its_imported_rules() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("workflow.ts", "example");
+        fs::write(
+            temp_dir.path().join("workflow.ts"),
+            r#"import { astGrep, forEachFile, step } from "codemod/workflow";
+import rules from "./rules/config.yml";
+
+export default async function main() {
+  await step("Rules", forEachFile(astGrep(rules)));
+}
+"#,
+        )
+        .unwrap();
+        fs::create_dir_all(temp_dir.path().join("rules")).unwrap();
+        fs::write(
+            temp_dir.path().join("rules/config.yml"),
+            "id: no-var\nlanguage: javascript\nrule:\n  pattern: var $A = $B\nfix: let $A = $B;\n",
+        )
+        .unwrap();
+
+        let files = validate_package_structure(temp_dir.path(), &manifest).unwrap();
+        assert_eq!(files, ["workflow.ts"]);
+        let bundle = create_package_bundle(temp_dir.path(), &manifest, &files)
+            .await
+            .unwrap();
+        let installed = tempdir().unwrap();
+        let archive = flate2::read::GzDecoder::new(fs::File::open(&bundle).unwrap());
+        tar::Archive::new(archive).unpack(installed.path()).unwrap();
+        assert!(installed.path().join("rules/config.yml").is_file());
+        let workflow = fs::read_to_string(installed.path().join("workflow.ts")).unwrap();
+        assert!(workflow.contains("\"./rules/config.yml\""), "{workflow}");
+
+        let target = tempdir().unwrap();
+        fs::write(target.path().join("a.js"), "var a = 1;\n").unwrap();
+        let loaded = codemod_workflow::load_workflow(&installed.path().join("workflow.ts"))
+            .unwrap_or_else(|e| panic!("the bundle does not build: {e}\n{workflow}"));
+        let engine = codemod_workflow::Engine::new(
+            std::sync::Arc::new(codemod_workflow::MemoryStore::default()),
+            std::sync::Arc::new(codemod_workflow::events::CollectEvents::default()),
+            std::sync::Arc::new(codemod_workflow::interaction::NonInteractive {
+                approve_all: false,
+            }),
+            codemod_workflow::Services::default(),
+        );
+        let target_path = target.path().to_path_buf();
+        let report = tokio::task::spawn_blocking(move || {
+            engine.start(codemod_workflow::StartRequest {
+                workflow: loaded,
+                target: target_path,
+                params: serde_json::Value::Null,
+                name: None,
+                dry_run: false,
+                test: None,
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(report.ending, codemod_workflow::Ending::Succeeded(_)),
+            "{:?}",
+            report.ending
+        );
+        assert_eq!(
+            fs::read_to_string(target.path().join("a.js")).unwrap(),
+            "let a = 1;\n"
+        );
+    }
+
+    /// A rule file named by path would be missing from the package.
+    #[test]
+    fn a_workflow_ts_package_with_a_rule_path_is_refused() {
+        let temp_dir = tempdir().unwrap();
+        let manifest = manifest_with("workflow.ts", "example");
+        fs::write(
+            temp_dir.path().join("workflow.ts"),
+            r#"import { astGrep, step } from "codemod/workflow";
+export default async function main() {
+  await step(astGrep("./rules.yml" as any));
+}
+"#,
+        )
+        .unwrap();
+        let error = validate_package_structure(temp_dir.path(), &manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("astGrep takes rules, not a file path"),
+            "{error}"
         );
     }
 

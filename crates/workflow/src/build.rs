@@ -967,7 +967,10 @@ impl<R: codemod_sandbox::sandbox::resolvers::ModuleResolver> ImportWalk<'_, R> {
             return Ok(None);
         }
         let shown = self.shown(path);
-        if path.extension().is_some_and(|e| e == "json") {
+        if path
+            .extension()
+            .is_some_and(|e| e == "json" || e == "yaml" || e == "yml")
+        {
             return Ok(None);
         }
         let text =
@@ -1191,10 +1194,10 @@ pub struct Inspection {
     /// files given to `astGrep`, and the imported transforms and shard
     /// functions given to `jssg` and `shard`.
     pub files: Vec<String>,
-    /// Imports of transforms and shard functions, as written
-    /// (`./scripts/codemod.ts`): they stay imports when the workflow is
-    /// bundled, since the engine runs those files itself.
-    pub transforms: Vec<String>,
+    /// Imports to keep when the workflow is bundled, as written: transforms
+    /// and shard functions (`./scripts/codemod.ts`), which the engine runs
+    /// from their files, and YAML files (`./rules.yaml`), which are data.
+    pub external_imports: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1248,7 +1251,7 @@ pub fn inspect(file: &str, source: &str) -> Result<Inspection, BuildError> {
     let transforms = crate::transforms::analyze(file, source, &program, &semantic)?;
     let mut inspection = Inspection {
         files: transforms.files,
-        transforms: transforms.specifiers,
+        external_imports: transforms.externals,
         ..Inspection::default()
     };
     for node in semantic.nodes().iter() {

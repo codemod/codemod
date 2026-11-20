@@ -523,6 +523,55 @@ export default async function main() {
     },
   );
 
+  test(
+    `${host}: ast-grep rules run inline, built from params, and imported from YAML`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          "rules/config.yml":
+            "id: no-var\nlanguage: javascript\nrule:\n  pattern: var $A = $B\nfix: let $A = $B;\n---\nid: no-console\nlanguage: javascript\nrule:\n  pattern: console.log($$$)\nfix: ''\n",
+          "workflow.ts": `
+import { step, forEachFile, astGrep } from "codemod/workflow";
+import rules from "./rules/config.yml";
+export default async function main({ params }: { params: { from: string; to: string } }) {
+  const imported = await step("Imported", forEachFile("**/*.js", astGrep(rules)));
+  const rename = { id: "rename", language: "javascript", rule: { pattern: params.from + "()" }, fix: params.to + "()" };
+  await step("Dynamic", forEachFile(astGrep([rename])));
+  return { ids: (rules as { id: string }[]).map((rule) => rule.id), matches: imported.matches };
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, {
+        target: { "a.js": "var a = 1;\nconsole.log(a);\nold();\n" },
+        params: { from: "old", to: "fresh" },
+      });
+      assert.equal(result.status, "succeeded", result.error);
+      assert.deepEqual(result.output, { ids: ["no-var", "no-console"], matches: 2 });
+      assert.equal(result.files["a.js"], "let a = 1;\n;\nfresh();\n");
+    },
+  );
+
+  test(`${host}: a rule file path given to astGrep does not build`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, astGrep } from "codemod/workflow";
+export default async function main() {
+  await step(astGrep("./rules.yml"));
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    await assert.rejects(
+      runWorkflow(path, { target: { "a.js": "a\n" } }),
+      /astGrep takes rules, not a file path: add import rules from/,
+    );
+  });
+
   test(`${host}: a path given to jssg does not build`, HOSTS[host], async () => {
     const path = join(
       scratch({

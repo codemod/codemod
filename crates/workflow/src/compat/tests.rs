@@ -190,8 +190,9 @@ nodes:
         // workflow.yaml parses as TypeScript unless told otherwise.
         r#"import codemodTransform from "./scripts/codemod.ts";"#,
         r#"await step("Transform", forEachFile({ language: "typescript" }, jssg(codemodTransform)));"#,
-        r#"await step("Rules", forEachFile(astGrep("rules/config.yml")));"#,
-        r#"forEachFile({ include: ["src/**"] }, astGrep("rules/config.yml"))"#,
+        r#"import configRules from "./rules/config.yml";"#,
+        r#"await step("Rules", forEachFile(astGrep(configRules)));"#,
+        r#"forEachFile({ include: ["src/**"] }, astGrep(configRules))"#,
     ] {
         assert!(
             source.contains(expected),

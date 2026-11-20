@@ -39,3 +39,11 @@ pub fn rewrite_workflow(file: String, source: String) -> napi::Result<Option<Str
     codemod_workflow::rewrite_transforms(&file, &source)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
+
+/// A YAML file as the JavaScript module `import data from "./file.yaml"`
+/// loads: its content as the default export, an array when the file has
+/// several documents. As the codemod CLI's module loader does.
+#[napi_derive::napi]
+pub fn yaml_module(text: String) -> napi::Result<String> {
+    codemod_sandbox::utils::yaml::yaml_module(&text).map_err(napi::Error::from_reason)
+}

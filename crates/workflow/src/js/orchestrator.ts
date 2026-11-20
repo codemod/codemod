@@ -404,9 +404,14 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     return Object.freeze({ ...task, reducer: { callback, initial: initial as Json } });
   }
 
-  /** Apply an ast-grep YAML rule file. */
-  function astGrep(path: string, options: object = {}): HostTask {
-    return hostTask("astGrep", { ...options, path });
+  /**
+   * Apply ast-grep rules: a rule object of the shape of an ast-grep YAML
+   * rule, or an array of them, written in the workflow, built at run time,
+   * or imported from a YAML file. They are part of the step's content, so a
+   * changed rule runs the step again on resume.
+   */
+  function astGrep(rules: unknown, options: object = {}): HostTask {
+    return hostTask("astGrep", { ...options, rules: ruleList(rules) });
   }
 
   /** Split files into shards. */
@@ -537,6 +542,31 @@ function transformPath(value: unknown, what: string): string {
   throw new TypeError(
     `${what} takes an imported transform (import codemod from "./scripts/codemod.ts")`,
   );
+}
+
+/** `astGrep`'s rules as a list of JSON objects, or why they are not. */
+function ruleList(value: unknown): Json[] {
+  if (typeof value === "string") {
+    const specifier = /^\.\.?\//.test(value) ? value : `./${value}`;
+    throw new TypeError(
+      `astGrep takes rules, not a file path: import rules from ${JSON.stringify(specifier)}, then astGrep(rules)`,
+    );
+  }
+  const list: unknown[] = Array.isArray(value) ? value : [value];
+  if (list.length === 0) throw new TypeError("astGrep needs at least one rule");
+  return list.map((rule, index) => {
+    const what = Array.isArray(value) ? `astGrep: rule ${index}` : "astGrep: the rule";
+    if (!isRecord(rule) || Array.isArray(rule)) {
+      throw new TypeError(
+        `${what} must be an object of the shape of an ast-grep YAML rule ({ id, language, rule, fix, ... })`,
+      );
+    }
+    // A field left undefined is left out, as in JSON.stringify; anything
+    // else that is not JSON (a function, a RegExp, a Map) is an error.
+    const cleaned = withoutUndefined(rule);
+    checkJson(cleaned, what);
+    return cleaned;
+  });
 }
 
 /** Tasks that wait: their step records when the wait began. */
@@ -1070,8 +1100,11 @@ function defaultLabel(position: number, content: TaskContent): string {
     case "shell":
       return `shell ${truncate(content.command)}`;
     case "jssg":
-    case "astGrep":
-      return `${content.kind} ${String(content.path)}`;
+      return `jssg ${String(content.path)}`;
+    case "astGrep": {
+      const ids = (content.rules as { id?: unknown }[]).map((rule) => rule.id).filter(Boolean);
+      return ids.length ? `astGrep ${ids.join(", ")}` : "astGrep";
+    }
     case "approval":
       return `approval: ${truncate(content.message)}`;
     case "sleep":

@@ -11,7 +11,9 @@
 //! The import is not loaded: the transform runs in the engine, file by file.
 //! The build drops the import and passes the engine a reference to the file
 //! (`__transform("./scripts/codemod.ts")`), and publishing includes the file.
-//! `astGrep` rule files are data: their path is written in the call.
+//! `astGrep` takes rules as data: objects written in the workflow (or built
+//! at run time), or a YAML file imported as its content
+//! (`import rules from "./rules.yaml"`), which the module loader reads as JSON.
 //!
 //! Anything the build cannot read (a path in a string, a path computed at
 //! run time, a transform used for something else) is a build error, so a
@@ -53,11 +55,13 @@ pub(crate) struct Transforms {
     pub imports: HashMap<SymbolId, TransformImport>,
     /// Text to put in place of each argument that names a transform.
     pub replacements: Vec<(Span, String)>,
-    /// Files the workflow names, in source order: rule files given to
-    /// `astGrep`, and imported transforms and shard functions.
+    /// Files the workflow names, in source order: imported YAML files, and
+    /// imported transforms and shard functions.
     pub files: Vec<String>,
-    /// The specifiers of imported transforms, as written.
-    pub specifiers: Vec<String>,
+    /// Imports to keep as imports when the workflow is bundled, as written:
+    /// transforms, which the engine runs from their files, and YAML files,
+    /// which the module loader reads as data.
+    pub externals: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +149,7 @@ pub(crate) fn analyze<'a>(
         accepted: Vec::new(),
     };
     analyzer.collect_imports(program);
+    analyzer.yaml_imports(program)?;
 
     let scoping = semantic.scoping();
     let mut flow: HashMap<SymbolId, String> = HashMap::new();
@@ -256,25 +261,65 @@ impl<'a> Analyzer<'_, 'a> {
         }
     }
 
+    /// YAML files are imported as data, by their default export: the module
+    /// loader reads one as its content, as JSON.
+    fn yaml_imports(&mut self, program: &Program<'a>) -> Result<(), BuildError> {
+        for statement in &program.body {
+            let Statement::ImportDeclaration(import) = statement else {
+                continue;
+            };
+            let specifier = import.source.value.as_str();
+            if import.import_kind.is_type() || !is_yaml(specifier) {
+                continue;
+            }
+            if !is_relative(specifier) {
+                return Err(self.error(
+                    import.source.span.start,
+                    format!("import YAML from the package's own files, with a relative path (\"./...\"): \"{specifier}\" would not be published"),
+                ));
+            }
+            for value in import.specifiers.iter().flatten() {
+                if !matches!(value, ImportDeclarationSpecifier::ImportDefaultSpecifier(_)) {
+                    return Err(self.error(
+                        value.span().start,
+                        format!("a YAML file is imported as its content, its default export: import rules from \"{specifier}\""),
+                    ));
+                }
+            }
+            self.found.files.push(specifier.to_string());
+            if !self.found.externals.iter().any(|e| e == specifier) {
+                self.found.externals.push(specifier.to_string());
+            }
+        }
+        Ok(())
+    }
+
     fn jssg(&mut self, call: &CallExpression<'a>) -> Result<(), BuildError> {
         let argument = self.first(call, Role::Jssg)?;
         self.transform(argument, None, Role::Jssg)
     }
 
+    /// `astGrep` takes rules, as objects or imported YAML: a string is a
+    /// file path, which the build would not include when publishing.
     fn ast_grep(&mut self, call: &CallExpression<'a>) -> Result<(), BuildError> {
-        let message = || {
-            "astGrep needs its rule file's path written directly in the code (astGrep(\"./rules/config.yml\")), so the build can include the file when publishing".to_string()
-        };
         let Some(argument) = call.arguments.first().and_then(Argument::as_expression) else {
-            return Err(self.error(call.span.start, message()));
+            return Err(self.error(
+                call.span.start,
+                "astGrep takes rules: an object ({ id, language, rule, fix }), an array of them, or a YAML file imported as import rules from \"./rules.yaml\"".to_string(),
+            ));
         };
-        match literal_string(argument) {
-            Some(path) => {
-                self.found.files.push(path);
-                Ok(())
+        let message = match (literal_string(argument), argument.get_inner_expression()) {
+            (Some(path), _) => {
+                let specifier = import_specifier(&path);
+                let name = binding_name(&specifier, "rules");
+                format!(
+                    "astGrep takes rules, not a file path: add import {name} from \"{specifier}\" at the top of the workflow and write astGrep({name}), so the build can include the file when publishing"
+                )
             }
-            None => Err(self.error(argument.span().start, message())),
-        }
+            (None, Expression::TemplateLiteral(_)) => "astGrep takes rules, not a file path: import the YAML file (import rules from \"./rules.yaml\") and write astGrep(rules), or write the rules as objects".to_string(),
+            _ => return Ok(()),
+        };
+        Err(self.error(argument.span().start, message))
     }
 
     fn shard(&mut self, call: &CallExpression<'a>) -> Result<(), BuildError> {
@@ -456,8 +501,8 @@ impl<'a> Analyzer<'_, 'a> {
                 self.found.replacements.push(replacement);
                 self.accepted.push(ident.span);
                 self.found.files.push(specifier.clone());
-                if !self.found.specifiers.contains(specifier) {
-                    self.found.specifiers.push(specifier.clone());
+                if !self.found.externals.contains(specifier) {
+                    self.found.externals.push(specifier.clone());
                 }
                 let cut = if binding.alone {
                     binding.declaration
@@ -578,6 +623,11 @@ pub fn rewrite_transforms(file: &str, source: &str) -> Result<Option<String>, Bu
         "\nimport {{ __transform as {TRANSFORM_REFERENCE} }} from \"codemod:workflow\";\n"
     ));
     Ok(Some(rewritten))
+}
+
+fn is_yaml(specifier: &str) -> bool {
+    let lower = specifier.to_ascii_lowercase();
+    lower.ends_with(".yaml") || lower.ends_with(".yml")
 }
 
 fn is_relative(specifier: &str) -> bool {
@@ -788,7 +838,7 @@ export default async function main() {
 
         let inspection = inspect("workflow.ts", source).unwrap();
         assert_eq!(inspection.files, vec!["./scripts/codemod.ts"]);
-        assert_eq!(inspection.transforms, vec!["./scripts/codemod.ts"]);
+        assert_eq!(inspection.external_imports, vec!["./scripts/codemod.ts"]);
     }
 
     #[test]
@@ -825,23 +875,76 @@ export default async function main() {
     }
 
     #[test]
-    fn astgrep_paths_written_in_the_call_still_work() {
+    fn astgrep_takes_rules_inline_or_imported_from_yaml() {
         let source = r#"
 import { step, forEachFile, astGrep } from "codemod/workflow";
-export default async function main() {
-  await step(forEachFile(astGrep("./rules.yaml")));
-  await step(forEachFile(astGrep(`rules/more.yml`)));
+import rules from "./rules/config.yml";
+export default async function main({ params }) {
+  await step(forEachFile(astGrep(rules)));
+  await step(forEachFile(astGrep({ id: "a", language: "javascript", rule: { pattern: params.from }, fix: params.to })));
 }
 "#;
         let built = build("workflow.ts", source).unwrap();
+        // The YAML stays an import, which the module loader reads as data.
         assert!(
-            built.main.contains(r#"astGrep("./rules.yaml")"#),
+            built
+                .main
+                .contains(r#"import rules from "./rules/config.yml";"#),
             "{}",
             built.main
         );
         let inspection = inspect("workflow.ts", source).unwrap();
-        assert_eq!(inspection.files, vec!["./rules.yaml", "rules/more.yml"]);
-        assert!(inspection.transforms.is_empty());
+        assert_eq!(inspection.files, vec!["./rules/config.yml"]);
+        assert_eq!(inspection.external_imports, vec!["./rules/config.yml"]);
+    }
+
+    #[test]
+    fn a_path_given_to_astgrep_is_an_error_that_says_how_to_import_it() {
+        let message = error(
+            r#"
+import { step, forEachFile, astGrep } from "codemod/workflow";
+export default async function main() {
+  await step(forEachFile(astGrep("rules/config.yml")));
+}
+"#,
+        );
+        assert_eq!(
+            message,
+            r#"astGrep takes rules, not a file path: add import config from "./rules/config.yml" at the top of the workflow and write astGrep(config), so the build can include the file when publishing"#
+        );
+        let message = error(
+            r#"
+import { step, astGrep } from "codemod/workflow";
+export default async function main({ params }) {
+  await step(astGrep(`./rules/${params.name}.yml`));
+}
+"#,
+        );
+        assert!(
+            message.starts_with("astGrep takes rules, not a file path"),
+            "{message}"
+        );
+        let named = error(
+            r#"
+import { step, astGrep } from "codemod/workflow";
+import { rule } from "./rules.yaml";
+export default async function main() { await step(astGrep(rule)); }
+"#,
+        );
+        assert!(
+            named.starts_with("a YAML file is imported as its content"),
+            "{named}"
+        );
+        let package = error(
+            r#"
+import rules from "shared-rules/rules.yaml";
+export default async function main() {}
+"#,
+        );
+        assert!(
+            package.starts_with("import YAML from the package's own files"),
+            "{package}"
+        );
     }
 
     #[test]
@@ -872,19 +975,6 @@ export default async function main({ params }) {
         );
         assert!(
             message.starts_with("jssg takes an imported transform, not a file path, so the build can include its file when publishing"),
-            "{message}"
-        );
-        let message = error(
-            r#"
-import { step, forEachFile, astGrep } from "codemod/workflow";
-const rules = "./rules.yaml";
-export default async function main() {
-  await step(forEachFile(astGrep(rules)));
-}
-"#,
-        );
-        assert!(
-            message.starts_with("astGrep needs its rule file's path written directly in the code"),
             "{message}"
         );
         let message = error(

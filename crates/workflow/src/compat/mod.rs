@@ -87,8 +87,8 @@ struct Generator {
     pass_params: bool,
     names: HashMap<String, String>,
     taken: BTreeSet<String>,
-    /// Transforms and shard functions the workflow imports, in the order
-    /// first used: (local name, import specifier).
+    /// Transforms, shard functions and ast-grep rule files the workflow
+    /// imports, in the order first used: (local name, import specifier).
     transforms: Vec<(String, String)>,
 }
 
@@ -722,7 +722,7 @@ impl Generator {
                 for_each_file(
                     &selector,
                     with_options(
-                        format!("astGrep({}", js_string(&ast_grep.config_file)),
+                        format!("astGrep({}", self.transform(&ast_grep.config_file, "Rules")),
                         &fields,
                     ),
                 )
@@ -955,7 +955,7 @@ impl Generator {
         if self.uses_context {
             source.push_str("import type { WorkflowContext } from \"codemod/workflow\";\n");
         }
-        // The engine runs these files; the workflow only names them.
+        // The engine runs the transforms; rule files are imported as data.
         for (name, specifier) in &self.transforms {
             let _ = writeln!(source, "import {name} from {};", js_string(specifier));
         }

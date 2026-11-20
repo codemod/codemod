@@ -122,6 +122,8 @@ export interface Addon {
    * Throws the build's error for a transform the build cannot read.
    */
   rewriteWorkflow?(file: string, source: string): string | null;
+  /** A YAML file's text as an ES module whose default export is its content. */
+  yamlModule?(text: string): string;
   /** Parse `source` as `language`; returns an `SgRoot`. */
   parse(language: string, source: string, filename?: string, relativeFilename?: string): unknown;
   languageFromPath(path: string): string | null;
