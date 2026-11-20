@@ -149,16 +149,25 @@ nodes:
     assert_eq!(
         source,
         r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
-import { forEachFile, jssg, step } from "codemod/workflow";
-import workflowTransform from "./src/workflow.ts";
+import { forEachFile, step } from "codemod/workflow";
+import type { WorkflowContext } from "codemod/workflow";
+// codemod upgrade: the transforms below are jssg transform files, run by a
+// compatibility adapter that does what workflow.yaml's js-ast-grep step did.
+// To convert one, give forEachFile a callback in its place:
+// (file) => { const root = parse(file); ...; file.write(text) }, with parse from
+// "codemod/ast-grep", or move it to a file and import its default export.
+import * as workflowTransform from "./src/workflow.ts";
+import { jssgFile } from "codemod-internal:jssg-compat";
 
-export default async function main() {
+type Params = Record<string, any>;
+
+export default async function main({ params }: WorkflowContext<Params>) {
   // Apply AST Transformations
   await step("Rewrite rmdir", forEachFile({
     include: ["**/*.js", "**/*.ts"],
     exclude: ["**/node_modules/**"],
     language: "typescript",
-  }, jssg(workflowTransform)));
+  }, (file) => jssgFile(workflowTransform, file, { language: "typescript", params })));
 }
 "#
     );
@@ -188,8 +197,8 @@ nodes:
     .source;
     for expected in [
         // workflow.yaml parses as TypeScript unless told otherwise.
-        r#"import codemodTransform from "./scripts/codemod.ts";"#,
-        r#"await step("Transform", forEachFile({ language: "typescript" }, jssg(codemodTransform)));"#,
+        r#"import * as codemodTransform from "./scripts/codemod.ts";"#,
+        "await step(\"Transform\", forEachFile({\n    language: \"typescript\",\n  }, (file) => jssgFile(codemodTransform, file, { language: \"typescript\", params })));",
         r#"import configRules from "./rules/config.yml";"#,
         r#"await step("Rules", forEachFile(astGrep(configRules)));"#,
         r#"forEachFile({ include: ["src/**"] }, astGrep(configRules))"#,
@@ -323,12 +332,13 @@ fn the_documented_features_translate_and_build() {
 
     expect("\"pr_size\": 20");
     expect("\"mode\": \"safe\"");
-    expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", jssg: { transform: codemodTransform, language: \"tsx\", params }, previous: state[\"shards\"] }));");
+    expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", files: { language: \"tsx\" }, filter: (file) => jssgWouldChange(codemodTransform, file, { language: \"tsx\", params }), previous: state[\"shards\"] }));");
     expect("(state[\"shards\"] ?? []).map((matrix: Matrix, index: number) => applyNodeFor(params, state, matrix, index))");
     expect("await step(approval(\"Run 'Apply transforms'?\"));");
     expect("const branchName = `codemod-apply-${index}`;");
-    expect("import codemodTransform from \"./scripts/codemod.ts\";");
-    expect("forEachFile({ language: \"tsx\" }, jssg(codemodTransform, {\n    files: matrix?._meta_files,\n    params,\n    matrix: matrix ?? undefined,\n  }))");
+    expect("import * as codemodTransform from \"./scripts/codemod.ts\";");
+    expect("import { jssgFile, jssgWouldChange } from \"codemod-internal:jssg-compat\";");
+    expect("forEachFile({\n    include: matrix?._meta_files,\n    language: \"tsx\",\n  }, (file) => jssgFile(codemodTransform, file, {\n    language: \"tsx\",\n    params,\n    matrix: matrix ?? undefined,\n  }))");
     expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state })) {");
     expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state })) {");

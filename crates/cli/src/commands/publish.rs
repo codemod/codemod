@@ -207,9 +207,10 @@ fn find_js_files_in_workflow(workflow: &Workflow, package_path: &Path) -> Result
 }
 
 /// Check that a workflow.ts builds, and find the files to bundle for it,
-/// relative to the package: the workflow itself, and the transforms and
-/// shard functions it imports for `jssg(...)` and `shard(...)`. Bundling
-/// takes in what they import from `node_modules`, which is not published.
+/// relative to the package: the workflow itself, and the callbacks it
+/// imports for `forEachFile` and `shard`. Bundling takes in what they import
+/// from `node_modules`, which is not published. Imported YAML is checked to
+/// exist and published as it is.
 fn typescript_workflow_scripts(package_path: &Path, workflow_path: &Path) -> Result<Vec<String>> {
     codemod_workflow::load_workflow(workflow_path).map_err(|e| anyhow!("Invalid workflow: {e}"))?;
     let source = fs::read_to_string(workflow_path)?;
@@ -263,9 +264,9 @@ async fn bundle_js_file(package_path: &Path, js_file: &str) -> Result<String> {
 
     debug!("Bundling JS file: {}", js_file_path.display());
 
-    // A workflow's transforms and YAML files stay imports of their own files:
-    // the engine runs transforms, which are bundled on their own, and the
-    // module loader reads YAML as data.
+    // A workflow's imported callbacks and YAML stay imports of their own
+    // files: callbacks are bundled on their own, as the modules the build
+    // extracts import them, and the module loader reads YAML as data.
     let externals = fs::read_to_string(&js_file_path)
         .ok()
         .and_then(|source| {
@@ -952,17 +953,17 @@ nodes:
     }
 
     #[tokio::test]
-    async fn a_workflow_ts_package_bundles_its_workflow_and_transforms() {
+    async fn a_workflow_ts_package_bundles_its_workflow_and_imported_callbacks() {
         let temp_dir = tempdir().unwrap();
         let manifest = manifest_with("workflow.ts", "example");
         fs::write(
             temp_dir.path().join("workflow.ts"),
             r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
-import { jssg, step } from "codemod/workflow";
-import workflowTransform from "./src/workflow.ts";
+import { forEachFile, step } from "codemod/workflow";
+import rewrite from "./src/rewrite.ts";
 
 export default async function main() {
-  await step("Rewrite", jssg(workflowTransform, { include: ["**/*.ts"], language: "typescript" }));
+  await step("Rewrite", forEachFile({ include: ["**/*.ts"], language: "typescript" }, rewrite));
 }
 "#,
         )
@@ -974,14 +975,14 @@ export default async function main() {
         )
         .unwrap();
         fs::write(
-            temp_dir.path().join("src/workflow.ts"),
-            "import { marker } from \"./helper.ts\";\nexport default function transform() { return marker; }\n",
+            temp_dir.path().join("src/rewrite.ts"),
+            "import { marker } from \"./helper.ts\";\nexport default function rewrite(file: { write(text: string): void }) { file.write(marker); }\n",
         )
         .unwrap();
 
-        // The workflow itself is bundled too, with the transforms it names.
+        // The workflow itself is bundled too, with the callbacks it imports.
         let files = validate_package_structure(temp_dir.path(), &manifest).unwrap();
-        assert_eq!(files, ["workflow.ts", "src/workflow.ts"]);
+        assert_eq!(files, ["workflow.ts", "src/rewrite.ts"]);
 
         let bundle = create_package_bundle(temp_dir.path(), &manifest, &files)
             .await
@@ -994,7 +995,7 @@ export default async function main() {
         for entry in tar.entries().unwrap() {
             let mut entry = entry.unwrap();
             let name = entry.path().unwrap().to_string_lossy().into_owned();
-            if name == "src/workflow.ts" {
+            if name == "src/rewrite.ts" {
                 std::io::Read::read_to_string(&mut entry, &mut transform).unwrap();
             }
             if name == "workflow.ts" {
@@ -1004,12 +1005,12 @@ export default async function main() {
         }
         assert!(names.contains(&"workflow.ts".to_string()), "{names:?}");
         assert!(transform.contains("bundled-helper"), "{transform}");
-        // The workflow's bundle still imports its transform, which is not
+        // The workflow's bundle still imports its callback, which is not
         // bundled into it.
-        assert!(workflow.contains("\"./src/workflow.ts\""), "{workflow}");
+        assert!(workflow.contains("\"./src/rewrite.ts\""), "{workflow}");
         assert!(!workflow.contains("bundled-helper"), "{workflow}");
 
-        // What a consumer installs runs: the transform comes from its own file.
+        // What a consumer installs runs: the callback comes from its own file.
         let installed = tempdir().unwrap();
         let archive = flate2::read::GzDecoder::new(fs::File::open(&bundle).unwrap());
         tar::Archive::new(archive).unpack(installed.path()).unwrap();
@@ -1149,14 +1150,14 @@ export default async function main() {
     /// A path the build cannot read would be missing from the package:
     /// publishing refuses it, with the build's error.
     #[test]
-    fn a_workflow_ts_package_with_a_transform_path_is_refused() {
+    fn a_workflow_ts_package_with_a_callback_path_is_refused() {
         let temp_dir = tempdir().unwrap();
         let manifest = manifest_with("workflow.ts", "example");
         fs::write(
             temp_dir.path().join("workflow.ts"),
-            r#"import { jssg, step } from "codemod/workflow";
-export default async function main({ params }: { params: { name: string } }) {
-  await step(jssg(`./transforms/${params.name}.ts` as any));
+            r#"import { forEachFile, step } from "codemod/workflow";
+export default async function main() {
+  await step(forEachFile("**/*.ts", "./transforms/rename.ts" as any));
 }
 "#,
         )
@@ -1165,7 +1166,7 @@ export default async function main({ params }: { params: { name: string } }) {
             .unwrap_err()
             .to_string();
         assert!(
-            error.contains("jssg takes an imported transform, not a file path"),
+            error.contains("forEachFile takes a callback, not a file path"),
             "{error}"
         );
     }

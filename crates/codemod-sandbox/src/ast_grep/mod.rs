@@ -104,6 +104,18 @@ unsafe impl<'js> rquickjs::JsLifetime<'js> for DefaultParseLanguage {
     type Changed<'to> = DefaultParseLanguage;
 }
 
+/// The semantic analysis roots made by `parse(...)` get, when the host
+/// stores one: a workflow's `forEachFile` step does, as its selector's
+/// `semanticAnalysis` says.
+#[cfg(feature = "native")]
+#[derive(Clone)]
+pub struct ParseSemanticProvider(pub Arc<dyn language_core::SemanticProvider>);
+
+#[cfg(feature = "native")]
+unsafe impl<'js> rquickjs::JsLifetime<'js> for ParseSemanticProvider {
+    type Changed<'to> = ParseSemanticProvider;
+}
+
 /// What a `parse(...)` call asks for, after sorting out its forms.
 struct ParseRequest {
     language: String,
@@ -244,6 +256,30 @@ fn parse_with<'js>(
     });
     #[cfg(not(feature = "native"))]
     let target_directory: Option<std::path::PathBuf> = None;
+    #[cfg(feature = "native")]
+    if let Some(ParseSemanticProvider(provider)) = ctx
+        .userdata::<ParseSemanticProvider>()
+        .map(|p| (*p).clone())
+    {
+        let language = CodemodLang::from_str(&request.language).map_err(|e| {
+            Exception::throw_message(
+                &ctx,
+                &format!(
+                    "Failed to parse: unsupported language {}: {e}",
+                    request.language
+                ),
+            )
+        })?;
+        let grep = ast_grep_core::AstGrep::new(request.text, language);
+        return SgRootRjs::try_new_with_semantic(
+            grep,
+            request.filename,
+            Some(provider),
+            None,
+            target_directory.as_deref(),
+        )
+        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")));
+    }
     SgRootRjs::try_new(
         request.language,
         request.text,

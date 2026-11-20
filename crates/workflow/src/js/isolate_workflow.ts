@@ -17,7 +17,6 @@ export const sleep = bodyOnly("sleep");
 export const waitForEvent = bodyOnly("waitForEvent");
 export const forEachFile = bodyOnly("forEachFile");
 export const shell = bodyOnly("shell");
-export const jssg = bodyOnly("jssg");
 export const astGrep = bodyOnly("astGrep");
 export const shard = bodyOnly("shard");
 export const codemod = bodyOnly("codemod");

@@ -5,46 +5,25 @@
 //! run store, events, host tasks, and selecting and committing files.
 //!
 //! There is no capability sandbox in such a host: the code it runs has
-//! whatever the host gives it. Host tasks (`jssg`, `codemod`, ...) still run
+//! whatever the host gives it. Host tasks (`shard`, `codemod`, ...) still run
 //! in the engine as usual.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
-use butterflow_core::jssg_runner::JssgRunOutcome;
 use butterflow_state::run_store::StepRecord;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::engine::{Engine, EngineError, Execution, RunReport};
 use crate::events::Event;
-use crate::run::{run_host_task, Ending, RunContext, StepClock, TestPlan};
+use crate::run::{run_host_task, Ending, RunContext, TestPlan};
 use crate::tasks::for_each_file::{self, FileEffects, Selector};
-use crate::tasks::{jssg, TaskContext, TaskError};
+use crate::tasks::TaskContext;
 
 /// The language a `forEachFile` step's files are in, when known, and the
 /// files as `(path, text)` pairs.
 pub type SelectedFiles = (Option<String>, Vec<(String, String)>);
-
-/// Native transform output that can be discarded or committed once.
-pub struct PreparedJssg {
-    run: Arc<RunContext>,
-    position: u64,
-    label: String,
-    dry_run: bool,
-    outcome: JssgRunOutcome,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct JssgRequest {
-    position: u64,
-    label: String,
-    task: jssg::Request,
-    timeout_ms: Option<u64>,
-}
 
 pub struct OpenRequest {
     /// The workflow file; relative task paths resolve against its directory.
@@ -54,6 +33,9 @@ pub struct OpenRequest {
     pub name: Option<String>,
     pub dry_run: bool,
     pub test: Option<TestPlan>,
+    /// The functions the build extracted for the engine to run in isolates
+    /// (`shard`'s function and filter), by id; see [`crate::Built::callbacks`].
+    pub callbacks: std::collections::BTreeMap<String, String>,
 }
 
 /// The host of runs opened here, as recorded in a run's settings.
@@ -76,7 +58,7 @@ impl Engine {
             &request.target,
             request.params,
             request.name,
-            Default::default(),
+            request.callbacks,
             request.dry_run,
             request.test,
             NODE_HOST,
@@ -90,7 +72,11 @@ impl Engine {
             .store()
             .get_run(run_id)?
             .ok_or_else(|| EngineError::NotFound(run_id.to_string()))?;
-        let execution = self.begin_resumed(record, Default::default(), NODE_HOST)?;
+        // The workflow is built again, for the functions the engine runs.
+        let callbacks = crate::engine::load_workflow(&record.workflow_path)
+            .map(|loaded| loaded.built.callbacks)
+            .unwrap_or_default();
+        let execution = self.begin_resumed(record, callbacks, NODE_HOST)?;
         let history = execution.context.store.load_steps(run_id)?;
         Ok(HostedRun::new(execution, history))
     }
@@ -233,95 +219,6 @@ impl HostedRun {
             run_host_task(&self.context, request)
         }))
         .unwrap_or_else(|panic| Err(crate::run::panic_payload(panic)))
-    }
-
-    /// Collect the transform's data and hold its edits until the host reducer
-    /// succeeds. Dropping the returned plan leaves files untouched.
-    pub fn prepare_jssg(&self, request: &str) -> Result<(PreparedJssg, Value), String> {
-        self.open().map_err(|e| e.to_string())?;
-        let request: JssgRequest =
-            serde_json::from_str(request).map_err(|e| format!("bad jssg task request: {e}"))?;
-        let clock = request.timeout_ms.map(|ms| {
-            StepClock::start(Arc::clone(&self.context.cancel), Duration::from_millis(ms))
-        });
-        let task = TaskContext {
-            run: &self.context,
-            position: request.position,
-            label: request.label,
-            cancel: Arc::clone(
-                clock
-                    .as_ref()
-                    .map_or(&self.context.cancel, |clock| &clock.cancel),
-            ),
-            since: None,
-        };
-        let dry_run = request.task.dry_run || self.context.dry_run;
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            if self.refuses_steps() {
-                return Err(TaskError::Canceled.to_payload());
-            }
-            let collected = jssg::collect(&task, &request.task, dry_run);
-            if let Some(ms) = request.timeout_ms.filter(|_| {
-                !self.canceled()
-                    && clock
-                        .as_ref()
-                        .is_some_and(|clock| clock.expired.load(Ordering::SeqCst))
-            }) {
-                return Err(TaskError::Failed(format!(
-                    "timed out after {}",
-                    crate::tasks::describe_duration(ms)
-                ))
-                .to_payload());
-            }
-            let (outcome, data) = collected.map_err(|e| self.jssg_error(e))?;
-            // Preserve diagnostics for a transform that failed on all files;
-            // there are no edits to defer and no reducer should be called.
-            if jssg::all_failed(&outcome) {
-                let error =
-                    jssg::finish(&task, outcome, data, dry_run).expect_err("all files failed");
-                return Err(self.jssg_error(error));
-            }
-            Ok((
-                PreparedJssg {
-                    run: Arc::clone(&self.context),
-                    position: task.position,
-                    label: task.label,
-                    dry_run,
-                    outcome,
-                },
-                data,
-            ))
-        }))
-        .unwrap_or_else(|panic| Err(crate::run::panic_payload(panic)))
-    }
-
-    /// Apply the prepared edits, returning the public JSSG step outcome.
-    pub fn commit_jssg(&self, prepared: PreparedJssg, data: Value) -> Result<Value, String> {
-        self.open().map_err(|e| e.to_string())?;
-        if !Arc::ptr_eq(&self.context, &prepared.run) {
-            return Err("the prepared transform belongs to another run".into());
-        }
-        let task = TaskContext {
-            run: &self.context,
-            position: prepared.position,
-            label: prepared.label,
-            cancel: Arc::clone(&self.context.cancel),
-            since: None,
-        };
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let outcome = jssg::finish(&task, prepared.outcome, data, prepared.dry_run)
-                .map_err(|e| self.jssg_error(e))?;
-            serde_json::to_value(outcome).map_err(|e| e.to_string())
-        }))
-        .unwrap_or_else(|panic| Err(crate::run::panic_payload(panic)))
-    }
-
-    fn jssg_error(&self, error: TaskError) -> String {
-        if self.refuses_steps() {
-            TaskError::Canceled.to_payload()
-        } else {
-            error.to_payload()
-        }
     }
 
     /// The files a `forEachFile` selector picks, as `[path, text]` pairs, and

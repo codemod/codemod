@@ -30,6 +30,7 @@ generated/
 /crates/cli/npm/vite.d.mts
 /crates/cli/npm/src/runtime/orchestrator.mts
 /crates/cli/npm/src/runtime/orchestrator-version.mts
+/crates/cli/npm/src/runtime/jssg-compat.mts
 
 # Environment files
 **.env

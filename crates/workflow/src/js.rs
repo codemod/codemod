@@ -63,6 +63,11 @@ javascript! {
     pub(crate) fn isolate_workflow_module = include_str!("js/isolate_workflow.ts"), "isolate_workflow.ts"
 }
 javascript! {
+    /// `codemod-internal:jssg-compat` in isolates: a jssg transform module
+    /// run from a `forEachFile` callback, for the YAML translation.
+    pub(crate) fn jssg_compat_module = include_str!("js/jssg_compat.ts"), "jssg_compat.ts"
+}
+javascript! {
     /// Replay-safe globals of the workflow body; a script, not a module.
     pub(crate) fn body_globals = include_str!("js/body_globals.ts"), "body_globals.ts"
 }
@@ -88,6 +93,7 @@ mod tests {
             super::semver_module(),
             super::dependencies_module(),
             super::isolate_workflow_module(),
+            super::jssg_compat_module(),
         ] {
             assert!(!js.is_empty());
             assert!(!js.contains("interface "), "types are left in:\n{js}");

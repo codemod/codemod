@@ -55,13 +55,12 @@ globalThis.__workflowClose = runtime.close;
 
 export const {
   __callback,
-  __transform,
+  __importedCallback,
   __evaluate,
   // `codemod/deps` exports it as `dependencyGraph`.
   dependencyGraph: __dependencyGraph,
   forEachFile,
   shell,
-  jssg,
   astGrep,
   shard,
   codemod,

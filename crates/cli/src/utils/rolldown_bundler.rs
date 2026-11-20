@@ -93,6 +93,8 @@ impl RolldownBundler {
             external: Some(IsExternal::from(
                 supported_runtime_external_modules()
                     .into_iter()
+                    // What the YAML translation's callbacks use; the engine has it.
+                    .chain(["codemod-internal:jssg-compat".to_string()])
                     .chain(self.config.externals.iter().cloned())
                     .collect::<Vec<_>>(),
             )),

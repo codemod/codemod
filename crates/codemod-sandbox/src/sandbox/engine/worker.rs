@@ -25,7 +25,7 @@ use super::execution_engine::{
 };
 use super::pending_files::PendingFiles;
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
-use crate::ast_grep::DefaultParseLanguage;
+use crate::ast_grep::{DefaultParseLanguage, ParseSemanticProvider};
 use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
 use crate::sandbox::errors::{ExecutionError, RuntimeError};
 use crate::sandbox::resolvers::ModuleResolver;
@@ -55,6 +55,9 @@ pub struct WorkerOptions<R> {
     pub target_directory: PathBuf,
     /// The language `parse(text)` uses when the call names none.
     pub default_language: Option<String>,
+    /// Semantic analysis for roots `parse(file)` makes, so `definition()`
+    /// and `references()` find something; none without it.
+    pub semantic_provider: Option<Arc<dyn language_core::SemanticProvider>>,
 }
 
 /// A JSSG runtime kept alive across calls. Run code in it with
@@ -178,6 +181,10 @@ impl Worker {
                     .map_err(|e| fail(format!("{e:?}")))?;
                 if let Some(language) = &options.default_language {
                     ctx.store_userdata(DefaultParseLanguage(language.clone()))
+                        .map_err(|e| fail(format!("{e:?}")))?;
+                }
+                if let Some(provider) = &options.semantic_provider {
+                    ctx.store_userdata(ParseSemanticProvider(Arc::clone(provider)))
                         .map_err(|e| fail(format!("{e:?}")))?;
                 }
                 globals.attach(&ctx)?;

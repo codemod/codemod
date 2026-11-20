@@ -22,8 +22,6 @@ mod function;
 mod git;
 mod install_skill;
 pub(crate) mod isolate;
-pub(crate) mod jssg;
-mod reduce;
 mod shard;
 mod shell;
 mod wait;
@@ -168,7 +166,6 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         "function" => function::run(task, content).map_err(TaskError::from),
         "dependencyGraph" => dependency_graph::run(task, content).map_err(TaskError::from),
         "shell" => shell::run(task, parse(content)?),
-        "jssg" => jssg::run(task, parse(content)?),
         "astGrep" => ast_grep::run(task, parse(content)?),
         "shard" => shard::run(task, content),
         "codemod" => codemod::run(task, parse(content)?),

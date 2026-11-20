@@ -29,14 +29,14 @@ pub fn resolve_workflow(source: String, name: Option<String>) -> napi::Result<St
         .map_err(napi::Error::from_reason)
 }
 
-/// The workflow source as Node.js should load it: transforms imported for
-/// `jssg` and `shard` replaced by references to their files, and their
-/// imports dropped, as the codemod CLI's build does. `None` when the
-/// workflow imports no transforms. Throws the build's error for a
-/// transform the build cannot read.
+/// The workflow source as Node.js should load it: `shard`'s functions as
+/// references to the modules the build extracted, which the engine runs in
+/// isolates, and imported `forEachFile` callbacks with the ids the build
+/// gave them. `None` when the build changes nothing Node.js runs. Throws
+/// the build's error.
 #[napi_derive::napi]
 pub fn rewrite_workflow(file: String, source: String) -> napi::Result<Option<String>> {
-    codemod_workflow::rewrite_transforms(&file, &source)
+    codemod_workflow::rewrite_for_node(&file, &source)
         .map_err(|error| napi::Error::from_reason(error.to_string()))
 }
 

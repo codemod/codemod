@@ -164,6 +164,8 @@ export interface Selector {
   language?: string;
   containing?: string;
   concurrency?: number;
+  semanticAnalysis?: Json;
+  capabilities?: string[];
 }
 
 /** A callback the build extracted, or one given as a function. */
@@ -178,6 +180,8 @@ export interface Extracted {
 export interface CallbackReference {
   __flowCallback: string;
   captures: () => Json;
+  /** On hosts that run callbacks in place: the function itself. */
+  fn?: Callback;
 }
 
 export interface ForEachFileTask {
@@ -189,13 +193,12 @@ export interface ForEachFileTask {
 export interface HostTask {
   readonly [TASK]: "host";
   readonly content: TaskContent;
-  /** `jssg(transform, { reduce, initial })`: folds each file's data into one result. */
-  readonly reducer?: Reducer;
-}
-
-export interface Reducer {
-  callback: Extracted;
-  initial: Json;
+  /**
+   * Functions the engine runs in isolates, by the field of `content` they
+   * go in (`shard`'s `method.function` and `filter`); their captures are
+   * read when the step starts.
+   */
+  readonly callbacks?: Readonly<Record<string, Extracted>>;
 }
 
 export interface DependencyGraphTask {
@@ -217,7 +220,7 @@ export interface StepOptions {
 }
 
 /**
- * The task builders (`forEachFile`, `shell`, `jssg`, ...). They only describe
+ * The task builders (`forEachFile`, `shell`, `astGrep`, ...). They only describe
  * work, so they need no run. `options.callbackId(fn)` lets callbacks be given
  * as functions, for hosts that run them in place.
  */
@@ -228,18 +231,23 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
   }
 
   /**
-   * Inserted by the build in place of a transform imported for `jssg` or
-   * `shard`: the file the import names, relative to the workflow. The
-   * workflow never loads the transform's code.
+   * Inserted by the Node.js host's build in place of an imported
+   * `forEachFile` callback: the function, which runs in place, with the id
+   * the build gave it, which changes with its file and the files it imports.
    */
-  function __transform(path: string): TransformReference {
-    return Object.freeze({ [TRANSFORM]: path });
+  function __importedCallback(id: string, fn: Callback): CallbackReference {
+    return { __flowCallback: id, captures: () => ({}), fn };
   }
 
   /** A callback the build extracted, or one given as a function on hosts that run them in place. */
   function callbackOf(value: unknown): Extracted | null {
     if (isRecord(value) && typeof value.__flowCallback === "string") {
-      return { id: value.__flowCallback, captures: value.captures as Extracted["captures"] };
+      const fn = typeof value.fn === "function" ? (value.fn as Callback) : undefined;
+      return {
+        id: value.__flowCallback,
+        captures: value.captures as Extracted["captures"],
+        ...(fn ? { fn } : {}),
+      };
     }
     if (typeof value === "function" && typeof options.callbackId === "function") {
       const fn = value as Callback;
@@ -248,10 +256,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     return null;
   }
 
-  /**
-   * Run a callback, or a `jssg(...)` or `astGrep(...)` transform, on every
-   * selected file.
-   */
+  /** Run a callback, or `astGrep(...)` rules, on every selected file. */
   function forEachFile(selector: unknown, callback?: unknown): ForEachFileTask | HostTask {
     if (callback === undefined && (callbackOf(selector) || isTask(selector))) {
       callback = selector;
@@ -263,7 +268,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
       throw new TypeError(
         typeof callback === "function"
           ? "forEachFile: the callback was not extracted by the build; run the workflow through the codemod-workflow build"
-          : "forEachFile takes a callback written inline as a function, jssg(...) or astGrep(...)",
+          : "forEachFile takes a callback, written inline as a function or imported from its file, or astGrep(...)",
       );
     }
     return Object.freeze({
@@ -274,22 +279,22 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
   }
 
   /**
-   * `forEachFile(selector, jssg(...))`: the transform's task, on the files
-   * the selector picks. The selector's fields become the transform's.
+   * `forEachFile(selector, astGrep(...))`: the rules' task, on the files the
+   * selector picks. The selector's fields become the task's.
    */
   function transformFiles(selector: unknown, transform: Task): HostTask {
     const kind = transform[TASK] === "host" ? transform.content.kind : "";
-    if (transform[TASK] !== "host" || (kind !== "jssg" && kind !== "astGrep")) {
+    if (transform[TASK] !== "host" || kind !== "astGrep") {
       throw new TypeError(
-        "forEachFile takes a callback written inline as a function, jssg(...) or astGrep(...)",
+        "forEachFile takes a callback, written inline as a function or imported from its file, or astGrep(...)",
       );
     }
-    const { include, exclude, language, containing, concurrency } = normalizeSelector(selector);
-    if (containing !== undefined || concurrency !== undefined) {
-      const field = containing !== undefined ? "containing" : "concurrency";
+    const { include, exclude, language, ...forCallbacks } = normalizeSelector(selector);
+    const field = Object.keys(forCallbacks)[0];
+    if (field !== undefined) {
       throw new TypeError(`forEachFile: selector.${field} is for callbacks, not for ${kind}(...)`);
     }
-    if (language !== undefined && kind === "astGrep") {
+    if (language !== undefined) {
       throw new TypeError(
         "forEachFile: the rules of astGrep(...) name their languages; select files with globs",
       );
@@ -306,9 +311,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
       }
     }
     const content: TaskContent = { ...transform.content, ...selected };
-    // Without a language, the package's (codemod.yaml), as for callbacks.
-    if (kind === "jssg" && content.language === undefined) content.packageLanguage = true;
-    return Object.freeze({ [TASK]: "host" as const, content, reducer: transform.reducer });
+    return Object.freeze({ [TASK]: "host" as const, content });
   }
 
   /**
@@ -378,32 +381,6 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     return hostTask("shell", { ...options, command });
   }
 
-  /** Run an imported JSSG transform over the target. */
-  function jssg(transform: unknown, options: object = {}): HostTask {
-    const path = transformPath(transform, "jssg");
-    if (!isRecord(options) || !("reduce" in options)) {
-      if (isRecord(options) && "initial" in options) {
-        throw new TypeError("jssg: initial is the starting value of reduce; give reduce too");
-      }
-      return hostTask("jssg", { ...options, path });
-    }
-    const { reduce, initial, ...rest } = options;
-    const callback = callbackOf(reduce);
-    if (!callback) {
-      throw new TypeError(
-        typeof reduce === "function"
-          ? "jssg: reduce was not extracted by the build; run the workflow through the codemod-workflow build"
-          : "jssg: reduce must be a function, written inline as reduce: (result, file) => ...",
-      );
-    }
-    if (initial === undefined) {
-      throw new TypeError("jssg: reduce needs an initial value, as { reduce, initial }");
-    }
-    checkJson(initial, "jssg: initial");
-    const task = hostTask("jssg", { ...rest, path });
-    return Object.freeze({ ...task, reducer: { callback, initial: initial as Json } });
-  }
-
   /**
    * Apply ast-grep rules: a rule object of the shape of an ast-grep YAML
    * rule, or an array of them, written in the workflow, built at run time,
@@ -414,28 +391,58 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     return hostTask("astGrep", { ...options, rules: ruleList(rules) });
   }
 
-  /** Split files into shards. */
-  function shard(options: object): HostTask {
-    if (!isRecord(options)) return hostTask("shard", options);
-    let request: Record<string, unknown> = options;
-    const { method, jssg: transform } = options;
-    if (isRecord(method) && "function" in method) {
-      const path = transformPath(method.function, "shard's method.function");
-      request = { ...request, method: { ...method, function: path } };
-    }
-    if (isRecord(transform)) {
-      if ("path" in transform) {
+  /**
+   * Split files into shards: `shard({ method, target, files, filter,
+   * previous })`. `method` is built in (`{ type, maxFilesPerShard }`) or a
+   * function (`{ function }`), and `filter` a per-file callback; both are
+   * written inline or imported, and run in isolates, as callbacks do.
+   */
+  function shard(options: unknown): HostTask {
+    if (!isRecord(options)) throw new TypeError("shard takes options: shard({ method, ... })");
+    const known = new Set(["method", "target", "files", "filter", "previous"]);
+    for (const key of Object.keys(options)) {
+      if (key === "jssg" || key === "filePattern") {
         throw new TypeError(
-          "shard's jssg takes the transform as `transform`, imported, not a file path as `path`",
+          key === "jssg"
+            ? "shard's jssg was removed: give a filter, filter: (file) => ..., that keeps the files it returns true for"
+            : 'shard\'s filePattern was removed: select files with files: "**/*.ts" (or a selector object)',
         );
       }
-      const { transform: given, ...rest } = transform;
-      request = {
-        ...request,
-        jssg: { ...rest, path: transformPath(given, "shard's jssg.transform") },
-      };
+      if (!known.has(key)) throw new TypeError(`shard: unknown option '${key}'`);
     }
-    return hostTask("shard", request);
+    const { method, files, filter, ...rest } = options;
+    const callbacks: Record<string, Extracted> = {};
+    const extracted = (value: unknown, what: string): Extracted => {
+      const callback = callbackOf(value);
+      if (!callback || callback.fn) {
+        throw new TypeError(
+          typeof value === "function"
+            ? `${what} was not extracted by the build: run the workflow with the codemod CLI, or with runWorkflow(path) from codemod/host or codemod/testing`
+            : `${what} takes a function, written inline or imported from its file`,
+        );
+      }
+      return callback;
+    };
+    if (!isRecord(method)) {
+      throw new TypeError(
+        "shard: method must be { type, maxFilesPerShard } or { function }, written inline",
+      );
+    }
+    let content: Record<string, unknown> = { ...rest, method };
+    if ("function" in method) {
+      callbacks["method.function"] = extracted(method.function, "shard's method.function");
+      const { function: _, ...others } = method;
+      content.method = others;
+    }
+    if (filter !== undefined) callbacks.filter = extracted(filter, "shard's filter");
+    if (files !== undefined) {
+      const { include, exclude, language, ...forCallbacks } = normalizeSelector(files);
+      const field = Object.keys(forCallbacks)[0];
+      if (field !== undefined) throw new TypeError(`shard: files.${field} is for forEachFile`);
+      content = { ...content, files: withoutUndefined({ include, exclude, language }) };
+    }
+    const task = hostTask("shard", content);
+    return Object.freeze({ ...task, callbacks });
   }
 
   /** Run another codemod package (registry name or local path). */
@@ -498,11 +505,10 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
   return {
     callbackOf,
     __callback,
-    __transform,
+    __importedCallback,
     forEachFile,
     dependencyGraph,
     shell,
-    jssg,
     astGrep,
     shard,
     codemod,
@@ -515,33 +521,6 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     commit,
     pullRequest,
   };
-}
-
-/** Marks a transform reference; shared by every copy of this module. */
-const TRANSFORM = Symbol.for("codemod.transform");
-
-/** An imported transform, as the build passes it on: the file it names. */
-export interface TransformReference {
-  readonly [TRANSFORM]: string;
-}
-
-/** The file a transform reference names, or why the value is not one. */
-function transformPath(value: unknown, what: string): string {
-  const path = isRecord(value) ? (value as Partial<TransformReference>)[TRANSFORM] : undefined;
-  if (typeof path === "string") return path;
-  if (typeof value === "string") {
-    throw new TypeError(
-      `${what} takes an imported transform, not a file path: import codemod from ${JSON.stringify(value.startsWith(".") ? value : `./${value}`)}, then pass codemod`,
-    );
-  }
-  if (typeof value === "function") {
-    throw new TypeError(
-      `${what} was given the transform's code: the workflow was loaded without the codemod build, which turns imported transforms into references to their files. Run it with the codemod CLI, or with runWorkflow(path) from codemod/host or codemod/testing`,
-    );
-  }
-  throw new TypeError(
-    `${what} takes an imported transform (import codemod from "./scripts/codemod.ts")`,
-  );
 }
 
 /** `astGrep`'s rules as a list of JSON objects, or why they are not. */
@@ -624,7 +603,7 @@ function policyOf(options: unknown, what: string): Policy {
   if (options === undefined) return { attempts: 1, retryDelay: 0, timeout: undefined };
   if (isRecord(options) && "state" in options) {
     throw new TypeError(
-      `${what}: steps take no \`state\`: give values to the task itself (a function step's variables, jssg \`params\`, shell \`env\`) and read what it found from its result`,
+      `${what}: steps take no \`state\`: give values to the task itself (a function step's or callback's variables, shell \`env\`) and read what it found from its result`,
     );
   }
   onlyKeys(options, ["retries", "retryDelay", "timeout"], what);
@@ -838,13 +817,11 @@ export function createRuntime(host: Host) {
       }) as TaskContent;
     } else if (isTask(task) && task[TASK] === "host") {
       content = task.content;
-      if (task.reducer) {
-        const { callback, initial } = task.reducer;
-        content = {
-          ...content,
-          reduce: { callback: callback.id, captures: capturesOf(callback), initial },
-        };
-        fn = callback.fn;
+      for (const [field, callback] of Object.entries(task.callbacks ?? {})) {
+        content = withField(content, field, {
+          callback: callback.id,
+          captures: capturesOf(callback) ?? {},
+        });
       }
     } else {
       throw new TypeError(`${described}: expected a task such as forEachFile(...) or a function`);
@@ -1035,6 +1012,15 @@ function isTask(value: unknown): value is Task {
   return isRecord(value) && TASK in value;
 }
 
+/** `content` with `value` at a dotted `field` (`method.function`). */
+function withField(content: TaskContent, field: string, value: Json): TaskContent {
+  const [head, ...tail] = field.split(".");
+  if (head === undefined) return content;
+  if (tail.length === 0) return { ...content, [head]: value } as TaskContent;
+  const inner = isRecord(content[head]) ? (content[head] as TaskContent) : ({} as TaskContent);
+  return { ...content, [head]: withField(inner, tail.join("."), value) } as TaskContent;
+}
+
 function withoutUndefined(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutUndefined);
   if (isRecord(value) && Object.getPrototypeOf(value) === Object.prototype) {
@@ -1055,7 +1041,15 @@ function normalizeSelector(selector: unknown): Selector {
       "forEachFile: the selector must be a glob, an array of globs, or an object",
     );
   }
-  const known = new Set(["include", "exclude", "language", "containing", "concurrency"]);
+  const known = new Set([
+    "include",
+    "exclude",
+    "language",
+    "containing",
+    "concurrency",
+    "semanticAnalysis",
+    "capabilities",
+  ]);
   for (const key of Object.keys(selector)) {
     if (!known.has(key)) throw new TypeError(`forEachFile: unknown selector field '${key}'`);
   }
@@ -1078,6 +1072,26 @@ function normalizeSelector(selector: unknown): Selector {
     }
     normalized.concurrency = concurrency;
   }
+  const { semanticAnalysis, capabilities } = selector;
+  if (semanticAnalysis !== undefined) {
+    const mode = isRecord(semanticAnalysis) ? semanticAnalysis.mode : semanticAnalysis;
+    if (!["none", "file", "workspace"].includes(mode as string)) {
+      throw new TypeError(
+        'forEachFile: semanticAnalysis must be "none", "file", "workspace" or { mode, root }',
+      );
+    }
+    checkJson(semanticAnalysis, "forEachFile: semanticAnalysis");
+    normalized.semanticAnalysis = semanticAnalysis;
+  }
+  if (capabilities !== undefined) {
+    const known = ["fs", "fetch", "child_process"];
+    if (!Array.isArray(capabilities) || !capabilities.every((c) => known.includes(c))) {
+      throw new TypeError(
+        'forEachFile: capabilities must be an array of "fs", "fetch" and "child_process"',
+      );
+    }
+    normalized.capabilities = [...capabilities];
+  }
   // Neither include nor language: the package's languages from codemod.yaml.
   return normalized;
 }
@@ -1099,8 +1113,6 @@ function defaultLabel(position: number, content: TaskContent): string {
       return `step #${position}`;
     case "shell":
       return `shell ${truncate(content.command)}`;
-    case "jssg":
-      return `jssg ${String(content.path)}`;
     case "astGrep": {
       const ids = (content.rules as { id?: unknown }[]).map((rule) => rule.id).filter(Boolean);
       return ids.length ? `astGrep ${ids.join(", ")}` : "astGrep";

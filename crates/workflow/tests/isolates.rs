@@ -490,35 +490,79 @@ export default async function main() {}
 }
 
 #[test]
-fn a_jssg_reducer_must_be_written_inline() {
+fn jssg_was_removed_and_says_what_replaced_it() {
     let h = Harness::new();
     let error = load_error(
         &h,
         r#"
 import { step, jssg } from "codemod/workflow";
-import transform from "./transform.ts";
-const add = (total: number) => total + 1;
-export default async function main() {
-  await step(jssg(transform, { reduce: add, initial: 0 }));
-}
+export default async function main() {}
 "#,
     );
-    assert!(error.contains("reduce must be written inline"), "{error}");
+    assert!(
+        error.contains("jssg was removed: per-file logic is a forEachFile callback"),
+        "{error}"
+    );
+    assert!(
+        error.contains("import migrate from \"./scripts/migrate.ts\""),
+        "{error}"
+    );
 }
 
 #[test]
-fn a_jssg_reducer_needs_an_initial_value() {
+fn file_paths_where_callbacks_go_are_build_errors() {
     let h = Harness::new();
-    let report = h.start(
-        r#"
-import { step, jssg } from "codemod/workflow";
-import transform from "./transform.ts";
+    for (source, message) in [
+        (
+            r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() { await step(forEachFile("src/**", "./scripts/rename-imports.ts")); }
+"#,
+            "forEachFile takes a callback, not a file path: export the function as the default of \"./scripts/rename-imports.ts\", add import renameImports from \"./scripts/rename-imports.ts\" at the top of the workflow, and write forEachFile(selector, renameImports)",
+        ),
+        (
+            r#"
+import { step, shard } from "codemod/workflow";
+export default async function main() { await step(shard({ method: { function: "./scripts/shard.ts" } })); }
+"#,
+            "shard's method.function takes a function, not a file path",
+        ),
+        (
+            r#"
+import { step, shard } from "codemod/workflow";
+export default async function main() { await step(shard({ method: { type: "directory", maxFilesPerShard: 1 }, jssg: { path: "./t.ts" } })); }
+"#,
+            "shard's jssg was removed",
+        ),
+        (
+            r#"
+import { step, forEachFile } from "codemod/workflow";
+import { migrate } from "./scripts/migrate.ts";
+export default async function main() { await step(forEachFile("src/**", migrate)); }
+"#,
+            "forEachFile takes a file's default export, and 'migrate' is the export 'migrate'",
+        ),
+        (
+            r#"
+import { step, forEachFile } from "codemod/workflow";
+import migrate from "some-package/migrate";
+export default async function main() { await step(forEachFile("src/**", migrate)); }
+"#,
+            "\"some-package/migrate\" is a package",
+        ),
+        (
+            r#"
+import { step, forEachFile } from "codemod/workflow";
+import migrate from "./scripts/migrate.ts";
 export default async function main() {
-  await step(jssg(transform, { reduce: (total) => total }));
+  await step(forEachFile("src/**", migrate));
+  migrate({ path: "x", text: "" });
 }
 "#,
-        Value::Null,
-    );
-    let error = output(&report).unwrap_err();
-    assert!(error.contains("reduce needs an initial value"), "{error}");
+            "'migrate' is the callback imported from \"./scripts/migrate.ts\": only give it to forEachFile(...)",
+        ),
+    ] {
+        let error = load_error(&h, source);
+        assert!(error.contains(message), "{source}\n{error}");
+    }
 }

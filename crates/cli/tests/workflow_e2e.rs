@@ -28,6 +28,15 @@ export default function transform(root: any) {
 }
 "#,
         );
+        // The same change as a callback, for workflow.ts.
+        fixture.package_file(
+            "scripts/replace.ts",
+            r#"
+export default function replace(file: { text: string; write(text: string): void }) {
+  if (file.text.includes("var ")) file.write(file.text.replaceAll("var ", "let "));
+}
+"#,
+        );
         fixture.target_file("src/a.ts", "var a = 1;\n");
         fixture.target_file("src/b.ts", "const b = 2;\n");
         fixture
@@ -172,10 +181,10 @@ fn jsonl_output_has_one_event_per_line() {
 }
 
 const TS_FAILING: &str = r#"
-import { step, jssg } from "codemod/workflow";
-import codemod from "./scripts/codemod.ts";
+import { step, forEachFile } from "codemod/workflow";
+import replace from "./scripts/replace.ts";
 export default async function main() {
-  await step("Replace var", jssg(codemod, { include: "src/**/*.ts" }));
+  await step("Replace var", forEachFile("src/**/*.ts", replace));
   await step("Check", () => { throw new Error("not ready"); });
 }
 "#;
@@ -253,11 +262,11 @@ fn a_manual_step_waits_until_resumed_with_approval() {
     fixture.package_file(
         "workflow.ts",
         r#"
-import { step, approval, jssg } from "codemod/workflow";
-import codemod from "./scripts/codemod.ts";
+import { step, approval, forEachFile } from "codemod/workflow";
+import replace from "./scripts/replace.ts";
 export default async function main() {
   await step(approval("Apply the change?"));
-  await step(jssg(codemod, { include: "src/**/*.ts" }));
+  await step(forEachFile("src/**/*.ts", replace));
 }
 "#,
     );
@@ -299,13 +308,12 @@ fn the_harness_runs_one_test_from_a_spec_on_stdin() {
     fixture.package_file(
         "workflow.ts",
         r#"
-import { jssg, step } from "codemod/workflow";
-import codemod from "./scripts/codemod.ts";
-import missing from "./scripts/missing.ts";
+import { forEachFile, step } from "codemod/workflow";
+import replace from "./scripts/replace.ts";
 export default async function main() {
-  const found = await step("Find", jssg(codemod, { include: ["**/*.ts"], dryRun: true }));
-  await step("Replace var", jssg(codemod, { include: ["**/*.ts"] }));
-  await step("Never", jssg(missing));
+  const found = await step("Find", forEachFile("**/*.ts", (file) => file.path));
+  await step("Replace var", forEachFile("**/*.ts", replace));
+  await step("Never", forEachFile("**/*.ts", () => { throw new Error("never"); }));
   return found;
 }
 "#,
