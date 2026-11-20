@@ -10,8 +10,8 @@ pub mod utils;
 
 #[cfg(feature = "native")]
 pub use ast_grep::{
-    scan_file_with_combined_scan, with_combined_scan, with_combined_scan_of, AstGrepModule,
-    DefaultParseLanguage, ParseSemanticProvider,
+    scan_file_with_combined_scan, scan_text_with_combined_scan, with_combined_scan,
+    with_combined_scan_of, AstGrepModule, DefaultParseLanguage, ParseSemanticProvider,
 };
 /// What hosts that bind the ast-grep API themselves (the Node.js addon)
 /// share with this one.

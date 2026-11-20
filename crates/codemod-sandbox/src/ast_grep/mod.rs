@@ -50,7 +50,10 @@ pub(crate) mod scanner;
 pub(crate) mod serde;
 
 #[cfg(feature = "native")]
-pub use native::{scan_file_with_combined_scan, with_combined_scan, with_combined_scan_of};
+pub use native::{
+    scan_file_with_combined_scan, scan_text_with_combined_scan, with_combined_scan,
+    with_combined_scan_of,
+};
 
 /// The `codemod/ast-grep` runtime module. Public so other hosts can register
 /// it in their own QuickJS runtimes.

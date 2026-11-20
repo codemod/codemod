@@ -72,7 +72,17 @@ pub fn scan_file_with_combined_scan(
     apply_fixes: bool,
 ) -> Result<(Vec<AstGrepMatch>, bool, Option<String>), AstGrepError> {
     let content = fs::read_to_string(file_path)?;
+    scan_text_with_combined_scan(file_path, &content, combined_scan, apply_fixes)
+}
 
+/// [`scan_file_with_combined_scan`] on text already read from `file_path`
+/// (its extension picks the language).
+pub fn scan_text_with_combined_scan(
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+    apply_fixes: bool,
+) -> Result<(Vec<AstGrepMatch>, bool, Option<String>), AstGrepError> {
     let language_str = detect_language_from_extension(
         file_path
             .extension()
@@ -88,10 +98,10 @@ pub fn scan_file_with_combined_scan(
     quiet_scan_panics();
     SCANNING.with(|scanning| scanning.set(true));
     let scanned = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        let root = AstGrep::doc(StrDoc::new(&content, language));
+        let root = AstGrep::doc(StrDoc::new(content, language));
         scan_content(
             &root,
-            &content,
+            content,
             file_path.to_string_lossy().to_string(),
             combined_scan,
             apply_fixes,

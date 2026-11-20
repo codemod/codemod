@@ -72,23 +72,6 @@ impl TaskContext<'_> {
             }
         }
     }
-
-    /// A progress callback for `CodemodExecutionConfig` walks.
-    pub fn walk_progress(&self) -> butterflow_core::execution::ProgressCallback {
-        let events = Arc::clone(&self.run.events);
-        let position = self.position;
-        butterflow_core::execution::ProgressCallback {
-            callback: Arc::new(Box::new(move |_task, _path, status, total, processed| {
-                if status == "increment" || status == "finish" {
-                    events.emit(Event::StepProgress {
-                        position,
-                        processed: *processed as usize,
-                        total: total.copied().unwrap_or(*processed) as usize,
-                    });
-                }
-            })),
-        }
-    }
 }
 
 #[derive(Debug, Serialize)]
