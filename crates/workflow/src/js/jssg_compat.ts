@@ -8,7 +8,14 @@
 // analysis), `options.params`, `options.matrixValues`, `options.language`,
 // `options.targetDir` and `options.matches` (from `getSelector`, whose files
 // without a match are skipped), a string, `null` or `{ edit, data }` result,
-// and `root.rename(path)`.
+// `root.rename(path)`, and `jssgTransform` on other files.
+//
+// `jssgTransform` changes other files from a transform. The engine keeps
+// those changes with the step's other unwritten changes (`__jssgCompatHost`,
+// crates/workflow/src/tasks/for_each_file.rs): `begin` gives the file's text
+// with what other files' transforms did to it so far, and holds the file
+// until its transform is done; the changes the transform made to other files
+// are kept only if it succeeds.
 
 import { parse } from "codemod/ast-grep";
 
@@ -16,6 +23,18 @@ import { parse } from "codemod/ast-grep";
 export interface JssgModule {
   default?: unknown;
   getSelector?: unknown;
+}
+
+/**
+ * `__jssgCompatHost`, in `forEachFile` isolates that run one file at a time
+ * per worker (crates/workflow/src/tasks/for_each_file.rs).
+ */
+interface CompatHost {
+  /**
+   * Start running a transform on the file at `path`: its text as the step
+   * has it now. With `discard`, what the transform changes is dropped.
+   */
+  begin(path: string, discard: boolean): string | null;
 }
 
 /** The file a `forEachFile` callback gets. */
@@ -132,10 +151,11 @@ async function apply(
  */
 export async function jssgFile(
   module: JssgModule,
-  file: CallbackFile,
+  callbackFile: CallbackFile,
   options: JssgOptions = {},
 ): Promise<unknown> {
-  if (!underBase(file.path, options.basePath)) return undefined;
+  if (!underBase(callbackFile.path, options.basePath)) return undefined;
+  const file = begin(callbackFile, options.dryRun === true);
   const applied = await apply(module, file, options);
   if (options.dryRun) return applied.data;
   if (applied.text !== undefined) file.write(applied.text);
@@ -155,10 +175,29 @@ export async function jssgWouldChange(
 ): Promise<true | "matched" | undefined> {
   if (!underBase(file.path, options.basePath)) return undefined;
   // As the YAML engine's shard prescan did: the transform sees a dry run.
-  const applied = await apply(module, file, { ...options, dryRun: true });
+  const applied = await apply(module, begin(file, true), { ...options, dryRun: true });
   if (applied.text !== undefined || applied.renamed !== undefined) return true;
   if (!applied.skipped && "getSelector" in module) return "matched";
   return undefined;
+}
+
+/**
+ * The file with the text the step has for it now, which other files'
+ * transforms may have changed with `jssgTransform`; `discard` drops what
+ * this one changes. Without the engine's host (several files in flight per
+ * worker, or the Node.js host), the callback's file as it is, and
+ * `jssgTransform` on other files fails.
+ */
+function begin(file: CallbackFile, discard: boolean): CallbackFile {
+  const host = (globalThis as { __jssgCompatHost?: CompatHost }).__jssgCompatHost;
+  const text = host?.begin(file.path, discard) ?? null;
+  if (text === null || text === file.text) return file;
+  return {
+    path: file.path,
+    text,
+    write: (next) => file.write(next),
+    rename: (to) => file.rename(to),
+  };
 }
 
 /** Whether `path` is under `base`, a directory of the target (all of it when not given). */

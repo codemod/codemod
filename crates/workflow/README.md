@@ -44,8 +44,8 @@ renders events and answers prompts.
   history entry.
 - `codemod/llm` inside JSSG transforms, callbacks and function steps.
 - Creating or changing other files from a `forEachFile` callback (`jssgTransform`, `fs` writes).
-- Cross-file `jssgTransform` from `forEachFile` callbacks, which jssg transforms in
-  `workflow.yaml` files can call.
+  Jssg transforms from `workflow.yaml` files may still change other files with
+  `jssgTransform`, through the translation's adapter, as before.
 - `dependencyGraph` and
   `registry` on the Node.js host.
 - One rate limit for registry requests across the whole run: each batch of

@@ -1771,3 +1771,57 @@ export default async function main() {
         })
     );
 }
+
+/// Only jssg transforms from workflow.yaml (the translation's adapter) may
+/// change other files from a forEachFile callback; a callback of its own
+/// still may not, and what it tried is not written.
+#[test]
+fn a_for_each_file_callback_cannot_change_other_files_with_jssg_transform() {
+    let h = Harness::new();
+    h.write("a.ts", "const a = 1;\n");
+    h.write("other.ts", "const other = 1;\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  await step("Edit", forEachFile("a.ts", async (file) => {
+    await jssgTransform((root) => root.root().text().replace("1", "2"), `${target}/other.ts`, "typescript");
+    file.write("const a = 2;\n");
+  }));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("jssgTransform() is not supported in forEachFile callbacks"),
+        "{error}"
+    );
+    assert_eq!(h.read("a.ts"), "const a = 1;\n");
+    assert_eq!(h.read("other.ts"), "const other = 1;\n");
+}
+
+#[test]
+fn a_function_step_renames_what_it_changes_with_jssg_transform() {
+    let h = Harness::new();
+    h.write("styles.less", "@color: red;\n");
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  await step("Rename", async () => {
+    await jssgTransform((root) => {
+      root.rename("styles.css");
+      return root.root().text().replace("@color", "--color");
+    }, `${target}/styles.less`, "css");
+  });
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert!(!h.exists("styles.less"));
+    assert_eq!(h.read("styles.css"), "--color: red;\n");
+}
