@@ -9,7 +9,7 @@ The `shard` task splits a large migration into groups of files ("shards"), for e
 ## How it works
 
 1. A `shard` step finds the files the transform would change and groups them.
-2. The workflow runs the transform for every shard, limited to that shard's files.
+2. The workflow runs the transform for every shard, limited to that shard's files, one shard at a time when each gets its own branch and pull request.
 
 ```ts workflow.ts
 import { step, shard, forEachFile, jssg, approval, branch, commit, pullRequest } from "codemod/workflow";
@@ -21,7 +21,8 @@ export default async function main() {
     jssg: { path: "scripts/codemod.ts", language: "tsx", include: ["**/*.{ts,tsx}"] },
   }));
 
-  await Promise.all(shards.map(async (current, index) => {
+  // One shard at a time: git steps share one checkout.
+  for (const [index, current] of shards.entries()) {
     await step(approval(`Migrate ${current.name}?`));
     await step(branch(`codemod-migrate-${index}`));
     await step(`Migrate ${current.name}`, forEachFile(
@@ -30,7 +31,7 @@ export default async function main() {
     ));
     await step(commit(`refactor: migrate ${current.name}`));
     await step(pullRequest({ title: `refactor: migrate ${current.name}` }));
-  }));
+  }
 }
 ```
 
@@ -38,15 +39,19 @@ export default async function main() {
 - **`files: current._meta_files`** limits each transform run to its shard's files.
 - `branch`, `commit` and `pullRequest` only touch git when the run uses `--managed-git`. See [Workflow Reference](/community/workflows/reference#tasks).
 
+<Warning>
+Don't run shards that use git steps at the same time, for example with `Promise.all`. Git steps share the run's one checkout, so one shard could commit on another shard's branch. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`. Shards without git steps can still run in parallel. Separate checkouts per shard are planned as an explicit API.
+</Warning>
+
 <Note>
-In `workflow.yaml`, the same pattern is a `shard` step with `output_state`, followed by a matrix node with `from_state`. See the [workflow.yaml reference](/community/workflows/yaml).
+In `workflow.yaml`, the same pattern is a `shard` step with `output_state`, followed by a matrix node with `from_state`. A matrix node with `branch_name`, `pull_request` or a step `commit` runs its values one at a time. See the [workflow.yaml reference](/community/workflows/yaml).
 </Note>
 
 ## File discovery
 
 Files are filtered before they reach any shard method:
 
-- With `jssg`, the transform runs in dry-run mode on the files matching its `include` under `target`, and only files it would change are kept. If it changes none, files its selector matches are used instead.
+- With `jssg`, the transform runs in dry-run mode on the files matching its `include` under `target`, and only files it would change are kept. If it changes none, files its selector matches are used instead. If the transform fails on every file, the shard step fails.
 - Without `jssg`, every file matching `filePattern` under `target` is eligible.
 
 <ParamField path="target" type="string" default=".">

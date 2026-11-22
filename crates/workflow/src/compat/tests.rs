@@ -321,7 +321,10 @@ fn the_documented_features_translate_and_build() {
     expect("\"pr_size\": 20");
     expect("\"mode\": \"safe\"");
     expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", jssg: { path: \"scripts/codemod.ts\", language: \"tsx\", params }, previous: state[\"shards\"] }));");
-    expect("(state[\"shards\"] ?? []).map((matrix: Matrix, index: number) => applyNodeFor(params, state, matrix, index))");
+    // Git steps share one checkout: the matrix with a pull request runs one
+    // value at a time; the one without runs its values together.
+    expect("const values: Matrix[] = (state[\"shards\"] ?? []);\n  if (!Array.isArray(values)) {\n    throw new Error(\"matrix values must be a list\");\n  }\n  for (let index = 0; index < values.length; index++) {\n    await applyNodeFor(params, state, values[index], index);\n  }");
+    expect(".map((matrix: Matrix, index: number) => reportNodeFor(params, matrix, index))");
     expect("await step(approval(\"Run 'Apply transforms'?\"));");
     expect("const branchName = `codemod-apply-${index}`;");
     expect("forEachFile({ language: \"tsx\" }, jssg(\"scripts/codemod.ts\", {\n    files: matrix?._meta_files,\n    params,\n    matrix: matrix ?? undefined,\n  }))");
@@ -340,6 +343,71 @@ fn the_documented_features_translate_and_build() {
     assert!(warnings.contains("runtime"), "{warnings}");
     assert!(warnings.contains("timeout_ms"), "{warnings}");
     assert!(warnings.contains("args, env and working_dir"), "{warnings}");
+}
+
+#[test]
+fn a_matrix_with_any_git_step_runs_one_value_at_a_time() {
+    let matrix = |git: &str, steps: &str| {
+        format!(
+            r#"
+version: "1"
+templates:
+  - id: save
+    name: Save
+    steps:
+      - name: Save
+        run: echo save
+        commit:
+          message: save
+nodes:
+  - id: apply
+    name: Apply
+    strategy:
+      type: matrix
+      values:
+        - team: a
+        - team: b
+{git}    steps:
+{steps}"#
+        )
+    };
+    let plain_step = "      - name: Run\n        run: echo hi\n";
+    let cases = [
+        (
+            "branch",
+            matrix(
+                "    branch_name: \"codemod-${{ matrix.team }}\"\n",
+                plain_step,
+            ),
+        ),
+        (
+            "commit",
+            matrix(
+                "",
+                "      - name: Run\n        run: echo hi\n        commit:\n          message: hi\n",
+            ),
+        ),
+        (
+            "template commit",
+            matrix(
+                "",
+                "      - name: Save\n        use:\n          template: save\n",
+            ),
+        ),
+    ];
+    for (name, yaml) in cases {
+        let source = source_of(&yaml);
+        assert!(
+            source.contains("for (let index = 0; index < values.length; index++)"),
+            "{name}: not sequential:\n{source}"
+        );
+        assert!(
+            !source.contains(".map((matrix: Matrix"),
+            "{name}:\n{source}"
+        );
+    }
+    let source = source_of(&matrix("", plain_step));
+    assert!(source.contains(".map((matrix: Matrix"), "{source}");
 }
 
 #[test]

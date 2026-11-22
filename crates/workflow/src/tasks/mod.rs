@@ -42,6 +42,9 @@ pub(crate) struct TaskContext<'a> {
     /// When the step began to wait, for `sleep` and `waitForEvent`, in
     /// milliseconds since the epoch.
     pub since: Option<i64>,
+    /// Other steps were still running when the step was issued
+    /// (`StartRequest.alongside` in `js/orchestrator.ts`).
+    pub alongside: bool,
 }
 
 impl TaskContext<'_> {

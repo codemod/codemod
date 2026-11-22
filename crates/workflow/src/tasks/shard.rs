@@ -123,6 +123,12 @@ fn prescan(
         request.base_path = Some(shard_target.to_string());
     }
     let outcome = jssg::execute(task, &request, true, None)?;
+    if jssg::all_failed(&outcome) {
+        return Err(TaskError::Failed(format!(
+            "the shard prescan failed on every file; first error: {}",
+            outcome.failures[0].1
+        )));
+    }
     let target = &task.run.target;
     let to_relative = |path: &Path| relative(target, path);
     let modified: Vec<String> = outcome
