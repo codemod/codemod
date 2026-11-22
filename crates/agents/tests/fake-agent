@@ -1,0 +1,6 @@
+#!/bin/sh
+# The stand-in agent for tests/agents.rs. Each test links to this file and
+# writes what to run next to the link: executing a file the test process has
+# just written can fail with "Text file busy" on Linux, when a child forked
+# by another test thread still holds it open for writing.
+exec /bin/sh "${0%/*}/script" "$@"

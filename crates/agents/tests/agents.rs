@@ -4,7 +4,6 @@
 #![cfg(unix)]
 
 use std::collections::BTreeSet;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -26,6 +25,11 @@ struct Fake {
 impl Fake {
     /// An executable that records its arguments, environment and stdin,
     /// then runs `body`. Asked for `--help`, it prints `help` instead.
+    ///
+    /// The executable is a link to `tests/fake-agent`, which runs the script
+    /// written here. Writing the executable itself would let it fail to start
+    /// with "Text file busy" on Linux: a process another test thread forks
+    /// while the file is open for writing keeps it open until it execs.
     fn with_help(help: &str, body: &str) -> Self {
         let dir = TempDir::new().unwrap();
         let script = format!(
@@ -37,9 +41,9 @@ impl Fake {
              {body}\n",
             dir = dir.path().display()
         );
-        let path = dir.path().join("agent");
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.path().join("script"), script).unwrap();
+        let stand_in = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake-agent");
+        std::os::unix::fs::symlink(stand_in, dir.path().join("agent")).unwrap();
         Self { dir }
     }
 
@@ -769,7 +773,10 @@ fn tool_calls_that_change_files_say_which_and_how() {
     let changes = |agent: &str, fixture: &str| {
         let fake = Fake::replaying(fixture);
         let cwd = TempDir::new().unwrap();
-        let (_, events) = run_with(agent, &fake, task(cwd.path()));
+        let (result, events) = run_with(agent, &fake, task(cwd.path()));
+        if let Err(error) = result {
+            panic!("{agent}: {error}");
+        }
         events
             .into_iter()
             .find_map(|event| match event {
