@@ -83,6 +83,49 @@ pub fn scan_text_with_combined_scan(
     combined_scan: &CombinedScan<SupportLang>,
     apply_fixes: bool,
 ) -> Result<(Vec<AstGrepMatch>, bool, Option<String>), AstGrepError> {
+    let scan_result = scan_text(file_path, content, combined_scan, apply_fixes)?;
+    let file_modified = scan_result.file_modified;
+    let new_content = if file_modified {
+        Some(scan_result.new_content)
+    } else {
+        None
+    };
+
+    Ok((scan_result.matches, file_modified, new_content))
+}
+
+/// One pass of rules over a file's text, with their fixes applied.
+pub struct ScanPass {
+    /// Matches found, of every rule, overlapping ones included.
+    pub matches: usize,
+    /// Fixes applied: of overlapping matches, only the outer one is fixed.
+    pub fixes: usize,
+    /// The new text, when the fixes changed it.
+    pub content: Option<String>,
+}
+
+/// Scan text already read from `file_path` (its extension picks the
+/// language) and apply the fixes, counting what was found and fixed.
+pub fn scan_pass(
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+) -> Result<ScanPass, AstGrepError> {
+    let scanned = scan_text(file_path, content, combined_scan, true)?;
+    Ok(ScanPass {
+        matches: scanned.matches.len(),
+        fixes: scanned.fixes_applied,
+        content: (scanned.file_modified && scanned.new_content != content)
+            .then_some(scanned.new_content),
+    })
+}
+
+fn scan_text(
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+    apply_fixes: bool,
+) -> Result<crate::ast_grep::scanner::ScanResult, AstGrepError> {
     let language_str = detect_language_from_extension(
         file_path
             .extension()
@@ -108,18 +151,9 @@ pub fn scan_text_with_combined_scan(
         )
     }));
     SCANNING.with(|scanning| scanning.set(false));
-    let scan_result = scanned.map_err(|_| {
+    scanned.map_err(|_| {
         AstGrepError::Config(format!("ast-grep could not scan '{}'", file_path.display()))
-    })??;
-
-    let file_modified = scan_result.file_modified;
-    let new_content = if file_modified {
-        Some(scan_result.new_content)
-    } else {
-        None
-    };
-
-    Ok((scan_result.matches, file_modified, new_content))
+    })?
 }
 
 #[cfg(test)]

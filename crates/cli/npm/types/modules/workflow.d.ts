@@ -390,53 +390,6 @@ declare module "codemod:workflow" {
   ) => Output | undefined | void | PromiseLike<Output | undefined | void>;
 
   /**
-   * Runs `callback` once for every selected file, in parallel, in isolates.
-   * The callback may be async. Returned values are collected into `outputs`.
-   *
-   * Write the callback inline, or import it from a file of the package
-   * whose default export it is (`import migrate from "./scripts/migrate.ts"`);
-   * the workflow body does not load that file, and the step runs again on
-   * resume when the file, or a file it imports, changes. Variables from
-   * outside an inline callback arrive as frozen copies and must be JSON;
-   * assigning to them is a build error. Imports (`codemod/ast-grep`,
-   * packages, files next to the workflow) are available inside.
-   *
-   * @example
-   * ```ts
-   * import { parse } from "codemod/ast-grep";
-   *
-   * const usages = await step(forEachFile({ language: "typescript", containing: "moment" }, (file) => {
-   *   const found = parse(file).root().findAll({ rule: { pattern: 'import $X from "moment"' } });
-   *   return found.length ? file.path : undefined;
-   * }));
-   * usages.outputs; // readonly string[]
-   * ```
-   */
-  export function forEachFile<Output = undefined>(
-    selector: FileSelector,
-    callback: (file: WorkflowFile) => PromiseLike<Checked<Output>>,
-  ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
-  export function forEachFile<Output = undefined>(
-    selector: FileSelector,
-    callback: (file: WorkflowFile) => Checked<Output>,
-  ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
-  /** Visits the files of the package's `targets.languages` (codemod.yaml). */
-  export function forEachFile<Output = undefined>(
-    callback: (file: WorkflowFile) => PromiseLike<Checked<Output>>,
-  ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
-  export function forEachFile<Output = undefined>(
-    callback: (file: WorkflowFile) => Checked<Output>,
-  ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
-  /** A callback typed as a `FileCallback`, as one imported from its file usually is. */
-  export function forEachFile<Output>(
-    selector: FileSelector,
-    callback: FileCallback<Checked<Output>>,
-  ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
-  export function forEachFile<Output>(
-    callback: FileCallback<Checked<Output>>,
-  ): Task<ForEachFileResult<Exclude<Output, void | undefined>>>;
-
-  /**
    * Which files `forEachFile` applies `astGrep` rules to: a glob, a list of
    * globs, or an object. Without `include`, the files of the rules'
    * languages. Selected files of other languages are skipped: each rule
@@ -470,6 +423,46 @@ declare module "codemod:workflow" {
     selector: AstGrepSelector,
     rules: AstGrepHandler,
   ): Task<AstGrepResult>;
+
+  /**
+   * Runs `callback` once for every selected file, in parallel, in isolates.
+   * The callback may be async. Returned values are collected into `outputs`.
+   *
+   * Write the callback inline, or import it from a file of the package
+   * whose default export it is (`import migrate from "./scripts/migrate.ts"`);
+   * the workflow body does not load that file, and the step runs again on
+   * resume when the file, or a file it imports, changes. Variables from
+   * outside an inline callback arrive as frozen copies and must be JSON;
+   * assigning to them is a build error. Imports (`codemod/ast-grep`,
+   * packages, files next to the workflow) are available inside.
+   *
+   * @example
+   * ```ts
+   * import { parse } from "codemod/ast-grep";
+   *
+   * const usages = await step(forEachFile({ language: "typescript", containing: "moment" }, (file) => {
+   *   const found = parse(file).root().findAll({ rule: { pattern: 'import $X from "moment"' } });
+   *   return found.length ? file.path : undefined;
+   * }));
+   * usages.outputs; // readonly string[]
+   * ```
+   */
+  export function forEachFile<Returned>(
+    selector: FileSelector,
+    callback: (file: WorkflowFile) => Returned & NoInfer<CallbackReturn<Returned>>,
+  ): Task<ForEachFileResult<Exclude<Awaited<Returned>, void | undefined>>>;
+  /** Visits the files of the package's `targets.languages` (codemod.yaml). */
+  export function forEachFile<Returned>(
+    callback: (file: WorkflowFile) => Returned & NoInfer<CallbackReturn<Returned>>,
+  ): Task<ForEachFileResult<Exclude<Awaited<Returned>, void | undefined>>>;
+
+  /**
+   * What a `forEachFile` callback may return: JSON or nothing, or a promise
+   * of either. Anything else is replaced by a `NotJson` marker that says why,
+   * so the type error points at the returned value.
+   */
+  export type CallbackReturn<Returned> =
+    Returned extends PromiseLike<infer Value> ? PromiseLike<JsonCompatible<Value>> : JsonCompatible<Returned>;
 
   /**
    * A result for tasks that do nothing in some runs: shell commands, agents
@@ -677,7 +670,20 @@ declare module "codemod:workflow" {
    * })));
    * ```
    */
-  export function astGrep(rules: AstGrepRules): AstGrepHandler;
+  export function astGrep(rules: AstGrepRules, options?: AstGrepOptions): AstGrepHandler;
+
+  export interface AstGrepOptions {
+    /**
+     * Run the rules again on the text they fixed, until it no longer
+     * changes: `true` makes up to 10 passes over each file, a number at most
+     * that many. Of overlapping matches (`console.log(console.log(x))`) one
+     * pass fixes the outer one, so the inner one needs another pass. Passes
+     * run on the text in memory, so a dry run shows the same result. A file
+     * still changing after the last pass is a failure and is left as it was
+     * (a fix may match its own output).
+     */
+    repeat?: boolean | number;
+  }
 
   export type ShardMethod =
     | {

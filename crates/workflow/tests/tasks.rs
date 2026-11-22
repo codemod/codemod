@@ -693,7 +693,15 @@ fn for_each_file_refuses_what_a_transform_cannot_take() {
     for (call, message) in [
         (
             r#"forEachFile({ include: "a/**" }, astGrep(rules, { include: "b/**" }))"#,
-            "astGrep takes only rules: select the files with forEachFile's selector",
+            "astGrep: 'include' goes in forEachFile's selector: forEachFile({ include }, astGrep(rules))",
+        ),
+        (
+            r#"forEachFile(astGrep(rules, { repeat: 0 }))"#,
+            "astGrep: repeat must be true (up to 10 passes) or the most passes to make",
+        ),
+        (
+            r#"forEachFile(astGrep(rules, { again: true }))"#,
+            "astGrep: unknown option 'again' (it takes repeat)",
         ),
         (
             r#"astGrep(rules)"#,
@@ -1302,6 +1310,116 @@ export default async function main() {
     );
     assert_eq!(output(&report).unwrap(), json!(2));
     assert_eq!(h.read("a.js"), "logger.info(console.log(1));\n");
+}
+
+const CONSOLE_TO_LOGGER: &str = r#"{ id: "log", language: "javascript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" }"#;
+
+/// With `repeat`, the rules run again on the text they fixed until it no
+/// longer changes: the inner match of a nested pair is fixed too, in one
+/// step. `matches` counts each fix once.
+#[test]
+fn ast_grep_repeats_until_nothing_changes() {
+    let h = Harness::new();
+    h.write(
+        "a.js",
+        "console.log(console.log(console.log(1)));
+console.log(2);
+",
+    );
+    h.write(
+        "b.js",
+        "const b = 1;
+",
+    );
+    let report = h.start(
+        &format!(
+            r#"
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
+export default async function main() {{
+  const result = await step(forEachFile(astGrep({CONSOLE_TO_LOGGER}, {{ repeat: true }})));
+  return [result.matches, result.changes.written];
+}}
+"#
+        ),
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([4, ["a.js"]]));
+    assert_eq!(
+        h.read("a.js"),
+        "logger.info(logger.info(logger.info(1)));\nlogger.info(2);\n"
+    );
+    assert_eq!(report.steps.len(), 1);
+}
+
+/// A dry run repeats on the text in memory, so it reports the diff a real
+/// run makes, though nothing is written between passes.
+#[test]
+fn a_dry_run_repeats_to_the_same_diff_as_a_real_run() {
+    let source = format!(
+        r#"
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
+export default async function main() {{
+  const result = await step(forEachFile(astGrep({CONSOLE_TO_LOGGER}, {{ repeat: true }})));
+  return result.matches;
+}}
+"#
+    );
+    let input = "console.log(console.log(1));\n";
+    let diffs = |h: &Harness| -> Vec<(String, String)> {
+        h.summary
+            .diffs()
+            .into_iter()
+            .map(|diff| (diff.path, diff.diff_text))
+            .collect()
+    };
+    let dry = Harness::new();
+    dry.write("a.js", input);
+    let report = dry.dry_run(&source);
+    assert_eq!(output(&report).unwrap(), json!(2));
+    assert_eq!(dry.read("a.js"), input, "a dry run writes nothing");
+    let real = Harness::new();
+    real.write("a.js", input);
+    let report = real.start(&source, Value::Null);
+    assert_eq!(output(&report).unwrap(), json!(2));
+    assert_eq!(real.read("a.js"), "logger.info(logger.info(1));\n");
+    assert_eq!(diffs(&dry), diffs(&real));
+    assert!(
+        diffs(&dry)[0].1.contains("+logger.info(logger.info(1));"),
+        "{:?}",
+        diffs(&dry)
+    );
+}
+
+/// A fix that matches its own output would repeat forever: after the most
+/// passes the file is a failure and is left as it was.
+#[test]
+fn ast_grep_repeat_stops_at_its_most_passes() {
+    let h = Harness::new();
+    h.write("a.js", "wrap(1);\n");
+    h.write("b.js", "console.log(console.log(1));\n");
+    let report = h.start(
+        &format!(
+            r#"
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
+export default async function main() {{
+  const grow = {{ id: "grow", language: "javascript", rule: {{ pattern: "wrap($A)" }}, fix: "wrap(wrap($A))" }};
+  const result = await step(forEachFile(astGrep([grow, {CONSOLE_TO_LOGGER}], {{ repeat: 3 }})));
+  return [result.changes.written, result.failures.map((f) => f.path)];
+}}
+"#
+        ),
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([["b.js"], ["a.js"]]));
+    assert_eq!(h.read("a.js"), "wrap(1);\n");
+    let failure = report.steps[0].result.as_ref().unwrap()["failures"][0]["error"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        failure.contains("the rules still change this file after 3 passes"),
+        "{failure}"
+    );
 }
 
 #[test]

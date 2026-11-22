@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use butterflow_core::execution::CodemodExecutionConfig;
 use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
-use codemod_sandbox::{scan_text_with_combined_scan, with_combined_scan_of};
+use codemod_sandbox::{scan_pass, scan_text_with_combined_scan, with_combined_scan_of};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -24,6 +24,9 @@ pub(crate) struct Request {
     exclude: Option<Globs>,
     /// Only files whose text contains this string.
     containing: Option<String>,
+    /// Passes over each file at most: the rules run again on the text the
+    /// last pass fixed, until it no longer changes. One without.
+    repeat: Option<usize>,
 }
 
 pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
@@ -82,11 +85,43 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         let processed = AtomicUsize::new(0);
         let total = files.len();
         let every = (total / 100).max(1);
+        let passes = request.repeat.unwrap_or(1).max(1);
         // (matches, the new text when the fixes changed the file).
-        let scan_text = |path: &Path, text: &str| {
-            scan_text_with_combined_scan(path, text, &scan.combined_scan, true)
-                .map(|(found, modified, content)| (found.len(), content.filter(|_| modified)))
-                .map_err(|error| error.to_string())
+        let scan_text = |path: &Path, text: &str| -> Result<(usize, Option<String>), String> {
+            if passes == 1 {
+                return scan_text_with_combined_scan(path, text, &scan.combined_scan, true)
+                    .map(|(found, modified, content)| (found.len(), content.filter(|_| modified)))
+                    .map_err(|error| error.to_string());
+            }
+            // Repeat: run the rules on the text the last pass fixed, in
+            // memory, so a dry run ends with the same text. Of overlapping
+            // matches a pass fixes the outer one; the next finds the inner.
+            // A pass that changes the text counts the fixes it applied, the
+            // last one the matches left (of rules without a fix).
+            let mut fixed: Option<String> = None;
+            let mut matches = 0;
+            for _ in 0..passes {
+                let input = fixed.as_deref().unwrap_or(text);
+                let pass = scan_pass(path, input, &scan.combined_scan)
+                    .map_err(|error| error.to_string())?;
+                match pass.content {
+                    None => return Ok((matches + pass.matches, fixed)),
+                    Some(next) => {
+                        matches += pass.fixes;
+                        fixed = Some(next);
+                    }
+                }
+            }
+            // Every pass changed the text: one more says whether it is done.
+            let input = fixed.as_deref().unwrap_or(text);
+            let last = scan_pass(path, input, &scan.combined_scan)
+                .map_err(|error| error.to_string())?;
+            if last.content.is_some() {
+                return Err(format!(
+                    "the rules still change this file after {passes} passes, so it was left as it was; a fix may match its own output (give repeat a higher number, or change the rule)"
+                ));
+            }
+            Ok((matches + last.matches, fixed))
         };
         let workers: Vec<Scanned> = std::thread::scope(|scope| {
             let handles: Vec<_> = (0..threads)

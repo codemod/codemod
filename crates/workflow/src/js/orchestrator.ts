@@ -223,7 +223,12 @@ const HANDLER = Symbol.for("codemod.workflow.handler");
 export interface AstGrepHandler {
   readonly [HANDLER]: "astGrep";
   readonly rules: Json[];
+  /** Passes over each file at most; more than one repeats until nothing changes. */
+  readonly repeat?: number;
 }
+
+/** Passes `astGrep(rules, { repeat: true })` makes over a file at most. */
+const REPEAT_PASSES = 10;
 
 /** A length of time: milliseconds, or a string such as "30s" or "10m". */
 export type Duration = number | string;
@@ -314,6 +319,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     }
     return hostTask("astGrep", {
       rules: handler.rules,
+      repeat: handler.repeat,
       include: include.length ? include : undefined,
       exclude: exclude.length ? exclude : undefined,
       containing,
@@ -395,13 +401,41 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
    * The rules are part of the step's content, so a changed rule runs the
    * step again on resume.
    */
-  function astGrep(rules: unknown, ...rest: unknown[]): AstGrepHandler {
-    if (rest.length > 0) {
+  function astGrep(rules: unknown, options?: unknown): AstGrepHandler {
+    const list = ruleList(rules);
+    if (options === undefined) return Object.freeze({ [HANDLER]: "astGrep" as const, rules: list });
+    if (!isRecord(options) || Array.isArray(options)) {
+      throw new TypeError("astGrep's options must be an object: astGrep(rules, { repeat: true })");
+    }
+    for (const key of Object.keys(options)) {
+      if (key !== "repeat") {
+        throw new TypeError(
+          ["include", "exclude", "containing", "language", "basePath"].includes(key)
+            ? `astGrep: '${key}' goes in forEachFile's selector: forEachFile({ ${key} }, astGrep(rules))`
+            : `astGrep: unknown option '${key}' (it takes repeat)`,
+        );
+      }
+    }
+    const { repeat } = options;
+    let passes = 1;
+    if (repeat === true) passes = REPEAT_PASSES;
+    else if (
+      typeof repeat === "number" &&
+      Number.isInteger(repeat) &&
+      repeat >= 1 &&
+      repeat <= 1000
+    ) {
+      passes = repeat;
+    } else if (repeat !== false && repeat !== undefined) {
       throw new TypeError(
-        "astGrep takes only rules: select the files with forEachFile's selector, forEachFile({ include, exclude }, astGrep(rules))",
+        "astGrep: repeat must be true (up to 10 passes) or the most passes to make, a whole number from 1 to 1000",
       );
     }
-    return Object.freeze({ [HANDLER]: "astGrep" as const, rules: ruleList(rules) });
+    return Object.freeze({
+      [HANDLER]: "astGrep" as const,
+      rules: list,
+      ...(passes > 1 ? { repeat: passes } : {}),
+    });
   }
 
   /**

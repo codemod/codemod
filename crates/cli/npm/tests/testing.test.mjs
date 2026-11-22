@@ -480,6 +480,28 @@ export default async function main() {
     );
   });
 
+  test(`${host}: astGrep repeats until nothing changes`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, forEachFile, astGrep } from "codemod/workflow";
+export default async function main() {
+  const rule = { id: "log", language: "javascript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" };
+  const result = await step(forEachFile(astGrep(rule, { repeat: true })));
+  return result.matches;
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await runWorkflow(path, {
+      target: { "a.js": "console.log(console.log(1));\n" },
+    });
+    assert.equal(result.status, "succeeded", result.error);
+    assert.equal(result.output, 2);
+    assert.equal(result.files["a.js"], "logger.info(logger.info(1));\n");
+  });
+
   test(`${host}: astGrep is not a step on its own`, HOSTS[host], async () => {
     const path = join(
       scratch({

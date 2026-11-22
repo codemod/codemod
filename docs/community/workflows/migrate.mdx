@@ -161,7 +161,7 @@ A `workflow.ts` written for an earlier preview may need these changes. Each fail
   - `shard({ method: { function: "./scripts/shard.ts" } })` → an imported (or inline) shard function, `method: { function: shardFiles }`;
   - `shard({ jssg: { path, ... } })` → `filter: (file) => ...`, a callback that keeps the files it returns `true` for; `filePattern` → `files`.
 
-- **`astGrep(rules)` runs only inside `forEachFile`.** It is no longer a step on its own and takes no options; the selector says which files:
+- **`astGrep(rules)` runs only inside `forEachFile`.** It is no longer a step on its own, and its only option is `repeat`; the selector says which files:
 
   ```ts
   // Before

@@ -89,8 +89,14 @@ export default async function main({
     return [fromText, withLanguage, legacy].length;
   });
 
+  // The error names what is not JSON (`NotJson<"a Set: use an array">`),
+  // not astGrep's handler, which forEachFile also takes.
   // @ts-expect-error a Set is not JSON
   forEachFile("**/*.ts", (file) => new Set([file.path]));
+  // @ts-expect-error a Set is not JSON, without a selector too
+  forEachFile((file) => new Set([file.path]));
+  // @ts-expect-error what an async callback resolves to must be JSON: a Map is not
+  forEachFile({ language: "tsx" }, async (file) => new Map([[file.path, 1]]));
   // @ts-expect-error a nested function is not JSON
   forEachFile("**/*.ts", (file) => ({ path: file.path, run: () => 1 }));
 
@@ -186,6 +192,12 @@ export default async function main({
   void step(astGrep(rules));
   // @ts-expect-error the selector says which files
   astGrep(rules, { include: ["**/*.ts"] });
+  // Repeat until nothing changes: up to 10 passes, or as many as given.
+  const repeated = await step(forEachFile(astGrep(rules, { repeat: true })));
+  expectType<Equal<typeof repeated.matches, number>>(true);
+  await step(forEachFile("src/**", astGrep(rules, { repeat: 3 })));
+  // @ts-expect-error repeat is a boolean or a number of passes
+  astGrep(rules, { repeat: "yes" });
   // @ts-expect-error only callbacks and astGrep
   forEachFile(shell("echo hi"));
 
