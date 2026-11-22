@@ -223,12 +223,15 @@ fn plan(path: &Path) -> Result<(PathBuf, Vec<Conversion>)> {
                 .unwrap_or_default()
                 .into_iter()
                 .find(|entry| same_file(&package_dir.join(entry), path));
-            return Ok((
-                package_dir.to_path_buf(),
-                vec![conversion(&canonical, entry)],
-            ));
+            // Convert the file as the manifest names it, even through a
+            // symlink, so the rewritten entry names the new file.
+            let yaml = match &entry {
+                Some(entry) => package_dir.join(entry),
+                None => path.to_path_buf(),
+            };
+            return Ok((package_dir.to_path_buf(), vec![conversion(&yaml, entry)]));
         }
-        return Ok((parent.to_path_buf(), vec![conversion(&canonical, None)]));
+        return Ok((parent.to_path_buf(), vec![conversion(path, None)]));
     }
     if !path.is_dir() {
         return Err(anyhow!("{} does not exist", path.display()));
@@ -456,6 +459,36 @@ mod tests {
         assert_eq!(
             butterflow_core::package_workflows::locate_workflow(dir.path(), None).unwrap(),
             yaml.with_extension("ts").canonicalize().unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upgrading_a_symlinked_workflow_keeps_the_manifest_pointing_at_a_real_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("codemod.yaml"),
+            "schema_version: \"1.0\"\nname: demo\nversion: 0.1.0\ndescription: d\nauthor: a\nworkflow: alias.yaml\n",
+        )
+        .unwrap();
+        std::fs::create_dir(dir.path().join("flows")).unwrap();
+        std::fs::write(
+            dir.path().join("flows/main.yaml"),
+            "version: \"1\"\nnodes:\n  - id: a\n    name: A\n    steps:\n      - name: Hello\n        run: echo hi\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("flows/main.yaml", dir.path().join("alias.yaml")).unwrap();
+        handler(&Command {
+            path: Some(dir.path().join("alias.yaml")),
+            keep_yaml: false,
+            dry_run: false,
+        })
+        .unwrap();
+        assert!(dir.path().join("flows/main.yaml").is_file());
+        assert!(dir.path().join("alias.ts").is_file());
+        assert_eq!(
+            butterflow_core::package_workflows::locate_workflow(dir.path(), None).unwrap(),
+            dir.path().join("alias.ts").canonicalize().unwrap()
         );
     }
 
