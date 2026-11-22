@@ -457,7 +457,7 @@ impl Generator {
                         if code.uses_git {
                             let _ = writeln!(
                                 self.body,
-                                "async function {}({params}) {{\n  // Git steps share one checkout: one value at a time.\n  const values: Matrix[] = {source};\n  for (let index = 0; index < values.length; index++) {{\n    await {instance}({pass}values[index], index);\n  }}\n}}\n",
+                                "async function {}({params}) {{\n  // Git steps share one checkout: one value at a time.\n  const values: Matrix[] = {source};\n  if (!Array.isArray(values)) {{\n    throw new Error(\"matrix values must be a list\");\n  }}\n  for (let index = 0; index < values.length; index++) {{\n    await {instance}({pass}values[index], index);\n  }}\n}}\n",
                                 code.function
                             );
                         } else {
