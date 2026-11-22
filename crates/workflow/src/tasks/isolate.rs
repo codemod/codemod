@@ -111,6 +111,7 @@ impl StepIsolates {
             target_directory: run.target.clone(),
             default_language,
             semantic_provider: self.semantic_provider.clone(),
+            pending_files: None,
         }
     }
 }

@@ -73,6 +73,10 @@ pub(crate) struct SgRootInner {
     /// The current file being processed (for write() validation)
     #[cfg(feature = "native")]
     pub(crate) current_file_path: Option<String>,
+    /// Made by `jssgTransform` for a file it changes: `rename()` is part of
+    /// that change, which the step commits, so callbacks may call it.
+    #[cfg(feature = "native")]
+    pub(crate) transformed_file: bool,
 }
 
 #[derive(Trace, Clone)]
@@ -140,7 +144,7 @@ impl<'js> SgRootRjs<'js> {
     /// If absolute, it is used as-is.
     pub fn rename(&self, new_path: String, ctx: Ctx<'js>) -> Result<()> {
         #[cfg(feature = "native")]
-        if in_callback_isolate(&ctx) {
+        if in_callback_isolate(&ctx) && !self.inner.transformed_file {
             return Err(Exception::throw_message(
                 &ctx,
                 "root.rename() is for jssg transforms; in a forEachFile callback, call file.rename(path)",
@@ -266,6 +270,15 @@ fn in_callback_isolate(ctx: &Ctx<'_>) -> bool {
 }
 
 impl<'js> SgRootRjs<'js> {
+    /// Mark a root `jssgTransform` made for the file it changes.
+    #[cfg(feature = "native")]
+    pub(crate) fn into_transformed_file(mut self) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.transformed_file = true;
+        }
+        self
+    }
+
     /// Get the rename target path, if rename() was called.
     pub fn get_rename_to(&self) -> Option<String> {
         self.inner
@@ -332,6 +345,8 @@ impl<'js> SgRootRjs<'js> {
                     semantic_provider: None,
                     #[cfg(feature = "native")]
                     current_file_path: None,
+                    #[cfg(feature = "native")]
+                    transformed_file: false,
                 }),
                 _phantom: PhantomData,
             })
@@ -356,6 +371,8 @@ impl<'js> SgRootRjs<'js> {
                     semantic_provider: None,
                     #[cfg(feature = "native")]
                     current_file_path: None,
+                    #[cfg(feature = "native")]
+                    transformed_file: false,
                 }),
                 _phantom: PhantomData,
             })
@@ -378,6 +395,8 @@ impl<'js> SgRootRjs<'js> {
                 semantic_provider: None,
                 #[cfg(feature = "native")]
                 current_file_path: None,
+                #[cfg(feature = "native")]
+                transformed_file: false,
             }),
             _phantom: PhantomData,
         })
@@ -401,6 +420,7 @@ impl<'js> SgRootRjs<'js> {
                 rename_to: Mutex::new(None),
                 semantic_provider,
                 current_file_path,
+                transformed_file: false,
             }),
             _phantom: PhantomData,
         })

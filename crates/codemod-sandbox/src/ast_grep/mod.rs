@@ -445,7 +445,8 @@ fn jssg_transform_rjs<'js>(
         Some(path_to_file.clone()),
         target_directory.as_deref(),
     )
-    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?;
+    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?
+    .into_transformed_file();
 
     let sg_root_inner = Arc::clone(&sg_root.inner);
 

@@ -58,6 +58,10 @@ pub struct WorkerOptions<R> {
     /// Semantic analysis for roots `parse(file)` makes, so `definition()`
     /// and `references()` find something; none without it.
     pub semantic_provider: Option<Arc<dyn language_core::SemanticProvider>>,
+    /// The step's unwritten files, when several workers share them;
+    /// `jssgTransform` reads and changes files through it. Each worker has
+    /// its own without it.
+    pub pending_files: Option<PendingFiles>,
 }
 
 /// A JSSG runtime kept alive across calls. Run code in it with
@@ -146,7 +150,7 @@ impl Worker {
         );
         // `jssgTransform` calls in one step build on each other's results.
         let file_changes = JssgFileChanges {
-            pending: Some(PendingFiles::default()),
+            pending: Some(options.pending_files.clone().unwrap_or_default()),
             ..JssgFileChanges::default()
         };
         let target = options
@@ -211,6 +215,11 @@ impl Worker {
             failure: self.hooks.take_pending_failure(),
             other_files: std::mem::take(&mut *self.file_changes.changes.lock().unwrap()),
         }
+    }
+
+    /// The files `jssgTransform` reads and changes through.
+    pub fn pending_files(&self) -> Option<&PendingFiles> {
+        self.file_changes.pending.as_ref()
     }
 
     /// What `jssgTransform` calls have made of the files they changed, so
