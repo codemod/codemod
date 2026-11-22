@@ -18,6 +18,61 @@ fn approving() -> Harness {
 }
 
 #[test]
+fn shell_runs_in_the_target_by_default() {
+    let h = Harness::new();
+    h.write("cwd-marker.txt", "target");
+    let report = h.start(
+        r#"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  return (await step(shell("echo ok < cwd-marker.txt"))).exitCode;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(0));
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_cannot_write_through_an_external_symlink() {
+    let h = Harness::new();
+    let outside = tempfile::tempdir().unwrap();
+    h.write("a.txt", "original");
+    std::os::unix::fs::symlink(outside.path(), h.target.path().join("link")).unwrap();
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step(forEachFile("a.txt", (file) => file.rename("link/new/file.txt")));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("must stay inside the target"), "{error}");
+    assert_eq!(h.read("a.txt"), "original");
+    assert!(!outside.path().join("new").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_honors_cwd_for_shebang_scripts() {
+    let h = Harness::new();
+    h.write("sub dir/cwd-marker.txt", "subdir");
+    let report = h.start(
+        r##"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  return (await step(shell("#!/bin/sh\ncat cwd-marker.txt", { cwd: "sub dir" }))).stdout;
+}
+"##,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!("subdir"));
+}
+
+#[test]
 fn a_shell_step_returns_what_the_command_printed() {
     let h = Harness::new();
     let report = h.start(
@@ -228,6 +283,32 @@ export default async function main() { return step(codemod("./loop")); }
 }
 
 #[test]
+fn a_shard_filter_that_fails_on_every_file_fails_the_step() {
+    let h = Harness::new();
+    h.write("src/a.ts", "const a = 1;\n");
+    let report = h.start(
+        r#"
+import { step, shard } from "codemod/workflow";
+export default async function main() {
+  return step(shard({
+    method: { type: "directory", maxFilesPerShard: 10 },
+    target: "src",
+    files: "**/*.ts",
+    filter: () => { throw new Error("filter failure"); },
+  }));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("shard's filter failed on every file"),
+        "{error}"
+    );
+    assert!(error.contains("filter failure"), "{error}");
+}
+
+#[test]
 fn git_steps_are_skipped_unless_managed_git_is_on() {
     let h = approving();
     let report = h.start(
@@ -246,6 +327,185 @@ export default async function main() {
     assert_eq!(
         output(&report).unwrap(),
         json!([{ "skipped": true }, { "skipped": true }, { "skipped": true }])
+    );
+}
+
+/// A harness with managed git on, whose target is a git repository with one
+/// commit on `main`.
+fn managed_git() -> Harness {
+    let h = Harness::with_services(
+        Arc::new(MemoryStore::default()),
+        Arc::new(NonInteractive { approve_all: true }),
+        Services {
+            managed_git: true,
+            ..Services::default()
+        },
+    );
+    h.write("README.md", "base\n");
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "test@example.com"],
+        &["config", "user.name", "Test"],
+        &["config", "commit.gpgsign", "false"],
+        &["add", "."],
+        &["commit", "-q", "-m", "base"],
+    ] {
+        git(&h, args);
+    }
+    h
+}
+
+fn git(h: &Harness, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(h.target.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+const PARALLEL_SHARDS: &str = r#"
+import { step, approval, branch, commit, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await Promise.all(["a", "b"].map(async (name) => {
+    await step(approval(`Migrate ${name}?`));
+    await step(branch(`codemod-${name}`));
+    await step(forEachFile("README.md", (file) => { file.write(file.text + name + "\n"); }));
+    await step(commit(`migrate ${name}`));
+  }));
+}
+"#;
+
+#[test]
+fn managed_git_steps_refuse_to_run_in_parallel() {
+    let starts_with_branch =
+        PARALLEL_SHARDS.replace("    await step(approval(`Migrate ${name}?`));\n", "");
+    for source in [PARALLEL_SHARDS, starts_with_branch.as_str()] {
+        let h = managed_git();
+        let report = h.start(source, Value::Null);
+        let error = output(&report).unwrap_err();
+        assert!(
+            error.contains("managed git steps can't run in parallel"),
+            "{error}"
+        );
+        // No commit landed anywhere, on any shard's branch.
+        assert_eq!(git(&h, &["rev-list", "--all", "--count"]), "1", "{source}");
+    }
+}
+
+#[test]
+fn parallel_git_steps_are_refused_even_with_managed_git_off() {
+    let h = approving();
+    let report = h.start(PARALLEL_SHARDS, Value::Null);
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("managed git steps can't run in parallel"),
+        "{error}"
+    );
+}
+
+#[test]
+fn each_git_step_is_refused_alongside_other_steps() {
+    for task in [
+        "branch(\"codemod-x\")",
+        "commit(\"x\")",
+        "pullRequest({ title: \"x\" })",
+    ] {
+        let h = approving();
+        let source = format!(
+            r#"
+import {{ step, shell, branch, commit, pullRequest }} from "codemod/workflow";
+export default async function main() {{
+  await Promise.all([step(shell("echo hi")), step({task})]);
+}}
+"#
+        );
+        let error = output(&h.start(&source, Value::Null)).unwrap_err();
+        assert!(
+            error.contains("managed git steps can't run in parallel"),
+            "{task}: {error}"
+        );
+    }
+}
+
+#[test]
+fn managed_git_steps_run_one_shard_after_another() {
+    let h = managed_git();
+    let report = h.start(
+        r#"
+import { step, shell, branch, commit, forEachFile } from "codemod/workflow";
+export default async function main() {
+  // Steps without git still run together.
+  await Promise.all([
+    step(shell("echo one > one.txt")),
+    step(shell("echo two > two.txt")),
+  ]);
+  for (const name of ["a", "b"]) {
+    await step(branch(`codemod-${name}`));
+    await step(forEachFile("README.md", (file) => { file.write(file.text + name + "\n"); }));
+    await step(commit(`migrate ${name}`));
+  }
+}
+"#,
+        Value::Null,
+    );
+    output(&report).unwrap();
+    assert_eq!(
+        git(&h, &["log", "-1", "--format=%s", "codemod-a"]),
+        "migrate a"
+    );
+    assert_eq!(git(&h, &["show", "codemod-a:README.md"]), "base\na");
+    assert_eq!(
+        git(&h, &["log", "-1", "--format=%s", "codemod-b"]),
+        "migrate b"
+    );
+    assert_eq!(git(&h, &["show", "codemod-b:README.md"]), "base\na\nb");
+    assert_eq!(git(&h, &["show", "codemod-a:one.txt"]), "one");
+}
+
+#[test]
+fn a_nested_codemod_run_alongside_other_steps_refuses_managed_git() {
+    let h = managed_git();
+    h.bundle_file(
+        "child/workflow.ts",
+        r#"
+import { step, branch } from "codemod/workflow";
+export default async function main() {
+  await step(branch("codemod-child"));
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, codemod, shell } from "codemod/workflow";
+export default async function main() {
+  await Promise.all([step(shell("echo hi")), step(codemod("./child"))]);
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("in a codemod step that ran alongside other steps"),
+        "{error}"
+    );
+    assert_eq!(git(&h, &["branch", "--list", "codemod-child"]), "");
+
+    // Alone, the same codemod checks out its branch.
+    let report = h.start(
+        r#"
+import { step, codemod } from "codemod/workflow";
+export default async function main() {
+  await step(codemod("./child"));
+}
+"#,
+        Value::Null,
+    );
+    output(&report).unwrap();
+    assert_eq!(
+        git(&h, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "codemod-child"
     );
 }
 
@@ -290,6 +550,30 @@ export default async function main() {
     );
     assert_eq!(report.ending, Ending::AwaitingApproval("Ship it?".into()));
     assert_eq!(h.read("a.txt"), "a", "nothing runs past the gate");
+}
+
+#[cfg(unix)]
+#[test]
+fn ast_grep_does_not_scan_through_a_symlink_outside_the_target() {
+    let h = Harness::new();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("a.ts"), "const a = 1;\n").unwrap();
+    std::os::unix::fs::symlink(outside.path(), h.target.path().join("link")).unwrap();
+    let report = h.start(
+        r#"
+import { step, forEachFile, astGrep } from "codemod/workflow";
+export default async function main() {
+  const result = await step(forEachFile("link/**", astGrep({ id: "r", language: "typescript", rule: { pattern: "const a = 1" }, fix: "const a = 2" })));
+  return result.changes.written;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([]));
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("a.ts")).unwrap(),
+        "const a = 1;\n"
+    );
 }
 
 #[test]
@@ -998,6 +1282,26 @@ export default async function main({{ params }}) {{
     );
     assert_eq!(output(&report).unwrap(), json!(2));
     assert_eq!(h.read("a.js"), "let x = 1;\nfresh();\n");
+}
+
+/// Nested matches (one rule's match inside another's) keep the outer fix
+/// instead of splicing both into the file; every match is counted.
+#[test]
+fn ast_grep_keeps_the_outer_fix_of_nested_matches() {
+    let h = Harness::new();
+    h.write("a.js", "console.log(console.log(1));\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile, astGrep } from "codemod/workflow";
+export default async function main() {
+  const result = await step(forEachFile(astGrep({ id: "log", language: "javascript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" })));
+  return result.matches;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(2));
+    assert_eq!(h.read("a.js"), "logger.info(console.log(1));\n");
 }
 
 #[test]

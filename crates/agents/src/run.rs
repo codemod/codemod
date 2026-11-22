@@ -1,7 +1,7 @@
 //! Running an agent: start it, feed it the prompt, read its output as
 //! events, and stop it when asked or when it takes too long.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,6 +12,12 @@ use std::time::{Duration, Instant};
 use crate::adapter::{Adapter, Autonomy, ReadOnly, Task};
 use crate::event::{AgentEvent, Stream, Usage};
 use crate::transcript::Transcript;
+
+#[cfg(windows)]
+#[path = "windows_job.rs"]
+mod windows_job;
+#[cfg(windows)]
+pub(crate) use windows_job::ProcessGroup;
 
 /// One run of an agent.
 pub struct Run<'a> {
@@ -113,6 +119,7 @@ const POLL: Duration = Duration::from_millis(100);
 /// How long output is still read after the agent exited.
 const DRAIN: Duration = Duration::from_secs(2);
 /// How long a process group gets to end after SIGTERM, before SIGKILL.
+#[cfg(unix)]
 const STOP: Duration = Duration::from_secs(3);
 const STDERR_TAIL: usize = 20;
 /// The largest command-line argument a run passes. Linux refuses one of
@@ -158,11 +165,8 @@ impl Run<'_> {
         for (key, value) in &launch.env {
             command.env(key, value);
         }
-        new_process_group(&mut command);
-
-        let mut child = command
-            .spawn()
-            .map_err(|source| RunError::Start { agent, source })?;
+        let (mut child, group) =
+            spawn_group(&mut command).map_err(|source| RunError::Start { agent, source })?;
 
         if let (Some(prompt), Some(mut stdin)) = (launch.stdin, child.stdin.take()) {
             // On its own thread: a full pipe must not block reading output.
@@ -247,12 +251,11 @@ impl Run<'_> {
             emit(events, &mut transcript);
         };
 
-        if pipes_open {
-            // The agent is still running, or left something that holds its
-            // pipes. The readers are not joined: a process that left the
-            // group can keep a pipe open, and they end when it closes.
-            stop_group(&mut child);
-        } else {
+        // EOF does not imply that the agent or its descendants have exited.
+        group.stop(&mut child);
+        // A process that left the group can keep a pipe open. Don't wait
+        // indefinitely for the readers in that case.
+        if !pipes_open {
             for reader in readers.into_iter().flatten() {
                 let _ = reader.join();
             }
@@ -357,43 +360,52 @@ fn strip_ansi(text: &str) -> String {
     out
 }
 
-/// The agent and the commands it runs get their own process group, so
-/// stopping the agent stops them too.
-#[cfg(unix)]
-fn new_process_group(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
-}
+/// Start the agent in a group of its own, so stopping it stops its descendants.
+pub(crate) fn spawn_group(command: &mut Command) -> io::Result<(Child, ProcessGroup)> {
+    #[cfg(windows)]
+    return ProcessGroup::spawn(command);
 
-#[cfg(not(unix))]
-fn new_process_group(_command: &mut Command) {}
-
-/// End the agent's process group: SIGTERM, then SIGKILL for whatever is
-/// left of the group after [`STOP`], whether or not the agent itself is.
-#[cfg(unix)]
-fn stop_group(child: &mut Child) {
-    let group = child.id() as libc::pid_t;
-    // Whether the group still had a process to signal; signal 0 only asks.
-    // SAFETY: signalling a process group we created.
-    let signal = |signal: libc::c_int| unsafe { libc::killpg(group, signal) == 0 };
-    signal(libc::SIGTERM);
-    let deadline = Instant::now() + STOP;
-    while Instant::now() < deadline {
-        // The agent has to be reaped, or it stays in its group as a zombie.
-        let reaped = !matches!(child.try_wait(), Ok(None));
-        if reaped && !signal(0) {
-            return;
+    #[cfg(not(windows))]
+    {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
         }
-        std::thread::sleep(POLL);
+        Ok((command.spawn()?, ProcessGroup))
     }
-    signal(libc::SIGKILL);
-    let _ = child.wait();
 }
 
-#[cfg(not(unix))]
-fn stop_group(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+#[cfg(not(windows))]
+pub(crate) struct ProcessGroup;
+
+#[cfg(not(windows))]
+impl ProcessGroup {
+    /// Send SIGTERM, then SIGKILL to whatever is left after [`STOP`].
+    #[cfg(unix)]
+    pub(crate) fn stop(self, child: &mut Child) {
+        let group = child.id() as libc::pid_t;
+        // SAFETY: signalling a process group we created; signal 0 only asks.
+        let signal = |signal: libc::c_int| unsafe { libc::killpg(group, signal) == 0 };
+        signal(libc::SIGTERM);
+        let deadline = Instant::now() + STOP;
+        while Instant::now() < deadline {
+            // The agent has to be reaped, or it stays in its group as a zombie.
+            let reaped = !matches!(child.try_wait(), Ok(None));
+            if reaped && !signal(0) {
+                return;
+            }
+            std::thread::sleep(POLL);
+        }
+        signal(libc::SIGKILL);
+        let _ = child.wait();
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn stop(self, child: &mut Child) {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 #[cfg(test)]
@@ -407,3 +419,7 @@ mod tests {
         assert_eq!(strip_ansi("plain"), "plain");
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "windows_cancel_tests.rs"]
+mod windows_cancel_tests;

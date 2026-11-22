@@ -9,7 +9,7 @@ The `shard` task splits a large migration into groups of files ("shards"), for e
 ## How it works
 
 1. A `shard` step finds the files the codemod would change and groups them.
-2. The workflow runs the codemod for every shard, limited to that shard's files.
+2. The workflow runs the codemod for every shard, limited to that shard's files, one shard at a time when each gets its own branch and pull request.
 
 ```ts workflow.ts
 import { step, shard, forEachFile, approval, branch, commit, pullRequest } from "codemod/workflow";
@@ -24,7 +24,8 @@ export default async function main() {
     filter: wouldChange,
   }));
 
-  await Promise.all(shards.map(async (current, index) => {
+  // One shard at a time: git steps share one checkout.
+  for (const [index, current] of shards.entries()) {
     await step(approval(`Migrate ${current.name}?`));
     await step(branch(`codemod-migrate-${index}`));
     await step(`Migrate ${current.name}`, forEachFile(
@@ -33,7 +34,7 @@ export default async function main() {
     ));
     await step(commit(`refactor: migrate ${current.name}`));
     await step(pullRequest({ title: `refactor: migrate ${current.name}` }));
-  }));
+  }
 }
 ```
 
@@ -42,8 +43,12 @@ export default async function main() {
 - **`include: current._meta_files`** limits each run of the migration to its shard's files.
 - `branch`, `commit` and `pullRequest` only touch git when the run uses `--managed-git`. See [Workflow Reference](/community/workflows/reference#tasks).
 
+<Warning>
+Don't run shards that use git steps at the same time, for example with `Promise.all`. Git steps share the run's one checkout, so one shard could commit on another shard's branch. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`. Shards without git steps can still run in parallel. Separate checkouts per shard are planned as an explicit API.
+</Warning>
+
 <Note>
-In `workflow.yaml`, the same pattern is a `shard` step with `output_state`, followed by a matrix node with `from_state`. See the [workflow.yaml reference](/community/workflows/yaml).
+In `workflow.yaml`, the same pattern is a `shard` step with `output_state`, followed by a matrix node with `from_state`. A matrix node with `branch_name`, `pull_request` or a step `commit` runs its values one at a time. See the [workflow.yaml reference](/community/workflows/yaml).
 </Note>
 
 ## File discovery
@@ -51,7 +56,7 @@ In `workflow.yaml`, the same pattern is a `shard` step with `output_state`, foll
 Files are chosen before they reach any shard method:
 
 - `files` selects the eligible files under `target`: a glob, a list of globs, or `{ include, exclude, language }`. Without it, the files of the package's `targets.languages`.
-- `filter`, when given, runs on each of them, in isolates, and keeps those it returns `true` for.
+- `filter`, when given, runs on each of them, in isolates, and keeps those it returns `true` for. If it throws on every file, the shard step fails.
 - A built-in method given neither `files` nor `filter` takes every file under `target`.
 
 <ParamField path="target" type="string" default=".">

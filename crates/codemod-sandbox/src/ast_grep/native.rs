@@ -121,3 +121,53 @@ pub fn scan_text_with_combined_scan(
 
     Ok((scan_result.matches, file_modified, new_content))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{scan_file_with_combined_scan, with_combined_scan};
+
+    /// Fix `source` (a `.ts` file) with the rules in `rules` (YAML).
+    fn fix(rules: &str, source: &str) -> Option<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let rules_path = dir.path().join("rules.yml");
+        std::fs::write(&rules_path, rules).unwrap();
+        let file = dir.path().join("input.ts");
+        std::fs::write(&file, source).unwrap();
+        with_combined_scan(rules_path.to_str().unwrap(), |scan| {
+            let (_, _, content) = scan_file_with_combined_scan(&file, &scan.combined_scan, true)?;
+            Ok(content)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn a_match_nested_in_another_match_of_the_rule_keeps_the_outer_fix() {
+        let rules = "id: log\nlanguage: typescript\nrule:\n  pattern: console.log($A)\nfix: logger.info($A)\n";
+        assert_eq!(
+            fix(rules, "console.log(console.log(1));\nconsole.log(2);\n").as_deref(),
+            Some("logger.info(console.log(1));\nlogger.info(2);\n")
+        );
+    }
+
+    #[test]
+    fn overlapping_matches_of_two_rules_keep_the_outer_fix() {
+        let rules = "\
+id: undefined-check
+language: typescript
+rule:
+  pattern: $A !== undefined
+fix: $A != null
+---
+id: rename-dispose
+language: typescript
+rule:
+  kind: property_identifier
+  regex: ^dispose$
+fix: disposeNow
+";
+        assert_eq!(
+            fix(rules, "if (x.dispose !== undefined) { y.dispose(); }\n").as_deref(),
+            Some("if (x.dispose != null) { y.disposeNow(); }\n")
+        );
+    }
+}

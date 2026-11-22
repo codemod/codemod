@@ -129,6 +129,34 @@ jobs:
         env:
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
 
+      # `codemod --version` and telemetry report the crate version. Manual
+      # (alpha) releases take their version from the input, not Cargo.toml,
+      # so write the release version there before building.
+      - name: Set crate version to the release version
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$EVENT_NAME" == "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${REF_NAME#codemod-cli@}"
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Not a release version: $VERSION"
+            exit 1
+          fi
+          sed -i.bak -E '/^\[workspace\.package\]/,/^\[workspace\.dependencies\]/ s/^version = ".*"/version = "'"$VERSION"'"/' Cargo.toml
+          rm Cargo.toml.bak
+          # Not `grep -x`: a Windows checkout may end lines with CR.
+          if ! grep -Eq "^version = \"$VERSION\"\r?$" Cargo.toml; then
+            echo "::error::Could not set the workspace version to $VERSION"
+            exit 1
+          fi
+          echo "Building version $VERSION"
+
       - name: Build
         run: |
           cargo build --release -p codemod --target ${{ matrix.target }}

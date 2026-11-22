@@ -17,6 +17,8 @@ npx codemod workflow upgrade --dry-run
 npx codemod workflow upgrade
 ```
 
+You can also pass a single workflow file, for example `npx codemod workflow upgrade workflows/main.yaml`. If the package manifest points to that file, upgrade updates the entry to the new TypeScript file.
+
 `upgrade` writes `workflow.ts` next to `workflow.yaml`, points `codemod.yaml` at it, and removes the YAML file. Keep the YAML file with `--keep-yaml`. In a repository with many packages, run it once at the root to convert them all.
 
 For example, this `workflow.yaml`:
@@ -82,7 +84,7 @@ npm install --save-dev codemod
 | `codemod` | `codemod(source, { params })` |
 | `ai` | `agent(prompt, { ... })` |
 | `install-skill` | `installSkill({ ... })` |
-| `matrix` (`values` or `from_state`) | One call per value, run at the same time |
+| `matrix` (`values` or `from_state`) | One call per value, run at the same time; one at a time when the node uses git (`branch_name`, `pull_request`, step `commit`) |
 | `shard` | `shard({ method, target, files, filter, previous })`, its result passed to the steps that use it. A shard `function` is imported; the shard's `js-ast-grep` transform becomes a `filter` that keeps the files it would change |
 | `if:` | An `if` statement whose condition runs through `__evaluate(...)`, the YAML engine's own evaluator, so it means exactly what it did |
 | `${{ params.name }}` | `params.name` |

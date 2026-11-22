@@ -516,6 +516,23 @@ export default async function main() {
     assert.equal(result.ok, false);
   });
 
+  test(`${host}: git steps refuse to run alongside other steps`, HOSTS[host], async () => {
+    const dir = scratch({
+      "workflow.ts": `
+import { step, branch, commit } from "codemod/workflow";
+export default async function main() {
+  await Promise.all(["a", "b"].map(async (name) => {
+    await step(branch("codemod-" + name));
+    await step(commit("migrate " + name));
+  }));
+}
+`,
+    });
+    const result = await runWorkflow(join(dir, "workflow.ts"), { target: {} });
+    assert.equal(result.status, "failed");
+    assert.match(result.error, /managed git steps can't run in parallel/);
+  });
+
   test(
     `${host}: a workflow in src/ runs its scripts from import.meta.dirname`,
     HOSTS[host],

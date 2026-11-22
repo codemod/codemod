@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "crates/agents/**"
       - "crates/runners/**"
       - "crates/workflow/**"
       - "crates/models/**"
@@ -15,6 +16,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "crates/agents/**"
       - "crates/runners/**"
       - "crates/workflow/**"
       - "crates/models/**"
@@ -44,6 +46,9 @@ jobs:
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
+
+      - name: Run agent tests
+        run: cargo test --locked -p codemod-agents
 
       - name: Run runner tests
         run: cargo test --locked -p butterflow-runners

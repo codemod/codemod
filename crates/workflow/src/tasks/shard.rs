@@ -208,6 +208,12 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
         }
     }
     task.log_failures(&failures);
+    if !failures.is_empty() && failures.len() == selected.len() {
+        return Err(TaskError::Failed(format!(
+            "shard's filter failed on every file; first error: {}: {}",
+            failures[0].0, failures[0].1
+        )));
+    }
     Ok(Some(if kept.is_empty() { matched } else { kept }))
 }
 

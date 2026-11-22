@@ -7,6 +7,8 @@ A **Codemod package** is a directory containing everything needed to run an auto
 
 Packages are fully portable—run them locally, in CI, or share them via the [Codemod Registry](https://go.codemod.com/registry).
 
+TypeScript packages do not need a root `workflow.yaml`. The registry resolver uses the entry in `codemod.yaml`, or discovers a supported default such as `src/workflow.ts`.
+
 <Frame>
   <div style={{ position: 'relative', paddingBottom: 'calc(64.616497829233% + 41px)', height: '0', width: '100%' }}>
     <iframe

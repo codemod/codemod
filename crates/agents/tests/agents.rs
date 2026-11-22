@@ -381,6 +381,46 @@ fn canceling_stops_the_agent_and_what_it_started() {
 }
 
 #[test]
+fn canceling_stops_an_agent_that_closed_its_output_pipes() {
+    let cwd = TempDir::new().unwrap();
+    let fake = Fake::new(&format!(
+        "{SESSION_STARTED}\nexec >/dev/null 2>&1\nprintf '%s' \"$$\" >pid\nexec sleep 30"
+    ));
+    // Cancel from another thread, once the run has had time to see both
+    // pipes close: canceling inside the event callback would stop the run
+    // before it reads EOF.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let result = Run {
+        adapter: find("codex").unwrap(),
+        executable: fake.executable(),
+        task: task(cwd.path()),
+        cancel: Some(Arc::clone(&cancel)),
+        timeout: None,
+    }
+    .run(&mut |event| {
+        if let AgentEvent::Started { .. } = event {
+            let cancel = Arc::clone(&cancel);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(1));
+                cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+    });
+    assert!(matches!(result, Err(RunError::Canceled { .. })));
+    let pid: libc::pid_t = std::fs::read_to_string(cwd.path().join("pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    // SAFETY: signal 0 only checks the stand-in's process ID.
+    let alive = unsafe { libc::kill(pid, 0) == 0 };
+    if alive {
+        // SAFETY: clean up the stand-in if the regression recurs.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    assert!(!alive, "the agent must be terminated and reaped");
+}
+
+#[test]
 fn stopping_kills_what_ignores_the_request_to_stop() {
     let cwd = TempDir::new().unwrap();
     let marker = cwd.path().join("still-running");

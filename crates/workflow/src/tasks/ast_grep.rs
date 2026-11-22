@@ -210,8 +210,14 @@ fn scan_one(
         .strip_prefix(&run.target)
         .ok()
         .map(|p| p.to_string_lossy().replace('\\', "/"))
-        .or_else(|| relative(&run.target, path))
-        .unwrap_or_else(|| path.display().to_string());
+        .or_else(|| relative(&run.target, path));
+    let Some(display) = display else {
+        out.failures.push((
+            path.display().to_string(),
+            "the scan path must stay inside the target".into(),
+        ));
+        return;
+    };
     // One read: the scan's input is also the original the commit checks.
     let original = match std::fs::read_to_string(path) {
         Ok(text) => text,
