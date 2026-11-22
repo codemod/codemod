@@ -185,7 +185,9 @@ impl Filter<'_> {
             .file_name()
             .map(|name| name.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
-        self.extensions.iter().any(|extension| name.ends_with(extension.as_str()))
+        self.extensions
+            .iter()
+            .any(|extension| name.ends_with(extension.as_str()))
     }
 }
 

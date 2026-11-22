@@ -297,8 +297,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
    * the files of those languages are selected.
    */
   function astGrepFiles(selector: unknown, handler: AstGrepHandler): HostTask {
-    const { include, exclude, language, containing, ...forCallbacks } =
-      normalizeSelector(selector);
+    const { include, exclude, language, containing, ...forCallbacks } = normalizeSelector(selector);
     const field = Object.keys(forCallbacks)[0];
     if (field !== undefined) {
       throw new TypeError(`forEachFile: selector.${field} is for callbacks, not for astGrep(...)`);

@@ -161,6 +161,20 @@ pub(crate) fn analyze<'a>(
     analyzer.yaml_imports(program)?;
 
     let scoping = semantic.scoping();
+    // The build inserts `__flowCallback` and the like as text: a binding of
+    // the workflow's own by such a name would shadow them.
+    if let Some(symbol) = scoping
+        .symbol_ids()
+        .find(|&symbol| scoping.symbol_name(symbol).starts_with("__flow"))
+    {
+        return Err(analyzer.error(
+            scoping.symbol_span(symbol).start,
+            format!(
+                "rename '{}': names starting with __flow are reserved for the codemod build",
+                scoping.symbol_name(symbol)
+            ),
+        ));
+    }
     let mut flow: HashMap<SymbolId, String> = HashMap::new();
     for statement in &program.body {
         let Statement::ImportDeclaration(import) = statement else {
@@ -380,6 +394,26 @@ impl<'a> Analyzer<'_, 'a> {
         if let Some(spread) = spread(options) {
             return Err(inline(spread, "options"));
         }
+        let computed_key = |object: &ObjectExpression| {
+            object
+                .properties
+                .iter()
+                .find_map(|property| match property {
+                    ObjectPropertyKind::ObjectProperty(p) if p.computed => Some(p.span.start),
+                    _ => None,
+                })
+        };
+        let computed = |at: u32| {
+            error_at(
+                file,
+                source,
+                at,
+                "write shard's keys as names, not computed ([...]), so the build can find the functions it runs".to_string(),
+            )
+        };
+        if let Some(at) = computed_key(options) {
+            return Err(computed(at));
+        }
         if let Some(jssg) = property(options, "jssg") {
             return Err(self.error(
                 jssg.span.start,
@@ -398,6 +432,9 @@ impl<'a> Analyzer<'_, 'a> {
             };
             if let Some(spread) = spread(method) {
                 return Err(inline(spread, "method"));
+            }
+            if let Some(at) = computed_key(method) {
+                return Err(computed(at));
             }
             if let Some(function) = property(method, "function") {
                 let shorthand = function.shorthand.then_some((function.span, "function"));
@@ -939,6 +976,91 @@ export default async function main(): Promise<void> {
         let plain =
             "import { step } from \"codemod/workflow\";\nexport default async function main() {}\n";
         assert_eq!(rewrite_for_node(&file(&workflow), plain).unwrap(), None);
+    }
+
+    /// Imports and inline shard functions written over several lines keep
+    /// their line breaks, so the lines after them do not move.
+    #[test]
+    fn the_node_rewrite_keeps_lines_of_code_it_replaces_over_several_lines() {
+        let (_dir, workflow) = package(&files());
+        let source = r#"import { step, shard } from "codemod/workflow";
+import shardFiles
+  from "./scripts/shard.ts";
+
+export default async function main(): Promise<void> {
+  await step(shard({
+    method: { function: shardFiles },
+    files: "src/**",
+    filter: (file) =>
+      file.text.includes("var"),
+  }));
+  throw new Error("line 12");
+}
+"#;
+        let rewritten = rewrite_for_node(&file(&workflow), source).unwrap().unwrap();
+        let line = |text: &str| text.lines().position(|l| l.contains("line 12"));
+        assert_eq!(line(&rewritten), line(source), "{rewritten}");
+        assert!(!rewritten.contains("import shardFiles"), "{rewritten}");
+        assert!(
+            rewritten.contains("filter: __flowCallback(\"cb_"),
+            "{rewritten}"
+        );
+    }
+
+    /// `shard`'s keys may be quoted, as in any object; computed keys are
+    /// refused, so the build finds every function it runs.
+    #[test]
+    fn shard_options_with_quoted_keys_are_extracted_and_computed_keys_refused() {
+        let (_dir, workflow) = package(&files());
+        let quoted = r#"import { step, shard } from "codemod/workflow";
+export default async function main() {
+  await step(shard({ "method": { "function": (input) => [] }, "filter": (file) => true }));
+}
+"#;
+        let built = build(&file(&workflow), quoted).unwrap();
+        assert_eq!(built.callbacks.len(), 2, "{}", built.main);
+        assert!(
+            built
+                .main
+                .contains("\"method\": { \"function\": __flowCallback(\"cb_"),
+            "{}",
+            built.main
+        );
+        for computed in [
+            r#"shard({ method: { ["function"]: shardFiles } })"#,
+            r#"shard({ ["method"]: { function: shardFiles } })"#,
+            r#"shard({ method: { type: "directory", maxFilesPerShard: 1 }, ["filter"]: (file) => true })"#,
+        ] {
+            let source = format!(
+                "import {{ step, shard }} from \"codemod/workflow\";\nimport shardFiles from \"./scripts/shard.ts\";\nexport default async function main() {{ await step({computed}); }}\n"
+            );
+            let error = build(&file(&workflow), &source).unwrap_err().message;
+            assert!(
+                error.contains("write shard's keys as names, not computed"),
+                "{computed}: {error}"
+            );
+        }
+    }
+
+    /// The build inserts names starting with `__flow`; the workflow may not
+    /// declare them.
+    #[test]
+    fn names_the_build_inserts_are_reserved() {
+        let (_dir, workflow) = package(&files());
+        let source = r#"import { step, forEachFile } from "codemod/workflow";
+import migrate from "./scripts/migrate.ts";
+export default async function main() {
+  const __flowImported = 0;
+  await step(forEachFile("src/**", migrate));
+}
+"#;
+        let error = build(&file(&workflow), source).unwrap_err().message;
+        assert!(
+            error.contains(
+                "'__flowImported': names starting with __flow are reserved for the codemod build"
+            ),
+            "{error}"
+        );
     }
 
     #[test]

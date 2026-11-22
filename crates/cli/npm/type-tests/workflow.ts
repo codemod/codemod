@@ -172,7 +172,12 @@ export default async function main({
   const ruled = await step(forEachFile(["src/**/*.ts"], astGrep(rules)));
   expectType<Equal<typeof ruled.matches, number>>(true);
   await step(forEachFile(astGrep(rules)));
-  await step(forEachFile({ include: "src/**", exclude: "**/*.test.ts", containing: "moment" }, astGrep(rules)));
+  await step(
+    forEachFile(
+      { include: "src/**", exclude: "**/*.test.ts", containing: "moment" },
+      astGrep(rules),
+    ),
+  );
   // @ts-expect-error the rules name their languages
   forEachFile({ language: "tsx" }, astGrep(rules));
   // @ts-expect-error semantic analysis is for callbacks
@@ -196,26 +201,28 @@ export default async function main({
 
   // Rules written in the workflow, or built from values it has.
   await step(
-    forEachFile(astGrep([
-      {
-        id: "no-var",
-        language: "javascript",
-        rule: { pattern: "var $A = $B" },
-        fix: "let $A = $B;",
-      },
-      {
-        id: "rename",
-        language: "typescript",
-        rule: {
-          kind: "call_expression",
-          has: { field: "function", regex: `^${target}$`, stopBy: "end" },
+    forEachFile(
+      astGrep([
+        {
+          id: "no-var",
+          language: "javascript",
+          rule: { pattern: "var $A = $B" },
+          fix: "let $A = $B;",
         },
-        fix: { template: "renamed()", expandEnd: { regex: ";", stopBy: "end" } },
-        constraints: { A: { not: { kind: "identifier" } } },
-        transform: { B: { convert: { source: "$A", toCase: "camelCase" } } },
-        severity: "warning",
-      },
-    ])),
+        {
+          id: "rename",
+          language: "typescript",
+          rule: {
+            kind: "call_expression",
+            has: { field: "function", regex: `^${target}$`, stopBy: "end" },
+          },
+          fix: { template: "renamed()", expandEnd: { regex: ";", stopBy: "end" } },
+          constraints: { A: { not: { kind: "identifier" } } },
+          transform: { B: { convert: { source: "$A", toCase: "camelCase" } } },
+          severity: "warning",
+        },
+      ]),
+    ),
   );
   // @ts-expect-error rules are imported or written, not named by path
   astGrep("./rules/config.yml");

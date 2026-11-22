@@ -1,7 +1,9 @@
 use anyhow::Result;
 use codemod_llrt_capabilities::module_builder::supported_runtime_external_modules;
 use rolldown::{BundleOutput, Bundler, BundlerOptions, InputItem, IsExternal, SourceMapType};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Simple rolldown-based bundler configuration
 #[derive(Debug, Clone)]
@@ -90,13 +92,9 @@ impl RolldownBundler {
             // What the runtime provides stays an import. Left to resolution,
             // `codemod/ast-grep` would be found in an installed `codemod`
             // package and its Node.js files bundled.
-            external: Some(IsExternal::from(
-                supported_runtime_external_modules()
-                    .into_iter()
-                    // What the YAML translation's callbacks use; the engine has it.
-                    .chain(["codemod-internal:jssg-compat".to_string()])
-                    .chain(self.config.externals.iter().cloned())
-                    .collect::<Vec<_>>(),
+            external: Some(externals(
+                &base_dir.join(&entry_str),
+                self.config.externals.clone(),
             )),
             ..Default::default()
         };
@@ -129,6 +127,30 @@ impl RolldownBundler {
             output_path: self.config.output_path.clone(),
         })
     }
+}
+
+/// What stays an import: the modules the runtime provides, from any file,
+/// and `entry_externals` (relative specifiers) only as the entry file
+/// imports them. A file the entry imports may use the same specifier for
+/// another file, next to it, which is bundled.
+fn externals(entry: &Path, entry_externals: Vec<String>) -> IsExternal {
+    let runtime: HashSet<String> = supported_runtime_external_modules()
+        .into_iter()
+        // What the YAML translation's callbacks use; the engine has it.
+        .chain(["codemod-internal:jssg-compat".to_string()])
+        .collect();
+    let entry_externals: HashSet<String> = entry_externals.into_iter().collect();
+    let entry = std::fs::canonicalize(entry).unwrap_or_else(|_| entry.to_path_buf());
+    IsExternal::Fn(Some(Arc::new(
+        move |specifier: &str, importer: Option<&str>, _resolved: bool| {
+            let external = runtime.contains(specifier)
+                || (entry_externals.contains(specifier)
+                    && importer.is_some_and(|importer| {
+                        std::fs::canonicalize(importer).is_ok_and(|importer| importer == entry)
+                    }));
+            Box::pin(async move { Ok(external) })
+        },
+    )))
 }
 
 fn normalize_rolldown_path(path: &Path) -> PathBuf {

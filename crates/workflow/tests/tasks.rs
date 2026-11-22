@@ -1101,6 +1101,29 @@ export default async function main() {
     assert_eq!(h.read("a.js"), "let x = 1;\n");
 }
 
+#[test]
+fn imported_yaml_keeps_a_proto_key_as_a_key() {
+    let h = Harness::new();
+    h.bundle_file("data.yaml", "__proto__:\n  enabled: true\nname: x\n");
+    let report = h.start(
+        r#"
+import data from "./data.yaml";
+export default async function main() {
+  return { keys: Object.keys(data), inherited: (data as any).enabled ?? null, own: JSON.stringify(data) };
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "keys": ["__proto__", "name"],
+            "inherited": null,
+            "own": r#"{"__proto__":{"enabled":true},"name":"x"}"#,
+        })
+    );
+}
+
 /// A callback's roots resolve definitions and references within their file
 /// by default, across the selected files with `semanticAnalysis:
 /// "workspace"`, and not at all with `"none"`.
@@ -1141,10 +1164,17 @@ export default async function main() {{
         output(&h.start(&workflow(r#", semanticAnalysis: "workspace""#), Value::Null)).unwrap(),
         json!([["definition", "value"], ["references", ["b.ts"]]])
     );
-    assert_eq!(
-        output(&h.start(&workflow(r#", semanticAnalysis: "none""#), Value::Null)).unwrap(),
-        json!([["definition", null], ["references", []]])
-    );
+    for none in [r#""none""#, r#"{ mode: "none" }"#] {
+        assert_eq!(
+            output(&h.start(
+                &workflow(&format!(", semanticAnalysis: {none}")),
+                Value::Null
+            ))
+            .unwrap(),
+            json!([["definition", null], ["references", []]]),
+            "{none}"
+        );
+    }
 }
 
 /// A callback gets the capabilities its selector asks for once they are

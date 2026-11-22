@@ -466,7 +466,10 @@ declare module "codemod:workflow" {
    * ```
    */
   export function forEachFile(rules: AstGrepHandler): Task<AstGrepResult>;
-  export function forEachFile(selector: AstGrepSelector, rules: AstGrepHandler): Task<AstGrepResult>;
+  export function forEachFile(
+    selector: AstGrepSelector,
+    rules: AstGrepHandler,
+  ): Task<AstGrepResult>;
 
   /**
    * A result for tasks that do nothing in some runs: shell commands, agents

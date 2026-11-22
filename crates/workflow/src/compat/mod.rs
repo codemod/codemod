@@ -816,7 +816,10 @@ impl Generator {
                 }
                 for_each_file(
                     &selector,
-                    format!("astGrep({})", self.transform(&ast_grep.config_file, "Rules")),
+                    format!(
+                        "astGrep({})",
+                        self.transform(&ast_grep.config_file, "Rules")
+                    ),
                 )
             }
             StepAction::JSAstGrep(js) => {
@@ -1256,13 +1259,19 @@ fn is_root(base: &str) -> bool {
 /// matches at any depth, and one with a slash is anchored at the base.
 fn rebase_glob(base: &str, glob: &str) -> String {
     let base = base.trim();
-    let base = base.strip_prefix("./").unwrap_or(base).trim_end_matches('/');
+    let base = base
+        .strip_prefix("./")
+        .unwrap_or(base)
+        .trim_end_matches('/');
     let (negated, glob) = match glob.strip_prefix('!') {
         Some(rest) => ("!", rest),
         None => ("", glob),
     };
     let anchored = glob.trim_end_matches('/').contains('/');
-    let glob = glob.strip_prefix("./").unwrap_or(glob).trim_start_matches('/');
+    let glob = glob
+        .strip_prefix("./")
+        .unwrap_or(glob)
+        .trim_start_matches('/');
     if anchored || glob.starts_with("**") {
         format!("{negated}{base}/{glob}")
     } else {

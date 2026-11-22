@@ -28,9 +28,13 @@ pub fn yaml_to_json(text: &str) -> Result<Value, String> {
     })
 }
 
-/// The JavaScript module a YAML file is loaded as.
+/// The JavaScript module a YAML file is loaded as. The content goes through
+/// `JSON.parse`: as an object literal, a `__proto__` key would set the
+/// prototype instead of being a key.
 pub fn yaml_module(text: &str) -> Result<String, String> {
-    Ok(format!("export default {};\n", yaml_to_json(text)?))
+    let json = yaml_to_json(text)?.to_string();
+    let literal = serde_json::to_string(&json).map_err(|e| e.to_string())?;
+    Ok(format!("export default JSON.parse({literal});\n"))
 }
 
 #[cfg(test)]
@@ -51,7 +55,7 @@ mod tests {
         assert!(yaml_to_json("id: [").is_err());
         assert_eq!(
             yaml_module("id: a").unwrap(),
-            "export default {\"id\":\"a\"};\n"
+            "export default JSON.parse(\"{\\\"id\\\":\\\"a\\\"}\");\n"
         );
     }
 }

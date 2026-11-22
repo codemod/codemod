@@ -1051,6 +1051,48 @@ export default async function main() {
         );
     }
 
+    /// The workflow's imported callback stays an import; a helper's import
+    /// with the same specifier names another file, which is bundled.
+    #[tokio::test]
+    async fn only_the_workflows_own_imports_stay_external() {
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join("workflow.ts"),
+            r#"import { forEachFile, step } from "codemod/workflow";
+import migrate from "./migrate.ts";
+import { label } from "./lib/helper.ts";
+
+export default async function main() {
+  await step(label, forEachFile("**/*.ts", migrate));
+}
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("migrate.ts"),
+            "export default function migrate(file: any) { file.write(\"root-migrate\"); }\n",
+        )
+        .unwrap();
+        fs::create_dir_all(temp_dir.path().join("lib")).unwrap();
+        fs::write(
+            temp_dir.path().join("lib/helper.ts"),
+            "import name from \"./migrate.ts\";\nexport const label = name();\n",
+        )
+        .unwrap();
+        fs::write(
+            temp_dir.path().join("lib/migrate.ts"),
+            "export default function name() { return \"helper-label\"; }\n",
+        )
+        .unwrap();
+
+        let bundle = bundle_js_file(temp_dir.path(), "workflow.ts")
+            .await
+            .unwrap();
+        assert!(bundle.contains("helper-label"), "{bundle}");
+        assert!(!bundle.contains("root-migrate"), "{bundle}");
+        assert_eq!(bundle.matches("\"./migrate.ts\"").count(), 1, "{bundle}");
+    }
+
     /// Imported YAML rules are published as they are, the workflow's bundle
     /// still imports them, and the installed package runs them.
     #[tokio::test]

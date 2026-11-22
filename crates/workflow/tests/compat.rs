@@ -272,6 +272,50 @@ nodes:
         .all(|s| s.status == StepStatus::Succeeded));
 }
 
+/// The shard's transform runs as the YAML engine's prescan ran it: as a dry
+/// run, so a transform that changes files only then is what picks them.
+#[test]
+fn a_shard_transform_sees_a_dry_run() {
+    let h = Harness::new();
+    h.write("src/a/a.ts", "y = 1\n");
+    h.write("src/b/b.ts", "y = 2\n");
+    h.bundle_file(
+        "scripts/codemod.ts",
+        r#"
+export default function transform(root: any, options: any) {
+  const text = root.root().text();
+  if (!options.dryRun || !text.includes("1")) return null;
+  return text.replace("1", "one");
+}
+"#,
+    );
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: evaluate
+    name: Evaluate shards
+    steps:
+      - name: Build shards
+        shard:
+          method:
+            type: directory
+            max_files_per_shard: 10
+          target: src
+          output_state: shards
+          js-ast-grep:
+            js_file: scripts/codemod.ts
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let shards = report.steps[0].result.as_ref().unwrap();
+    assert!(shards.to_string().contains("a/a.ts"), "{shards}");
+    assert!(!shards.to_string().contains("b/b.ts"), "{shards}");
+    assert_eq!(h.read("src/a/a.ts"), "y = 1\n");
+}
+
 /// The YAML names its rule file by path; the translation imports it.
 #[test]
 fn a_yaml_ast_grep_step_applies_its_imported_rule_file() {
@@ -719,23 +763,26 @@ export default function transform() { return null; }
 }
 
 /// File-scope semantic analysis is on by default, as it was; a step
-/// `dry_run` runs the transform but changes nothing.
+/// `dry_run` runs the transform (which sees `options.dryRun`) but changes
+/// nothing.
 #[test]
 fn a_yaml_transform_gets_semantic_analysis_and_dry_run_as_before() {
     let transform = r#"
-export default function transform(root: any) {
+export default function transform(root: any, options: any) {
   const use = root.root().find({ rule: { pattern: "console.log($A)" } });
   const definition = use.getMatch("A").definition();
-  return `// defined: ${definition ? definition.node.text() : "unknown"}\n` + root.root().text();
+  const edit = `// defined: ${definition ? definition.node.text() : "unknown"}\n` + root.root().text();
+  return { edit, data: options.dryRun ? "dry run" : "run" };
 }
 "#;
-    for (options, expected) in [
-        ("", "// defined: value\n"),
+    for (options, expected, ran) in [
+        ("", "// defined: value\n", "run"),
         (
             "          semantic_analysis: workspace",
             "// defined: value\n",
+            "run",
         ),
-        ("          dry_run: true", ""),
+        ("          dry_run: true", "", "dry run"),
     ] {
         let h = Harness::new();
         h.write("src/a.ts", "const value = 1;\nconsole.log(value);\n");
@@ -747,5 +794,8 @@ export default function transform(root: any) {
             format!("{expected}const value = 1;\nconsole.log(value);\n"),
             "{options}"
         );
+        // The transform ran, and saw whether it was a dry run.
+        let result = report.steps[0].result.as_ref().unwrap();
+        assert_eq!(result["outputs"], json!([ran]), "{options}: {result}");
     }
 }

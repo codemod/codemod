@@ -154,7 +154,8 @@ export async function jssgWouldChange(
   options: JssgOptions = {},
 ): Promise<true | "matched" | undefined> {
   if (!underBase(file.path, options.basePath)) return undefined;
-  const applied = await apply(module, file, options);
+  // As the YAML engine's shard prescan did: the transform sees a dry run.
+  const applied = await apply(module, file, { ...options, dryRun: true });
   if (applied.text !== undefined || applied.renamed !== undefined) return true;
   if (!applied.skipped && "getSelector" in module) return "matched";
   return undefined;

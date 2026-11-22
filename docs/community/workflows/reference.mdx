@@ -232,7 +232,7 @@ export default async function main() {
 }
 ```
 
-- The build extracts it as it does an inline callback: the module it runs in imports the file. The workflow body never loads it.
+- The build extracts it as it does an inline callback: the module it runs in imports the file. The workflow body never loads it, with the CLI and with `runWorkflow(path)` on Node.js (a module you import yourself, or Bun, loads it with the workflow: see [Node.js](/community/workflows/node#import-workflows-yourself)).
 - The step is identified by the file's content and the content of the files it imports (relatively): change either and a finished step runs again on resume, as an edited inline callback does.
 - Publishing includes the file, bundled with what it imports from npm packages.
 - `FileCallback<Output>` types the function; what it returns is collected into `outputs`.
