@@ -946,13 +946,21 @@ nodes:
 /// are kept, when it throws, changes its own file with `jssgTransform`
 /// (it returns its file's new text instead), or reaches outside the target,
 /// through `..` or a symbolic link. The other files' changes are kept.
-#[cfg(unix)]
 #[test]
 fn a_yaml_transform_s_changes_to_other_files_are_kept_only_when_it_succeeds() {
     let h = Harness::new();
     let outside = tempfile::tempdir().unwrap();
     std::fs::write(outside.path().join("escape.ts"), "export {};\n").unwrap();
-    std::os::unix::fs::symlink(outside.path(), h.target.path().join("link")).unwrap();
+    // Next to the target: `../escape.ts` from it.
+    std::fs::write(h.target.path().join("../escape.ts"), "export {};\n").unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside.path(), h.target.path().join("link")).unwrap();
+        h.write(
+            "src/symlink.ts",
+            "// touch: shared/index.ts\n// touch: link/escape.ts\nconst l = 'OLD';\n",
+        );
+    }
     h.write("shared/index.ts", "export {};\n");
     h.write(
         "src/ok.ts",
@@ -969,10 +977,6 @@ fn a_yaml_transform_s_changes_to_other_files_are_kept_only_when_it_succeeds() {
     h.write(
         "src/dots.ts",
         "// touch: shared/index.ts\n// touch: ../escape.ts\nconst d = 'OLD';\n",
-    );
-    h.write(
-        "src/symlink.ts",
-        "// touch: shared/index.ts\n// touch: link/escape.ts\nconst l = 'OLD';\n",
     );
     let report = js_step(&h, CROSS_FILE, "          include: [\"src/**/*.ts\"]");
     assert!(output(&report).is_ok(), "{:?}", report.ending);
@@ -1001,10 +1005,12 @@ fn a_yaml_transform_s_changes_to_other_files_are_kept_only_when_it_succeeds() {
     ] {
         assert_eq!(h.read(path), text, "{path}");
     }
-    assert_eq!(
-        std::fs::read_to_string(outside.path().join("escape.ts")).unwrap(),
-        "export {};\n"
-    );
+    for escape in [
+        outside.path().join("escape.ts"),
+        h.target.path().join("../escape.ts"),
+    ] {
+        assert_eq!(std::fs::read_to_string(&escape).unwrap(), "export {};\n");
+    }
     let failures = &report.steps[0].result.as_ref().unwrap()["failures"];
     let error = |path: &str| {
         failures
@@ -1020,7 +1026,50 @@ fn a_yaml_transform_s_changes_to_other_files_are_kept_only_when_it_succeeds() {
     assert!(error("src/throws.ts").contains("throws.ts fails on purpose"));
     assert!(error("src/self.ts").contains("is being transformed already"));
     assert!(error("src/dots.ts").contains("outside the target directory"));
+    #[cfg(unix)]
     assert!(error("src/symlink.ts").contains("outside the target directory"));
+    let _ = std::fs::remove_file(h.target.path().join("../escape.ts"));
+}
+
+/// A transform that does not wait for its `jssgTransform` call fails on
+/// its file: the call would change the other file after the transform's
+/// changes were kept or dropped. Nothing of it is kept, and the other
+/// files' transforms are not affected by the late call.
+#[test]
+fn a_yaml_transform_that_does_not_await_jssg_transform_fails() {
+    let h = Harness::new();
+    h.write("shared/index.ts", "export {};\n");
+    h.write("src/late.ts", "// late\nconst l = 'OLD';\n");
+    h.write(
+        "src/ok.ts",
+        "// touch: shared/index.ts\nconst ok = 'OLD';\n",
+    );
+    let transform = CROSS_FILE.replace(
+        "  let edit = text;",
+        r#"  if (text.includes("// late")) {
+    jssgTransform(async (r: any) => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return r.root().text() + "// late\n";
+    }, `${options.targetDir}/shared/index.ts`, "typescript");
+  }
+  let edit = text;"#,
+    );
+    let report = js_step(&h, &transform, "          include: [\"src/**/*.ts\"]");
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("src/late.ts"), "// late\nconst l = 'OLD';\n");
+    assert_eq!(
+        h.read("src/ok.ts"),
+        "// touch: shared/index.ts\nconst ok = 'NEW';\n"
+    );
+    assert_eq!(
+        h.read("shared/index.ts"),
+        "export {};\n// touched by ok.ts\n"
+    );
+    let failures = report.steps[0].result.as_ref().unwrap()["failures"].to_string();
+    assert!(
+        failures.contains("src/late.ts") && failures.contains("await it"),
+        "{failures}"
+    );
 }
 
 /// Many files changing one file, and files changing each other, keep every

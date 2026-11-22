@@ -11,6 +11,10 @@
 //! its own until the transaction ends, and are put back as they were if the
 //! transaction does not keep its changes (the transform failed). A file's
 //! changes to other files are then applied with its own, or not at all.
+//!
+//! Each take of a file gets its own token. A guard whose take has ended
+//! (its transaction finished while a transform still had it, such as an
+//! unawaited `jssgTransform`) changes nothing any more.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -33,6 +37,8 @@ struct Pending {
     busy: bool,
     /// The text when the holder's transaction took the file.
     before: String,
+    /// The take that has the file now; 0 when none has.
+    token: u64,
 }
 
 #[derive(Debug, Default)]
@@ -47,6 +53,10 @@ struct State {
     aborted: HashMap<ThreadId, (ThreadId, u64)>,
     /// How many transactions each thread has ended.
     ended: HashMap<ThreadId, u64>,
+    /// The files each open transaction holds.
+    held: HashMap<ThreadId, Vec<PathBuf>>,
+    /// The last token given to a take.
+    tokens: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -60,6 +70,7 @@ pub struct PendingFiles {
 pub struct TakenFile {
     files: PendingFiles,
     path: PathBuf,
+    token: u64,
 }
 
 /// The files one thread takes until [`Transaction::finish`]. Dropped
@@ -92,36 +103,39 @@ impl State {
         false
     }
 
-    /// Give back one file held outside a transaction.
-    fn release_one(&mut self, path: &Path) {
-        let unchanged = match self.files.get_mut(path) {
-            Some(file) => {
-                file.holder = None;
-                file.busy = false;
-                file.before.clear();
-                file.text == file.original
-            }
-            None => false,
-        };
-        if unchanged {
-            self.files.remove(path);
-        }
+    fn next_token(&mut self) -> u64 {
+        self.tokens += 1;
+        self.tokens
     }
 
-    /// Give back what `thread` holds, putting back the texts if `keep` is false.
-    fn release(&mut self, thread: ThreadId, keep: bool) {
-        self.files.retain(|_, file| {
-            if file.holder == Some(thread) {
+    /// Give back one file `thread` holds, putting back its text from when
+    /// the holder took it unless `keep`.
+    fn release_one(&mut self, path: &Path, thread: ThreadId, keep: bool) {
+        let unchanged = match self.files.get_mut(path) {
+            Some(file) if file.holder == Some(thread) => {
                 if !keep {
                     file.text = std::mem::take(&mut file.before);
                 }
                 file.holder = None;
                 file.busy = false;
+                file.token = 0;
                 file.before.clear();
+                file.text == file.original
             }
-            // A file left as it was needs no keeping: the next take reads it again.
-            file.holder.is_some() || file.text != file.original
-        });
+            _ => false,
+        };
+        // A file left as it was needs no keeping: the next take reads it again.
+        if unchanged {
+            self.files.remove(path);
+        }
+    }
+
+    /// Give back what `thread`'s transaction holds, putting back the texts
+    /// if `keep` is false. Only those files are visited.
+    fn release(&mut self, thread: ThreadId, keep: bool) {
+        for path in self.held.remove(&thread).unwrap_or_default() {
+            self.release_one(&path, thread, keep);
+        }
     }
 }
 
@@ -148,8 +162,12 @@ impl PendingFiles {
                 // Taken earlier in this transaction, and free again.
                 file.busy = true;
                 let text = file.text.clone();
+                let token = state.next_token();
+                if let Some(file) = state.files.get_mut(&key) {
+                    file.token = token;
+                }
                 drop(state);
-                return Ok((text, self.taken(key)));
+                return Ok((text, self.taken(key, token)));
             }
         }
         let deadline = Instant::now() + WAIT_LIMIT;
@@ -184,10 +202,12 @@ impl PendingFiles {
                 .0;
             state.waiting.remove(&me);
         }
+        let token = state.next_token();
         let text = match state.files.get_mut(&key) {
             Some(file) => {
                 file.holder = Some(me);
                 file.busy = true;
+                file.token = token;
                 file.before = file.text.clone();
                 file.text.clone()
             }
@@ -201,19 +221,24 @@ impl PendingFiles {
                         holder: Some(me),
                         busy: true,
                         before: text.clone(),
+                        token,
                     },
                 );
                 text
             }
         };
+        if state.open.contains(&me) {
+            state.held.entry(me).or_default().push(key.clone());
+        }
         drop(state);
-        Ok((text, self.taken(key)))
+        Ok((text, self.taken(key, token)))
     }
 
-    fn taken(&self, path: PathBuf) -> TakenFile {
+    fn taken(&self, path: PathBuf, token: u64) -> TakenFile {
         TakenFile {
             files: self.clone(),
             path,
+            token,
         }
     }
 
@@ -250,10 +275,24 @@ impl TakenFile {
         &self.path
     }
 
+    /// Whether this take still has the file: its transaction has not ended.
+    pub fn is_current(&self) -> bool {
+        self.files
+            .lock()
+            .files
+            .get(&self.path)
+            .is_some_and(|file| file.token == self.token)
+    }
+
     /// The file's new text, for whoever takes it next and for the commit.
-    pub fn set(&self, text: String) {
-        if let Some(file) = self.files.lock().files.get_mut(&self.path) {
-            file.text = text;
+    /// Gives false, and changes nothing, when the take has ended.
+    pub fn set(&self, text: String) -> bool {
+        match self.files.lock().files.get_mut(&self.path) {
+            Some(file) if file.token == self.token => {
+                file.text = text;
+                true
+            }
+            _ => false,
         }
     }
 }
@@ -262,22 +301,22 @@ impl Drop for TakenFile {
     fn drop(&mut self) {
         let me = std::thread::current().id();
         let mut state = self.files.lock();
-        if state.open.contains(&me) {
-            // The transaction gives it back.
-            if let Some(file) = state.files.get_mut(&self.path) {
-                if file.holder == Some(me) {
-                    file.busy = false;
-                }
-            }
+        let in_transaction = state.open.contains(&me);
+        let Some(file) = state
+            .files
+            .get_mut(&self.path)
+            .filter(|file| file.token == self.token)
+        else {
+            // Its take has ended.
+            return;
+        };
+        if in_transaction {
+            // Free for the transaction to take again; the transaction gives it back.
+            file.busy = false;
+            file.token = 0;
             return;
         }
-        let held = state
-            .files
-            .get(&self.path)
-            .is_some_and(|file| file.holder == Some(me));
-        if held {
-            state.release_one(&self.path);
-        }
+        state.release_one(&self.path, me, true);
         drop(state);
         self.files.inner.1.notify_all();
     }
@@ -289,6 +328,17 @@ impl Transaction {
     /// be dropped and done again.
     pub fn aborted(&self) -> bool {
         self.files.lock().aborted.contains_key(&self.thread)
+    }
+
+    /// Whether a transform still has one of the transaction's files (an
+    /// unawaited `jssgTransform`): what it does next would come too late.
+    pub fn unsettled(&self) -> bool {
+        let state = self.files.lock();
+        state.held.get(&self.thread).is_some_and(|paths| {
+            paths
+                .iter()
+                .any(|path| state.files.get(path).is_some_and(|file| file.busy))
+        })
     }
 
     /// Put back what an aborted transaction changed, and wait until the
@@ -481,5 +531,39 @@ mod tests {
         let mark = if aborted[0] { "2" } else { "1" };
         assert_eq!(changed[0].2, format!("a{mark}"));
         assert_eq!(changed[1].2, format!("b{mark}"));
+    }
+
+    /// A guard that outlives its transaction (an unawaited `jssgTransform`)
+    /// changes nothing once the file is taken again, by another thread or
+    /// by the next transaction on this one.
+    #[test]
+    fn a_guard_that_outlives_its_transaction_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.ts");
+        std::fs::write(&path, "0").unwrap();
+        let files = PendingFiles::default();
+
+        let transaction = files.begin();
+        let (_, late) = files.take(&path).unwrap();
+        assert!(transaction.unsettled());
+        transaction.finish(false);
+        assert!(!late.is_current());
+        assert!(!late.set("late".into()));
+
+        let transaction = files.begin();
+        let (text, taken) = files.take(&path).unwrap();
+        assert!(!late.set("late".into()));
+        drop(late);
+        // The stale guard did not free the file for a second take.
+        assert!(files
+            .take(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("being transformed already"));
+        assert!(taken.set(format!("{text}1")));
+        drop(taken);
+        assert!(!transaction.unsettled());
+        transaction.finish(true);
+        assert_eq!(files.changed()[0].2, "01");
     }
 }

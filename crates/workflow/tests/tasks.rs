@@ -1925,3 +1925,101 @@ export default async function main({ target }) {
     assert!(!h.exists("styles.less"));
     assert_eq!(h.read("styles.css"), "--color: red;\n");
 }
+
+/// The YAML translation's adapter can only take the file its callback runs
+/// on: a callback that asks for another, in the target or outside it, is
+/// refused, and nothing is read or written through it.
+#[test]
+fn a_callback_cannot_take_another_file_through_the_jssg_adapter_host() {
+    let h = Harness::new();
+    h.write("a.ts", "const a = 1;\n");
+    h.write("other.ts", "const other = 1;\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  return await step("Edit", forEachFile("a.ts", (file) => {
+    const errors = [];
+    for (const path of ["other.ts", "../outside.ts"]) {
+      try {
+        globalThis.__jssgCompatHost.begin(path, false);
+      } catch (error) {
+        errors.push(String(error.message));
+      }
+    }
+    file.write("const a = 2;\n");
+    return errors;
+  }));
+}
+"#,
+        Value::Null,
+    );
+    let result = output(&report).unwrap();
+    assert_eq!(
+        result["outputs"],
+        json!([[
+            "'other.ts' is not the file this callback runs on",
+            "'../outside.ts' is not the file this callback runs on"
+        ]]),
+        "{result}"
+    );
+    assert_eq!(h.read("a.ts"), "const a = 2;\n");
+    assert_eq!(h.read("other.ts"), "const other = 1;\n");
+}
+
+/// With several files in flight per worker, `jssgTransform` on other files
+/// is refused, and what it did is not written, even when other files of
+/// the step succeed.
+#[test]
+fn refused_jssg_transform_changes_are_not_written_with_concurrency() {
+    let h = Harness::new();
+    h.write("a.ts", "const a = 1;\n");
+    h.write("b.ts", "const b = 1;\n");
+    h.write("c.ts", "const c = 1;\n");
+    h.write("other.txt", "other\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  return await step("Edit", forEachFile({ include: "*.ts", concurrency: 2 }, async (file) => {
+    if (file.path === "a.ts") {
+      await jssgTransform((root) => root.root().text() + "changed\n", `${target}/other.txt`, "typescript");
+    }
+    file.write(file.text.replace("1", "2"));
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("other.txt"), "other\n");
+    assert_eq!(h.read("c.ts"), "const c = 2;\n");
+    assert_eq!(h.read("a.ts"), "const a = 1;\n");
+}
+
+/// Work a callback leaves running (a timer it does not wait for, an
+/// interval it never clears) does not crash the run when the step's
+/// workers finish.
+#[test]
+fn work_a_callback_leaves_running_does_not_crash_the_run() {
+    let h = Harness::new();
+    h.write("a.ts", "const a = 1;\n");
+    h.write("b.ts", "const b = 1;\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step("Edit", forEachFile("*.ts", (file) => {
+    if (file.path === "a.ts") new Promise((resolve) => setTimeout(resolve, 50)).then(() => {});
+    else setInterval(() => {}, 10);
+    file.write(file.text.replace("1", "2"));
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("a.ts"), "const a = 2;\n");
+    assert_eq!(h.read("b.ts"), "const b = 2;\n");
+}

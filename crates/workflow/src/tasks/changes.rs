@@ -79,6 +79,16 @@ pub(crate) fn relative(target: &Path, path: &Path) -> Option<String> {
         .map(|p| p.to_string_lossy().replace('\\', "/"))
 }
 
+/// `relative` (with `/` separators) under `target`, joined part by part so
+/// the separators are the platform's: on Windows, a `\\?\` target does not
+/// take `/`.
+pub(crate) fn under(target: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .fold(target.to_path_buf(), |path, part| path.join(part))
+}
+
 /// A relative path in one spelling: `/` separators, no `.` parts. `None`
 /// when it is empty, absolute, or climbs out with `..`.
 pub(crate) fn normalize(path: &str) -> Option<String> {
@@ -419,14 +429,28 @@ pub(crate) fn plan(
     changes: &[butterflow_core::jssg_runner::JssgFileChange],
 ) -> Result<Vec<PlannedChange>, String> {
     let target = &task.run.target;
+    // Changed files are kept under their canonical paths, so under the
+    // canonical target they need no lookup of their own. Rename targets may
+    // not be canonical (`..`, symbolic links) and are looked up in full.
+    let root = fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+    let canonical = |path: &Path| {
+        let inside = path.strip_prefix(&root).ok()?;
+        inside
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+            .then(|| inside.to_string_lossy().replace('\\', "/"))
+            .filter(|inside| !inside.is_empty())
+    };
     let mut planned = Vec::new();
     for change in changes {
-        let path = relative(target, &change.path).ok_or_else(|| {
-            format!(
-                "the step changed '{}', outside the target",
-                change.path.display()
-            )
-        })?;
+        let path = canonical(&change.path)
+            .or_else(|| relative(target, &change.path))
+            .ok_or_else(|| {
+                format!(
+                    "the step changed '{}', outside the target",
+                    change.path.display()
+                )
+            })?;
         let rename_to = change
             .rename_to
             .as_ref()
