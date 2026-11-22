@@ -811,7 +811,7 @@ import { jssgTransform } from "codemod:ast-grep";
 
 export default async function transform(root: any, options: any) {
   const text: string = root.root().text();
-  const name = root.filename().split("/").pop();
+  const name = root.filename().split(/[\\/]/).pop();
   for (const match of text.matchAll(/\/\/ touch: (\S+)/g)) {
     await jssgTransform(
       (r: any) => r.root().text() + `// touched by ${name}\n`,
