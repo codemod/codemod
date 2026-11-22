@@ -4,23 +4,33 @@
 //!
 //! Callbacks may be async. Each worker keeps up to `concurrency` files in
 //! flight, so callbacks that wait on the network overlap.
+//!
+//! Selecting only walks the target: each worker reads its files as it gets
+//! to them, and keeps a file's text only when the callback changed the file
+//! (the commit needs it to check the file did not change on disk meanwhile,
+//! and for the diff).
 
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use butterflow_core::execution::{self, language_globs};
+use butterflow_core::jssg_runner::{JssgFileChange, SemanticMode};
 use codemod_deps::Registry;
+use codemod_sandbox::sandbox::engine::{
+    ExecutionResult, FileChange, ModifiedResult, PendingFiles, TakenFile, Transaction,
+};
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::WorkerOptions;
-use rquickjs::{async_with, CatchResultExt, Function, Module, Promise};
+use rquickjs::{async_with, CatchResultExt, Ctx, Exception, Function, Module, Object, Promise};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::changes::{self, Change, PlannedChange};
 use super::isolate::{self, module_name, StepIsolates};
-use super::{block_on, TaskContext, TaskOutcome};
+use super::{block_on, parallel_map, TaskContext, TaskOutcome};
 use crate::run::RunContext;
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -34,6 +44,14 @@ pub struct Selector {
     /// Files each worker keeps in flight; more than one only helps callbacks
     /// that wait (network, `codemod/llm`).
     pub concurrency: Option<usize>,
+    /// `"file"` (the default), `"workspace"` or `"none"`: what `definition()`
+    /// and `references()` on roots `parse(file)` makes can find.
+    #[serde(rename = "semanticAnalysis")]
+    pub semantic_analysis: Option<Value>,
+    /// Capabilities the callback needs besides the run's (`fs`, `fetch`,
+    /// `child_process`).
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,12 +88,101 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     let request: Request =
         serde_json::from_value(request).map_err(|e| format!("bad forEachFile task: {e}"))?;
     let run = task.run;
+    let (selector, files) = select_paths(run, request.selector)?;
+    let (outcomes, other_changes) = run_callback(
+        task,
+        &request.callback,
+        &request.captures,
+        &selector,
+        &files,
+    )?;
+
+    let mut total = 0;
+    let mut outputs = Vec::new();
+    let mut failures: Vec<(String, String)> = Vec::new();
+    let mut planned = Vec::new();
+    for (Selected { path, .. }, outcome) in files.into_iter().zip(outcomes) {
+        let outcome = outcome.unwrap_or_else(|| Err("the file was not processed".to_string()));
+        if matches!(outcome, Ok(Ran::Skipped)) {
+            continue;
+        }
+        total += 1;
+        match outcome {
+            Ok(Ran::Skipped) => {}
+            Err(error) => failures.push((path, error)),
+            Ok(Ran::Done { outcome, original }) => {
+                if outcome.has_output {
+                    outputs.push(outcome.output);
+                }
+                // A file the callback left alone is not part of the commit, so
+                // steps over other files may change it meanwhile.
+                let Some(original) = original else {
+                    continue;
+                };
+                match fold(path.clone(), original, outcome.effects) {
+                    Ok(Some(plan)) => planned.push(plan),
+                    Ok(None) => {}
+                    Err(error) => failures.push((path, error)),
+                }
+            }
+        }
+    }
+
+    if task.canceled() {
+        return Err("canceled".to_string());
+    }
+    task.log_failures(&failures);
+    every_file_failed(&failures, total)?;
+    planned.extend(changes::plan(task, &other_changes)?);
+    let changes = changes::commit(task, &planned, run.dry_run)?;
+    let failed = failures.len();
+    let failures: Vec<Value> = failures
+        .into_iter()
+        .map(|(path, error)| json!({ "path": path, "error": error }))
+        .collect();
+    Ok(TaskOutcome::new(json!({
+        "outputs": outputs,
+        "changes": changes,
+        "failures": failures,
+    }))
+    .with_failures(failed, total))
+}
+
+/// What became of one selected file.
+enum Ran {
+    /// Not UTF-8, or without the selector's `containing` text: not one of
+    /// the step's files.
+    Skipped,
+    /// The callback ran. `original` is the text it was given, kept only when
+    /// it asked for changes.
+    Done {
+        outcome: FileOutcome,
+        original: Option<String>,
+    },
+}
+
+/// What became of each of a step's files, in their order (`None` for a file
+/// the callback did not get to), and the files jssg transforms changed
+/// through the step's unwritten files (see [`OtherFiles`]).
+type CallbackOutcomes = (Vec<Option<Result<Ran, String>>>, Vec<JssgFileChange>);
+
+/// Run the extracted callback `callback` on the selected `files`, in
+/// workers, as the selector says (language, concurrency, semantic analysis,
+/// capabilities, `containing`). Each worker reads its files. Gives each
+/// file's outcome, in the order of `files`; nothing is committed.
+fn run_callback(
+    task: &TaskContext<'_>,
+    callback: &str,
+    captures: &Value,
+    selector: &Selector,
+    files: &[Selected],
+) -> Result<CallbackOutcomes, String> {
+    let run = task.run;
     let module = run
         .callbacks
-        .get(&request.callback)
-        .ok_or_else(|| format!("unknown callback '{}'", request.callback))?;
-    let captures = serde_json::to_string(&request.captures).map_err(|e| e.to_string())?;
-    let (selector, files) = select_files(run, request.selector)?;
+        .get(callback)
+        .ok_or_else(|| format!("unknown callback '{callback}'"))?;
+    let captures = serde_json::to_string(captures).map_err(|e| e.to_string())?;
     let total = files.len();
     let processed = AtomicUsize::new(0);
     let report_every = (total / 100).max(1);
@@ -86,8 +193,24 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         }
     };
 
-    let isolates = StepIsolates::new(task)?;
-    let name = module_name(task, &request.callback);
+    let mut isolates = StepIsolates::new(task)?;
+    isolates.capabilities = isolate::capabilities(task, &selector.capabilities)?;
+    let mode = isolate::semantic_mode(task, selector.semantic_analysis.as_ref())?;
+    // Only a workspace-wide provider needs the files up front.
+    let paths: Vec<_> = match mode {
+        SemanticMode::Workspace(_) => files
+            .iter()
+            .map(|selected| {
+                selected
+                    .file
+                    .canonicalize()
+                    .unwrap_or_else(|_| selected.file.clone())
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    isolates.semantic_provider = butterflow_core::jssg_runner::semantic_provider(&mode, &paths);
+    let name = module_name(task, callback);
     let next = AtomicUsize::new(0);
     let concurrency = selector.concurrency.unwrap_or(1).max(1);
     let workers = std::thread::available_parallelism()
@@ -95,8 +218,8 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         .unwrap_or(1)
         .min(files.len().div_ceil(concurrency))
         .max(1);
-    let mut outcomes: Vec<Option<Result<FileOutcome, String>>> =
-        (0..files.len()).map(|_| None).collect();
+    let mut outcomes: Vec<Option<Result<Ran, String>>> = (0..files.len()).map(|_| None).collect();
+    let other_files = OtherFiles::default();
 
     let worker_results: Vec<WorkerResult> = if files.is_empty() {
         Vec::new()
@@ -104,7 +227,14 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         std::thread::scope(|scope| {
             let handles: Vec<_> = (0..workers)
                 .map(|_| {
-                    let options = isolates.worker_options(task, selector.language.clone());
+                    let mut options = isolates.worker_options(task, selector.language.clone());
+                    // Only workers that run one file at a time keep what a
+                    // file's transforms change in a transaction of its own;
+                    // other workers' `jssgTransform` changes are refused, and
+                    // must not reach the step's.
+                    if concurrency == 1 {
+                        options.pending_files = Some(other_files.pending.clone());
+                    }
                     let job = Job {
                         options,
                         registry: isolates.registry.clone(),
@@ -112,11 +242,14 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
                         module,
                         captures: &captures,
                         language: selector.language.as_deref(),
-                        files: &files,
+                        files,
+                        containing: selector.containing.as_deref(),
                         next: &next,
                         concurrency,
                         cancel: &task.cancel,
                         workflow_path: &run.workflow_path,
+                        target: &run.target,
+                        other_files: &other_files,
                     };
                     let progress = &progress;
                     scope.spawn(move || worker(job, progress))
@@ -137,42 +270,40 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
             outcomes[index] = Some(outcome);
         }
     }
+    Ok((outcomes, other_files.into_changes()))
+}
 
-    let mut outputs = Vec::new();
-    let mut failures: Vec<(String, String)> = Vec::new();
-    let mut planned = Vec::new();
-    for ((path, original), outcome) in files.into_iter().zip(outcomes) {
-        match outcome.unwrap_or_else(|| Err("the file was not processed".to_string())) {
-            Err(error) => failures.push((path, error)),
-            Ok(outcome) => {
-                if outcome.has_output {
-                    outputs.push(outcome.output);
-                }
-                match fold(path.clone(), original, outcome.effects) {
-                    Ok(plan) => planned.push(plan),
-                    Err(error) => failures.push((path, error)),
-                }
-            }
-        }
-    }
+/// A file's path, and what the callback returned for it or why it failed.
+pub(crate) type FileOutput = (String, Result<Value, String>);
 
-    if task.canceled() {
-        return Err("canceled".to_string());
-    }
-    task.log_failures(&failures);
-    every_file_failed(&failures, total)?;
-    let changes = changes::commit(task, &planned, run.dry_run)?;
-    let failed = failures.len();
-    let failures: Vec<Value> = failures
-        .into_iter()
-        .map(|(path, error)| json!({ "path": path, "error": error }))
-        .collect();
-    Ok(TaskOutcome::new(json!({
-        "outputs": outputs,
-        "changes": changes,
-        "failures": failures,
-    }))
-    .with_failures(failed, total))
+/// What the callback returned for each of the selected `files` (`null` for
+/// nothing), without committing what it did to them; files it failed on are
+/// errors, files that are not UTF-8 are left out. For `shard`'s filter.
+pub(crate) fn callback_outputs(
+    task: &TaskContext<'_>,
+    callback: &str,
+    captures: &Value,
+    selector: &Selector,
+    files: &[Selected],
+) -> Result<Vec<FileOutput>, String> {
+    // A filter changes nothing: what transforms changed is dropped.
+    let (outcomes, _) = run_callback(task, callback, captures, selector, files)?;
+    Ok(files
+        .iter()
+        .zip(outcomes)
+        .filter_map(|(Selected { path, .. }, outcome)| {
+            let output =
+                match outcome.unwrap_or_else(|| Err("the file was not processed".to_string())) {
+                    Ok(Ran::Skipped) => return None,
+                    Ok(Ran::Done { outcome, .. }) => match outcome.error {
+                        Some(error) if !outcome.ok => Err(error),
+                        _ => Ok(outcome.output),
+                    },
+                    Err(error) => Err(error),
+                };
+            Some((path.clone(), output))
+        })
+        .collect())
 }
 
 /// A `forEachFile` step fails when its callback failed on every file it
@@ -186,12 +317,24 @@ pub(crate) fn every_file_failed(failures: &[(String, String)], total: usize) -> 
     }
 }
 
-/// The files a selector picks in the run's target, with the selector as
-/// completed from the package's languages when it names none.
+/// The files a selector picks in the run's target, with their text, and the
+/// selector as completed from the package's languages when it names none.
 pub(crate) fn select_files(
     run: &RunContext,
-    mut selector: Selector,
+    selector: Selector,
 ) -> Result<(Selector, Vec<(String, String)>), String> {
+    let (selector, selected) = select_paths(run, selector)?;
+    let files = read_selected(selected, selector.containing.as_deref());
+    Ok((selector, files))
+}
+
+/// The files the globs of a selector pick in the run's target, unread, with
+/// the selector as completed from the package's languages when it names
+/// none. Its `containing` filter is left for when the files are read.
+pub(crate) fn select_paths(
+    run: &RunContext,
+    mut selector: Selector,
+) -> Result<(Selector, Vec<Selected>), String> {
     let default_languages = if selector.include.is_empty() && selector.language.is_none() {
         let languages = package_languages(&run.package_dir)?;
         if languages.is_empty() {
@@ -204,8 +347,8 @@ pub(crate) fn select_files(
     if selector.language.is_none() && default_languages.len() == 1 {
         selector.language = default_languages.first().cloned();
     }
-    let files = select(&run.target, &selector, &default_languages)?;
-    Ok((selector, files))
+    let paths = select(&run.target, &selector, &default_languages)?;
+    Ok((selector, paths))
 }
 
 /// One file a callback ran on, and what it did to it.
@@ -228,7 +371,8 @@ pub(crate) fn commit_effects(
     for file in files {
         let path = file.path.clone();
         match fold(file.path, file.original, file.effects) {
-            Ok(plan) => planned.push(plan),
+            Ok(Some(plan)) => planned.push(plan),
+            Ok(None) => {}
             Err(error) => failures.push(json!({ "path": path, "error": error })),
         }
     }
@@ -259,14 +403,24 @@ pub(crate) fn package_languages(bundle_dir: &Path) -> Result<Vec<String>, String
         .unwrap_or_default())
 }
 
-/// Select files: globs and `.gitignore` first (as `jssg` and `astGrep`
-/// select theirs), then the text filter. Returns paths relative to the
-/// target with their contents, sorted by path.
-fn select(
+/// A selected file, not read yet.
+#[derive(Debug, Clone)]
+pub(crate) struct Selected {
+    /// Relative to the target, with `/`: what the callback gets.
+    pub path: String,
+    /// The file as the walk found it, to read it by: `path` may not lead
+    /// back to it (a `\` in a name on Unix, a name that is not UTF-8).
+    pub file: PathBuf,
+}
+
+/// Select files by globs and `.gitignore` (as `astGrep` selects its),
+/// without reading them. Sorted by path. The selector's text filter is
+/// [`read_selected`]'s.
+pub(crate) fn select(
     target: &Path,
     selector: &Selector,
     default_languages: &[String],
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<Vec<Selected>, String> {
     let include: Vec<String> = if !selector.include.is_empty() {
         selector.include.clone()
     } else {
@@ -281,27 +435,47 @@ fn select(
         globs
     };
 
-    let mut files = Vec::new();
-    for path in execution::select_files(target, &include, &selector.exclude)? {
-        let relative = path
-            .strip_prefix(target)
-            .map_err(|e| e.to_string())?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue; // not UTF-8
-        };
-        if let Some(needle) = &selector.containing {
-            if !text.contains(needle.as_str()) {
-                continue;
-            }
-        }
-        files.push((relative, text));
-    }
-    Ok(files)
+    execution::select_files(target, &include, &selector.exclude)?
+        .into_iter()
+        .map(|file| {
+            let path = file
+                .strip_prefix(target)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .replace('\\', "/");
+            Ok(Selected { path, file })
+        })
+        .collect()
 }
 
-type WorkerResult = Result<Vec<(usize, Result<FileOutcome, String>)>, String>;
+/// The text of a selected file, or `None` when it is not one of the step's
+/// files: unreadable, not UTF-8, or without the `containing` text.
+fn read_selected_file(file: &Path, containing: Option<&str>) -> Option<String> {
+    let text = fs::read_to_string(file).ok()?;
+    match containing {
+        Some(needle) if !text.contains(needle) => None,
+        _ => Some(text),
+    }
+}
+
+/// The selected files with their text (by their paths relative to the
+/// target), read in parallel; those [`read_selected_file`] leaves out are
+/// dropped.
+pub(crate) fn read_selected(
+    selected: Vec<Selected>,
+    containing: Option<&str>,
+) -> Vec<(String, String)> {
+    let texts = parallel_map(&selected, |selected| {
+        read_selected_file(&selected.file, containing)
+    });
+    selected
+        .into_iter()
+        .zip(texts)
+        .filter_map(|(selected, text)| Some((selected.path, text?)))
+        .collect()
+}
+
+type WorkerResult = Result<Vec<(usize, Result<Ran, String>)>, String>;
 
 struct Job<'a> {
     options: WorkerOptions<OxcResolver>,
@@ -310,11 +484,14 @@ struct Job<'a> {
     module: &'a str,
     captures: &'a str,
     language: Option<&'a str>,
-    files: &'a [(String, String)],
+    files: &'a [Selected],
+    containing: Option<&'a str>,
     next: &'a AtomicUsize,
     concurrency: usize,
     cancel: &'a Arc<AtomicBool>,
     workflow_path: &'a Path,
+    target: &'a Path,
+    other_files: &'a OtherFiles,
 }
 
 fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
@@ -326,15 +503,18 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         captures,
         language,
         files,
+        containing,
         next,
         concurrency,
         cancel,
         workflow_path,
+        target,
+        other_files,
     } = job;
     block_on(async move {
-        let sandbox = isolate::start(options, registry).await?;
-        let sandbox = &sandbox;
-        async_with!(sandbox.context => |ctx| {
+        let worker = isolate::start(options, registry).await?;
+        let sandbox = &worker;
+        let results = async_with!(sandbox.context => |ctx| {
             let setup = async {
                 let declared = Module::declare(ctx.clone(), name, module)?;
                 crate::run::set_import_meta(&declared, workflow_path)?;
@@ -349,66 +529,335 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                 .catch(&ctx)
                 .map_err(|e| format!("could not load the callback: {e}"))?;
 
+            // One file at a time per worker: a jssg transform the YAML
+            // translation runs may change other files with `jssgTransform`.
+            let slot: CompatSlot = Arc::default();
+            if concurrency == 1 {
+                install_compat_host(&ctx, other_files.pending.clone(), Arc::clone(&slot))
+                    .map_err(|e| format!("could not start the step's runtime: {e}"))?;
+            }
+
             let mut results = Vec::new();
             loop {
                 if cancel.load(Ordering::SeqCst) {
                     break;
                 }
                 let start = next.fetch_add(concurrency, Ordering::SeqCst);
-                let indices: Vec<usize> = (start..(start + concurrency).min(files.len())).collect();
-                if indices.is_empty() {
+                let range = start..(start + concurrency).min(files.len());
+                if range.is_empty() {
                     break;
                 }
-                let batch: Vec<(&str, &str)> = indices
-                    .iter()
-                    .map(|&index| (files[index].0.as_str(), files[index].1.as_str()))
-                    .collect();
-                let batch = serde_json::to_string(&batch).map_err(|e| e.to_string())?;
-                let settled = async {
-                    let promise: Promise = run_batch.call((batch,))?;
-                    promise.into_future::<String>().await
-                };
-                let outcomes: Result<Vec<FileOutcome>, String> = settled
-                    .await
-                    .catch(&ctx)
-                    .map_err(|e| e.to_string())
-                    .and_then(|json| serde_json::from_str(&json).map_err(|e| e.to_string()));
-                let effects = sandbox.take_side_effects();
-                let reported = effects.failure.map(|failure| failure.message);
-                let other_files = !effects.other_files.is_empty();
-                match outcomes {
-                    Ok(outcomes) => {
-                        for (index, outcome) in indices.iter().zip(outcomes) {
-                            let outcome = if !outcome.ok {
-                                Err(outcome.error.unwrap_or_else(|| "the callback failed".into()))
-                            } else if let Some(message) = reported.as_ref().filter(|_| indices.len() == 1) {
-                                Err(message.clone())
-                            } else if other_files {
-                                Err("jssgTransform() is not supported in forEachFile callbacks yet; change each file from its own callback".to_string())
-                            } else {
-                                Ok(outcome)
+                // Read this batch's files; the ones that are not the step's
+                // are done.
+                let mut indices = Vec::with_capacity(range.len());
+                let mut texts = Vec::with_capacity(range.len());
+                for index in range {
+                    match read_selected_file(&files[index].file, containing) {
+                        Some(text) => {
+                            indices.push(index);
+                            texts.push(text);
+                        }
+                        None => {
+                            results.push((index, Ok(Ran::Skipped)));
+                            progress();
+                        }
+                    }
+                }
+                if indices.is_empty() {
+                    continue;
+                }
+                let mut attempts = 0;
+                let outcomes = loop {
+                    let transaction = (concurrency == 1).then(|| other_files.pending.begin());
+                    if transaction.is_some() {
+                        // The one file the adapter may take for this callback.
+                        let selected = &files[indices[0]];
+                        slot.lock().unwrap_or_else(|e| e.into_inner()).current =
+                            Some((selected.path.clone(), selected.file.clone()));
+                    }
+                    let settled = async {
+                        let paths: Vec<&str> = indices.iter().map(|&index| files[index].path.as_str()).collect();
+                        let batch: Vec<&str> = texts.iter().map(String::as_str).collect();
+                        let promise: Promise = run_batch.call((paths, batch))?;
+                        promise.into_future::<String>().await
+                    };
+                    let outcomes: Result<Vec<FileOutcome>, String> = settled
+                        .await
+                        .catch(&ctx)
+                        .map_err(|e| e.to_string())
+                        .and_then(|json| serde_json::from_str(&json).map_err(|e| e.to_string()));
+                    let effects = sandbox.take_side_effects();
+                    let compat = {
+                        let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+                        slot.current = None;
+                        slot.taken.take()
+                    };
+                    // It gave way to another file's transform that was waiting
+                    // for a file it held, so what it did is incomplete: drop it
+                    // and run it again once that one is done.
+                    if transaction.as_ref().is_some_and(Transaction::aborted) {
+                        drop(compat);
+                        if let Some(transaction) = transaction {
+                            transaction.give_way();
+                        }
+                        attempts += 1;
+                        if attempts < RETRIES {
+                            continue;
+                        }
+                        let error = "other files' transforms kept waiting for the files this one changes with jssgTransform; run the step again".to_string();
+                        break indices.iter().map(|_| Err(error.clone())).collect::<Vec<_>>();
+                    }
+                    let reported = effects.failure.map(|failure| failure.message);
+                    let mut outcomes: Vec<Result<FileOutcome, String>> = match outcomes {
+                        Ok(outcomes) => outcomes
+                            .into_iter()
+                            .map(|outcome| {
+                                if !outcome.ok {
+                                    Err(outcome.error.unwrap_or_else(|| "the callback failed".into()))
+                                } else if let Some(message) = reported.as_ref().filter(|_| indices.len() == 1) {
+                                    Err(message.clone())
+                                } else {
+                                    Ok(outcome)
+                                }
+                            })
+                            .collect(),
+                        Err(error) => indices.iter().map(|_| Err(error.clone())).collect(),
+                    };
+                    match (transaction, outcomes.as_mut_slice()) {
+                        // One file, in its own transaction.
+                        (Some(transaction), [outcome]) => {
+                            let keep = match (outcome.as_mut(), compat) {
+                                (Err(_), _) => false,
+                                (Ok(file), Some(compat)) => {
+                                    match keep_changes(target, other_files, file, compat, effects.other_files) {
+                                        Ok(keep) => keep,
+                                        Err(error) => {
+                                            *outcome = Err(error);
+                                            false
+                                        }
+                                    }
+                                }
+                                (Ok(_), None) if !effects.other_files.is_empty() => {
+                                    *outcome = Err(NOT_SUPPORTED.to_string());
+                                    false
+                                }
+                                (Ok(_), None) => true,
                             };
-                            results.push((*index, outcome));
-                            progress();
+                            // A transform still running would change files after
+                            // they are given back: refuse what the callback did.
+                            let keep = if keep && transaction.unsettled() {
+                                *outcome = Err(UNSETTLED.to_string());
+                                false
+                            } else {
+                                keep
+                            };
+                            transaction.finish(keep);
                         }
-                    }
-                    Err(error) => {
-                        for index in &indices {
-                            results.push((*index, Err(error.clone())));
-                            progress();
+                        _ if !effects.other_files.is_empty() => {
+                            for outcome in &mut outcomes {
+                                if outcome.is_ok() {
+                                    *outcome = Err(NOT_SUPPORTED.to_string());
+                                }
+                            }
                         }
+                        _ => {}
                     }
+                    break outcomes;
+                };
+                for ((index, outcome), text) in indices.iter().zip(outcomes).zip(texts) {
+                    // The text is only needed to commit changes: a jssg
+                    // transform's are in the step's unwritten files already.
+                    let outcome = outcome.map(|outcome| {
+                        let original = (!outcome.effects.is_empty()).then_some(text);
+                        Ran::Done { outcome, original }
+                    });
+                    results.push((*index, outcome));
+                    progress();
                 }
             }
             Ok(results)
         })
-        .await
+        .await;
+        worker.shutdown(SHUTDOWN_GRACE).await;
+        results
     })
+}
+
+/// How long a worker waits, once its files are done, for work its callbacks
+/// left running.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Why a callback's `jssgTransform` calls on other files fail.
+const NOT_SUPPORTED: &str = "jssgTransform() is not supported in forEachFile callbacks yet; change each file from its own callback";
+
+/// Why a callback that left a `jssgTransform` call running fails.
+const UNSETTLED: &str =
+    "a jssgTransform() call was still running when the transform finished; await it";
+
+/// How many times one file's transform may give way to others (see
+/// [`Transaction::aborted`]) before it fails.
+const RETRIES: usize = 50;
+
+/// What a step's workers share so jssg transforms (run by the YAML
+/// translation's `codemod-internal:jssg-compat` adapter) can change other
+/// files with `jssgTransform`, as workflow.yaml's `js-ast-grep` step let
+/// them: the step's unwritten files, so every change to a file adds up
+/// whichever file's transform made it, and the renames among them.
+#[derive(Default)]
+struct OtherFiles {
+    pending: PendingFiles,
+    /// By the renamed file's canonical path: where it goes, absolute.
+    renames: Mutex<BTreeMap<PathBuf, PathBuf>>,
+}
+
+impl OtherFiles {
+    /// Every file the step's transforms changed this way, renames included.
+    fn into_changes(self) -> Vec<JssgFileChange> {
+        let mut renames = self.renames.into_inner().unwrap_or_else(|e| e.into_inner());
+        let mut changes = Vec::new();
+        for (path, original, content) in self.pending.changed() {
+            changes.push(JssgFileChange {
+                rename_to: renames.remove(&path),
+                path,
+                original,
+                content,
+            });
+        }
+        // Files only renamed.
+        for (path, to) in renames {
+            if let Ok(text) = fs::read_to_string(&path) {
+                changes.push(JssgFileChange {
+                    path,
+                    original: text.clone(),
+                    content: text,
+                    rename_to: Some(to),
+                });
+            }
+        }
+        changes
+    }
+}
+
+/// The callback's file, taken by the adapter's `begin` for the transform.
+struct CompatFile {
+    taken: TakenFile,
+    /// Drop what the transform changed (a step `dry_run`, a shard filter).
+    discard: bool,
+}
+
+/// The worker's current callback: the file it runs on (its path as the
+/// callback has it, and as the walk found it), and that file once the
+/// adapter took it.
+#[derive(Default)]
+struct CompatState {
+    current: Option<(String, PathBuf)>,
+    taken: Option<CompatFile>,
+}
+
+type CompatSlot = Arc<Mutex<CompatState>>;
+
+/// `__jssgCompatHost` for `jssg_compat.ts`: `begin(path, discard)` takes
+/// the callback's own file from the step's unwritten files and gives its
+/// text. Any other path is refused: the file is one the step selected, so
+/// what is read and written through it stays the step's own file.
+fn install_compat_host<'js>(
+    ctx: &Ctx<'js>,
+    pending: PendingFiles,
+    slot: CompatSlot,
+) -> rquickjs::Result<()> {
+    let host = Object::new(ctx.clone())?;
+    host.set(
+        "begin",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, path: String, discard: bool| -> rquickjs::Result<String> {
+                let mut state = slot.lock().unwrap_or_else(|e| e.into_inner());
+                let file = match &state.current {
+                    Some((current, file)) if *current == path => file.clone(),
+                    _ => {
+                        return Err(Exception::throw_message(
+                            &ctx,
+                            &format!("'{path}' is not the file this callback runs on"),
+                        ))
+                    }
+                };
+                if state.taken.is_some() {
+                    return Err(Exception::throw_message(
+                        &ctx,
+                        &format!("'{path}' is being transformed already"),
+                    ));
+                }
+                let (text, taken) = pending
+                    .take(&file)
+                    .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
+                state.taken = Some(CompatFile { taken, discard });
+                Ok(text)
+            },
+        )?,
+    )?;
+    ctx.globals().set("__jssgCompatHost", host)
+}
+
+/// Put what a jssg transform did to its file into the step's unwritten
+/// files, with the renames it and its `jssgTransform` calls made. Its
+/// effects are then committed from there. Gives whether to keep the
+/// transaction's changes.
+fn keep_changes(
+    target: &Path,
+    other_files: &OtherFiles,
+    outcome: &mut FileOutcome,
+    compat: CompatFile,
+    changed: Vec<FileChange>,
+) -> Result<bool, String> {
+    if compat.discard {
+        return Ok(false);
+    }
+    let mut renames = Vec::new();
+    for effect in std::mem::take(&mut outcome.effects) {
+        match effect {
+            Effect::Write { text } => {
+                if !compat.taken.set(text) {
+                    return Err(UNSETTLED.to_string());
+                }
+            }
+            Effect::Rename { to } => {
+                let to = changes::normalize(&to).ok_or_else(|| {
+                    format!("cannot rename to '{to}': the path must be relative and stay inside the target")
+                })?;
+                renames.push((
+                    compat.taken.path().to_path_buf(),
+                    changes::under(target, &to),
+                ));
+            }
+            Effect::Delete => return Err("a jssg transform cannot delete its file".to_string()),
+        }
+    }
+    for change in changed {
+        if let ExecutionResult::Modified(ModifiedResult {
+            rename_to: Some(to),
+            ..
+        }) = change.result
+        {
+            let path = change.path.canonicalize().unwrap_or(change.path);
+            renames.push((path, to));
+        }
+    }
+    other_files
+        .renames
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .extend(renames);
+    Ok(true)
 }
 
 /// What a callback's effects leave of one file. `delete()` wins over
 /// whatever else the callback did; the last `write()` and `rename()` count.
-fn fold(path: String, original: String, effects: Vec<Effect>) -> Result<PlannedChange, String> {
+/// `None` when they leave it as it was (it was written its own text).
+fn fold(
+    path: String,
+    original: String,
+    effects: Vec<Effect>,
+) -> Result<Option<PlannedChange>, String> {
     let mut text = None;
     let mut rename_to = None;
     let mut deleted = false;
@@ -426,12 +875,16 @@ fn fold(path: String, original: String, effects: Vec<Effect>) -> Result<PlannedC
         }
     }
     if deleted {
-        return Ok(PlannedChange {
+        return Ok(Some(PlannedChange {
             path,
             original,
             change: Change::Delete,
-        });
+        }));
     }
     let text = text.unwrap_or_else(|| original.clone());
-    Ok(PlannedChange::moved(path, original, text, rename_to))
+    let plan = PlannedChange::moved(path, original, text, rename_to);
+    Ok(match &plan.change {
+        Change::Edit(text) if *text == plan.original => None,
+        _ => Some(plan),
+    })
 }

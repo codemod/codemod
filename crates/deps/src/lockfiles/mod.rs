@@ -16,32 +16,38 @@ use crate::model::{Graph, Kind, Skipped};
 mod cargo;
 mod npm;
 mod pnpm;
+mod python;
 mod yarn;
 
 pub use cargo::{parse as cargo, Manifests as CargoManifests};
 pub use npm::parse as package_lock;
 pub use pnpm::parse as pnpm;
+pub use python::{pipfile, poetry, uv};
 pub use yarn::parse as yarn;
 
 /// Reads a file relative to the lockfile's directory.
 pub type ReadFile<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 /// Lockfiles this crate reads, by file name.
-pub const LOCKFILES: [&str; 4] = [
+pub const LOCKFILES: [&str; 7] = [
     "yarn.lock",
     "pnpm-lock.yaml",
     "package-lock.json",
     "Cargo.lock",
+    "uv.lock",
+    "poetry.lock",
+    "Pipfile.lock",
 ];
 
-/// Every lockfile under `root`, merged into one graph. `.gitignore` is
-/// respected, and `node_modules` and `target` are skipped. `only` keeps
-/// the lockfiles whose relative path matches one of its globs.
+/// The lockfiles at `root`, merged into one graph. `only` instead keeps
+/// every lockfile under `root` whose relative path matches one of its globs
+/// (`**/yarn.lock` for nested ones); `.gitignore` is respected, and
+/// `node_modules` and `target` are skipped. A workspace keeps its lockfile
+/// at its root, so nested ones are usually fixtures or examples.
 ///
 /// A lockfile `only` names that cannot be read is an error. Without `only`,
-/// one that cannot be read (a Yarn v1 lockfile in an example, say) is left
-/// out and listed in [`Graph::skipped`]; it is an error only when no
-/// lockfile can be read.
+/// one that cannot be read is left out and listed in [`Graph::skipped`];
+/// it is an error only when no lockfile can be read.
 pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
     let mut found: Vec<String> = ignore::WalkBuilder::new(root)
         .hidden(false)
@@ -59,12 +65,21 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
             let relative = entry.path().strip_prefix(root).ok()?;
             Some(relative.to_string_lossy().replace('\\', "/"))
         })
-        .filter(|path: &String| only.is_empty() || only.iter().any(|glob| glob_match(glob, path)))
         .collect();
     found.sort();
+    let nested = !found.is_empty();
+    found.retain(|path| match only {
+        [] => !path.contains('/'),
+        globs => globs.iter().any(|glob| glob_match(glob, path)),
+    });
     if found.is_empty() {
+        let hint = if only.is_empty() && nested {
+            "; name nested ones with a glob such as **/yarn.lock"
+        } else {
+            ""
+        };
         return Err(format!(
-            "no lockfile ({}) under {}",
+            "no lockfile ({}) at {}{hint}",
             LOCKFILES.join(", "),
             root.display()
         ));
@@ -83,6 +98,9 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
                 "yarn.lock" => yarn(&text, &read),
                 "pnpm-lock.yaml" => pnpm(&text, &read),
                 "package-lock.json" => package_lock(&text),
+                "uv.lock" => uv(&text),
+                "poetry.lock" => poetry(&text, &read),
+                "Pipfile.lock" => pipfile(&text, &read),
                 _ => cargo(&text, &CargoManifests::find(&base)),
             });
         match parsed {

@@ -1161,6 +1161,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.16",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -1199,6 +1200,7 @@ dependencies = [
  "futures",
  "ignore",
  "node-semver",
+ "pep440_rs",
  "reqwest 0.12.23",
  "semver",
  "serde",
@@ -1271,6 +1273,7 @@ dependencies = [
  "bytes",
  "codemod-llrt-capabilities",
  "dashmap 6.1.0",
+ "dunce",
  "ignore",
  "js-sys",
  "language-core",

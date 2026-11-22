@@ -339,19 +339,19 @@ impl CodemodExecutionConfig {
     /// Collect all files that will be processed into a Vec
     /// This is useful for pre-processing files (e.g., semantic analysis indexing)
     pub fn collect_files(&self) -> Vec<PathBuf> {
-        let search_base = match self.get_search_base() {
-            Ok(base) => base,
-            Err(_) => return Vec::new(),
-        };
+        self.try_collect_files().unwrap_or_default()
+    }
+
+    /// The files [`Self::execute`] would visit, in walk order, from one walk;
+    /// fails as it does on a bad base path or glob.
+    pub fn try_collect_files(&self) -> Result<Vec<PathBuf>, String> {
+        let search_base = self.get_search_base()?;
 
         if let Some(files) = self.explicit_files.clone() {
-            return files;
+            return Ok(files);
         }
 
-        let globs = match self.build_globs(&search_base) {
-            Ok(globs) => globs,
-            Err(_) => return Vec::new(),
-        };
+        let globs = self.build_globs(&search_base)?;
 
         let walker = file_walker(&search_base, globs).threads(1).build();
 
@@ -362,7 +362,7 @@ impl CodemodExecutionConfig {
             }
         }
 
-        files
+        Ok(files)
     }
 
     /// Get the search base path by combining target_path and base_path

@@ -1,7 +1,6 @@
-// `codemod-internal:dependencies`: `registry`, `semver` and the dependency
-// graph inside isolates (function steps, forEachFile and dependencyGraph
-// callbacks). The build imports `registry` and `semver` from here when a
-// step or callback uses them. The host installs
+// `codemod/deps` inside isolates (function steps, forEachFile and
+// dependencyGraph callbacks, and the files they import): `registry`,
+// `semver` and the dependency graph. The host installs
 // `globalThis.__dependencyHost` in every isolate and
 // `globalThis.__graphHost` for dependencyGraph callbacks (`globals.d.ts`).
 
@@ -92,16 +91,24 @@ function flush(): void {
   }
 }
 
-/** Package releases from npm and crates.io, oldest first. */
+/** Package releases from npm, crates.io and PyPI, oldest first. */
 export const registry = Object.freeze({
   npm: (name: string) => lookup("npm", name),
   cargo: (name: string) => lookup("cargo", name),
+  pypi: (name: string) => lookup("pypi", name),
 });
 
-/** Versions and ranges, by npm rules or (with `{ ecosystem: "cargo" }`) Cargo's. */
+/** Versions and ranges, by npm rules, Cargo's (`{ ecosystem: "cargo" }`) or PEP 440 (`{ ecosystem: "pypi" }`). */
 export const semver = makeSemver((op, ecosystem, a, b) =>
   JSON.parse(host().semver(op, ecosystem, a, b)),
 );
+
+/** Starts a step, which only the workflow body can do. */
+export function dependencyGraph(): never {
+  throw new Error(
+    "dependencyGraph() can only be called in the workflow body, not inside a step or forEachFile callback",
+  );
+}
 
 // ------------------------------------------------------------------ graph ---
 
@@ -245,6 +252,11 @@ export function __graph() {
      */
     async releases({ accepting, newerThanMine = false, prereleases = false }: ReleaseOptions = {}) {
       const options = { ecosystem: this.ecosystem };
+      if (accepting && this.ecosystem === "pypi") {
+        throw new TypeError(
+          "accepting cannot filter PyPI releases: PyPI lists no dependencies per release",
+        );
+      }
       const found = await registry[this.ecosystem](this.name);
       return found.versions
         .filter(
@@ -273,7 +285,7 @@ export function __graph() {
 
   class DependencyEdge {
     readonly from: PackageNode;
-    /** The installed node; null for peer edges and ranges the lockfile does not resolve. */
+    /** The installed node; null when the lockfile does not resolve it, as for most peer edges. */
     readonly to: PackageNode | null;
     readonly name: string;
     /** Declared range; null when the lockfile keeps none (third-party crates in Cargo.lock). */
@@ -329,7 +341,7 @@ export function __graph() {
     node: (name: string, version?: string): PackageNode | undefined =>
       graph.nodes(name).find((node) => version === undefined || node.version === version),
 
-    /** Edges that declare a dependency on `name`, resolved or not (peer edges are never resolved). */
+    /** Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the installed peer). */
     dependents: (name: string, options?: KindOptions): DependencyEdge[] =>
       edges("named", name, options),
 

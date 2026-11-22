@@ -4,7 +4,7 @@ sidebarTitle: "Testing"
 description: "Test what a package does: run the whole workflow on fixtures from a test file, and compare the files it leaves."
 ---
 
-A package's tests are a test file you can read and change: `tests/workflow.test.ts`. It runs the whole workflow on fixtures with `codemod/testing`, so it covers what the package actually does: inline `forEachFile` callbacks, function steps, how the steps fit together, shell steps and renames. (`codemod jssg test` tests one transform file on its own.)
+A package's tests are a test file you can read and change: `tests/workflow.test.ts`. It runs the whole workflow on fixtures with `codemod/testing`, so it covers what the package actually does: `forEachFile` callbacks, inline or imported from their files, function steps, how the steps fit together, shell steps and renames. An imported callback is tested the same way, through the workflow that runs it: give its step's files as fixtures. (`codemod jssg test` tests one jssg transform file on its own.)
 
 `codemod init` scaffolds the test file, a starter fixture, and a `test` script that runs them with Node.js's built-in test runner:
 
@@ -168,7 +168,7 @@ test("rewrites the files the first step found", async () => {
 });
 ```
 
-A label in `until` or `given` that matches no step is an error that lists the run's steps. Steps without a label get one from their task, such as `jssg scripts/codemod.ts`.
+A label in `until` or `given` that matches no step is an error that lists the run's steps. Steps without a label get one from their task, such as `forEachFile src/**/*.ts`.
 
 ### Mock a workflow's imports
 
@@ -240,10 +240,10 @@ YAML workflows always run with the CLI.
 
 - Every approval is given unless you pass `approve: false` (or `--no-approve`).
 - The capabilities `codemod.yaml` declares are granted without asking.
-- Git steps (`branch`, `commit`, `pullRequest`) do nothing, as in a run without `--managed-git`.
+- Git steps (`branch`, `commit`, `pullRequest`) do nothing, as in a run without `--managed-git`. One started while other steps are still running still fails, as it would with `--managed-git`.
 - Shell steps run for real, in the temporary copy.
 - `agent` steps would call a coding agent: give their result with `given` instead.
 - `waitForEvent` steps have nobody to send their event: give the event's data with `given`, under the label `wait for <name>`. Without it the step waits until its `timeout`, or for as long as your test runner allows. `sleep` steps wait as usual.
-- On the Node.js host, capabilities only apply to `jssg` transforms, which still run in the engine. See [what differs on the Node.js host](/community/workflows/node#how-it-differs-from-the-cli).
+- On the Node.js host, capabilities only apply to what still runs in the engine (`shard`'s functions, `astGrep`); callbacks run in Node.js with whatever it gives them. See [what differs on the Node.js host](/community/workflows/node#how-it-differs-from-the-cli).
 
 `codemod/testing` uses the native addon and the `codemod` CLI that the package installed. To test against other builds, set `CODEMOD_NODE_ADDON` and `CODEMOD_BINARY` to their paths.

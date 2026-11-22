@@ -25,7 +25,7 @@ use super::execution_engine::{
 };
 use super::pending_files::PendingFiles;
 use super::quickjs_adapters::{QuickJSLoader, QuickJSResolver};
-use crate::ast_grep::DefaultParseLanguage;
+use crate::ast_grep::{DefaultParseLanguage, ParseSemanticProvider};
 use crate::llm::{LlmRequestHandler, LlmRuntimeContext};
 use crate::sandbox::errors::{ExecutionError, RuntimeError};
 use crate::sandbox::resolvers::ModuleResolver;
@@ -41,9 +41,10 @@ pub struct WorkerOptions<R> {
     pub resolver: Arc<R>,
     /// In-memory modules, by name, as JavaScript source.
     pub modules: Vec<(String, String)>,
-    /// The in-memory module `codemod/workflow` resolves to; without one,
-    /// importing it is an error.
-    pub workflow_module: Option<String>,
+    /// The in-memory modules codemod modules resolve to, by codemod module
+    /// name (`workflow` for `codemod/workflow`); importing a codemod module
+    /// that is not here, and not offered to every transform, is an error.
+    pub codemod_modules: Vec<(&'static str, String)>,
     /// Handles `codemod:llm` requests; the module exists only when fetch is granted.
     pub llm_request_handler: Option<LlmRequestHandler>,
     /// Receives `codemod:runtime` events and `console` output.
@@ -54,6 +55,13 @@ pub struct WorkerOptions<R> {
     pub target_directory: PathBuf,
     /// The language `parse(text)` uses when the call names none.
     pub default_language: Option<String>,
+    /// Semantic analysis for roots `parse(file)` makes, so `definition()`
+    /// and `references()` find something; none without it.
+    pub semantic_provider: Option<Arc<dyn language_core::SemanticProvider>>,
+    /// The step's unwritten files, when several workers share them;
+    /// `jssgTransform` reads and changes files through it. Each worker has
+    /// its own without it.
+    pub pending_files: Option<PendingFiles>,
 }
 
 /// A JSSG runtime kept alive across calls. Run code in it with
@@ -111,7 +119,7 @@ impl Worker {
 
         let (resolver, loader, globals) = module_builder.builder.build();
         let (codemod_resolver, loader) = crate::with_codemod_modules!(loader, llm: fetch);
-        let codemod_resolver = codemod_resolver.with_workflow(options.workflow_module.clone());
+        let codemod_resolver = codemod_resolver.providing(options.codemod_modules.clone());
 
         let mut memory_resolver = BuiltinResolver::default();
         let mut memory_loader = BuiltinLoader::default();
@@ -142,12 +150,12 @@ impl Worker {
         );
         // `jssgTransform` calls in one step build on each other's results.
         let file_changes = JssgFileChanges {
-            pending: Some(PendingFiles::default()),
+            pending: Some(options.pending_files.clone().unwrap_or_default()),
             ..JssgFileChanges::default()
         };
-        let target = options
-            .target_directory
-            .canonicalize()
+        // Not `\\?\C:\...` on Windows: code builds paths from this one by
+        // appending `/` and relative paths, which such paths do not take.
+        let target = dunce::canonicalize(&options.target_directory)
             .unwrap_or_else(|_| options.target_directory.clone());
         let llm = LlmRuntimeContext::new(fetch.then_some(options.llm_request_handler).flatten());
 
@@ -179,6 +187,10 @@ impl Worker {
                     ctx.store_userdata(DefaultParseLanguage(language.clone()))
                         .map_err(|e| fail(format!("{e:?}")))?;
                 }
+                if let Some(provider) = &options.semantic_provider {
+                    ctx.store_userdata(ParseSemanticProvider(Arc::clone(provider)))
+                        .map_err(|e| fail(format!("{e:?}")))?;
+                }
                 globals.attach(&ctx)?;
                 install_console_bridge(&ctx)
             };
@@ -195,6 +207,19 @@ impl Worker {
         })
     }
 
+    /// Let work the code left running (an unawaited promise, a timer)
+    /// finish, for up to `grace`, then drop the worker. QuickJS aborts the
+    /// process when a runtime is freed with such work still holding values,
+    /// so a worker whose work does not finish (an interval) is leaked instead.
+    pub async fn shutdown(self, grace: std::time::Duration) {
+        let finished = tokio::time::timeout(grace, self.runtime.idle())
+            .await
+            .is_ok();
+        if !finished || self.runtime.is_job_pending().await {
+            std::mem::forget(self);
+        }
+    }
+
     /// What the code did since the last call besides returning a value.
     /// Callers take both together after each call into the worker, so
     /// neither is left to be blamed on the next call.
@@ -203,6 +228,11 @@ impl Worker {
             failure: self.hooks.take_pending_failure(),
             other_files: std::mem::take(&mut *self.file_changes.changes.lock().unwrap()),
         }
+    }
+
+    /// The files `jssgTransform` reads and changes through.
+    pub fn pending_files(&self) -> Option<&PendingFiles> {
+        self.file_changes.pending.as_ref()
     }
 
     /// What `jssgTransform` calls have made of the files they changed, so

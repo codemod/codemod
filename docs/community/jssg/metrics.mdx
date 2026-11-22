@@ -43,47 +43,29 @@ export default codemod;
 
 ## In a workflow
 
-A `jssg` step's result lists each file's data as `data`, sorted by path. Files that returned no data are left out:
+In `workflow.ts`, per-file logic is a `forEachFile` callback, and what it returns is collected into the step's `outputs`, in path order, leaving out files that returned nothing:
 
 ```typescript
-import { step, jssg } from "codemod/workflow";
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
 
 export default async function main() {
-  const scan = await step("Scan", jssg("scripts/codemod.ts"));
-  // [{ file: "src/a.tsx", data: { buttons: 2 } }, { file: "src/b.tsx", data: { buttons: 1 } }]
-  const total = scan.data.reduce((sum, { data }) => sum + data.buttons, 0);
+  const scan = await step("Scan", forEachFile({ language: "tsx" }, (file) => {
+    const buttons = parse(file).root().findAll({ rule: { pattern: "<Button $$$ />" } });
+    return buttons.length ? { file: file.path, buttons: buttons.length } : undefined;
+  }));
+  // [{ file: "src/a.tsx", buttons: 2 }, { file: "src/b.tsx", buttons: 1 }]
+  const total = scan.outputs.reduce((sum, { buttons }) => sum + buttons, 0);
   return { total };
 }
 ```
 
-## Folding data as files finish
-
-On a large repository the list can get big. Pass `reduce` and `initial` to fold each file's data into one value as the file finishes, so the step never holds every file's data at once:
-
-```typescript
-const scan = await step(
-  "Scan",
-  jssg("scripts/codemod.ts", {
-    reduce: (total, { file, data }) => total + data.buttons,
-    initial: 0,
-  }),
-);
-scan.data; // 3
-```
-
-- The reducer gets `{ file, data }` for each file that returned data, in no particular order.
-- It can read the workflow's variables, the way `forEachFile` callbacks do, as long as their values are JSON.
-- Write it inline in the `jssg(...)` call, as an arrow or `function` expression, so the build can extract it.
-- Its result must be JSON. If it throws, the step fails.
-
-A reducer only saves memory. `reduce: (all, entry) => [...all, entry], initial: []` gives the same list as no reducer, just not sorted by path.
-
-If a reducer fails or times out, the step discards the pending transform edits. A retry can start from the unchanged files.
+A jssg transform's `{ edit, data }` is what `codemod jssg run` and `codemod jssg test` report, and what `workflow.yaml`'s `js-ast-grep` steps collect into their outputs.
 
 ## Testing
 
 `codemod jssg test` snapshots the data next to `input` and `expected` as `data.json`, in the same `[{ file, data }]` shape. A missing `data.json` is written on the first run; `--update-snapshots` rewrites a changed one.
 
 <Note>
-In workflow v2, `useMetricAtom` from `codemod/metrics` and the CLI's metric totals were removed. Return what you counted in `data` and add it up in the workflow, or with a reducer.
+In workflow v2, `useMetricAtom` from `codemod/metrics` and the CLI's metric totals were removed. Return what you counted and add it up in the workflow.
 </Note>

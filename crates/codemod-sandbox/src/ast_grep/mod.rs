@@ -50,7 +50,10 @@ pub(crate) mod scanner;
 pub(crate) mod serde;
 
 #[cfg(feature = "native")]
-pub use native::{scan_file_with_combined_scan, with_combined_scan};
+pub use native::{
+    scan_file_with_combined_scan, scan_pass, scan_text_with_combined_scan, with_combined_scan,
+    with_combined_scan_of, ScanPass,
+};
 
 /// The `codemod/ast-grep` runtime module. Public so other hosts can register
 /// it in their own QuickJS runtimes.
@@ -102,6 +105,18 @@ pub struct DefaultParseLanguage(pub String);
 
 unsafe impl<'js> rquickjs::JsLifetime<'js> for DefaultParseLanguage {
     type Changed<'to> = DefaultParseLanguage;
+}
+
+/// The semantic analysis roots made by `parse(...)` get, when the host
+/// stores one: a workflow's `forEachFile` step does, as its selector's
+/// `semanticAnalysis` says.
+#[cfg(feature = "native")]
+#[derive(Clone)]
+pub struct ParseSemanticProvider(pub Arc<dyn language_core::SemanticProvider>);
+
+#[cfg(feature = "native")]
+unsafe impl<'js> rquickjs::JsLifetime<'js> for ParseSemanticProvider {
+    type Changed<'to> = ParseSemanticProvider;
 }
 
 /// What a `parse(...)` call asks for, after sorting out its forms.
@@ -221,7 +236,12 @@ fn absolute_filename(ctx: &Ctx<'_>, path: String) -> String {
         return path;
     }
     match ctx.userdata::<crate::sandbox::engine::execution_engine::TargetDirectory>() {
-        Some(target) => target.0.join(relative).to_string_lossy().into_owned(),
+        // Part by part, so the separators are the platform's.
+        Some(target) => relative
+            .components()
+            .fold(target.0.clone(), |path, part| path.join(part))
+            .to_string_lossy()
+            .into_owned(),
         None => path,
     }
 }
@@ -244,6 +264,30 @@ fn parse_with<'js>(
     });
     #[cfg(not(feature = "native"))]
     let target_directory: Option<std::path::PathBuf> = None;
+    #[cfg(feature = "native")]
+    if let Some(ParseSemanticProvider(provider)) = ctx
+        .userdata::<ParseSemanticProvider>()
+        .map(|p| (*p).clone())
+    {
+        let language = CodemodLang::from_str(&request.language).map_err(|e| {
+            Exception::throw_message(
+                &ctx,
+                &format!(
+                    "Failed to parse: unsupported language {}: {e}",
+                    request.language
+                ),
+            )
+        })?;
+        let grep = ast_grep_core::AstGrep::new(request.text, language);
+        return SgRootRjs::try_new_with_semantic(
+            grep,
+            request.filename,
+            Some(provider),
+            None,
+            target_directory.as_deref(),
+        )
+        .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")));
+    }
     SgRootRjs::try_new(
         request.language,
         request.text,
@@ -371,10 +415,10 @@ fn jssg_transform_rjs<'js>(
         .map(|flag| flag.0)
         .unwrap_or(false);
 
-    let file_path = std::path::Path::new(&path_to_file);
+    let file_path = crate::sandbox::engine::execution_engine::native_path(&path_to_file);
 
     // Validate: file path must resolve within the target directory
-    validate_path_within_target(&ctx, file_path, "jssgTransform()")?;
+    validate_path_within_target(&ctx, &file_path, "jssgTransform()")?;
 
     // Read the file: as the step has it so far when the caller keeps its
     // unwritten files, else from disk.
@@ -386,11 +430,11 @@ fn jssg_transform_rjs<'js>(
     };
     let (content, taken) = match &file_changes.pending {
         Some(pending) => {
-            let (content, taken) = pending.take(file_path).map_err(read_error)?;
+            let (content, taken) = pending.take(&file_path).map_err(read_error)?;
             (content, Some(taken))
         }
         None => (
-            std::fs::read_to_string(file_path).map_err(read_error)?,
+            std::fs::read_to_string(&file_path).map_err(read_error)?,
             None,
         ),
     };
@@ -406,7 +450,8 @@ fn jssg_transform_rjs<'js>(
         Some(path_to_file.clone()),
         target_directory.as_deref(),
     )
-    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?;
+    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?
+    .into_transformed_file();
 
     let sg_root_inner = Arc::clone(&sg_root.inner);
 
@@ -458,9 +503,22 @@ fn jssg_transform_rjs<'js>(
             _ => None,
         };
 
-        // The next transform of this file starts from this one's result.
-        if let (Some(taken), Some(content)) = (&taken, &return_content) {
-            taken.set(content.clone());
+        // The next transform of this file starts from this one's result. A
+        // take that has ended (the transform calling this one finished
+        // without waiting for it) keeps nothing, and records nothing.
+        if let Some(taken) = &taken {
+            let kept = match &return_content {
+                Some(content) => taken.set(content.clone()),
+                None => taken.is_current(),
+            };
+            if !kept {
+                return Err(Exception::throw_message(
+                    &ctx2,
+                    &format!(
+                        "jssgTransform() on '{path_to_file}' finished after the transform that called it; await it"
+                    ),
+                ));
+            }
         }
         drop(taken);
 
@@ -469,7 +527,7 @@ fn jssg_transform_rjs<'js>(
             Exception::throw_message(&ctx2, &format!("Failed to lock file_changes mutex: {e}"))
         })?;
         changes.push(FileChange {
-            path: std::path::PathBuf::from(&path_to_file),
+            path: file_path,
             result: exec_result,
         });
 

@@ -110,6 +110,28 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
     RUNTIME.with(|runtime| tokio::task::LocalSet::new().block_on(runtime, future))
 }
 
+/// The semantic analysis `mode` asks for. In workspace mode it is told
+/// about `files` up front, as `run_jssg` does with the files it runs on;
+/// others are read when a lookup reaches them.
+pub fn semantic_provider(
+    mode: &SemanticMode,
+    files: &[PathBuf],
+) -> Option<Arc<dyn SemanticProvider>> {
+    match mode {
+        SemanticMode::None => None,
+        SemanticMode::File => Some(Arc::new(LazySemanticProvider::file_scope())),
+        SemanticMode::Workspace(root) => {
+            let provider = Arc::new(LazySemanticProvider::workspace_scope(root.clone()));
+            for file in files {
+                if let Ok(content) = std::fs::read_to_string(file) {
+                    let _ = provider.notify_file_processed(file, &content);
+                }
+            }
+            Some(provider)
+        }
+    }
+}
+
 pub fn run_jssg(request: JssgRunRequest) -> Result<JssgRunOutcome, String> {
     if !request.script_path.is_file() {
         return Err(format!(

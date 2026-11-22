@@ -581,6 +581,41 @@ export default async function main() {
 }
 
 #[test]
+fn path_named_exports_work_in_the_quickjs_body() {
+    let h = Harness::new();
+    h.bundle_file("helper.ts", "export { sep, delimiter } from 'path';");
+    let report = h.start(
+        r#"
+import path, { sep, delimiter, join } from "node:path";
+import * as barePath from "path";
+import * as helper from "./helper.ts";
+export default function main() {
+  return {
+    sep, delimiter,
+    joined: join("one", "two"),
+    sameDefault: path === barePath.default,
+    sameNamed: sep === path.sep && delimiter === path.delimiter && join === path.join,
+    sameReexports: sep === helper.sep && delimiter === helper.delimiter,
+  };
+}
+"#,
+        Value::Null,
+    );
+    let sep = std::path::MAIN_SEPARATOR.to_string();
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "sep": sep,
+            "delimiter": if cfg!(windows) { ";" } else { ":" },
+            "joined": format!("one{sep}two"),
+            "sameDefault": true,
+            "sameNamed": true,
+            "sameReexports": true,
+        })
+    );
+}
+
+#[test]
 fn importing_a_node_only_codemod_export_is_a_build_error() {
     let h = Harness::new();
     let error = codemod_workflow::build(
@@ -687,6 +722,22 @@ export default async function main() {
 "#,
     );
     assert!(error.contains("by name"), "{error}");
+}
+
+#[test]
+fn importing_a_dependency_api_from_the_workflow_module_says_it_moved_to_codemod_deps() {
+    let error = build_error(
+        r#"
+import { step, dependencyGraph } from "codemod/workflow";
+export default async function main() {
+  await step(dependencyGraph({}, (g) => g.workspaces()));
+}
+"#,
+    );
+    assert!(
+        error.contains(r#"import { dependencyGraph } from "codemod/deps""#),
+        "{error}"
+    );
 }
 
 #[test]

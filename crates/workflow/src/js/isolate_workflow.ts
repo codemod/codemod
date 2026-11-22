@@ -1,11 +1,7 @@
 // `codemod/workflow` inside steps and callbacks, for the files they import.
-// The workflow file's own callbacks get `registry` and `semver` from
-// `codemod-internal:dependencies` through the build; a helper file that
-// imports them from `codemod/workflow` gets them here. The rest only work in
-// the workflow body, so using one here says so; importing one still works,
-// for helpers the body and callbacks share.
+// These functions only work in the workflow body, so using one here says so;
+// importing one still works, for helpers the body and callbacks share.
 
-export { registry, semver } from "codemod-internal:dependencies";
 export { AwaitingApprovalError, CanceledError, StepError } from "codemod-internal:orchestrator";
 
 function bodyOnly(name: string): () => never {
@@ -20,9 +16,7 @@ export const step = bodyOnly("step");
 export const sleep = bodyOnly("sleep");
 export const waitForEvent = bodyOnly("waitForEvent");
 export const forEachFile = bodyOnly("forEachFile");
-export const dependencyGraph = bodyOnly("dependencyGraph");
 export const shell = bodyOnly("shell");
-export const jssg = bodyOnly("jssg");
 export const astGrep = bodyOnly("astGrep");
 export const shard = bodyOnly("shard");
 export const codemod = bodyOnly("codemod");

@@ -251,14 +251,11 @@ const YARN_V1: &str = "# yarn lockfile v1\n\na@^1:\n  version \"1.0.0\"\n";
 
 #[test]
 fn a_lockfile_that_cannot_be_read_is_skipped_when_none_were_named() {
-    let dir = repository(&[
-        ("package-lock.json", PACKAGE_LOCK),
-        ("examples/old/yarn.lock", YARN_V1),
-    ]);
+    let dir = repository(&[("package-lock.json", PACKAGE_LOCK), ("yarn.lock", YARN_V1)]);
     let graph = lockfiles::load(dir.path(), &[]).unwrap();
     assert_eq!(graph.lockfiles, vec!["package-lock.json".to_string()]);
     assert_eq!(graph.skipped.len(), 1);
-    assert_eq!(graph.skipped[0].lockfile, "examples/old/yarn.lock");
+    assert_eq!(graph.skipped[0].lockfile, "yarn.lock");
     assert_eq!(graph.skipped[0].error, "Yarn v1 lockfiles are not read yet");
 }
 
@@ -278,6 +275,25 @@ fn loading_fails_when_no_lockfile_can_be_read() {
     let error = lockfiles::load(dir.path(), &[]).unwrap_err();
     assert!(error.contains("no lockfile could be read"), "{error}");
     assert!(error.contains("yarn.lock: Yarn v1"), "{error}");
+}
+
+#[test]
+fn only_root_lockfiles_are_read_when_none_were_named() {
+    let dir = repository(&[
+        ("package-lock.json", PACKAGE_LOCK),
+        ("packages/web/package-lock.json", PACKAGE_LOCK),
+        ("examples/old/yarn.lock", YARN_V1),
+    ]);
+    let graph = lockfiles::load(dir.path(), &[]).unwrap();
+    assert_eq!(graph.lockfiles, vec!["package-lock.json".to_string()]);
+    assert!(graph.skipped.is_empty());
+}
+
+#[test]
+fn nested_lockfiles_alone_point_to_a_glob() {
+    let dir = repository(&[("packages/web/package-lock.json", PACKAGE_LOCK)]);
+    let error = lockfiles::load(dir.path(), &[]).unwrap_err();
+    assert!(error.contains("**/yarn.lock"), "{error}");
 }
 
 #[test]
@@ -434,3 +450,86 @@ fn a_registry_package_does_not_merge_into_a_workspace_with_its_name_and_version(
         .collect();
     assert_eq!(foos, [Some(".".to_string()), None]);
 }
+
+#[test]
+fn package_lock_looks_in_every_ancestor_directory_before_the_root() {
+    let lock = r#"{
+      "lockfileVersion": 3,
+      "packages": {
+        "": { "name": "root" },
+        "packages/app": { "name": "app", "dependencies": { "x": "^2.0.0" } },
+        "node_modules/app": { "resolved": "packages/app", "link": true },
+        "packages/node_modules/x": { "version": "2.0.0" },
+        "node_modules/x": { "version": "1.0.0" }
+      }
+    }"#;
+    let graph = lockfiles::package_lock(lock).unwrap();
+    assert_eq!(
+        chains_to(graph, "x", &[]),
+        ["app@0.0.0-use.local > x@2.0.0"]
+    );
+}
+
+#[test]
+fn a_pnpm_peer_installed_with_a_package_is_a_peer_edge_not_a_prod_one() {
+    let lock = r#"
+lockfileVersion: '9.0'
+importers:
+  .:
+    dependencies:
+      table:
+        specifier: ^3.0.0
+        version: 3.2.5(react@18.3.1)
+packages:
+  table@3.2.5:
+    peerDependencies:
+      react: ^18
+  react@18.3.1: {}
+snapshots:
+  table@3.2.5(react@18.3.1):
+    dependencies:
+      react: 18.3.1
+  react@18.3.1: {}
+"#;
+    let graph = lockfiles::pnpm(lock, &|_| Some(r#"{ "name": "app" }"#.into())).unwrap();
+    let table = graph.find(Ecosystem::Npm, "table", "3.2.5").unwrap();
+    let edges: Vec<usize> = (0..graph.edges.len())
+        .filter(|&index| graph.edges[index].from == table)
+        .collect();
+    assert_eq!(
+        described(&Walk::new(graph), edges),
+        ["table@3.2.5 peer react@18.3.1 ^18"]
+    );
+}
+
+#[test]
+fn a_pnpm_optional_dependency_also_declared_as_a_peer_stays_optional() {
+    let lock = r#"
+lockfileVersion: '6.0'
+dependencies:
+  table:
+    specifier: ^3.0.0
+    version: 3.2.5(x@1.0.0)
+packages:
+  /table@3.2.5(x@1.0.0):
+    resolution: {integrity: sha512-t}
+    optionalDependencies:
+      x: 1.0.0
+    peerDependencies:
+      x: ^1
+  /x@1.0.0:
+    resolution: {integrity: sha512-x}
+"#;
+    let graph = lockfiles::pnpm(lock, &|_| Some(r#"{ "name": "app" }"#.into())).unwrap();
+    let table = graph.find(Ecosystem::Npm, "table", "3.2.5").unwrap();
+    let edges: Vec<usize> = (0..graph.edges.len())
+        .filter(|&index| graph.edges[index].from == table)
+        .collect();
+    assert_eq!(
+        described(&Walk::new(graph), edges),
+        ["table@3.2.5 optional x@1.0.0 ?", "table@3.2.5 peer x ^1"]
+    );
+}
+
+#[path = "specs/python.rs"]
+mod python;

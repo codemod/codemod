@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -17,6 +18,7 @@ pub struct DirectRunner {
     quiet: bool,
     /// Set to stop a command that is running.
     cancel: Option<Arc<AtomicBool>>,
+    cwd: Option<PathBuf>,
 }
 
 /// How often a running command checks whether it was asked to stop.
@@ -30,6 +32,7 @@ impl DirectRunner {
         Self {
             quiet: false,
             cancel: None,
+            cwd: None,
         }
     }
 
@@ -38,6 +41,7 @@ impl DirectRunner {
         Self {
             quiet,
             cancel: None,
+            cwd: None,
         }
     }
 
@@ -45,6 +49,12 @@ impl DirectRunner {
     /// is set; `run_command` then fails with [`Error::Canceled`].
     pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
         self.cancel = Some(cancel);
+        self
+    }
+
+    /// Set the working directory for every command, including scripts.
+    pub fn with_cwd(mut self, cwd: PathBuf) -> Self {
+        self.cwd = Some(cwd);
         self
     }
 
@@ -118,6 +128,9 @@ impl DirectRunner {
         mut cmd: Command,
         output_callback: Option<OutputCallback>,
     ) -> Result<CommandOutput> {
+        if let Some(cwd) = &self.cwd {
+            cmd.current_dir(cwd);
+        }
         #[cfg(unix)]
         let (child, stdout, stderr) = {
             use std::os::unix::io::FromRawFd;

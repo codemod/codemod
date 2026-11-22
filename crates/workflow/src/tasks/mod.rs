@@ -22,13 +22,37 @@ mod function;
 mod git;
 mod install_skill;
 pub(crate) mod isolate;
-pub(crate) mod jssg;
-mod reduce;
 mod shard;
 mod shell;
 mod wait;
 
 pub(crate) use wait::describe as describe_duration;
+
+/// `f` of each of `items`, in order, over as many threads as there are cores.
+pub(crate) fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(items.len().div_ceil(64))
+        .max(1);
+    if threads == 1 {
+        return items.iter().map(f).collect();
+    }
+    let f = &f;
+    std::thread::scope(|scope| {
+        items
+            .chunks(items.len().div_ceil(threads))
+            .map(|chunk| scope.spawn(move || chunk.iter().map(f).collect::<Vec<R>>()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flat_map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    })
+}
 
 /// One task invocation.
 pub(crate) struct TaskContext<'a> {
@@ -42,6 +66,9 @@ pub(crate) struct TaskContext<'a> {
     /// When the step began to wait, for `sleep` and `waitForEvent`, in
     /// milliseconds since the epoch.
     pub since: Option<i64>,
+    /// Other steps were still running when the step was issued
+    /// (`StartRequest.alongside` in `js/orchestrator.ts`).
+    pub alongside: bool,
 }
 
 impl TaskContext<'_> {
@@ -72,23 +99,6 @@ impl TaskContext<'_> {
             for line in error.lines() {
                 self.log(format!("  {line}"));
             }
-        }
-    }
-
-    /// A progress callback for `CodemodExecutionConfig` walks.
-    pub fn walk_progress(&self) -> butterflow_core::execution::ProgressCallback {
-        let events = Arc::clone(&self.run.events);
-        let position = self.position;
-        butterflow_core::execution::ProgressCallback {
-            callback: Arc::new(Box::new(move |_task, _path, status, total, processed| {
-                if status == "increment" || status == "finish" {
-                    events.emit(Event::StepProgress {
-                        position,
-                        processed: *processed as usize,
-                        total: total.copied().unwrap_or(*processed) as usize,
-                    });
-                }
-            })),
         }
     }
 }
@@ -168,7 +178,6 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         "function" => function::run(task, content).map_err(TaskError::from),
         "dependencyGraph" => dependency_graph::run(task, content).map_err(TaskError::from),
         "shell" => shell::run(task, parse(content)?),
-        "jssg" => jssg::run(task, parse(content)?),
         "astGrep" => ast_grep::run(task, parse(content)?),
         "shard" => shard::run(task, content),
         "codemod" => codemod::run(task, parse(content)?),

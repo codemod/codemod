@@ -48,10 +48,9 @@ async function __one(path: string, text: string): Promise<__FileOutcome> {
   };
 }
 
-/** Run the callback for a batch of `[path, text]` pairs (as JSON), concurrently. */
-export function __runBatch(batch: string): Promise<string> {
-  const files: [path: string, text: string][] = JSON.parse(batch);
-  return Promise.all(files.map(([path, text]) => __one(path, text))).then((outcomes) =>
+/** Run the callback for a batch of files, concurrently: `texts[i]` is the text of `paths[i]`. */
+export function __runBatch(paths: string[], texts: string[]): Promise<string> {
+  return Promise.all(paths.map((path, i) => __one(path, texts[i] as string))).then((outcomes) =>
     JSON.stringify(outcomes),
   );
 }
@@ -108,21 +107,14 @@ function __plain(value: unknown): unknown {
   return value;
 }
 
-let __folded: unknown;
-
-/** Start a `jssg(path, { reduce, initial })` fold; `initial` is JSON. */
-export function __reduceStart(initial: string): void {
-  __folded = JSON.parse(initial);
-}
-
-/** Fold one file's `{ file, data }` (as JSON) into the result. */
-export async function __reduceOne(entry: string): Promise<void> {
-  __folded = await __cb(__folded, JSON.parse(entry));
-}
-
-/** The folded result, as JSON. */
-export function __reduceEnd(): string {
-  const result = __folded === undefined ? null : __folded;
-  __checkJson(result, "the reducer's result");
-  return JSON.stringify(result);
+/** Call the function with arguments (a JSON array): a shard function. Never throws. */
+export async function __runCall(args: string): Promise<string> {
+  try {
+    let result = await __cb(...(JSON.parse(args) as unknown[]));
+    if (result === undefined) result = null;
+    __checkJson(result, "the function's result");
+    return JSON.stringify({ ok: true, result });
+  } catch (error) {
+    return JSON.stringify({ ok: false, error: __describe(error) });
+  }
 }

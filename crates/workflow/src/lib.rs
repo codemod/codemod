@@ -2,7 +2,7 @@
 //!
 //! A workflow is a TypeScript module whose default export runs steps:
 //! `step(task)` marks durable work, `forEachFile` runs a callback per file,
-//! and the other tasks (`shell`, `jssg`, `codemod`, ...) wrap the existing
+//! and the other tasks (`shell`, `astGrep`, `codemod`, ...) wrap the existing
 //! executors. Each step's outcome is recorded in a [`RunStore`]; resuming a
 //! run replays finished steps. `workflow.yaml` runs through [`compat`], which
 //! translates it into the same TypeScript.
@@ -25,12 +25,15 @@ mod engine;
 pub mod events;
 mod expr;
 mod hosted;
+mod imported;
 pub mod interaction;
 mod js;
 mod run;
 mod tasks;
 
-pub use build::{build, inspect, BuildError, Built, Inspection, InstalledSkill, FLOW_MODULE};
+pub use build::{
+    build, inspect, rewrite_for_node, BuildError, Built, Inspection, InstalledSkill, FLOW_MODULE,
+};
 pub use butterflow_core::package_workflows::{
     declared_workflows, locate_workflow, DeclaredWorkflow,
 };
@@ -41,7 +44,7 @@ pub use engine::{
     cancel_run, is_typescript, load_workflow, send_event, Canceled, Engine, EngineError,
     LoadedWorkflow, RunReport, StartRequest, StopHandle,
 };
-pub use hosted::{HostedRun, OpenRequest, PreparedJssg, SelectedFiles};
+pub use hosted::{HostedRun, OpenRequest, SelectedFiles};
 pub use js::orchestrator_version;
 pub use run::{Ending, RunError, TestPlan};
 

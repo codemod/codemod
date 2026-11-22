@@ -2,7 +2,7 @@
 //! resolved edges in `snapshots` (keys carry a `(peer)` suffix) and declared
 //! ranges and peers in `packages`; v6 keeps both in `packages`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 use serde_yaml::Value;
@@ -132,6 +132,10 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
 
     // v9: resolved edges in snapshots, declared ranges in packages.
     // v6: `packages` holds resolved versions only, so the range stays unknown.
+    // Both list the peers a copy was installed with among its dependencies:
+    // those become resolved peer edges, with the peer's declared range. An
+    // optional dependency stays optional, even when also declared as a peer.
+    let mut resolved_peers: HashSet<(usize, String)> = HashSet::new();
     let resolved_edges = if snapshots.is_empty() {
         &packages
     } else {
@@ -145,11 +149,15 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
         let Some(from) = graph.find(Ecosystem::Npm, name, version) else {
             continue;
         };
+        let package = if snapshots.is_empty() {
+            Some(entry)
+        } else {
+            packages.get(Value::String(format!("{name}@{version}")))
+        };
         let declared: HashMap<String, String> = if snapshots.is_empty() {
             HashMap::new()
         } else {
-            packages
-                .get(Value::String(format!("{name}@{version}")))
+            package
                 .map(|package| {
                     yaml_pairs(package.get("dependencies"))
                         .into_iter()
@@ -158,14 +166,29 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
                 })
                 .unwrap_or_default()
         };
+        let peers: HashMap<String, String> = package
+            .map(|package| {
+                yaml_pairs(package.get("peerDependencies"))
+                    .into_iter()
+                    .collect()
+            })
+            .unwrap_or_default();
         for (field, kind) in [
             ("dependencies", Kind::Prod),
             ("optionalDependencies", Kind::Optional),
         ] {
             for (dependency, version) in yaml_pairs(entry.get(field)) {
                 let to = target(&graph, ".", &dependency, &version);
-                let range = declared.get(&dependency).cloned();
-                graph.edge(from, to, &dependency, range, kind);
+                match peers.get(&dependency) {
+                    Some(range) if kind == Kind::Prod && !declared.contains_key(&dependency) => {
+                        graph.edge(from, to, &dependency, Some(range.clone()), Kind::Peer);
+                        resolved_peers.insert((from, dependency));
+                    }
+                    _ => {
+                        let range = declared.get(&dependency).cloned();
+                        graph.edge(from, to, &dependency, range, kind);
+                    }
+                }
             }
         }
     }
@@ -177,7 +200,9 @@ pub fn parse(text: &str, read: ReadFile) -> Result<Graph, String> {
             continue;
         };
         for (name, range) in yaml_pairs(entry.get("peerDependencies")) {
-            graph.edge(from, None, &name, Some(range), Kind::Peer);
+            if !resolved_peers.contains(&(from, name.clone())) {
+                graph.edge(from, None, &name, Some(range), Kind::Peer);
+            }
         }
     }
     Ok(graph)

@@ -23,13 +23,13 @@ use codemod_sandbox::sandbox::engine::quickjs_adapters::{
 };
 use codemod_sandbox::sandbox::resolvers::OxcResolver;
 use codemod_sandbox::AstGrepModule;
-use rquickjs::loader::{BuiltinLoader, BuiltinResolver};
+use rquickjs::loader::{BuiltinLoader, BuiltinResolver, Resolver};
 use rquickjs::promise::PromiseState;
 use rquickjs::{CatchResultExt, Context, Ctx, Function, Module, Object, Promise, Runtime, Value};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::build::{Built, FLOW_MODULE};
+use crate::build::{Built, DEPS_MODULE, FLOW_MODULE};
 use crate::events::{Event, EventSink};
 use crate::interaction::Interaction;
 use crate::tasks::{self, TaskContext};
@@ -40,6 +40,20 @@ pub(crate) const ORCHESTRATOR_MODULE: &str = "codemod-internal:orchestrator";
 /// `semver` for the body and isolates; see `js/semver.ts`.
 pub(crate) const SEMVER_MODULE: &str = "codemod-internal:semver";
 const WORKFLOW_MODULE: &str = "workflow.js";
+const PATH_SHIM_MODULE: &str = "codemod-internal:path";
+
+struct BodyPathResolver;
+
+impl Resolver for BodyPathResolver {
+    fn resolve(&mut self, _ctx: &Ctx<'_>, base: &str, name: &str) -> rquickjs::Result<String> {
+        if base != PATH_SHIM_MODULE && matches!(name, "path" | "node:path") {
+            Ok(PATH_SHIM_MODULE.into())
+        } else {
+            // The shim itself imports the original LLRT module.
+            Err(rquickjs::Error::new_resolving(base, name))
+        }
+    }
+}
 
 /// LLRT modules left out of the workflow body: they read the clock, the
 /// environment or the machine, or schedule work. Steps and callbacks have them.
@@ -145,6 +159,10 @@ pub(crate) struct RunContext {
     /// Serializes file commits from steps running at the same time, in this
     /// run and in the codemods nested in it.
     pub commit_lock: Arc<Mutex<()>>,
+    /// For a nested codemod: the step running it, or one of its own parents,
+    /// ran alongside other steps. Its managed git steps are refused then, as
+    /// they share the checkout with those steps.
+    pub alongside: bool,
     /// The codemod packages being run, outermost first, for cycle detection:
     /// the run's own workflow directory, then each nested codemod.
     pub chain: Vec<String>,
@@ -203,11 +221,13 @@ pub struct TestPlan {
 impl RunContext {
     /// The context of a codemod nested in this run's step at `position`: its
     /// own workflow, params and step history, everything else shared. It
-    /// stops when that step does (`cancel`).
+    /// stops when that step does (`cancel`). `alongside`: that step ran
+    /// alongside other steps.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn child(
         &self,
         position: u64,
+        alongside: bool,
         workflow_path: PathBuf,
         package_dir: PathBuf,
         params: serde_json::Value,
@@ -234,6 +254,7 @@ impl RunContext {
             services: Arc::clone(&self.services),
             cancel,
             commit_lock: Arc::clone(&self.commit_lock),
+            alongside: self.alongside || alongside,
             chain,
             test: None,
             stopped: AtomicBool::new(false),
@@ -413,6 +434,9 @@ struct HostRequest {
     /// When the step began to wait (`sleep`, `waitForEvent`).
     #[serde(default)]
     since: Option<i64>,
+    /// Other steps were still running when the step was issued.
+    #[serde(default)]
+    alongside: bool,
 }
 
 /// Stops one step's task when its time is up, or when the run is canceled.
@@ -474,7 +498,8 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
     runtime.set_loader(
         (
             // The body's codemod modules: `codemod/<name>`, or `codemod:<name>`.
-            CodemodModuleResolver::new(&["ast-grep", "workflow"]),
+            CodemodModuleResolver::new(&["ast-grep", "workflow", "deps"]),
+            BodyPathResolver,
             llrt_resolver,
             BuiltinResolver::default()
                 .with_module(ORCHESTRATOR_MODULE)
@@ -485,8 +510,10 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
             llrt_loader.with_module("codemod/ast-grep", AstGrepModule),
             BuiltinLoader::default()
                 .with_module(FLOW_MODULE, crate::js::workflow_module())
+                .with_module(DEPS_MODULE, crate::js::deps_module())
                 .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator())
-                .with_module(SEMVER_MODULE, crate::js::semver_module()),
+                .with_module(SEMVER_MODULE, crate::js::semver_module())
+                .with_module(PATH_SHIM_MODULE, include_str!("js/path.js")),
             QuickJSLoader,
         ),
     );
@@ -704,6 +731,7 @@ pub(crate) fn run_host_task(run: &Arc<RunContext>, request: &str) -> Result<Stri
             None => Arc::clone(&run.cancel),
         },
         since: request.since,
+        alongside: request.alongside,
     };
     let result = tasks::dispatch(&task, request.task).map_err(|error| {
         // Stopped by its clock, the task reports a cancel; the run goes on.

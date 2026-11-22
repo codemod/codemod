@@ -149,15 +149,25 @@ nodes:
     assert_eq!(
         source,
         r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
-import { forEachFile, jssg, step } from "codemod/workflow";
+import { forEachFile, step } from "codemod/workflow";
+import type { WorkflowContext } from "codemod/workflow";
+// codemod upgrade: the transforms below are jssg transform files, run by a
+// compatibility adapter that does what workflow.yaml's js-ast-grep step did.
+// To convert one, give forEachFile a callback in its place:
+// (file) => { const root = parse(file); ...; file.write(text) }, with parse from
+// "codemod/ast-grep", or move it to a file and import its default export.
+import * as workflowTransform from "./src/workflow.ts";
+import { jssgFile } from "codemod-internal:jssg-compat";
 
-export default async function main() {
+type Params = Record<string, any>;
+
+export default async function main({ params }: WorkflowContext<Params>) {
   // Apply AST Transformations
   await step("Rewrite rmdir", forEachFile({
     include: ["**/*.js", "**/*.ts"],
     exclude: ["**/node_modules/**"],
     language: "typescript",
-  }, jssg("src/workflow.ts")));
+  }, (file) => jssgFile(workflowTransform, file, { language: "typescript", params })));
 }
 "#
     );
@@ -187,15 +197,57 @@ nodes:
     .source;
     for expected in [
         // workflow.yaml parses as TypeScript unless told otherwise.
-        r#"await step("Transform", forEachFile({ language: "typescript" }, jssg("scripts/codemod.ts")));"#,
-        r#"await step("Rules", forEachFile(astGrep("rules/config.yml")));"#,
-        r#"forEachFile({ include: ["src/**"] }, astGrep("rules/config.yml"))"#,
+        r#"import * as codemodTransform from "./scripts/codemod.ts";"#,
+        "await step(\"Transform\", forEachFile({\n    language: \"typescript\",\n  }, (file) => jssgFile(codemodTransform, file, { language: \"typescript\", params })));",
+        r#"import configRules from "./rules/config.yml";"#,
+        r#"await step("Rules", forEachFile(astGrep(configRules)));"#,
+        r#"forEachFile({ include: ["src/**"] }, astGrep(configRules))"#,
     ] {
         assert!(
             source.contains(expected),
             "missing {expected} in:\n{source}"
         );
     }
+}
+
+#[test]
+fn ast_grep_base_path_is_joined_to_the_globs() {
+    let result = translated(
+        r#"
+version: "1"
+nodes:
+  - id: apply
+    name: Apply
+    steps:
+      - name: Under base
+        ast-grep:
+          config_file: rules/config.yml
+          base_path: ./packages/app/
+          include: ["*.ts", "src/**/*.ts", "**/*.js"]
+          exclude: ["node_modules"]
+          max_threads: 2
+      - name: Whole base
+        ast-grep:
+          config_file: rules/config.yml
+          base_path: packages/app
+"#,
+    );
+    for expected in [
+        r#"include: ["packages/app/**/*.ts", "packages/app/src/**/*.ts", "packages/app/**/*.js"]"#,
+        r#"exclude: ["packages/app/**/node_modules"]"#,
+        r#"forEachFile({ include: ["packages/app/**"] }, astGrep(configRules))"#,
+        "step 'Under base': max_threads is dropped",
+    ] {
+        assert!(
+            result.source.contains(expected),
+            "missing {expected} in:\n{}",
+            result.source
+        );
+    }
+    assert!(!result.source.contains("basePath"), "{}", result.source);
+    assert_eq!(rebase_glob("a", "!b/*.ts"), "!a/b/*.ts");
+    assert_eq!(rebase_glob("a/", "/top.ts"), "a/top.ts");
+    assert_eq!(rebase_glob("./a", "dist/"), "a/**/dist/");
 }
 
 #[test]
@@ -320,11 +372,16 @@ fn the_documented_features_translate_and_build() {
 
     expect("\"pr_size\": 20");
     expect("\"mode\": \"safe\"");
-    expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", jssg: { path: \"scripts/codemod.ts\", language: \"tsx\", params }, previous: state[\"shards\"] }));");
-    expect("(state[\"shards\"] ?? []).map((matrix: Matrix, index: number) => applyNodeFor(params, state, matrix, index))");
+    expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", files: { language: \"tsx\" }, filter: (file) => jssgWouldChange(codemodTransform, file, { language: \"tsx\", params }), previous: state[\"shards\"] }));");
+    // Git steps share one checkout: the matrix with a pull request runs one
+    // value at a time; the one without runs its values together.
+    expect("const values: Matrix[] = (state[\"shards\"] ?? []);\n  if (!Array.isArray(values)) {\n    throw new Error(\"matrix values must be a list\");\n  }\n  for (let index = 0; index < values.length; index++) {\n    await applyNodeFor(params, state, values[index], index);\n  }");
+    expect(".map((matrix: Matrix, index: number) => reportNodeFor(params, matrix, index))");
     expect("await step(approval(\"Run 'Apply transforms'?\"));");
     expect("const branchName = `codemod-apply-${index}`;");
-    expect("forEachFile({ language: \"tsx\" }, jssg(\"scripts/codemod.ts\", {\n    files: matrix?._meta_files,\n    params,\n    matrix: matrix ?? undefined,\n  }))");
+    expect("import * as codemodTransform from \"./scripts/codemod.ts\";");
+    expect("import { jssgFile, jssgWouldChange } from \"codemod-internal:jssg-compat\";");
+    expect("forEachFile({\n    include: matrix?._meta_files,\n    language: \"tsx\",\n  }, (file) => jssgFile(codemodTransform, file, {\n    language: \"tsx\",\n    params,\n    matrix: matrix ?? undefined,\n  }))");
     expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state })) {");
     expect("await step(commit(`chore: ${matrix?.name}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state })) {");
@@ -340,6 +397,71 @@ fn the_documented_features_translate_and_build() {
     assert!(warnings.contains("runtime"), "{warnings}");
     assert!(warnings.contains("timeout_ms"), "{warnings}");
     assert!(warnings.contains("args, env and working_dir"), "{warnings}");
+}
+
+#[test]
+fn a_matrix_with_any_git_step_runs_one_value_at_a_time() {
+    let matrix = |git: &str, steps: &str| {
+        format!(
+            r#"
+version: "1"
+templates:
+  - id: save
+    name: Save
+    steps:
+      - name: Save
+        run: echo save
+        commit:
+          message: save
+nodes:
+  - id: apply
+    name: Apply
+    strategy:
+      type: matrix
+      values:
+        - team: a
+        - team: b
+{git}    steps:
+{steps}"#
+        )
+    };
+    let plain_step = "      - name: Run\n        run: echo hi\n";
+    let cases = [
+        (
+            "branch",
+            matrix(
+                "    branch_name: \"codemod-${{ matrix.team }}\"\n",
+                plain_step,
+            ),
+        ),
+        (
+            "commit",
+            matrix(
+                "",
+                "      - name: Run\n        run: echo hi\n        commit:\n          message: hi\n",
+            ),
+        ),
+        (
+            "template commit",
+            matrix(
+                "",
+                "      - name: Save\n        use:\n          template: save\n",
+            ),
+        ),
+    ];
+    for (name, yaml) in cases {
+        let source = source_of(&yaml);
+        assert!(
+            source.contains("for (let index = 0; index < values.length; index++)"),
+            "{name}: not sequential:\n{source}"
+        );
+        assert!(
+            !source.contains(".map((matrix: Matrix"),
+            "{name}:\n{source}"
+        );
+    }
+    let source = source_of(&matrix("", plain_step));
+    assert!(source.contains(".map((matrix: Matrix"), "{source}");
 }
 
 #[test]

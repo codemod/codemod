@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub enum Ecosystem {
     Npm,
     Cargo,
+    Pypi,
 }
 
 impl Ecosystem {
@@ -17,6 +18,7 @@ impl Ecosystem {
         match self {
             Self::Npm => "npm",
             Self::Cargo => "cargo",
+            Self::Pypi => "pypi",
         }
     }
 
@@ -24,6 +26,7 @@ impl Ecosystem {
         match text {
             "npm" => Some(Self::Npm),
             "cargo" => Some(Self::Cargo),
+            "pypi" => Some(Self::Pypi),
             _ => None,
         }
     }
@@ -76,8 +79,8 @@ pub struct Node {
 #[derive(Debug, Clone)]
 pub struct Edge {
     pub from: usize,
-    /// The installed target; peer edges and ranges the lockfile does not
-    /// resolve have none.
+    /// The installed target; none when the lockfile does not resolve it,
+    /// as for peers other than ones pnpm records as installed.
     pub to: Option<usize>,
     pub name: String,
     /// Declared range. Cargo.lock keeps none for third-party crates.

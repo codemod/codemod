@@ -6,10 +6,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata};
+use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata, FileDiff};
 use serde_json::{json, Value};
 
-use super::TaskContext;
+use super::{parallel_map, TaskContext};
 
 /// What happens to one file.
 #[derive(Debug, Clone, PartialEq)]
@@ -79,6 +79,16 @@ pub(crate) fn relative(target: &Path, path: &Path) -> Option<String> {
         .map(|p| p.to_string_lossy().replace('\\', "/"))
 }
 
+/// `relative` (with `/` separators) under `target`, joined part by part so
+/// the separators are the platform's: on Windows, a `\\?\` target does not
+/// take `/`.
+pub(crate) fn under(target: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .fold(target.to_path_buf(), |path, part| path.join(part))
+}
+
 /// A relative path in one spelling: `/` separators, no `.` parts. `None`
 /// when it is empty, absolute, or climbs out with `..`.
 pub(crate) fn normalize(path: &str) -> Option<String> {
@@ -94,39 +104,27 @@ pub(crate) fn normalize(path: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-pub(crate) fn is_safe_relative(path: &str) -> bool {
-    normalize(path).is_some()
-}
-
-/// A task's `basePath`: a directory under the target, or the target itself
-/// (`None`) for `.`, `./` and nothing.
-pub(crate) fn base_path(base: Option<&str>) -> Result<Option<PathBuf>, String> {
-    let Some(base) = base.map(str::trim) else {
-        return Ok(None);
-    };
-    if base.is_empty() || base.trim_end_matches('/') == "." {
-        return Ok(None);
+/// Check existing path components, including the last one if it exists.
+/// A dangling symlink is not a missing component that we may create.
+fn check_containment(target: &Path, path: &str) -> Result<(), String> {
+    let mut prefix = target.to_path_buf();
+    for component in Path::new(path).components() {
+        prefix.push(component);
+        match fs::symlink_metadata(&prefix) {
+            Ok(_) => {
+                let resolved = fs::canonicalize(&prefix)
+                    .map_err(|e| format!("cannot resolve '{}': {e}", prefix.display()))?;
+                if !resolved.starts_with(target) {
+                    return Err(format!(
+                        "refusing to change '{path}': the path must stay inside the target"
+                    ));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => return Err(format!("cannot inspect '{}': {e}", prefix.display())),
+        }
     }
-    normalize(base)
-        .map(|base| Some(PathBuf::from(base)))
-        .ok_or_else(|| format!("basePath '{base}' must stay inside the target"))
-}
-
-/// Resolve a path from the workflow (a transform, a rule file, a script)
-/// against the workflow's directory, refusing paths that leave it.
-pub(crate) fn bundle_path(
-    task: &TaskContext<'_>,
-    path: &str,
-    what: &str,
-) -> Result<PathBuf, String> {
-    let trimmed = path.trim();
-    let relative = trimmed.strip_prefix("./").unwrap_or(trimmed);
-    if !is_safe_relative(relative) {
-        return Err(format!(
-            "{what} '{path}' must be a relative path inside the workflow's directory"
-        ));
-    }
-    Ok(task.run.bundle_dir.join(relative))
+    Ok(())
 }
 
 /// Check the plan, then apply it unless `dry_run`. Returns
@@ -152,15 +150,25 @@ pub(crate) fn commit(
     if task.canceled() {
         return Err("canceled".to_string());
     }
-    check_conflicts(target, &planned)?;
-    for plan in &planned {
-        let on_disk = fs::read_to_string(target.join(&plan.path)).ok();
-        if on_disk.as_deref() != Some(plan.original.as_str()) {
-            return Err(format!(
-                "'{}' changed on disk while this step ran (another step or command edited it); nothing was written",
-                plan.path
-            ));
+    if !planned.is_empty() {
+        let root = fs::canonicalize(target)
+            .map_err(|e| format!("cannot resolve target '{}': {e}", target.display()))?;
+        for plan in &planned {
+            check_containment(&root, &plan.path)?;
+            if let Change::Move { to, .. } = &plan.change {
+                check_containment(&root, to)?;
+            }
         }
+    }
+    check_conflicts(target, &planned)?;
+    let unchanged = parallel_map(&planned, |plan| {
+        fs::read(target.join(&plan.path)).is_ok_and(|on_disk| on_disk == plan.original.as_bytes())
+    });
+    if let Some((plan, _)) = planned.iter().zip(unchanged).find(|(_, same)| !same) {
+        return Err(format!(
+            "'{}' changed on disk while this step ran (another step or command edited it); nothing was written",
+            plan.path
+        ));
     }
 
     if !dry_run {
@@ -170,27 +178,34 @@ pub(crate) fn commit(
     let mut written = Vec::new();
     let mut renamed = Vec::new();
     let mut deleted = Vec::new();
+    // (path, before, after) of each file whose text changed, for the diffs.
+    let mut diffs: Vec<(&str, &str, &str)> = Vec::new();
     for plan in &planned {
         match &plan.change {
             Change::Delete => {
                 deleted.push(plan.path.clone());
-                task.diff(&plan.path, &plan.original, "");
+                diffs.push((&plan.path, &plan.original, ""));
             }
             Change::Move { to, text } => {
                 renamed.push(json!({ "from": plan.path, "to": to }));
                 if *text != plan.original {
                     written.push(to.clone());
-                    task.diff(to, &plan.original, text);
+                    diffs.push((to, &plan.original, text));
                 }
             }
             Change::Edit(text) if *text != plan.original => {
                 written.push(plan.path.clone());
-                task.diff(&plan.path, &plan.original, text);
+                diffs.push((&plan.path, &plan.original, text));
             }
             Change::Edit(_) => {}
         }
     }
     let summary = &run.services.summary;
+    for diff in parallel_map(&diffs, |(path, before, after)| {
+        task.diff(path, before, after)
+    }) {
+        summary.add_diff(diff);
+    }
     summary.add_modified(written.len() + renamed.len() + deleted.len());
     Ok(json!({ "written": written, "renamed": renamed, "deleted": deleted }))
 }
@@ -285,6 +300,23 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+#[cfg(all(test, unix))]
+mod containment_tests {
+    use super::*;
+
+    #[test]
+    fn containment_checks_existing_ancestors_of_new_paths() {
+        let target = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = target.path().canonicalize().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("outside")).unwrap();
+        std::os::unix::fs::symlink(root.join("missing"), root.join("dangling")).unwrap();
+        assert!(check_containment(&root, "outside/new/file").is_err());
+        assert!(check_containment(&root, "dangling").is_err());
+        assert!(check_containment(&root, "new/file").is_ok());
+    }
+}
+
 /// How to take one applied operation back.
 enum Undo {
     /// Put this text back (the file was overwritten or removed).
@@ -371,8 +403,9 @@ fn apply_steps(
 }
 
 impl TaskContext<'_> {
-    pub(crate) fn diff(&self, path: &str, original: &str, text: &str) {
-        let diff = generate_unified_diff(
+    /// The diff of one file this task changed, for the run summary.
+    fn diff(&self, path: &str, original: &str, text: &str) -> FileDiff {
+        generate_unified_diff(
             Path::new(path),
             original,
             text,
@@ -385,7 +418,57 @@ impl TaskContext<'_> {
                 step_name: Some(self.label.clone()),
                 ..DiffMetadata::default()
             },
-        );
-        self.run.services.summary.add_diff(diff);
+        )
     }
+}
+
+/// Files a step's isolate changed with `jssgTransform`, as a plan for
+/// [`commit`], refusing paths outside the target.
+pub(crate) fn plan(
+    task: &TaskContext<'_>,
+    changes: &[butterflow_core::jssg_runner::JssgFileChange],
+) -> Result<Vec<PlannedChange>, String> {
+    let target = &task.run.target;
+    // Changed files are kept under their canonical paths, so under the
+    // canonical target they need no lookup of their own. Rename targets may
+    // not be canonical (`..`, symbolic links) and are looked up in full.
+    let root = fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+    let canonical = |path: &Path| {
+        let inside = path.strip_prefix(&root).ok()?;
+        inside
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+            .then(|| inside.to_string_lossy().replace('\\', "/"))
+            .filter(|inside| !inside.is_empty())
+    };
+    let mut planned = Vec::new();
+    for change in changes {
+        let path = canonical(&change.path)
+            .or_else(|| relative(target, &change.path))
+            .ok_or_else(|| {
+                format!(
+                    "the step changed '{}', outside the target",
+                    change.path.display()
+                )
+            })?;
+        let rename_to = change
+            .rename_to
+            .as_ref()
+            .map(|to| {
+                relative(target, to).ok_or_else(|| {
+                    format!(
+                        "the step renamed '{path}' to '{}', outside the target",
+                        to.display()
+                    )
+                })
+            })
+            .transpose()?;
+        planned.push(PlannedChange::moved(
+            path,
+            change.original.clone(),
+            change.content.clone(),
+            rename_to,
+        ));
+    }
+    Ok(planned)
 }
