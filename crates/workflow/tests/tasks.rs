@@ -18,6 +18,61 @@ fn approving() -> Harness {
 }
 
 #[test]
+fn shell_runs_in_the_target_by_default() {
+    let h = Harness::new();
+    h.write("cwd-marker.txt", "target");
+    let report = h.start(
+        r#"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  return (await step(shell("echo ok < cwd-marker.txt"))).exitCode;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(0));
+}
+
+#[cfg(unix)]
+#[test]
+fn rename_cannot_write_through_an_external_symlink() {
+    let h = Harness::new();
+    let outside = tempfile::tempdir().unwrap();
+    h.write("a.txt", "original");
+    std::os::unix::fs::symlink(outside.path(), h.target.path().join("link")).unwrap();
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step(forEachFile("a.txt", (file) => file.rename("link/new/file.txt")));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("must stay inside the target"), "{error}");
+    assert_eq!(h.read("a.txt"), "original");
+    assert!(!outside.path().join("new").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_honors_cwd_for_shebang_scripts() {
+    let h = Harness::new();
+    h.write("sub dir/cwd-marker.txt", "subdir");
+    let report = h.start(
+        r##"
+import { step, shell } from "codemod/workflow";
+export default async function main() {
+  return (await step(shell("#!/bin/sh\ncat cwd-marker.txt", { cwd: "sub dir" }))).stdout;
+}
+"##,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!("subdir"));
+}
+
+#[test]
 fn a_shell_step_returns_what_the_command_printed() {
     let h = Harness::new();
     let report = h.start(
@@ -145,9 +200,9 @@ fn ast_grep_steps_apply_rule_fixes() {
     );
     let report = h.start(
         r#"
-import { step, astGrep } from "codemod/workflow";
+import { step, forEachFile, astGrep } from "codemod/workflow";
 import rules from "./rules.yaml";
-export default async function main() { return step(astGrep(rules)); }
+export default async function main() { return step(forEachFile(astGrep(rules))); }
 "#,
         Value::Null,
     );
@@ -228,6 +283,32 @@ export default async function main() { return step(codemod("./loop")); }
 }
 
 #[test]
+fn a_shard_filter_that_fails_on_every_file_fails_the_step() {
+    let h = Harness::new();
+    h.write("src/a.ts", "const a = 1;\n");
+    let report = h.start(
+        r#"
+import { step, shard } from "codemod/workflow";
+export default async function main() {
+  return step(shard({
+    method: { type: "directory", maxFilesPerShard: 10 },
+    target: "src",
+    files: "**/*.ts",
+    filter: () => { throw new Error("filter failure"); },
+  }));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("shard's filter failed on every file"),
+        "{error}"
+    );
+    assert!(error.contains("filter failure"), "{error}");
+}
+
+#[test]
 fn git_steps_are_skipped_unless_managed_git_is_on() {
     let h = approving();
     let report = h.start(
@@ -246,6 +327,185 @@ export default async function main() {
     assert_eq!(
         output(&report).unwrap(),
         json!([{ "skipped": true }, { "skipped": true }, { "skipped": true }])
+    );
+}
+
+/// A harness with managed git on, whose target is a git repository with one
+/// commit on `main`.
+fn managed_git() -> Harness {
+    let h = Harness::with_services(
+        Arc::new(MemoryStore::default()),
+        Arc::new(NonInteractive { approve_all: true }),
+        Services {
+            managed_git: true,
+            ..Services::default()
+        },
+    );
+    h.write("README.md", "base\n");
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "test@example.com"],
+        &["config", "user.name", "Test"],
+        &["config", "commit.gpgsign", "false"],
+        &["add", "."],
+        &["commit", "-q", "-m", "base"],
+    ] {
+        git(&h, args);
+    }
+    h
+}
+
+fn git(h: &Harness, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(h.target.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+const PARALLEL_SHARDS: &str = r#"
+import { step, approval, branch, commit, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await Promise.all(["a", "b"].map(async (name) => {
+    await step(approval(`Migrate ${name}?`));
+    await step(branch(`codemod-${name}`));
+    await step(forEachFile("README.md", (file) => { file.write(file.text + name + "\n"); }));
+    await step(commit(`migrate ${name}`));
+  }));
+}
+"#;
+
+#[test]
+fn managed_git_steps_refuse_to_run_in_parallel() {
+    let starts_with_branch =
+        PARALLEL_SHARDS.replace("    await step(approval(`Migrate ${name}?`));\n", "");
+    for source in [PARALLEL_SHARDS, starts_with_branch.as_str()] {
+        let h = managed_git();
+        let report = h.start(source, Value::Null);
+        let error = output(&report).unwrap_err();
+        assert!(
+            error.contains("managed git steps can't run in parallel"),
+            "{error}"
+        );
+        // No commit landed anywhere, on any shard's branch.
+        assert_eq!(git(&h, &["rev-list", "--all", "--count"]), "1", "{source}");
+    }
+}
+
+#[test]
+fn parallel_git_steps_are_refused_even_with_managed_git_off() {
+    let h = approving();
+    let report = h.start(PARALLEL_SHARDS, Value::Null);
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("managed git steps can't run in parallel"),
+        "{error}"
+    );
+}
+
+#[test]
+fn each_git_step_is_refused_alongside_other_steps() {
+    for task in [
+        "branch(\"codemod-x\")",
+        "commit(\"x\")",
+        "pullRequest({ title: \"x\" })",
+    ] {
+        let h = approving();
+        let source = format!(
+            r#"
+import {{ step, shell, branch, commit, pullRequest }} from "codemod/workflow";
+export default async function main() {{
+  await Promise.all([step(shell("echo hi")), step({task})]);
+}}
+"#
+        );
+        let error = output(&h.start(&source, Value::Null)).unwrap_err();
+        assert!(
+            error.contains("managed git steps can't run in parallel"),
+            "{task}: {error}"
+        );
+    }
+}
+
+#[test]
+fn managed_git_steps_run_one_shard_after_another() {
+    let h = managed_git();
+    let report = h.start(
+        r#"
+import { step, shell, branch, commit, forEachFile } from "codemod/workflow";
+export default async function main() {
+  // Steps without git still run together.
+  await Promise.all([
+    step(shell("echo one > one.txt")),
+    step(shell("echo two > two.txt")),
+  ]);
+  for (const name of ["a", "b"]) {
+    await step(branch(`codemod-${name}`));
+    await step(forEachFile("README.md", (file) => { file.write(file.text + name + "\n"); }));
+    await step(commit(`migrate ${name}`));
+  }
+}
+"#,
+        Value::Null,
+    );
+    output(&report).unwrap();
+    assert_eq!(
+        git(&h, &["log", "-1", "--format=%s", "codemod-a"]),
+        "migrate a"
+    );
+    assert_eq!(git(&h, &["show", "codemod-a:README.md"]), "base\na");
+    assert_eq!(
+        git(&h, &["log", "-1", "--format=%s", "codemod-b"]),
+        "migrate b"
+    );
+    assert_eq!(git(&h, &["show", "codemod-b:README.md"]), "base\na\nb");
+    assert_eq!(git(&h, &["show", "codemod-a:one.txt"]), "one");
+}
+
+#[test]
+fn a_nested_codemod_run_alongside_other_steps_refuses_managed_git() {
+    let h = managed_git();
+    h.bundle_file(
+        "child/workflow.ts",
+        r#"
+import { step, branch } from "codemod/workflow";
+export default async function main() {
+  await step(branch("codemod-child"));
+}
+"#,
+    );
+    let report = h.start(
+        r#"
+import { step, codemod, shell } from "codemod/workflow";
+export default async function main() {
+  await Promise.all([step(shell("echo hi")), step(codemod("./child"))]);
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("in a codemod step that ran alongside other steps"),
+        "{error}"
+    );
+    assert_eq!(git(&h, &["branch", "--list", "codemod-child"]), "");
+
+    // Alone, the same codemod checks out its branch.
+    let report = h.start(
+        r#"
+import { step, codemod } from "codemod/workflow";
+export default async function main() {
+  await step(codemod("./child"));
+}
+"#,
+        Value::Null,
+    );
+    output(&report).unwrap();
+    assert_eq!(
+        git(&h, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "codemod-child"
     );
 }
 
@@ -292,27 +552,28 @@ export default async function main() {
     assert_eq!(h.read("a.txt"), "a", "nothing runs past the gate");
 }
 
+#[cfg(unix)]
 #[test]
-fn ast_grep_refuses_a_base_path_outside_the_target() {
+fn ast_grep_does_not_scan_through_a_symlink_outside_the_target() {
     let h = Harness::new();
-    h.write("a.ts", "const a = 1;\n");
-    h.bundle_file(
-        "rules.yml",
-        "id: r\nlanguage: typescript\nrule:\n  pattern: const a = 1\nfix: const a = 2\n",
-    );
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("a.ts"), "const a = 1;\n").unwrap();
+    std::os::unix::fs::symlink(outside.path(), h.target.path().join("link")).unwrap();
     let report = h.start(
         r#"
-import { step, astGrep } from "codemod/workflow";
-import rules from "./rules.yml";
+import { step, forEachFile, astGrep } from "codemod/workflow";
 export default async function main() {
-  await step("Scan", astGrep(rules, { basePath: "../elsewhere" }));
+  const result = await step(forEachFile("link/**", astGrep({ id: "r", language: "typescript", rule: { pattern: "const a = 1" }, fix: "const a = 2" })));
+  return result.changes.written;
 }
 "#,
         Value::Null,
     );
-    let error = output(&report).unwrap_err();
-    assert!(error.contains("must stay inside the target"), "{error}");
-    assert_eq!(h.read("a.ts"), "const a = 1;\n");
+    assert_eq!(output(&report).unwrap(), json!([]));
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("a.ts")).unwrap(),
+        "const a = 1;\n"
+    );
 }
 
 #[test]
@@ -378,7 +639,11 @@ export default async function main({ target }) {
 fn for_each_file_applies_ast_grep_rules_to_the_files_its_selector_picks() {
     let h = Harness::new();
     h.write("src/a.js", "var x = 1;\n");
+    // Files of no rule's language are skipped, not failures.
+    h.write("src/README.md", "var x = 1;\n");
     h.write("lib/b.js", "var y = 2;\n");
+    h.write("lib/c.js", "var z = 3; // keep\n");
+    h.write("lib/d.js", "var w = 4; // keep\n");
     h.bundle_file(
         "rules.yaml",
         "id: no-var\nlanguage: javascript\nrule:\n  pattern: var $A = $B\nfix: let $A = $B;\n",
@@ -389,17 +654,27 @@ import { step, forEachFile, astGrep } from "codemod/workflow";
 import rules from "./rules.yaml";
 export default async function main() {
   const some = await step("Some", forEachFile("src/**", astGrep(rules)));
+  const kept = await step("Kept", forEachFile({ include: "lib/**", exclude: "lib/d.js", containing: "keep" }, astGrep(rules)));
   const all = await step("All", forEachFile(astGrep(rules)));
-  return [some.changes.written, all.changes.written];
+  return [some, kept.changes.written, all.changes.written];
 }
 "#,
         Value::Null,
     );
     assert_eq!(
         output(&report).unwrap(),
-        json!([["src/a.js"], ["lib/b.js"]])
+        json!([
+            {
+                "changes": { "written": ["src/a.js"], "renamed": [], "deleted": [] },
+                "matches": 1,
+                "failures": [],
+            },
+            ["lib/c.js"],
+            ["lib/b.js", "lib/d.js"],
+        ])
     );
     assert_eq!(h.read("src/a.js"), "let x = 1;\n");
+    assert_eq!(h.read("src/README.md"), "var x = 1;\n");
 }
 
 #[test]
@@ -418,11 +693,23 @@ fn for_each_file_refuses_what_a_transform_cannot_take() {
     for (call, message) in [
         (
             r#"forEachFile({ include: "a/**" }, astGrep(rules, { include: "b/**" }))"#,
-            "'include' is given twice, in the selector and in astGrep(...)",
+            "astGrep: 'include' goes in forEachFile's selector: forEachFile({ include }, astGrep(rules))",
         ),
         (
-            r#"forEachFile({ containing: "x" }, astGrep(rules))"#,
-            "selector.containing is for callbacks, not for astGrep(...)",
+            r#"forEachFile(astGrep(rules, { repeat: 0 }))"#,
+            "astGrep: repeat must be true (up to 10 passes) or the most passes to make",
+        ),
+        (
+            r#"forEachFile(astGrep(rules, { again: true }))"#,
+            "astGrep: unknown option 'again' (it takes repeat)",
+        ),
+        (
+            r#"astGrep(rules)"#,
+            "astGrep(...) is not a step on its own; run it on files with step(forEachFile(selector, astGrep(rules)))",
+        ),
+        (
+            r#"forEachFile({ concurrency: 2 }, astGrep(rules))"#,
+            "selector.concurrency is for callbacks, not for astGrep(...)",
         ),
         (
             r#"forEachFile({ semanticAnalysis: "none" }, astGrep(rules))"#,
@@ -570,6 +857,31 @@ export default async function main() {{
     assert!(
         error.contains("the callback failed on every file; first error: a.ts: Error: no"),
         "{error}"
+    );
+}
+
+/// A file is read from where the walk found it, not from its `/`-path: on
+/// Unix a `\` in a name is not a separator, so `a\..\b.ts` is its own file,
+/// not `b.ts`.
+#[cfg(unix)]
+#[test]
+fn for_each_file_reads_a_file_whose_name_has_a_backslash() {
+    let h = Harness::new();
+    std::fs::create_dir(h.target.path().join("a")).unwrap();
+    h.write("b.ts", "b\n");
+    h.write("a\\..\\b.ts", "backslash\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  return step(forEachFile("*.ts", (file) => [file.path, file.text]));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap()["outputs"],
+        json!([["a/../b.ts", "backslash\n"], ["b.ts", "b\n"]])
     );
 }
 
@@ -1060,7 +1372,7 @@ fn ast_grep_takes_rules_built_at_run_time_and_several_at_once() {
     let report = h.start(
         &format!(
             r#"
-import {{ step, astGrep }} from "codemod/workflow";
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
 export default async function main({{ params }}) {{
   const rename = {{
     id: "rename",
@@ -1069,7 +1381,7 @@ export default async function main({{ params }}) {{
     fix: `${{params.to}}()`,
     message: undefined,
   }};
-  const result = await step(astGrep([{NO_VAR}, rename]));
+  const result = await step(forEachFile(astGrep([{NO_VAR}, rename])));
   return result.matches;
 }}
 "#
@@ -1080,12 +1392,142 @@ export default async function main({{ params }}) {{
     assert_eq!(h.read("a.js"), "let x = 1;\nfresh();\n");
 }
 
+/// Nested matches (one rule's match inside another's) keep the outer fix
+/// instead of splicing both into the file; every match is counted.
+#[test]
+fn ast_grep_keeps_the_outer_fix_of_nested_matches() {
+    let h = Harness::new();
+    h.write("a.js", "console.log(console.log(1));\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile, astGrep } from "codemod/workflow";
+export default async function main() {
+  const result = await step(forEachFile(astGrep({ id: "log", language: "javascript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" })));
+  return result.matches;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(2));
+    assert_eq!(h.read("a.js"), "logger.info(console.log(1));\n");
+}
+
+const CONSOLE_TO_LOGGER: &str = r#"{ id: "log", language: "javascript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" }"#;
+
+/// With `repeat`, the rules run again on the text they fixed until it no
+/// longer changes: the inner match of a nested pair is fixed too, in one
+/// step. `matches` counts each fix once.
+#[test]
+fn ast_grep_repeats_until_nothing_changes() {
+    let h = Harness::new();
+    h.write(
+        "a.js",
+        "console.log(console.log(console.log(1)));
+console.log(2);
+",
+    );
+    h.write(
+        "b.js",
+        "const b = 1;
+",
+    );
+    let report = h.start(
+        &format!(
+            r#"
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
+export default async function main() {{
+  const result = await step(forEachFile(astGrep({CONSOLE_TO_LOGGER}, {{ repeat: true }})));
+  return [result.matches, result.changes.written];
+}}
+"#
+        ),
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([4, ["a.js"]]));
+    assert_eq!(
+        h.read("a.js"),
+        "logger.info(logger.info(logger.info(1)));\nlogger.info(2);\n"
+    );
+    assert_eq!(report.steps.len(), 1);
+}
+
+/// A dry run repeats on the text in memory, so it reports the diff a real
+/// run makes, though nothing is written between passes.
+#[test]
+fn a_dry_run_repeats_to_the_same_diff_as_a_real_run() {
+    let source = format!(
+        r#"
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
+export default async function main() {{
+  const result = await step(forEachFile(astGrep({CONSOLE_TO_LOGGER}, {{ repeat: true }})));
+  return result.matches;
+}}
+"#
+    );
+    let input = "console.log(console.log(1));\n";
+    let diffs = |h: &Harness| -> Vec<(String, String)> {
+        h.summary
+            .diffs()
+            .into_iter()
+            .map(|diff| (diff.path, diff.diff_text))
+            .collect()
+    };
+    let dry = Harness::new();
+    dry.write("a.js", input);
+    let report = dry.dry_run(&source);
+    assert_eq!(output(&report).unwrap(), json!(2));
+    assert_eq!(dry.read("a.js"), input, "a dry run writes nothing");
+    let real = Harness::new();
+    real.write("a.js", input);
+    let report = real.start(&source, Value::Null);
+    assert_eq!(output(&report).unwrap(), json!(2));
+    assert_eq!(real.read("a.js"), "logger.info(logger.info(1));\n");
+    assert_eq!(diffs(&dry), diffs(&real));
+    assert!(
+        diffs(&dry)[0].1.contains("+logger.info(logger.info(1));"),
+        "{:?}",
+        diffs(&dry)
+    );
+}
+
+/// A fix that matches its own output would repeat forever: after the most
+/// passes the file is a failure and is left as it was.
+#[test]
+fn ast_grep_repeat_stops_at_its_most_passes() {
+    let h = Harness::new();
+    h.write("a.js", "wrap(1);\n");
+    h.write("b.js", "console.log(console.log(1));\n");
+    let report = h.start(
+        &format!(
+            r#"
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
+export default async function main() {{
+  const grow = {{ id: "grow", language: "javascript", rule: {{ pattern: "wrap($A)" }}, fix: "wrap(wrap($A))" }};
+  const result = await step(forEachFile(astGrep([grow, {CONSOLE_TO_LOGGER}], {{ repeat: 3 }})));
+  return [result.changes.written, result.failures.map((f) => f.path)];
+}}
+"#
+        ),
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([["b.js"], ["a.js"]]));
+    assert_eq!(h.read("a.js"), "wrap(1);\n");
+    let failure = report.steps[0].result.as_ref().unwrap()["failures"][0]["error"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        failure.contains("the rules still change this file after 3 passes"),
+        "{failure}"
+    );
+}
+
 #[test]
 fn ast_grep_refuses_rules_that_are_not_json_or_are_paths() {
     let h = Harness::new();
     let failed = |rules: &str| {
         let source = format!(
-            "import {{ step, astGrep }} from \"codemod/workflow\";\nconst run = astGrep;\nexport default async function main() {{ await step(run({rules})); }}\n"
+            "import {{ step, forEachFile, astGrep }} from \"codemod/workflow\";\nconst run = astGrep;\nexport default async function main() {{ await step(forEachFile(run({rules}))); }}\n"
         );
         output(&h.start(&source, Value::Null)).unwrap_err()
     };
@@ -1103,6 +1545,10 @@ fn ast_grep_refuses_rules_that_are_not_json_or_are_paths() {
             "astGrep: the rule.fix is a function, which is not JSON",
         ),
         (r#"[]"#, "astGrep needs at least one rule"),
+        (
+            r#"(() => { const r = { id: "a", language: "javascript", rule: { any: [] } }; r.rule.any.push(r.rule); return r; })()"#,
+            "astGrep: the rule.rule.any[0].any[0] is a circular reference",
+        ),
         (r#"["x"]"#, "astGrep: rule 0 must be an object"),
         (
             r#""rules/config.yml""#,
@@ -1125,9 +1571,9 @@ fn a_changed_ast_grep_rule_runs_its_step_again_on_resume() {
     let workflow = |fix: &str| {
         format!(
             r#"
-import {{ step, astGrep }} from "codemod/workflow";
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
 export default async function main() {{
-  const result = await step("Rules", astGrep({{ id: "r", language: "javascript", rule: {{ pattern: "var $A = $B" }}, fix: "{fix} $A = $B;" }}));
+  const result = await step("Rules", forEachFile(astGrep({{ id: "r", language: "javascript", rule: {{ pattern: "var $A = $B" }}, fix: "{fix} $A = $B;" }})));
   await step("Check", () => {{ throw new Error("not yet"); }});
   return result.matches;
 }}
@@ -1164,7 +1610,7 @@ import { step, forEachFile, astGrep } from "codemod/workflow";
 import rules from "./rules.yaml";
 export default async function main() {
   const ids = await step("Ids", forEachFile("a.js", () => rules.map((rule) => rule.id)));
-  const applied = await step(astGrep(rules));
+  const applied = await step(forEachFile(astGrep(rules)));
   return { ids: ids.outputs[0], written: applied.changes.written };
 }
 "#,
@@ -1175,6 +1621,29 @@ export default async function main() {
         json!({ "ids": ["one", "two"], "written": ["a.js"] })
     );
     assert_eq!(h.read("a.js"), "let x = 1;\n");
+}
+
+#[test]
+fn imported_yaml_keeps_a_proto_key_as_a_key() {
+    let h = Harness::new();
+    h.bundle_file("data.yaml", "__proto__:\n  enabled: true\nname: x\n");
+    let report = h.start(
+        r#"
+import data from "./data.yaml";
+export default async function main() {
+  return { keys: Object.keys(data), inherited: (data as any).enabled ?? null, own: JSON.stringify(data) };
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "keys": ["__proto__", "name"],
+            "inherited": null,
+            "own": r#"{"__proto__":{"enabled":true},"name":"x"}"#,
+        })
+    );
 }
 
 /// A callback's roots resolve definitions and references within their file
@@ -1217,10 +1686,17 @@ export default async function main() {{
         output(&h.start(&workflow(r#", semanticAnalysis: "workspace""#), Value::Null)).unwrap(),
         json!([["definition", "value"], ["references", ["b.ts"]]])
     );
-    assert_eq!(
-        output(&h.start(&workflow(r#", semanticAnalysis: "none""#), Value::Null)).unwrap(),
-        json!([["definition", null], ["references", []]])
-    );
+    for none in [r#""none""#, r#"{ mode: "none" }"#] {
+        assert_eq!(
+            output(&h.start(
+                &workflow(&format!(", semanticAnalysis: {none}")),
+                Value::Null
+            ))
+            .unwrap(),
+            json!([["definition", null], ["references", []]]),
+            "{none}"
+        );
+    }
 }
 
 /// A callback gets the capabilities its selector asks for once they are
@@ -1394,4 +1870,58 @@ export default async function main() {
             "inline": ["src/a.ts", "src/b.ts", "src/c.ts"],
         })
     );
+}
+
+/// Only jssg transforms from workflow.yaml (the translation's adapter) may
+/// change other files from a forEachFile callback; a callback of its own
+/// still may not, and what it tried is not written.
+#[test]
+fn a_for_each_file_callback_cannot_change_other_files_with_jssg_transform() {
+    let h = Harness::new();
+    h.write("a.ts", "const a = 1;\n");
+    h.write("other.ts", "const other = 1;\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  await step("Edit", forEachFile("a.ts", async (file) => {
+    await jssgTransform((root) => root.root().text().replace("1", "2"), `${target}/other.ts`, "typescript");
+    file.write("const a = 2;\n");
+  }));
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("jssgTransform() is not supported in forEachFile callbacks"),
+        "{error}"
+    );
+    assert_eq!(h.read("a.ts"), "const a = 1;\n");
+    assert_eq!(h.read("other.ts"), "const other = 1;\n");
+}
+
+#[test]
+fn a_function_step_renames_what_it_changes_with_jssg_transform() {
+    let h = Harness::new();
+    h.write("styles.less", "@color: red;\n");
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  await step("Rename", async () => {
+    await jssgTransform((root) => {
+      root.rename("styles.css");
+      return root.root().text().replace("@color", "--color");
+    }, `${target}/styles.less`, "css");
+  });
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert!(!h.exists("styles.less"));
+    assert_eq!(h.read("styles.css"), "--color: red;\n");
 }

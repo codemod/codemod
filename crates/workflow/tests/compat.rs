@@ -272,6 +272,50 @@ nodes:
         .all(|s| s.status == StepStatus::Succeeded));
 }
 
+/// The shard's transform runs as the YAML engine's prescan ran it: as a dry
+/// run, so a transform that changes files only then is what picks them.
+#[test]
+fn a_shard_transform_sees_a_dry_run() {
+    let h = Harness::new();
+    h.write("src/a/a.ts", "y = 1\n");
+    h.write("src/b/b.ts", "y = 2\n");
+    h.bundle_file(
+        "scripts/codemod.ts",
+        r#"
+export default function transform(root: any, options: any) {
+  const text = root.root().text();
+  if (!options.dryRun || !text.includes("1")) return null;
+  return text.replace("1", "one");
+}
+"#,
+    );
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: evaluate
+    name: Evaluate shards
+    steps:
+      - name: Build shards
+        shard:
+          method:
+            type: directory
+            max_files_per_shard: 10
+          target: src
+          output_state: shards
+          js-ast-grep:
+            js_file: scripts/codemod.ts
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let shards = report.steps[0].result.as_ref().unwrap();
+    assert!(shards.to_string().contains("a/a.ts"), "{shards}");
+    assert!(!shards.to_string().contains("b/b.ts"), "{shards}");
+    assert_eq!(h.read("src/a/a.ts"), "y = 1\n");
+}
+
 /// The YAML names its rule file by path; the translation imports it.
 #[test]
 fn a_yaml_ast_grep_step_applies_its_imported_rule_file() {
@@ -297,6 +341,56 @@ nodes:
     let report = h.start_loaded(workflow, Value::Null, false);
     assert!(output(&report).is_ok(), "{:?}", report.ending);
     assert_eq!(h.read("src/a.js"), "let x = 1;\nfresh();\n");
+}
+
+/// `base_path` and the globs under it select the same files as in the YAML
+/// engine, also when the base comes from the matrix.
+#[test]
+fn a_yaml_ast_grep_step_keeps_its_base_path() {
+    let h = Harness::new();
+    for dir in ["one", "two", "three"] {
+        h.write(&format!("{dir}/src/a.js"), "var x = 1;\n");
+        h.write(&format!("{dir}/a.js"), "var y = 2;\n");
+        h.write(&format!("{dir}/README.md"), "var z = 3;\n");
+    }
+    h.bundle_file(
+        "rules/config.yml",
+        "id: no-var\nlanguage: javascript\nrule:\n  pattern: var $A = $B\nfix: let $A = $B;\n",
+    );
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: fixed
+    name: Fixed base
+    steps:
+      - name: Only src
+        ast-grep:
+          config_file: rules/config.yml
+          base_path: one
+          include: ["src/**"]
+  - id: each
+    name: Each directory
+    strategy:
+      type: matrix
+      values:
+        - dir: two
+    steps:
+      - name: Whole base
+        ast-grep:
+          config_file: rules/config.yml
+          base_path: "${{ matrix.dir }}"
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("one/src/a.js"), "let x = 1;\n");
+    assert_eq!(h.read("one/a.js"), "var y = 2;\n");
+    assert_eq!(h.read("two/src/a.js"), "let x = 1;\n");
+    assert_eq!(h.read("two/a.js"), "let y = 2;\n");
+    assert_eq!(h.read("two/README.md"), "var z = 3;\n");
+    assert_eq!(h.read("three/a.js"), "var y = 2;\n");
 }
 
 /// The YAML names its shard function by path; the translation imports it.
@@ -669,23 +763,26 @@ export default function transform() { return null; }
 }
 
 /// File-scope semantic analysis is on by default, as it was; a step
-/// `dry_run` runs the transform but changes nothing.
+/// `dry_run` runs the transform (which sees `options.dryRun`) but changes
+/// nothing.
 #[test]
 fn a_yaml_transform_gets_semantic_analysis_and_dry_run_as_before() {
     let transform = r#"
-export default function transform(root: any) {
+export default function transform(root: any, options: any) {
   const use = root.root().find({ rule: { pattern: "console.log($A)" } });
   const definition = use.getMatch("A").definition();
-  return `// defined: ${definition ? definition.node.text() : "unknown"}\n` + root.root().text();
+  const edit = `// defined: ${definition ? definition.node.text() : "unknown"}\n` + root.root().text();
+  return { edit, data: options.dryRun ? "dry run" : "run" };
 }
 "#;
-    for (options, expected) in [
-        ("", "// defined: value\n"),
+    for (options, expected, ran) in [
+        ("", "// defined: value\n", "run"),
         (
             "          semantic_analysis: workspace",
             "// defined: value\n",
+            "run",
         ),
-        ("          dry_run: true", ""),
+        ("          dry_run: true", "", "dry run"),
     ] {
         let h = Harness::new();
         h.write("src/a.ts", "const value = 1;\nconsole.log(value);\n");
@@ -697,5 +794,333 @@ export default function transform(root: any) {
             format!("{expected}const value = 1;\nconsole.log(value);\n"),
             "{options}"
         );
+        // The transform ran, and saw whether it was a dry run.
+        let result = report.steps[0].result.as_ref().unwrap();
+        assert_eq!(result["outputs"], json!([ran]), "{options}: {result}");
     }
+}
+
+/// A transform that changes other files with `jssgTransform`, driven by
+/// comments in the file it runs on:
+/// `// touch: <path>` appends `// touched by <file>` to `<path>` (relative
+/// to the target), `// rename-less: <path>` renames that `.less` file to
+/// `.css` and fixes the import, `// throw` fails after the touches, and
+/// `OLD` becomes `NEW` in the file itself.
+const CROSS_FILE: &str = r#"
+import { jssgTransform } from "codemod:ast-grep";
+
+export default async function transform(root: any, options: any) {
+  const text: string = root.root().text();
+  const name = root.filename().split("/").pop();
+  for (const match of text.matchAll(/\/\/ touch: (\S+)/g)) {
+    await jssgTransform(
+      (r: any) => r.root().text() + `// touched by ${name}\n`,
+      `${options.targetDir}/${match[1]}`,
+      "typescript",
+    );
+  }
+  let edit = text;
+  for (const match of text.matchAll(/\/\/ rename-less: (\S+)/g)) {
+    await jssgTransform(
+      (r: any) => {
+        r.rename(r.filename().replace(/\.less$/, ".css"));
+        return r.root().text().replace("@color", "--color");
+      },
+      `${options.targetDir}/${match[1]}`,
+      "css",
+    );
+    edit = edit.replace(/'([^']*)\.less'/, "'$1.css'");
+  }
+  if (text.includes("// throw")) throw new Error(`${name} fails on purpose`);
+  edit = edit.replace("OLD", "NEW");
+  return edit === text ? null : edit;
+}
+"#;
+
+/// Two files that change a third (outside the step's files), one that
+/// changes another of the step's files, and one that renames a stylesheet.
+fn cross_file_target(h: &Harness) {
+    h.write(
+        "src/a.ts",
+        "// touch: shared/index.ts\n// touch: src/b.ts\n// rename-less: src/styles.less\nimport './styles.less';\nconst a = 'OLD';\n",
+    );
+    h.write("src/b.ts", "// touch: shared/index.ts\nconst b = 'OLD';\n");
+    h.write("src/styles.less", "@color: red;\n");
+    h.write("shared/index.ts", "export {};\n");
+}
+
+/// A workflow.yaml transform may still change other files with
+/// `jssgTransform`: every change to a file adds up, whichever file's
+/// transform made it, and none is lost to another.
+#[test]
+fn a_yaml_transform_changes_other_files_with_jssg_transform() {
+    let h = Harness::new();
+    cross_file_target(&h);
+    let report = js_step(&h, CROSS_FILE, "          include: [\"src/**/*.ts\"]");
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(report.steps[0].status, StepStatus::Succeeded);
+    assert_eq!(
+        h.read("src/a.ts"),
+        "// touch: shared/index.ts\n// touch: src/b.ts\n// rename-less: src/styles.less\nimport './styles.css';\nconst a = 'NEW';\n"
+    );
+    // b.ts's own change and a.ts's change to it.
+    assert_eq!(
+        h.read("src/b.ts"),
+        "// touch: shared/index.ts\nconst b = 'NEW';\n// touched by a.ts\n"
+    );
+    // Both files' changes to a file outside the step's files, in either order.
+    let index = h.read("shared/index.ts");
+    let mut lines: Vec<&str> = index.lines().collect();
+    lines.sort();
+    assert_eq!(
+        lines,
+        ["// touched by a.ts", "// touched by b.ts", "export {};"],
+        "{index}"
+    );
+    assert!(!h.exists("src/styles.less"));
+    assert_eq!(h.read("src/styles.css"), "--color: red;\n");
+    // The step's changes and the run's diffs name every file.
+    let changes = &report.steps[0].result.as_ref().unwrap()["changes"];
+    let mut written: Vec<&str> = changes["written"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| path.as_str().unwrap())
+        .collect();
+    written.sort();
+    assert_eq!(
+        written,
+        ["shared/index.ts", "src/a.ts", "src/b.ts", "src/styles.css"],
+        "{changes}"
+    );
+    assert_eq!(
+        changes["renamed"],
+        json!([{ "from": "src/styles.less", "to": "src/styles.css" }])
+    );
+    assert_eq!(h.engine_summary_diffs(), 4);
+}
+
+/// A dry run writes nothing, and reports each changed file once, with
+/// every change made to it.
+#[test]
+fn a_dry_run_reports_what_yaml_transforms_would_change_in_other_files() {
+    let h = Harness::new();
+    cross_file_target(&h);
+    h.bundle_file("scripts/codemod.ts", CROSS_FILE);
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: apply
+    name: Apply
+    steps:
+      - name: Transform
+        js-ast-grep:
+          js_file: scripts/codemod.ts
+          include: ["src/**/*.ts"]
+"#,
+    );
+    let report = h.start_loaded(workflow, json!({}), true);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("shared/index.ts"), "export {};\n");
+    assert_eq!(
+        h.read("src/b.ts"),
+        "// touch: shared/index.ts\nconst b = 'OLD';\n"
+    );
+    assert!(h.exists("src/styles.less") && !h.exists("src/styles.css"));
+    let diffs = h.summary.diffs();
+    assert_eq!(diffs.len(), 4, "{diffs:#?}");
+    let index = diffs
+        .iter()
+        .map(|diff| format!("{diff:?}"))
+        .find(|diff| diff.contains("shared/index.ts"))
+        .expect("a diff of shared/index.ts");
+    assert!(
+        index.contains("+// touched by a.ts") && index.contains("+// touched by b.ts"),
+        "{index}"
+    );
+}
+
+/// A transform fails on its file, and none of its changes to other files
+/// are kept, when it throws, changes its own file with `jssgTransform`
+/// (it returns its file's new text instead), or reaches outside the target,
+/// through `..` or a symbolic link. The other files' changes are kept.
+#[cfg(unix)]
+#[test]
+fn a_yaml_transform_s_changes_to_other_files_are_kept_only_when_it_succeeds() {
+    let h = Harness::new();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("escape.ts"), "export {};\n").unwrap();
+    std::os::unix::fs::symlink(outside.path(), h.target.path().join("link")).unwrap();
+    h.write("shared/index.ts", "export {};\n");
+    h.write(
+        "src/ok.ts",
+        "// touch: shared/index.ts\nconst ok = 'OLD';\n",
+    );
+    h.write(
+        "src/throws.ts",
+        "// touch: shared/index.ts\n// throw\nconst t = 'OLD';\n",
+    );
+    h.write(
+        "src/self.ts",
+        "// touch: shared/index.ts\n// touch: src/self.ts\nconst s = 'OLD';\n",
+    );
+    h.write(
+        "src/dots.ts",
+        "// touch: shared/index.ts\n// touch: ../escape.ts\nconst d = 'OLD';\n",
+    );
+    h.write(
+        "src/symlink.ts",
+        "// touch: shared/index.ts\n// touch: link/escape.ts\nconst l = 'OLD';\n",
+    );
+    let report = js_step(&h, CROSS_FILE, "          include: [\"src/**/*.ts\"]");
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(report.steps[0].status, StepStatus::Partial);
+    assert_eq!(
+        h.read("src/ok.ts"),
+        "// touch: shared/index.ts\nconst ok = 'NEW';\n"
+    );
+    assert_eq!(
+        h.read("shared/index.ts"),
+        "export {};\n// touched by ok.ts\n"
+    );
+    for (path, text) in [
+        (
+            "src/throws.ts",
+            "// touch: shared/index.ts\n// throw\nconst t = 'OLD';\n",
+        ),
+        (
+            "src/self.ts",
+            "// touch: shared/index.ts\n// touch: src/self.ts\nconst s = 'OLD';\n",
+        ),
+        (
+            "src/dots.ts",
+            "// touch: shared/index.ts\n// touch: ../escape.ts\nconst d = 'OLD';\n",
+        ),
+    ] {
+        assert_eq!(h.read(path), text, "{path}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("escape.ts")).unwrap(),
+        "export {};\n"
+    );
+    let failures = &report.steps[0].result.as_ref().unwrap()["failures"];
+    let error = |path: &str| {
+        failures
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|failure| failure["path"] == path)
+            .unwrap_or_else(|| panic!("{path} did not fail: {failures}"))["error"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(error("src/throws.ts").contains("throws.ts fails on purpose"));
+    assert!(error("src/self.ts").contains("is being transformed already"));
+    assert!(error("src/dots.ts").contains("outside the target directory"));
+    assert!(error("src/symlink.ts").contains("outside the target directory"));
+}
+
+/// Many files changing one file, and files changing each other, keep every
+/// change: a transform waiting for a file another holds while that one
+/// waits for its own gives way and runs again.
+#[test]
+fn yaml_transforms_that_change_the_same_files_keep_every_change() {
+    let h = Harness::new();
+    h.write("shared/index.ts", "");
+    for n in 0..24 {
+        // Pairs that change each other, and all of them the index.
+        let pair = n ^ 1;
+        h.write(
+            &format!("src/f{n:02}.ts"),
+            &format!("// touch: shared/index.ts\n// touch: src/f{pair:02}.ts\nconst f = 'OLD';\n"),
+        );
+    }
+    let report = js_step(&h, CROSS_FILE, "          include: [\"src/**/*.ts\"]");
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(
+        report.steps[0].status,
+        StepStatus::Succeeded,
+        "{:?}",
+        report.steps[0].result
+    );
+    let index = h.read("shared/index.ts");
+    let mut lines: Vec<&str> = index.lines().collect();
+    lines.sort();
+    let expected: Vec<String> = (0..24)
+        .map(|n| format!("// touched by f{n:02}.ts"))
+        .collect();
+    assert_eq!(lines, expected);
+    for n in 0..24 {
+        let pair = n ^ 1;
+        assert_eq!(
+            h.read(&format!("src/f{n:02}.ts")),
+            format!("// touch: shared/index.ts\n// touch: src/f{pair:02}.ts\nconst f = 'NEW';\n// touched by f{pair:02}.ts\n"),
+        );
+    }
+}
+
+/// A step `dry_run` changes nothing, in other files either.
+#[test]
+fn a_yaml_step_dry_run_changes_no_other_file() {
+    let h = Harness::new();
+    cross_file_target(&h);
+    let report = js_step(
+        &h,
+        CROSS_FILE,
+        "          include: [\"src/**/*.ts\"]\n          dry_run: true",
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("shared/index.ts"), "export {};\n");
+    assert_eq!(
+        h.read("src/b.ts"),
+        "// touch: shared/index.ts\nconst b = 'OLD';\n"
+    );
+    assert!(h.exists("src/styles.less"));
+    assert_eq!(h.engine_summary_diffs(), 0);
+}
+
+/// A shard's transform may change other files too; as a dry run, it
+/// changes nothing, and picks the files it would change itself.
+#[test]
+fn a_shard_transform_may_change_other_files() {
+    let h = Harness::new();
+    h.write(
+        "src/a/a.ts",
+        "// touch: shared/index.ts\nconst a = 'OLD';\n",
+    );
+    h.write("src/b/b.ts", "// touch: shared/index.ts\nconst b = 1;\n");
+    h.write("shared/index.ts", "export {};\n");
+    h.bundle_file("scripts/codemod.ts", CROSS_FILE);
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: evaluate
+    name: Evaluate shards
+    steps:
+      - name: Build shards
+        shard:
+          method:
+            type: directory
+            max_files_per_shard: 10
+          target: src
+          output_state: shards
+          js-ast-grep:
+            js_file: scripts/codemod.ts
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let shards = report.steps[0].result.as_ref().unwrap();
+    assert!(shards.to_string().contains("a/a.ts"), "{shards}");
+    assert!(!shards.to_string().contains("b/b.ts"), "{shards}");
+    assert_eq!(h.read("shared/index.ts"), "export {};\n");
+    assert_eq!(
+        h.read("src/a/a.ts"),
+        "// touch: shared/index.ts\nconst a = 'OLD';\n"
+    );
 }

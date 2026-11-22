@@ -182,7 +182,7 @@ nodes:
 
 ### Git Automation (Campaign/Cloud Runs)
 
-In Campaign/cloud runs, each task executes on its own git branch. Codemod creates that branch before the node's steps run, can create commits after successful steps, and pushes the branch plus opens a pull request when the node ends with commits.
+In Campaign/cloud runs, each task executes on its own git branch. Codemod creates that branch before the node's steps run, can create commits after successful steps, and pushes the branch plus opens a pull request when the node ends with commits. All tasks share one checkout, so the tasks of a matrix node that uses git run one at a time, and two nodes that use git must not run at the same time.
 
 <Info>
 These git automation fields are only used in Campaign/cloud runs. Local `codemod workflow run` execution does not create branches, commits, or pull requests automatically.
@@ -655,7 +655,7 @@ nodes:
         run: node codemod.js --team=$team --shard=$shardId
 ```
 
-The `from_state` field references an array in your workflow's [state schema](#shared-state). Each array item spawns a parallel task.
+The `from_state` field references an array in your workflow's [state schema](#shared-state). Each array item spawns a parallel task. A matrix node with `branch_name`, `pull_request` or a step `commit` runs its tasks one at a time instead: they share one git checkout.
 
 **Accessing Matrix Values**:
 

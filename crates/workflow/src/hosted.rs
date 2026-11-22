@@ -250,6 +250,7 @@ impl HostedRun {
             label,
             cancel: Arc::clone(&self.context.cancel),
             since: None,
+            alongside: false,
         };
         let (changes, failures) = for_each_file::commit_effects(&task, files)?;
         Ok(json!({ "changes": changes, "failures": failures }))

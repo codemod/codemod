@@ -66,6 +66,9 @@ pub(crate) struct TaskContext<'a> {
     /// When the step began to wait, for `sleep` and `waitForEvent`, in
     /// milliseconds since the epoch.
     pub since: Option<i64>,
+    /// Other steps were still running when the step was issued
+    /// (`StartRequest.alongside` in `js/orchestrator.ts`).
+    pub alongside: bool,
 }
 
 impl TaskContext<'_> {
@@ -96,23 +99,6 @@ impl TaskContext<'_> {
             for line in error.lines() {
                 self.log(format!("  {line}"));
             }
-        }
-    }
-
-    /// A progress callback for `CodemodExecutionConfig` walks.
-    pub fn walk_progress(&self) -> butterflow_core::execution::ProgressCallback {
-        let events = Arc::clone(&self.run.events);
-        let position = self.position;
-        butterflow_core::execution::ProgressCallback {
-            callback: Arc::new(Box::new(move |_task, _path, status, total, processed| {
-                if status == "increment" || status == "finish" {
-                    events.emit(Event::StepProgress {
-                        position,
-                        processed: *processed as usize,
-                        total: total.copied().unwrap_or(*processed) as usize,
-                    });
-                }
-            })),
         }
     }
 }

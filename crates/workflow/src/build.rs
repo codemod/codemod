@@ -791,8 +791,12 @@ fn shard_functions(call: &oxc::ast::ast::CallExpression<'_>) -> Vec<(Span, Isola
         let ObjectPropertyKind::ObjectProperty(property) = property else {
             continue;
         };
-        let is_method =
-            matches!(&property.key, PropertyKey::StaticIdentifier(id) if id.name == "method");
+        let is_method = !property.computed
+            && match &property.key {
+                PropertyKey::StaticIdentifier(id) => id.name == "method",
+                PropertyKey::StringLiteral(s) => s.value == "method",
+                _ => false,
+            };
         if let (true, Expression::ObjectExpression(method)) =
             (is_method, property.value.get_inner_expression())
         {
@@ -820,8 +824,15 @@ pub fn rewrite_for_node(file: &str, source: &str) -> Result<Option<String>, Buil
     let mut splices = built.node_splices;
     splices.sort_by_key(|(span, _)| std::cmp::Reverse((span.start, span.end)));
     let mut rewritten = source.to_string();
-    for (span, text) in splices {
-        rewritten.replace_range(span.start as usize..span.end as usize, &text);
+    for (span, mut text) in splices {
+        // Keep the lines the replaced code had, so later lines stay where
+        // they are in stack traces: a cut import or a function written over
+        // several lines leaves its line breaks.
+        let range = span.start as usize..span.end as usize;
+        let lines = source[range.clone()].matches('\n').count();
+        let kept = text.matches('\n').count();
+        text.push_str(&"\n".repeat(lines.saturating_sub(kept)));
+        rewritten.replace_range(range, &text);
     }
     Ok(Some(rewritten))
 }

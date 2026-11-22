@@ -16,6 +16,6 @@ pub mod codemod_lang;
 
 pub use execution_engine::*;
 pub use in_memory_engine::*;
-pub use pending_files::PendingFiles;
+pub use pending_files::{PendingFiles, TakenFile, Transaction};
 pub use selector_engine::*;
 pub mod language_data;

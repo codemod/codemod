@@ -94,18 +94,27 @@ pub(crate) fn normalize(path: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-/// A task's `basePath`: a directory under the target, or the target itself
-/// (`None`) for `.`, `./` and nothing.
-pub(crate) fn base_path(base: Option<&str>) -> Result<Option<PathBuf>, String> {
-    let Some(base) = base.map(str::trim) else {
-        return Ok(None);
-    };
-    if base.is_empty() || base.trim_end_matches('/') == "." {
-        return Ok(None);
+/// Check existing path components, including the last one if it exists.
+/// A dangling symlink is not a missing component that we may create.
+fn check_containment(target: &Path, path: &str) -> Result<(), String> {
+    let mut prefix = target.to_path_buf();
+    for component in Path::new(path).components() {
+        prefix.push(component);
+        match fs::symlink_metadata(&prefix) {
+            Ok(_) => {
+                let resolved = fs::canonicalize(&prefix)
+                    .map_err(|e| format!("cannot resolve '{}': {e}", prefix.display()))?;
+                if !resolved.starts_with(target) {
+                    return Err(format!(
+                        "refusing to change '{path}': the path must stay inside the target"
+                    ));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => return Err(format!("cannot inspect '{}': {e}", prefix.display())),
+        }
     }
-    normalize(base)
-        .map(|base| Some(PathBuf::from(base)))
-        .ok_or_else(|| format!("basePath '{base}' must stay inside the target"))
+    Ok(())
 }
 
 /// Check the plan, then apply it unless `dry_run`. Returns
@@ -130,6 +139,16 @@ pub(crate) fn commit(
         .map_err(|_| "commit lock poisoned".to_string())?;
     if task.canceled() {
         return Err("canceled".to_string());
+    }
+    if !planned.is_empty() {
+        let root = fs::canonicalize(target)
+            .map_err(|e| format!("cannot resolve target '{}': {e}", target.display()))?;
+        for plan in &planned {
+            check_containment(&root, &plan.path)?;
+            if let Change::Move { to, .. } = &plan.change {
+                check_containment(&root, to)?;
+            }
+        }
     }
     check_conflicts(target, &planned)?;
     let unchanged = parallel_map(&planned, |plan| {
@@ -268,6 +287,23 @@ fn same_file(a: &Path, b: &Path) -> bool {
             (Ok(a), Ok(b)) => a == b,
             _ => false,
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod containment_tests {
+    use super::*;
+
+    #[test]
+    fn containment_checks_existing_ancestors_of_new_paths() {
+        let target = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = target.path().canonicalize().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("outside")).unwrap();
+        std::os::unix::fs::symlink(root.join("missing"), root.join("dangling")).unwrap();
+        assert!(check_containment(&root, "outside/new/file").is_err());
+        assert!(check_containment(&root, "dangling").is_err());
+        assert!(check_containment(&root, "new/file").is_ok());
     }
 }
 

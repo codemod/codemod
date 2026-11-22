@@ -466,9 +466,9 @@ export default async function main({ params }: { params: { from: string; to: str
     const path = join(
       scratch({
         "workflow.ts": `
-import { step, astGrep } from "codemod/workflow";
+import { step, forEachFile, astGrep } from "codemod/workflow";
 export default async function main() {
-  await step(astGrep("./rules.yml"));
+  await step(forEachFile(astGrep("./rules.yml")));
 }
 `,
       }),
@@ -478,6 +478,45 @@ export default async function main() {
       runWorkflow(path, { target: { "a.js": "a\n" } }),
       /astGrep takes rules, not a file path: add import rules from/,
     );
+  });
+
+  test(`${host}: astGrep repeats until nothing changes`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, forEachFile, astGrep } from "codemod/workflow";
+export default async function main() {
+  const rule = { id: "log", language: "javascript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" };
+  const result = await step(forEachFile(astGrep(rule, { repeat: true })));
+  return result.matches;
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await runWorkflow(path, {
+      target: { "a.js": "console.log(console.log(1));\n" },
+    });
+    assert.equal(result.status, "succeeded", result.error);
+    assert.equal(result.output, 2);
+    assert.equal(result.files["a.js"], "logger.info(logger.info(1));\n");
+  });
+
+  test(`${host}: astGrep is not a step on its own`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, astGrep } from "codemod/workflow";
+export default async function main() {
+  await step(astGrep({ id: "r", language: "javascript", rule: { pattern: "a" } }) as any);
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await runWorkflow(path, { target: { "a.js": "a\n" } });
+    assert.equal(result.status, "failed");
+    assert.match(result.error, /astGrep\(\.\.\.\) is not a step on its own/);
   });
 
   test(`${host}: a failing until step fails the run`, HOSTS[host], async () => {
@@ -497,6 +536,23 @@ export default async function main() {
     assert.equal(result.status, "failed");
     assert.equal(result.error, "StepError: step 'Boom' failed: no");
     assert.equal(result.ok, false);
+  });
+
+  test(`${host}: git steps refuse to run alongside other steps`, HOSTS[host], async () => {
+    const dir = scratch({
+      "workflow.ts": `
+import { step, branch, commit } from "codemod/workflow";
+export default async function main() {
+  await Promise.all(["a", "b"].map(async (name) => {
+    await step(branch("codemod-" + name));
+    await step(commit("migrate " + name));
+  }));
+}
+`,
+    });
+    const result = await runWorkflow(join(dir, "workflow.ts"), { target: {} });
+    assert.equal(result.status, "failed");
+    assert.match(result.error, /managed git steps can't run in parallel/);
   });
 
   test(

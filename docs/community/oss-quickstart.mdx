@@ -56,7 +56,7 @@ You will end up with a [Codemod package](/community/package-structure):
     <Tree.Folder name="src" defaultOpen>
       <Tree.File name="workflow.ts" />
       <Tree.Folder name="scripts" defaultOpen>
-        <Tree.File name="codemod.ts" />
+        <Tree.File name="hoist-components.ts" />
       </Tree.Folder>
     </Tree.Folder>
     <Tree.Folder name="tests" defaultOpen>
@@ -123,13 +123,15 @@ Only modify files that still contain inner component definitions.`));
 }
 ```
 
-```ts src/scripts/codemod.ts expandable
-import type { Codemod, Edit } from "codemod/ast-grep";
-import type { SgNode } from "codemod/ast-grep";
+```ts src/scripts/hoist-components.ts expandable
+import type { FileCallback } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+import type { Edit, SgNode } from "codemod/ast-grep";
 import type TSX from "codemod/ast-grep/langs/tsx";
 
-const codemod: Codemod<TSX> = async (root) => {
-  const rootNode = root.root();
+// A forEachFile callback: it gets each selected file, and writes the new text.
+const hoistComponents: FileCallback = (file) => {
+  const rootNode = parse<TSX>(file).root();
   const edits: Edit[] = [];
 
   // Find function components defined inside other function components.
@@ -184,7 +186,7 @@ const codemod: Codemod<TSX> = async (root) => {
   });
 
   if (innerFuncComponents.length === 0 && innerArrowComponents.length === 0) {
-    return null;
+    return;
   }
 
   const allInner = [...innerFuncComponents, ...innerArrowComponents];
@@ -241,10 +243,10 @@ const codemod: Codemod<TSX> = async (root) => {
     });
   }
 
-  return rootNode.commitEdits(edits);
+  file.write(rootNode.commitEdits(edits));
 };
 
-export default codemod;
+export default hoistComponents;
 ```
 
 </CodeGroup>

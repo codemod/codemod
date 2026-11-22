@@ -72,7 +72,60 @@ pub fn scan_file_with_combined_scan(
     apply_fixes: bool,
 ) -> Result<(Vec<AstGrepMatch>, bool, Option<String>), AstGrepError> {
     let content = fs::read_to_string(file_path)?;
+    scan_text_with_combined_scan(file_path, &content, combined_scan, apply_fixes)
+}
 
+/// [`scan_file_with_combined_scan`] on text already read from `file_path`
+/// (its extension picks the language).
+pub fn scan_text_with_combined_scan(
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+    apply_fixes: bool,
+) -> Result<(Vec<AstGrepMatch>, bool, Option<String>), AstGrepError> {
+    let scan_result = scan_text(file_path, content, combined_scan, apply_fixes)?;
+    let file_modified = scan_result.file_modified;
+    let new_content = if file_modified {
+        Some(scan_result.new_content)
+    } else {
+        None
+    };
+
+    Ok((scan_result.matches, file_modified, new_content))
+}
+
+/// One pass of rules over a file's text, with their fixes applied.
+pub struct ScanPass {
+    /// Matches found, of every rule, overlapping ones included.
+    pub matches: usize,
+    /// Fixes applied: of overlapping matches, only the outer one is fixed.
+    pub fixes: usize,
+    /// The new text, when the fixes changed it.
+    pub content: Option<String>,
+}
+
+/// Scan text already read from `file_path` (its extension picks the
+/// language) and apply the fixes, counting what was found and fixed.
+pub fn scan_pass(
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+) -> Result<ScanPass, AstGrepError> {
+    let scanned = scan_text(file_path, content, combined_scan, true)?;
+    Ok(ScanPass {
+        matches: scanned.matches.len(),
+        fixes: scanned.fixes_applied,
+        content: (scanned.file_modified && scanned.new_content != content)
+            .then_some(scanned.new_content),
+    })
+}
+
+fn scan_text(
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+    apply_fixes: bool,
+) -> Result<crate::ast_grep::scanner::ScanResult, AstGrepError> {
     let language_str = detect_language_from_extension(
         file_path
             .extension()
@@ -88,26 +141,67 @@ pub fn scan_file_with_combined_scan(
     quiet_scan_panics();
     SCANNING.with(|scanning| scanning.set(true));
     let scanned = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        let root = AstGrep::doc(StrDoc::new(&content, language));
+        let root = AstGrep::doc(StrDoc::new(content, language));
         scan_content(
             &root,
-            &content,
+            content,
             file_path.to_string_lossy().to_string(),
             combined_scan,
             apply_fixes,
         )
     }));
     SCANNING.with(|scanning| scanning.set(false));
-    let scan_result = scanned.map_err(|_| {
+    scanned.map_err(|_| {
         AstGrepError::Config(format!("ast-grep could not scan '{}'", file_path.display()))
-    })??;
+    })?
+}
 
-    let file_modified = scan_result.file_modified;
-    let new_content = if file_modified {
-        Some(scan_result.new_content)
-    } else {
-        None
-    };
+#[cfg(test)]
+mod tests {
+    use super::{scan_file_with_combined_scan, with_combined_scan};
 
-    Ok((scan_result.matches, file_modified, new_content))
+    /// Fix `source` (a `.ts` file) with the rules in `rules` (YAML).
+    fn fix(rules: &str, source: &str) -> Option<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let rules_path = dir.path().join("rules.yml");
+        std::fs::write(&rules_path, rules).unwrap();
+        let file = dir.path().join("input.ts");
+        std::fs::write(&file, source).unwrap();
+        with_combined_scan(rules_path.to_str().unwrap(), |scan| {
+            let (_, _, content) = scan_file_with_combined_scan(&file, &scan.combined_scan, true)?;
+            Ok(content)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn a_match_nested_in_another_match_of_the_rule_keeps_the_outer_fix() {
+        let rules = "id: log\nlanguage: typescript\nrule:\n  pattern: console.log($A)\nfix: logger.info($A)\n";
+        assert_eq!(
+            fix(rules, "console.log(console.log(1));\nconsole.log(2);\n").as_deref(),
+            Some("logger.info(console.log(1));\nlogger.info(2);\n")
+        );
+    }
+
+    #[test]
+    fn overlapping_matches_of_two_rules_keep_the_outer_fix() {
+        let rules = "\
+id: undefined-check
+language: typescript
+rule:
+  pattern: $A !== undefined
+fix: $A != null
+---
+id: rename-dispose
+language: typescript
+rule:
+  kind: property_identifier
+  regex: ^dispose$
+fix: disposeNow
+";
+        assert_eq!(
+            fix(rules, "if (x.dispose !== undefined) { y.dispose(); }\n").as_deref(),
+            Some("if (x.dispose != null) { y.disposeNow(); }\n")
+        );
+    }
 }

@@ -89,8 +89,14 @@ export default async function main({
     return [fromText, withLanguage, legacy].length;
   });
 
+  // The error names what is not JSON (`NotJson<"a Set: use an array">`),
+  // not astGrep's handler, which forEachFile also takes.
   // @ts-expect-error a Set is not JSON
   forEachFile("**/*.ts", (file) => new Set([file.path]));
+  // @ts-expect-error a Set is not JSON, without a selector too
+  forEachFile((file) => new Set([file.path]));
+  // @ts-expect-error what an async callback resolves to must be JSON: a Map is not
+  forEachFile({ language: "tsx" }, async (file) => new Map([[file.path, 1]]));
   // @ts-expect-error a nested function is not JSON
   forEachFile("**/*.ts", (file) => ({ path: file.path, run: () => 1 }));
 
@@ -172,10 +178,26 @@ export default async function main({
   const ruled = await step(forEachFile(["src/**/*.ts"], astGrep(rules)));
   expectType<Equal<typeof ruled.matches, number>>(true);
   await step(forEachFile(astGrep(rules)));
-  // @ts-expect-error `containing` is for callbacks
-  forEachFile({ containing: "moment" }, astGrep(rules));
+  await step(
+    forEachFile(
+      { include: "src/**", exclude: "**/*.test.ts", containing: "moment" },
+      astGrep(rules),
+    ),
+  );
   // @ts-expect-error the rules name their languages
   forEachFile({ language: "tsx" }, astGrep(rules));
+  // @ts-expect-error semantic analysis is for callbacks
+  forEachFile({ semanticAnalysis: "workspace" }, astGrep(rules));
+  // @ts-expect-error astGrep is not a step on its own
+  void step(astGrep(rules));
+  // @ts-expect-error the selector says which files
+  astGrep(rules, { include: ["**/*.ts"] });
+  // Repeat until nothing changes: up to 10 passes, or as many as given.
+  const repeated = await step(forEachFile(astGrep(rules, { repeat: true })));
+  expectType<Equal<typeof repeated.matches, number>>(true);
+  await step(forEachFile("src/**", astGrep(rules, { repeat: 3 })));
+  // @ts-expect-error repeat is a boolean or a number of passes
+  astGrep(rules, { repeat: "yes" });
   // @ts-expect-error only callbacks and astGrep
   forEachFile(shell("echo hi"));
 
@@ -189,29 +211,30 @@ export default async function main({
   // @ts-expect-error a template takes strings, numbers and booleans
   void step(shell`echo ${{ not: "a word" }}`);
 
-  await step(astGrep(rules, { include: ["**/*.ts"] }));
   // Rules written in the workflow, or built from values it has.
   await step(
-    astGrep([
-      {
-        id: "no-var",
-        language: "javascript",
-        rule: { pattern: "var $A = $B" },
-        fix: "let $A = $B;",
-      },
-      {
-        id: "rename",
-        language: "typescript",
-        rule: {
-          kind: "call_expression",
-          has: { field: "function", regex: `^${target}$`, stopBy: "end" },
+    forEachFile(
+      astGrep([
+        {
+          id: "no-var",
+          language: "javascript",
+          rule: { pattern: "var $A = $B" },
+          fix: "let $A = $B;",
         },
-        fix: { template: "renamed()", expandEnd: { regex: ";" } },
-        constraints: { A: { not: { kind: "identifier" } } },
-        transform: { B: { convert: { source: "$A", toCase: "camelCase" } } },
-        severity: "warning",
-      },
-    ]),
+        {
+          id: "rename",
+          language: "typescript",
+          rule: {
+            kind: "call_expression",
+            has: { field: "function", regex: `^${target}$`, stopBy: "end" },
+          },
+          fix: { template: "renamed()", expandEnd: { regex: ";", stopBy: "end" } },
+          constraints: { A: { not: { kind: "identifier" } } },
+          transform: { B: { convert: { source: "$A", toCase: "camelCase" } } },
+          severity: "warning",
+        },
+      ]),
+    ),
   );
   // @ts-expect-error rules are imported or written, not named by path
   astGrep("./rules/config.yml");

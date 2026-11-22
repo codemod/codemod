@@ -6,16 +6,20 @@
 //! would be lost. Reading and updating such a file through [`PendingFiles`]
 //! gives it to one transform at a time and hands each the text the step has
 //! so far.
+//!
+//! A thread may also open a [`Transaction`]: the files it takes then stay
+//! its own until the transaction ends, and are put back as they were if the
+//! transaction does not keep its changes (the transform failed). A file's
+//! changes to other files are then applied with its own, or not at all.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::ThreadId;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-/// How long a transform waits for a file another transform holds. Only a
-/// transform that holds one file while asking for another can make a wait
-/// that long.
+/// How long a transform waits for a file another transform holds. Waits
+/// that could never end are found and refused without waiting.
 const WAIT_LIMIT: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
@@ -24,82 +28,213 @@ struct Pending {
     text: String,
     /// The thread whose transform has the file now.
     holder: Option<ThreadId>,
+    /// A transform is running on the file now: the holder may not take it
+    /// again until it is done.
+    busy: bool,
+    /// The text when the holder's transaction took the file.
+    before: String,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    files: HashMap<PathBuf, Pending>,
+    /// Threads with an open transaction.
+    open: HashSet<ThreadId>,
+    /// The file each thread is waiting for.
+    waiting: HashMap<ThreadId, PathBuf>,
+    /// Transactions that were refused a file to break a cycle of waits: the
+    /// thread that held it, and how many transactions that thread had ended.
+    aborted: HashMap<ThreadId, (ThreadId, u64)>,
+    /// How many transactions each thread has ended.
+    ended: HashMap<ThreadId, u64>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct PendingFiles {
-    inner: Arc<(Mutex<HashMap<PathBuf, Pending>>, Condvar)>,
+    inner: Arc<(Mutex<State>, Condvar)>,
 }
 
-/// One file taken with [`PendingFiles::take`]; gives it back when dropped.
+/// One file taken with [`PendingFiles::take`]; gives it back when dropped,
+/// or, in a transaction, when the transaction ends.
 #[derive(Debug)]
 pub struct TakenFile {
     files: PendingFiles,
     path: PathBuf,
 }
 
+/// The files one thread takes until [`Transaction::finish`]. Dropped
+/// unfinished, it keeps none of their changes.
+#[derive(Debug)]
+pub struct Transaction {
+    files: PendingFiles,
+    thread: ThreadId,
+    done: bool,
+}
+
+impl State {
+    /// Whether `me` waiting for `key` would wait forever: its holder waits,
+    /// directly or through others, for a file `me` holds.
+    fn would_deadlock(&self, me: ThreadId, key: &Path) -> bool {
+        let mut holder = self.files.get(key).and_then(|file| file.holder);
+        for _ in 0..=self.waiting.len() {
+            match holder {
+                None => return false,
+                Some(thread) if thread == me => return true,
+                Some(thread) => {
+                    holder = self
+                        .waiting
+                        .get(&thread)
+                        .and_then(|path| self.files.get(path))
+                        .and_then(|file| file.holder);
+                }
+            }
+        }
+        false
+    }
+
+    /// Give back one file held outside a transaction.
+    fn release_one(&mut self, path: &Path) {
+        let unchanged = match self.files.get_mut(path) {
+            Some(file) => {
+                file.holder = None;
+                file.busy = false;
+                file.before.clear();
+                file.text == file.original
+            }
+            None => false,
+        };
+        if unchanged {
+            self.files.remove(path);
+        }
+    }
+
+    /// Give back what `thread` holds, putting back the texts if `keep` is false.
+    fn release(&mut self, thread: ThreadId, keep: bool) {
+        self.files.retain(|_, file| {
+            if file.holder == Some(thread) {
+                if !keep {
+                    file.text = std::mem::take(&mut file.before);
+                }
+                file.holder = None;
+                file.busy = false;
+                file.before.clear();
+            }
+            // A file left as it was needs no keeping: the next take reads it again.
+            file.holder.is_some() || file.text != file.original
+        });
+    }
+}
+
 impl PendingFiles {
-    fn lock(&self) -> MutexGuard<'_, HashMap<PathBuf, Pending>> {
+    fn lock(&self) -> MutexGuard<'_, State> {
         self.inner.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// The file's text as the step has it so far, and the file itself until
-    /// the returned guard is dropped. Waits while another transform has it.
+    /// the returned guard is dropped (or the thread's transaction ends).
+    /// Waits while another transform has it.
     pub fn take(&self, path: &Path) -> std::io::Result<(String, TakenFile)> {
         let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let me = std::thread::current().id();
-        let mut files = self.lock();
-        if files.get(&key).is_some_and(|file| file.holder == Some(me)) {
-            return Err(std::io::Error::other(format!(
-                "'{}' is being transformed already; return its new text from that transform instead",
-                path.display()
-            )));
+        let mut state = self.lock();
+        if let Some(file) = state.files.get_mut(&key) {
+            if file.holder == Some(me) {
+                if file.busy {
+                    return Err(std::io::Error::other(format!(
+                        "'{}' is being transformed already; return its new text from that transform instead",
+                        path.display()
+                    )));
+                }
+                // Taken earlier in this transaction, and free again.
+                file.busy = true;
+                let text = file.text.clone();
+                drop(state);
+                return Ok((text, self.taken(key)));
+            }
         }
-        let waited = self
-            .inner
-            .1
-            .wait_timeout_while(files, WAIT_LIMIT, |files| {
-                files.get(&key).is_some_and(|file| file.holder.is_some())
-            })
-            .unwrap_or_else(|e| e.into_inner());
-        if waited.1.timed_out() {
-            return Err(std::io::Error::other(format!(
-                "timed out waiting for another transform of '{}'",
-                path.display()
-            )));
+        let deadline = Instant::now() + WAIT_LIMIT;
+        while state
+            .files
+            .get(&key)
+            .is_some_and(|file| file.holder.is_some())
+        {
+            if state.would_deadlock(me, &key) {
+                if let Some(holder) = state.files.get(&key).and_then(|file| file.holder) {
+                    let ended = state.ended.get(&holder).copied().unwrap_or(0);
+                    state.aborted.insert(me, (holder, ended));
+                }
+                return Err(std::io::Error::other(format!(
+                    "'{}' is held by another file's transform, which is waiting for a file this one holds",
+                    path.display()
+                )));
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(std::io::Error::other(format!(
+                    "timed out waiting for another transform of '{}'",
+                    path.display()
+                )));
+            }
+            state.waiting.insert(me, key.clone());
+            state = self
+                .inner
+                .1
+                .wait_timeout(state, deadline - now)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+            state.waiting.remove(&me);
         }
-        files = waited.0;
-        let text = match files.get_mut(&key) {
+        let text = match state.files.get_mut(&key) {
             Some(file) => {
                 file.holder = Some(me);
+                file.busy = true;
+                file.before = file.text.clone();
                 file.text.clone()
             }
             None => {
                 let text = std::fs::read_to_string(&key)?;
-                files.insert(
+                state.files.insert(
                     key.clone(),
                     Pending {
                         original: text.clone(),
                         text: text.clone(),
                         holder: Some(me),
+                        busy: true,
+                        before: text.clone(),
                     },
                 );
                 text
             }
         };
-        Ok((
-            text,
-            TakenFile {
-                files: self.clone(),
-                path: key,
-            },
-        ))
+        drop(state);
+        Ok((text, self.taken(key)))
+    }
+
+    fn taken(&self, path: PathBuf) -> TakenFile {
+        TakenFile {
+            files: self.clone(),
+            path,
+        }
+    }
+
+    /// Keep the files this thread takes until [`Transaction::finish`].
+    pub fn begin(&self) -> Transaction {
+        let thread = std::thread::current().id();
+        let mut state = self.lock();
+        state.open.insert(thread);
+        state.aborted.remove(&thread);
+        Transaction {
+            files: self.clone(),
+            thread,
+            done: false,
+        }
     }
 
     /// Every file whose text the step changed: `(path, on disk, now)`, by path.
     pub fn changed(&self) -> Vec<(PathBuf, String, String)> {
         let mut changed: Vec<_> = self
             .lock()
+            .files
             .iter()
             .filter(|(_, file)| file.text != file.original)
             .map(|(path, file)| (path.clone(), file.original.clone(), file.text.clone()))
@@ -117,7 +252,7 @@ impl TakenFile {
 
     /// The file's new text, for whoever takes it next and for the commit.
     pub fn set(&self, text: String) {
-        if let Some(file) = self.files.lock().get_mut(&self.path) {
+        if let Some(file) = self.files.lock().files.get_mut(&self.path) {
             file.text = text;
         }
     }
@@ -125,10 +260,80 @@ impl TakenFile {
 
 impl Drop for TakenFile {
     fn drop(&mut self) {
-        if let Some(file) = self.files.lock().get_mut(&self.path) {
-            file.holder = None;
+        let me = std::thread::current().id();
+        let mut state = self.files.lock();
+        if state.open.contains(&me) {
+            // The transaction gives it back.
+            if let Some(file) = state.files.get_mut(&self.path) {
+                if file.holder == Some(me) {
+                    file.busy = false;
+                }
+            }
+            return;
         }
+        let held = state
+            .files
+            .get(&self.path)
+            .is_some_and(|file| file.holder == Some(me));
+        if held {
+            state.release_one(&self.path);
+        }
+        drop(state);
         self.files.inner.1.notify_all();
+    }
+}
+
+impl Transaction {
+    /// Whether another transaction was given a file instead of this one, to
+    /// break a cycle of waits: what this one did is incomplete, and should
+    /// be dropped and done again.
+    pub fn aborted(&self) -> bool {
+        self.files.lock().aborted.contains_key(&self.thread)
+    }
+
+    /// Put back what an aborted transaction changed, and wait until the
+    /// transaction it gave way to is done, so running it again does not
+    /// take the files back first.
+    pub fn give_way(mut self) {
+        let winner = self.files.lock().aborted.get(&self.thread).copied();
+        self.end(false);
+        let Some((thread, ended)) = winner else {
+            return;
+        };
+        let state = self.files.lock();
+        let _ = self
+            .files
+            .inner
+            .1
+            .wait_timeout_while(state, WAIT_LIMIT, |state| {
+                state.ended.get(&thread).copied().unwrap_or(0) <= ended
+            });
+    }
+
+    /// Give back every file taken since [`PendingFiles::begin`], keeping
+    /// their new texts or putting back the ones they had.
+    pub fn finish(mut self, keep: bool) {
+        self.end(keep);
+    }
+
+    fn end(&mut self, keep: bool) {
+        if self.done {
+            return;
+        }
+        self.done = true;
+        let mut state = self.files.lock();
+        state.open.remove(&self.thread);
+        state.aborted.remove(&self.thread);
+        *state.ended.entry(self.thread).or_default() += 1;
+        state.release(self.thread, keep);
+        drop(state);
+        self.files.inner.1.notify_all();
+    }
+}
+
+impl Drop for Transaction {
+    fn drop(&mut self) {
+        self.end(false);
     }
 }
 
@@ -179,5 +384,102 @@ mod tests {
         let files = PendingFiles::default();
         drop(files.take(&path).unwrap());
         assert!(files.changed().is_empty());
+    }
+
+    #[test]
+    fn a_transaction_keeps_its_files_until_it_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.ts");
+        std::fs::write(&path, "0").unwrap();
+        let files = PendingFiles::default();
+        let transaction = files.begin();
+        let (text, taken) = files.take(&path).unwrap();
+        taken.set(format!("{text}1"));
+        drop(taken);
+        // The same transaction may take it again, and builds on its change.
+        let (text, taken) = files.take(&path).unwrap();
+        assert_eq!(text, "01");
+        taken.set(format!("{text}2"));
+        drop(taken);
+        let other = {
+            let (files, path) = (files.clone(), path.clone());
+            std::thread::spawn(move || {
+                let (text, taken) = files.take(&path).unwrap();
+                taken.set(format!("{text}3"));
+            })
+        };
+        std::thread::sleep(Duration::from_millis(50));
+        // The other thread waits for the transaction.
+        assert_eq!(files.changed()[0].2, "012");
+        transaction.finish(true);
+        other.join().unwrap();
+        assert_eq!(files.changed()[0].2, "0123");
+    }
+
+    #[test]
+    fn a_transaction_that_does_not_keep_its_changes_puts_the_texts_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.ts"), dir.path().join("b.ts"));
+        std::fs::write(&a, "a").unwrap();
+        std::fs::write(&b, "b").unwrap();
+        let files = PendingFiles::default();
+        let (text, taken) = files.take(&a).unwrap();
+        taken.set(format!("{text}1"));
+        drop(taken);
+
+        let transaction = files.begin();
+        for path in [&a, &b] {
+            let (text, taken) = files.take(path).unwrap();
+            taken.set(format!("{text}2"));
+        }
+        drop(transaction);
+        let changed = files.changed();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].2, "a1");
+    }
+
+    #[test]
+    fn a_cycle_of_waits_is_refused_and_aborts_the_transaction_that_closes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (dir.path().join("a.ts"), dir.path().join("b.ts"));
+        std::fs::write(&a, "a").unwrap();
+        std::fs::write(&b, "b").unwrap();
+        let files = PendingFiles::default();
+        let barrier = std::sync::Barrier::new(2);
+        let aborted: Vec<bool> = std::thread::scope(|scope| {
+            let handles: Vec<_> = [(&a, &b, "1"), (&b, &a, "2")]
+                .into_iter()
+                .map(|(mine, theirs, mark)| {
+                    let (files, barrier) = (&files, &barrier);
+                    scope.spawn(move || {
+                        let transaction = files.begin();
+                        let (text, held) = files.take(mine).unwrap();
+                        held.set(format!("{text}{mark}"));
+                        barrier.wait();
+                        if let Ok((text, other)) = files.take(theirs) {
+                            other.set(format!("{text}{mark}"));
+                        }
+                        let aborted = transaction.aborted();
+                        drop(held);
+                        if aborted {
+                            // Returns once the other transaction is done.
+                            transaction.give_way();
+                            assert_eq!(files.changed().len(), 2);
+                        } else {
+                            transaction.finish(true);
+                        }
+                        aborted
+                    })
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        // One gave way and kept nothing; the other changed both files.
+        assert_eq!(aborted.iter().filter(|aborted| **aborted).count(), 1);
+        let changed = files.changed();
+        assert_eq!(changed.len(), 2);
+        let mark = if aborted[0] { "2" } else { "1" };
+        assert_eq!(changed[0].2, format!("a{mark}"));
+        assert_eq!(changed[1].2, format!("b{mark}"));
     }
 }

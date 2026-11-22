@@ -50,7 +50,10 @@ pub(crate) mod scanner;
 pub(crate) mod serde;
 
 #[cfg(feature = "native")]
-pub use native::{scan_file_with_combined_scan, with_combined_scan, with_combined_scan_of};
+pub use native::{
+    scan_file_with_combined_scan, scan_pass, scan_text_with_combined_scan, with_combined_scan,
+    with_combined_scan_of, ScanPass,
+};
 
 /// The `codemod/ast-grep` runtime module. Public so other hosts can register
 /// it in their own QuickJS runtimes.
@@ -442,7 +445,8 @@ fn jssg_transform_rjs<'js>(
         Some(path_to_file.clone()),
         target_directory.as_deref(),
     )
-    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?;
+    .map_err(|e| Exception::throw_message(&ctx, &format!("Failed to parse: {e}")))?
+    .into_transformed_file();
 
     let sg_root_inner = Arc::clone(&sg_root.inner);
 

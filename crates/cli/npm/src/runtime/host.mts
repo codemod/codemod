@@ -171,7 +171,10 @@ type BodyEnding =
  *
  * A module (`await import("./workflow.ts")`), for test runners that should
  * load it through their own module system, needs `options.path` (or
- * `options.workflowDir`) so relative task paths resolve.
+ * `options.workflowDir`) so relative task paths resolve. Such a module (and
+ * any workflow on Bun) is loaded without the build's changes: imported
+ * callbacks load with it and run as plain functions, and `shard`'s
+ * `method.function` and `filter` fail. Give those workflows by path.
  */
 export async function runWorkflow(
   workflow: string | UrlLike | WorkflowModule,

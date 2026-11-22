@@ -17,6 +17,8 @@ npx codemod workflow upgrade --dry-run
 npx codemod workflow upgrade
 ```
 
+You can also pass a single workflow file, for example `npx codemod workflow upgrade workflows/main.yaml`. If the package manifest points to that file, upgrade updates the entry to the new TypeScript file.
+
 `upgrade` writes `workflow.ts` next to `workflow.yaml`, points `codemod.yaml` at it, and removes the YAML file. Keep the YAML file with `--keep-yaml`. In a repository with many packages, run it once at the root to convert them all.
 
 For example, this `workflow.yaml`:
@@ -77,12 +79,12 @@ npm install --save-dev codemod
 | `depends_on` | Functions called in order; independent nodes run at the same time |
 | A step | `await step("<step name>", <task>)` |
 | `js-ast-grep` | `import * as transform from "./<js_file>"` and `forEachFile({ include, exclude, language, semanticAnalysis, capabilities }, (file) => jssgFile(transform, file, { ... }))`, through the compatibility adapter |
-| `ast-grep` | `import rules from "./<config_file>"` and `forEachFile({ include, exclude }, astGrep(rules, { ... }))` |
+| `ast-grep` | `import rules from "./<config_file>"` and `forEachFile({ include, exclude }, astGrep(rules))`. A `base_path` is joined to the globs (`base_path: app` with `include: ["src/**"]` gives `include: ["app/src/**"]`); `max_threads` is dropped |
 | `run` | `shell(command, { env })` |
 | `codemod` | `codemod(source, { params })` |
 | `ai` | `agent(prompt, { ... })` |
 | `install-skill` | `installSkill({ ... })` |
-| `matrix` (`values` or `from_state`) | One call per value, run at the same time |
+| `matrix` (`values` or `from_state`) | One call per value, run at the same time; one at a time when the node uses git (`branch_name`, `pull_request`, step `commit`) |
 | `shard` | `shard({ method, target, files, filter, previous })`, its result passed to the steps that use it. A shard `function` is imported; the shard's `js-ast-grep` transform becomes a `filter` that keeps the files it would change |
 | `if:` | An `if` statement whose condition runs through `__evaluate(...)`, the YAML engine's own evaluator, so it means exactly what it did |
 | `${{ params.name }}` | `params.name` |
@@ -158,5 +160,15 @@ A `workflow.ts` written for an earlier preview may need these changes. Each fail
   - `astGrep("./rules/config.yml")` → `import rules from "./rules/config.yml"` and `astGrep(rules)`, or rules written as objects: `astGrep({ id: "no-var", language: "javascript", rule: { pattern: "var $A = $B" }, fix: "let $A = $B;" })`;
   - `shard({ method: { function: "./scripts/shard.ts" } })` → an imported (or inline) shard function, `method: { function: shardFiles }`;
   - `shard({ jssg: { path, ... } })` → `filter: (file) => ...`, a callback that keeps the files it returns `true` for; `filePattern` → `files`.
+
+- **`astGrep(rules)` runs only inside `forEachFile`.** It is no longer a step on its own, and its only option is `repeat`; the selector says which files:
+
+  ```ts
+  // Before
+  await step(astGrep(rules, { include: ["src/**"], basePath: "app", threads: 4 }));
+
+  // After
+  await step(forEachFile({ include: ["app/src/**"] }, astGrep(rules)));
+  ```
 
 If your editor flags `.ts` in an import, add `"allowImportingTsExtensions": true` to `tsconfig.json`, as packages from `codemod init` have.

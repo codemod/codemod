@@ -9,6 +9,8 @@ pub(crate) struct ScanResult {
     pub matches: Vec<AstGrepMatch>,
     pub file_modified: bool,
     pub new_content: String,
+    /// Fixes applied; of overlapping ones, only the outer.
+    pub fixes_applied: usize,
 }
 
 pub(crate) fn scan_content<D: Doc<Lang = L>, L: Language>(
@@ -33,18 +35,19 @@ where
     let mut matches = Vec::new();
     let mut file_modified = false;
     let mut new_content = content.to_string();
+    let mut fixes_applied = 0;
 
     // Handle diffs (rules with fixers) when applying fixes
     if apply_fixes && !scan_result.diffs.is_empty() {
-        // Collect all edits and sort them in reverse order (from end to start)
-        // to avoid offset issues when applying multiple fixes
-        let mut edit_infos: Vec<(usize, usize, Vec<u8>)> = Vec::new(); // (position, deleted_length, inserted_text)
+        // (position, deleted_length, inserted_text), in the scan's order:
+        // depth first, so an outer node comes before the nodes inside it.
+        let mut edits: Vec<(usize, usize, Vec<u8>)> = Vec::new();
 
         for (rule, node_match) in &scan_result.diffs {
             if let Ok(fixers) = rule.get_fixer() {
                 if let Some(fixer) = fixers.first() {
                     let edit = node_match.make_edit(&rule.matcher, fixer);
-                    edit_infos.push((edit.position, edit.deleted_length, edit.inserted_text));
+                    edits.push((edit.position, edit.deleted_length, edit.inserted_text));
                 }
             }
 
@@ -66,59 +69,8 @@ where
             });
         }
 
-        // Sort edits by position in reverse order (end to start)
-        edit_infos.sort_by_key(|edit| std::cmp::Reverse(edit.0));
-
-        // Apply edits to content using a proper offset-tracking approach
-        if !edit_infos.is_empty() {
-            // Build the new content by applying edits in reverse order (end to start)
-            // This ensures that earlier edits don't affect the positions of later edits
-            let original_content = content;
-            let mut new_content_parts = Vec::new();
-            let mut last_end = original_content.len();
-
-            // Process edits in reverse order by position
-            for (position, deleted_length, inserted_text) in edit_infos.iter() {
-                let start = *position;
-                let end = start + deleted_length;
-
-                // Validate that the edit is within bounds of the original content
-                if start > original_content.len() || end > original_content.len() {
-                    eprintln!(
-                        "Warning: Edit range {}..{} is beyond original content length {}. Skipping edit.",
-                        start, end, original_content.len()
-                    );
-                    continue;
-                }
-
-                // Add the content after this edit (from end of edit to last_end)
-                if end < last_end {
-                    new_content_parts.push(&original_content.as_bytes()[end..last_end]);
-                }
-
-                // Add the replacement text
-                new_content_parts.push(inserted_text);
-
-                last_end = start;
-            }
-
-            // Add the content before the first edit (from 0 to last_end)
-            if last_end > 0 {
-                new_content_parts.push(&original_content.as_bytes()[0..last_end]);
-            }
-
-            // Reverse the parts since we built them in reverse order
-            new_content_parts.reverse();
-
-            // Concatenate all parts
-            let mut result_bytes = Vec::new();
-            for part in new_content_parts {
-                result_bytes.extend_from_slice(part);
-            }
-
-            new_content = String::from_utf8(result_bytes).map_err(|e| {
-                AstGrepError::Config(format!("Invalid UTF-8 after applying fixes: {e}"))
-            })?;
+        if !edits.is_empty() {
+            (new_content, fixes_applied) = apply_edits(content, edits)?;
             file_modified = true;
         }
     }
@@ -148,5 +100,79 @@ where
         matches,
         file_modified,
         new_content,
+        fixes_applied,
     })
+}
+
+/// Apply `(position, deleted_length, inserted_text)` edits to `content`, as
+/// `ast-grep --update-all` does: in order of position, and an edit that
+/// starts inside one already applied is dropped. Edits come in the scan's
+/// order, outer nodes first, and the sort keeps that order for edits that
+/// start at the same byte, so of two nested matches the outer one wins.
+/// Gives the new text and how many edits were applied.
+fn apply_edits(
+    content: &str,
+    mut edits: Vec<(usize, usize, Vec<u8>)>,
+) -> Result<(String, usize), AstGrepError> {
+    edits.sort_by_key(|(position, _, _)| *position);
+    let bytes = content.as_bytes();
+    let mut result = Vec::with_capacity(bytes.len());
+    let mut done = 0;
+    let mut applied = 0;
+    for (start, deleted, inserted) in edits {
+        let end = start + deleted;
+        if start < done || end > bytes.len() {
+            continue;
+        }
+        result.extend_from_slice(&bytes[done..start]);
+        result.extend_from_slice(&inserted);
+        done = end;
+        applied += 1;
+    }
+    result.extend_from_slice(&bytes[done..]);
+    let text = String::from_utf8(result)
+        .map_err(|e| AstGrepError::Config(format!("Invalid UTF-8 after applying fixes: {e}")))?;
+    Ok((text, applied))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_edits;
+
+    fn edit(position: usize, deleted: usize, text: &str) -> (usize, usize, Vec<u8>) {
+        (position, deleted, text.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn an_edit_inside_an_earlier_one_is_dropped() {
+        // `f(g(x))`: the outer call (0..7) and the inner one (2..6).
+        let edits = vec![edit(0, 7, "F(g(x))"), edit(2, 4, "G(x)")];
+        assert_eq!(
+            apply_edits("f(g(x));", edits).unwrap(),
+            ("F(g(x));".to_string(), 1)
+        );
+    }
+
+    #[test]
+    fn of_two_edits_at_one_position_the_first_wins() {
+        let edits = vec![edit(0, 5, "outer"), edit(0, 1, "i")];
+        assert_eq!(
+            apply_edits("a.b.c", edits).unwrap(),
+            ("outer".to_string(), 1)
+        );
+    }
+
+    #[test]
+    fn separate_edits_all_apply_whatever_their_order() {
+        let edits = vec![
+            edit(8, 1, "Z"),
+            edit(0, 1, "X"),
+            edit(4, 1, "Y"),
+            edit(9, 0, "!"),
+        ];
+        assert_eq!(
+            apply_edits("a = b + c;", edits).unwrap(),
+            ("X = Y + Z!;".to_string(), 4)
+        );
+    }
 }

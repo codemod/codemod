@@ -111,6 +111,7 @@ impl StepIsolates {
             target_directory: run.target.clone(),
             default_language,
             semantic_provider: self.semantic_provider.clone(),
+            pending_files: None,
         }
     }
 }
@@ -163,6 +164,7 @@ pub(crate) fn semantic_mode(
         Some(Value::String(mode)) if mode == "file" => SemanticMode::File,
         Some(Value::String(mode)) if mode == "workspace" => SemanticMode::Workspace(target.clone()),
         Some(Value::Object(detail)) => match detail.get("mode").and_then(Value::as_str) {
+            Some("none") => SemanticMode::None,
             Some("file") => SemanticMode::File,
             Some("workspace") => SemanticMode::Workspace(
                 detail
@@ -171,7 +173,7 @@ pub(crate) fn semantic_mode(
                     .map(|root| target.join(root))
                     .unwrap_or_else(|| target.clone()),
             ),
-            _ => return Err("semanticAnalysis.mode must be 'file' or 'workspace'".into()),
+            _ => return Err("semanticAnalysis.mode must be 'none', 'file' or 'workspace'".into()),
         },
         Some(other) => {
             return Err(format!(
