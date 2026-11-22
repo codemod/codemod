@@ -48,10 +48,9 @@ async function __one(path: string, text: string): Promise<__FileOutcome> {
   };
 }
 
-/** Run the callback for a batch of `[path, text]` pairs (as JSON), concurrently. */
-export function __runBatch(batch: string): Promise<string> {
-  const files: [path: string, text: string][] = JSON.parse(batch);
-  return Promise.all(files.map(([path, text]) => __one(path, text))).then((outcomes) =>
+/** Run the callback for a batch of files, concurrently: `texts[i]` is the text of `paths[i]`. */
+export function __runBatch(paths: string[], texts: string[]): Promise<string> {
+  return Promise.all(paths.map((path, i) => __one(path, texts[i] as string))).then((outcomes) =>
     JSON.stringify(outcomes),
   );
 }

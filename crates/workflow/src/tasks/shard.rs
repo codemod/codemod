@@ -11,7 +11,7 @@ use butterflow_models::step::{BuiltinShardType, ShardMethod, UseShard};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::for_each_file::{self, Selector};
+use super::for_each_file::{self, Selected, Selector};
 use super::{function, TaskContext, TaskError, TaskOutcome, TaskResult};
 
 #[derive(Deserialize)]
@@ -179,14 +179,23 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
         Some(dir) => format!("{dir}/{path}"),
         None => path,
     };
-    let selected: Vec<(String, String)> =
-        for_each_file::select(&base, &selector, &default_languages)?
-            .into_iter()
-            .map(|(path, text)| (under_target(path), text))
-            .collect();
+    let selected = for_each_file::select(&base, &selector, &default_languages)?;
     let Some(filter) = &request.filter else {
-        return Ok(Some(selected.into_iter().map(|(path, _)| path).collect()));
+        // Only text files: the ones a `forEachFile` callback would get.
+        return Ok(Some(
+            for_each_file::read_selected(selected, None)
+                .into_iter()
+                .map(|(path, _)| under_target(path))
+                .collect(),
+        ));
     };
+    let selected: Vec<Selected> = selected
+        .into_iter()
+        .map(|selected| Selected {
+            path: under_target(selected.path),
+            ..selected
+        })
+        .collect();
     let outputs = for_each_file::callback_outputs(
         task,
         &filter.callback,
@@ -199,6 +208,8 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
     // selector matched but would not change: kept only when no file would.
     let mut matched = Vec::new();
     let mut failures = Vec::new();
+    // The text files the filter ran on.
+    let total = outputs.len();
     for (path, output) in outputs {
         match output {
             Ok(Value::Bool(true)) => kept.push(path),
@@ -208,7 +219,7 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
         }
     }
     task.log_failures(&failures);
-    if !failures.is_empty() && failures.len() == selected.len() {
+    if !failures.is_empty() && failures.len() == total {
         return Err(TaskError::Failed(format!(
             "shard's filter failed on every file; first error: {}: {}",
             failures[0].0, failures[0].1

@@ -28,6 +28,32 @@ mod wait;
 
 pub(crate) use wait::describe as describe_duration;
 
+/// `f` of each of `items`, in order, over as many threads as there are cores.
+pub(crate) fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(items.len().div_ceil(64))
+        .max(1);
+    if threads == 1 {
+        return items.iter().map(f).collect();
+    }
+    let f = &f;
+    std::thread::scope(|scope| {
+        items
+            .chunks(items.len().div_ceil(threads))
+            .map(|chunk| scope.spawn(move || chunk.iter().map(f).collect::<Vec<R>>()))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flat_map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    })
+}
+
 /// One task invocation.
 pub(crate) struct TaskContext<'a> {
     pub run: &'a Arc<RunContext>,
