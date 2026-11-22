@@ -1098,7 +1098,9 @@ export default async function main() {
     #[tokio::test]
     async fn a_workflow_ts_package_publishes_its_imported_rules() {
         let temp_dir = tempdir().unwrap();
-        let manifest = manifest_with("workflow.ts", "example");
+        // Its own name: bundles go to one path per name in the temp directory,
+        // and tests run in parallel.
+        let manifest = manifest_with("workflow.ts", "example-rules");
         fs::write(
             temp_dir.path().join("workflow.ts"),
             r#"import { astGrep, forEachFile, step } from "codemod/workflow";
