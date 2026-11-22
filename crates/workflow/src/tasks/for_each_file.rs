@@ -34,6 +34,14 @@ pub struct Selector {
     /// Files each worker keeps in flight; more than one only helps callbacks
     /// that wait (network, `codemod/llm`).
     pub concurrency: Option<usize>,
+    /// `"file"` (the default), `"workspace"` or `"none"`: what `definition()`
+    /// and `references()` on roots `parse(file)` makes can find.
+    #[serde(rename = "semanticAnalysis")]
+    pub semantic_analysis: Option<Value>,
+    /// Capabilities the callback needs besides the run's (`fs`, `fetch`,
+    /// `child_process`).
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,73 +78,15 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     let request: Request =
         serde_json::from_value(request).map_err(|e| format!("bad forEachFile task: {e}"))?;
     let run = task.run;
-    let module = run
-        .callbacks
-        .get(&request.callback)
-        .ok_or_else(|| format!("unknown callback '{}'", request.callback))?;
-    let captures = serde_json::to_string(&request.captures).map_err(|e| e.to_string())?;
     let (selector, files) = select_files(run, request.selector)?;
     let total = files.len();
-    let processed = AtomicUsize::new(0);
-    let report_every = (total / 100).max(1);
-    let progress = || {
-        let done = processed.fetch_add(1, Ordering::SeqCst) + 1;
-        if done == total || done.is_multiple_of(report_every) {
-            task.progress(done, total);
-        }
-    };
-
-    let isolates = StepIsolates::new(task)?;
-    let name = module_name(task, &request.callback);
-    let next = AtomicUsize::new(0);
-    let concurrency = selector.concurrency.unwrap_or(1).max(1);
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(files.len().div_ceil(concurrency))
-        .max(1);
-    let mut outcomes: Vec<Option<Result<FileOutcome, String>>> =
-        (0..files.len()).map(|_| None).collect();
-
-    let worker_results: Vec<WorkerResult> = if files.is_empty() {
-        Vec::new()
-    } else {
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..workers)
-                .map(|_| {
-                    let options = isolates.worker_options(task, selector.language.clone());
-                    let job = Job {
-                        options,
-                        registry: isolates.registry.clone(),
-                        name: &name,
-                        module,
-                        captures: &captures,
-                        language: selector.language.as_deref(),
-                        files: &files,
-                        next: &next,
-                        concurrency,
-                        cancel: &task.cancel,
-                        workflow_path: &run.workflow_path,
-                    };
-                    let progress = &progress;
-                    scope.spawn(move || worker(job, progress))
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|handle| {
-                    handle
-                        .join()
-                        .unwrap_or_else(|_| Err("a forEachFile worker panicked".to_string()))
-                })
-                .collect()
-        })
-    };
-    for result in worker_results {
-        for (index, outcome) in result? {
-            outcomes[index] = Some(outcome);
-        }
-    }
+    let outcomes = run_callback(
+        task,
+        &request.callback,
+        &request.captures,
+        &selector,
+        &files,
+    )?;
 
     let mut outputs = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
@@ -147,6 +97,11 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
             Ok(outcome) => {
                 if outcome.has_output {
                     outputs.push(outcome.output);
+                }
+                // A file the callback left alone is not part of the commit, so
+                // steps over other files may change it meanwhile.
+                if outcome.effects.is_empty() {
+                    continue;
                 }
                 match fold(path.clone(), original, outcome.effects) {
                     Ok(plan) => planned.push(plan),
@@ -173,6 +128,125 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         "failures": failures,
     }))
     .with_failures(failed, total))
+}
+
+/// Run the extracted callback `callback` on `files`, in workers, as the
+/// selector says (language, concurrency, semantic analysis, capabilities).
+/// Gives each file's outcome, in the order of `files`; nothing is committed.
+fn run_callback(
+    task: &TaskContext<'_>,
+    callback: &str,
+    captures: &Value,
+    selector: &Selector,
+    files: &[(String, String)],
+) -> Result<Vec<Option<Result<FileOutcome, String>>>, String> {
+    let run = task.run;
+    let module = run
+        .callbacks
+        .get(callback)
+        .ok_or_else(|| format!("unknown callback '{callback}'"))?;
+    let captures = serde_json::to_string(captures).map_err(|e| e.to_string())?;
+    let total = files.len();
+    let processed = AtomicUsize::new(0);
+    let report_every = (total / 100).max(1);
+    let progress = || {
+        let done = processed.fetch_add(1, Ordering::SeqCst) + 1;
+        if done == total || done.is_multiple_of(report_every) {
+            task.progress(done, total);
+        }
+    };
+
+    let mut isolates = StepIsolates::new(task)?;
+    isolates.capabilities = isolate::capabilities(task, &selector.capabilities)?;
+    let mode = isolate::semantic_mode(task, selector.semantic_analysis.as_ref())?;
+    let paths: Vec<_> = files
+        .iter()
+        .map(|(path, _)| {
+            let path = run.target.join(path);
+            path.canonicalize().unwrap_or(path)
+        })
+        .collect();
+    isolates.semantic_provider = butterflow_core::jssg_runner::semantic_provider(&mode, &paths);
+    let name = module_name(task, callback);
+    let next = AtomicUsize::new(0);
+    let concurrency = selector.concurrency.unwrap_or(1).max(1);
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(files.len().div_ceil(concurrency))
+        .max(1);
+    let mut outcomes: Vec<Option<Result<FileOutcome, String>>> =
+        (0..files.len()).map(|_| None).collect();
+
+    let worker_results: Vec<WorkerResult> = if files.is_empty() {
+        Vec::new()
+    } else {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..workers)
+                .map(|_| {
+                    let options = isolates.worker_options(task, selector.language.clone());
+                    let job = Job {
+                        options,
+                        registry: isolates.registry.clone(),
+                        name: &name,
+                        module,
+                        captures: &captures,
+                        language: selector.language.as_deref(),
+                        files,
+                        next: &next,
+                        concurrency,
+                        cancel: &task.cancel,
+                        workflow_path: &run.workflow_path,
+                    };
+                    let progress = &progress;
+                    scope.spawn(move || worker(job, progress))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err("a forEachFile worker panicked".to_string()))
+                })
+                .collect()
+        })
+    };
+    for result in worker_results {
+        for (index, outcome) in result? {
+            outcomes[index] = Some(outcome);
+        }
+    }
+    Ok(outcomes)
+}
+
+/// A file's path, and what the callback returned for it or why it failed.
+pub(crate) type FileOutput = (String, Result<Value, String>);
+
+/// What the callback returned for each of `files` (`null` for nothing),
+/// without committing what it did to them; files it failed on are errors.
+/// For `shard`'s filter.
+pub(crate) fn callback_outputs(
+    task: &TaskContext<'_>,
+    callback: &str,
+    captures: &Value,
+    selector: &Selector,
+    files: &[(String, String)],
+) -> Result<Vec<FileOutput>, String> {
+    let outcomes = run_callback(task, callback, captures, selector, files)?;
+    Ok(files
+        .iter()
+        .zip(outcomes)
+        .map(|((path, _), outcome)| {
+            let output = outcome
+                .unwrap_or_else(|| Err("the file was not processed".to_string()))
+                .and_then(|outcome| match outcome.error {
+                    Some(error) if !outcome.ok => Err(error),
+                    _ => Ok(outcome.output),
+                });
+            (path.clone(), output)
+        })
+        .collect())
 }
 
 /// A `forEachFile` step fails when its callback failed on every file it
@@ -262,7 +336,7 @@ pub(crate) fn package_languages(bundle_dir: &Path) -> Result<Vec<String>, String
 /// Select files: globs and `.gitignore` first (as `jssg` and `astGrep`
 /// select theirs), then the text filter. Returns paths relative to the
 /// target with their contents, sorted by path.
-fn select(
+pub(crate) fn select(
     target: &Path,
     selector: &Selector,
     default_languages: &[String],

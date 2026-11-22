@@ -22,8 +22,6 @@ mod function;
 mod git;
 mod install_skill;
 pub(crate) mod isolate;
-pub(crate) mod jssg;
-mod reduce;
 mod shard;
 mod shell;
 mod wait;
@@ -75,23 +73,6 @@ impl TaskContext<'_> {
             for line in error.lines() {
                 self.log(format!("  {line}"));
             }
-        }
-    }
-
-    /// A progress callback for `CodemodExecutionConfig` walks.
-    pub fn walk_progress(&self) -> butterflow_core::execution::ProgressCallback {
-        let events = Arc::clone(&self.run.events);
-        let position = self.position;
-        butterflow_core::execution::ProgressCallback {
-            callback: Arc::new(Box::new(move |_task, _path, status, total, processed| {
-                if status == "increment" || status == "finish" {
-                    events.emit(Event::StepProgress {
-                        position,
-                        processed: *processed as usize,
-                        total: total.copied().unwrap_or(*processed) as usize,
-                    });
-                }
-            })),
         }
     }
 }
@@ -171,7 +152,6 @@ pub(crate) fn dispatch(task: &TaskContext<'_>, content: Value) -> TaskResult {
         "function" => function::run(task, content).map_err(TaskError::from),
         "dependencyGraph" => dependency_graph::run(task, content).map_err(TaskError::from),
         "shell" => shell::run(task, parse(content)?),
-        "jssg" => jssg::run(task, parse(content)?),
         "astGrep" => ast_grep::run(task, parse(content)?),
         "shard" => shard::run(task, content),
         "codemod" => codemod::run(task, parse(content)?),

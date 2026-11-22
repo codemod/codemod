@@ -2,6 +2,8 @@
   "extends": "@codemod.com/tsconfig/base.json",
   "compilerOptions": {
     "noEmit": true,
+    // Workflows import their transforms by file name, extension included.
+    "allowImportingTsExtensions": true,
     "incremental": false,
     "lib": ["ESNext"],
     "types": [],

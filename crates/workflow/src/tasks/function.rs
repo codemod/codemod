@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::isolate::{self, module_name, StepIsolates};
-use super::{block_on, changes, jssg, TaskContext, TaskOutcome};
+use super::{block_on, changes, TaskContext, TaskOutcome};
 
 #[derive(Deserialize)]
 struct Request {
@@ -36,15 +36,31 @@ struct Outcome {
 pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome, String> {
     let request: Request =
         serde_json::from_value(request).map_err(|e| format!("bad function step: {e}"))?;
+    let (result, changes) = call(task, &request.callback, &request.captures, None)?;
+    let planned = changes::plan(task, &changes)?;
+    changes::commit(task, &planned, task.run.dry_run)?;
+    Ok(TaskOutcome::new(result))
+}
+
+/// Run an extracted function once, in its own isolate: with no arguments
+/// (a function step), or with `args`, a JSON array (a shard function).
+/// Gives its JSON result and the files it changed with `jssgTransform`.
+pub(crate) fn call(
+    task: &TaskContext<'_>,
+    callback: &str,
+    captures: &Value,
+    args: Option<&Value>,
+) -> Result<(Value, Vec<JssgFileChange>), String> {
     let module = task
         .run
         .callbacks
-        .get(&request.callback)
-        .ok_or_else(|| format!("unknown function step '{}'", request.callback))?;
-    let captures = serde_json::to_string(&request.captures).map_err(|e| e.to_string())?;
+        .get(callback)
+        .ok_or_else(|| format!("unknown function '{callback}'"))?;
+    let captures = serde_json::to_string(captures).map_err(|e| e.to_string())?;
+    let args = args.map(Value::to_string);
     let isolates = StepIsolates::new(task)?;
     let options = isolates.worker_options(task, None);
-    let name = module_name(task, &request.callback);
+    let name = module_name(task, callback);
     let workflow_path = task.run.workflow_path.clone();
     let registry = isolates.registry.clone();
 
@@ -59,8 +75,10 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
                 promise.into_future::<()>().await?;
                 let init: Function = evaluated.get("__init")?;
                 init.call::<_, ()>((captures.as_str(), None::<&str>))?;
-                let run_step: Function = evaluated.get("__runStep")?;
-                let promise: Promise = run_step.call(())?;
+                let promise: Promise = match &args {
+                    None => evaluated.get::<_, Function>("__runStep")?.call(())?,
+                    Some(args) => evaluated.get::<_, Function>("__runCall")?.call((args.as_str(),))?,
+                };
                 promise.into_future::<String>().await
             };
             run.await.catch(&ctx).map_err(|e| e.to_string())
@@ -77,11 +95,9 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     if !outcome.ok {
         return Err(outcome
             .error
-            .unwrap_or_else(|| "the step failed".to_string()));
+            .unwrap_or_else(|| "the function failed".to_string()));
     }
-    let planned = jssg::plan(task, &changes)?;
-    changes::commit(task, &planned, task.run.dry_run)?;
-    Ok(TaskOutcome::new(outcome.result))
+    Ok((outcome.result, changes))
 }
 
 /// What a step's isolate did besides returning: a failure it reported with

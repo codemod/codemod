@@ -10,7 +10,8 @@ pub mod utils;
 
 #[cfg(feature = "native")]
 pub use ast_grep::{
-    scan_file_with_combined_scan, with_combined_scan, AstGrepModule, DefaultParseLanguage,
+    scan_file_with_combined_scan, scan_pass, scan_text_with_combined_scan, with_combined_scan,
+    with_combined_scan_of, AstGrepModule, DefaultParseLanguage, ParseSemanticProvider, ScanPass,
 };
 /// What hosts that bind the ast-grep API themselves (the Node.js addon)
 /// share with this one.
@@ -19,6 +20,8 @@ pub mod matchers {
     pub use crate::ast_grep::sg_node::splice_edits;
     pub use crate::ast_grep::utils::{json_matcher, JsMatcherRjs as Matcher};
 }
+#[cfg(feature = "native")]
+pub use language_core::SemanticProvider;
 #[cfg(feature = "native")]
 pub use sandbox::engine::codemod_lang::CodemodLang;
 #[cfg(feature = "jssg-in-memory")]

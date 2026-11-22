@@ -414,7 +414,7 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 </ResponseField>
 
 <ResponseField name="--param <KEY=VALUE>" type="string">
-  Pass key=value pairs to your workflow. Parameters reach the workflow as `params` and jssg transforms as `options.params`.
+  Pass key=value pairs to your workflow. Parameters reach the workflow as `params` (and the jssg transforms of a `workflow.yaml` as `options.params`).
 
   ```bash
   # Single parameter:
@@ -647,7 +647,7 @@ jssg is the **primary transformation engine** for Codemod. These commands let yo
 - ❌ Production deployments → use `codemod workflow` for orchestration
 
 <Tip>
-  For production, run your jssg transform from a workflow with `forEachFile(jssg(...))`. See [Workflow Reference: Transforms](/community/workflows/reference#transforms).
+  For production, run the change from a workflow as a `forEachFile` callback, inline or imported from its file. See [Workflow Reference: Imported callbacks](/community/workflows/reference#imported-callbacks).
 </Tip>
 
 **Learn more**: [jssg documentation](/community/jssg)
@@ -993,7 +993,7 @@ Publish a Codemod package to a registry.
 npx codemod publish [PATH]
 ```
 
-`node_modules` is not published. A `workflow.ts`, and each transform file it passes to `jssg("...")` as a string, is bundled with what it imports from npm packages; the modules the CLI provides (`codemod/workflow`, `codemod/ast-grep`, `fs`, ...) stay imports. A transform whose path is computed at run time is published as it is, so keep such transforms free of package imports.
+`node_modules` is not published. A `workflow.ts`, and each callback and shard function it imports from its own file, is bundled with what it imports from npm packages; the modules the CLI provides (`codemod/workflow`, `codemod/ast-grep`, `fs`, ...) stay imports, and so do the workflow's imports of its callbacks, which the modules the build extracts import. YAML files it imports (ast-grep rules) are published as they are, and stay imports. A workflow that names a file by path where a callback or rules go does not build, so it does not publish: see [Imported callbacks](/community/workflows/reference#imported-callbacks).
 
 <ResponseField name="[PATH]" type="string">
   Path to codemod directory (defaults to current directory).

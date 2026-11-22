@@ -5,8 +5,9 @@ through a translation to the same TypeScript. User docs:
 `docs/community/workflows/reference.mdx`.
 
 ```ts
-import { step, forEachFile, jssg } from "codemod/workflow";
+import { step, forEachFile } from "codemod/workflow";
 import { parse } from "codemod/ast-grep";
+import migrate from "./scripts/migrate.ts";
 
 export default async function main() {
   const usages = await step("Find moment imports",
@@ -15,7 +16,7 @@ export default async function main() {
       return found.length ? file.path : undefined;
     }),
   );
-  await step(forEachFile(jssg("./scripts/codemod.ts", { files: usages.outputs })));
+  await step(forEachFile({ include: usages.outputs }, migrate));
 }
 ```
 
@@ -27,7 +28,7 @@ export default async function main() {
 | `src/run.rs`, `src/js.rs`, `src/js/workflow.ts`, `src/js/body_globals.ts` | The workflow body in one QuickJS context with pure modules and replay-safe `Date`/`Math.random`; the `codemod/workflow` runtime: `step()`, replay by position and content, state, events, cancellation |
 | `src/tasks/isolate.rs`, `src/tasks/for_each_file.rs`, `src/tasks/function.rs` | Callbacks and function steps on sandbox workers (`codemod_sandbox::Worker`): the JSSG module set, async, imports, metrics and state |
 | `src/engine.rs` | `Engine::start` / `resume` / `cancel` over a `RunStore` (`crates/state`) |
-| `src/tasks/` | Host tasks, each a thin adapter over an existing executor: `forEachFile`, `jssg` (`butterflow_core::jssg_runner`), `astGrep`, `shell`, `shard`, `codemod`, `agent`, `installSkill`, `approval`, `branch` / `commit` / `pullRequest`, and `dependencyGraph` (over the `codemod-deps` crate) |
+| `src/tasks/` | Host tasks, each a thin adapter over an existing executor: `forEachFile`, `astGrep`, `shell`, `shard`, `codemod`, `agent`, `installSkill`, `approval`, `branch` / `commit` / `pullRequest`, and `dependencyGraph` (over the `codemod-deps` crate) |
 | `src/js/deps.ts`, `src/deps_host.rs`, `src/js/dependencies.ts`, `src/js/semver.ts` | `codemod/deps`: `dependencyGraph`, `registry` and `semver` in the body (`deps.ts`) and in isolates (`dependencies.ts`), batching lookups started together; the host side over `Services::package_registry` |
 | `src/tasks/changes.rs` | One commit path for every task that edits files: conflict checks, dry run, diffs |
 | `src/compat/` | workflow.yaml to TypeScript; `${{ }}` expressions become TypeScript or fall back to `evaluate()`, which uses the YAML engine's evaluator |
@@ -43,8 +44,9 @@ renders events and answers prompts.
   history entry.
 - `codemod/llm` inside JSSG transforms, callbacks and function steps.
 - Creating or changing other files from a `forEachFile` callback (`jssgTransform`, `fs` writes).
-- `jssg()` on the same worker engine as `forEachFile`.
-- `registry` inside JSSG transforms run by the `jssg` task, and `dependencyGraph` and
+- Cross-file `jssgTransform` from `forEachFile` callbacks, which jssg transforms in
+  `workflow.yaml` files can call.
+- `dependencyGraph` and
   `registry` on the Node.js host.
 - One rate limit for registry requests across the whole run: each batch of
   lookups is capped, but batches from parallel workers are not.

@@ -19,9 +19,9 @@ export function callbackId(fn: Callback): string {
 
 export const {
   __callback,
+  __importedCallback,
   forEachFile,
   shell,
-  jssg,
   astGrep,
   shard,
   codemod,

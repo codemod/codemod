@@ -9,6 +9,8 @@ pub(crate) struct ScanResult {
     pub matches: Vec<AstGrepMatch>,
     pub file_modified: bool,
     pub new_content: String,
+    /// Fixes applied; of overlapping ones, only the outer.
+    pub fixes_applied: usize,
 }
 
 pub(crate) fn scan_content<D: Doc<Lang = L>, L: Language>(
@@ -33,6 +35,7 @@ where
     let mut matches = Vec::new();
     let mut file_modified = false;
     let mut new_content = content.to_string();
+    let mut fixes_applied = 0;
 
     // Handle diffs (rules with fixers) when applying fixes
     if apply_fixes && !scan_result.diffs.is_empty() {
@@ -67,7 +70,7 @@ where
         }
 
         if !edits.is_empty() {
-            new_content = apply_edits(content, edits)?;
+            (new_content, fixes_applied) = apply_edits(content, edits)?;
             file_modified = true;
         }
     }
@@ -97,6 +100,7 @@ where
         matches,
         file_modified,
         new_content,
+        fixes_applied,
     })
 }
 
@@ -105,14 +109,16 @@ where
 /// starts inside one already applied is dropped. Edits come in the scan's
 /// order, outer nodes first, and the sort keeps that order for edits that
 /// start at the same byte, so of two nested matches the outer one wins.
+/// Gives the new text and how many edits were applied.
 fn apply_edits(
     content: &str,
     mut edits: Vec<(usize, usize, Vec<u8>)>,
-) -> Result<String, AstGrepError> {
+) -> Result<(String, usize), AstGrepError> {
     edits.sort_by_key(|(position, _, _)| *position);
     let bytes = content.as_bytes();
     let mut result = Vec::with_capacity(bytes.len());
     let mut done = 0;
+    let mut applied = 0;
     for (start, deleted, inserted) in edits {
         let end = start + deleted;
         if start < done || end > bytes.len() {
@@ -121,10 +127,12 @@ fn apply_edits(
         result.extend_from_slice(&bytes[done..start]);
         result.extend_from_slice(&inserted);
         done = end;
+        applied += 1;
     }
     result.extend_from_slice(&bytes[done..]);
-    String::from_utf8(result)
-        .map_err(|e| AstGrepError::Config(format!("Invalid UTF-8 after applying fixes: {e}")))
+    let text = String::from_utf8(result)
+        .map_err(|e| AstGrepError::Config(format!("Invalid UTF-8 after applying fixes: {e}")))?;
+    Ok((text, applied))
 }
 
 #[cfg(test)]
@@ -139,13 +147,19 @@ mod tests {
     fn an_edit_inside_an_earlier_one_is_dropped() {
         // `f(g(x))`: the outer call (0..7) and the inner one (2..6).
         let edits = vec![edit(0, 7, "F(g(x))"), edit(2, 4, "G(x)")];
-        assert_eq!(apply_edits("f(g(x));", edits).unwrap(), "F(g(x));");
+        assert_eq!(
+            apply_edits("f(g(x));", edits).unwrap(),
+            ("F(g(x));".to_string(), 1)
+        );
     }
 
     #[test]
     fn of_two_edits_at_one_position_the_first_wins() {
         let edits = vec![edit(0, 5, "outer"), edit(0, 1, "i")];
-        assert_eq!(apply_edits("a.b.c", edits).unwrap(), "outer");
+        assert_eq!(
+            apply_edits("a.b.c", edits).unwrap(),
+            ("outer".to_string(), 1)
+        );
     }
 
     #[test]
@@ -156,6 +170,9 @@ mod tests {
             edit(4, 1, "Y"),
             edit(9, 0, "!"),
         ];
-        assert_eq!(apply_edits("a = b + c;", edits).unwrap(), "X = Y + Z!;");
+        assert_eq!(
+            apply_edits("a = b + c;", edits).unwrap(),
+            ("X = Y + Z!;".to_string(), 4)
+        );
     }
 }

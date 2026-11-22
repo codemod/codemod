@@ -2,15 +2,13 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use butterflow_state::run_store::{LocalStore, MemoryStore, RunStore, StepRecord};
 use codemod_llrt_capabilities::types::LlrtSupportedModules;
 use codemod_workflow::events::CollectEvents;
 use codemod_workflow::interaction::NonInteractive;
-use codemod_workflow::{
-    Ending, Engine, HostedRun, OpenRequest, PreparedJssg, Services, Summary, TestPlan,
-};
+use codemod_workflow::{Ending, Engine, HostedRun, OpenRequest, Services, Summary, TestPlan};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use serde::Deserialize;
@@ -49,37 +47,6 @@ pub struct Run {
     inner: Arc<Inner>,
 }
 
-/// A native transform prepared for a reducer; dropping it discards the edits.
-#[napi]
-pub struct PreparedTransform {
-    inner: Arc<Inner>,
-    prepared: Mutex<Option<PreparedJssg>>,
-    data: Value,
-}
-
-#[napi]
-impl PreparedTransform {
-    #[napi(getter)]
-    pub fn data(&self) -> Value {
-        self.data.clone()
-    }
-
-    #[napi]
-    pub async fn commit(&self, data: String) -> Result<Value> {
-        let data: Value = serde_json::from_str(&data).map_err(to_napi)?;
-        let prepared = self
-            .prepared
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-            .ok_or_else(|| Error::from_reason("the transform has already been committed"))?;
-        let inner = Arc::clone(&self.inner);
-        off_thread(move || inner.run.commit_jssg(prepared, data))
-            .await?
-            .map_err(Error::from_reason)
-    }
-}
-
 #[napi]
 impl Run {
     #[napi(factory)]
@@ -93,9 +60,14 @@ impl Run {
         // cannot run in its isolates (a callback that changes an outer
         // variable, `fs` in the body, ...). The same rules hold here, so a
         // workflow that passes its tests also runs with the CLI.
-        if workflow.is_file() && codemod_workflow::is_typescript(&workflow) {
-            codemod_workflow::load_workflow(&workflow).map_err(to_napi)?;
-        }
+        let callbacks = if workflow.is_file() && codemod_workflow::is_typescript(&workflow) {
+            codemod_workflow::load_workflow(&workflow)
+                .map_err(to_napi)?
+                .built
+                .callbacks
+        } else {
+            Default::default()
+        };
         let test = if options.until.is_some() || options.given.is_some() {
             Some(TestPlan {
                 until: options.until,
@@ -143,6 +115,7 @@ impl Run {
                 name: options.name,
                 dry_run: options.dry_run.unwrap_or(false),
                 test,
+                callbacks,
             }),
         }
         .map_err(to_napi)?;
@@ -253,20 +226,6 @@ impl Run {
             .await?
             .map_err(Error::from_reason)?;
         serde_json::from_str(&json).map_err(to_napi)
-    }
-
-    /// Prepare a native transform, deferring all planned edits to `commit`.
-    #[napi]
-    pub async fn prepare_jssg(&self, request: String) -> Result<PreparedTransform> {
-        let inner = Arc::clone(&self.inner);
-        let (prepared, data) = off_thread(move || inner.run.prepare_jssg(&request))
-            .await?
-            .map_err(Error::from_reason)?;
-        Ok(PreparedTransform {
-            inner: Arc::clone(&self.inner),
-            prepared: Mutex::new(Some(prepared)),
-            data,
-        })
     }
 
     /// The files a `forEachFile` selector picks: `{ language, files: [[path, text]] }`.

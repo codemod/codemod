@@ -24,7 +24,16 @@ pub fn with_combined_scan<T>(
     f: impl for<'a> FnOnce(&CombinedScanWithRuleConfigs<'a>) -> Result<T, Box<dyn Error>>,
 ) -> Result<T, Box<dyn Error>> {
     let config_content = fs::read_to_string(config_file_path)?;
-    let rule_configs = from_yaml_string(&config_content, &Default::default())
+    with_combined_scan_of(&config_content, f)
+}
+
+/// [`with_combined_scan`] for rules given as text: YAML, with documents
+/// separated by `---`. JSON is YAML, so rules built as JSON objects work too.
+pub fn with_combined_scan_of<T>(
+    config_content: &str,
+    f: impl for<'a> FnOnce(&CombinedScanWithRuleConfigs<'a>) -> Result<T, Box<dyn Error>>,
+) -> Result<T, Box<dyn Error>> {
+    let rule_configs = from_yaml_string(config_content, &Default::default())
         .map_err(|e| AstGrepError::Config(format!("Failed to parse YAML rules: {e:?}")))?;
 
     let combined_scan = CombinedScan::new(rule_configs.iter().collect());
@@ -63,7 +72,60 @@ pub fn scan_file_with_combined_scan(
     apply_fixes: bool,
 ) -> Result<(Vec<AstGrepMatch>, bool, Option<String>), AstGrepError> {
     let content = fs::read_to_string(file_path)?;
+    scan_text_with_combined_scan(file_path, &content, combined_scan, apply_fixes)
+}
 
+/// [`scan_file_with_combined_scan`] on text already read from `file_path`
+/// (its extension picks the language).
+pub fn scan_text_with_combined_scan(
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+    apply_fixes: bool,
+) -> Result<(Vec<AstGrepMatch>, bool, Option<String>), AstGrepError> {
+    let scan_result = scan_text(file_path, content, combined_scan, apply_fixes)?;
+    let file_modified = scan_result.file_modified;
+    let new_content = if file_modified {
+        Some(scan_result.new_content)
+    } else {
+        None
+    };
+
+    Ok((scan_result.matches, file_modified, new_content))
+}
+
+/// One pass of rules over a file's text, with their fixes applied.
+pub struct ScanPass {
+    /// Matches found, of every rule, overlapping ones included.
+    pub matches: usize,
+    /// Fixes applied: of overlapping matches, only the outer one is fixed.
+    pub fixes: usize,
+    /// The new text, when the fixes changed it.
+    pub content: Option<String>,
+}
+
+/// Scan text already read from `file_path` (its extension picks the
+/// language) and apply the fixes, counting what was found and fixed.
+pub fn scan_pass(
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+) -> Result<ScanPass, AstGrepError> {
+    let scanned = scan_text(file_path, content, combined_scan, true)?;
+    Ok(ScanPass {
+        matches: scanned.matches.len(),
+        fixes: scanned.fixes_applied,
+        content: (scanned.file_modified && scanned.new_content != content)
+            .then_some(scanned.new_content),
+    })
+}
+
+fn scan_text(
+    file_path: &Path,
+    content: &str,
+    combined_scan: &CombinedScan<SupportLang>,
+    apply_fixes: bool,
+) -> Result<crate::ast_grep::scanner::ScanResult, AstGrepError> {
     let language_str = detect_language_from_extension(
         file_path
             .extension()
@@ -79,28 +141,19 @@ pub fn scan_file_with_combined_scan(
     quiet_scan_panics();
     SCANNING.with(|scanning| scanning.set(true));
     let scanned = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-        let root = AstGrep::doc(StrDoc::new(&content, language));
+        let root = AstGrep::doc(StrDoc::new(content, language));
         scan_content(
             &root,
-            &content,
+            content,
             file_path.to_string_lossy().to_string(),
             combined_scan,
             apply_fixes,
         )
     }));
     SCANNING.with(|scanning| scanning.set(false));
-    let scan_result = scanned.map_err(|_| {
+    scanned.map_err(|_| {
         AstGrepError::Config(format!("ast-grep could not scan '{}'", file_path.display()))
-    })??;
-
-    let file_modified = scan_result.file_modified;
-    let new_content = if file_modified {
-        Some(scan_result.new_content)
-    } else {
-        None
-    };
-
-    Ok((scan_result.matches, file_modified, new_content))
+    })?
 }
 
 #[cfg(test)]

@@ -69,3 +69,9 @@ declare var __graphHost: GraphHost;
 /** In dependencyGraph isolates: the live graph handed to the callback. */
 declare var __dependencyGraph: unknown;
 /* eslint-enable no-var */
+
+/** What `jssg_compat.ts` uses of `codemod/ast-grep` (crates/cli/npm/types/modules/ast-grep.d.ts). */
+declare module "codemod/ast-grep" {
+  // eslint-disable-next-line typescript-eslint/no-explicit-any -- an ast-grep root
+  export function parse(file: unknown, options?: { language?: string }): any;
+}

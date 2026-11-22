@@ -88,6 +88,14 @@ struct Generator {
     pass_params: bool,
     names: HashMap<String, String>,
     taken: BTreeSet<String>,
+    /// Shard functions and ast-grep rule files the workflow imports, in
+    /// the order first used: (local name, import specifier).
+    transforms: Vec<(String, String)>,
+    /// jssg transform modules, imported as namespaces for the compatibility
+    /// adapter: (local name, import specifier).
+    jssg_modules: Vec<(String, String)>,
+    /// What the callbacks import from the compatibility adapter.
+    adapter: BTreeSet<&'static str>,
 }
 
 /// One node, generated before deciding how `main` runs it.
@@ -240,6 +248,89 @@ impl Generator {
     fn import(&mut self, name: &'static str) -> &'static str {
         self.imports.insert(name);
         name
+    }
+
+    /// The local name of the transform (or shard function) at `path`,
+    /// relative to the workflow, imported once however often it is used.
+    fn transform(&mut self, path: &str, suffix: &str) -> String {
+        let specifier = crate::imported::import_specifier(path);
+        if let Some((name, _)) = self.transforms.iter().find(|(_, s)| *s == specifier) {
+            return name.clone();
+        }
+        let name = format!(
+            "{}{suffix}",
+            crate::imported::camel_stem(&specifier).unwrap_or_else(|| "imported".into())
+        );
+        let mut unique = name.clone();
+        let mut n = 2;
+        while !self.taken.insert(unique.clone()) {
+            unique = format!("{name}{n}");
+            n += 1;
+        }
+        self.transforms.push((unique.clone(), specifier));
+        unique
+    }
+
+    /// The local name of the jssg transform module at `path`, imported as a
+    /// namespace (its `default` and `getSelector`) for the adapter.
+    fn jssg_module(&mut self, path: &str) -> String {
+        let specifier = crate::imported::import_specifier(path);
+        if let Some((name, _)) = self.jssg_modules.iter().find(|(_, s)| *s == specifier) {
+            return name.clone();
+        }
+        let name = format!(
+            "{}Transform",
+            crate::imported::camel_stem(&specifier).unwrap_or_else(|| "imported".into())
+        );
+        let mut unique = name.clone();
+        let mut n = 2;
+        while !self.taken.insert(unique.clone()) {
+            unique = format!("{name}{n}");
+            n += 1;
+        }
+        self.jssg_modules.push((unique.clone(), specifier));
+        unique
+    }
+
+    /// `(file) => jssgFile(module, file, { ... })`: the callback that runs
+    /// a jssg transform as the YAML engine did, and the selector for it.
+    fn jssg_callback(
+        &mut self,
+        js: &UseJSAstGrep,
+        scope: &Scope<'_>,
+        adapter: &'static str,
+    ) -> (Vec<(&'static str, String)>, String) {
+        self.adapter.insert(adapter);
+        let module = self.jssg_module(&js.js_file);
+        let mut selector = Vec::new();
+        let mut options = Vec::new();
+        for (key, value) in self.jssg_fields(js, scope) {
+            match key {
+                // Exact files, as globs.
+                "include" | "files" => selector.push(("include", value)),
+                "exclude" | "semanticAnalysis" | "capabilities" => selector.push((key, value)),
+                "language" => {
+                    selector.push((key, value.clone()));
+                    options.push((key, value));
+                }
+                "basePath" | "dryRun" | "params" | "matrix" => options.push((key, value)),
+                // Workers run files in parallel already.
+                _ => {}
+            }
+        }
+        if js.language.is_none() {
+            // workflow.yaml's default, where forEachFile's is the package's.
+            selector.push(("language", js_string("typescript")));
+            options.push(("language", js_string("typescript")));
+        }
+        if !options.iter().any(|(key, _)| *key == "params") {
+            // The run's params, as a jssg step got them.
+            options.push(("params", "params".into()));
+        }
+        (
+            selector,
+            with_options(format!("(file) => {adapter}({module}, file"), &options),
+        )
     }
 
     fn warn(&mut self, message: String) -> String {
@@ -738,54 +829,72 @@ impl Generator {
                         step.name
                     )));
                 }
+                if ast_grep.max_threads.is_some() {
+                    notes.push_str(&self.warn(format!(
+                        "step '{}': max_threads is dropped; the engine picks the number of threads",
+                        step.name
+                    )));
+                }
+                // The YAML engine matched the globs under `base_path`;
+                // forEachFile matches them under the target.
+                let base = ast_grep.base_path.as_deref().filter(|b| !is_root(b));
+                if let Some(base) = base {
+                    // A templated glob may stand for several, which the
+                    // base is not joined to.
+                    let templated = ast_grep
+                        .include
+                        .iter()
+                        .chain(&ast_grep.exclude)
+                        .flatten()
+                        .any(|glob| glob.contains("${{"));
+                    let outside = base.trim().starts_with('/')
+                        || base.split(['/', '\\']).any(|part| part == "..");
+                    if templated || outside {
+                        notes.push_str(&self.warn(format!(
+                            "step '{}': base_path '{base}' was joined to the include and exclude globs; check that they still select the same files",
+                            step.name
+                        )));
+                    }
+                }
+                let rebased = |globs: &[String]| match base {
+                    Some(base) => globs.iter().map(|glob| rebase_glob(base, glob)).collect(),
+                    None => globs.to_vec(),
+                };
                 let mut selector = Vec::new();
                 match &ast_grep.include {
-                    Some(include) => selector.push(("include", string_list(include))),
+                    Some(include) => selector.push(("include", string_list(&rebased(include)))),
                     None if scope.meta_files => {
                         selector.push(("include", "matrix?._meta_files".into()))
                     }
-                    None => {}
+                    None => {
+                        if let Some(base) = base {
+                            selector.push(("include", string_list(&[rebase_glob(base, "**")])));
+                        }
+                    }
                 }
                 if let Some(exclude) = &ast_grep.exclude {
-                    selector.push(("exclude", string_list(exclude)));
-                }
-                let mut fields = Vec::new();
-                if let Some(base) = ast_grep.base_path.as_deref().filter(|b| !is_root(b)) {
-                    fields.push(("basePath", js_string(base)));
-                }
-                if let Some(threads) = ast_grep.max_threads {
-                    fields.push(("threads", threads.to_string()));
+                    selector.push(("exclude", string_list(&rebased(exclude))));
                 }
                 for_each_file(
                     &selector,
-                    with_options(
-                        format!("astGrep({}", js_string(&ast_grep.config_file)),
-                        &fields,
+                    format!(
+                        "astGrep({})",
+                        self.transform(&ast_grep.config_file, "Rules")
                     ),
                 )
             }
             StepAction::JSAstGrep(js) => {
                 self.import("forEachFile");
-                self.import("jssg");
                 if self.plumb_state {
                     notes.push_str(&self.warn(format!(
                         "step '{}': a transform can no longer read or set workflow state; if its script calls getState or setState, give it values through `params` and return what it finds as `data`",
                         step.name
                     )));
                 }
-                // Which files, and in which language, is the selector's part.
-                let (mut selector, fields): (Vec<_>, Vec<_>) = self
-                    .jssg_fields(js, scope)
-                    .into_iter()
-                    .partition(|(key, _)| matches!(*key, "include" | "exclude" | "language"));
-                if js.language.is_none() {
-                    // workflow.yaml's default, where forEachFile's is the package's.
-                    selector.push(("language", js_string("typescript")));
-                }
-                for_each_file(
-                    &selector,
-                    with_options(format!("jssg({}", js_string(&js.js_file)), &fields),
-                )
+                // Which files, in which language, with which semantic analysis
+                // and capabilities, is the selector's part; the rest the adapter's.
+                let (selector, callback) = self.jssg_callback(js, scope, "jssgFile");
+                for_each_file(&selector, callback)
             }
             StepAction::Codemod(codemod) => {
                 self.import("codemod");
@@ -872,27 +981,39 @@ impl Generator {
                             object(&method)
                         }
                         ShardMethod::Function(function) => {
-                            object(&[("function", js_string(&function.function))])
+                            let function = self.transform(&function.function, "Shards");
+                            object(&[("function", function)])
                         }
                     },
                 ));
                 if let Some(target) = &shard.target {
                     fields.push(("target", template(target)));
                 }
-                if let Some(pattern) = &shard.file_pattern {
-                    fields.push(("filePattern", js_string(pattern)));
-                }
-                if let Some(js) = &shard.js_ast_grep {
-                    let mut js_fields = vec![("path", js_string(&js.js_file))];
-                    js_fields.extend(self.jssg_fields(
-                        js,
-                        &Scope {
-                            env: scope.env,
-                            meta_files: false,
-                            matrix: false,
-                        },
-                    ));
-                    fields.push(("jssg", object(&js_fields)));
+                match &shard.js_ast_grep {
+                    // The files the transform would change, as the YAML engine's
+                    // dry run of it found them.
+                    Some(js) => {
+                        let (selector, filter) = self.jssg_callback(
+                            js,
+                            &Scope {
+                                env: scope.env,
+                                meta_files: false,
+                                matrix: false,
+                            },
+                            "jssgWouldChange",
+                        );
+                        let selector: Vec<_> = selector
+                            .into_iter()
+                            .filter(|(key, _)| matches!(*key, "include" | "exclude" | "language"))
+                            .collect();
+                        fields.push(("files", object(&selector)));
+                        fields.push(("filter", filter));
+                    }
+                    None => {
+                        if let Some(pattern) = &shard.file_pattern {
+                            fields.push(("files", js_string(pattern)));
+                        }
+                    }
                 }
                 let key = format!("state[{}]", js_string(&shard.output_state));
                 fields.push(("previous", key.clone()));
@@ -988,6 +1109,28 @@ impl Generator {
         );
         if self.uses_context {
             source.push_str("import type { WorkflowContext } from \"codemod/workflow\";\n");
+        }
+        // Shard functions run where callbacks run; rule files are data.
+        for (name, specifier) in &self.transforms {
+            let _ = writeln!(source, "import {name} from {};", js_string(specifier));
+        }
+        if !self.jssg_modules.is_empty() {
+            source.push_str(concat!(
+                "// codemod upgrade: the transforms below are jssg transform files, run by a\n",
+                "// compatibility adapter that does what workflow.yaml's js-ast-grep step did.\n",
+                "// To convert one, give forEachFile a callback in its place:\n",
+                "// (file) => { const root = parse(file); ...; file.write(text) }, with parse from\n",
+                "// \"codemod/ast-grep\", or move it to a file and import its default export.\n",
+            ));
+            for (name, specifier) in &self.jssg_modules {
+                let _ = writeln!(source, "import * as {name} from {};", js_string(specifier));
+            }
+            let adapter: Vec<&str> = self.adapter.iter().copied().collect();
+            let _ = writeln!(
+                source,
+                "import {{ {} }} from \"codemod-internal:jssg-compat\";",
+                adapter.join(", ")
+            );
         }
         source.push('\n');
         let mut aliases = String::new();
@@ -1172,6 +1315,31 @@ fn is_root(base: &str) -> bool {
     matches!(base.trim(), "" | "." | "./")
 }
 
+/// `glob`, which the YAML engine matched under `base`, as a glob under the
+/// target. As in `.gitignore`, a glob with no slash (but a trailing one)
+/// matches at any depth, and one with a slash is anchored at the base.
+fn rebase_glob(base: &str, glob: &str) -> String {
+    let base = base.trim();
+    let base = base
+        .strip_prefix("./")
+        .unwrap_or(base)
+        .trim_end_matches('/');
+    let (negated, glob) = match glob.strip_prefix('!') {
+        Some(rest) => ("!", rest),
+        None => ("", glob),
+    };
+    let anchored = glob.trim_end_matches('/').contains('/');
+    let glob = glob
+        .strip_prefix("./")
+        .unwrap_or(glob)
+        .trim_start_matches('/');
+    if anchored || glob.starts_with("**") {
+        format!("{negated}{base}/{glob}")
+    } else {
+        format!("{negated}{base}/**/{glob}")
+    }
+}
+
 /// Prefix every line with `prefix`.
 fn indent(text: &str, prefix: &str) -> String {
     let mut out = String::new();
@@ -1202,7 +1370,7 @@ fn object(fields: &[(&str, String)]) -> String {
     format!("{{ {} }}", parts.join(", "))
 }
 
-/// `call` (an open call such as `jssg("a.ts"`) closed with its options.
+/// `call` (an open call such as `jssg(transform`) closed with its options.
 /// Long option objects go on several lines.
 fn with_options(call: String, fields: &[(&str, String)]) -> String {
     if fields.is_empty() {

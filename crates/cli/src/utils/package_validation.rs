@@ -572,7 +572,6 @@ fn workflow_behavior_summary_from_path_optional(
 const EXECUTABLE_TASKS: &[&str] = &[
     "forEachFile",
     "shell",
-    "jssg",
     "astGrep",
     "codemod",
     "agent",

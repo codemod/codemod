@@ -76,6 +76,11 @@ pub struct Built {
     pub callbacks: BTreeMap<String, String>,
     /// Package and relative imports the workflow body uses; see [`check_imports`].
     pub body_imports: Vec<BodyImport>,
+    /// What the Node.js host changes in the workflow file before loading it
+    /// (see [`rewrite_for_node`]): functions the engine runs in isolates
+    /// (`shard`'s) become references to their extracted modules, and
+    /// imported `forEachFile` callbacks get the ids given to them here.
+    pub node_splices: Vec<(Span, String)>,
 }
 
 /// A package or relative import used by the workflow body.
@@ -236,7 +241,8 @@ enum Isolated {
     Callback,
     GraphCallback,
     FunctionStep,
-    Reducer,
+    ShardFunction,
+    ShardFilter,
 }
 
 impl Isolated {
@@ -245,35 +251,10 @@ impl Isolated {
             Isolated::Callback => "forEachFile callback",
             Isolated::GraphCallback => "dependencyGraph callback",
             Isolated::FunctionStep => "function step",
-            Isolated::Reducer => "jssg reducer",
+            Isolated::ShardFunction => "shard function",
+            Isolated::ShardFilter => "shard filter",
         }
     }
-}
-
-/// The span of the inline function given as `reduce` in `jssg(path, { reduce })`,
-/// or where a `reduce` that is not one starts.
-fn reducer(options: &oxc::ast::ast::ObjectExpression<'_>) -> Result<Option<Span>, u32> {
-    use oxc::ast::ast::{ObjectPropertyKind, PropertyKey};
-    for property in &options.properties {
-        let ObjectPropertyKind::ObjectProperty(property) = property else {
-            continue;
-        };
-        let named = match &property.key {
-            PropertyKey::StaticIdentifier(id) => id.name == "reduce",
-            PropertyKey::StringLiteral(s) => s.value == "reduce",
-            _ => false,
-        };
-        if !named {
-            continue;
-        }
-        return match &property.value {
-            _ if property.method => Err(property.span.start),
-            Expression::ArrowFunctionExpression(f) => Ok(Some(f.span)),
-            Expression::FunctionExpression(f) => Ok(Some(f.span)),
-            other => Err(other.span().start),
-        };
-    }
-    Ok(None)
 }
 
 /// `codemod/workflow` exports that were removed with workflow state.
@@ -436,6 +417,13 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
         }
     }
 
+    // Callbacks imported from files are extracted, not loaded: their
+    // imports leave the body, and their modules import the files.
+    let imported = crate::imported::analyze(file, source, &program, &semantic)?;
+    for callback in &imported.callbacks {
+        analysis.imports.remove(&callback.symbol);
+    }
+
     // Functions to extract, in source order: forEachFile callbacks and
     // inline function steps.
     let mut sites: Vec<(Span, Isolated)> = Vec::new();
@@ -489,7 +477,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                 sites.push((f.span, kind))
                             }
                             Some(Argument::FunctionExpression(f)) => sites.push((f.span, kind)),
-                            // `jssg(...)` or `astGrep(...)`, or a variable holding one.
+                            // `astGrep(...)`, a variable holding it, or an imported callback.
                             Some(Argument::CallExpression(_)) if task == "forEachFile" => {}
                             Some(Argument::Identifier(id))
                                 if task == "forEachFile"
@@ -511,7 +499,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                 return Err(analysis.error(
                                     call.span.start,
                                     if task == "forEachFile" {
-                                        "forEachFile takes a callback, jssg(...) or astGrep(...), optionally after a selector"
+                                        "forEachFile takes a callback, written inline or imported from its file, or astGrep(...), optionally after a selector"
                                     } else {
                                         "dependencyGraph takes options and a callback"
                                     }
@@ -520,18 +508,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                             }
                         }
                     }
-                    Some("jssg") => {
-                        if let Some(Argument::ObjectExpression(options)) = call.arguments.get(1) {
-                            if let Some(span) = reducer(options).map_err(|at| {
-                                analysis.error(
-                                    at,
-                                    "jssg's reduce must be written inline, as reduce: (result, file) => ..., so the build can extract it".to_string(),
-                                )
-                            })? {
-                                sites.push((span, Isolated::Reducer));
-                            }
-                        }
-                    }
+                    Some("shard") => sites.extend(shard_functions(call)),
                     Some("step") => {
                         for argument in call.arguments.iter().take(2) {
                             match argument {
@@ -567,6 +544,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
 
     let mut callbacks = BTreeMap::new();
     let mut splices: Vec<(Span, String)> = Vec::new();
+    let mut node_splices: Vec<(Span, String)> = Vec::new();
     for &(span, kind) in &outermost {
         let parts = analysis.callback_parts(span, kind)?;
         let callback_source = &source[span.start as usize..span.end as usize];
@@ -599,11 +577,90 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
         module.push_str(crate::js::CALLBACK_PRELUDE_TS);
         let module = strip_types(file, &module, true)
             .map_err(|message| analysis.error(span.start, message))?;
-        splices.push((
-            span,
-            format!("__flowCallback({id:?}, () => ({{ {destructure} }}))"),
-        ));
+        let reference = format!("__flowCallback({id:?}, () => ({{ {destructure} }}))");
+        if matches!(kind, Isolated::ShardFunction | Isolated::ShardFilter) {
+            node_splices.push((span, reference.clone()));
+        }
+        splices.push((span, reference));
         callbacks.insert(id, module);
+    }
+
+    // Imported callbacks: their modules import the files. The id covers the
+    // files too, so a step runs again when they change.
+    let base = Path::new(file).parent().unwrap_or(Path::new("."));
+    let mut node_cuts: BTreeSet<(u32, u32)> = BTreeSet::new();
+    let mut kept_for_node: HashSet<SymbolId> = HashSet::new();
+    let mut needs_imported = false;
+    for callback in &imported.callbacks {
+        let module = format!(
+            "import __imported from {:?};\nconst __make = ({{  }}) => (__imported);\n",
+            callback.specifier
+        );
+        let files = crate::imported::imported_text(base, &callback.specifier)
+            .map_err(|message| analysis.error(callback.argument.start, message))?;
+        let stripped = strip_types(file, &module, false)
+            .map_err(|message| analysis.error(callback.argument.start, message))?;
+        let id = content_id(&format!("{stripped}\0{files}"));
+        let module = strip_types(
+            file,
+            &format!("{module}{}", crate::js::CALLBACK_PRELUDE_TS),
+            true,
+        )
+        .map_err(|message| analysis.error(callback.argument.start, message))?;
+        callbacks.insert(id.clone(), module);
+        let keyed = |text: String| match callback.shorthand {
+            Some(key) => format!("{key}: {text}"),
+            None => text,
+        };
+        let reference = keyed(format!("__flowCallback({id:?}, () => ({{  }}))"));
+        splices.push((callback.argument, reference.clone()));
+        if callback.role.isolated() {
+            node_splices.push((callback.argument, reference));
+            node_cuts.insert((callback.cut.start, callback.cut.end));
+        } else {
+            needs_imported = true;
+            kept_for_node.insert(callback.symbol);
+            node_splices.push((
+                callback.argument,
+                keyed(format!(
+                    "{}({id:?}, {})",
+                    crate::imported::IMPORTED_REFERENCE,
+                    callback.name
+                )),
+            ));
+        }
+    }
+    // A Node.js host loads a callback that runs in place; one that runs in
+    // an isolate it does not.
+    for callback in &imported.callbacks {
+        if kept_for_node.contains(&callback.symbol) {
+            node_cuts.remove(&(callback.cut.start, callback.cut.end));
+        }
+    }
+    node_splices.extend(
+        node_cuts
+            .into_iter()
+            .map(|(start, end)| (Span::new(start, end), String::new())),
+    );
+    if !node_splices.is_empty() {
+        let mut names = vec!["__callback as __flowCallback".to_string()];
+        if needs_imported {
+            names.push(format!(
+                "__importedCallback as {}",
+                crate::imported::IMPORTED_REFERENCE
+            ));
+        }
+        // At the end, so every line stays where it was: imports are hoisted.
+        // `codemod:workflow` resolves to the codemod package's own module
+        // wherever the workflow is.
+        let end = source.len() as u32;
+        node_splices.push((
+            Span::new(end, end),
+            format!(
+                "\nimport {{ {} }} from \"codemod:workflow\";\n",
+                names.join(", ")
+            ),
+        ));
     }
 
     // Imports the body keeps: codemod/workflow, and others the body itself
@@ -693,7 +750,91 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
         main,
         callbacks,
         body_imports,
+        node_splices,
     })
+}
+
+/// The inline functions `shard` runs in isolates: `method.function` and
+/// `filter`, written in its options.
+fn shard_functions(call: &oxc::ast::ast::CallExpression<'_>) -> Vec<(Span, Isolated)> {
+    use oxc::ast::ast::{ObjectExpression, ObjectPropertyKind, PropertyKey};
+    fn function_in(object: &ObjectExpression<'_>, name: &str) -> Option<Span> {
+        object.properties.iter().find_map(|property| {
+            let ObjectPropertyKind::ObjectProperty(property) = property else {
+                return None;
+            };
+            let named = match &property.key {
+                PropertyKey::StaticIdentifier(id) => id.name == name,
+                PropertyKey::StringLiteral(s) => s.value == name,
+                _ => false,
+            };
+            if !named || property.computed {
+                return None;
+            }
+            match property.value.get_inner_expression() {
+                Expression::ArrowFunctionExpression(f) => Some(f.span),
+                Expression::FunctionExpression(f) => Some(f.span),
+                _ => None,
+            }
+        })
+    }
+    let mut found = Vec::new();
+    let Some(Expression::ObjectExpression(options)) = call
+        .arguments
+        .first()
+        .and_then(Argument::as_expression)
+        .map(Expression::get_inner_expression)
+    else {
+        return found;
+    };
+    for property in &options.properties {
+        let ObjectPropertyKind::ObjectProperty(property) = property else {
+            continue;
+        };
+        let is_method = !property.computed
+            && match &property.key {
+                PropertyKey::StaticIdentifier(id) => id.name == "method",
+                PropertyKey::StringLiteral(s) => s.value == "method",
+                _ => false,
+            };
+        if let (true, Expression::ObjectExpression(method)) =
+            (is_method, property.value.get_inner_expression())
+        {
+            if let Some(span) = function_in(method, "function") {
+                found.push((span, Isolated::ShardFunction));
+            }
+        }
+    }
+    if let Some(span) = function_in(options, "filter") {
+        found.push((span, Isolated::ShardFilter));
+    }
+    found
+}
+
+/// The workflow file as the Node.js host loads it, or `None` when the build
+/// changes nothing it runs: `shard`'s functions become references to the
+/// modules the build extracted (the engine runs them in isolates, on this
+/// host too), and imported `forEachFile` callbacks carry the ids the build
+/// gave them. Lines and TypeScript are kept. Fails with the build's error.
+pub fn rewrite_for_node(file: &str, source: &str) -> Result<Option<String>, BuildError> {
+    let built = build(file, source)?;
+    if built.node_splices.is_empty() {
+        return Ok(None);
+    }
+    let mut splices = built.node_splices;
+    splices.sort_by_key(|(span, _)| std::cmp::Reverse((span.start, span.end)));
+    let mut rewritten = source.to_string();
+    for (span, mut text) in splices {
+        // Keep the lines the replaced code had, so later lines stay where
+        // they are in stack traces: a cut import or a function written over
+        // several lines leaves its line breaks.
+        let range = span.start as usize..span.end as usize;
+        let lines = source[range.clone()].matches('\n').count();
+        let kept = text.matches('\n').count();
+        text.push_str(&"\n".repeat(lines.saturating_sub(kept)));
+        rewritten.replace_range(range, &text);
+    }
+    Ok(Some(rewritten))
 }
 
 impl Analysis<'_> {
@@ -949,7 +1090,10 @@ impl<R: codemod_sandbox::sandbox::resolvers::ModuleResolver> ImportWalk<'_, R> {
             return Ok(None);
         }
         let shown = self.shown(path);
-        if path.extension().is_some_and(|e| e == "json") {
+        if path
+            .extension()
+            .is_some_and(|e| e == "json" || e == "yaml" || e == "yml")
+        {
             return Ok(None);
         }
         let text =
@@ -1065,7 +1209,7 @@ fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
 
 /// Every module a JavaScript or TypeScript file imports, re-exports,
 /// imports dynamically (with a string) or `require`s.
-fn module_specifiers(path: &Path, text: &str) -> Vec<String> {
+pub(crate) fn module_specifiers(path: &Path, text: &str) -> Vec<String> {
     use oxc::ast::ast::ModuleDeclaration;
 
     let allocator = Allocator::default();
@@ -1149,7 +1293,7 @@ fn content_id(source: &str) -> String {
     format!("cb_{hex}")
 }
 
-fn error_at(file: &str, source: &str, offset: u32, message: String) -> BuildError {
+pub(crate) fn error_at(file: &str, source: &str, offset: u32, message: String) -> BuildError {
     let before = &source[..(offset as usize).min(source.len())];
     let line = before.matches('\n').count() + 1;
     let column = before.len() - before.rfind('\n').map(|i| i + 1).unwrap_or(0) + 1;
@@ -1165,12 +1309,17 @@ fn error_at(file: &str, source: &str, offset: u32, message: String) -> BuildErro
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Inspection {
     /// `codemod/workflow` functions the module calls, by imported name, in
-    /// source order (`step`, `forEachFile`, `jssg`, `installSkill`, ...).
+    /// source order (`step`, `forEachFile`, `astGrep`, `installSkill`, ...).
     pub calls: Vec<String>,
     /// `installSkill({ package, path })` calls whose options are literals.
     pub install_skills: Vec<InstalledSkill>,
-    /// String-literal paths passed to `jssg`, `astGrep` and shard functions.
+    /// Files the workflow imports for the build, relative to it, in source
+    /// order: imported callbacks (`forEachFile`'s, `shard`'s) and YAML.
     pub files: Vec<String>,
+    /// Imports to keep when the workflow is bundled, as written: imported
+    /// callbacks (`./scripts/migrate.ts`), which the modules the build
+    /// extracts import, and YAML files (`./rules.yaml`), which are data.
+    pub external_imports: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1221,7 +1370,12 @@ pub fn inspect(file: &str, source: &str) -> Result<Inspection, BuildError> {
         _ => None,
     };
 
-    let mut inspection = Inspection::default();
+    let found = crate::imported::analyze(file, source, &program, &semantic)?;
+    let mut inspection = Inspection {
+        files: found.files,
+        external_imports: found.externals,
+        ..Inspection::default()
+    };
     for node in semantic.nodes().iter() {
         let AstKind::CallExpression(call) = node.kind() else {
             continue;
@@ -1237,55 +1391,35 @@ pub fn inspect(file: &str, source: &str) -> Result<Inspection, BuildError> {
             continue;
         };
         inspection.calls.push(name.clone());
-        let first = call.arguments.first().and_then(|a| a.as_expression());
-        match name.as_str() {
-            "jssg" | "astGrep" => {
-                if let Some(path) = first.and_then(string_of) {
-                    inspection.files.push(path);
-                }
+        if name != "installSkill" {
+            continue;
+        }
+        let Some(Expression::ObjectExpression(object)) =
+            call.arguments.first().and_then(|a| a.as_expression())
+        else {
+            continue;
+        };
+        let mut package = None;
+        let mut path = None;
+        for property in &object.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = property else {
+                continue;
+            };
+            let key = match &property.key {
+                PropertyKey::StaticIdentifier(id) => id.name.to_string(),
+                PropertyKey::StringLiteral(s) => s.value.to_string(),
+                _ => continue,
+            };
+            match key.as_str() {
+                "package" => package = string_of(&property.value),
+                "path" => path = string_of(&property.value),
+                _ => {}
             }
-            "installSkill" | "shard" => {
-                let Some(Expression::ObjectExpression(object)) = first else {
-                    continue;
-                };
-                let mut package = None;
-                let mut path = None;
-                for property in &object.properties {
-                    let ObjectPropertyKind::ObjectProperty(property) = property else {
-                        continue;
-                    };
-                    let key = match &property.key {
-                        PropertyKey::StaticIdentifier(id) => id.name.to_string(),
-                        PropertyKey::StringLiteral(s) => s.value.to_string(),
-                        _ => continue,
-                    };
-                    match (name.as_str(), key.as_str()) {
-                        ("installSkill", "package") => package = string_of(&property.value),
-                        ("installSkill", "path") => path = string_of(&property.value),
-                        ("shard", "method") => {
-                            if let Expression::ObjectExpression(method) = &property.value {
-                                for inner in &method.properties {
-                                    if let ObjectPropertyKind::ObjectProperty(inner) = inner {
-                                        let is_function = matches!(&inner.key, PropertyKey::StaticIdentifier(id) if id.name == "function");
-                                        if is_function {
-                                            if let Some(file) = string_of(&inner.value) {
-                                                inspection.files.push(file);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(package) = package {
-                    inspection
-                        .install_skills
-                        .push(InstalledSkill { package, path });
-                }
-            }
-            _ => {}
+        }
+        if let Some(package) = package {
+            inspection
+                .install_skills
+                .push(InstalledSkill { package, path });
         }
     }
     Ok(inspection)

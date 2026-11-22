@@ -1,0 +1,5 @@
+id: no-var
+language: javascript
+rule:
+  pattern: var $A = $B
+fix: let $A = $B;
