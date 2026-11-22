@@ -462,7 +462,9 @@ declare module "codemod:workflow" {
    * so the type error points at the returned value.
    */
   export type CallbackReturn<Returned> =
-    Returned extends PromiseLike<infer Value> ? PromiseLike<JsonCompatible<Value>> : JsonCompatible<Returned>;
+    Returned extends PromiseLike<infer Value>
+      ? PromiseLike<JsonCompatible<Value>>
+      : JsonCompatible<Returned>;
 
   /**
    * A result for tasks that do nothing in some runs: shell commands, agents
