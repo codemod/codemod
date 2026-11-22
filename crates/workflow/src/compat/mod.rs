@@ -768,30 +768,55 @@ impl Generator {
                         step.name
                     )));
                 }
+                if ast_grep.max_threads.is_some() {
+                    notes.push_str(&self.warn(format!(
+                        "step '{}': max_threads is dropped; the engine picks the number of threads",
+                        step.name
+                    )));
+                }
+                // The YAML engine matched the globs under `base_path`;
+                // forEachFile matches them under the target.
+                let base = ast_grep.base_path.as_deref().filter(|b| !is_root(b));
+                if let Some(base) = base {
+                    // A templated glob may stand for several, which the
+                    // base is not joined to.
+                    let templated = ast_grep
+                        .include
+                        .iter()
+                        .chain(&ast_grep.exclude)
+                        .flatten()
+                        .any(|glob| glob.contains("${{"));
+                    let outside = base.trim().starts_with('/')
+                        || base.split(['/', '\\']).any(|part| part == "..");
+                    if templated || outside {
+                        notes.push_str(&self.warn(format!(
+                            "step '{}': base_path '{base}' was joined to the include and exclude globs; check that they still select the same files",
+                            step.name
+                        )));
+                    }
+                }
+                let rebased = |globs: &[String]| match base {
+                    Some(base) => globs.iter().map(|glob| rebase_glob(base, glob)).collect(),
+                    None => globs.to_vec(),
+                };
                 let mut selector = Vec::new();
                 match &ast_grep.include {
-                    Some(include) => selector.push(("include", string_list(include))),
+                    Some(include) => selector.push(("include", string_list(&rebased(include)))),
                     None if scope.meta_files => {
                         selector.push(("include", "matrix?._meta_files".into()))
                     }
-                    None => {}
+                    None => {
+                        if let Some(base) = base {
+                            selector.push(("include", string_list(&[rebase_glob(base, "**")])));
+                        }
+                    }
                 }
                 if let Some(exclude) = &ast_grep.exclude {
-                    selector.push(("exclude", string_list(exclude)));
-                }
-                let mut fields = Vec::new();
-                if let Some(base) = ast_grep.base_path.as_deref().filter(|b| !is_root(b)) {
-                    fields.push(("basePath", js_string(base)));
-                }
-                if let Some(threads) = ast_grep.max_threads {
-                    fields.push(("threads", threads.to_string()));
+                    selector.push(("exclude", string_list(&rebased(exclude))));
                 }
                 for_each_file(
                     &selector,
-                    with_options(
-                        format!("astGrep({}", self.transform(&ast_grep.config_file, "Rules")),
-                        &fields,
-                    ),
+                    format!("astGrep({})", self.transform(&ast_grep.config_file, "Rules")),
                 )
             }
             StepAction::JSAstGrep(js) => {
@@ -1224,6 +1249,25 @@ fn mentions(text: &str, word: &str) -> bool {
 /// A YAML `base_path` that means the target itself.
 fn is_root(base: &str) -> bool {
     matches!(base.trim(), "" | "." | "./")
+}
+
+/// `glob`, which the YAML engine matched under `base`, as a glob under the
+/// target. As in `.gitignore`, a glob with no slash (but a trailing one)
+/// matches at any depth, and one with a slash is anchored at the base.
+fn rebase_glob(base: &str, glob: &str) -> String {
+    let base = base.trim();
+    let base = base.strip_prefix("./").unwrap_or(base).trim_end_matches('/');
+    let (negated, glob) = match glob.strip_prefix('!') {
+        Some(rest) => ("!", rest),
+        None => ("", glob),
+    };
+    let anchored = glob.trim_end_matches('/').contains('/');
+    let glob = glob.strip_prefix("./").unwrap_or(glob).trim_start_matches('/');
+    if anchored || glob.starts_with("**") {
+        format!("{negated}{base}/{glob}")
+    } else {
+        format!("{negated}{base}/**/{glob}")
+    }
 }
 
 /// Prefix every line with `prefix`.

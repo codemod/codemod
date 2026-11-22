@@ -299,6 +299,56 @@ nodes:
     assert_eq!(h.read("src/a.js"), "let x = 1;\nfresh();\n");
 }
 
+/// `base_path` and the globs under it select the same files as in the YAML
+/// engine, also when the base comes from the matrix.
+#[test]
+fn a_yaml_ast_grep_step_keeps_its_base_path() {
+    let h = Harness::new();
+    for dir in ["one", "two", "three"] {
+        h.write(&format!("{dir}/src/a.js"), "var x = 1;\n");
+        h.write(&format!("{dir}/a.js"), "var y = 2;\n");
+        h.write(&format!("{dir}/README.md"), "var z = 3;\n");
+    }
+    h.bundle_file(
+        "rules/config.yml",
+        "id: no-var\nlanguage: javascript\nrule:\n  pattern: var $A = $B\nfix: let $A = $B;\n",
+    );
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: fixed
+    name: Fixed base
+    steps:
+      - name: Only src
+        ast-grep:
+          config_file: rules/config.yml
+          base_path: one
+          include: ["src/**"]
+  - id: each
+    name: Each directory
+    strategy:
+      type: matrix
+      values:
+        - dir: two
+    steps:
+      - name: Whole base
+        ast-grep:
+          config_file: rules/config.yml
+          base_path: "${{ matrix.dir }}"
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("one/src/a.js"), "let x = 1;\n");
+    assert_eq!(h.read("one/a.js"), "var y = 2;\n");
+    assert_eq!(h.read("two/src/a.js"), "let x = 1;\n");
+    assert_eq!(h.read("two/a.js"), "let y = 2;\n");
+    assert_eq!(h.read("two/README.md"), "var z = 3;\n");
+    assert_eq!(h.read("three/a.js"), "var y = 2;\n");
+}
+
 /// The YAML names its shard function by path; the translation imports it.
 #[test]
 fn a_yaml_shard_function_runs_from_its_import() {

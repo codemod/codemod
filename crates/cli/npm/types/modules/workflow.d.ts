@@ -116,14 +116,14 @@ declare module "codemod:workflow" {
     readonly [taskResult]: Result;
   }
 
-  const transformResult: unique symbol;
+  const astGrepHandler: unique symbol;
 
   /**
-   * A transform for single files, made by `astGrep`. Give it to
-   * `forEachFile` to say which files it runs on.
+   * ast-grep rules, made by `astGrep(rules)`. Not a step on its own: give it
+   * to `forEachFile` in place of a callback, to say which files it runs on.
    */
-  export interface Transform<Result> extends Task<Result> {
-    readonly [transformResult]: Result;
+  export interface AstGrepHandler {
+    readonly [astGrepHandler]: true;
   }
 
   /** What the workflow's default export receives. */
@@ -438,26 +438,35 @@ declare module "codemod:workflow" {
 
   /**
    * Which files `forEachFile` applies `astGrep` rules to: a glob, a list of
-   * globs, or an object. Without `include`, the files of the rules' languages.
+   * globs, or an object. Without `include`, the files of the rules'
+   * languages. Selected files of other languages are skipped: each rule
+   * names its language. Options for callbacks (`language`,
+   * `semanticAnalysis`, `capabilities`, `concurrency`) do not apply.
    */
-  export type AstGrepSelector = Globs | { include?: Globs; exclude?: Globs };
+  export type AstGrepSelector =
+    | Globs
+    | {
+        include?: Globs;
+        /** Files only these globs match are skipped. */
+        exclude?: Globs;
+        /** Only files whose text contains this string. */
+        containing?: string;
+      };
 
   /**
-   * Applies ast-grep rules on every selected file. The selector's fields
-   * stand for the same options of `astGrep`, so give each in one place.
+   * Applies ast-grep rules on every selected file, in the engine: no
+   * JavaScript runs per file.
    *
    * @example
    * ```ts
    * import rules from "./rules/config.yml";
    *
-   * await step("Apply rules", forEachFile("src/**\/*.ts", astGrep(rules)));
+   * const result = await step("Apply rules", forEachFile("src/**\/*.ts", astGrep(rules)));
+   * result.matches; // number
    * ```
    */
-  export function forEachFile(transform: Transform<AstGrepResult>): Task<AstGrepResult>;
-  export function forEachFile(
-    selector: AstGrepSelector,
-    transform: Transform<AstGrepResult>,
-  ): Task<AstGrepResult>;
+  export function forEachFile(rules: AstGrepHandler): Task<AstGrepResult>;
+  export function forEachFile(selector: AstGrepSelector, rules: AstGrepHandler): Task<AstGrepResult>;
 
   /**
    * A result for tasks that do nothing in some runs: shell commands, agents
@@ -519,16 +528,12 @@ declare module "codemod:workflow" {
     options: ShellOptions,
   ): (strings: TemplateStringsArray, ...values: ShellValue[]) => ShellTask;
 
-  export interface AstGrepOptions {
-    include?: Globs;
-    exclude?: Globs;
-    basePath?: string;
-    threads?: number;
-  }
-
+  /** What `forEachFile(selector, astGrep(rules))` gives. */
   export interface AstGrepResult {
     changes: FileChanges;
+    /** Matches of all the rules, across the selected files. */
     matches: number;
+    /** Files that could not be read or scanned. */
     failures: FileFailure[];
   }
 
@@ -620,8 +625,8 @@ declare module "codemod:workflow" {
       | string
       | {
           template: string;
-          expandStart?: AstGrepRuleMatcher;
-          expandEnd?: AstGrepRuleMatcher;
+          expandStart?: AstGrepRelation;
+          expandEnd?: AstGrepRelation;
         };
     /** Further rules each metavariable must match. */
     constraints?: Readonly<Record<string, AstGrepRuleMatcher>>;
@@ -647,14 +652,14 @@ declare module "codemod:workflow" {
   export type AstGrepRules = AstGrepRule | readonly AstGrepRule[];
 
   /**
-   * Applies ast-grep rules: an object of the shape of an ast-grep YAML rule
-   * (or an array of them), written in the workflow or built at run time, or
-   * a YAML rule file imported as its content
+   * ast-grep rules for `forEachFile`: an object of the shape of an ast-grep
+   * YAML rule (or an array of them), written in the workflow or built at run
+   * time, or a YAML rule file imported as its content
    * (`import rules from "./rules/config.yml"`; several documents give an
-   * array). Apply them with `forEachFile(selector, astGrep(rules))`, which
-   * says which files they are for. As a step on its own it runs on the files
-   * its options select. The rules are part of the step: a changed rule runs
-   * the step again on resume.
+   * array). It is not a step on its own: `forEachFile(selector,
+   * astGrep(rules))` runs the rules on the selected files, in the engine.
+   * The rules are part of the step: a changed rule runs the step again on
+   * resume.
    *
    * @example
    * ```ts
@@ -669,7 +674,7 @@ declare module "codemod:workflow" {
    * })));
    * ```
    */
-  export function astGrep(rules: AstGrepRules, options?: AstGrepOptions): Transform<AstGrepResult>;
+  export function astGrep(rules: AstGrepRules): AstGrepHandler;
 
   export type ShardMethod =
     | {

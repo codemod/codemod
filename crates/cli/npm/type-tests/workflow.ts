@@ -172,10 +172,15 @@ export default async function main({
   const ruled = await step(forEachFile(["src/**/*.ts"], astGrep(rules)));
   expectType<Equal<typeof ruled.matches, number>>(true);
   await step(forEachFile(astGrep(rules)));
-  // @ts-expect-error `containing` is for callbacks
-  forEachFile({ containing: "moment" }, astGrep(rules));
+  await step(forEachFile({ include: "src/**", exclude: "**/*.test.ts", containing: "moment" }, astGrep(rules)));
   // @ts-expect-error the rules name their languages
   forEachFile({ language: "tsx" }, astGrep(rules));
+  // @ts-expect-error semantic analysis is for callbacks
+  forEachFile({ semanticAnalysis: "workspace" }, astGrep(rules));
+  // @ts-expect-error astGrep is not a step on its own
+  void step(astGrep(rules));
+  // @ts-expect-error the selector says which files
+  astGrep(rules, { include: ["**/*.ts"] });
   // @ts-expect-error only callbacks and astGrep
   forEachFile(shell("echo hi"));
 
@@ -189,10 +194,9 @@ export default async function main({
   // @ts-expect-error a template takes strings, numbers and booleans
   void step(shell`echo ${{ not: "a word" }}`);
 
-  await step(astGrep(rules, { include: ["**/*.ts"] }));
   // Rules written in the workflow, or built from values it has.
   await step(
-    astGrep([
+    forEachFile(astGrep([
       {
         id: "no-var",
         language: "javascript",
@@ -206,12 +210,12 @@ export default async function main({
           kind: "call_expression",
           has: { field: "function", regex: `^${target}$`, stopBy: "end" },
         },
-        fix: { template: "renamed()", expandEnd: { regex: ";" } },
+        fix: { template: "renamed()", expandEnd: { regex: ";", stopBy: "end" } },
         constraints: { A: { not: { kind: "identifier" } } },
         transform: { B: { convert: { source: "$A", toCase: "camelCase" } } },
         severity: "warning",
       },
-    ]),
+    ])),
   );
   // @ts-expect-error rules are imported or written, not named by path
   astGrep("./rules/config.yml");

@@ -145,9 +145,9 @@ fn ast_grep_steps_apply_rule_fixes() {
     );
     let report = h.start(
         r#"
-import { step, astGrep } from "codemod/workflow";
+import { step, forEachFile, astGrep } from "codemod/workflow";
 import rules from "./rules.yaml";
-export default async function main() { return step(astGrep(rules)); }
+export default async function main() { return step(forEachFile(astGrep(rules))); }
 "#,
         Value::Null,
     );
@@ -293,29 +293,6 @@ export default async function main() {
 }
 
 #[test]
-fn ast_grep_refuses_a_base_path_outside_the_target() {
-    let h = Harness::new();
-    h.write("a.ts", "const a = 1;\n");
-    h.bundle_file(
-        "rules.yml",
-        "id: r\nlanguage: typescript\nrule:\n  pattern: const a = 1\nfix: const a = 2\n",
-    );
-    let report = h.start(
-        r#"
-import { step, astGrep } from "codemod/workflow";
-import rules from "./rules.yml";
-export default async function main() {
-  await step("Scan", astGrep(rules, { basePath: "../elsewhere" }));
-}
-"#,
-        Value::Null,
-    );
-    let error = output(&report).unwrap_err();
-    assert!(error.contains("must stay inside the target"), "{error}");
-    assert_eq!(h.read("a.ts"), "const a = 1;\n");
-}
-
-#[test]
 fn renames_are_compared_by_the_file_they_name() {
     let h = Harness::new();
     h.write("a.txt", "a");
@@ -378,7 +355,11 @@ export default async function main({ target }) {
 fn for_each_file_applies_ast_grep_rules_to_the_files_its_selector_picks() {
     let h = Harness::new();
     h.write("src/a.js", "var x = 1;\n");
+    // Files of no rule's language are skipped, not failures.
+    h.write("src/README.md", "var x = 1;\n");
     h.write("lib/b.js", "var y = 2;\n");
+    h.write("lib/c.js", "var z = 3; // keep\n");
+    h.write("lib/d.js", "var w = 4; // keep\n");
     h.bundle_file(
         "rules.yaml",
         "id: no-var\nlanguage: javascript\nrule:\n  pattern: var $A = $B\nfix: let $A = $B;\n",
@@ -389,17 +370,27 @@ import { step, forEachFile, astGrep } from "codemod/workflow";
 import rules from "./rules.yaml";
 export default async function main() {
   const some = await step("Some", forEachFile("src/**", astGrep(rules)));
+  const kept = await step("Kept", forEachFile({ include: "lib/**", exclude: "lib/d.js", containing: "keep" }, astGrep(rules)));
   const all = await step("All", forEachFile(astGrep(rules)));
-  return [some.changes.written, all.changes.written];
+  return [some, kept.changes.written, all.changes.written];
 }
 "#,
         Value::Null,
     );
     assert_eq!(
         output(&report).unwrap(),
-        json!([["src/a.js"], ["lib/b.js"]])
+        json!([
+            {
+                "changes": { "written": ["src/a.js"], "renamed": [], "deleted": [] },
+                "matches": 1,
+                "failures": [],
+            },
+            ["lib/c.js"],
+            ["lib/b.js", "lib/d.js"],
+        ])
     );
     assert_eq!(h.read("src/a.js"), "let x = 1;\n");
+    assert_eq!(h.read("src/README.md"), "var x = 1;\n");
 }
 
 #[test]
@@ -418,11 +409,15 @@ fn for_each_file_refuses_what_a_transform_cannot_take() {
     for (call, message) in [
         (
             r#"forEachFile({ include: "a/**" }, astGrep(rules, { include: "b/**" }))"#,
-            "'include' is given twice, in the selector and in astGrep(...)",
+            "astGrep takes only rules: select the files with forEachFile's selector",
         ),
         (
-            r#"forEachFile({ containing: "x" }, astGrep(rules))"#,
-            "selector.containing is for callbacks, not for astGrep(...)",
+            r#"astGrep(rules)"#,
+            "astGrep(...) is not a step on its own; run it on files with step(forEachFile(selector, astGrep(rules)))",
+        ),
+        (
+            r#"forEachFile({ concurrency: 2 }, astGrep(rules))"#,
+            "selector.concurrency is for callbacks, not for astGrep(...)",
         ),
         (
             r#"forEachFile({ semanticAnalysis: "none" }, astGrep(rules))"#,
@@ -985,7 +980,7 @@ fn ast_grep_takes_rules_built_at_run_time_and_several_at_once() {
     let report = h.start(
         &format!(
             r#"
-import {{ step, astGrep }} from "codemod/workflow";
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
 export default async function main({{ params }}) {{
   const rename = {{
     id: "rename",
@@ -994,7 +989,7 @@ export default async function main({{ params }}) {{
     fix: `${{params.to}}()`,
     message: undefined,
   }};
-  const result = await step(astGrep([{NO_VAR}, rename]));
+  const result = await step(forEachFile(astGrep([{NO_VAR}, rename])));
   return result.matches;
 }}
 "#
@@ -1010,7 +1005,7 @@ fn ast_grep_refuses_rules_that_are_not_json_or_are_paths() {
     let h = Harness::new();
     let failed = |rules: &str| {
         let source = format!(
-            "import {{ step, astGrep }} from \"codemod/workflow\";\nconst run = astGrep;\nexport default async function main() {{ await step(run({rules})); }}\n"
+            "import {{ step, forEachFile, astGrep }} from \"codemod/workflow\";\nconst run = astGrep;\nexport default async function main() {{ await step(forEachFile(run({rules}))); }}\n"
         );
         output(&h.start(&source, Value::Null)).unwrap_err()
     };
@@ -1028,6 +1023,10 @@ fn ast_grep_refuses_rules_that_are_not_json_or_are_paths() {
             "astGrep: the rule.fix is a function, which is not JSON",
         ),
         (r#"[]"#, "astGrep needs at least one rule"),
+        (
+            r#"(() => { const r = { id: "a", language: "javascript", rule: { any: [] } }; r.rule.any.push(r.rule); return r; })()"#,
+            "astGrep: the rule.rule.any[0].any[0] is a circular reference",
+        ),
         (r#"["x"]"#, "astGrep: rule 0 must be an object"),
         (
             r#""rules/config.yml""#,
@@ -1050,9 +1049,9 @@ fn a_changed_ast_grep_rule_runs_its_step_again_on_resume() {
     let workflow = |fix: &str| {
         format!(
             r#"
-import {{ step, astGrep }} from "codemod/workflow";
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
 export default async function main() {{
-  const result = await step("Rules", astGrep({{ id: "r", language: "javascript", rule: {{ pattern: "var $A = $B" }}, fix: "{fix} $A = $B;" }}));
+  const result = await step("Rules", forEachFile(astGrep({{ id: "r", language: "javascript", rule: {{ pattern: "var $A = $B" }}, fix: "{fix} $A = $B;" }})));
   await step("Check", () => {{ throw new Error("not yet"); }});
   return result.matches;
 }}
@@ -1089,7 +1088,7 @@ import { step, forEachFile, astGrep } from "codemod/workflow";
 import rules from "./rules.yaml";
 export default async function main() {
   const ids = await step("Ids", forEachFile("a.js", () => rules.map((rule) => rule.id)));
-  const applied = await step(astGrep(rules));
+  const applied = await step(forEachFile(astGrep(rules)));
   return { ids: ids.outputs[0], written: applied.changes.written };
 }
 "#,

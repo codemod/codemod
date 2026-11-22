@@ -94,20 +94,6 @@ pub(crate) fn normalize(path: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-/// A task's `basePath`: a directory under the target, or the target itself
-/// (`None`) for `.`, `./` and nothing.
-pub(crate) fn base_path(base: Option<&str>) -> Result<Option<PathBuf>, String> {
-    let Some(base) = base.map(str::trim) else {
-        return Ok(None);
-    };
-    if base.is_empty() || base.trim_end_matches('/') == "." {
-        return Ok(None);
-    }
-    normalize(base)
-        .map(|base| Some(PathBuf::from(base)))
-        .ok_or_else(|| format!("basePath '{base}' must stay inside the target"))
-}
-
 /// Check the plan, then apply it unless `dry_run`. Returns
 /// `{ written, renamed, deleted }`.
 ///

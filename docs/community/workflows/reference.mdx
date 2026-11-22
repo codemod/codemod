@@ -115,7 +115,7 @@ const config = await step("Read config", async () => JSON.parse(await readFile("
 
 Runs `callback` once per selected file and returns a task for `step()`. Without a selector, it visits the files of the package's `targets.languages` in `codemod.yaml`.
 
-Per-file logic is always a callback: written inline, or [imported from its own file](#imported-callbacks). In place of the callback, `forEachFile` also takes [ast-grep rules](#ast-grep-rules): `astGrep(rules)`.
+Per-file logic is a callback: written inline, or [imported from its own file](#imported-callbacks). In place of the callback, `forEachFile` also takes [ast-grep rules](#ast-grep-rules), `forEachFile(selector, astGrep(rules))`, which the engine applies with no JavaScript per file.
 
 ### Selector
 
@@ -247,14 +247,17 @@ To test an imported callback, run the workflow on fixtures: see [Testing workflo
 
 ### ast-grep rules
 
+`astGrep(rules)` goes where the callback goes: `forEachFile(selector, astGrep(rules))` applies the rules to each selected file, in the engine (no JavaScript runs per file, so it is the fastest way to apply rules). It is not a step on its own.
+
 ```ts
 import { step, forEachFile, astGrep } from "codemod/workflow";
 import rules from "./rules/config.yml";
 
-// ast-grep rules: a YAML rule file, imported as its rules.
-await step("Apply rules", forEachFile("src/**/*.ts", astGrep(rules)));
+// A YAML rule file, imported as its rules.
+const result = await step("Apply rules", forEachFile("src/**/*.ts", astGrep(rules)));
+result.matches; // matches of all the rules
 
-// Or rules written in the workflow, which may use its values.
+// Or rules written in the workflow (one, or an array), which may use its values.
 await step("Rename", forEachFile(astGrep({
   id: "rename",
   language: "typescript",
@@ -263,15 +266,13 @@ await step("Rename", forEachFile(astGrep({
 })));
 ```
 
-| Task | What it is |
-|---|---|
-| `astGrep(rules, options?)` | ast-grep rules: an object of the shape of an ast-grep YAML rule (`id`, `language`, `rule`, `fix`, `constraints`, `utils`, `transform`, ...), an array of them, or an imported YAML rule file. Options: `basePath`, `threads`. Result: `{ changes, matches, failures }`. |
+**Rules** are data: an object of the shape of an ast-grep YAML rule (`id`, `language`, `rule`, `fix`, `constraints`, `utils`, `transform`, ...), an array of them, or an imported YAML rule file. Import a YAML file with `import rules from "./rules/config.yml"` (no import attribute needed): the import gives the file's rule as an object, or an array when the file has several documents (`---`), and publishing includes the file. Rules can also be written in the workflow, or built from params and earlier results; they must be JSON (a function, a `RegExp` or a cycle in a rule is an error naming it; a field left `undefined` is left out). The rules are part of the step, so a changed rule runs the step again on resume. A YAML import is data anywhere: in the body, in callbacks, and in Node.js through `codemod/host`. The `AstGrepRule` type describes a rule, and `.yaml` imports are typed as rules.
 
-`astGrep` takes rules as data. Import a YAML rule file with `import rules from "./rules/config.yml"` (no import attribute needed): the import gives the file's rule as an object, or an array when the file has several documents (`---`), and publishing includes the file. Rules can also be written in the workflow, or built from params and earlier results; they must be JSON (a function or a `RegExp` in a rule fails the step, naming it; a field left `undefined` is left out). The rules are part of the step, so a changed rule runs the step again on resume. A YAML import is data anywhere: in the body, in callbacks, and in Node.js through `codemod/host`. The `AstGrepRule` type describes a rule, and `.yaml` imports are typed as rules.
+**The selector** is a glob, a list of globs, or an object with `include`, `exclude` and `containing`. Without `include`, the files of the rules' languages are selected; selected files of other languages are skipped, as no rule is for them. The callback options (`language`, `semanticAnalysis`, `capabilities`, `concurrency`) do not apply: each rule names its language, and rules have no semantic analysis.
 
-The selector is a glob, a list of globs, or an object with `include` and `exclude`; without `include`, the rules run on the files of their own languages. `astGrep` also takes `include` and `exclude` as options, and is a task itself: `step(astGrep(rules, { include }))`. Inside `forEachFile`, give each field in one place.
+**Result:** `{ changes, matches, failures }`. `matches` counts the matches of all the rules; `failures` lists files that could not be read or parsed. As with callbacks, the step is partial when some files fail, and fails when all do.
 
-These are build errors: a path given to `astGrep` (`astGrep takes rules, not a file path: add import config from "./rules/config.yml" at the top of the workflow and write astGrep(config), so the build can include the file when publishing`; a path that only shows up at run time fails the step with the same advice), and a YAML file imported by name, as a namespace, or from an npm package.
+These are errors: a path given to `astGrep` (a build error: `astGrep takes rules, not a file path: add import config from "./rules/config.yml" at the top of the workflow and write astGrep(config), so the build can include the file when publishing`; a path that only shows up at run time fails the step with the same advice), a YAML file imported by name, as a namespace, or from an npm package, `step(astGrep(rules))` (`astGrep(...) is not a step on its own`), and options given to `astGrep` (the selector says which files).
 
 ### jssg transforms
 
@@ -305,7 +306,7 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 | Task | What it does |
 |---|---|
 | `forEachFile(selector?, callback)` | Run a callback, inline or imported, on every selected file. See [`forEachFile`](#foreachfileselector-callback). |
-| `forEachFile(selector?, astGrep(rules, options))` | Apply ast-grep rules, written in the workflow or imported from YAML, to the selected files. See [ast-grep rules](#ast-grep-rules). |
+| `forEachFile(selector?, astGrep(rules))` | Apply ast-grep rules, written in the workflow or imported from YAML, to the selected files. Result: `{ changes, matches, failures }`. See [ast-grep rules](#ast-grep-rules). |
 | `shell(command, { env, cwd })`, ``shell`command` `` | Run a shell command. Result: `{ output }`. See [Shell commands](#shell-commands). |
 | `shard(options)` | Split files into groups. See [Sharding](/community/workflows/sharding). |
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |

@@ -466,9 +466,9 @@ export default async function main({ params }: { params: { from: string; to: str
     const path = join(
       scratch({
         "workflow.ts": `
-import { step, astGrep } from "codemod/workflow";
+import { step, forEachFile, astGrep } from "codemod/workflow";
 export default async function main() {
-  await step(astGrep("./rules.yml"));
+  await step(forEachFile(astGrep("./rules.yml")));
 }
 `,
       }),
@@ -478,6 +478,23 @@ export default async function main() {
       runWorkflow(path, { target: { "a.js": "a\n" } }),
       /astGrep takes rules, not a file path: add import rules from/,
     );
+  });
+
+  test(`${host}: astGrep is not a step on its own`, HOSTS[host], async () => {
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, astGrep } from "codemod/workflow";
+export default async function main() {
+  await step(astGrep({ id: "r", language: "javascript", rule: { pattern: "a" } }) as any);
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const result = await runWorkflow(path, { target: { "a.js": "a\n" } });
+    assert.equal(result.status, "failed");
+    assert.match(result.error, /astGrep\(\.\.\.\) is not a step on its own/);
   });
 
   test(`${host}: a failing until step fails the run`, HOSTS[host], async () => {

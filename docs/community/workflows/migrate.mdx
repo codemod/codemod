@@ -77,7 +77,7 @@ npm install --save-dev codemod
 | `depends_on` | Functions called in order; independent nodes run at the same time |
 | A step | `await step("<step name>", <task>)` |
 | `js-ast-grep` | `import * as transform from "./<js_file>"` and `forEachFile({ include, exclude, language, semanticAnalysis, capabilities }, (file) => jssgFile(transform, file, { ... }))`, through the compatibility adapter |
-| `ast-grep` | `import rules from "./<config_file>"` and `forEachFile({ include, exclude }, astGrep(rules, { ... }))` |
+| `ast-grep` | `import rules from "./<config_file>"` and `forEachFile({ include, exclude }, astGrep(rules))`. A `base_path` is joined to the globs (`base_path: app` with `include: ["src/**"]` gives `include: ["app/src/**"]`); `max_threads` is dropped |
 | `run` | `shell(command, { env })` |
 | `codemod` | `codemod(source, { params })` |
 | `ai` | `agent(prompt, { ... })` |
@@ -158,5 +158,15 @@ A `workflow.ts` written for an earlier preview may need these changes. Each fail
   - `astGrep("./rules/config.yml")` → `import rules from "./rules/config.yml"` and `astGrep(rules)`, or rules written as objects: `astGrep({ id: "no-var", language: "javascript", rule: { pattern: "var $A = $B" }, fix: "let $A = $B;" })`;
   - `shard({ method: { function: "./scripts/shard.ts" } })` → an imported (or inline) shard function, `method: { function: shardFiles }`;
   - `shard({ jssg: { path, ... } })` → `filter: (file) => ...`, a callback that keeps the files it returns `true` for; `filePattern` → `files`.
+
+- **`astGrep(rules)` runs only inside `forEachFile`.** It is no longer a step on its own and takes no options; the selector says which files:
+
+  ```ts
+  // Before
+  await step(astGrep(rules, { include: ["src/**"], basePath: "app", threads: 4 }));
+
+  // After
+  await step(forEachFile({ include: ["app/src/**"] }, astGrep(rules)));
+  ```
 
 If your editor flags `.ts` in an import, add `"allowImportingTsExtensions": true` to `tsconfig.json`, as packages from `codemod init` have.

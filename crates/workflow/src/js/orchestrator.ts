@@ -209,6 +209,17 @@ export interface DependencyGraphTask {
 
 export type Task = ForEachFileTask | DependencyGraphTask | HostTask;
 
+const HANDLER = Symbol.for("codemod.workflow.handler");
+
+/**
+ * What `astGrep(rules)` makes: not a task, but what `forEachFile` runs on
+ * each selected file in place of a callback.
+ */
+export interface AstGrepHandler {
+  readonly [HANDLER]: "astGrep";
+  readonly rules: Json[];
+}
+
 /** A length of time: milliseconds, or a string such as "30s" or "10m". */
 export type Duration = number | string;
 
@@ -258,11 +269,11 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
 
   /** Run a callback, or `astGrep(...)` rules, on every selected file. */
   function forEachFile(selector: unknown, callback?: unknown): ForEachFileTask | HostTask {
-    if (callback === undefined && (callbackOf(selector) || isTask(selector))) {
+    if (callback === undefined && (callbackOf(selector) || isHandler(selector))) {
       callback = selector;
       selector = undefined;
     }
-    if (isTask(callback)) return transformFiles(selector, callback);
+    if (isHandler(callback)) return astGrepFiles(selector, callback);
     const extracted = callbackOf(callback);
     if (!extracted) {
       throw new TypeError(
@@ -279,39 +290,30 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
   }
 
   /**
-   * `forEachFile(selector, astGrep(...))`: the rules' task, on the files the
-   * selector picks. The selector's fields become the task's.
+   * `forEachFile(selector, astGrep(rules))`: the engine's ast-grep task,
+   * which applies the rules to the selected files without running any
+   * JavaScript per file. The selector picks files with `include`, `exclude`
+   * and `containing`; the rules name their languages, and without `include`
+   * the files of those languages are selected.
    */
-  function transformFiles(selector: unknown, transform: Task): HostTask {
-    const kind = transform[TASK] === "host" ? transform.content.kind : "";
-    if (transform[TASK] !== "host" || kind !== "astGrep") {
-      throw new TypeError(
-        "forEachFile takes a callback, written inline as a function or imported from its file, or astGrep(...)",
-      );
-    }
-    const { include, exclude, language, ...forCallbacks } = normalizeSelector(selector);
+  function astGrepFiles(selector: unknown, handler: AstGrepHandler): HostTask {
+    const { include, exclude, language, containing, ...forCallbacks } =
+      normalizeSelector(selector);
     const field = Object.keys(forCallbacks)[0];
     if (field !== undefined) {
-      throw new TypeError(`forEachFile: selector.${field} is for callbacks, not for ${kind}(...)`);
+      throw new TypeError(`forEachFile: selector.${field} is for callbacks, not for astGrep(...)`);
     }
     if (language !== undefined) {
       throw new TypeError(
         "forEachFile: the rules of astGrep(...) name their languages; select files with globs",
       );
     }
-    const selected: Record<string, unknown> = {};
-    if (include.length) selected.include = include;
-    if (exclude.length) selected.exclude = exclude;
-    if (language !== undefined) selected.language = language;
-    for (const field of Object.keys(selected)) {
-      if (field in transform.content) {
-        throw new TypeError(
-          `forEachFile: '${field}' is given twice, in the selector and in ${kind}(...)`,
-        );
-      }
-    }
-    const content: TaskContent = { ...transform.content, ...selected };
-    return Object.freeze({ [TASK]: "host" as const, content });
+    return hostTask("astGrep", {
+      rules: handler.rules,
+      include: include.length ? include : undefined,
+      exclude: exclude.length ? exclude : undefined,
+      containing,
+    });
   }
 
   /**
@@ -382,13 +384,20 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
   }
 
   /**
-   * Apply ast-grep rules: a rule object of the shape of an ast-grep YAML
-   * rule, or an array of them, written in the workflow, built at run time,
-   * or imported from a YAML file. They are part of the step's content, so a
-   * changed rule runs the step again on resume.
+   * ast-grep rules for `forEachFile`: a rule object of the shape of an
+   * ast-grep YAML rule, or an array of them, written in the workflow, built
+   * at run time, or imported from a YAML file. Not a step on its own:
+   * `forEachFile(selector, astGrep(rules))` says which files they run on.
+   * The rules are part of the step's content, so a changed rule runs the
+   * step again on resume.
    */
-  function astGrep(rules: unknown, options: object = {}): HostTask {
-    return hostTask("astGrep", { ...options, rules: ruleList(rules) });
+  function astGrep(rules: unknown, ...rest: unknown[]): AstGrepHandler {
+    if (rest.length > 0) {
+      throw new TypeError(
+        "astGrep takes only rules: select the files with forEachFile's selector, forEachFile({ include, exclude }, astGrep(rules))",
+      );
+    }
+    return Object.freeze({ [HANDLER]: "astGrep" as const, rules: ruleList(rules) });
   }
 
   /**
@@ -823,6 +832,10 @@ export function createRuntime(host: Host) {
           captures: capturesOf(callback) ?? {},
         });
       }
+    } else if (isHandler(task)) {
+      throw new TypeError(
+        `${described}: astGrep(...) is not a step on its own; run it on files with step(forEachFile(selector, astGrep(rules)))`,
+      );
     } else {
       throw new TypeError(`${described}: expected a task such as forEachFile(...) or a function`);
     }
@@ -1012,6 +1025,10 @@ function isTask(value: unknown): value is Task {
   return isRecord(value) && TASK in value;
 }
 
+function isHandler(value: unknown): value is AstGrepHandler {
+  return isRecord(value) && HANDLER in value;
+}
+
 /** `content` with `value` at a dotted `field` (`method.function`). */
 function withField(content: TaskContent, field: string, value: Json): TaskContent {
   const [head, ...tail] = field.split(".");
@@ -1021,16 +1038,27 @@ function withField(content: TaskContent, field: string, value: Json): TaskConten
   return { ...content, [head]: withField(inner, tail.join("."), value) } as TaskContent;
 }
 
-function withoutUndefined(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutUndefined);
-  if (isRecord(value) && Object.getPrototypeOf(value) === Object.prototype) {
-    const result: Record<string, unknown> = {};
+/**
+ * `value` without its `undefined` fields. A cycle is left in place (the
+ * nested value as given), so `checkJson` reports it by its path.
+ */
+function withoutUndefined(value: unknown, seen: Set<object> = new Set()): unknown {
+  if (typeof value !== "object" || value === null || seen.has(value)) return value;
+  const plain = Array.isArray(value) || Object.getPrototypeOf(value) === Object.prototype;
+  if (!plain) return value;
+  seen.add(value);
+  let result: unknown;
+  if (Array.isArray(value)) {
+    result = value.map((item) => withoutUndefined(item, seen));
+  } else {
+    const cleaned: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
-      if (item !== undefined) result[key] = withoutUndefined(item);
+      if (item !== undefined) cleaned[key] = withoutUndefined(item, seen);
     }
-    return result;
+    result = cleaned;
   }
-  return value;
+  seen.delete(value);
+  return result;
 }
 
 function normalizeSelector(selector: unknown): Selector {

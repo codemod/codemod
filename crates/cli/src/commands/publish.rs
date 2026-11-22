@@ -1131,9 +1131,9 @@ export default async function main() {
         let manifest = manifest_with("workflow.ts", "example");
         fs::write(
             temp_dir.path().join("workflow.ts"),
-            r#"import { astGrep, step } from "codemod/workflow";
+            r#"import { astGrep, forEachFile, step } from "codemod/workflow";
 export default async function main() {
-  await step(astGrep("./rules.yml" as any));
+  await step(forEachFile(astGrep("./rules.yml" as any)));
 }
 "#,
         )

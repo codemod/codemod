@@ -1,11 +1,13 @@
-//! `astGrep(rules, options)`: apply ast-grep rules. The workflow gives them
-//! as JSON, written in the workflow or imported from a YAML file, which the
-//! module loader reads as JSON.
+//! `forEachFile(selector, astGrep(rules))`: apply ast-grep rules to the
+//! selected files, in Rust, with no JavaScript per file. The workflow gives
+//! the rules as JSON, written in the workflow or imported from a YAML file,
+//! which the module loader reads as JSON.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use butterflow_core::execution::CodemodExecutionConfig;
+use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
 use codemod_sandbox::{scan_text_with_combined_scan, with_combined_scan_of};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -20,8 +22,8 @@ pub(crate) struct Request {
     rules: Vec<Value>,
     include: Option<Globs>,
     exclude: Option<Globs>,
-    base_path: Option<String>,
-    threads: Option<usize>,
+    /// Only files whose text contains this string.
+    containing: Option<String>,
 }
 
 pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
@@ -36,7 +38,6 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         .map(Value::to_string)
         .collect::<Vec<_>>()
         .join("\n---\n");
-    let base_path = changes::base_path(request.base_path.as_deref())?;
 
     let scanned = with_combined_scan_of(&rules, |scan| {
         let languages = scan
@@ -44,29 +45,38 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
             .iter()
             .map(|rule| rule.language.to_string())
             .collect::<Vec<_>>();
+        // Files the include globs pick that no rule is for (another
+        // language, or none) are skipped, as the default selection (the
+        // rules' languages) would not have them.
+        let extensions = scan
+            .rule_refs
+            .iter()
+            .flat_map(|rule| get_extensions_for_language(rule.language))
+            .map(str::to_ascii_lowercase)
+            .collect::<Vec<_>>();
+        let filter = Filter {
+            extensions: &extensions,
+            containing: request.containing.as_deref(),
+        };
         let config = CodemodExecutionConfig {
             pre_run_callback: None,
             progress_callback: std::sync::Arc::new(None),
             target_path: Some(run.target.clone()),
-            base_path: base_path.clone(),
+            base_path: None,
             include_globs: request.include.clone().map(Globs::into_vec),
             explicit_files: None,
             exclude_globs: request.exclude.clone().map(Globs::into_vec),
             dry_run: true,
             languages: Some(languages),
-            threads: request.threads,
+            threads: None,
             capabilities: None,
         };
         // One walk (`execute` walks twice: once to count, once to visit),
         // then the files go to the threads in walk order.
         let files = config.try_collect_files()?;
-        let threads = request
-            .threads
-            .unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map_or(1, |n| n.get())
-                    .min(12)
-            })
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(12)
             .clamp(1, files.len().max(1));
         let next = AtomicUsize::new(0);
         let processed = AtomicUsize::new(0);
@@ -81,15 +91,15 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         let workers: Vec<Scanned> = std::thread::scope(|scope| {
             let handles: Vec<_> = (0..threads)
                 .map(|_| {
-                    let (files, next, processed, scan_text) =
-                        (&files, &next, &processed, &scan_text);
+                    let (files, next, processed, scan_text, filter) =
+                        (&files, &next, &processed, &scan_text, &filter);
                     scope.spawn(move || {
                         let mut out = Scanned::default();
                         loop {
                             let index = next.fetch_add(1, Ordering::Relaxed);
                             let Some(path) = files.get(index) else { break };
                             if !task.canceled() {
-                                scan_one(task, scan_text, path, &mut out);
+                                scan_one(task, scan_text, filter, path, &mut out);
                             }
                             let done = processed.fetch_add(1, Ordering::Relaxed) + 1;
                             if done == total || done.is_multiple_of(every) {
@@ -162,8 +172,34 @@ struct Scanned {
     unmodified: usize,
 }
 
+/// Which of the walked files are scanned.
+struct Filter<'a> {
+    /// The rules' languages' extensions (`.ts`, ...), lowercase.
+    extensions: &'a [String],
+    containing: Option<&'a str>,
+}
+
+impl Filter<'_> {
+    fn covers(&self, path: &Path) -> bool {
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        self.extensions.iter().any(|extension| name.ends_with(extension.as_str()))
+    }
+}
+
 /// Scan one file the walk found (an absolute path under the target).
-fn scan_one(task: &TaskContext<'_>, scan_text: &ScanText<'_>, path: &Path, out: &mut Scanned) {
+fn scan_one(
+    task: &TaskContext<'_>,
+    scan_text: &ScanText<'_>,
+    filter: &Filter<'_>,
+    path: &Path,
+    out: &mut Scanned,
+) {
+    if !filter.covers(path) {
+        return;
+    }
     let run = task.run;
     // The walker gives regular files (it follows no links) under the target
     // as the run spells it, so the relative path is a prefix away; `relative`
@@ -185,6 +221,12 @@ fn scan_one(task: &TaskContext<'_>, scan_text: &ScanText<'_>, path: &Path, out: 
             return;
         }
     };
+    if filter
+        .containing
+        .is_some_and(|needle| !original.contains(needle))
+    {
+        return;
+    }
     match scan_text(path, &original) {
         Ok((found, content)) => {
             out.matches += found;

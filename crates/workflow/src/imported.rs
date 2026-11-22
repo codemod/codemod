@@ -962,7 +962,7 @@ export default async function main() {
         assert_eq!(inspection.files, vec!["./rules/config.yml"]);
         let error = build(
             "workflow.ts",
-            "import { step, astGrep } from \"codemod/workflow\";\nexport default async function main() { await step(astGrep(\"rules/config.yml\")); }\n",
+            "import { step, forEachFile, astGrep } from \"codemod/workflow\";\nexport default async function main() { await step(forEachFile(astGrep(\"rules/config.yml\"))); }\n",
         )
         .unwrap_err()
         .message;

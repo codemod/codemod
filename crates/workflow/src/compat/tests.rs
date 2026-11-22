@@ -211,6 +211,46 @@ nodes:
 }
 
 #[test]
+fn ast_grep_base_path_is_joined_to_the_globs() {
+    let result = translated(
+        r#"
+version: "1"
+nodes:
+  - id: apply
+    name: Apply
+    steps:
+      - name: Under base
+        ast-grep:
+          config_file: rules/config.yml
+          base_path: ./packages/app/
+          include: ["*.ts", "src/**/*.ts", "**/*.js"]
+          exclude: ["node_modules"]
+          max_threads: 2
+      - name: Whole base
+        ast-grep:
+          config_file: rules/config.yml
+          base_path: packages/app
+"#,
+    );
+    for expected in [
+        r#"include: ["packages/app/**/*.ts", "packages/app/src/**/*.ts", "packages/app/**/*.js"]"#,
+        r#"exclude: ["packages/app/**/node_modules"]"#,
+        r#"forEachFile({ include: ["packages/app/**"] }, astGrep(configRules))"#,
+        "step 'Under base': max_threads is dropped",
+    ] {
+        assert!(
+            result.source.contains(expected),
+            "missing {expected} in:\n{}",
+            result.source
+        );
+    }
+    assert!(!result.source.contains("basePath"), "{}", result.source);
+    assert_eq!(rebase_glob("a", "!b/*.ts"), "!a/b/*.ts");
+    assert_eq!(rebase_glob("a/", "/top.ts"), "a/top.ts");
+    assert_eq!(rebase_glob("./a", "dist/"), "a/**/dist/");
+}
+
+#[test]
 fn independent_nodes_run_together() {
     let source = translated(
         r#"
