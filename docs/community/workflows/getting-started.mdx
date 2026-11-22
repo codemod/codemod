@@ -1,0 +1,306 @@
+---
+title: "Build your first workflow"
+sidebarTitle: "Tutorial"
+description: "Apply ast-grep rules, edit files with a per-file callback, run a shell command, ask for approval, and test the workflow."
+---
+
+Build a `workflow.ts` that replaces deprecated `util.isArray()` and `util.isBuffer()` calls, removes the imports left unused, and formats the changed files. Then test it. You need Node.js 22.18 or later, npm, and Git.
+
+## Set up a test project
+
+Create a directory named `my-app`. Run all commands from that directory. Start with these two files:
+
+```ts src/check.ts
+import util from "node:util";
+
+export function describe(value: unknown) {
+  if (util.isArray(value)) return `list of ${value.length}`;
+  if (util.isBuffer(value)) return `${value.length} bytes`;
+  return typeof value;
+}
+```
+
+```ts src/format.ts
+import util from "node:util";
+
+export function join(parts: unknown) {
+  return util.isArray(parts) ? parts.join(", ") : String(parts);
+}
+```
+
+## 1. Apply ast-grep rules
+
+Simple find-and-replace edits are [ast-grep rules](https://ast-grep.github.io/reference/yaml.html). Create `rules/util-is.yaml` with one rule per call. `---` separates them:
+
+```yaml rules/util-is.yaml
+id: util-is-array
+language: typescript
+rule:
+  pattern: util.isArray($ARG)
+fix: Array.isArray($ARG)
+---
+id: util-is-buffer
+language: typescript
+rule:
+  pattern: util.isBuffer($ARG)
+fix: Buffer.isBuffer($ARG)
+```
+
+Create `workflow.ts` at the root. Import the rules, and give them to `forEachFile` with the files to run on. `step` runs it and returns the result:
+
+```ts workflow.ts
+import { astGrep, forEachFile, step } from "codemod/workflow";
+import rules from "./rules/util-is.yaml";
+
+export default async function main() {
+  const migrated = await step("Replace util.is* calls", forEachFile("src/**/*.ts", astGrep(rules)));
+  console.log(`Replaced ${migrated.matches} calls in ${migrated.changes.written.length} files`);
+}
+```
+
+You can also write rules inline: `astGrep({ id, language, rule, fix })`, or an array of them.
+
+Commit the starting files so the target is clean, then try a dry run. It runs every step but writes nothing:
+
+```bash
+git init
+git add .
+git commit -m "Before the migration"
+npx codemod@2.0.0-alpha.5 workflow run -w ./workflow.ts --dry-run
+```
+
+It prints `Replaced 3 calls in 2 files`, and `git status` shows no changes. Now run it for real and look at the diff:
+
+```bash
+npx codemod@2.0.0-alpha.5 workflow run -w ./workflow.ts
+git diff -- src
+```
+
+Two calls change to `Array.isArray` and one to `Buffer.isBuffer`. The imports are still there for now.
+
+## 2. Edit files with a callback
+
+Rules can't tell whether `util` is still used, so removing the import takes code. Give `forEachFile` a callback in place of the rules. It runs once per file and gets a `file` with its `path` and `text`. `parse` from `codemod/ast-grep` gives you the syntax tree, and `file.write` saves the new text.
+
+Replace `workflow.ts` with this:
+
+```ts workflow.ts
+import { parse } from "codemod/ast-grep";
+import { astGrep, forEachFile, step } from "codemod/workflow";
+import rules from "./rules/util-is.yaml";
+
+const FILES = "src/**/*.ts";
+
+export default async function main() {
+  const migrated = await step("Replace util.is* calls", forEachFile(FILES, astGrep(rules)));
+  console.log(`Replaced ${migrated.matches} calls in ${migrated.changes.written.length} files`);
+
+  const cleaned = await step(
+    "Remove unused util imports",
+    forEachFile({ include: FILES, containing: "node:util" }, (file) => {
+      const root = parse(file).root();
+      const imports = root.findAll({ rule: { pattern: 'import util from "node:util"' } });
+      const uses = root.findAll({
+        rule: {
+          kind: "identifier",
+          regex: "^util$",
+          not: { inside: { kind: "import_statement", stopBy: "end" } },
+        },
+      });
+      if (imports.length === 0 || uses.length > 0) return;
+      file.write(root.commitEdits(imports.map((node) => node.replace(""))));
+      return file.path;
+    }),
+  );
+  console.log(`Removed the util import from ${cleaned.outputs.length} files`);
+}
+```
+
+`containing` skips files that don't mention `node:util`. Whatever the callback returns is collected into `cleaned.outputs`, in path order. Returning nothing collects nothing. Return any JSON value: a path, a count, an object.
+
+To try it, restore the original files with `git restore src`. The CLI refuses to run on a dirty target, so commit your workflow first:
+
+```bash
+git restore src
+git add workflow.ts
+git commit -m "Remove unused imports"
+npx codemod@2.0.0-alpha.5 workflow run -w ./workflow.ts
+```
+
+It prints `Replaced 3 calls in 2 files` and `Removed the util import from 2 files`. `git diff -- src` shows both imports gone, with blank lines left where they were. The next step cleans those up.
+
+<Note>
+  In a dry run, nothing is written, so each step sees the files as they are on disk. Here the second step still sees the `util.is*` calls and reports `Removed the util import from 0 files`.
+</Note>
+
+### Move the callback to its own file
+
+A longer callback reads better in its own file. Move it to `scripts/remove-util-import.ts` as the default export. `FileCallback<string>` types it: it returns a string for each file it changes.
+
+```ts scripts/remove-util-import.ts
+import { parse } from "codemod/ast-grep";
+import type { FileCallback } from "codemod/workflow";
+
+const removeUtilImport: FileCallback<string> = (file) => {
+  const root = parse(file).root();
+  const imports = root.findAll({ rule: { pattern: 'import util from "node:util"' } });
+  const uses = root.findAll({
+    rule: {
+      kind: "identifier",
+      regex: "^util$",
+      not: { inside: { kind: "import_statement", stopBy: "end" } },
+    },
+  });
+  if (imports.length === 0 || uses.length > 0) return;
+  file.write(root.commitEdits(imports.map((node) => node.replace(""))));
+  return file.path;
+};
+
+export default removeUtilImport;
+```
+
+Then import it and pass it to `forEachFile`. The result is the same. The next section shows the full workflow.
+
+## 3. Run a shell command
+
+`shell` runs a command. Its step returns `{ stdout, stderr, exitCode }`. Write the command as a tagged template, and each value becomes one quoted argument; an array becomes one argument per item. Here, Prettier formats the files the rules changed and lists the ones it rewrote:
+
+```ts
+const formatted = await step(
+  "Format changed files",
+  shell`npx --yes prettier@3.6.2 --write --list-different -- ${migrated.changes.written}`,
+);
+const reformatted = formatted.stdout?.split("\n").filter(Boolean) ?? [];
+console.log(`Prettier reformatted ${reformatted.length} files`);
+```
+
+A command that exits with an error fails the step, unless you pass `{ allowFailure: true }` and check `exitCode` yourself. A dry run skips shell steps, so `stdout` can be missing there. In an interactive run, the CLI asks before running each command.
+
+## 4. Add a decision and an approval
+
+Replace `workflow.ts` with the complete workflow. It stops early when there's nothing to replace, uses the callback from its file, and asks before formatting:
+
+```ts workflow.ts
+import { approval, astGrep, forEachFile, shell, step } from "codemod/workflow";
+import rules from "./rules/util-is.yaml";
+import removeUtilImport from "./scripts/remove-util-import.ts";
+
+const FILES = "src/**/*.ts";
+
+export default async function main() {
+  const migrated = await step("Replace util.is* calls", forEachFile(FILES, astGrep(rules)));
+  if (migrated.matches === 0) {
+    console.log("No util.isArray or util.isBuffer calls found");
+    return;
+  }
+  console.log(`Replaced ${migrated.matches} calls in ${migrated.changes.written.length} files`);
+
+  const cleaned = await step(
+    "Remove unused util imports",
+    forEachFile({ include: FILES, containing: "node:util" }, removeUtilImport),
+  );
+  console.log(`Removed the util import from ${cleaned.outputs.length} files`);
+
+  const files = migrated.changes.written;
+  await step(approval(`Format ${files.length} changed files with Prettier?`));
+  const formatted = await step(
+    "Format changed files",
+    shell`npx --yes prettier@3.6.2 --write --list-different -- ${files}`,
+  );
+  const reformatted = formatted.stdout?.split("\n").filter(Boolean) ?? [];
+  console.log(`Prettier reformatted ${reformatted.length} files`);
+}
+```
+
+The workflow body is plain TypeScript: `if`, loops, and variables decide what runs next. Step results are plain JSON, so you pass them straight to the next step.
+
+Restore the files, commit, then run without prompts:
+
+```bash
+git restore src
+git add workflow.ts scripts
+git commit -m "Finish the migration workflow"
+npx codemod@2.0.0-alpha.5 workflow run -w ./workflow.ts --no-interactive
+```
+
+The run prints `Replaced 3 calls in 2 files` and `Removed the util import from 2 files`, then pauses at `Format 2 changed files with Prettier?` and prints the command to continue. Approve with the run ID from the output:
+
+```bash
+npx codemod@2.0.0-alpha.5 workflow resume --id <run-id> --approve
+```
+
+The workflow runs again from the top, but finished steps reuse their saved results (`↺ ... (done earlier)`). Prettier lists both files and the run prints `Prettier reformatted 2 files`. `git diff -- src` now shows clean files with no imports.
+
+Commit the changes and run the workflow again. It stops early with `No util.isArray or util.isBuffer calls found`.
+
+## 5. Test the workflow
+
+`codemod/testing` runs the whole workflow on fixture files and compares what it leaves. Add a `package.json` and install `codemod`, and keep `node_modules` out of Git:
+
+```json package.json
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.ts\""
+  }
+}
+```
+
+```bash
+npm install --save-dev codemod@2.0.0-alpha.5
+echo node_modules > .gitignore
+```
+
+A fixture is a directory with an `input` and an `expected` tree. Copy the two files from [Set up a test project](#set-up-a-test-project) into `tests/fixtures/util-is/input/src/`, unchanged. Then create the test:
+
+```ts tests/workflow.test.ts
+import { test } from "node:test";
+import { assertTree, fixtures, runWorkflow } from "codemod/testing";
+
+const workflow = new URL("../workflow.ts", import.meta.url);
+
+for (const fixture of fixtures(new URL("./fixtures", import.meta.url))) {
+  test(fixture.name, async () => {
+    const run = await runWorkflow(workflow, { target: fixture.input });
+    assertTree(run, fixture.expected);
+  });
+}
+
+test("leaves files without util.is* calls alone", async () => {
+  const run = await runWorkflow(workflow, {
+    target: { "src/a.ts": "export const a = 1;\n" },
+  });
+  assertTree(run, { "src/a.ts": "export const a = 1;\n" });
+});
+```
+
+`runWorkflow` copies the input to a temporary directory and runs the workflow there, approvals given. Shell steps run for real in that copy. The second test passes files inline instead of a fixture.
+
+There's no `expected` tree yet, so let the first run write it, then check it:
+
+```bash
+CODEMOD_UPDATE_FIXTURES=1 npm test
+cat tests/fixtures/util-is/expected/src/format.ts
+```
+
+`format.ts` should read:
+
+```ts
+export function join(parts: unknown) {
+  return Array.isArray(parts) ? parts.join(", ") : String(parts);
+}
+```
+
+From now on, `npm test` fails with a diff when the workflow's output changes. See [Testing workflows](/community/workflows/testing) for more.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Workflow reference" icon="book" href="/community/workflows/reference">
+    See the tasks, options, and run controls.
+  </Card>
+  <Card title="Test your workflow" icon="flask" href="/community/workflows/testing">
+    Fixtures, testing one step, and mocks.
+  </Card>
+</CardGroup>
