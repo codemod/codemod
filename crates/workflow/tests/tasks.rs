@@ -793,6 +793,30 @@ fn parallel_git_steps_are_refused_even_with_managed_git_off() {
 }
 
 #[test]
+fn each_git_step_is_refused_alongside_other_steps() {
+    for task in [
+        "branch(\"codemod-x\")",
+        "commit(\"x\")",
+        "pullRequest({ title: \"x\" })",
+    ] {
+        let h = approving();
+        let source = format!(
+            r#"
+import {{ step, shell, branch, commit, pullRequest }} from "codemod/workflow";
+export default async function main() {{
+  await Promise.all([step(shell("echo hi")), step({task})]);
+}}
+"#
+        );
+        let error = output(&h.start(&source, Value::Null)).unwrap_err();
+        assert!(
+            error.contains("managed git steps can't run in parallel"),
+            "{task}: {error}"
+        );
+    }
+}
+
+#[test]
 fn managed_git_steps_run_one_shard_after_another() {
     let h = managed_git();
     let report = h.start(

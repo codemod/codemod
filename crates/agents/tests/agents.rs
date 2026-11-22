@@ -386,7 +386,26 @@ fn canceling_stops_an_agent_that_closed_its_output_pipes() {
     let fake = Fake::new(&format!(
         "{SESSION_STARTED}\nexec >/dev/null 2>&1\nprintf '%s' \"$$\" >pid\nexec sleep 30"
     ));
-    let (result, _) = run_codex(&fake, cwd.path(), true, None);
+    // Cancel from another thread, once the run has had time to see both
+    // pipes close: canceling inside the event callback would stop the run
+    // before it reads EOF.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let result = Run {
+        adapter: find("codex").unwrap(),
+        executable: fake.executable(),
+        task: task(cwd.path()),
+        cancel: Some(Arc::clone(&cancel)),
+        timeout: None,
+    }
+    .run(&mut |event| {
+        if let AgentEvent::Started { .. } = event {
+            let cancel = Arc::clone(&cancel);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(1));
+                cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+    });
     assert!(matches!(result, Err(RunError::Canceled { .. })));
     let pid: libc::pid_t = std::fs::read_to_string(cwd.path().join("pid"))
         .unwrap()
