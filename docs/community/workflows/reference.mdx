@@ -280,7 +280,7 @@ Paths given to `jssg`, `astGrep` and shard functions are relative to the workflo
 
 `branch`, `commit` and `pullRequest` only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped.
 
-They all work on the run's one checkout, so they can't run in parallel. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`, before it touches git. So does one inside a `codemod(...)` step that runs alongside other steps. To open one pull request per shard, run the shards one after another:
+They all work on the run's one checkout, so they can't run in parallel. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`, before it touches git. So does one inside a `codemod(...)` step that was started while other steps were running. The check happens when a step starts: a git step, or a `codemod(...)` step, that started first is not stopped by steps started after it, so don't start other steps while git work runs. To open one pull request per shard, run the shards one after another:
 
 ```ts
 for (const current of shards) {

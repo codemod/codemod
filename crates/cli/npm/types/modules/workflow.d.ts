@@ -425,7 +425,7 @@ declare module "codemod:workflow" {
   export interface ShellOptions {
     /** Extra environment variables. */
     env?: Readonly<Record<string, string>>;
-    /** Directory to run in, relative to the target (or absolute). Defaults to the current directory. */
+    /** Directory to run in, relative to the target (or absolute). Defaults to the target, or a file target's directory. */
     cwd?: string;
     /** Return the result of a command that exits with an error, instead of failing the step. */
     allowFailure?: boolean;
