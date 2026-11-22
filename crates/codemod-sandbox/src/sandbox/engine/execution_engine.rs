@@ -195,6 +195,17 @@ unsafe impl<'js> rquickjs::JsLifetime<'js> for TargetDirectory {
     type Changed<'to> = TargetDirectory;
 }
 
+/// A path a transform gave as text, as one the OS takes. Windows does not
+/// read `/` as a separator in a `\\?\` (verbatim) path, which a transform
+/// gets by appending `/file` to such a path.
+pub fn native_path(path: &str) -> PathBuf {
+    #[cfg(windows)]
+    if path.starts_with(r"\\?\") {
+        return PathBuf::from(path.replace('/', "\\"));
+    }
+    PathBuf::from(path)
+}
+
 /// Validate that `path` resolves within the target directory stored in QuickJS userdata.
 /// `caller` is used in error messages (e.g. "jssgTransform()" or "rename()").
 /// If the file doesn't exist yet (e.g. rename target), the parent directory is canonicalized instead.

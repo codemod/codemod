@@ -236,7 +236,12 @@ fn absolute_filename(ctx: &Ctx<'_>, path: String) -> String {
         return path;
     }
     match ctx.userdata::<crate::sandbox::engine::execution_engine::TargetDirectory>() {
-        Some(target) => target.0.join(relative).to_string_lossy().into_owned(),
+        // Part by part, so the separators are the platform's.
+        Some(target) => relative
+            .components()
+            .fold(target.0.clone(), |path, part| path.join(part))
+            .to_string_lossy()
+            .into_owned(),
         None => path,
     }
 }
@@ -410,10 +415,10 @@ fn jssg_transform_rjs<'js>(
         .map(|flag| flag.0)
         .unwrap_or(false);
 
-    let file_path = std::path::Path::new(&path_to_file);
+    let file_path = crate::sandbox::engine::execution_engine::native_path(&path_to_file);
 
     // Validate: file path must resolve within the target directory
-    validate_path_within_target(&ctx, file_path, "jssgTransform()")?;
+    validate_path_within_target(&ctx, &file_path, "jssgTransform()")?;
 
     // Read the file: as the step has it so far when the caller keeps its
     // unwritten files, else from disk.
@@ -425,11 +430,11 @@ fn jssg_transform_rjs<'js>(
     };
     let (content, taken) = match &file_changes.pending {
         Some(pending) => {
-            let (content, taken) = pending.take(file_path).map_err(read_error)?;
+            let (content, taken) = pending.take(&file_path).map_err(read_error)?;
             (content, Some(taken))
         }
         None => (
-            std::fs::read_to_string(file_path).map_err(read_error)?,
+            std::fs::read_to_string(&file_path).map_err(read_error)?,
             None,
         ),
     };
@@ -498,9 +503,22 @@ fn jssg_transform_rjs<'js>(
             _ => None,
         };
 
-        // The next transform of this file starts from this one's result.
-        if let (Some(taken), Some(content)) = (&taken, &return_content) {
-            taken.set(content.clone());
+        // The next transform of this file starts from this one's result. A
+        // take that has ended (the transform calling this one finished
+        // without waiting for it) keeps nothing, and records nothing.
+        if let Some(taken) = &taken {
+            let kept = match &return_content {
+                Some(content) => taken.set(content.clone()),
+                None => taken.is_current(),
+            };
+            if !kept {
+                return Err(Exception::throw_message(
+                    &ctx2,
+                    &format!(
+                        "jssgTransform() on '{path_to_file}' finished after the transform that called it; await it"
+                    ),
+                ));
+            }
         }
         drop(taken);
 
@@ -509,7 +527,7 @@ fn jssg_transform_rjs<'js>(
             Exception::throw_message(&ctx2, &format!("Failed to lock file_changes mutex: {e}"))
         })?;
         changes.push(FileChange {
-            path: std::path::PathBuf::from(&path_to_file),
+            path: file_path,
             result: exec_result,
         });
 

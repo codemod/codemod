@@ -158,15 +158,24 @@ impl<'js> SgRootRjs<'js> {
         }
 
         let resolved_path = if std::path::Path::new(&new_path).is_absolute() {
+            #[cfg(feature = "native")]
+            let new_path = crate::sandbox::engine::execution_engine::native_path(&new_path)
+                .to_string_lossy()
+                .into_owned();
             new_path
         } else {
-            // Resolve relative to current file's parent directory
+            // Resolve relative to current file's parent directory, part by
+            // part so the separators are the platform's.
             match &self.inner.filename {
                 Some(filename) => {
                     let parent = std::path::Path::new(filename)
                         .parent()
                         .unwrap_or(std::path::Path::new("."));
-                    parent.join(&new_path).to_string_lossy().to_string()
+                    std::path::Path::new(&new_path)
+                        .components()
+                        .fold(parent.to_path_buf(), |path, part| path.join(part))
+                        .to_string_lossy()
+                        .to_string()
                 }
                 None => new_path,
             }

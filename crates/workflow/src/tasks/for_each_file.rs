@@ -228,7 +228,13 @@ fn run_callback(
             let handles: Vec<_> = (0..workers)
                 .map(|_| {
                     let mut options = isolates.worker_options(task, selector.language.clone());
-                    options.pending_files = Some(other_files.pending.clone());
+                    // Only workers that run one file at a time keep what a
+                    // file's transforms change in a transaction of its own;
+                    // other workers' `jssgTransform` changes are refused, and
+                    // must not reach the step's.
+                    if concurrency == 1 {
+                        options.pending_files = Some(other_files.pending.clone());
+                    }
                     let job = Job {
                         options,
                         registry: isolates.registry.clone(),
@@ -506,9 +512,9 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         other_files,
     } = job;
     block_on(async move {
-        let sandbox = isolate::start(options, registry).await?;
-        let sandbox = &sandbox;
-        async_with!(sandbox.context => |ctx| {
+        let worker = isolate::start(options, registry).await?;
+        let sandbox = &worker;
+        let results = async_with!(sandbox.context => |ctx| {
             let setup = async {
                 let declared = Module::declare(ctx.clone(), name, module)?;
                 crate::run::set_import_meta(&declared, workflow_path)?;
@@ -527,7 +533,7 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
             // translation runs may change other files with `jssgTransform`.
             let slot: CompatSlot = Arc::default();
             if concurrency == 1 {
-                install_compat_host(&ctx, other_files.pending.clone(), target.to_path_buf(), Arc::clone(&slot))
+                install_compat_host(&ctx, other_files.pending.clone(), Arc::clone(&slot))
                     .map_err(|e| format!("could not start the step's runtime: {e}"))?;
             }
 
@@ -563,6 +569,12 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                 let mut attempts = 0;
                 let outcomes = loop {
                     let transaction = (concurrency == 1).then(|| other_files.pending.begin());
+                    if transaction.is_some() {
+                        // The one file the adapter may take for this callback.
+                        let selected = &files[indices[0]];
+                        slot.lock().unwrap_or_else(|e| e.into_inner()).current =
+                            Some((selected.path.clone(), selected.file.clone()));
+                    }
                     let settled = async {
                         let paths: Vec<&str> = indices.iter().map(|&index| files[index].path.as_str()).collect();
                         let batch: Vec<&str> = texts.iter().map(String::as_str).collect();
@@ -575,7 +587,11 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                         .map_err(|e| e.to_string())
                         .and_then(|json| serde_json::from_str(&json).map_err(|e| e.to_string()));
                     let effects = sandbox.take_side_effects();
-                    let compat = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+                    let compat = {
+                        let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+                        slot.current = None;
+                        slot.taken.take()
+                    };
                     // It gave way to another file's transform that was waiting
                     // for a file it held, so what it did is incomplete: drop it
                     // and run it again once that one is done.
@@ -627,6 +643,14 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                                 }
                                 (Ok(_), None) => true,
                             };
+                            // A transform still running would change files after
+                            // they are given back: refuse what the callback did.
+                            let keep = if keep && transaction.unsettled() {
+                                *outcome = Err(UNSETTLED.to_string());
+                                false
+                            } else {
+                                keep
+                            };
                             transaction.finish(keep);
                         }
                         _ if !effects.other_files.is_empty() => {
@@ -653,12 +677,22 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
             }
             Ok(results)
         })
-        .await
+        .await;
+        worker.shutdown(SHUTDOWN_GRACE).await;
+        results
     })
 }
 
+/// How long a worker waits, once its files are done, for work its callbacks
+/// left running.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Why a callback's `jssgTransform` calls on other files fail.
 const NOT_SUPPORTED: &str = "jssgTransform() is not supported in forEachFile callbacks yet; change each file from its own callback";
+
+/// Why a callback that left a `jssgTransform` call running fails.
+const UNSETTLED: &str =
+    "a jssgTransform() call was still running when the transform finished; await it";
 
 /// How many times one file's transform may give way to others (see
 /// [`Transaction::aborted`]) before it fails.
@@ -711,15 +745,24 @@ struct CompatFile {
     discard: bool,
 }
 
-/// The file the worker's current callback took, if it took one.
-type CompatSlot = Arc<Mutex<Option<CompatFile>>>;
+/// The worker's current callback: the file it runs on (its path as the
+/// callback has it, and as the walk found it), and that file once the
+/// adapter took it.
+#[derive(Default)]
+struct CompatState {
+    current: Option<(String, PathBuf)>,
+    taken: Option<CompatFile>,
+}
+
+type CompatSlot = Arc<Mutex<CompatState>>;
 
 /// `__jssgCompatHost` for `jssg_compat.ts`: `begin(path, discard)` takes
-/// the callback's file from the step's unwritten files and gives its text.
+/// the callback's own file from the step's unwritten files and gives its
+/// text. Any other path is refused: the file is one the step selected, so
+/// what is read and written through it stays the step's own file.
 fn install_compat_host<'js>(
     ctx: &Ctx<'js>,
     pending: PendingFiles,
-    target: PathBuf,
     slot: CompatSlot,
 ) -> rquickjs::Result<()> {
     let host = Object::new(ctx.clone())?;
@@ -728,11 +771,26 @@ fn install_compat_host<'js>(
         Function::new(
             ctx.clone(),
             move |ctx: Ctx<'js>, path: String, discard: bool| -> rquickjs::Result<String> {
+                let mut state = slot.lock().unwrap_or_else(|e| e.into_inner());
+                let file = match &state.current {
+                    Some((current, file)) if *current == path => file.clone(),
+                    _ => {
+                        return Err(Exception::throw_message(
+                            &ctx,
+                            &format!("'{path}' is not the file this callback runs on"),
+                        ))
+                    }
+                };
+                if state.taken.is_some() {
+                    return Err(Exception::throw_message(
+                        &ctx,
+                        &format!("'{path}' is being transformed already"),
+                    ));
+                }
                 let (text, taken) = pending
-                    .take(&target.join(&path))
+                    .take(&file)
                     .map_err(|e| Exception::throw_message(&ctx, &e.to_string()))?;
-                *slot.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(CompatFile { taken, discard });
+                state.taken = Some(CompatFile { taken, discard });
                 Ok(text)
             },
         )?,
@@ -757,12 +815,19 @@ fn keep_changes(
     let mut renames = Vec::new();
     for effect in std::mem::take(&mut outcome.effects) {
         match effect {
-            Effect::Write { text } => compat.taken.set(text),
+            Effect::Write { text } => {
+                if !compat.taken.set(text) {
+                    return Err(UNSETTLED.to_string());
+                }
+            }
             Effect::Rename { to } => {
                 let to = changes::normalize(&to).ok_or_else(|| {
                     format!("cannot rename to '{to}': the path must be relative and stay inside the target")
                 })?;
-                renames.push((compat.taken.path().to_path_buf(), target.join(to)));
+                renames.push((
+                    compat.taken.path().to_path_buf(),
+                    changes::under(target, &to),
+                ));
             }
             Effect::Delete => return Err("a jssg transform cannot delete its file".to_string()),
         }

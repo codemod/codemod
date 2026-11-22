@@ -153,9 +153,9 @@ impl Worker {
             pending: Some(options.pending_files.clone().unwrap_or_default()),
             ..JssgFileChanges::default()
         };
-        let target = options
-            .target_directory
-            .canonicalize()
+        // Not `\\?\C:\...` on Windows: code builds paths from this one by
+        // appending `/` and relative paths, which such paths do not take.
+        let target = dunce::canonicalize(&options.target_directory)
             .unwrap_or_else(|_| options.target_directory.clone());
         let llm = LlmRuntimeContext::new(fetch.then_some(options.llm_request_handler).flatten());
 
@@ -205,6 +205,19 @@ impl Worker {
             hooks,
             file_changes,
         })
+    }
+
+    /// Let work the code left running (an unawaited promise, a timer)
+    /// finish, for up to `grace`, then drop the worker. QuickJS aborts the
+    /// process when a runtime is freed with such work still holding values,
+    /// so a worker whose work does not finish (an interval) is leaked instead.
+    pub async fn shutdown(self, grace: std::time::Duration) {
+        let finished = tokio::time::timeout(grace, self.runtime.idle())
+            .await
+            .is_ok();
+        if !finished || self.runtime.is_job_pending().await {
+            std::mem::forget(self);
+        }
     }
 
     /// What the code did since the last call besides returning a value.
