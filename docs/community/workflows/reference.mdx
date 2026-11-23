@@ -115,7 +115,7 @@ const config = await step("Read config", async () => JSON.parse(await readFile("
 
 Runs `callback` once per selected file and returns a task for `step()`. Without a selector, it visits the files of the package's `targets.languages` in `codemod.yaml`.
 
-Per-file logic is a callback: written inline, or [imported from its own file](#imported-callbacks). In place of the callback, `forEachFile` also takes [ast-grep rules](#ast-grep-rules), `forEachFile(selector, astGrep(rules))`, which the engine applies with no JavaScript per file.
+Per-file logic is a callback: written inline, or [imported from its own file](#imported-callbacks). In place of the callback, `forEachFile` also takes [ast-grep rules](#ast-grep-rules), `forEachFile(selector, astGrep(rules))`, which the engine applies with no JavaScript per file. After the callback, it takes an optional [reducer](#reducing-outputs) and its initial value, `forEachFile(selector, callback, reducer, initial)`, which folds what the callback returns into one value.
 
 ### Selector
 
@@ -162,7 +162,7 @@ An `astGrep` step also rejects a `basePath` that resolves outside the target.
 - A callback that throws fails only that file; the error appears in `result.failures`, and the file and its error are logged under the step.
 - When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again.
 - When the callback fails on every file it ran on, the step fails, with the first file's error.
-- To count what a callback found, return it: outputs are values, so add them up after the step.
+- To count what a callback found, return it: outputs are values, so add them up after the step, or give a [reducer](#reducing-outputs) that adds them up as files finish.
 
 ```ts
 export default async function main() {
@@ -185,6 +185,46 @@ export default async function main() {
   failures: { path: string; error: string }[];
 }
 ```
+
+### Reducing outputs
+
+`forEachFile(selector, callback, reducer, initial)` folds what the callback returns into one value, as `Array#reduce` does: `reducer(result, output, path)` gets the result so far, one file's output and that file's path, and returns the new result. The step's result has that value as `reduced`, in place of `outputs`:
+
+```ts
+// Rewrites per package.
+const { reduced } = await step("Migrate calls", forEachFile(
+  "packages/*/src/**/*.ts",
+  (file) => {
+    const root = parse(file);
+    const edits = root.root().findAll({ rule: { pattern: "moment($A)" } }).map((node) => node.replace("dayjs()"));
+    if (!edits.length) return;
+    file.write(root.root().commitEdits(edits));
+    return edits.length;
+  },
+  (counts, rewrites, path) => {
+    const name = path.split("/")[1];
+    return { ...counts, [name]: (counts[name] ?? 0) + rewrites };
+  },
+  {} as Record<string, number>,
+));
+reduced; // { "app": 12, "ui": 3 }
+```
+
+```ts
+{
+  reduced: unknown; // what the reducer returned last, or `initial` when no file returned anything
+  changes: { written: string[]; renamed: { from: string; to: string }[]; deleted: string[] };
+  failures: { path: string; error: string }[];
+}
+```
+
+- Use it when there are many files: without a reducer, every output is kept until the step ends and is held in the workflow's memory as `outputs`. With one, each output is folded as its file finishes, so only the result is kept.
+- Outputs are folded in path order, whatever order files finish in, so the result is the same on every run and a reducer may depend on the order. Outputs of files that finish early wait for those before them, and workers stay at most about a thousand files ahead of the reducer, so what waits stays small.
+- Files that return nothing, and files whose callback throws, are not folded; the latter are in `failures`, as without a reducer.
+- `initial` must be JSON, and so must the reducer's result. The reducer may be async.
+- Write the reducer inline or [import it](#imported-callbacks) from its own file (type it with `FileReducer<Result, Output>`). It runs in an isolate of its own, with the same rules for outside variables as callbacks; captured variables, the reducer and `initial` are part of the step, so changing them runs it again on resume.
+- A reducer that throws fails the step, and nothing the step's callbacks changed is written.
+- `astGrep(...)` returns nothing per file, so `forEachFile(selector, astGrep(rules), reducer, initial)` is a build and type error.
 
 ### Using outside variables
 
@@ -244,7 +284,7 @@ These are build errors, each with the fix:
 
 - a file path where the callback goes: `forEachFile takes a callback, not a file path: export the function as the default of "./scripts/rename-imports.ts", add import renameImports from "./scripts/rename-imports.ts" at the top of the workflow, and write forEachFile(selector, renameImports)`;
 - a named or namespace import, an import from an npm package, or one without the file's extension;
-- using the imported callback for anything else, in the body or in another callback (`'migrate' is the callback imported from "./scripts/migrate.ts": only give it to forEachFile(...), or as shard's method.function or filter`).
+- using the imported callback for anything else, in the body or in another callback (`'migrate' is the callback imported from "./scripts/migrate.ts": only give it to forEachFile(...) as its callback or reducer, or as shard's method.function or filter`).
 
 To test an imported callback, run the workflow on fixtures: see [Testing workflows](/community/workflows/testing).
 
@@ -316,6 +356,7 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 | Task | What it does |
 |---|---|
 | `forEachFile(selector?, callback)` | Run a callback, inline or imported, on every selected file. See [`forEachFile`](#foreachfileselector-callback). |
+| `forEachFile(selector, callback, reducer, initial)` | Run a callback on every selected file and fold what it returns into one value. Result: `{ reduced, changes, failures }`. See [Reducing outputs](#reducing-outputs). |
 | `forEachFile(selector?, astGrep(rules, { repeat }?))` | Apply ast-grep rules, written in the workflow or imported from YAML, to the selected files; `repeat` runs them until nothing changes. Result: `{ changes, matches, failures }`. See [ast-grep rules](#ast-grep-rules). |
 | `shell(command, { env, cwd })`, ``shell`command` `` | Run a shell command. Result: `{ output }`. See [Shell commands](#shell-commands). |
 | `shard(options)` | Split files into groups. See [Sharding](/community/workflows/sharding). |
