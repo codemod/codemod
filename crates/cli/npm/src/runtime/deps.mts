@@ -10,7 +10,7 @@ function unavailable(what: string): never {
   throw new Error(`${what} ${QUICKJS_ONLY}`);
 }
 
-export function dependencyGraph(_options: unknown, _callback: unknown): never {
+export function dependencyGraph(..._args: unknown[]): never {
   return unavailable("dependencyGraph()");
 }
 

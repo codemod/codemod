@@ -8,12 +8,9 @@ import {
   agent,
   approval,
   astGrep,
-  branch,
   codemod,
-  commit,
   forEachFile,
   installSkill,
-  pullRequest,
   shard,
   shell,
   sleep,
@@ -22,6 +19,13 @@ import {
   type ShardResult,
   type WorkflowContext,
 } from "codemod/workflow";
+import { branch, commit, pullRequest, type PullRequestOptions } from "codemod/git";
+// @ts-expect-error the git steps moved to codemod/git
+import { branch as oldBranch } from "codemod/workflow";
+// @ts-expect-error the git steps moved to codemod/git
+import { commit as oldCommit } from "codemod/workflow";
+// @ts-expect-error the git steps moved to codemod/git
+import { pullRequest as oldPullRequest } from "codemod/workflow";
 import migrate from "./scripts/migrate.ts";
 import sumByPackage from "./scripts/sum-by-package.ts";
 import shardFiles from "./scripts/shard.ts";
@@ -279,6 +283,11 @@ export default async function main({
   await step(commit("refactor: migrate", { add: ["src"] }));
   const pr = await step(pullRequest({ title: "Migrate", draft: true }));
   expectType<Equal<typeof pr.url, string | null | undefined>>(true);
+  const prOptions: PullRequestOptions = { title: "Migrate", base: "main" };
+  await step(pullRequest(prOptions));
+  void oldBranch;
+  void oldCommit;
+  void oldPullRequest;
 
   // ── values between steps ─────────────────────────────────────────────
 

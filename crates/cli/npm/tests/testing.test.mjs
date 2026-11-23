@@ -651,7 +651,8 @@ export default async function main() {
   test(`${host}: git steps refuse to run alongside other steps`, HOSTS[host], async () => {
     const dir = scratch({
       "workflow.ts": `
-import { step, branch, commit } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { branch, commit } from "codemod/git";
 export default async function main() {
   await Promise.all(["a", "b"].map(async (name) => {
     await step(branch("codemod-" + name));

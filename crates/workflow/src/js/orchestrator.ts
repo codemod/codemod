@@ -388,7 +388,9 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
    * with a live handle on it, in its own isolate. Only what the callback
    * returns is recorded.
    */
-  function dependencyGraph(options: unknown, callback: unknown): DependencyGraphTask {
+  function dependencyGraph(...args: unknown[]): DependencyGraphTask {
+    // `dependencyGraph(callback)` or `dependencyGraph(options, callback)`.
+    const [options, callback] = args.length < 2 ? [undefined, args[0]] : args;
     const extracted = callbackOf(callback);
     if (!extracted || extracted.fn) {
       throw new TypeError(
@@ -403,15 +405,6 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
       lockfiles:
         lockfiles === undefined ? undefined : globs(lockfiles, "lockfiles", "dependencyGraph: "),
       callback: extracted,
-    });
-  }
-
-  function hostTask(kind: string, options: unknown): HostTask {
-    const content = withoutUndefined(options);
-    checkJson(content, kind);
-    return Object.freeze({
-      [TASK]: "host" as const,
-      content: { ...(content as Record<string, unknown>), kind },
     });
   }
 
@@ -591,21 +584,6 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     });
   }
 
-  /** Check out a branch for the following changes (managed git only). */
-  function branch(name: string): HostTask {
-    return hostTask("branch", { name });
-  }
-
-  /** Commit changes (managed git only). */
-  function commit(message: string, options: object = {}): HostTask {
-    return hostTask("commit", { ...options, message });
-  }
-
-  /** Push the branch and open a pull request (managed git only). */
-  function pullRequest(options: object): HostTask {
-    return hostTask("pullRequest", options);
-  }
-
   return {
     callbackOf,
     __callback,
@@ -621,11 +599,39 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     approval,
     sleep,
     waitForEvent,
-    branch,
-    commit,
-    pullRequest,
   };
 }
+
+function hostTask(kind: string, options: unknown): HostTask {
+  const content = withoutUndefined(options);
+  checkJson(content, kind);
+  return Object.freeze({
+    [TASK]: "host" as const,
+    content: { ...(content as Record<string, unknown>), kind },
+  });
+}
+
+// ------------------------------------------------------------------ git ---
+
+/**
+ * The git steps, `codemod/git`. They describe tasks like the rest; `step`
+ * runs them. Not part of `createTasks`, so `codemod/workflow` doesn't export
+ * them.
+ */
+export const gitTasks = Object.freeze({
+  /** Check out a branch for the following changes (managed git only). */
+  branch(name: string): HostTask {
+    return hostTask("branch", { name });
+  },
+  /** Commit changes (managed git only). */
+  commit(message: string, options: object = {}): HostTask {
+    return hostTask("commit", { ...options, message });
+  },
+  /** Push the branch and open a pull request (managed git only). */
+  pullRequest(options: object): HostTask {
+    return hostTask("pullRequest", options);
+  },
+});
 
 /** `astGrep`'s rules as a list of JSON objects, or why they are not. */
 function ruleList(value: unknown): Json[] {
