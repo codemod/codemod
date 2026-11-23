@@ -1143,6 +1143,8 @@ export default async function main() {{ return await step("B", dependencyGraph((
     };
     let report = h.start(&workflow(r#"g.node("b", "1.5.0")"#), Value::Null);
     assert_eq!(output(&report).unwrap(), json!("b@1.5.0"));
+    let report = h.start(&workflow(r#"g.node("b", "2.1.0")"#), Value::Null);
+    assert_eq!(output(&report).unwrap(), json!("b@2.1.0"));
     let report = h.start(&workflow(r#"g.node("b")"#), Value::Null);
     let error = output(&report).unwrap_err();
     assert!(

@@ -113,6 +113,23 @@ export default async function main() {}
 }
 
 #[test]
+fn a_namespace_import_of_the_deps_module_asks_for_named_imports() {
+    let h = Harness::new();
+    let error = load_error(
+        &h,
+        r#"
+import { step } from "codemod/workflow";
+import * as deps from "codemod/deps";
+export default async function main() { await step(deps.dependencyGraph((g) => g.workspaces())); }
+"#,
+    );
+    assert!(
+        error.contains("import { dependencyGraph } from \"codemod/deps\""),
+        "{error}"
+    );
+}
+
+#[test]
 fn importing_a_removed_state_function_says_what_replaced_it() {
     let h = Harness::new();
     let error = load_error(

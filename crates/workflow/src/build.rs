@@ -363,6 +363,14 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                     ),
                                 ));
                             }
+                            if is_deps_module(&module) {
+                                return Err(analysis.error(
+                                    s.span.start,
+                                    format!(
+                                        "import what you use from \"{module}\" by name (import {{ dependencyGraph }} from \"{module}\"): the build finds dependencyGraph callbacks by that name"
+                                    ),
+                                ));
+                            }
                             let line = format!("import * as {} from {:?};", s.local.name, module);
                             (&s.local, None, line)
                         }

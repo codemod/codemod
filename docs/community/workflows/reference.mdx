@@ -372,7 +372,7 @@ const usesMui = await step(
 |---|---|
 | `g.workspaces()` | The repository's own packages |
 | `g.nodes(name?)` | Every node, or every installed version of `name` |
-| `g.node(name, version?)` | One node. Throws when several versions of `name` are installed and no version is given: use `g.nodes(name)` |
+| `g.node(name, version?)` | One node, or `undefined` when none matches. Throws when several versions of `name` are installed and no version is given: use `g.nodes(name)` |
 | `g.dependents(name, { kinds, includeThirdParty })` | Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the peer it was installed with) |
 | `g.chains({ from, to, kinds })` | The shortest chain from each `from` node (default: every one of the repository's own packages) to a `to` node, `from` first. Chains pass through the repository's own packages |
 | `node.dependencies({ kinds })` | Edges the node declares |
@@ -380,7 +380,7 @@ const usesMui = await step(
 | `node.releases({ accepting, newerThanMine })` | The package's releases from the registry, each with `breaking` relative to the installed version |
 | `edge.accepts(version)` | Whether the edge's declared range accepts a version: `true`, `false`, or `null` when it cannot tell |
 
-What lists dependents is about the repository's own packages: `g.dependents` and `node.installedBy` return only edges from them, and `g.chains` starts from them, unless you pass `includeThirdParty: true` (or, for `g.chains`, the `from` nodes). So `g.dependents("react")` is the repository's packages that declare React, not every library that does.
+What lists dependents is about the repository's own packages: `g.dependents` and `node.installedBy` return only edges from them unless you pass `includeThirdParty: true`, and `g.chains` starts from them unless you pass the `from` nodes. So `g.dependents("react")` is the repository's packages that declare React, not every library that does.
 
 A node has `ecosystem`, `name` and `version`, and `dir` (the directory, relative to the target) when it is one of the repository's own packages, which `local` tells. Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`. In a step's result, nodes become `name@version` text and edges `{ from, to, kind, range }`.
 
