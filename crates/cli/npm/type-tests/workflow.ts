@@ -22,6 +22,10 @@ import {
 import { branch, commit, pullRequest, type PullRequestOptions } from "codemod/git";
 // @ts-expect-error the git steps moved to codemod/git
 import { branch as oldBranch } from "codemod/workflow";
+// @ts-expect-error the git steps moved to codemod/git
+import { commit as oldCommit } from "codemod/workflow";
+// @ts-expect-error the git steps moved to codemod/git
+import { pullRequest as oldPullRequest } from "codemod/workflow";
 import migrate from "./scripts/migrate.ts";
 import shardFiles from "./scripts/shard.ts";
 import wouldChange from "./scripts/would-change.ts";
@@ -281,6 +285,8 @@ export default async function main({
   const prOptions: PullRequestOptions = { title: "Migrate", base: "main" };
   await step(pullRequest(prOptions));
   void oldBranch;
+  void oldCommit;
+  void oldPullRequest;
 
   // ── values between steps ─────────────────────────────────────────────
 

@@ -179,6 +179,42 @@ export default async function main() {{}}
 }
 
 #[test]
+fn a_helper_importing_git_steps_from_the_workflow_module_points_to_codemod_git() {
+    let h = Harness::new();
+    h.bundle_file(
+        "lib/open.ts",
+        "import { pullRequest } from \"codemod/workflow\";\nexport const open = () => pullRequest({ title: \"x\" });\n",
+    );
+    let error = load_error(
+        &h,
+        r#"
+import { step } from "codemod/workflow";
+import { open } from "./lib/open.ts";
+export default async function main() { await step(open()); }
+"#,
+    );
+    assert!(
+        error.contains(r#"'pullRequest' moved to "codemod/git""#),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_type_only_re_export_from_the_workflow_module_builds() {
+    let h = Harness::new();
+    let path = h.bundle.path().join("workflow.ts");
+    std::fs::write(
+        &path,
+        r#"
+export type { branch } from "codemod/workflow";
+export default async function main() {}
+"#,
+    )
+    .unwrap();
+    assert!(load_workflow(&path).is_ok());
+}
+
+#[test]
 fn git_steps_cannot_start_inside_a_callback() {
     let h = Harness::new();
     let error = load_error(

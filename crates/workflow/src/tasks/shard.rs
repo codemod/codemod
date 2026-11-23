@@ -158,7 +158,7 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
     let base_dir = request
         .target
         .as_deref()
-        .map(|target| target.trim_start_matches("./").trim_end_matches('/'))
+        .map(|target| target.trim_start_matches("./").trim_matches('/'))
         .filter(|target| !target.is_empty() && *target != ".");
     let files = match &request.files {
         Some(files) => Files {
@@ -195,6 +195,15 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
         Some(dir) => run.target.join(dir),
         None => run.target.clone(),
     };
+    // Through symlinks too: the directory walked must be inside the run's target.
+    if let (Ok(root), Ok(resolved)) = (run.target.canonicalize(), base.canonicalize()) {
+        if !resolved.starts_with(&root) {
+            return Err(TaskError::Failed(format!(
+                "shard `target` '{}' must be relative and stay within the run's target",
+                request.target.as_deref().unwrap_or_default()
+            )));
+        }
+    }
     let under_target = |path: String| match base_dir {
         Some(dir) => format!("{dir}/{path}"),
         None => path,

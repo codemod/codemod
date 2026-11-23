@@ -369,6 +369,33 @@ export default async function main() {{
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn a_shard_target_that_is_a_symlink_out_of_the_run_target_fails() {
+    let h = Harness::new();
+    let outside = tempfile::TempDir::new().unwrap();
+    std::fs::write(outside.path().join("secret.ts"), "x\n").unwrap();
+    std::os::unix::fs::symlink(outside.path(), h.target.path().join("out")).unwrap();
+    for target in ["out", ".//out/"] {
+        let report = h.start(
+            &format!(
+                r#"
+import {{ step, shard }} from "codemod/workflow";
+export default async function main() {{
+  return step(shard({{ method: {{ type: "directory", maxFilesPerShard: 5 }}, target: {target:?} }}));
+}}
+"#
+            ),
+            Value::Null,
+        );
+        let error = output(&report).unwrap_err();
+        assert!(
+            error.contains("must be relative and stay within the run's target"),
+            "{target}: {error}"
+        );
+    }
+}
+
 #[test]
 fn shards_given_previous_keep_their_files_and_new_files_get_new_shards() {
     let h = Harness::new();

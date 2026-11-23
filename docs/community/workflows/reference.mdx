@@ -306,7 +306,7 @@ parse("tsx", text);                 // the original JSSG form
 
 The body is the code outside steps and callbacks. It runs again on every resume, and a step's saved result is reused only when the body calls that same step again, so the body has to come out the same each time:
 
-- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, and npm packages or local files whose imports only reach these. In the QuickJS workflow body, you can import `sep` and `delimiter` by name from `node:path` (or `path`); Node's `path.posix` and `path.win32` are not available there.
+- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, `codemod/git`, and npm packages or local files whose imports only reach these. In the QuickJS workflow body, you can import `sep` and `delimiter` by name from `node:path` (or `path`); Node's `path.posix` and `path.win32` are not available there.
 - **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
 - **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
 - **`console.log`** goes to the run's output.
@@ -336,7 +336,7 @@ Callbacks kept in files and YAML rule files are imported, relative to the workfl
 import { branch, commit, pullRequest } from "codemod/git";
 ```
 
-They only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped. They moved out of `codemod/workflow`; importing one from there is a build error that names `codemod/git`.
+They only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped. They moved out of `codemod/workflow`; when the CLI or `codemod/host` builds the workflow, importing one from there is an error that names `codemod/git`.
 
 They all work on the run's one checkout, so they can't run in parallel. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`, before it touches git. So does one inside a `codemod(...)` step that was started while other steps were running. The check happens when a step starts: a git step, or a `codemod(...)` step, that started first is not stopped by steps started after it, so don't start other steps while git work runs. To open one pull request per shard, run the shards one after another:
 

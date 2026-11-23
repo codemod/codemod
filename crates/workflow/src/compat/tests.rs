@@ -495,6 +495,23 @@ nodes:
     );
     let source = translated(&yaml("")).source;
     assert!(!source.contains("codemod/git"), "{source}");
+    let source = translated(
+        r#"
+version: "1"
+nodes:
+  - id: apply
+    name: Apply
+    branch_name: "codemod-apply"
+    steps:
+      - name: Run
+        run: echo hi
+"#,
+    )
+    .source;
+    assert!(
+        source.contains("import { branch } from \"codemod/git\";\n"),
+        "{source}"
+    );
 }
 
 #[test]
