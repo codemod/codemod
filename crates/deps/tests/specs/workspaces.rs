@@ -72,6 +72,40 @@ snapshots:
 }
 
 #[test]
+fn a_chain_does_not_cross_a_workspace_link_of_another_kind() {
+    // web -dev-> shared -prod-> moment.
+    let lock = r#"
+lockfileVersion: '9.0'
+importers:
+  .: {}
+  packages/shared:
+    dependencies:
+      moment:
+        specifier: ^2.29.4
+        version: 2.29.4
+  packages/web:
+    devDependencies:
+      '@demo/shared':
+        specifier: workspace:*
+        version: link:../shared
+packages:
+  moment@2.29.4: {}
+snapshots:
+  moment@2.29.4: {}
+"#;
+    let graph = lockfiles::pnpm(lock, &|path| match path {
+        "packages/shared/package.json" => Some(r#"{ "name": "@demo/shared" }"#.into()),
+        "packages/web/package.json" => Some(r#"{ "name": "@demo/web" }"#.into()),
+        _ => None,
+    })
+    .unwrap();
+    assert_eq!(
+        chains_to(graph, "moment", &[Kind::Prod]),
+        ["@demo/shared@0.0.0-use.local > moment@2.29.4"]
+    );
+}
+
+#[test]
 fn chains_to_nothing_are_empty() {
     let walk = Walk::new(demo());
     assert!(walk
