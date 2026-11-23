@@ -87,7 +87,7 @@ npm install --save-dev codemod
 | `matrix` (`values` or `from_state`) | One call per value, run at the same time; one at a time when the node uses git (`branch_name`, `pull_request`, step `commit`) |
 | `shard` | `shard({ method, target, files, filter, previous })`, its result passed to the steps that use it. A shard `function` is imported; the shard's `js-ast-grep` transform becomes a `filter` that keeps the files it would change |
 | `if:` | An `if` statement whose condition runs through `__evaluate(...)`, the YAML engine's own evaluator, so it means exactly what it did |
-| `${{ params.name }}` | `params.name` |
+| `${{ params.name }}` | `params.name`. Inside a string it becomes `asText(params.name, "params.name")`, which prints arrays and objects as JSON and null as nothing, and fails if the value is not set, as workflow.yaml did |
 | `${{ state.name }}` | `state.name`, a local object. Shell steps get it as `CODEMOD_STATE_<KEY>` variables, and the lines they write to `$STATE_OUTPUTS` are printed at the end of their stdout and copied into it by `applyStateOutputs`. JSSG transforms that call `getState` or `setState` cannot be translated; `upgrade` flags them |
 | `trigger: manual` | `await step(approval("<node name>"))` |
 | `branch_name`, `pull_request`, step `commit` | `branch`, `pullRequest` and `commit` steps |

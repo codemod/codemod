@@ -630,6 +630,111 @@ nodes:
 }
 
 #[cfg(not(windows))]
+/// `${{ }}` in a string prints arrays and objects as compact JSON, in their
+/// own key order, and null as nothing, as workflow.yaml did (codemod 1.x).
+#[cfg(not(windows))]
+#[test]
+fn expressions_print_arrays_and_objects_as_json() {
+    let h = Harness::new();
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: set
+    name: Set
+    steps:
+      - name: Set
+        run: |
+          echo 'arr=["x",1,{"b":2,"a":1},null,true,1.5]' >> "$STATE_OUTPUTS"
+          echo 'obj={"z":1,"a":[1,2],"s":"t","n":null}' >> "$STATE_OUTPUTS"
+          echo 'num=3' >> "$STATE_OUTPUTS"
+          echo 'flt=2.50' >> "$STATE_OUTPUTS"
+          echo 'bool=true' >> "$STATE_OUTPUTS"
+          echo 'str=hello' >> "$STATE_OUTPUTS"
+          echo 'empty=[]' >> "$STATE_OUTPUTS"
+          echo 'eobj={}' >> "$STATE_OUTPUTS"
+      - name: Show ${{ state.empty }}
+        run: |
+          printf '%s\n' 'ARR=${{ state.arr }}' 'OBJ=${{ state.obj }}' 'OBJA=${{ state.obj.a }}' 'NUM=${{ state.num }}' 'FLT=${{ state.flt }}' 'BOOL=${{ state.bool }}' 'STR=${{ state.str }}' 'EMPTY=${{ state.empty }}' 'EOBJ=${{ state.eobj }}' 'P=${{ params.p }}' 'NULL=[${{ params.nothing }}]'
+  - id: each
+    name: Each
+    depends_on: [set]
+    strategy:
+      type: matrix
+      values:
+        - name: one
+          tags: ["a", "b"]
+          meta: { k: 2, a: 1 }
+          n: 4
+    steps:
+      - name: Matrix
+        run: printf '%s\n' 'MNAME=${{ matrix.name }}' 'MTAGS=${{ matrix.tags }}' 'MMETA=${{ matrix.meta }}' 'MN=${{ matrix.n }}'
+"#,
+    );
+    let report = h.start_loaded(
+        workflow,
+        json!({ "p": { "q": [1, 2] }, "nothing": null }),
+        false,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let labels: Vec<&str> = report.steps.iter().map(|s| s.label.as_str()).collect();
+    assert_eq!(labels, ["Set", "Show []", "Matrix"]);
+    let shown = printed(&report.steps[1].result.as_ref().unwrap()["stdout"]);
+    assert_eq!(
+        shown,
+        [
+            r#"ARR=["x",1,{"b":2,"a":1},null,true,1.5]"#,
+            r#"OBJ={"z":1,"a":[1,2],"s":"t","n":null}"#,
+            "OBJA=[1,2]",
+            "NUM=3",
+            "FLT=2.5",
+            "BOOL=true",
+            "STR=hello",
+            "EMPTY=[]",
+            "EOBJ={}",
+            r#"P={"q":[1,2]}"#,
+            "NULL=[]",
+        ]
+        .join("\n")
+    );
+    let matrix = printed(&report.steps[2].result.as_ref().unwrap()["stdout"]);
+    assert_eq!(
+        matrix,
+        [
+            "MNAME=one",
+            r#"MTAGS=["a","b"]"#,
+            r#"MMETA={"k":2,"a":1}"#,
+            "MN=4"
+        ]
+        .join("\n")
+    );
+}
+
+/// A `${{ }}` naming a value that is not set fails, as in workflow.yaml,
+/// instead of printing `undefined`.
+#[cfg(not(windows))]
+#[test]
+fn an_expression_naming_an_unset_value_fails_its_step() {
+    let h = Harness::new();
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: only
+    name: Only
+    steps:
+      - name: Show
+        run: echo '${{ state.missing }}'
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    let error = format!("{:?}", report.ending);
+    assert!(output(&report).is_err(), "{error}");
+    assert!(error.contains("state.missing"), "{error}");
+}
+
 #[test]
 fn a_multi_line_command_with_an_expression_keeps_its_lines_as_written() {
     let printed = last_printed(

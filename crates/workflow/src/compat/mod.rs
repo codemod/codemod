@@ -1162,6 +1162,9 @@ impl Generator {
         if self.uses_state_outputs {
             source.push_str(&STATE_OUTPUTS_HELPER.replace("{marker}", STATE_MARKER));
         }
+        if self.body.contains(&format!("{}(", expr::TEXT)) {
+            source.push_str(expr::TEXT_HELPER);
+        }
         if self.uses_matrix_env {
             source.push_str(
                 "\n/** Matrix values as environment variables, JSON-encoded as before. */\nfunction matrixEnv(matrix: Matrix): Record<string, string> {\n  return Object.fromEntries(\n    Object.entries(matrix ?? {}).map(([key, value]) => [key, JSON.stringify(value)]),\n  );\n}\n",

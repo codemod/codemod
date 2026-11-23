@@ -16,6 +16,21 @@ fn expr_re() -> &'static Regex {
 /// The scope object passed to `evaluate`.
 pub const SCOPE: &str = "{ params, matrix, state }";
 
+/// The helper that formats a value in a template as the YAML engine did;
+/// [`TEXT_HELPER`] defines it.
+pub const TEXT: &str = "asText";
+
+/// Arrays and objects print as compact JSON in their own key order, null as
+/// nothing, and a value that is not set fails, as in workflow.yaml.
+pub const TEXT_HELPER: &str = r#"
+/** A `${{ }}` value in a string, as workflow.yaml printed it: arrays and objects as JSON, null as nothing. */
+function asText(value: unknown, expression: string): string {
+  if (value === undefined) throw new Error(`\${{ ${expression} }} is not set`);
+  if (value === null) return "";
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+"#;
+
 /// A JavaScript string literal.
 pub fn js_string(text: &str) -> String {
     serde_json::to_string(text).expect("strings serialize")
@@ -34,7 +49,7 @@ pub fn template(text: &str) -> String {
         out.push_str(&escape_template(&text[last..whole.start()]));
         let inner = captures.get(1).unwrap().as_str();
         match path(inner) {
-            Some(js) => out.push_str(&format!("${{{js}}}")),
+            Some(js) => out.push_str(&format!("${{{TEXT}({js}, {})}}", js_string(inner.trim()))),
             None => out.push_str(&format!(
                 "${{evaluate(\"string\", {}, {SCOPE})}}",
                 js_string(whole.as_str())
@@ -119,9 +134,12 @@ mod tests {
         assert_eq!(template("plain"), "\"plain\"");
         assert_eq!(
             template("migrate ${{ matrix.name }} for ${{ params.team.id }}"),
-            "`migrate ${matrix?.name} for ${params.team?.id}`"
+            "`migrate ${asText(matrix?.name, \"matrix.name\")} for ${asText(params.team?.id, \"params.team.id\")}`"
         );
-        assert_eq!(template("${{ state.count }}`"), "`${state.count}\\``");
+        assert_eq!(
+            template("${{ state.count }}`"),
+            "`${asText(state.count, \"state.count\")}\\``"
+        );
     }
 
     #[test]
