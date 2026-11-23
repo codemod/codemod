@@ -83,4 +83,16 @@ fn a_directory_case_with_nested_files_snapshots_data_at_its_root() {
     // The snapshot now exists and matches.
     let second = jssg_test(root);
     assert!(second.status.success(), "{}", output(&second));
+
+    // A different snapshot fails the case and is left as it was.
+    let stale = r#"[{ "file": "c.ts", "data": { "kind": "other" } }]"#;
+    fs::write(case.join("data.json"), stale).unwrap();
+    let third = jssg_test(root);
+    assert!(!third.status.success(), "{}", output(&third));
+    assert!(
+        output(&third).contains("Data mismatch"),
+        "{}",
+        output(&third)
+    );
+    assert_eq!(fs::read_to_string(case.join("data.json")).unwrap(), stale);
 }

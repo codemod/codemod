@@ -292,6 +292,13 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 } else {
                     test_case_dir.join("data.json")
                 };
+                // Counts this file towards the case's data.json, even when it
+                // stops early (an error, a timeout).
+                let collection = DataCollection::start(
+                    shared_data.clone(),
+                    data_path,
+                    request.entrypoint_count,
+                )?;
                 let per_test_config =
                     match TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))
                     {
@@ -315,12 +322,6 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 let language_enum: CodemodLang = language_str
                     .parse()
                     .map_err(|e: String| anyhow::anyhow!("{}", e))?;
-
-                shared_data
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("shared data lock poisoned"))?
-                    .entry(data_path.clone())
-                    .or_insert_with(|| SharedDataState::new(request.entrypoint_count));
 
                 // For directory snapshot tests with --semantic-workspace,
                 // create a workspace-scoped provider using the temp dir
@@ -379,9 +380,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     })
                     .map_err(anyhow::Error::from);
 
-                let pending_snapshot = finish_data_collection(
-                    shared_data.as_ref(),
-                    &data_path,
+                let pending_snapshot = collection.finish(
                     data.map(|data| (file_name, data)),
                     execution_result.is_err(),
                 );
@@ -428,6 +427,51 @@ fn data_file_name(input_path: &Path, target_directory: &Path) -> String {
         .unwrap_or(input_path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+/// One file's part in its case's data snapshot. Dropped before
+/// [`DataCollection::finish`] (the file stopped early), it still counts the
+/// file, and the case's data is not checked.
+struct DataCollection {
+    shared: Arc<Mutex<HashMap<PathBuf, SharedDataState>>>,
+    path: PathBuf,
+    finished: bool,
+}
+
+impl DataCollection {
+    fn start(
+        shared: Arc<Mutex<HashMap<PathBuf, SharedDataState>>>,
+        path: PathBuf,
+        entrypoint_count: usize,
+    ) -> Result<Self> {
+        shared
+            .lock()
+            .map_err(|_| anyhow::anyhow!("shared data lock poisoned"))?
+            .entry(path.clone())
+            .or_insert_with(|| SharedDataState::new(entrypoint_count));
+        Ok(Self {
+            shared,
+            path,
+            finished: false,
+        })
+    }
+
+    fn finish(
+        mut self,
+        entry: Option<(String, serde_json::Value)>,
+        should_skip_snapshot: bool,
+    ) -> Result<Option<PendingDataSnapshot>> {
+        self.finished = true;
+        finish_data_collection(&self.shared, &self.path, entry, should_skip_snapshot)
+    }
+}
+
+impl Drop for DataCollection {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = finish_data_collection(&self.shared, &self.path, None, true);
+        }
+    }
 }
 
 fn finish_data_collection(
@@ -589,11 +633,12 @@ mod tests {
     use super::{
         classify_and_sanitize_error, data_file_name, data_to_canonical_json,
         finish_data_collection, generate_data_diff, handle_data_snapshot, normalize_line_endings,
-        PendingDataSnapshot, SharedDataState,
+        DataCollection, PendingDataSnapshot, SharedDataState,
     };
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::Mutex;
     use tempfile::tempdir;
 
@@ -661,6 +706,21 @@ mod tests {
             .unwrap()
             .expect("the last file finishes the snapshot");
         assert_eq!(last.entries.len(), 2);
+    }
+
+    #[test]
+    fn a_file_that_stops_early_still_counts_towards_its_case() {
+        let root = PathBuf::from("/tmp/fixture/data.json");
+        let shared = Arc::new(Mutex::new(HashMap::new()));
+        let stopped = DataCollection::start(shared.clone(), root.clone(), 2).unwrap();
+        let finished = DataCollection::start(shared.clone(), root.clone(), 2).unwrap();
+        drop(stopped);
+        let snapshot = finished
+            .finish(Some(("a.ts".into(), json!(1))), false)
+            .unwrap();
+        // The case is done, and its data is not checked.
+        assert!(snapshot.is_none());
+        assert!(shared.lock().unwrap().is_empty());
     }
 
     #[test]

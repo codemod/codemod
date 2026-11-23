@@ -629,7 +629,6 @@ nodes:
     );
 }
 
-#[cfg(not(windows))]
 /// `${{ }}` in a string prints arrays and objects as compact JSON, in their
 /// own key order, and null as nothing, as workflow.yaml did (codemod 1.x).
 #[cfg(not(windows))]
@@ -656,7 +655,7 @@ nodes:
           echo 'eobj={}' >> "$STATE_OUTPUTS"
       - name: Show ${{ state.empty }}
         run: |
-          printf '%s\n' 'ARR=${{ state.arr }}' 'OBJ=${{ state.obj }}' 'OBJA=${{ state.obj.a }}' 'NUM=${{ state.num }}' 'FLT=${{ state.flt }}' 'BOOL=${{ state.bool }}' 'STR=${{ state.str }}' 'EMPTY=${{ state.empty }}' 'EOBJ=${{ state.eobj }}' 'P=${{ params.p }}' 'NULL=[${{ params.nothing }}]'
+          printf '%s\n' 'ARR=${{ state.arr }}' 'OBJ=${{ state.obj }}' 'OBJA=${{ state.obj.a }}' 'NUM=${{ state.num }}' 'FLT=${{ state.flt }}' 'BOOL=${{ state.bool }}' 'STR=${{ state.str }}' 'EMPTY=${{ state.empty }}' 'EOBJ=${{ state.eobj }}' 'P=${{ params.p }}' 'ZEROS=${{ params.zeros }}' 'NULL=[${{ params.nothing }}]'
   - id: each
     name: Each
     depends_on: [set]
@@ -674,7 +673,7 @@ nodes:
     );
     let report = h.start_loaded(
         workflow,
-        json!({ "p": { "q": [1, 2] }, "nothing": null }),
+        json!({ "p": { "q": [1, 2] }, "zeros": "007", "nothing": null }),
         false,
     );
     assert!(output(&report).is_ok(), "{:?}", report.ending);
@@ -694,6 +693,8 @@ nodes:
             "EMPTY=[]",
             "EOBJ={}",
             r#"P={"q":[1,2]}"#,
+            // A string is printed as it is, never as a number.
+            "ZEROS=007",
             "NULL=[]",
         ]
         .join("\n")
@@ -735,6 +736,7 @@ nodes:
     assert!(error.contains("state.missing"), "{error}");
 }
 
+#[cfg(not(windows))]
 #[test]
 fn a_multi_line_command_with_an_expression_keeps_its_lines_as_written() {
     let printed = last_printed(
