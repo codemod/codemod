@@ -384,6 +384,87 @@ export default async function main() {
     },
   );
 
+  test(
+    `${host}: a reducer folds the outputs in path order, inline or imported`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          "scripts/by-dir.ts": `
+export default async function byDir(acc: Record<string, string[]>, output: number, path: string) {
+  await Promise.resolve();
+  const dir = path.split("/")[0];
+  return { ...acc, [dir]: [...(acc[dir] ?? []), path + ":" + output] };
+}
+`,
+          "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+import byDir from "./scripts/by-dir.ts";
+export default async function main() {
+  const weight = 2;
+  const inline = await step("Inline", forEachFile({ include: "**/*.ts", concurrency: 3 }, async (file) => {
+    // Later files finish first.
+    await new Promise((resolve) => setTimeout(resolve, file.path.includes("a") ? 20 : 1));
+    file.write(file.text.replace("var", "let"));
+    return file.path.includes("skip") ? undefined : file.text.length;
+  }, (acc, size, path) => ({ paths: [...acc.paths, path], total: acc.total + size * weight }), { paths: [], total: 0 }));
+  const imported = await step("Imported", forEachFile("**/*.ts", (file) => file.text.length, byDir, {}));
+  return { inline, imported: imported.reduced };
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, {
+        target: {
+          "x/a.ts": "var a = 1;\n",
+          "x/b.ts": "var b = 1;\n",
+          "y/c.ts": "var c = 1;\n",
+          "y/skip.ts": "var s = 1;\n",
+        },
+      });
+      assert.equal(result.status, "succeeded", result.error);
+      assert.deepEqual(result.output.inline.reduced, {
+        paths: ["x/a.ts", "x/b.ts", "y/c.ts"],
+        total: 66,
+      });
+      assert.equal(result.output.inline.outputs, undefined);
+      assert.deepEqual(result.output.inline.changes.written.length, 4);
+      assert.deepEqual(result.output.imported, {
+        x: ["x/a.ts:11", "x/b.ts:11"],
+        y: ["y/c.ts:11", "y/skip.ts:11"],
+      });
+    },
+  );
+
+  test(
+    `${host}: a reducer that throws fails the step and nothing is written`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step("Fold", forEachFile("*.ts", (file) => {
+    file.write("changed\\n");
+    return file.path;
+  }, (count, path) => {
+    if (path === "b.ts") throw new Error("cannot fold b");
+    return count + 1;
+  }, 0));
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, { target: { "a.ts": "a\n", "b.ts": "b\n" } });
+      assert.equal(result.status, "failed");
+      assert.match(result.error, /the reducer failed: .*cannot fold b/);
+      assert.deepEqual(result.files, { "a.ts": "a\n", "b.ts": "b\n" });
+    },
+  );
+
   test(`${host}: shard runs its filter and function, inline or imported`, HOSTS[host], async () => {
     const path = join(
       scratch({

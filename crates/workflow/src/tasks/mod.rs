@@ -22,6 +22,7 @@ mod function;
 mod git;
 mod install_skill;
 pub(crate) mod isolate;
+mod reduce;
 mod shard;
 mod shell;
 mod wait;

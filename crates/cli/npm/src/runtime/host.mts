@@ -40,7 +40,7 @@ import type { JsonValue } from "../testing/index.mts";
 import { addon } from "./addon.mts";
 import type { Addon, FileEffects, NativeRun } from "./addon.mts";
 import { context, stepScope } from "./context.mts";
-import type { RunScope } from "./context.mts";
+import type { RunScope, StepScope } from "./context.mts";
 import { ORCHESTRATOR_VERSION } from "./orchestrator-version.mts";
 import {
   AwaitingApprovalError,
@@ -521,6 +521,7 @@ async function forEachFile(
   const failures: { path: string; error: string }[] = [];
   const effects: FileEffects[] = [];
   const concurrency = selector.concurrency ?? 1;
+  const fold = task.reducer ? inOrderFold(task, outer, step) : undefined;
 
   const one = async (index: number, [path, text]: [path: string, text: string]) => {
     const { file, effects: done, close } = fileHandle(path, text, step.language);
@@ -536,12 +537,14 @@ async function forEachFile(
       }
       if (output !== undefined) {
         checkJson(output, "return value");
-        outputs[index] = { output };
+        if (fold) fold.output(index, path, output);
+        else outputs[index] = { output };
       }
       if (done.length) effects.push({ path, original: text, effects: done });
     } catch (error) {
       failures.push({ path, error: describeError(error) });
     } finally {
+      fold?.done(index);
       close();
       processed++;
       if (processed === total || processed % every === 0) {
@@ -564,13 +567,15 @@ async function forEachFile(
         await new Promise((turn) => setImmediate(turn));
       }
       if (run.refusesSteps()) throw new CanceledError();
-      if (limit.expired) return;
+      if (limit.expired || fold?.failed) return;
       await one(index, file);
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, total) }, worker));
   // Out of time: the step has already failed, and nothing it did is written.
   if (limit.expired) throw new CanceledError("the step ran out of time");
+  // A reducer that failed fails the step before anything is written.
+  const reduced = fold ? await fold.end() : undefined;
 
   effects.sort((a, b) => (a.path < b.path ? -1 : 1));
   const committed = await run.commitFiles(task.position, task.label, JSON.stringify(effects));
@@ -591,16 +596,82 @@ async function forEachFile(
     );
   }
   const result: Outcome = {
-    result: {
-      outputs: outputs.flatMap((entry) => (entry ? [entry.output] : [])),
-      changes: committed.changes,
-      failures: allFailures,
-    },
+    result: fold
+      ? { reduced: reduced ?? null, changes: committed.changes, failures: allFailures }
+      : {
+          outputs: outputs.flatMap((entry) => (entry ? [entry.output] : [])),
+          changes: committed.changes,
+          failures: allFailures,
+        },
   };
   if (!allFailures.length) return result;
   return {
     ...result,
     partial: `${allFailures.length} of ${total} ${total === 1 ? "file" : "files"} failed`,
+  };
+}
+
+/** Folds a `forEachFile` step's outputs, in the order of its files. */
+interface InOrderFold {
+  /** What the callback returned for file `index`. */
+  output(index: number, path: string, output: Json): void;
+  /** File `index` is done: its output, if it has one, can be folded. */
+  done(index: number): void;
+  /** Set once the reducer threw: process no more files. */
+  readonly failed: boolean;
+  /** The folded value, once every file is done; rejects with the reducer's error. */
+  end(): Promise<Json>;
+}
+
+/**
+ * The reducer's fold, as the engine does it: outputs are folded in the
+ * order of the step's files (sorted by path) as they arrive, holding only
+ * those that arrive before an earlier file's.
+ */
+function inOrderFold(task: InPlaceTask, outer: RunScope, step: StepScope): InOrderFold {
+  const reducer = task.reducer as Callback;
+  const reduce = task.task.reduce as { initial: Json };
+  let folded: unknown = JSON.parse(JSON.stringify(reduce.initial));
+  let next = 0;
+  const early = new Map<number, { path: string; output: Json } | null>();
+  const outputs = new Map<number, { path: string; output: Json }>();
+  let chain: Promise<void> = Promise.resolve();
+  let error: { error: unknown } | undefined;
+  const drain = async () => {
+    for (;;) {
+      if (error || !early.has(next)) return;
+      const entry = early.get(next);
+      early.delete(next);
+      next++;
+      if (!entry) continue;
+      try {
+        folded = await context.run({ ...outer, step }, () =>
+          reducer(folded, entry.output, entry.path),
+        );
+      } catch (cause) {
+        error = { error: cause };
+      }
+    }
+  };
+  return {
+    output(index, path, output) {
+      outputs.set(index, { path, output });
+    },
+    done(index) {
+      early.set(index, outputs.get(index) ?? null);
+      outputs.delete(index);
+      chain = chain.then(drain);
+    },
+    get failed() {
+      return error !== undefined;
+    },
+    async end() {
+      await chain;
+      if (error) throw new Error(`the reducer failed: ${describeError(error.error)}`);
+      const result = folded === undefined ? null : folded;
+      checkJson(result, "the reducer's result");
+      return result;
+    },
   };
 }
 

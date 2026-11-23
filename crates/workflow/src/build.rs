@@ -243,6 +243,7 @@ enum Isolated {
     FunctionStep,
     ShardFunction,
     ShardFilter,
+    Reducer,
 }
 
 impl Isolated {
@@ -253,6 +254,7 @@ impl Isolated {
             Isolated::FunctionStep => "function step",
             Isolated::ShardFunction => "shard function",
             Isolated::ShardFilter => "shard filter",
+            Isolated::Reducer => "forEachFile reducer",
         }
     }
 }
@@ -472,7 +474,20 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                         } else {
                             Isolated::GraphCallback
                         };
-                        match call.arguments.last() {
+                        // `forEachFile(selector, callback, reducer, initial)`.
+                        let reducing = task == "forEachFile" && call.arguments.len() > 2;
+                        if reducing {
+                            sites.extend(
+                                reducer_site(&analysis, &imported, call)
+                                    .map_err(|(at, message)| analysis.error(at, message))?,
+                            );
+                        }
+                        let callback = if reducing {
+                            call.arguments.get(1)
+                        } else {
+                            call.arguments.last()
+                        };
+                        match callback {
                             Some(Argument::ArrowFunctionExpression(f)) => {
                                 sites.push((f.span, kind))
                             }
@@ -752,6 +767,55 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
         body_imports,
         node_splices,
     })
+}
+
+/// Why `forEachFile(selector, astGrep(rules), reducer, initial)` is a build
+/// error (the orchestrator says the same at run time).
+const AST_GREP_REDUCER: &str = "forEachFile: astGrep(...) returns nothing per file, so there is nothing to reduce; give a reducer only with a callback, forEachFile(selector, (file) => ..., reducer, initial)";
+
+/// The reducer of `forEachFile(selector, callback, reducer, initial)` to
+/// extract: `None` when it is imported from a file (the imported analysis
+/// has it), or where and why it cannot be.
+fn reducer_site(
+    analysis: &Analysis<'_>,
+    imported: &crate::imported::Imports,
+    call: &oxc::ast::ast::CallExpression<'_>,
+) -> Result<Option<(Span, Isolated)>, (u32, String)> {
+    if let Some(Argument::CallExpression(handler)) = call.arguments.get(1) {
+        let is_ast_grep = match &handler.callee {
+            Expression::Identifier(callee) => analysis
+                .scoping
+                .get_reference(callee.reference_id())
+                .symbol_id()
+                .and_then(|symbol| analysis.imports.get(&symbol))
+                .is_some_and(|import| {
+                    is_flow_module(&import.source) && import.imported.as_deref() == Some("astGrep")
+                }),
+            _ => false,
+        };
+        if is_ast_grep {
+            return Err((handler.span.start, AST_GREP_REDUCER.to_string()));
+        }
+    }
+    let Some(reducer) = call.arguments.get(2) else {
+        return Ok(None);
+    };
+    match reducer {
+        Argument::ArrowFunctionExpression(f) => Ok(Some((f.span, Isolated::Reducer))),
+        Argument::FunctionExpression(f) => Ok(Some((f.span, Isolated::Reducer))),
+        other
+            if imported
+                .callbacks
+                .iter()
+                .any(|callback| callback.argument == other.span()) =>
+        {
+            Ok(None)
+        }
+        other => Err((
+            other.span().start,
+            "forEachFile's reducer must be written inline, as (result, output, path) => ..., or imported from its file (import count from \"./scripts/count.ts\"), so the build can extract it".to_string(),
+        )),
+    }
 }
 
 /// The inline functions `shard` runs in isolates: `method.function` and
@@ -1195,7 +1259,12 @@ fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
             )
         });
         // A transform (`forEachFile(jssg(...))`) has no callback to extract.
-        let given_call = matches!(call.arguments.last(), Some(Argument::CallExpression(_)));
+        let callback = if call.arguments.len() > 2 {
+            call.arguments.get(1)
+        } else {
+            call.arguments.last()
+        };
+        let given_call = matches!(callback, Some(Argument::CallExpression(_)));
         if (called == "forEachFile" && !given_call) || given_function {
             return Some(if called == "step" {
                 "step()"
