@@ -8,7 +8,8 @@ use std::process::Command;
 const TRANSFORM: &str = r#"
 export default function transform(root: any) {
   const text = root.root().text();
-  return { edit: text.replace("OLD", "NEW"), data: { kind: "seen" } };
+  const marker = text.match(/marker: (\w+)/)?.[1];
+  return { edit: text.replace("OLD", "NEW"), data: { marker } };
 }
 "#;
 
@@ -17,7 +18,7 @@ fn write(path: &Path, text: &str) {
     fs::write(path, text).unwrap();
 }
 
-fn jssg_test(dir: &Path) -> std::process::Output {
+fn jssg_test(dir: &Path, extra: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_codemod"))
         .current_dir(dir)
         .args([
@@ -29,34 +30,44 @@ fn jssg_test(dir: &Path) -> std::process::Output {
             "scripts/codemod.ts",
             "tests",
         ])
+        .args(extra)
         .output()
         .unwrap()
 }
+
+fn output(run: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    )
+}
+
+/// A case with `c.ts`, `src/a.ts` and `src/lib/b.ts`, each returning its
+/// own marker as data.
+fn nested_case(root: &Path) {
+    write(&root.join("scripts/codemod.ts"), TRANSFORM);
+    for (name, marker) in [("src/a.ts", "a"), ("src/lib/b.ts", "b"), ("c.ts", "c")] {
+        write(
+            &root.join("tests/case/input").join(name),
+            &format!("const a = 'OLD'; // marker: {marker}\n"),
+        );
+        write(
+            &root.join("tests/case/expected").join(name),
+            &format!("const a = 'NEW'; // marker: {marker}\n"),
+        );
+    }
+}
+
+const STALE: &str = r#"[{ "file": "c.ts", "data": { "marker": "other" } }]"#;
 
 #[test]
 fn a_directory_case_with_nested_files_snapshots_data_at_its_root() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    write(&root.join("scripts/codemod.ts"), TRANSFORM);
-    for name in ["src/a.ts", "src/lib/b.ts", "c.ts"] {
-        write(
-            &root.join("tests/case/input").join(name),
-            "const a = 'OLD';\n",
-        );
-        write(
-            &root.join("tests/case/expected").join(name),
-            "const a = 'NEW';\n",
-        );
-    }
+    nested_case(root);
 
-    let first = jssg_test(root);
-    let output = |run: &std::process::Output| {
-        format!(
-            "{}{}",
-            String::from_utf8_lossy(&run.stdout),
-            String::from_utf8_lossy(&run.stderr)
-        )
-    };
+    let first = jssg_test(root, &[]);
     assert!(first.status.success(), "{}", output(&first));
 
     let case = root.join("tests/case");
@@ -65,9 +76,9 @@ fn a_directory_case_with_nested_files_snapshots_data_at_its_root() {
     assert_eq!(
         data,
         serde_json::json!([
-            { "file": "c.ts", "data": { "kind": "seen" } },
-            { "file": "src/a.ts", "data": { "kind": "seen" } },
-            { "file": "src/lib/b.ts", "data": { "kind": "seen" } },
+            { "file": "c.ts", "data": { "marker": "c" } },
+            { "file": "src/a.ts", "data": { "marker": "a" } },
+            { "file": "src/lib/b.ts", "data": { "marker": "b" } },
         ])
     );
     for stray in [
@@ -81,18 +92,33 @@ fn a_directory_case_with_nested_files_snapshots_data_at_its_root() {
     }
 
     // The snapshot now exists and matches.
-    let second = jssg_test(root);
+    let second = jssg_test(root, &[]);
     assert!(second.status.success(), "{}", output(&second));
 
     // A different snapshot fails the case and is left as it was.
-    let stale = r#"[{ "file": "c.ts", "data": { "kind": "other" } }]"#;
-    fs::write(case.join("data.json"), stale).unwrap();
-    let third = jssg_test(root);
+    fs::write(case.join("data.json"), STALE).unwrap();
+    let third = jssg_test(root, &[]);
     assert!(!third.status.success(), "{}", output(&third));
     assert!(
         output(&third).contains("Data mismatch"),
         "{}",
         output(&third)
     );
-    assert_eq!(fs::read_to_string(case.join("data.json")).unwrap(), stale);
+    assert_eq!(fs::read_to_string(case.join("data.json")).unwrap(), STALE);
+}
+
+/// The data mismatch is reported on the case's last file; a filter that
+/// leaves that file out must not hide it.
+#[test]
+fn a_filter_does_not_hide_a_data_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    nested_case(root);
+    let case = root.join("tests/case");
+    write(&case.join("data.json"), STALE);
+
+    let run = jssg_test(root, &["--filter", "c.ts"]);
+    assert!(!run.status.success(), "{}", output(&run));
+    assert!(output(&run).contains("Data mismatch"), "{}", output(&run));
+    assert_eq!(fs::read_to_string(case.join("data.json")).unwrap(), STALE);
 }

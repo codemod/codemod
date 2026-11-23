@@ -653,7 +653,7 @@ nodes:
           echo 'str=hello' >> "$STATE_OUTPUTS"
           echo 'empty=[]' >> "$STATE_OUTPUTS"
           echo 'eobj={}' >> "$STATE_OUTPUTS"
-      - name: Show ${{ state.empty }}
+      - name: Show ${{ state.arr }} ${{ state.empty }}
         run: |
           printf '%s\n' 'ARR=${{ state.arr }}' 'OBJ=${{ state.obj }}' 'OBJA=${{ state.obj.a }}' 'NUM=${{ state.num }}' 'FLT=${{ state.flt }}' 'BOOL=${{ state.bool }}' 'STR=${{ state.str }}' 'EMPTY=${{ state.empty }}' 'EOBJ=${{ state.eobj }}' 'P=${{ params.p }}' 'ZEROS=${{ params.zeros }}' 'NULL=[${{ params.nothing }}]'
   - id: each
@@ -678,7 +678,14 @@ nodes:
     );
     assert!(output(&report).is_ok(), "{:?}", report.ending);
     let labels: Vec<&str> = report.steps.iter().map(|s| s.label.as_str()).collect();
-    assert_eq!(labels, ["Set", "Show []", "Matrix"]);
+    assert_eq!(
+        labels,
+        [
+            "Set",
+            r#"Show ["x",1,{"b":2,"a":1},null,true,1.5] []"#,
+            "Matrix"
+        ]
+    );
     let shown = printed(&report.steps[1].result.as_ref().unwrap()["stdout"]);
     assert_eq!(
         shown,
@@ -717,23 +724,29 @@ nodes:
 #[cfg(not(windows))]
 #[test]
 fn an_expression_naming_an_unset_value_fails_its_step() {
-    let h = Harness::new();
-    let workflow = h.workflow_file(
-        "workflow.yaml",
-        r#"
-version: "1"
-nodes:
-  - id: only
-    name: Only
-    steps:
-      - name: Show
-        run: echo '${{ state.missing }}'
-"#,
-    );
-    let report = h.start_loaded(workflow, Value::Null, false);
-    let error = format!("{:?}", report.ending);
-    assert!(output(&report).is_err(), "{error}");
-    assert!(error.contains("state.missing"), "{error}");
+    // A missing value, and a value under a missing parent.
+    for expression in ["state.missing", "state.missing.child"] {
+        let h = Harness::new();
+        let workflow = h.workflow_file(
+            "workflow.yaml",
+            &format!(
+                "version: \"1\"\nnodes:\n  - id: only\n    name: Only\n    steps:\n      - name: Show\n        run: echo '${{{{ {expression} }}}}'\n"
+            ),
+        );
+        let report = h.start_loaded(workflow, Value::Null, false);
+        let error = format!("{:?}", report.ending);
+        assert!(output(&report).is_err(), "{error}");
+        assert!(
+            error.contains(&format!("${{{{ {expression} }}}} is not set")),
+            "{error}"
+        );
+        // The command never ran.
+        assert!(
+            report.steps.iter().all(|step| step.result.is_none()),
+            "{:?}",
+            report.steps
+        );
+    }
 }
 
 #[cfg(not(windows))]

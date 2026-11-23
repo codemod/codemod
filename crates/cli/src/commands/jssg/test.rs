@@ -257,6 +257,11 @@ async fn handler_impl(args: &Command) -> Result<()> {
     let args_clone = args.clone();
     let current_dir_clone = current_dir.clone();
     let shared_data = Arc::new(Mutex::new(HashMap::<PathBuf, SharedDataState>::new()));
+    let remaining_data = shared_data.clone();
+    // A data.json failure belongs to its whole case, but the runner reports it
+    // on the case's last file, whose result `--filter` can drop.
+    let data_failures = Arc::new(Mutex::new(Vec::<(PathBuf, String)>::new()));
+    let recorded_data_failures = data_failures.clone();
     let semantic_provider: Option<Arc<dyn SemanticProvider>> =
         Some(Arc::new(LazySemanticProvider::file_scope()));
     let update_snapshots = args.update_snapshots;
@@ -274,6 +279,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
             let current_dir = current_dir_clone.clone();
             let semantic_provider = semantic_provider.clone();
             let shared_data = shared_data.clone();
+            let data_failures = data_failures.clone();
             let runtime_event_output = runtime_event_output.clone();
 
             Box::pin(async move {
@@ -388,7 +394,12 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 runtime_event_output.flush(&runtime_event_buffer);
 
                 if let Some(snapshot) = pending_snapshot? {
-                    handle_data_snapshot(&snapshot, update_snapshots)?;
+                    if let Err(error) = handle_data_snapshot(&snapshot, update_snapshots) {
+                        if let Ok(mut failures) = data_failures.lock() {
+                            failures.push((snapshot.path.clone(), format!("{error:#}")));
+                        }
+                        return Err(error);
+                    }
                 }
 
                 execution_result
@@ -407,16 +418,64 @@ async fn handler_impl(args: &Command) -> Result<()> {
 
     let extensions = get_extensions_for_language(default_language_enum);
 
+    let filtered = options.filter.is_some();
+    let fail_fast = options.fail_fast;
     let mut runner = TestRunner::new(options, test_source);
     let summary = runner
         .run_tests(&extensions, execution_fn, Some(capabilities))
         .await?;
 
-    if !summary.is_success() {
+    // Cases whose data the runner never finished: a file an earlier file
+    // deleted is skipped, so its case is checked now, with the files that ran.
+    // After a --fail-fast stop a case may be cut short, so it is not checked.
+    let mut failures = if fail_fast && !summary.is_success() {
+        Vec::new()
+    } else {
+        finish_remaining_data(&remaining_data, update_snapshots)?
+    };
+    if filtered {
+        let reported = recorded_data_failures
+            .lock()
+            .map_err(|_| anyhow::anyhow!("data failures lock poisoned"))?;
+        failures.extend(reported.iter().cloned());
+    }
+    for (path, error) in &failures {
+        eprintln!("{}: {error}", path.display());
+    }
+
+    if !summary.is_success() || !failures.is_empty() {
         std::process::exit(1);
     }
 
     Ok(())
+}
+
+/// Check the data of every case that is still collecting once the run is
+/// over. A case with a file that stopped early is not checked.
+fn finish_remaining_data(
+    shared_data: &Mutex<HashMap<PathBuf, SharedDataState>>,
+    update_snapshots: bool,
+) -> Result<Vec<(PathBuf, String)>> {
+    let remaining: Vec<(PathBuf, SharedDataState)> = shared_data
+        .lock()
+        .map_err(|_| anyhow::anyhow!("shared data lock poisoned"))?
+        .drain()
+        .collect();
+    let mut failures = Vec::new();
+    for (path, state) in remaining {
+        if state.skip_snapshot {
+            continue;
+        }
+        let snapshot = PendingDataSnapshot {
+            entries: state.entries,
+            path,
+        };
+        if let Err(error) = handle_data_snapshot(&snapshot, update_snapshots) {
+            failures.push((snapshot.path, format!("{error:#}")));
+        }
+    }
+    failures.sort();
+    Ok(failures)
 }
 
 /// A file's name in `data.json`: its path from the target, with `/`, as a
@@ -632,8 +691,8 @@ fn generate_data_diff(expected: &str, actual: &str) -> String {
 mod tests {
     use super::{
         classify_and_sanitize_error, data_file_name, data_to_canonical_json,
-        finish_data_collection, generate_data_diff, handle_data_snapshot, normalize_line_endings,
-        DataCollection, PendingDataSnapshot, SharedDataState,
+        finish_data_collection, finish_remaining_data, generate_data_diff, handle_data_snapshot,
+        normalize_line_endings, DataCollection, PendingDataSnapshot, SharedDataState,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -705,22 +764,59 @@ mod tests {
         let last = finish_data_collection(&shared, &root, Some(("b.ts".into(), json!(2))), false)
             .unwrap()
             .expect("the last file finishes the snapshot");
-        assert_eq!(last.entries.len(), 2);
+        assert_eq!(
+            last.entries,
+            vec![
+                ("a.ts".to_string(), json!(1)),
+                ("b.ts".to_string(), json!(2))
+            ]
+        );
     }
 
     #[test]
     fn a_file_that_stops_early_still_counts_towards_its_case() {
         let root = PathBuf::from("/tmp/fixture/data.json");
         let shared = Arc::new(Mutex::new(HashMap::new()));
-        let stopped = DataCollection::start(shared.clone(), root.clone(), 2).unwrap();
+        // The runner runs a case's files one after another.
+        drop(DataCollection::start(shared.clone(), root.clone(), 2).unwrap());
         let finished = DataCollection::start(shared.clone(), root.clone(), 2).unwrap();
-        drop(stopped);
         let snapshot = finished
             .finish(Some(("a.ts".into(), json!(1))), false)
             .unwrap();
         // The case is done, and its data is not checked.
         assert!(snapshot.is_none());
         assert!(shared.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_case_whose_last_file_never_ran_is_checked_after_the_run() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("data.json");
+        let shared = Arc::new(Mutex::new(HashMap::new()));
+        // Two files; the second was deleted by the first, so it never runs.
+        DataCollection::start(shared.clone(), path.clone(), 2)
+            .unwrap()
+            .finish(Some(("a.ts".into(), json!({ "from": "a" }))), false)
+            .unwrap();
+        assert!(!path.exists());
+
+        let failures = finish_remaining_data(&shared, false).unwrap();
+        assert!(failures.is_empty(), "{failures:?}");
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            written,
+            json!([{ "file": "a.ts", "data": { "from": "a" } }])
+        );
+
+        // A different snapshot is reported.
+        DataCollection::start(shared.clone(), path.clone(), 2)
+            .unwrap()
+            .finish(Some(("a.ts".into(), json!({ "from": "b" }))), false)
+            .unwrap();
+        let failures = finish_remaining_data(&shared, false).unwrap();
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].1.contains("Data mismatch"), "{failures:?}");
     }
 
     #[test]
