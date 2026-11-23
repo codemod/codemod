@@ -141,10 +141,11 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     if task.canceled() {
         return Err("canceled".to_string());
     }
+    // A reducer that failed fails the step before anything is written; the
+    // files left when it stopped are not failures of their own.
+    let reduced = reduced.transpose()?;
     task.log_failures(&failures);
     every_file_failed(&failures, total)?;
-    // A reducer that failed fails the step before anything is written.
-    let reduced = reduced.transpose()?;
     planned.extend(changes::plan(task, &other_changes)?);
     let changes = changes::commit(task, &planned, run.dry_run)?;
     let failed = failures.len();
