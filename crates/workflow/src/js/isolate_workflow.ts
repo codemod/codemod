@@ -16,6 +16,7 @@ export const step = bodyOnly("step");
 export const sleep = bodyOnly("sleep");
 export const waitForEvent = bodyOnly("waitForEvent");
 export const forEachFile = bodyOnly("forEachFile");
+export const selectFiles = bodyOnly("selectFiles");
 export const shell = bodyOnly("shell");
 export const astGrep = bodyOnly("astGrep");
 export const shard = bodyOnly("shard");

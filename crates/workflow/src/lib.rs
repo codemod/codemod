@@ -29,6 +29,7 @@ mod imported;
 pub mod interaction;
 mod js;
 mod run;
+mod select;
 mod tasks;
 
 pub use build::{

@@ -219,6 +219,15 @@ pub(crate) fn analyze<'a>(
             _ => {}
         }
     }
+    // `selectFiles(...).filter(cb).map(cb)`: each callback, as forEachFile's.
+    let select = crate::select::select_symbols(program);
+    let calls = crate::select::selection_calls(semantic, &select)
+        .map_err(|(at, message)| analyzer.error(at, message))?;
+    for call in calls {
+        if let Some(argument) = call.argument().and_then(Argument::as_expression) {
+            analyzer.callback(argument, None, Role::ForEachFile)?;
+        }
+    }
     analyzer.check_other_uses()?;
     Ok(analyzer.found)
 }

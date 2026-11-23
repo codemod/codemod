@@ -78,6 +78,9 @@
   const format = (value: unknown) => {
     if (typeof value === "string") return value;
     if (value instanceof Error) return value.stack || `${value.name}: ${value.message}`;
+    // Values that say how they print (a FileSelection: not a list of files).
+    const inspect = (value as Record<symbol, unknown> | null)?.[Symbol.for("nodejs.util.inspect.custom")];
+    if (typeof inspect === "function") return String(inspect.call(value));
     try {
       return JSON.stringify(value) ?? String(value);
     } catch {

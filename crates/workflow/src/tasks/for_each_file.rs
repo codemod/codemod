@@ -82,6 +82,24 @@ struct Request {
     selector: Selector,
     callback: String,
     captures: Value,
+    /// `selectFiles(...).filter(cb)` predicates, in order: a file goes on
+    /// only when each returns a truthy value.
+    #[serde(default)]
+    filters: Vec<FilterStage>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct FilterStage {
+    callback: String,
+    #[serde(default)]
+    captures: Value,
+}
+
+/// A filter's module, ready to load in a worker.
+struct FilterModule<'a> {
+    name: String,
+    module: &'a str,
+    captures: String,
 }
 
 pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome, String> {
@@ -93,6 +111,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         task,
         &request.callback,
         &request.captures,
+        &request.filters,
         &selector,
         &files,
     )?;
@@ -174,6 +193,7 @@ fn run_callback(
     task: &TaskContext<'_>,
     callback: &str,
     captures: &Value,
+    filters: &[FilterStage],
     selector: &Selector,
     files: &[Selected],
 ) -> Result<CallbackOutcomes, String> {
@@ -183,6 +203,19 @@ fn run_callback(
         .get(callback)
         .ok_or_else(|| format!("unknown callback '{callback}'"))?;
     let captures = serde_json::to_string(captures).map_err(|e| e.to_string())?;
+    let filters: Vec<FilterModule> = filters
+        .iter()
+        .map(|filter| {
+            Ok(FilterModule {
+                name: module_name(task, &filter.callback),
+                module: run
+                    .callbacks
+                    .get(&filter.callback)
+                    .ok_or_else(|| format!("unknown callback '{}'", filter.callback))?,
+                captures: serde_json::to_string(&filter.captures).map_err(|e| e.to_string())?,
+            })
+        })
+        .collect::<Result<_, String>>()?;
     let total = files.len();
     let processed = AtomicUsize::new(0);
     let report_every = (total / 100).max(1);
@@ -241,6 +274,7 @@ fn run_callback(
                         name: &name,
                         module,
                         captures: &captures,
+                        filters: &filters,
                         language: selector.language.as_deref(),
                         files,
                         containing: selector.containing.as_deref(),
@@ -287,7 +321,7 @@ pub(crate) fn callback_outputs(
     files: &[Selected],
 ) -> Result<Vec<FileOutput>, String> {
     // A filter changes nothing: what transforms changed is dropped.
-    let (outcomes, _) = run_callback(task, callback, captures, selector, files)?;
+    let (outcomes, _) = run_callback(task, callback, captures, &[], selector, files)?;
     Ok(files
         .iter()
         .zip(outcomes)
@@ -483,6 +517,7 @@ struct Job<'a> {
     name: &'a str,
     module: &'a str,
     captures: &'a str,
+    filters: &'a [FilterModule<'a>],
     language: Option<&'a str>,
     files: &'a [Selected],
     containing: Option<&'a str>,
@@ -501,6 +536,7 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         name,
         module,
         captures,
+        filters,
         language,
         files,
         containing,
@@ -528,6 +564,28 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                 .await
                 .catch(&ctx)
                 .map_err(|e| format!("could not load the callback: {e}"))?;
+            // Each filter's module, loaded the same way (one already loaded
+            // under the same name, the same function, is reused).
+            let mut filter_batches: Vec<Function> = Vec::with_capacity(filters.len());
+            for filter in filters {
+                let load = async {
+                    if filter.name == name {
+                        return Ok(run_batch.clone());
+                    }
+                    let declared = Module::declare(ctx.clone(), filter.name.as_str(), filter.module)?;
+                    crate::run::set_import_meta(&declared, workflow_path)?;
+                    let (evaluated, promise) = declared.eval()?;
+                    promise.into_future::<()>().await?;
+                    let init: Function = evaluated.get("__init")?;
+                    init.call::<_, ()>((filter.captures.as_str(), language))?;
+                    evaluated.get::<_, Function>("__runBatch")
+                };
+                filter_batches.push(
+                    load.await
+                        .catch(&ctx)
+                        .map_err(|e| format!("could not load the filter: {e}"))?,
+                );
+            }
 
             // One file at a time per worker: a jssg transform the YAML
             // translation runs may change other files with `jssgTransform`.
@@ -562,6 +620,59 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                             progress();
                         }
                     }
+                }
+                // `selectFiles(...).filter(cb)`: files a filter turns down are
+                // not the step's, as with `containing`.
+                for filter in &filter_batches {
+                    if indices.is_empty() {
+                        break;
+                    }
+                    let ran = async {
+                        let paths: Vec<&str> = indices.iter().map(|&index| files[index].path.as_str()).collect();
+                        let batch: Vec<&str> = texts.iter().map(String::as_str).collect();
+                        let promise: Promise = filter.call((paths, batch))?;
+                        promise.into_future::<String>().await
+                    };
+                    let outcomes: Result<Vec<FileOutcome>, String> = ran
+                        .await
+                        .catch(&ctx)
+                        .map_err(|e| e.to_string())
+                        .and_then(|json| serde_json::from_str(&json).map_err(|e| e.to_string()));
+                    drop(sandbox.take_side_effects());
+                    let outcomes: Vec<Result<FileOutcome, String>> = match outcomes {
+                        Ok(outcomes) => outcomes.into_iter().map(Ok).collect(),
+                        Err(error) => indices.iter().map(|_| Err(error.clone())).collect(),
+                    };
+                    let (mut kept_indices, mut kept_texts) = (Vec::new(), Vec::new());
+                    for ((index, text), outcome) in indices.drain(..).zip(texts.drain(..)).zip(outcomes) {
+                        let verdict = match outcome {
+                            Err(error) => Err(format!("filter: {error}")),
+                            Ok(outcome) if !outcome.ok => Err(format!(
+                                "filter: {}",
+                                outcome.error.unwrap_or_else(|| "the filter failed".into())
+                            )),
+                            Ok(outcome) if !outcome.effects.is_empty() => Err(
+                                "a selectFiles(...).filter callback cannot change files: do that in .map(...)".to_string(),
+                            ),
+                            Ok(outcome) => Ok(truthy(&outcome.output)),
+                        };
+                        match verdict {
+                            Ok(true) => {
+                                kept_indices.push(index);
+                                kept_texts.push(text);
+                            }
+                            Ok(false) => {
+                                results.push((index, Ok(Ran::Skipped)));
+                                progress();
+                            }
+                            Err(error) => {
+                                results.push((index, Err(error)));
+                                progress();
+                            }
+                        }
+                    }
+                    indices = kept_indices;
+                    texts = kept_texts;
                 }
                 if indices.is_empty() {
                     continue;
@@ -681,6 +792,17 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
         worker.shutdown(SHUTDOWN_GRACE).await;
         results
     })
+}
+
+/// Truthiness as JavaScript's `Array#filter` sees a JSON value.
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|n| n != 0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(_) | Value::Object(_) => true,
+    }
 }
 
 /// How long a worker waits, once its files are done, for work its callbacks

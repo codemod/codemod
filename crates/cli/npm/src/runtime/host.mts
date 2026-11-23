@@ -526,6 +526,12 @@ async function forEachFile(
     const { file, effects: done, close } = fileHandle(path, text, step.language);
     try {
       step.failure = undefined;
+      // `selectFiles(...).filter(cb)`: a file a filter turns down is not the step's.
+      for (const filter of task.filterFns ?? []) {
+        const keep = await context.run({ ...outer, step }, () => filter(file));
+        if (done.length) throw new Error("a selectFiles(...).filter callback cannot change files: do that in .map(...)");
+        if (!keep) return;
+      }
       const output = await context.run({ ...outer, step }, () => fn(file));
       // A failure reported with failFile() stands even if the callback
       // caught it. With files in flight together it cannot be told whose it

@@ -21,6 +21,7 @@ export const {
   __callback,
   __importedCallback,
   forEachFile,
+  selectFiles,
   shell,
   astGrep,
   shard,

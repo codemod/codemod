@@ -162,6 +162,14 @@ declare module "codemod:workflow" {
      * dropped.
      */
     timeout?: Duration;
+    /**
+     * What a resumed run does with this step when it finished before:
+     * `"replay"` (the default) gives the recorded result; `"rerun"` runs it
+     * again, so a file step lists and visits the files as they are now (its
+     * callback must then be safe to run twice). Steps after it see the new
+     * result, and run again when it differs.
+     */
+    onResume?: "replay" | "rerun";
   }
 
   /**
@@ -455,6 +463,56 @@ declare module "codemod:workflow" {
   export function forEachFile<Returned>(
     callback: (file: WorkflowFile) => Returned & NoInfer<CallbackReturn<Returned>>,
   ): Task<ForEachFileResult<Exclude<Awaited<Returned>, void | undefined>>>;
+
+  const fileSelection: unique symbol;
+
+  /**
+   * Which files a step will visit, made by `selectFiles(selector)`. It is
+   * not a list: it holds no files, and cannot be looped over, spread,
+   * measured or serialized. `.filter` narrows it, `.map` makes the task for
+   * `step()`; the files are listed, read and visited when that step runs.
+   *
+   * Write the chain where the build can see it: on `selectFiles(...)`
+   * itself, or on a `const` bound to it. Callbacks are written inline or
+   * imported from their file, as for `forEachFile`.
+   */
+  export interface FileSelection {
+    readonly [fileSelection]: true;
+    /**
+     * Keep only the files `predicate` returns a truthy value for. It runs in
+     * the step's isolates, before `.map`'s callback, and must not change the
+     * file.
+     */
+    filter(predicate: (file: WorkflowFile) => unknown): FileSelection;
+    /** Applies ast-grep rules to the selected files, in the engine. */
+    map(rules: AstGrepHandler): Task<AstGrepResult>;
+    /**
+     * Runs `callback` once for every selected file, as `forEachFile` does,
+     * and gives the same result: returned values are collected into `outputs`.
+     */
+    map<Returned>(
+      callback: (file: WorkflowFile) => Returned & NoInfer<CallbackReturn<Returned>>,
+    ): Task<ForEachFileResult<Exclude<Awaited<Returned>, void | undefined>>>;
+    /** Throws: a selection is not data. */
+    toJSON(): never;
+  }
+
+  /**
+   * Selects files for a step, without listing them: `.map(callback)` makes
+   * the task. The same selectors as `forEachFile`.
+   *
+   * @example
+   * ```ts
+   * import migrate from "./scripts/migrate.ts";
+   *
+   * const result = await step(
+   *   selectFiles({ language: "typescript" })
+   *     .filter((file) => file.text.includes("moment"))
+   *     .map(migrate),
+   * );
+   * ```
+   */
+  export function selectFiles(selector?: FileSelector): FileSelection;
 
   /**
    * What a `forEachFile` callback may return: JSON or nothing, or a promise

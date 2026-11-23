@@ -63,6 +63,8 @@ export interface StartRequest {
   task: TaskContent;
   /** The step's function, on hosts that run callbacks in place. */
   fn?: Callback;
+  /** `selectFiles(...).filter` predicates, on hosts that run callbacks in place. */
+  filterFns?: Callback[];
   /** How long the task may run, from the step's `timeout`. */
   timeoutMs?: number;
   /** When the step began to wait (`sleep`, `waitForEvent`). */
@@ -193,6 +195,8 @@ export interface ForEachFileTask {
   readonly [TASK]: "forEachFile";
   readonly selector: Selector;
   readonly callback: Extracted;
+  /** `selectFiles(...).filter(cb)` predicates, run in order before `callback`. */
+  readonly filters?: readonly Extracted[];
 }
 
 export interface HostTask {
@@ -238,6 +242,8 @@ export interface StepOptions {
   retries?: number;
   retryDelay?: Duration;
   timeout?: Duration;
+  /** `"rerun"`: a resumed run runs the step again even when it finished. */
+  onResume?: "replay" | "rerun";
 }
 
 /**
@@ -297,6 +303,133 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
       selector: normalizeSelector(selector),
       callback: extracted,
     });
+  }
+
+  /**
+   * `selectFiles(selector)`: an opaque description of which files a step
+   * will visit. It holds no files and is not a list: `.filter(cb)` adds a
+   * predicate, `.map(cb)` (or `.map(astGrep(rules))`) makes the task that
+   * `step()` runs. The files are only listed, read and visited when that
+   * step runs, in workers, exactly as `forEachFile` does.
+   */
+  function selectFiles(selector?: unknown): FileSelection {
+    return new FileSelection(normalizeSelector(selector), [], selector);
+  }
+
+  class FileSelection {
+    readonly #selector: Selector;
+    readonly #filters: readonly Extracted[];
+    /** The selector as written, for `.map(astGrep(...))`, which checks it itself. */
+    readonly #given: unknown;
+
+    constructor(selector: Selector, filters: readonly Extracted[], given: unknown) {
+      this.#selector = selector;
+      this.#filters = filters;
+      this.#given = given;
+      Object.freeze(this);
+    }
+
+    /** Keep only files the predicate returns a truthy value for. */
+    filter(predicate: unknown): FileSelection {
+      const extracted = callbackOf(predicate);
+      if (!extracted) {
+        throw new TypeError(
+          typeof predicate === "function"
+            ? "selectFiles(...).filter: the predicate was not extracted by the build; write it on a chain the build can see, selectFiles(selector).filter((file) => ...), or on a const bound to selectFiles(...)"
+            : "selectFiles(...).filter takes a predicate, written inline as a function or imported from its file",
+        );
+      }
+      return new FileSelection(this.#selector, [...this.#filters, extracted], this.#given);
+    }
+
+    /** The task: run `callback` (or `astGrep(rules)`) on every selected file. */
+    map(callback: unknown): ForEachFileTask | HostTask {
+      if (isHandler(callback)) {
+        if (this.#filters.length) {
+          throw new TypeError(
+            "selectFiles(...).filter(...).map(astGrep(...)) is not supported: astGrep runs in the engine without JavaScript per file; filter with the selector's `containing`, or map with a callback",
+          );
+        }
+        return astGrepFiles(this.#given, callback);
+      }
+      const extracted = callbackOf(callback);
+      if (!extracted) {
+        throw new TypeError(
+          typeof callback === "function"
+            ? "selectFiles(...).map: the callback was not extracted by the build; write it on a chain the build can see, selectFiles(selector).map((file) => ...), or on a const bound to selectFiles(...)"
+            : "selectFiles(...).map takes a callback, written inline as a function or imported from its file, or astGrep(...)",
+        );
+      }
+      return Object.freeze({
+        [TASK]: "forEachFile" as const,
+        selector: this.#selector,
+        callback: extracted,
+        ...(this.#filters.length ? { filters: this.#filters } : {}),
+      });
+    }
+
+    // ---- not a list: everything a list would do says so ----
+
+    toString(): string {
+      return `[FileSelection ${describeSelection(this.#selector, this.#filters.length)}]`;
+    }
+
+    toJSON(): never {
+      throw new TypeError(
+        `${this.toString()} is not data: it selects files when its step runs. Run it with step(selectFiles(...).map(callback)) and use the step's result`,
+      );
+    }
+
+    get length(): never {
+      return notAList("length");
+    }
+
+    get [Symbol.toStringTag](): string {
+      return "FileSelection";
+    }
+
+    [Symbol.iterator](): never {
+      return notAList("iteration (for...of, spread, Array.from)");
+    }
+
+    [Symbol.asyncIterator](): never {
+      return notAList("iteration (for await...of)");
+    }
+
+    /** Node's util.inspect (console.log there). */
+    [Symbol.for("nodejs.util.inspect.custom")](): string {
+      return `${this.toString()} (selects files when its step runs; not a list)`;
+    }
+  }
+
+  // Array methods people reach for: each says what to do instead.
+  for (const name of [
+    "forEach",
+    "reduce",
+    "some",
+    "every",
+    "find",
+    "flatMap",
+    "slice",
+    "at",
+    "includes",
+    "indexOf",
+    "join",
+    "entries",
+    "keys",
+    "values",
+  ]) {
+    Object.defineProperty(FileSelection.prototype, name, {
+      value() {
+        return notAList(`.${name}()`);
+      },
+    });
+  }
+
+  function notAList(what: string): never {
+    throw new TypeError(
+      `selectFiles(...) is not a list of files, so it has no ${what}: it describes the files a step will visit. Use step(selectFiles(selector).map((file) => ...)) and read the step's result`,
+    );
   }
 
   /**
@@ -554,6 +687,7 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
     __callback,
     __importedCallback,
     forEachFile,
+    selectFiles,
     dependencyGraph,
     shell,
     astGrep,
@@ -643,18 +777,23 @@ interface Policy {
   retryDelay: number;
   /** Milliseconds one attempt may take. */
   timeout: number | undefined;
+  /** A resumed run runs the step again even when it finished (a fresh file list). */
+  rerun: boolean;
 }
 
 /** What `step(..., options)` asks for. */
 function policyOf(options: unknown, what: string): Policy {
-  if (options === undefined) return { attempts: 1, retryDelay: 0, timeout: undefined };
+  if (options === undefined) return { attempts: 1, retryDelay: 0, timeout: undefined, rerun: false };
   if (isRecord(options) && "state" in options) {
     throw new TypeError(
       `${what}: steps take no \`state\`: give values to the task itself (a function step's or callback's variables, shell \`env\`) and read what it found from its result`,
     );
   }
-  onlyKeys(options, ["retries", "retryDelay", "timeout"], what);
-  const { retries = 0, retryDelay = "1s", timeout } = options as StepOptions;
+  onlyKeys(options, ["retries", "retryDelay", "timeout", "onResume"], what);
+  const { retries = 0, retryDelay = "1s", timeout, onResume = "replay" } = options as StepOptions;
+  if (onResume !== "replay" && onResume !== "rerun") {
+    throw new TypeError(`${what}: onResume must be "replay" (the default) or "rerun"`);
+  }
   if (!Number.isInteger(retries) || retries < 0) {
     throw new TypeError(`${what}: retries must be a whole number, 0 or more`);
   }
@@ -664,6 +803,7 @@ function policyOf(options: unknown, what: string): Policy {
     attempts: retries + 1,
     retryDelay: milliseconds(retryDelay, `${what}: retryDelay`),
     timeout: limit,
+    rerun: onResume === "rerun",
   };
 }
 
@@ -848,6 +988,7 @@ export function createRuntime(host: Host) {
     // captures are a snapshot taken when the step is called.
     let content: TaskContent;
     let fn: Callback | undefined;
+    let filterFns: Callback[] | undefined;
     const callback = callbackOf(task);
     if (callback) {
       content = { kind: "function", callback: callback.id, captures: capturesOf(callback) };
@@ -863,6 +1004,15 @@ export function createRuntime(host: Host) {
         callback: task.callback.id,
         captures: capturesOf(task.callback),
       };
+      // Only present with filters, so a forEachFile step's key is unchanged.
+      if (task.filters?.length) {
+        content.filters = task.filters.map((filter) => ({
+          callback: filter.id,
+          captures: capturesOf(filter) ?? {},
+        }));
+        const fns = task.filters.map((filter) => filter.fn);
+        if (fns.every((f) => f !== undefined)) filterFns = fns as Callback[];
+      }
       fn = task.callback.fn;
     } else if (isTask(task) && task[TASK] === "dependencyGraph") {
       content = withoutUndefined({
@@ -882,6 +1032,10 @@ export function createRuntime(host: Host) {
     } else if (isHandler(task)) {
       throw new TypeError(
         `${described}: astGrep(...) is not a step on its own; run it on files with step(forEachFile(selector, astGrep(rules)))`,
+      );
+    } else if (isRecord(task) && Object.prototype.toString.call(task) === "[object FileSelection]") {
+      throw new TypeError(
+        `${described}: ${String(task)} is not a task on its own; say what to do with each file: step(selectFiles(selector).map((file) => ...))`,
       );
     } else {
       throw new TypeError(`${described}: expected a task such as forEachFile(...) or a function`);
@@ -904,7 +1058,7 @@ export function createRuntime(host: Host) {
       );
       return JSON.parse(JSON.stringify(result)) as Json;
     }
-    if (prior && finished(prior)) {
+    if (prior && finished(prior) && !policy.rerun) {
       return new Promise<Json>((resolve) => {
         replaying.push({
           // Steps recorded before finishing order was kept replay in the
@@ -956,6 +1110,7 @@ export function createRuntime(host: Host) {
       label: name,
       task: content,
       fn,
+      ...(filterFns && { filterFns }),
       ...(policy.timeout !== undefined && { timeoutMs: policy.timeout }),
       ...(since !== undefined && { since }),
       ...(alongside && { alongside }),
@@ -1170,6 +1325,19 @@ function normalizeSelector(selector: unknown): Selector {
   }
   // Neither include nor language: the package's languages from codemod.yaml.
   return normalized;
+}
+
+/** `src/**\/*.ts, 2 filters`: what a `FileSelection` prints as. */
+function describeSelection(selector: Selector, filters: number): string {
+  const what = selector.include.length
+    ? selector.include.join(", ")
+    : (selector.language ?? "the package's languages");
+  const extra = [
+    selector.exclude.length ? `exclude ${selector.exclude.join(", ")}` : "",
+    selector.containing !== undefined ? `containing ${JSON.stringify(selector.containing)}` : "",
+    filters ? `${filters} filter${filters > 1 ? "s" : ""}` : "",
+  ].filter(Boolean);
+  return extra.length ? `${what} (${extra.join("; ")})` : what;
 }
 
 function globs(value: unknown, field: string, owner = "forEachFile: selector."): string[] {

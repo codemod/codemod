@@ -239,6 +239,8 @@ struct CallbackParts {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Isolated {
     Callback,
+    /// A `selectFiles(...).filter` or `.map` callback.
+    Selection,
     GraphCallback,
     FunctionStep,
     ShardFunction,
@@ -249,6 +251,7 @@ impl Isolated {
     fn noun(self) -> &'static str {
         match self {
             Isolated::Callback => "forEachFile callback",
+            Isolated::Selection => "selectFiles callback",
             Isolated::GraphCallback => "dependencyGraph callback",
             Isolated::FunctionStep => "function step",
             Isolated::ShardFunction => "shard function",
@@ -526,6 +529,43 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                 }
             }
             _ => {}
+        }
+    }
+
+    // `selectFiles(...).filter(cb).map(cb)`: the selection's callbacks.
+    // `imported::analyze` checked the shapes and took the imported ones.
+    let select = crate::select::select_symbols(&program);
+    let selection_calls = crate::select::selection_calls(&semantic, &select)
+        .map_err(|(at, message)| analysis.error(at, message))?;
+    for call in &selection_calls {
+        let method = call.method;
+        match call.argument() {
+            Some(Argument::ArrowFunctionExpression(f)) => sites.push((f.span, Isolated::Selection)),
+            Some(Argument::FunctionExpression(f)) => sites.push((f.span, Isolated::Selection)),
+            // `astGrep(...)` (map only; checked when it runs), or an imported callback.
+            Some(Argument::CallExpression(_)) if method == "map" => {}
+            Some(Argument::Identifier(id))
+                if !scoping
+                    .get_reference(id.reference_id())
+                    .symbol_id()
+                    .is_some_and(|symbol| {
+                        scoping
+                            .symbol_flags(symbol)
+                            .intersects(SymbolFlags::Function | SymbolFlags::Class)
+                            || analysis.function_valued.contains(&symbol)
+                    }) => {}
+            Some(other) => {
+                return Err(analysis.error(
+                    other.span().start,
+                    format!("selectFiles(...).{method}'s callback must be written inline as a function, or imported from its file, so the build can extract it"),
+                ));
+            }
+            None => {
+                return Err(analysis.error(
+                    call.call.span.start,
+                    format!("selectFiles(...).{method} takes a callback"),
+                ));
+            }
         }
     }
 
@@ -1136,6 +1176,7 @@ fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
     let parsed = Parser::new(&allocator, text, source_type).parse();
     // Local names of `step` and `forEachFile`, and of the module as a whole.
     let (mut steps, mut for_each, mut namespaces) = (Vec::new(), Vec::new(), Vec::new());
+    let mut selects: Vec<String> = Vec::new();
     for statement in &parsed.program.body {
         let Some(ModuleDeclaration::ImportDeclaration(import)) = statement.as_module_declaration()
         else {
@@ -1150,6 +1191,7 @@ fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
                     match s.imported.name().as_str() {
                         "step" => steps.push(s.local.name.to_string()),
                         "forEachFile" => for_each.push(s.local.name.to_string()),
+                        "selectFiles" => selects.push(s.local.name.to_string()),
                         _ => {}
                     }
                 }
@@ -1160,7 +1202,7 @@ fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
             }
         }
     }
-    if steps.is_empty() && for_each.is_empty() && namespaces.is_empty() {
+    if steps.is_empty() && for_each.is_empty() && namespaces.is_empty() && selects.is_empty() {
         return None;
     }
     let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
@@ -1169,6 +1211,10 @@ fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
             continue;
         };
         let called = match &call.callee {
+            // Its .map and .filter take callbacks.
+            Expression::Identifier(id) if selects.iter().any(|name| name == id.name.as_str()) => {
+                return Some("selectFiles()");
+            }
             Expression::Identifier(id) if for_each.iter().any(|name| name == id.name.as_str()) => {
                 "forEachFile"
             }
@@ -1183,6 +1229,7 @@ fn callback_call(path: &Path, text: &str) -> Option<&'static str> {
                 match (on_namespace, member.property.name.as_str()) {
                     (true, "forEachFile") => "forEachFile",
                     (true, "step") => "step",
+                    (true, "selectFiles") => return Some("selectFiles()"),
                     _ => continue,
                 }
             }

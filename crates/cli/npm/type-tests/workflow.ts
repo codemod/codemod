@@ -14,6 +14,7 @@ import {
   forEachFile,
   installSkill,
   pullRequest,
+  selectFiles,
   shard,
   shell,
   sleep,
@@ -289,6 +290,34 @@ export default async function main({
   );
   // @ts-expect-error steps take no state
   void step(shell("true"), { state: { target: "react-19" } });
+
+  // ── selectFiles ──────────────────────────────────────────────────────
+
+  // Same result as forEachFile, with filters before the callback.
+  const selected = await step(
+    selectFiles({ language: "typescript" })
+      .filter((file) => file.text.includes("moment"))
+      .map(migrate),
+  );
+  expectType<Equal<typeof selected, typeof migrated>>(true);
+  const paths = await step(selectFiles("src/**").map((file) => file.path));
+  expectType<Equal<typeof paths.outputs, readonly string[]>>(true);
+  const viaRules = await step(selectFiles(["src/**/*.ts"]).map(astGrep(rules)));
+  expectType<Equal<typeof viaRules.matches, number>>(true);
+  await step(selectFiles("src/**").map((file) => file.path), { onResume: "rerun" });
+  // @ts-expect-error onResume is "replay" or "rerun"
+  void step(selectFiles("src/**").map((file) => file.path), { onResume: "fresh" });
+  const selection = selectFiles("src/**");
+  // @ts-expect-error a selection is not a step on its own
+  void step(selection);
+  // @ts-expect-error not a list: no length
+  void selection.length;
+  // @ts-expect-error not a list: not iterable
+  void [...selection];
+  // @ts-expect-error not a list: no forEach
+  selection.forEach(() => {});
+  // @ts-expect-error the callback returns JSON
+  selectFiles("src/**").map((file) => new Map([[file.path, 1]]));
 
   return { files: found.outputs.length };
 }

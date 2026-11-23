@@ -60,6 +60,7 @@ export const {
   // `codemod/deps` exports it as `dependencyGraph`.
   dependencyGraph: __dependencyGraph,
   forEachFile,
+  selectFiles,
   shell,
   astGrep,
   shard,
