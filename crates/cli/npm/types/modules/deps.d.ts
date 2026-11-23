@@ -13,15 +13,14 @@ declare module "codemod:deps" {
     readonly ecosystem: Ecosystem;
     readonly name: string;
     readonly version: string;
-    /** Directory of one of the repository's own packages; null for third-party packages. */
-    readonly workspace: string | null;
-    readonly isWorkspace: boolean;
+    /** Directory of one of the repository's own packages, relative to the target; null for installed packages. */
+    readonly dir: string | null;
+    /** Whether this is one of the repository's own packages (`dir` is set). */
+    readonly local: boolean;
     /** Edges this node declares. */
     dependencies(options?: KindsOption): DependencyEdge[];
-    /** Edges installed onto this exact node. */
-    dependents(options?: KindsOption): DependencyEdge[];
-    /** Each workspace that reaches this node, with its shortest chain (workspace first, this node last). */
-    workspacesReaching(options?: KindsOption): { workspace: PackageNode; chain: PackageNode[] }[];
+    /** Edges installed onto this exact node. `g.dependents(name)` also has declarations the lockfile does not resolve. */
+    installedBy(options?: KindsOption): DependencyEdge[];
     /**
      * This package's releases from the registry, oldest first, each with
      * `breaking` relative to this node's version. Yanked releases are dropped.
@@ -88,16 +87,24 @@ declare module "codemod:deps" {
     workspaces(): PackageNode[];
     /** Every node, or every installed version of `name`. */
     nodes(name?: string): PackageNode[];
-    /** One node by name, and by version when several are installed. */
+    /**
+     * One node by name, or by name and version. Throws when several versions
+     * are installed and no version is given: use `nodes(name)` then.
+     */
     node(name: string, version?: string): PackageNode | undefined;
     /** Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the installed peer). */
     dependents(name: string, options?: KindsOption): DependencyEdge[];
-    /** Shortest chains from each `from` node (default: every workspace) to any `to` node. */
+    /**
+     * The shortest chain from each `from` node (default: every workspace) to
+     * any `to` node, `from` first and the reached node last. Chains pass
+     * through the repository's own packages, so web reaches moment through
+     * `web > @demo/shared > moment`. A `from` that reaches none has no chain.
+     */
     chains(options: {
       from?: PackageNode | readonly PackageNode[];
       to: PackageNode | readonly PackageNode[];
       kinds?: DependencyKind | readonly DependencyKind[];
-    }): PackageNode[][];
+    }): [from: PackageNode, ...rest: PackageNode[]][];
   }
 
   /**
@@ -109,13 +116,16 @@ declare module "codemod:deps" {
    *
    * @example
    * ```ts
-   * const muiUsers = await step(dependencyGraph({ lockfiles: "yarn.lock" }, (g) =>
+   * const muiUsers = await step(dependencyGraph((g) =>
    *   g.dependents("@material-ui/core", { kinds: "prod" })
-   *     .filter((edge) => edge.from.isWorkspace)
-   *     .map((edge) => edge.from.workspace),
+   *     .filter((edge) => edge.from.local)
+   *     .map((edge) => edge.from.dir),
    * ));
    * ```
    */
+  export function dependencyGraph<Output>(
+    callback: (graph: DependencyGraph) => Output | PromiseLike<Output>,
+  ): Task<Recorded<Awaited<Output>>>;
   export function dependencyGraph<Output>(
     options: { lockfiles?: Globs },
     callback: (graph: DependencyGraph) => Output | PromiseLike<Output>,

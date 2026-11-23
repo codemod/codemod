@@ -89,9 +89,9 @@ __metadata:
         "packages/shared/package.json" => {
             Some(r#"{ "name": "@demo/shared", "dependencies": { "moment": "^2.29.4" } }"#.into())
         }
-        "packages/web/package.json" => {
-            Some(r#"{ "name": "@demo/web", "dependencies": { "@demo/shared": "workspace:*" } }"#.into())
-        }
+        "packages/web/package.json" => Some(
+            r#"{ "name": "@demo/web", "dependencies": { "@demo/shared": "workspace:*" } }"#.into(),
+        ),
         _ => None,
     })
     .unwrap();
@@ -109,7 +109,9 @@ fn a_cargo_chain_crosses_a_path_dependency_on_another_member() {
     let lock = "version = 4\n[[package]]\nname = \"web\"\nversion = \"0.1.0\"\ndependencies = [\"shared\"]\n[[package]]\nname = \"shared\"\nversion = \"0.1.0\"\ndependencies = [\"chrono\"]\n[[package]]\nname = \"chrono\"\nversion = \"0.4.38\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
     let mut manifests = CargoManifests::default();
     manifests.add("web", &|_| {
-        Some("[package]\nname = \"web\"\n[dependencies]\nshared = { path = \"../shared\" }\n".into())
+        Some(
+            "[package]\nname = \"web\"\n[dependencies]\nshared = { path = \"../shared\" }\n".into(),
+        )
     });
     manifests.add("shared", &|_| {
         Some("[package]\nname = \"shared\"\n[dependencies]\nchrono = \"0.4\"\n".into())
@@ -154,6 +156,9 @@ source = { registry = "https://pypi.org/simple" }
 "#;
     assert_eq!(
         chains_to(lockfiles::uv(lock).unwrap(), "six", &[]),
-        ["app@0.1.0 > lib@0.2.0 > six@1.16.0", "lib@0.2.0 > six@1.16.0"]
+        [
+            "app@0.1.0 > lib@0.2.0 > six@1.16.0",
+            "lib@0.2.0 > six@1.16.0"
+        ]
     );
 }

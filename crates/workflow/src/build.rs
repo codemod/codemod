@@ -501,7 +501,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                     if task == "forEachFile" {
                                         "forEachFile takes a callback, written inline or imported from its file, or astGrep(...), optionally after a selector"
                                     } else {
-                                        "dependencyGraph takes options and a callback"
+                                        "dependencyGraph takes a callback, optionally after options"
                                     }
                                     .to_string(),
                                 ));
