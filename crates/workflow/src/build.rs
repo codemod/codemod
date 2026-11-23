@@ -384,14 +384,6 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                     ),
                                 ));
                             }
-                            if is_deps_module(&module) {
-                                return Err(analysis.error(
-                                    s.span.start,
-                                    format!(
-                                        "import what you use from \"{module}\" by name (import {{ dependencyGraph }} from \"{module}\"): the build finds dependencyGraph callbacks by that name"
-                                    ),
-                                ));
-                            }
                             let line = format!("import * as {} from {:?};", s.local.name, module);
                             (&s.local, None, line)
                         }
@@ -507,6 +499,31 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                     for binding in declarator.id.get_binding_identifiers() {
                         analysis.function_valued.insert(binding.symbol_id());
                     }
+                }
+            }
+            // `deps.dependencyGraph` through a namespace import: the build
+            // finds graph callbacks by the imported name only.
+            AstKind::StaticMemberExpression(member)
+                if member.property.name == "dependencyGraph" =>
+            {
+                let Expression::Identifier(object) = &member.object else {
+                    continue;
+                };
+                let namespace = scoping
+                    .get_reference(object.reference_id())
+                    .symbol_id()
+                    .and_then(|symbol| analysis.imports.get(&symbol))
+                    .filter(|import| {
+                        is_deps_module(&import.source) && import.line.starts_with("import * as ")
+                    });
+                if let Some(import) = namespace {
+                    return Err(analysis.error(
+                        member.span.start,
+                        format!(
+                            "import dependencyGraph by name (import {{ dependencyGraph }} from \"{}\"): the build finds its callbacks by that name",
+                            import.source
+                        ),
+                    ));
                 }
             }
             AstKind::CallExpression(call) => {
