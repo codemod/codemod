@@ -35,8 +35,8 @@ type DataEntries = Vec<(String, serde_json::Value)>;
 #[derive(Clone)]
 struct PendingDataSnapshot {
     entries: DataEntries,
-    output_path: PathBuf,
-    snapshot_path: Option<PathBuf>,
+    /// The case's `data.json`.
+    path: PathBuf,
 }
 
 /// The `data` of a test case's files, written to `data.json` once its last
@@ -268,6 +268,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
             let input_path = request.input_path;
             let logical_input_path = request.logical_input_path;
             let workspace_root = request.workspace_root;
+            let test_case_root = request.test_case_root;
             let base_config = base_config_clone.clone();
             let args = args_clone.clone();
             let current_dir = current_dir_clone.clone();
@@ -283,10 +284,14 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 let target_directory = workspace_root
                     .clone()
                     .unwrap_or_else(|| test_case_dir.to_path_buf());
-                let data_output_path = input_path
-                    .parent()
-                    .unwrap_or(input_path.as_path())
-                    .join("data.json");
+                // One data.json per case: a directory case's at its root, next to
+                // input/ and expected/, so it is never among the transform's output
+                // files; a single-file case's next to its input file.
+                let data_path = if workspace_root.is_some() {
+                    test_case_root.join("data.json")
+                } else {
+                    test_case_dir.join("data.json")
+                };
                 let per_test_config =
                     match TestConfig::load_hierarchical(test_case_dir, Some(current_dir.as_path()))
                     {
@@ -314,7 +319,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 shared_data
                     .lock()
                     .map_err(|_| anyhow::anyhow!("shared data lock poisoned"))?
-                    .entry(data_output_path.clone())
+                    .entry(data_path.clone())
                     .or_insert_with(|| SharedDataState::new(request.entrypoint_count));
 
                 // For directory snapshot tests with --semantic-workspace,
@@ -376,8 +381,7 @@ async fn handler_impl(args: &Command) -> Result<()> {
 
                 let pending_snapshot = finish_data_collection(
                     shared_data.as_ref(),
-                    &data_output_path,
-                    Some(test_case_dir.join("data.json")),
+                    &data_path,
                     data.map(|data| (file_name, data)),
                     execution_result.is_err(),
                 );
@@ -385,9 +389,6 @@ async fn handler_impl(args: &Command) -> Result<()> {
                 runtime_event_output.flush(&runtime_event_buffer);
 
                 if let Some(snapshot) = pending_snapshot? {
-                    if workspace_root.is_some() {
-                        write_data_output(&snapshot)?;
-                    }
                     handle_data_snapshot(&snapshot, update_snapshots)?;
                 }
 
@@ -431,8 +432,7 @@ fn data_file_name(input_path: &Path, target_directory: &Path) -> String {
 
 fn finish_data_collection(
     shared_data: &Mutex<HashMap<PathBuf, SharedDataState>>,
-    data_output_path: &Path,
-    snapshot_path: Option<PathBuf>,
+    data_path: &Path,
     entry: Option<(String, serde_json::Value)>,
     should_skip_snapshot: bool,
 ) -> Result<Option<PendingDataSnapshot>> {
@@ -440,7 +440,7 @@ fn finish_data_collection(
         .lock()
         .map_err(|_| anyhow::anyhow!("shared data lock poisoned"))?;
 
-    let Some(state) = shared_data.get_mut(data_output_path) else {
+    let Some(state) = shared_data.get_mut(data_path) else {
         return Ok(None);
     };
 
@@ -453,7 +453,7 @@ fn finish_data_collection(
     }
 
     let state = shared_data
-        .remove(data_output_path)
+        .remove(data_path)
         .expect("data state should exist when finalizing");
 
     if state.skip_snapshot {
@@ -462,16 +462,12 @@ fn finish_data_collection(
 
     Ok(Some(PendingDataSnapshot {
         entries: state.entries,
-        output_path: data_output_path.to_path_buf(),
-        snapshot_path,
+        path: data_path.to_path_buf(),
     }))
 }
 
 fn handle_data_snapshot(snapshot: &PendingDataSnapshot, update_snapshots: bool) -> Result<()> {
-    let data_path = snapshot
-        .snapshot_path
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("snapshot path missing for single-file data"))?;
+    let data_path = &snapshot.path;
 
     if !snapshot.entries.is_empty() {
         let actual_json = data_to_canonical_json(&snapshot.entries)?;
@@ -504,19 +500,6 @@ fn handle_data_snapshot(snapshot: &PendingDataSnapshot, update_snapshots: bool) 
                 data_path.display()
             );
         }
-    }
-
-    Ok(())
-}
-
-fn write_data_output(snapshot: &PendingDataSnapshot) -> Result<()> {
-    if !snapshot.entries.is_empty() {
-        std::fs::write(
-            &snapshot.output_path,
-            data_to_canonical_json(&snapshot.entries)?,
-        )?;
-    } else if snapshot.output_path.exists() {
-        std::fs::remove_file(&snapshot.output_path)?;
     }
 
     Ok(())
@@ -672,13 +655,11 @@ mod tests {
         let root = PathBuf::from("/tmp/fixture");
         let shared = Mutex::new(HashMap::from([(root.clone(), SharedDataState::new(2))]));
 
-        let first =
-            finish_data_collection(&shared, &root, None, Some(("a.ts".into(), json!(1))), false);
+        let first = finish_data_collection(&shared, &root, Some(("a.ts".into(), json!(1))), false);
         assert!(first.unwrap().is_none());
-        let last =
-            finish_data_collection(&shared, &root, None, Some(("b.ts".into(), json!(2))), false)
-                .unwrap()
-                .expect("the last file finishes the snapshot");
+        let last = finish_data_collection(&shared, &root, Some(("b.ts".into(), json!(2))), false)
+            .unwrap()
+            .expect("the last file finishes the snapshot");
         assert_eq!(last.entries.len(), 2);
     }
 
@@ -689,8 +670,7 @@ mod tests {
         handle_data_snapshot(
             &PendingDataSnapshot {
                 entries: vec![("input.ts".into(), json!({ "calls": 2 }))],
-                output_path: path.clone(),
-                snapshot_path: Some(path.clone()),
+                path: path.clone(),
             },
             false,
         )
