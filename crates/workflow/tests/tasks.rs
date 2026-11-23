@@ -1089,6 +1089,8 @@ export default async function main() {
     installedByAll: g.node("undici-types").installedBy({ includeThirdParty: true, kinds: "prod" }).map((e) => e.from),
     // The root package dev-depends on @types/node; codemod optionally depends on its binaries.
     typesNode: g.node("@types/node").installedBy().map((e) => e.kind),
+    declaresTypesNode: g.dependents("@types/node").map((e) => [e.from.dir, e.kind]),
+    declaresTypesNodeProd: g.dependents("@types/node", { kinds: "prod" }).map((e) => e.from.dir),
     typesNodeProd: g.node("@types/node").installedBy({ kinds: "prod" }).map((e) => e.from),
     binary: g.node("@codemod.com/cli-linux-x64-gnu").installedBy({ includeThirdParty: true }).map((e) => e.kind),
     binaryProd: g.node("@codemod.com/cli-linux-x64-gnu").installedBy({ includeThirdParty: true, kinds: "prod" }).map((e) => e.from),
@@ -1106,6 +1108,8 @@ export default async function main() {
             "installedBy": [],
             "installedByAll": ["@types/node@22.20.5"],
             "typesNode": ["dev"],
+            "declaresTypesNode": [[".", "dev"]],
+            "declaresTypesNodeProd": [],
             "typesNodeProd": [],
             "binary": ["optional"],
             "binaryProd": [],
@@ -1367,6 +1371,32 @@ export default async function main() {
     assert_eq!(
         output(&report).unwrap(),
         json!({ "read": ["yarn.lock"], "skipped": [["pnpm-lock.yaml", true]] })
+    );
+}
+
+#[test]
+fn a_dependency_graph_reads_the_lockfiles_its_options_select() {
+    let h = Harness::new();
+    // The root lockfile has moment; the selected nested one has table instead.
+    npm_workspaces_target(&h);
+    h.write("examples/app/yarn.lock", YARN_LOCK);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph({ lockfiles: "examples/app/yarn.lock" }, (g) => ({
+    read: g.lockfiles,
+    table: g.nodes("table").length > 0,
+    moment: g.nodes("moment").length,
+  })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "read": ["examples/app/yarn.lock"], "table": true, "moment": 0 })
     );
 }
 

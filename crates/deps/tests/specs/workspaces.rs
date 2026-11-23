@@ -22,6 +22,64 @@ fn a_package_lock_chain_crosses_a_workspace_the_start_depends_on() {
 }
 
 #[test]
+fn a_chain_through_a_workspace_keeps_to_the_kinds_asked_for() {
+    // web -> shared is prod, shared -> moment is dev, api -> moment is prod.
+    let lock = r#"
+lockfileVersion: '9.0'
+importers:
+  .: {}
+  packages/api:
+    dependencies:
+      moment:
+        specifier: ^2.29.4
+        version: 2.29.4
+  packages/shared:
+    devDependencies:
+      moment:
+        specifier: ^2.29.4
+        version: 2.29.4
+  packages/web:
+    dependencies:
+      '@demo/shared':
+        specifier: workspace:*
+        version: link:../shared
+packages:
+  moment@2.29.4: {}
+snapshots:
+  moment@2.29.4: {}
+"#;
+    let graph = || {
+        lockfiles::pnpm(lock, &|path| match path {
+            "packages/api/package.json" => Some(r#"{ "name": "@demo/api" }"#.into()),
+            "packages/shared/package.json" => Some(r#"{ "name": "@demo/shared" }"#.into()),
+            "packages/web/package.json" => Some(r#"{ "name": "@demo/web" }"#.into()),
+            _ => None,
+        })
+        .unwrap()
+    };
+    assert_eq!(
+        chains_to(graph(), "moment", &[Kind::Prod]),
+        ["@demo/api@0.0.0-use.local > moment@2.29.4"]
+    );
+    assert_eq!(
+        chains_to(graph(), "moment", &[]),
+        [
+            "@demo/api@0.0.0-use.local > moment@2.29.4",
+            "@demo/shared@0.0.0-use.local > moment@2.29.4",
+            "@demo/web@0.0.0-use.local > @demo/shared@0.0.0-use.local > moment@2.29.4",
+        ]
+    );
+}
+
+#[test]
+fn chains_to_nothing_are_empty() {
+    let walk = Walk::new(demo());
+    assert!(walk
+        .chains(&walk.workspaces(), &HashSet::new(), &[])
+        .is_empty());
+}
+
+#[test]
 fn a_pnpm_chain_crosses_a_linked_workspace() {
     let lock = r#"
 lockfileVersion: '9.0'

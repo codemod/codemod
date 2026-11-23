@@ -72,6 +72,9 @@ impl Walk {
     /// packages too, so `web -> shared -> moment` reaches moment from web.
     pub fn chains(&self, from: &[usize], to: &HashSet<usize>, kinds: &[Kind]) -> Vec<Vec<usize>> {
         let mut found = Vec::new();
+        if to.is_empty() {
+            return found;
+        }
         for &start in from {
             let mut previous: HashMap<usize, usize> = HashMap::new();
             let mut seen = HashSet::from([start]);

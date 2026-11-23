@@ -322,7 +322,7 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
 | `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
 | `installSkill({ package, path, harness, scope, force })` | Install a package's agent skill. |
-| `dependencyGraph(callback)`, `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback` on it. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: what the callback returns. |
+| `dependencyGraph(callback)`, `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback`, written inline, on it. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: what the callback returns. |
 | `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
 | `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. See [Git steps](#git-steps). |
 
