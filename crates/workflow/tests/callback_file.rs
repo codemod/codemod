@@ -109,3 +109,43 @@ fn a_default_export_that_is_not_a_function_is_refused() {
         "{error}"
     );
 }
+
+/// The callback runs from its own file whatever it is called, and whatever
+/// directory the resolver starts from.
+#[test]
+fn a_callback_named_like_the_wrapper_still_runs_from_its_directory() {
+    let dir = TempDir::new().unwrap();
+    let elsewhere = TempDir::new().unwrap();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    std::fs::write(
+        dir.path().join("scripts/helper.ts"),
+        "export const suffix = \"!\";\n",
+    )
+    .unwrap();
+    for name in ["__codemod_callback_file.js", "migrate.ts"] {
+        let callback = dir.path().join("scripts").join(name);
+        std::fs::write(
+            &callback,
+            "import { suffix } from \"./helper.ts\";\nexport default (file) => { file.write(file.text + suffix); };\n",
+        )
+        .unwrap();
+        let request = CallbackFileRequest {
+            callback,
+            resolver: Arc::new(OxcResolver::new(elsewhere.path().to_path_buf(), None).unwrap()),
+            target: dir.path().to_path_buf(),
+            path: "a.ts".to_string(),
+            text: "x".to_string(),
+            language: Some("typescript".to_string()),
+            semantic_provider: None,
+            capabilities: HashSet::new(),
+            runtime_event_callback: None,
+        };
+        let run = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(run_callback_file(request))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(run.written.as_deref(), Some("x!"), "{name}");
+    }
+}

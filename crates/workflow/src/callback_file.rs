@@ -2,8 +2,9 @@
 //! export, `(file) => ...`) on one file, outside a workflow: what
 //! `codemod jssg test --callback` tests. The callback runs as a
 //! `forEachFile` step runs it, in an isolate with the same modules, the same
-//! `file` object and the same `parse(file)`; what it did to the file is
-//! returned, not committed.
+//! `file` object and the same `parse(file)`; what it did through `file`
+//! (`write`, `rename`, `delete`) is returned, not committed. A callback
+//! granted `fs` writes with it at once, as in a workflow.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -76,8 +77,9 @@ pub async fn run_callback_file(request: CallbackFileRequest) -> Result<CallbackF
         .map(|name| name.to_string_lossy().into_owned())
         .ok_or_else(|| format!("{} is not a file", callback.display()))?;
     let module = callback_module(&file_name)?;
+    // Named after the callback file, so never the same module as it.
     let name = dir
-        .join("__codemod_callback_file.js")
+        .join(format!("{file_name}.__codemod_callback.js"))
         .to_string_lossy()
         .into_owned();
 

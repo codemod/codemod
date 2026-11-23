@@ -870,6 +870,31 @@ test("runCallback fails the run when the callback fails on a file", HOSTS.quickj
   assert.throws(() => assertTree(result, {}), /the run failed/);
 });
 
+test("runCallback applies renames and deletes to the copy", HOSTS.quickjs, async () => {
+  const dir = scratch({
+    "move.ts": `
+export default (file: any) => {
+  if (file.path === "old.ts") file.rename("lib/new.ts");
+  if (file.path === "gone.ts") file.delete();
+};
+`,
+  });
+  const result = await runCallback(join(dir, "move.ts"), {
+    target: { "old.ts": "a\n", "gone.ts": "b\n", "kept.ts": "c\n" },
+    language: "typescript",
+  });
+  assert.equal(result.status, "succeeded", result.error);
+  assert.deepEqual(result.files, { "kept.ts": "c\n", "lib/new.ts": "a\n" });
+});
+
+test("runCallback rejects a callback file that is not there", HOSTS.quickjs, async () => {
+  const dir = scratch({});
+  await assert.rejects(
+    runCallback(join(dir, "missing.ts"), { target: { "a.ts": "a\n" }, language: "typescript" }),
+    /no callback file/,
+  );
+});
+
 test("runCallback needs a target and a language", async () => {
   await assert.rejects(runCallback("migrate.ts", { target: {} }), /language is required/);
   await assert.rejects(runCallback("migrate.ts", {}), /target is required/);

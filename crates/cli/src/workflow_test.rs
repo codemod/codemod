@@ -140,6 +140,9 @@ pub async fn run_callback_case(request: CallbackCaseRequest) -> Result<Value> {
     use semantic_factory::LazySemanticProvider;
     use std::sync::Mutex;
 
+    if !request.callback.is_file() {
+        anyhow::bail!("no callback file at {}", request.callback.display());
+    }
     let language: CodemodLang = request.language.parse().map_err(|e: String| anyhow!(e))?;
     let extensions = get_extensions_for_language(language);
     let target = dunce::canonicalize(&request.target)?;
@@ -192,7 +195,9 @@ pub async fn run_callback_case(request: CallbackCaseRequest) -> Result<Value> {
 
     let mut outputs = Vec::new();
     let mut failures = Vec::new();
-    let mut moves = Vec::new();
+    // What each file's callback did, applied once every file has run, so
+    // none sees another's changes or new name.
+    let mut planned: Vec<(String, PathBuf, codemod_workflow::CallbackFileRun)> = Vec::new();
     for (path, file) in files {
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
@@ -224,28 +229,58 @@ pub async fn run_callback_case(request: CallbackCaseRequest) -> Result<Value> {
         match run {
             Err(error) => failures.push(json!({ "path": path, "error": error })),
             Ok(run) => {
-                if let Some(data) = run.output {
+                if let Some(data) = &run.output {
                     outputs.push(json!({ "file": path, "data": data }));
                 }
-                if run.deleted {
-                    std::fs::remove_file(&file)?;
-                    continue;
-                }
-                if let Some(text) = run.written {
-                    std::fs::write(&file, text)?;
-                }
-                if let Some(to) = run.renamed {
-                    moves.push((file, target.join(to)));
-                }
+                planned.push((path, file, run));
             }
         }
     }
-    // After every file ran, so none sees another's new name.
-    for (from, to) in moves {
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)?;
+    // Every rename must land inside the target, also through symlinked
+    // directories, before anything is changed.
+    let mut refused = Vec::new();
+    for (path, _, run) in &planned {
+        if let Some(to) = &run.renamed {
+            if let Err(error) = inside_target(&target, &target.join(to)) {
+                refused.push(
+                    json!({ "path": path, "error": format!("cannot rename to '{to}': {error}") }),
+                );
+            }
         }
-        std::fs::rename(from, to)?;
+    }
+    if refused.is_empty() {
+        let mut moves = Vec::new();
+        for (path, file, run) in &planned {
+            let applied = (|| -> std::io::Result<()> {
+                if run.deleted {
+                    return std::fs::remove_file(file);
+                }
+                if let Some(text) = &run.written {
+                    std::fs::write(file, text)?;
+                }
+                if let Some(to) = &run.renamed {
+                    moves.push((path, file, target.join(to)));
+                }
+                Ok(())
+            })();
+            if let Err(error) = applied {
+                failures.push(
+                    json!({ "path": path, "error": format!("cannot apply its changes: {error}") }),
+                );
+            }
+        }
+        for (path, from, to) in moves {
+            let moved = to
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::rename(from, &to));
+            if let Err(error) = moved {
+                failures
+                    .push(json!({ "path": path, "error": format!("cannot rename it: {error}") }));
+            }
+        }
+    } else {
+        failures.extend(refused);
     }
 
     let error = failures.first().map(|failure| {
@@ -267,4 +302,46 @@ pub async fn run_callback_case(request: CallbackCaseRequest) -> Result<Value> {
         "outputs": outputs,
         "failures": failures,
     }))
+}
+
+/// Whether `path` is inside `target` once symlinks are followed: its nearest
+/// existing ancestor is, and is a directory.
+fn inside_target(target: &std::path::Path, path: &std::path::Path) -> Result<(), String> {
+    let mut existing = path.parent();
+    while let Some(dir) = existing {
+        if dir.exists() {
+            break;
+        }
+        existing = dir.parent();
+    }
+    let Some(dir) = existing else {
+        return Err("the path is outside the target".into());
+    };
+    let resolved = dunce::canonicalize(dir).map_err(|e| e.to_string())?;
+    if !resolved.starts_with(target) {
+        return Err("the path is outside the target".into());
+    }
+    if !resolved.is_dir() {
+        return Err(format!("'{}' is a file", dir.display()));
+    }
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::inside_target;
+
+    #[test]
+    fn a_rename_through_a_symlinked_directory_is_outside_the_target() {
+        let target = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let target_dir = dunce::canonicalize(target.path()).unwrap();
+        std::os::unix::fs::symlink(outside.path(), target_dir.join("out")).unwrap();
+        std::fs::write(target_dir.join("file"), "x").unwrap();
+        assert!(inside_target(&target_dir, &target_dir.join("lib/new.ts")).is_ok());
+        assert!(inside_target(&target_dir, &target_dir.join("out/new.ts")).is_err());
+        assert!(inside_target(&target_dir, &target_dir.join("out/deeper/new.ts")).is_err());
+        let error = inside_target(&target_dir, &target_dir.join("file/new.ts")).unwrap_err();
+        assert!(error.contains("is a file"), "{error}");
+    }
 }
