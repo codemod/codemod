@@ -164,6 +164,92 @@ export default async function main() { setState("x", 1); }
 }
 
 #[test]
+fn importing_git_steps_from_the_workflow_module_points_to_codemod_git() {
+    let h = Harness::new();
+    let error = load_error(
+        &h,
+        r#"
+import { step, commit } from "codemod/workflow";
+export default async function main() { await step(commit("x")); }
+"#,
+    );
+    assert!(
+        error.contains(r#"'commit' moved to "codemod/git": import { commit } from "codemod/git""#),
+        "{error}"
+    );
+}
+
+#[test]
+fn re_exporting_moved_functions_from_the_workflow_module_points_to_their_module() {
+    let h = Harness::new();
+    for (export, hint) in [
+        ("branch as makeBranch", r#"'branch' moved to "codemod/git""#),
+        ("semver", r#"'semver' moved to "codemod/deps""#),
+    ] {
+        let error = load_error(
+            &h,
+            &format!(
+                r#"
+export {{ {export} }} from "codemod/workflow";
+export default async function main() {{}}
+"#
+            ),
+        );
+        assert!(error.contains(hint), "{error}");
+    }
+}
+
+#[test]
+fn a_helper_importing_git_steps_from_the_workflow_module_points_to_codemod_git() {
+    let h = Harness::new();
+    h.bundle_file(
+        "lib/open.ts",
+        "import { pullRequest } from \"codemod/workflow\";\nexport const open = () => pullRequest({ title: \"x\" });\n",
+    );
+    let error = load_error(
+        &h,
+        r#"
+import { step } from "codemod/workflow";
+import { open } from "./lib/open.ts";
+export default async function main() { await step(open()); }
+"#,
+    );
+    assert!(
+        error.contains(r#"'pullRequest' moved to "codemod/git""#),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_type_only_re_export_from_the_workflow_module_builds() {
+    let h = Harness::new();
+    let path = h.bundle.path().join("workflow.ts");
+    std::fs::write(
+        &path,
+        r#"
+export type { branch } from "codemod/workflow";
+export default async function main() {}
+"#,
+    )
+    .unwrap();
+    assert!(load_workflow(&path).is_ok());
+}
+
+#[test]
+fn git_steps_cannot_start_inside_a_callback() {
+    let h = Harness::new();
+    let error = load_error(
+        &h,
+        r#"
+import { step } from "codemod/workflow";
+import { branch } from "codemod/git";
+export default async function main() { await step(() => { branch("x"); }); }
+"#,
+    );
+    assert!(error.contains("uses 'branch' inside a"), "{error}");
+}
+
+#[test]
 fn callbacks_take_values_by_capture_and_hand_back_what_they_found() {
     let h = Harness::new();
     h.write("a.ts", "react-19");

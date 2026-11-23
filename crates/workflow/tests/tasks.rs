@@ -238,6 +238,206 @@ export default async function main() {
     assert!(result.to_string().contains("one"), "{result}");
 }
 
+/// `[name, files]` of each shard a workflow returned.
+fn shard_files(result: &Value) -> Vec<(String, Vec<String>)> {
+    result
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|shard| {
+            let files = shard["_meta_files"].as_array().unwrap();
+            (
+                shard["name"].as_str().unwrap().to_string(),
+                files
+                    .iter()
+                    .map(|f| f.as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn codeowner_shards_group_by_the_last_matching_rule_and_cap_files() {
+    let h = Harness::new();
+    // docs/CODEOWNERS is the third place looked in; the last match wins and
+    // its first owner owns the file.
+    h.write(
+        "docs/CODEOWNERS",
+        "# owners\n/packages/ui/ @acme/ui @acme/other\npackages/api @acme/API_Team\n*.md @docs\n/packages/ui/f3.ts @someone\n",
+    );
+    for file in [
+        "ui/f1.ts", "ui/f2.ts", "ui/f3.ts", "ui/f4.ts", "api/a.ts", "api/b.md",
+    ] {
+        h.write(&format!("packages/{file}"), "export {}\n");
+    }
+    h.write("root.ts", "export {}\n");
+    h.write(".git/HEAD", "ref: refs/heads/main\n");
+    let report = h.start(
+        r#"
+import { step, shard } from "codemod/workflow";
+export default async function main() {
+  return step(shard({ method: { type: "codeowner", maxFilesPerShard: 2 }, files: "**/*.{ts,md}" }));
+}
+"#,
+        Value::Null,
+    );
+    let result = output(&report).unwrap();
+    let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        shard_files(&result),
+        vec![
+            ("acme-api_team-0".into(), names(&["packages/api/a.ts"])),
+            (
+                "acme-ui-0".into(),
+                names(&["packages/ui/f1.ts", "packages/ui/f2.ts"])
+            ),
+            ("acme-ui-1".into(), names(&["packages/ui/f4.ts"])),
+            ("docs-0".into(), names(&["packages/api/b.md"])),
+            ("someone-0".into(), names(&["packages/ui/f3.ts"])),
+            ("unowned-0".into(), names(&["root.ts"])),
+        ],
+        "{result}"
+    );
+    assert_eq!(result[0]["team"], json!("@acme/API_Team"));
+}
+
+#[test]
+fn built_in_shards_without_files_take_every_file_under_target() {
+    let h = Harness::new();
+    for file in ["a/one.ts", "a/two.css", "b/three.md", "top.txt"] {
+        h.write(&format!("packages/{file}"), "x\n");
+    }
+    h.write("other.ts", "x\n");
+    h.write(".git/config", "[core]\n");
+    // Not UTF-8: not a file a callback could read, so in no shard.
+    std::fs::write(
+        h.target.path().join("packages/a/logo.png"),
+        [0x89, 0x50, 0xff, 0xfe, 0x00],
+    )
+    .unwrap();
+    let report = h.start(
+        r#"
+import { step, shard } from "codemod/workflow";
+export default async function main() {
+  return [
+    await step("Packages", shard({ method: { type: "directory", maxFilesPerShard: 5 }, target: "packages" })),
+    await step("Everything", shard({ method: { type: "directory", maxFilesPerShard: 5 } })),
+  ];
+}
+"#,
+        Value::Null,
+    );
+    let result = output(&report).unwrap();
+    let packages = shard_files(&result[0]);
+    let names: Vec<&str> = packages.iter().map(|(name, _)| name.as_str()).collect();
+    // Files directly under `target` are the "." group.
+    assert_eq!(names, [".-0", "a-0", "b-0"], "{result}");
+    assert_eq!(packages[0].1, ["packages/top.txt"], "{result}");
+    assert_eq!(
+        packages[1].1,
+        ["packages/a/one.ts", "packages/a/two.css"],
+        "{result}"
+    );
+    let everything = result[1].to_string();
+    assert!(everything.contains("other.ts"), "{everything}");
+    assert!(!everything.contains(".git"), "{everything}");
+    assert!(!everything.contains("logo.png"), "{everything}");
+}
+
+#[test]
+fn a_shard_target_outside_the_run_target_fails_before_reading_it() {
+    let h = Harness::new();
+    h.write("a/one.ts", "x\n");
+    for target in ["../outside", "/etc"] {
+        let report = h.start(
+            &format!(
+                r#"
+import {{ step, shard }} from "codemod/workflow";
+export default async function main() {{
+  return step(shard({{ method: {{ type: "directory", maxFilesPerShard: 5 }}, target: {target:?} }}));
+}}
+"#
+            ),
+            Value::Null,
+        );
+        let error = output(&report).unwrap_err();
+        assert!(
+            error.contains("must be relative and stay within the run's target"),
+            "{error}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_shard_target_that_is_a_symlink_out_of_the_run_target_fails() {
+    let h = Harness::new();
+    let outside = tempfile::TempDir::new().unwrap();
+    std::fs::write(outside.path().join("secret.ts"), "x\n").unwrap();
+    std::os::unix::fs::symlink(outside.path(), h.target.path().join("out")).unwrap();
+    for target in ["out", ".//out/"] {
+        let report = h.start(
+            &format!(
+                r#"
+import {{ step, shard }} from "codemod/workflow";
+export default async function main() {{
+  return step(shard({{ method: {{ type: "directory", maxFilesPerShard: 5 }}, target: {target:?} }}));
+}}
+"#
+            ),
+            Value::Null,
+        );
+        let error = output(&report).unwrap_err();
+        assert!(
+            error.contains("must be relative and stay within the run's target"),
+            "{target}: {error}"
+        );
+    }
+}
+
+#[test]
+fn shards_given_previous_keep_their_files_and_new_files_get_new_shards() {
+    let h = Harness::new();
+    for n in 0..3 {
+        h.write(&format!("src/ui/f{n}.ts"), "export {}\n");
+    }
+    let source = r#"
+import { step, shard } from "codemod/workflow";
+export default async function main({ params }: any) {
+  return step(shard({
+    method: { type: "directory", maxFilesPerShard: 2 },
+    target: "src",
+    files: "**/*.ts",
+    previous: params.previous,
+  }));
+}
+"#;
+    let first = output(&h.start(source, json!({}))).unwrap();
+    assert_eq!(
+        shard_files(&first),
+        vec![
+            (
+                "ui-0".into(),
+                vec!["src/ui/f0.ts".to_string(), "src/ui/f1.ts".into()]
+            ),
+            ("ui-1".into(), vec!["src/ui/f2.ts".to_string()]),
+        ]
+    );
+    std::fs::remove_file(h.target.path().join("src/ui/f0.ts")).unwrap();
+    h.write("src/ui/a.ts", "export {}\n");
+    let second = output(&h.start(source, json!({ "previous": first }))).unwrap();
+    assert_eq!(
+        shard_files(&second),
+        vec![
+            ("ui-0".into(), vec!["src/ui/f1.ts".to_string()]),
+            ("ui-1".into(), vec!["src/ui/f2.ts".to_string()]),
+            ("ui-2".into(), vec!["src/ui/a.ts".to_string()]),
+        ],
+        "{second}"
+    );
+}
+
 #[test]
 fn codemod_steps_run_a_local_package_and_detect_cycles() {
     let h = Harness::new();
@@ -313,7 +513,8 @@ fn git_steps_are_skipped_unless_managed_git_is_on() {
     let h = approving();
     let report = h.start(
         r#"
-import { step, branch, commit, pullRequest } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { branch, commit, pullRequest } from "codemod/git";
 export default async function main() {
   return [
     await step(branch("codemod/test")),
@@ -366,7 +567,8 @@ fn git(h: &Harness, args: &[&str]) -> String {
 }
 
 const PARALLEL_SHARDS: &str = r#"
-import { step, approval, branch, commit, forEachFile } from "codemod/workflow";
+import { step, approval, forEachFile } from "codemod/workflow";
+import { branch, commit } from "codemod/git";
 export default async function main() {
   await Promise.all(["a", "b"].map(async (name) => {
     await step(approval(`Migrate ${name}?`));
@@ -415,7 +617,8 @@ fn each_git_step_is_refused_alongside_other_steps() {
         let h = approving();
         let source = format!(
             r#"
-import {{ step, shell, branch, commit, pullRequest }} from "codemod/workflow";
+import {{ step, shell }} from "codemod/workflow";
+import {{ branch, commit, pullRequest }} from "codemod/git";
 export default async function main() {{
   await Promise.all([step(shell("echo hi")), step({task})]);
 }}
@@ -434,7 +637,8 @@ fn managed_git_steps_run_one_shard_after_another() {
     let h = managed_git();
     let report = h.start(
         r#"
-import { step, shell, branch, commit, forEachFile } from "codemod/workflow";
+import { step, shell, forEachFile } from "codemod/workflow";
+import { branch, commit } from "codemod/git";
 export default async function main() {
   // Steps without git still run together.
   await Promise.all([
@@ -470,7 +674,8 @@ fn a_nested_codemod_run_alongside_other_steps_refuses_managed_git() {
     h.bundle_file(
         "child/workflow.ts",
         r#"
-import { step, branch } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { branch } from "codemod/git";
 export default async function main() {
   await step(branch("codemod-child"));
 }

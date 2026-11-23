@@ -57,6 +57,15 @@ pub fn is_deps_module(specifier: &str) -> bool {
     codemod_module(specifier) == Some("deps")
 }
 
+/// Specifier of the git module: `branch`, `commit` and `pullRequest`.
+pub const GIT_MODULE: &str = "codemod/git";
+
+/// Whether a specifier names the git module (`codemod/git`, or
+/// `codemod:git`).
+pub fn is_git_module(specifier: &str) -> bool {
+    codemod_module(specifier) == Some("git")
+}
+
 /// Prelude appended to every extracted callback module.
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -122,7 +131,8 @@ const PURE_BUILTINS: &[&str] = &[
 pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
     match codemod_module(specifier) {
         Some("workflow") => return Ok(ModuleClass::Workflow),
-        Some("ast-grep" | "deps") => return Ok(ModuleClass::Pure),
+        // `codemod/git` only describes steps, as `codemod/workflow` does.
+        Some("ast-grep" | "deps" | "git") => return Ok(ModuleClass::Pure),
         Some(_) => return Ok(ModuleClass::StepsOnly),
         None => {}
     }
@@ -271,6 +281,9 @@ const REMOVED_STATE_API: &[&str] = &[
 /// Exports that moved from `codemod/workflow` to `codemod/deps`.
 const MOVED_TO_DEPS: &[&str] = &["dependencyGraph", "registry", "semver"];
 
+/// Exports that moved from `codemod/workflow` to `codemod/git`.
+const MOVED_TO_GIT: &[&str] = &["branch", "commit", "pullRequest"];
+
 pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
@@ -344,6 +357,14 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                     ),
                                 ));
                             }
+                            if module == FLOW_MODULE && MOVED_TO_GIT.contains(&imported.as_str()) {
+                                return Err(analysis.error(
+                                    s.span.start,
+                                    format!(
+                                        "'{imported}' moved to \"{GIT_MODULE}\": import {{ {imported} }} from \"{GIT_MODULE}\""
+                                    ),
+                                ));
+                            }
                             let line = format!(
                                 "import {{ {imported} as {} }} from {:?};",
                                 s.local.name, module
@@ -395,6 +416,34 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
             Statement::ClassDeclaration(class) => {
                 if let Some(id) = &class.id {
                     analysis.collect_whole(id.symbol_id(), class.span);
+                }
+            }
+            Statement::ExportNamedDeclaration(export)
+                if !export.export_kind.is_type()
+                    && export.source.as_ref().is_some_and(|source| {
+                        codemod_module(&source.value) == Some("workflow")
+                    }) =>
+            {
+                // `export { branch } from "codemod/workflow"`: the same
+                // migration hints as an import.
+                for specifier in &export.specifiers {
+                    if specifier.export_kind.is_type() {
+                        continue;
+                    }
+                    let name = specifier.local.name().to_string();
+                    let moved_to = if MOVED_TO_GIT.contains(&name.as_str()) {
+                        GIT_MODULE
+                    } else if MOVED_TO_DEPS.contains(&name.as_str()) {
+                        DEPS_MODULE
+                    } else {
+                        continue;
+                    };
+                    return Err(analysis.error(
+                        specifier.span.start,
+                        format!(
+                            "'{name}' moved to \"{moved_to}\": import {{ {name} }} from \"{moved_to}\""
+                        ),
+                    ));
                 }
             }
             Statement::ExportNamedDeclaration(export) => match &export.declaration {
@@ -998,6 +1047,7 @@ impl Analysis<'_> {
             // Other imports are copied as written: in an isolate,
             // `codemod/deps` gives `registry` and `semver` that run there.
             if is_flow_module(&import.source)
+                || is_git_module(&import.source)
                 || is_deps_module(&import.source) && imported == "dependencyGraph"
             {
                 return Err(self.error(
@@ -1128,6 +1178,9 @@ impl<R: codemod_sandbox::sandbox::resolvers::ModuleResolver> ImportWalk<'_, R> {
                 "{shown} calls {call} with a callback, but callbacks are only extracted from the workflow file: call it there, and keep the files it imports to plain helpers"
             ));
         }
+        if let Some(hint) = moved_import(path, &text) {
+            return Err(format!("{shown}: {hint}"));
+        }
         for specifier in module_specifiers(path, &text) {
             match module_class(&specifier) {
                 Ok(ModuleClass::StepsOnly) => return Ok(Some(vec![shown, specifier])),
@@ -1147,6 +1200,62 @@ impl<R: codemod_sandbox::sandbox::resolvers::ModuleResolver> ImportWalk<'_, R> {
         }
         Ok(None)
     }
+}
+
+/// The migration hint for a helper's import (or re-export) of a name that
+/// moved out of `codemod/workflow`.
+fn moved_import(path: &Path, text: &str) -> Option<String> {
+    use oxc::ast::ast::ModuleDeclaration;
+
+    let allocator = Allocator::default();
+    let source_type = SourceType::from_path(path).unwrap_or_else(|_| SourceType::mjs());
+    let parsed = Parser::new(&allocator, text, source_type).parse();
+    let hint = |name: &str| {
+        let moved_to = if MOVED_TO_GIT.contains(&name) {
+            GIT_MODULE
+        } else if MOVED_TO_DEPS.contains(&name) {
+            DEPS_MODULE
+        } else {
+            return None;
+        };
+        Some(format!(
+            "'{name}' moved to \"{moved_to}\": import {{ {name} }} from \"{moved_to}\""
+        ))
+    };
+    for statement in &parsed.program.body {
+        match statement.as_module_declaration() {
+            Some(ModuleDeclaration::ImportDeclaration(import))
+                if !import.import_kind.is_type()
+                    && codemod_module(&import.source.value) == Some("workflow") =>
+            {
+                for specifier in import.specifiers.iter().flatten() {
+                    if let ImportDeclarationSpecifier::ImportSpecifier(s) = specifier {
+                        if !s.import_kind.is_type() {
+                            if let Some(hint) = hint(&s.imported.name()) {
+                                return Some(hint);
+                            }
+                        }
+                    }
+                }
+            }
+            Some(ModuleDeclaration::ExportNamedDeclaration(export))
+                if !export.export_kind.is_type()
+                    && export.source.as_ref().is_some_and(|source| {
+                        codemod_module(&source.value) == Some("workflow")
+                    }) =>
+            {
+                for specifier in &export.specifiers {
+                    if !specifier.export_kind.is_type() {
+                        if let Some(hint) = hint(&specifier.local.name()) {
+                            return Some(hint);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// A call in a file the workflow imports that needs the build to extract a

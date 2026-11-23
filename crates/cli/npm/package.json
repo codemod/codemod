@@ -27,6 +27,10 @@
       "types": "./types/deps.d.ts",
       "default": "./runtime/deps.mjs"
     },
+    "./git": {
+      "types": "./types/git.d.ts",
+      "default": "./runtime/git.mjs"
+    },
     "./host": {
       "types": "./runtime/host.d.mts",
       "default": "./runtime/host.mjs"
@@ -84,7 +88,7 @@
     "build": "node scripts/build.mjs",
     "prepack": "node scripts/build.mjs",
     "test": "node scripts/build.mjs && node --test tests/*.test.js tests/*.test.mjs",
-    "typecheck": "node scripts/build.mjs && tsc -p ../../workflow/src/js && tsc -p types && tsc -p type-tests",
+    "typecheck": "node scripts/build.mjs && tsc -p ../../workflow/src/js && tsc -p types && tsc -p type-tests && tsc -p type-tests/standalone/git && tsc -p type-tests/standalone/deps",
     "pull-llrt-types": "bash scripts/pull-llrt-types.sh"
   },
   "dependencies": {

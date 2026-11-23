@@ -854,36 +854,6 @@ declare module "codemod:workflow" {
    */
   export function approval(message: string): Task<{ approved: true }>;
 
-  /**
-   * Checks out a branch for the following changes. Only with `--managed-git`.
-   * Git steps share one checkout: one started while other steps are still
-   * running fails, so run shards that use git one at a time.
-   */
-  export function branch(name: string): Task<Skippable<{ branch: string }>>;
-
-  /** Commits changes. Only with `--managed-git`. Not alongside other steps; see `branch`. */
-  export function commit(
-    message: string,
-    options?: { add?: readonly string[]; allowEmpty?: boolean },
-  ): Task<Skippable<{ committed: boolean }>>;
-
-  export interface PullRequestOptions {
-    title: string;
-    body?: string;
-    draft?: boolean;
-    base?: string;
-    /** Defaults to the current branch. */
-    branch?: string;
-  }
-
-  /**
-   * Pushes the branch and opens a pull request. Only with `--managed-git`.
-   * Not alongside other steps; see `branch`.
-   */
-  export function pullRequest(
-    options: PullRequestOptions,
-  ): Task<Skippable<{ branch: string; url: string | null }>>;
-
   /** A step failed. */
   export class StepError extends Error {
     readonly label: string;
