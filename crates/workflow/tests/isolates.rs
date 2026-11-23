@@ -113,20 +113,41 @@ export default async function main() {}
 }
 
 #[test]
-fn a_namespace_import_of_the_deps_module_asks_for_named_imports() {
+fn dependency_graph_through_a_namespace_import_asks_for_a_named_import() {
     let h = Harness::new();
-    let error = load_error(
-        &h,
+    for module in ["codemod/deps", "codemod:deps"] {
+        let error = load_error(
+            &h,
+            &format!(
+                r#"
+import {{ step }} from "codemod/workflow";
+import * as deps from "{module}";
+export default async function main() {{ await step(deps.dependencyGraph((g) => g.workspaces())); }}
+"#
+            ),
+        );
+        assert!(
+            error.contains(
+                "import dependencyGraph by name (import { dependencyGraph } from \"codemod/deps\")"
+            ),
+            "{module}: {error}"
+        );
+    }
+}
+
+#[test]
+fn a_namespace_import_of_the_deps_module_for_semver_builds() {
+    let h = Harness::new();
+    let path = h.bundle.path().join("workflow.ts");
+    std::fs::write(
+        &path,
         r#"
-import { step } from "codemod/workflow";
 import * as deps from "codemod/deps";
-export default async function main() { await step(deps.dependencyGraph((g) => g.workspaces())); }
+export default async function main() { return deps.semver.compare("1.0.0", "2.0.0"); }
 "#,
-    );
-    assert!(
-        error.contains("import { dependencyGraph } from \"codemod/deps\""),
-        "{error}"
-    );
+    )
+    .unwrap();
+    assert!(load_workflow(&path).is_ok());
 }
 
 #[test]
