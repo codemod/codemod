@@ -1412,6 +1412,64 @@ export default async function main() {
     assert_eq!(h.read("a.js"), "logger.info(console.log(1));\n");
 }
 
+/// A `typescript` rule selects `.js` files too, and applies to them: they are
+/// parsed as TypeScript, as `forEachFile({ language: "typescript" }, ...)`
+/// callbacks parse them.
+#[test]
+fn a_typescript_rule_applies_to_the_js_files_it_selects() {
+    let h = Harness::new();
+    for name in ["a.js", "b.ts", "c.mjs", "d.cjs", "e.py"] {
+        h.write(name, "console.log(1);\n");
+    }
+    let report = h.start(
+        r#"
+import { step, forEachFile, astGrep } from "codemod/workflow";
+export default async function main() {
+  const result = await step(forEachFile(astGrep({ id: "x", language: "typescript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" })));
+  return result.changes.written;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!(["a.js", "b.ts", "c.mjs", "d.cjs"])
+    );
+    for name in ["a.js", "b.ts", "c.mjs", "d.cjs"] {
+        assert_eq!(h.read(name), "logger.info(1);\n", "{name}");
+    }
+    assert_eq!(h.read("e.py"), "console.log(1);\n");
+}
+
+/// Rules of several languages each run on the files of their language,
+/// parsed with it: a `.js` file both a `javascript` and a `typescript` rule
+/// select gets both fixes, and a `.py` file only the `python` one.
+#[test]
+fn ast_grep_rules_of_several_languages_each_apply_to_their_files() {
+    let h = Harness::new();
+    h.write("a.js", "console.log(1);\nalert(2);\n");
+    h.write("b.ts", "console.log(1);\nalert(2);\n");
+    h.write("c.py", "print(1)\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile, astGrep } from "codemod/workflow";
+export default async function main() {
+  const result = await step(forEachFile(astGrep([
+    { id: "log", language: "typescript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" },
+    { id: "alert", language: "javascript", rule: { pattern: "alert($A)" }, fix: "notify($A)" },
+    { id: "print", language: "python", rule: { pattern: "print($A)" }, fix: "log($A)" },
+  ])));
+  return result.changes.written;
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!(["a.js", "b.ts", "c.py"]));
+    assert_eq!(h.read("a.js"), "logger.info(1);\nnotify(2);\n");
+    assert_eq!(h.read("b.ts"), "logger.info(1);\nalert(2);\n");
+    assert_eq!(h.read("c.py"), "log(1)\n");
+}
+
 const CONSOLE_TO_LOGGER: &str = r#"{ id: "log", language: "javascript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" }"#;
 
 /// With `repeat`, the rules run again on the text they fixed until it no

@@ -343,6 +343,35 @@ nodes:
     assert_eq!(h.read("src/a.js"), "let x = 1;\nfresh();\n");
 }
 
+/// A `typescript` rule file runs on `.js` files too, as TypeScript.
+#[test]
+fn a_yaml_ast_grep_step_runs_typescript_rules_on_js_files() {
+    let h = Harness::new();
+    h.write("a.js", "console.log(1);\n");
+    h.write("b.ts", "console.log(1);\n");
+    h.bundle_file(
+        "rules/config.yml",
+        "id: x\nlanguage: typescript\nrule:\n  pattern: console.log($A)\nfix: logger.info($A)\n",
+    );
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: apply
+    name: Apply
+    steps:
+      - name: Rules
+        ast-grep:
+          config_file: rules/config.yml
+"#,
+    );
+    let report = h.start_loaded(workflow, Value::Null, false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert_eq!(h.read("a.js"), "logger.info(1);\n");
+    assert_eq!(h.read("b.ts"), "logger.info(1);\n");
+}
+
 /// `base_path` and the globs under it select the same files as in the YAML
 /// engine, also when the base comes from the matrix.
 #[test]
