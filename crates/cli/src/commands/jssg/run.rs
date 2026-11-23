@@ -214,13 +214,37 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
     let execution_errors = Mutex::new(Vec::<String>::new());
     let target_directory_for_report = target_directory.clone();
 
-    // Every file's text goes through `pending`, and nothing is written until
-    // every file is done, so a file changed by several transforms (its own,
-    // and other files' `jssgTransform` calls) keeps all of the changes. Each
-    // file's transform runs in a transaction: its changes to other files are
-    // kept only when it succeeds.
+    // Every file's text goes through `pending`, so a file changed by several
+    // transforms (its own, and other files' `jssgTransform` calls) keeps all
+    // of the changes. Each file's transform runs in a transaction: what it
+    // returns and what its `jssgTransform` calls change are kept only when
+    // it succeeds (`root.write()` writes at once and is not rolled back).
+    // Once no transform holds a changed file it is written, so a later
+    // `root.write()` starts from it; a dry run keeps everything in memory
+    // and shows it at the end. Renames are applied at the end.
     let pending = PendingFiles::default();
-    let renames = Mutex::new(BTreeMap::<PathBuf, PathBuf>::new());
+    // Keyed by the file's canonical path: the path it was given as (to
+    // remove, so renaming a symlink removes the link, not its target) and
+    // the new path.
+    let renames = Mutex::new(BTreeMap::<PathBuf, (PathBuf, PathBuf)>::new());
+    let write_released = || {
+        if config.dry_run {
+            return;
+        }
+        for (path, error) in pending.write_released(|path, text| {
+            std::fs::write(path, text)?;
+            if let Some(ref provider) = semantic_provider {
+                let _ = provider.notify_file_processed(path, text);
+            }
+            Ok(())
+        }) {
+            execution_errors.lock().unwrap().push(format!(
+                "Failed to write modified file {}: {}",
+                path.display(),
+                error
+            ));
+        }
+    };
 
     let _ = config.execute(|file_path, _config| {
         // Only process files
@@ -240,9 +264,19 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             let transaction = pending.begin();
             let (content, taken) = match pending.take(file_path) {
                 Ok(taken) => taken,
-                Err(e) => {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     warn!("Failed to read file {}: {}", file_path.display(), e);
                     transaction.finish(false);
+                    return;
+                }
+                // Another transform kept it too long: the file was not transformed.
+                Err(e) => {
+                    transaction.finish(false);
+                    execution_errors.lock().unwrap().push(format!(
+                        "Failed to execute codemod on {}:\n{}",
+                        file_path.display(),
+                        e
+                    ));
                     return;
                 }
             };
@@ -295,7 +329,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                     if let ExecutionResult::Modified(modified) = primary {
                         taken.set(modified.content);
                         if let Some(to) = modified.rename_to {
-                            file_renames.push((taken.path().to_path_buf(), to));
+                            file_renames.push((
+                                taken.path().to_path_buf(),
+                                (file_path.to_path_buf(), to),
+                            ));
                         }
                     }
                     // What `jssgTransform` made of other files is in
@@ -303,8 +340,11 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                     for change in secondary {
                         if let ExecutionResult::Modified(modified) = change.result {
                             if let Some(to) = modified.rename_to {
-                                let path = change.path.canonicalize().unwrap_or(change.path);
-                                file_renames.push((path, to));
+                                let key = change
+                                    .path
+                                    .canonicalize()
+                                    .unwrap_or_else(|_| change.path.clone());
+                                file_renames.push((key, (change.path, to)));
                             }
                         }
                     }
@@ -325,8 +365,10 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
             };
             match outcome {
                 Ok(file_renames) => {
-                    transaction.finish(true);
+                    // Before the files are given back, so a later transform
+                    // of one of them renames it last.
                     renames.lock().unwrap().extend(file_renames);
+                    transaction.finish(true);
                 }
                 Err(e) => {
                     transaction.finish(false);
@@ -337,25 +379,26 @@ pub async fn handler(args: &Command, telemetry: TelemetrySenderMutex) -> Result<
                     ));
                 }
             }
+            write_released();
             runtime_event_output.flush(&runtime_event_buffer);
             return;
         }
     });
 
-    // Every file is done: apply what they changed.
+    // Every file is done: apply what is left (everything, in a dry run).
     let mut renames = renames.into_inner().unwrap();
     let mut changes: Vec<(PathBuf, String, String, Option<PathBuf>)> = pending
         .changed()
         .into_iter()
-        .map(|(path, original, content)| {
-            let rename_to = renames.remove(&path);
-            (path, original, content, rename_to)
+        .map(|(path, original, content)| match renames.remove(&path) {
+            Some((given, to)) => (given, original, content, Some(to)),
+            None => (path, original, content, None),
         })
         .collect();
-    // Files that were only renamed.
-    for (path, to) in renames {
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            changes.push((path, text.clone(), text, Some(to)));
+    // Files whose new text is written already, or that were only renamed.
+    for (given, to) in renames.into_values() {
+        if let Ok(text) = std::fs::read_to_string(&given) {
+            changes.push((given, text.clone(), text, Some(to)));
         }
     }
     changes.sort();

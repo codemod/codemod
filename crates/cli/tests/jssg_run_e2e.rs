@@ -222,3 +222,118 @@ fn jssg_run_files_changing_each_other_keep_both_changes() {
         assert_eq!(fixture.shared_lines(), touched_by_all());
     }
 }
+
+/// A transform that writes another file with `root.write()` starts from that
+/// file's text after its own transform, and the run keeps both changes.
+#[test]
+fn jssg_run_keeps_a_files_change_and_a_later_root_write_to_it() {
+    let package = TempDir::new().unwrap();
+    let target = TempDir::new().unwrap();
+    write(
+        package.path(),
+        "codemod.js",
+        r#"
+export default function transform(root) {
+  const text = root.root().text();
+  if (text.includes("import")) {
+    const spec = root.root().find({ rule: { kind: "import_specifier" } });
+    const def = spec.field("name").definition();
+    if (!def || def.kind !== "external") throw new Error("no definition");
+    def.root.write(def.root.root().text() + "// written by b_user\n");
+    return null;
+  }
+  const edit = text.replace("OLD", "NEW");
+  return edit === text ? null : edit;
+}
+"#,
+    );
+    write(target.path(), "a_lib.ts", "export const x = 'OLD';\n");
+    write(
+        target.path(),
+        "b_user.ts",
+        "import { x } from \"./a_lib\";\nconsole.log(x);\n",
+    );
+    let script = package.path().join("codemod.js");
+    let output = Command::new(env!("CARGO_BIN_EXE_codemod"))
+        .args([
+            "jssg",
+            "run",
+            script.to_str().unwrap(),
+            "--language",
+            "typescript",
+            "--target",
+            target.path().to_str().unwrap(),
+            "--semantic-workspace",
+            target.path().to_str().unwrap(),
+            "--allow-dirty",
+            "--no-interactive",
+            "--max-threads",
+            "1",
+        ])
+        .env("DISABLE_ANALYTICS", "true")
+        .output()
+        .expect("failed to run codemod");
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        fs::read_to_string(target.path().join("a_lib.ts")).unwrap(),
+        "export const x = 'NEW';\n// written by b_user\n",
+        "{}",
+        text(&output)
+    );
+}
+
+/// Renaming a symlink with `jssgTransform` moves the link: the file it
+/// points to stays.
+#[cfg(unix)]
+#[test]
+fn jssg_run_renaming_a_symlink_keeps_its_target() {
+    let package = TempDir::new().unwrap();
+    let target = TempDir::new().unwrap();
+    write(
+        package.path(),
+        "codemod.ts",
+        r#"
+import { jssgTransform } from "codemod:ast-grep";
+
+export default async function transform(root: any, options: any) {
+  if (!root.filename().endsWith("main.ts")) return null;
+  await jssgTransform(
+    (r: any) => {
+      r.rename("renamed.ts");
+      return r.root().text().replace("OLD", "NEW");
+    },
+    `${options.targetDir}/link.ts`,
+    "typescript",
+  );
+  return null;
+}
+"#,
+    );
+    write(target.path(), "main.ts", "export {};\n");
+    write(target.path(), "real.ts", "const x = 'OLD';\n");
+    std::os::unix::fs::symlink(target.path().join("real.ts"), target.path().join("link.ts"))
+        .unwrap();
+    let script = package.path().join("codemod.ts");
+    let output = Command::new(env!("CARGO_BIN_EXE_codemod"))
+        .args([
+            "jssg",
+            "run",
+            script.to_str().unwrap(),
+            "--language",
+            "typescript",
+            "--target",
+            target.path().to_str().unwrap(),
+            "--allow-dirty",
+            "--no-interactive",
+        ])
+        .env("DISABLE_ANALYTICS", "true")
+        .output()
+        .expect("failed to run codemod");
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(target.path().join("real.ts").exists(), "{}", text(&output));
+    assert!(!target.path().join("link.ts").exists(), "{}", text(&output));
+    assert_eq!(
+        fs::read_to_string(target.path().join("renamed.ts")).unwrap(),
+        "const x = 'NEW';\n"
+    );
+}
