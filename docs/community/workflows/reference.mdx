@@ -1,7 +1,7 @@
 ---
 title: "Workflow Reference"
 sidebarTitle: "Reference"
-description: "The workflow.ts API: steps, per-file callbacks, tasks, state, and resuming runs."
+description: "The workflow.ts API: steps, per-file callbacks, tasks, and resuming runs."
 ---
 
 A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow` and `codemod/deps`, and what else a workflow can import.
@@ -317,7 +317,7 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 |---|---|
 | `forEachFile(selector?, callback)` | Run a callback, inline or imported, on every selected file. See [`forEachFile`](#foreachfileselector-callback). |
 | `forEachFile(selector?, astGrep(rules, { repeat }?))` | Apply ast-grep rules, written in the workflow or imported from YAML, to the selected files; `repeat` runs them until nothing changes. Result: `{ changes, matches, failures }`. See [ast-grep rules](#ast-grep-rules). |
-| `shell(command, { env, cwd })`, ``shell`command` `` | Run a shell command. Result: `{ output }`. See [Shell commands](#shell-commands). |
+| `shell(command, { env, cwd, allowFailure })`, ``shell`command` `` | Run a shell command. Result: `{ stdout, stderr, exitCode }`. See [Shell commands](#shell-commands). |
 | `shard(options)` | Split files into groups. See [Sharding](/community/workflows/sharding). |
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
 | `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
@@ -337,7 +337,7 @@ They all work on the run's one checkout, so they can't run in parallel. A git st
 ```ts
 for (const current of shards) {
   await step(branch(`codemod-${current.name}`));
-  await step(forEachFile({ language: "tsx" }, jssg("./codemod.ts", { files: current._meta_files })));
+  await step(forEachFile({ include: current._meta_files, language: "tsx" }, migrate));
   await step(commit(`refactor: migrate ${current.name}`));
   await step(pullRequest({ title: `refactor: migrate ${current.name}` }));
 }
