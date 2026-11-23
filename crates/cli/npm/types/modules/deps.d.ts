@@ -7,21 +7,29 @@ declare module "codemod:deps" {
   export type Ecosystem = "npm" | "cargo" | "pypi";
   export type DependencyKind = "prod" | "dev" | "peer" | "optional" | "build";
   export type KindsOption = { kinds?: DependencyKind | readonly DependencyKind[] };
+  /**
+   * Options of the methods that list dependents. They list the repository's
+   * own packages only, unless `includeThirdParty` is true.
+   */
+  export type DependentsOptions = KindsOption & { includeThirdParty?: boolean };
 
   /** A `name@version` the lockfiles install, or one of the repository's own packages. */
   export interface PackageNode {
     readonly ecosystem: Ecosystem;
     readonly name: string;
     readonly version: string;
-    /** Directory of one of the repository's own packages; null for third-party packages. */
-    readonly workspace: string | null;
-    readonly isWorkspace: boolean;
+    /** Directory of one of the repository's own packages, relative to the target; null for installed packages. */
+    readonly dir: string | null;
+    /** Whether this is one of the repository's own packages (`dir` is set). */
+    readonly local: boolean;
     /** Edges this node declares. */
     dependencies(options?: KindsOption): DependencyEdge[];
-    /** Edges installed onto this exact node. */
-    dependents(options?: KindsOption): DependencyEdge[];
-    /** Each workspace that reaches this node, with its shortest chain (workspace first, this node last). */
-    workspacesReaching(options?: KindsOption): { workspace: PackageNode; chain: PackageNode[] }[];
+    /**
+     * Edges installed onto this exact node, from the repository's own
+     * packages unless `includeThirdParty`. `g.dependents(name)` also has
+     * declarations the lockfile does not resolve.
+     */
+    installedBy(options?: DependentsOptions): DependencyEdge[];
     /**
      * This package's releases from the registry, oldest first, each with
      * `breaking` relative to this node's version. Yanked releases are dropped.
@@ -88,16 +96,28 @@ declare module "codemod:deps" {
     workspaces(): PackageNode[];
     /** Every node, or every installed version of `name`. */
     nodes(name?: string): PackageNode[];
-    /** One node by name, and by version when several are installed. */
+    /**
+     * One node by name, or by name and version. Throws when several versions
+     * are installed and no version is given: use `nodes(name)` then.
+     */
     node(name: string, version?: string): PackageNode | undefined;
-    /** Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the installed peer). */
-    dependents(name: string, options?: KindsOption): DependencyEdge[];
-    /** Shortest chains from each `from` node (default: every workspace) to any `to` node. */
+    /**
+     * Edges that declare a dependency on `name`, resolved or not (a peer edge
+     * resolves only when pnpm records the installed peer), from the
+     * repository's own packages unless `includeThirdParty`.
+     */
+    dependents(name: string, options?: DependentsOptions): DependencyEdge[];
+    /**
+     * The shortest chain from each `from` node (default: every one of the repository's own packages) to
+     * any `to` node, `from` first and the reached node last. Chains pass
+     * through the repository's own packages, so web reaches moment through
+     * `web > @demo/shared > moment`. A `from` that reaches none has no chain.
+     */
     chains(options: {
       from?: PackageNode | readonly PackageNode[];
       to: PackageNode | readonly PackageNode[];
       kinds?: DependencyKind | readonly DependencyKind[];
-    }): PackageNode[][];
+    }): [from: PackageNode, ...rest: PackageNode[]][];
   }
 
   /**
@@ -106,16 +126,19 @@ declare module "codemod:deps" {
    * target's root, so nested ones need a `lockfiles` glob) into a graph and runs `callback` on it in
    * its own isolate, where it may await `registry` lookups. Nodes and edges in
    * the result are recorded as `name@version` text and `RecordedEdge`.
+   * Write `callback` inline, as an arrow or function expression: the build
+   * extracts it, and a callback passed by name is a build error.
    *
    * @example
    * ```ts
-   * const muiUsers = await step(dependencyGraph({ lockfiles: "yarn.lock" }, (g) =>
-   *   g.dependents("@material-ui/core", { kinds: "prod" })
-   *     .filter((edge) => edge.from.isWorkspace)
-   *     .map((edge) => edge.from.workspace),
+   * const muiUsers = await step(dependencyGraph((g) =>
+   *   g.dependents("@material-ui/core", { kinds: "prod" }).map((edge) => edge.from.dir),
    * ));
    * ```
    */
+  export function dependencyGraph<Output>(
+    callback: (graph: DependencyGraph) => Output | PromiseLike<Output>,
+  ): Task<Recorded<Awaited<Output>>>;
   export function dependencyGraph<Output>(
     options: { lockfiles?: Globs },
     callback: (graph: DependencyGraph) => Output | PromiseLike<Output>,

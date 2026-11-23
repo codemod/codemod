@@ -1173,6 +1173,164 @@ fn yarn_target(h: &Harness) {
     );
 }
 
+/// The demo monorepo: web -> @demo/shared -> moment, api -> moment.
+fn npm_workspaces_target(h: &Harness) {
+    h.write(
+        "package-lock.json",
+        include_str!("../../deps/tests/fixtures/npm-workspaces/package-lock.json"),
+    );
+}
+
+#[test]
+fn who_uses_a_package_follows_workspace_to_workspace_links() {
+    let h = Harness::new();
+    npm_workspaces_target(&h);
+    // The "who uses a package" example in docs/community/workflows/reference.mdx.
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph((g) => {
+    const installed = g.nodes("moment");
+    return {
+      installed: installed.map((node) => node.version),
+      declaredBy: g.dependents("moment")
+        .map((edge) => ({ dir: edge.from.dir, range: edge.range, kind: edge.kind })),
+      reachedBy: g.chains({ to: installed })
+        .filter((chain) => chain.length > 2)
+        .map((chain) => ({ dir: chain[0].dir, via: chain.slice(1, -1).map((node) => node.name) })),
+    };
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "installed": ["2.29.4"],
+            "declaredBy": [
+                { "dir": "packages/api", "range": "^2.29.4", "kind": "prod" },
+                { "dir": "packages/shared", "range": "^2.29.4", "kind": "prod" },
+            ],
+            "reachedBy": [{ "dir": "packages/web", "via": ["@demo/shared"] }],
+        })
+    );
+}
+
+#[test]
+fn a_node_knows_its_directory_and_what_installed_it() {
+    let h = Harness::new();
+    npm_workspaces_target(&h);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph((g) => {
+    const shared = g.node("@demo/shared");
+    return {
+      shared: [shared.dir, shared.local],
+      moment: [g.node("moment").dir, g.node("moment").local],
+      installedBy: shared.installedBy().map((edge) => edge.from.dir),
+    };
+  }));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "shared": ["packages/shared", true],
+            "moment": [null, false],
+            "installedBy": ["packages/api", "packages/web"],
+        })
+    );
+}
+
+#[test]
+fn dependents_are_the_repositorys_own_packages_unless_third_party_ones_are_asked_for() {
+    let h = Harness::new();
+    npm_workspaces_target(&h);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph((g) => ({
+    shared: g.dependents("@demo/shared").map((e) => e.from.dir),
+    undici: g.dependents("undici-types").map((e) => e.from),
+    undiciAll: g.dependents("undici-types", { includeThirdParty: true }).map((e) => e.from),
+    installedBy: g.node("undici-types").installedBy().map((e) => e.from),
+    installedByAll: g.node("undici-types").installedBy({ includeThirdParty: true, kinds: "prod" }).map((e) => e.from),
+    // The root package dev-depends on @types/node; codemod optionally depends on its binaries.
+    typesNode: g.node("@types/node").installedBy().map((e) => e.kind),
+    declaresTypesNode: g.dependents("@types/node").map((e) => [e.from.dir, e.kind]),
+    declaresTypesNodeProd: g.dependents("@types/node", { kinds: "prod" }).map((e) => e.from.dir),
+    typesNodeProd: g.node("@types/node").installedBy({ kinds: "prod" }).map((e) => e.from),
+    binary: g.node("@codemod.com/cli-linux-x64-gnu").installedBy({ includeThirdParty: true }).map((e) => e.kind),
+    binaryProd: g.node("@codemod.com/cli-linux-x64-gnu").installedBy({ includeThirdParty: true, kinds: "prod" }).map((e) => e.from),
+  })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "shared": ["packages/api", "packages/web"],
+            "undici": [],
+            "undiciAll": ["@types/node@22.20.5"],
+            "installedBy": [],
+            "installedByAll": ["@types/node@22.20.5"],
+            "typesNode": ["dev"],
+            "declaresTypesNode": [[".", "dev"]],
+            "declaresTypesNodeProd": [],
+            "typesNodeProd": [],
+            "binary": ["optional"],
+            "binaryProd": [],
+        })
+    );
+}
+
+#[test]
+fn node_by_name_alone_fails_when_several_versions_are_installed() {
+    let h = Harness::new();
+    h.write(
+        "package-lock.json",
+        r#"{
+          "lockfileVersion": 3,
+          "packages": {
+            "": { "name": "app", "dependencies": { "a": "^1.0.0", "b": "^2.0.0" } },
+            "node_modules/a": { "version": "1.0.0", "dependencies": { "b": "^1.0.0" } },
+            "node_modules/a/node_modules/b": { "version": "1.5.0" },
+            "node_modules/b": { "version": "2.1.0" }
+          }
+        }"#,
+    );
+    let workflow = |body: &str| {
+        format!(
+            r#"
+import {{ step }} from "codemod/workflow";
+import {{ dependencyGraph }} from "codemod/deps";
+export default async function main() {{ return await step("B", dependencyGraph((g) => {body})); }}
+"#
+        )
+    };
+    let report = h.start(&workflow(r#"g.node("b", "1.5.0")"#), Value::Null);
+    assert_eq!(output(&report).unwrap(), json!("b@1.5.0"));
+    let report = h.start(&workflow(r#"g.node("b", "2.1.0")"#), Value::Null);
+    assert_eq!(output(&report).unwrap(), json!("b@2.1.0"));
+    let report = h.start(&workflow(r#"g.node("b")"#), Value::Null);
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains(r#"g.node("b"): 2 versions are installed (1.5.0, 2.1.0); use g.nodes("b") or pass a version"#),
+        "{error}"
+    );
+}
+
 /// dnd's releases, counting how often the registry is asked.
 #[derive(Default)]
 struct FakeRegistry(std::sync::atomic::AtomicUsize);
@@ -1231,7 +1389,7 @@ fn a_dependency_graph_callback_walks_the_targets_lockfiles_through_a_live_handle
 import { step } from "codemod/workflow";
 import { dependencyGraph } from "codemod/deps";
 export default async function main() {
-  return await step(dependencyGraph({}, (g) => g.node("dnd").workspacesReaching().map((r) => r.chain)));
+  return await step(dependencyGraph({}, (g) => g.chains({ to: g.node("dnd") })));
 }
 "#,
         Value::Null,
@@ -1393,6 +1551,32 @@ export default async function main() {
     assert_eq!(
         output(&report).unwrap(),
         json!({ "read": ["yarn.lock"], "skipped": [["pnpm-lock.yaml", true]] })
+    );
+}
+
+#[test]
+fn a_dependency_graph_reads_the_lockfiles_its_options_select() {
+    let h = Harness::new();
+    // The root lockfile has moment; the selected nested one has table instead.
+    npm_workspaces_target(&h);
+    h.write("examples/app/yarn.lock", YARN_LOCK);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph({ lockfiles: "examples/app/yarn.lock" }, (g) => ({
+    read: g.lockfiles,
+    table: g.nodes("table").length > 0,
+    moment: g.nodes("moment").length,
+  })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({ "read": ["examples/app/yarn.lock"], "table": true, "moment": 0 })
     );
 }
 
