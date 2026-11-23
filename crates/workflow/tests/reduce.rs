@@ -314,3 +314,60 @@ export default async function main() {
         "{error}"
     );
 }
+
+#[test]
+fn a_reducer_that_never_settles_does_not_keep_a_timed_out_step_running() {
+    let h = Harness::new();
+    h.write("a.txt", "x\n");
+    let started = std::time::Instant::now();
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step("Fold", forEachFile(
+    "*.txt",
+    (file) => { file.write("y\n"); return 1; },
+    () => new Promise(() => {}),
+    0,
+  ), { timeout: 300 });
+}
+"#,
+        Value::Null,
+    );
+    let error = output(&report).unwrap_err();
+    assert!(
+        error.contains("timed out") || error.contains("time"),
+        "{error}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    assert_eq!(h.read("a.txt"), "x\n");
+}
+
+/// The step's key keeps an own `__proto__` key of the initial value, so a
+/// changed one is another step.
+#[test]
+fn an_initial_value_that_differs_only_in_a_proto_key_is_another_step() {
+    let h = Harness::new();
+    h.write("a.txt", "a\n");
+    let workflow = |start: u32| {
+        format!(
+            r#"
+import {{ step, forEachFile }} from "codemod/workflow";
+export default async function main() {{
+  const {{ reduced }} = await step("Fold", forEachFile("*.txt", (file) => {{
+    file.write(file.text + "!");
+    return 1;
+  }}, (acc, n) => acc, JSON.parse('{{"__proto__": {start}}}')));
+  await step("Check", () => {{ throw new Error("not yet"); }});
+  return reduced;
+}}
+"#
+        )
+    };
+    let report = h.start(&workflow(0), Value::Null);
+    assert!(output(&report).is_err());
+    assert_eq!(h.read("a.txt"), "a\n!");
+    let resumed = h.resume(&report, Some(&workflow(1)));
+    assert!(output(&resumed).is_err());
+    assert_eq!(h.read("a.txt"), "a\n!!");
+}

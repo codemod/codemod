@@ -1291,7 +1291,8 @@ function canonical(value: unknown): string {
 function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (isRecord(value)) {
-    const sorted: Record<string, unknown> = {};
+    // No prototype: an own `__proto__` key is kept as data, as JSON has it.
+    const sorted = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(value).sort()) sorted[key] = sortKeys(value[key]);
     return sorted;
   }

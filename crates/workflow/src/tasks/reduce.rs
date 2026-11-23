@@ -74,7 +74,11 @@ impl Fold {
     /// Fold every entry that arrives until the sender is dropped; the
     /// result, or why the reducer failed. Returning early drops `entries`,
     /// which tells [`InOrder`] to stop.
-    pub fn run(self, entries: Receiver<Entry>) -> Result<Value, String> {
+    ///
+    /// `cancel` is the step's flag: a reducer whose promise is still
+    /// pending when it is set stops waiting for it, so a step that times out
+    /// or is canceled does not hang on a reducer that never settles.
+    pub fn run(self, entries: Receiver<Entry>, cancel: &AtomicBool) -> Result<Value, String> {
         let Fold {
             options,
             registry,
@@ -99,7 +103,12 @@ impl Fold {
                     let one: Function = evaluated.get("__reduceOne")?;
                     while let Ok((path, output)) = entries.recv() {
                         let promise: Promise = one.call((output.as_str(), path.as_str()))?;
-                        promise.into_future::<()>().await?;
+                        tokio::select! {
+                            settled = promise.into_future::<()>() => settled?,
+                            () = canceled(cancel) => {
+                                return Err(rquickjs::Exception::throw_message(&ctx, "the step was canceled"));
+                            }
+                        }
                     }
                     let end: Function = evaluated.get("__reduceEnd")?;
                     end.call::<_, String>(())
@@ -116,6 +125,13 @@ impl Fold {
             json
         })?;
         serde_json::from_str(&json).map_err(|e| e.to_string())
+    }
+}
+
+/// Resolves once `cancel` is set.
+async fn canceled(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
@@ -274,6 +290,9 @@ mod tests {
         assert!(in_order.wait_turn(1, &cancel));
         std::thread::scope(|scope| {
             let waiting = scope.spawn(|| in_order.wait_turn(2, &cancel));
+            // File 2 is outside the window until file 0 is folded.
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(!waiting.is_finished());
             in_order.put(0, None);
             assert!(waiting.join().unwrap());
         });

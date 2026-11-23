@@ -262,7 +262,8 @@ fn run_callback(
     let in_order = in_order.as_ref();
 
     let (worker_results, reduced): (Vec<WorkerResult>, _) = std::thread::scope(|scope| {
-        let folding = fold.map(|fold| scope.spawn(move || fold.run(entries)));
+        let cancel = &*task.cancel;
+        let folding = fold.map(|fold| scope.spawn(move || fold.run(entries, cancel)));
         let worker_results = if files.is_empty() {
             Vec::new()
         } else {

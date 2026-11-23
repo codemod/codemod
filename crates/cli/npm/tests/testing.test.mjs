@@ -465,6 +465,35 @@ export default async function main() {
     },
   );
 
+  test(
+    `${host}: a reducer that catches its own failStep() still fails the step`,
+    HOSTS[host],
+    async () => {
+      const path = join(
+        scratch({
+          "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+import { failStep } from "codemod/runtime";
+export default async function main() {
+  await step("Fold", forEachFile("*.ts", (file) => {
+    file.write("changed\\n");
+    return 1;
+  }, (count, n) => {
+    try { failStep("the fold is wrong"); } catch {}
+    return count + n;
+  }, 0));
+}
+`,
+        }),
+        "workflow.ts",
+      );
+      const result = await runWorkflow(path, { target: { "a.ts": "a\n" } });
+      assert.equal(result.status, "failed");
+      assert.match(result.error, /the reducer failed: .*the fold is wrong/);
+      assert.deepEqual(result.files, { "a.ts": "a\n" });
+    },
+  );
+
   test(`${host}: shard runs its filter and function, inline or imported`, HOSTS[host], async () => {
     const path = join(
       scratch({
@@ -871,3 +900,33 @@ export default async function main() {
     assert.match(result.error ?? "", /dependencyGraph\(\) is not available on the Node\.js host/);
   },
 );
+
+test("node: workers stay within the reducer's window", HOSTS.node, async () => {
+  const path = join(
+    scratch({
+      "workflow.ts": `
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  // On Node.js, callbacks and the reducer share globalThis.
+  const { gap } = await step("Fold", forEachFile("*.txt", () => {
+    const shared = globalThis as { started?: number };
+    shared.started = (shared.started ?? 0) + 1;
+    return 1;
+  }, async (acc: { folded: number; gap: number }) => {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    const started = (globalThis as { started?: number }).started ?? 0;
+    return { folded: acc.folded + 1, gap: Math.max(acc.gap, started - acc.folded - 1) };
+  }, { folded: 0, gap: 0 })).then((result) => result.reduced);
+  return gap;
+}
+`,
+    }),
+    "workflow.ts",
+  );
+  const target = Object.fromEntries(
+    Array.from({ length: 1400 }, (_, i) => [`f${String(i).padStart(4, "0")}.txt`, "x\n"]),
+  );
+  const result = await run(path, { target, host: "node" });
+  assert.equal(result.status, "succeeded", result.error);
+  assert.ok(result.output <= 1025, `workers got ${result.output} files ahead`);
+});

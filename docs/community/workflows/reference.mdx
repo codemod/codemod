@@ -219,10 +219,10 @@ reduced; // { "app": 12, "ui": 3 }
 ```
 
 - Use it when there are many files: without a reducer, every output is kept until the step ends and is held in the workflow's memory as `outputs`. With one, each output is folded as its file finishes, so only the result is kept.
-- Outputs are folded in path order, whatever order files finish in, so the result is the same on every run and a reducer may depend on the order. Outputs of files that finish early wait for those before them, and workers stay at most about a thousand files ahead of the reducer, so what waits stays small.
+- Outputs are folded in path order, whatever order files finish in, so the result is the same on every run and a reducer may depend on the order. Outputs of files that finish early wait for those before them, and workers stay at most about a thousand files ahead of the reducer (a few `concurrency`-sized batches per worker, when that is more), so what waits stays small.
 - Files that return nothing, and files whose callback throws, are not folded; the latter are in `failures`, as without a reducer.
 - `initial` must be JSON, and so must the reducer's result. The reducer may be async.
-- Write the reducer inline or [import it](#imported-callbacks) from its own file (type it with `FileReducer<Result, Output>`). It runs in an isolate of its own, with the same rules for outside variables as callbacks; captured variables, the reducer and `initial` are part of the step, so changing them runs it again on resume.
+- Write the reducer inline or [import it](#imported-callbacks) from its own file (type it with `FileReducer<Result, Output>`). With the CLI it runs in an isolate of its own (on the Node.js host, in the same process as the callbacks, so don't share module state between them), with the same rules for outside variables as callbacks; captured variables, the reducer and `initial` are part of the step, so changing them runs it again on resume.
 - A reducer that throws fails the step, and nothing the step's callbacks changed is written.
 - `astGrep(...)` returns nothing per file, so `forEachFile(selector, astGrep(rules), reducer, initial)` is a build and type error.
 
