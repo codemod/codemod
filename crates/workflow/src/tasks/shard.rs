@@ -132,10 +132,11 @@ pub(crate) fn run(task: &TaskContext<'_>, content: Value) -> TaskResult {
 
 /// The files shards are made of, relative to the run's target: those
 /// `files` selects under `target` (the package's languages without one),
-/// then those `filter` keeps. `None` when neither is given: built-in
-/// methods then take every file under `target`.
+/// then those `filter` keeps. When neither is given, a built-in method
+/// takes every text file under `target`, and a shard function gets `None`.
 fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<String>>, TaskError> {
-    if request.files.is_none() && request.filter.is_none() {
+    let everything = request.files.is_none() && request.filter.is_none();
+    if everything && matches!(request.method, Method::Function { .. }) {
         return Ok(None);
     }
     let run = task.run;
@@ -144,14 +145,18 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
         .as_deref()
         .map(|target| target.trim_start_matches("./").trim_end_matches('/'))
         .filter(|target| !target.is_empty() && *target != ".");
-    let files = request
-        .files
-        .as_ref()
-        .map_or_else(Files::default, |files| Files {
+    let files = match &request.files {
+        Some(files) => Files {
             include: files.include.clone(),
             exclude: files.exclude.clone(),
             language: files.language.clone(),
-        });
+        },
+        None if everything => Files {
+            include: vec!["**/*".into()],
+            ..Files::default()
+        },
+        None => Files::default(),
+    };
     let mut selector = Selector {
         include: files.include,
         exclude: files.exclude,

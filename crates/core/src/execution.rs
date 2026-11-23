@@ -30,7 +30,10 @@ pub fn file_walker(base: &Path, overrides: Option<Override>) -> WalkBuilder {
         .require_git(false)
         .parents(true)
         .ignore(true)
-        .hidden(false);
+        .hidden(false)
+        // Hidden files are walked, but git's own files never are: a `.git`
+        // directory, or the `.git` file of a worktree or submodule.
+        .filter_entry(|entry| entry.file_name() != ".git");
     builder
 }
 
@@ -417,6 +420,34 @@ mod tests {
             std::env::temp_dir().join(format!("butterflow-exec-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn select_files_skips_git_files_but_not_other_hidden_files() {
+        let root = temp_dir();
+        for path in [
+            ".git/HEAD",
+            ".git/config",
+            "sub/.git",
+            ".github/CODEOWNERS",
+            "a.ts",
+        ] {
+            let file = root.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, "x").unwrap();
+        }
+        let files: Vec<String> = super::select_files(&root, &["**/*".to_string()], &[])
+            .unwrap()
+            .into_iter()
+            .map(|file| {
+                file.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert_eq!(files, vec![".github/CODEOWNERS", "a.ts"]);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
