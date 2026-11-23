@@ -11,6 +11,7 @@
 
 /**
  * Run workflows from any test runner and compare the files they leave.
+ * `runCallback` runs one `forEachFile` callback file the same way.
  *
  * ```ts
  * import { test } from "node:test";
@@ -182,6 +183,51 @@ export interface WorkflowRun {
   diff(): string;
 }
 
+export interface RunCallbackOptions {
+  /**
+   * The files the callback runs on: a directory or a single file (copied
+   * first), or files by path. It runs on each file in `language`.
+   */
+  target: PathLike | FileTree;
+  /** The language of the files, as `forEachFile`'s `language` (`"typescript"`). */
+  language: string;
+  /**
+   * What `definition()` and `references()` on roots `parse(file)` makes can
+   * find, as `forEachFile`'s option: `"file"` (the default), `"workspace"`
+   * (every file of the target) or `"none"`.
+   */
+  semanticAnalysis?: "file" | "workspace" | "none";
+  /** Capabilities granted on top of those codemod.yaml declares. */
+  capabilities?: Capability[];
+  /** Keep the temporary directory the run changed (`run.dir`). */
+  keep?: boolean;
+  /** Stops the run. */
+  signal?: AbortSignalLike;
+}
+
+/** What a callback returned for one file. */
+export interface CallbackOutput {
+  /** The file's path from the target. */
+  readonly file: string;
+  readonly data: JsonValue;
+}
+
+/** A file the callback threw on, or failed with `failFile`. */
+export interface CallbackFailure {
+  readonly path: string;
+  readonly error: string;
+}
+
+/**
+ * A `runCallback` run: a `WorkflowRun` without steps, which fails when the
+ * callback failed on any file.
+ */
+export interface CallbackRun extends WorkflowRun {
+  /** What the callback returned, by file, in path order; files it returned nothing for are left out. */
+  readonly outputs: readonly CallbackOutput[];
+  readonly failures: readonly CallbackFailure[];
+}
+
 export interface Fixture {
   /** The fixture's directory, relative to the fixtures directory (`"renames/default-export"`). */
   readonly name: string;
@@ -227,6 +273,21 @@ interface HarnessSpec {
   capabilities: Capability[];
 }
 
+/** A `runCallback` test for `codemod workflow harness` (`CallbackCaseRequest` in the CLI). */
+interface CallbackHarnessSpec {
+  callback: string;
+  target: string;
+  language: string;
+  semanticAnalysis: string | undefined;
+  capabilities: Capability[];
+}
+
+/** What the harness reports for a callback test. */
+interface CallbackResult extends RunResult {
+  outputs: CallbackOutput[];
+  failures: CallbackFailure[];
+}
+
 /** What the `codemod` launcher next to this package exports. */
 interface Launcher {
   findBinaryPath(): { binaryPath?: string | null; pkgName?: string | null };
@@ -270,6 +331,56 @@ export async function runWorkflow(
     const files = readTree(dir);
     checkLabels(result, options);
     return new Run(result, dir, before, files);
+  } finally {
+    if (!options.keep) rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Run a `forEachFile` callback kept in its own file (its default export,
+ * `(file) => ...`) on each file of a copy of `options.target` in
+ * `options.language`, as a `forEachFile` step runs it: with the codemod CLI,
+ * in the engine's runtime, with semantic analysis. What it writes, renames
+ * and deletes is applied to the copy; compare it with `assertTree`. What it
+ * returns is in `run.outputs`.
+ *
+ * ```ts
+ * for (const fixture of fixtures("tests")) {
+ *   test(fixture.name, async () => {
+ *     const run = await runCallback("src/migrate.ts", { target: fixture.input, language: "typescript" });
+ *     assertTree(run, fixture.expected);
+ *   });
+ * }
+ * ```
+ *
+ * Resolves for every outcome: the run failed when the callback failed on any
+ * file (`run.failures`). Rejects when the callback cannot run at all.
+ */
+export async function runCallback(
+  callback: PathLike,
+  options: RunCallbackOptions,
+): Promise<CallbackRun> {
+  if (!options || options.target === undefined) {
+    throw new TypeError("runCallback(callback, { target, language }): target is required");
+  }
+  if (typeof options.language !== "string" || !options.language) {
+    throw new TypeError("runCallback(callback, { target, language }): language is required");
+  }
+  const dir = mkdtempSync(join(tmpdir(), "codemod-test-"));
+  try {
+    materialize(options.target, dir);
+    const before = readTree(dir);
+    const result = (await harness(
+      {
+        callback: toPath(callback),
+        target: dir,
+        language: options.language,
+        semanticAnalysis: options.semanticAnalysis,
+        capabilities: options.capabilities ?? [],
+      },
+      options.signal,
+    )) as CallbackResult;
+    return new CallbackRunImpl(result, dir, before, readTree(dir));
   } finally {
     if (!options.keep) rmSync(dir, { recursive: true, force: true });
   }
@@ -404,6 +515,17 @@ class Run implements WorkflowRun {
   }
 }
 
+class CallbackRunImpl extends Run implements CallbackRun {
+  readonly outputs: readonly CallbackOutput[];
+  readonly failures: readonly CallbackFailure[];
+
+  constructor(result: CallbackResult, dir: string, before: Tree, files: Tree) {
+    super(result, dir, before, files);
+    this.outputs = Object.freeze((result.outputs ?? []).map((output) => Object.freeze(output)));
+    this.failures = Object.freeze((result.failures ?? []).map((failure) => Object.freeze(failure)));
+  }
+}
+
 function checkLabels(result: RunResult, options: RunWorkflowOptions): void {
   const ran = result.steps;
   if (options.until !== undefined && result.status === "succeeded") {
@@ -426,7 +548,11 @@ function labels(steps: readonly StepRun[]): string {
   return steps.length ? steps.map((step) => JSON.stringify(step.label)).join(", ") : "(none)";
 }
 
-function harness(spec: HarnessSpec, signal: AbortSignalLike | undefined): Promise<RunResult> {
+function harness(
+  spec: HarnessSpec | CallbackHarnessSpec,
+  signal: AbortSignalLike | undefined,
+): Promise<RunResult> {
+  const what = "workflow" in spec ? spec.workflow : spec.callback;
   const binary = codemodBinary();
   return new Promise((resolvePromise, reject) => {
     const child = spawn(binary, ["workflow", "harness"], {
@@ -470,7 +596,7 @@ function harness(spec: HarnessSpec, signal: AbortSignalLike | undefined): Promis
         /^Error:\s*/,
         "",
       );
-      reject(new Error(`cannot run ${spec.workflow}: ${detail}`));
+      reject(new Error(`cannot run ${what}: ${detail}`));
     });
     child.stdin.end(JSON.stringify(spec));
   });

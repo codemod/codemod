@@ -139,6 +139,13 @@ pub struct Command {
     /// Allow child process access
     #[arg(long)]
     pub allow_child_process: bool,
+
+    /// The file is a forEachFile callback (its default export is
+    /// `(file) => ...`) rather than a jssg transform. It runs on each input
+    /// as a forEachFile step runs it; what it returns is checked against the
+    /// case's data.json.
+    #[arg(long)]
+    pub callback: bool,
 }
 
 async fn send_failure_event(
@@ -345,34 +352,54 @@ async fn handler_impl(args: &Command) -> Result<()> {
                     super::display_path_title(&logical_input_path, Some(&current_dir)),
                 );
 
-                let options = JssgExecutionOptions {
-                    script_path: &codemod_path,
-                    resolver,
-                    language: language_enum,
-                    file_path: &input_path,
-                    content: &input_code,
-                    selector_config: None,
-                    params: test_config.params,
-                    matrix_values: None,
-                    capabilities,
-                    semantic_provider,
-                    llm_request_handler: None,
-                    runtime_event_callback: Some(runtime_event_callback),
-                    cancellation_flag: None,
-                    test_mode: true,
-                    dry_run: false,
-                    target_directory: &target_directory,
-                    pending_files: None,
-                };
                 let file_name = data_file_name(&input_path, &target_directory);
                 let mut data = None;
-                let execution_result = execute_codemod_with_quickjs(options)
-                    .await
-                    .map(|output: CodemodOutput| {
-                        data = output.data;
-                        map_execution_result(output.primary, input_code)
+                let execution_result = if args.callback {
+                    run_callback(CallbackCase {
+                        callback: &codemod_path,
+                        resolver,
+                        target: &target_directory,
+                        path: &file_name,
+                        text: input_code,
+                        language: language_str,
+                        params: test_config.params.as_ref(),
+                        semantic_provider,
+                        capabilities,
+                        runtime_event_callback,
                     })
-                    .map_err(anyhow::Error::from);
+                    .await
+                    .map(|(result, output)| {
+                        data = output;
+                        result
+                    })
+                } else {
+                    let options = JssgExecutionOptions {
+                        script_path: &codemod_path,
+                        resolver,
+                        language: language_enum,
+                        file_path: &input_path,
+                        content: &input_code,
+                        selector_config: None,
+                        params: test_config.params,
+                        matrix_values: None,
+                        capabilities,
+                        semantic_provider,
+                        llm_request_handler: None,
+                        runtime_event_callback: Some(runtime_event_callback),
+                        cancellation_flag: None,
+                        test_mode: true,
+                        dry_run: false,
+                        target_directory: &target_directory,
+                        pending_files: None,
+                    };
+                    execute_codemod_with_quickjs(options)
+                        .await
+                        .map(|output: CodemodOutput| {
+                            data = output.data;
+                            map_execution_result(output.primary, input_code)
+                        })
+                        .map_err(|error| with_callback_hint(anyhow::Error::from(error)))
+                };
 
                 let pending_snapshot = finish_data_collection(
                     shared_data.as_ref(),
@@ -417,6 +444,74 @@ async fn handler_impl(args: &Command) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// One input of a `--callback` test case.
+struct CallbackCase<'a> {
+    callback: &'a Path,
+    resolver: Arc<OxcResolver>,
+    target: &'a Path,
+    /// From the target, with `/`: the callback's `file.path`.
+    path: &'a str,
+    text: String,
+    language: &'a str,
+    params: Option<&'a HashMap<String, serde_json::Value>>,
+    semantic_provider: Option<Arc<dyn SemanticProvider>>,
+    capabilities: Option<HashSet<LlrtSupportedModules>>,
+    runtime_event_callback: codemod_sandbox::sandbox::runtime_module::RuntimeEventCallback,
+}
+
+/// Run a forEachFile callback file on one input, as a `forEachFile` step
+/// runs it: the file's new text (and where it was renamed to), and what the
+/// callback returned.
+async fn run_callback(
+    case: CallbackCase<'_>,
+) -> Result<(TransformationResult, Option<serde_json::Value>)> {
+    if case.params.is_some_and(|params| !params.is_empty()) {
+        anyhow::bail!(
+            "params are not given to a forEachFile callback: a callback file has no options; \
+             remove `params` from the test config, or read the value in the workflow and pass it \
+             to an inline callback"
+        );
+    }
+    let run = codemod_workflow::run_callback_file(codemod_workflow::CallbackFileRequest {
+        callback: case.callback.to_path_buf(),
+        resolver: case.resolver,
+        target: case.target.to_path_buf(),
+        path: case.path.to_string(),
+        text: case.text.clone(),
+        language: Some(case.language.to_string()),
+        semantic_provider: case.semantic_provider,
+        capabilities: case.capabilities.unwrap_or_default(),
+        runtime_event_callback: Some(case.runtime_event_callback),
+    })
+    .await
+    .map_err(|error| anyhow::anyhow!(error))?;
+    if run.deleted {
+        anyhow::bail!("the callback deleted {}: jssg test cannot check deleted files; test it with codemod/testing", case.path);
+    }
+    let rename_to = run.renamed.map(|to| {
+        to.split('/')
+            .filter(|part| !part.is_empty())
+            .fold(case.target.to_path_buf(), |path, part| path.join(part))
+    });
+    let result = TransformationResult::Success(testing_utils::TransformOutput {
+        content: run.written.unwrap_or(case.text),
+        rename_to,
+    });
+    Ok((result, run.output))
+}
+
+/// A forEachFile callback run as a jssg transform fails in `parse(root)`:
+/// say to pass `--callback`.
+fn with_callback_hint(error: anyhow::Error) -> anyhow::Error {
+    if format!("{error:#}").contains("parse(file) expects an object with a string `text`") {
+        anyhow::anyhow!(
+            "{error}\n\nIf this file is a forEachFile callback (`export default (file) => ...`), run it with --callback"
+        )
+    } else {
+        error
+    }
 }
 
 /// A file's name in `data.json`: its path from the target, with `/`, as a
