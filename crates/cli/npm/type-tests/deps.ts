@@ -2,7 +2,7 @@
 // nothing here runs.
 
 import { dependencyGraph } from "codemod/deps";
-import type { PackageNode } from "codemod/deps";
+import type { DependencyEdge, PackageNode } from "codemod/deps";
 import { step } from "codemod/workflow";
 
 type Equal<A, B> =
@@ -38,7 +38,13 @@ export default async function main() {
       const _workspace = moment?.workspace;
       // @ts-expect-error renamed to local
       const _isWorkspace = moment?.isWorkspace;
-      return moment?.installedBy({ kinds: "prod" }).map((edge) => edge.from);
+      // @ts-expect-error includeThirdParty is a boolean
+      g.dependents("moment", { includeThirdParty: "yes" });
+      const declared = g.dependents("moment", { kinds: "prod", includeThirdParty: true });
+      expectType<Equal<typeof declared, DependencyEdge[]>>(true);
+      return moment
+        ?.installedBy({ kinds: "prod", includeThirdParty: false })
+        .map((edge) => edge.from);
     }),
   );
 }

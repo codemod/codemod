@@ -124,6 +124,11 @@ interface KindOptions {
   kinds?: string | string[];
 }
 
+interface DependentOptions extends KindOptions {
+  /** Also list third-party packages; by default only the repository's own. */
+  includeThirdParty?: boolean;
+}
+
 function kindsOf(options?: KindOptions): string {
   const kinds = options?.kinds;
   if (kinds === undefined) return "";
@@ -204,6 +209,11 @@ export function __graph() {
     (JSON.parse(host.edges(direction, String(key), kindsOf(options))) as EdgeRecord[]).map(
       (edge) => new DependencyEdge(edge),
     );
+  /** Edges onto a package, from the repository's own packages unless `includeThirdParty`. */
+  const dependentEdges = (direction: string, key: string | number, options?: DependentOptions) => {
+    const found = edges(direction, key, options);
+    return options?.includeThirdParty ? found : found.filter((edge) => edge.from.local);
+  };
   const nodesOf = (json: string) => (JSON.parse(json) as NodeRecord[]).map(nodeOf);
 
   class PackageNode {
@@ -232,9 +242,9 @@ export function __graph() {
       return edges("out", idOf(this), options);
     }
 
-    /** Edges installed onto this exact node. */
-    installedBy(options?: KindOptions): DependencyEdge[] {
-      return edges("in", idOf(this), options);
+    /** Edges installed onto this exact node, from the repository's own packages unless `includeThirdParty`. */
+    installedBy(options?: DependentOptions): DependencyEdge[] {
+      return dependentEdges("in", idOf(this), options);
     }
 
     /**
@@ -344,9 +354,13 @@ export function __graph() {
       return named[0];
     },
 
-    /** Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the installed peer). */
-    dependents: (name: string, options?: KindOptions): DependencyEdge[] =>
-      edges("named", name, options),
+    /**
+     * Edges that declare a dependency on `name`, resolved or not (a peer edge
+     * resolves only when pnpm records the installed peer), from the
+     * repository's own packages unless `includeThirdParty`.
+     */
+    dependents: (name: string, options?: DependentOptions): DependencyEdge[] =>
+      dependentEdges("named", name, options),
 
     /**
      * The shortest chain from each `from` node (default: every workspace) to

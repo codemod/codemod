@@ -1018,7 +1018,6 @@ export default async function main() {
     return {
       installed: installed.map((node) => node.version),
       declaredBy: g.dependents("moment")
-        .filter((edge) => edge.from.local)
         .map((edge) => ({ dir: edge.from.dir, range: edge.range, kind: edge.kind })),
       reachedBy: g.chains({ to: installed })
         .filter((chain) => chain.length > 2)
@@ -1069,6 +1068,38 @@ export default async function main() {
             "shared": ["packages/shared", true],
             "moment": [null, false],
             "installedBy": ["packages/api", "packages/web"],
+        })
+    );
+}
+
+#[test]
+fn dependents_are_the_repositorys_own_packages_unless_third_party_ones_are_asked_for() {
+    let h = Harness::new();
+    npm_workspaces_target(&h);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph((g) => ({
+    shared: g.dependents("@demo/shared").map((e) => e.from.dir),
+    undici: g.dependents("undici-types").map((e) => e.from),
+    undiciAll: g.dependents("undici-types", { includeThirdParty: true }).map((e) => e.from),
+    installedBy: g.node("undici-types").installedBy().map((e) => e.from),
+    installedByAll: g.node("undici-types").installedBy({ includeThirdParty: true, kinds: "prod" }).map((e) => e.from),
+  })));
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(
+        output(&report).unwrap(),
+        json!({
+            "shared": ["packages/api", "packages/web"],
+            "undici": [],
+            "undiciAll": ["@types/node@22.20.5"],
+            "installedBy": [],
+            "installedByAll": ["@types/node@22.20.5"],
         })
     );
 }

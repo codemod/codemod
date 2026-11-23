@@ -7,6 +7,11 @@ declare module "codemod:deps" {
   export type Ecosystem = "npm" | "cargo" | "pypi";
   export type DependencyKind = "prod" | "dev" | "peer" | "optional" | "build";
   export type KindsOption = { kinds?: DependencyKind | readonly DependencyKind[] };
+  /**
+   * Options of the methods that list dependents. They list the repository's
+   * own packages only, unless `includeThirdParty` is true.
+   */
+  export type DependentsOptions = KindsOption & { includeThirdParty?: boolean };
 
   /** A `name@version` the lockfiles install, or one of the repository's own packages. */
   export interface PackageNode {
@@ -19,8 +24,12 @@ declare module "codemod:deps" {
     readonly local: boolean;
     /** Edges this node declares. */
     dependencies(options?: KindsOption): DependencyEdge[];
-    /** Edges installed onto this exact node. `g.dependents(name)` also has declarations the lockfile does not resolve. */
-    installedBy(options?: KindsOption): DependencyEdge[];
+    /**
+     * Edges installed onto this exact node, from the repository's own
+     * packages unless `includeThirdParty`. `g.dependents(name)` also has
+     * declarations the lockfile does not resolve.
+     */
+    installedBy(options?: DependentsOptions): DependencyEdge[];
     /**
      * This package's releases from the registry, oldest first, each with
      * `breaking` relative to this node's version. Yanked releases are dropped.
@@ -92,10 +101,14 @@ declare module "codemod:deps" {
      * are installed and no version is given: use `nodes(name)` then.
      */
     node(name: string, version?: string): PackageNode | undefined;
-    /** Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the installed peer). */
-    dependents(name: string, options?: KindsOption): DependencyEdge[];
     /**
-     * The shortest chain from each `from` node (default: every workspace) to
+     * Edges that declare a dependency on `name`, resolved or not (a peer edge
+     * resolves only when pnpm records the installed peer), from the
+     * repository's own packages unless `includeThirdParty`.
+     */
+    dependents(name: string, options?: DependentsOptions): DependencyEdge[];
+    /**
+     * The shortest chain from each `from` node (default: every one of the repository's own packages) to
      * any `to` node, `from` first and the reached node last. Chains pass
      * through the repository's own packages, so web reaches moment through
      * `web > @demo/shared > moment`. A `from` that reaches none has no chain.
@@ -117,9 +130,7 @@ declare module "codemod:deps" {
    * @example
    * ```ts
    * const muiUsers = await step(dependencyGraph((g) =>
-   *   g.dependents("@material-ui/core", { kinds: "prod" })
-   *     .filter((edge) => edge.from.local)
-   *     .map((edge) => edge.from.dir),
+   *   g.dependents("@material-ui/core", { kinds: "prod" }).map((edge) => edge.from.dir),
    * ));
    * ```
    */
