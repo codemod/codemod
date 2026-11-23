@@ -26,6 +26,7 @@ use crate::interaction::{Approval, Decision};
 
 /// `codemod/workflow` in isolates.
 const ISOLATE_WORKFLOW_MODULE: &str = "codemod-internal:isolate-workflow";
+const ISOLATE_GIT_MODULE: &str = "codemod-internal:isolate-git";
 
 /// What the YAML translation's callbacks run jssg transforms with.
 pub(crate) const JSSG_COMPAT_MODULE: &str = "codemod-internal:jssg-compat";
@@ -86,15 +87,20 @@ impl StepIsolates {
                     crate::js::isolate_workflow_module().to_string(),
                 ),
                 (
+                    ISOLATE_GIT_MODULE.to_string(),
+                    crate::js::isolate_git_module().to_string(),
+                ),
+                (
                     JSSG_COMPAT_MODULE.to_string(),
                     crate::js::jssg_compat_module().to_string(),
                 ),
             ],
             // Steps, callbacks and the files they import may import
-            // `codemod/deps`, and `codemod/workflow` for helpers they share
-            // with the body.
+            // `codemod/deps`, and `codemod/workflow` and `codemod/git` for
+            // helpers they share with the body.
             codemod_modules: vec![
                 ("workflow", ISOLATE_WORKFLOW_MODULE.to_string()),
+                ("git", ISOLATE_GIT_MODULE.to_string()),
                 ("deps", DEPENDENCIES_MODULE.to_string()),
             ],
             llm_request_handler: None,

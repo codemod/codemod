@@ -313,7 +313,8 @@ fn git_steps_are_skipped_unless_managed_git_is_on() {
     let h = approving();
     let report = h.start(
         r#"
-import { step, branch, commit, pullRequest } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { branch, commit, pullRequest } from "codemod/git";
 export default async function main() {
   return [
     await step(branch("codemod/test")),
@@ -366,7 +367,8 @@ fn git(h: &Harness, args: &[&str]) -> String {
 }
 
 const PARALLEL_SHARDS: &str = r#"
-import { step, approval, branch, commit, forEachFile } from "codemod/workflow";
+import { step, approval, forEachFile } from "codemod/workflow";
+import { branch, commit } from "codemod/git";
 export default async function main() {
   await Promise.all(["a", "b"].map(async (name) => {
     await step(approval(`Migrate ${name}?`));
@@ -415,7 +417,8 @@ fn each_git_step_is_refused_alongside_other_steps() {
         let h = approving();
         let source = format!(
             r#"
-import {{ step, shell, branch, commit, pullRequest }} from "codemod/workflow";
+import {{ step, shell }} from "codemod/workflow";
+import {{ branch, commit, pullRequest }} from "codemod/git";
 export default async function main() {{
   await Promise.all([step(shell("echo hi")), step({task})]);
 }}
@@ -434,7 +437,8 @@ fn managed_git_steps_run_one_shard_after_another() {
     let h = managed_git();
     let report = h.start(
         r#"
-import { step, shell, branch, commit, forEachFile } from "codemod/workflow";
+import { step, shell, forEachFile } from "codemod/workflow";
+import { branch, commit } from "codemod/git";
 export default async function main() {
   // Steps without git still run together.
   await Promise.all([
@@ -470,7 +474,8 @@ fn a_nested_codemod_run_alongside_other_steps_refuses_managed_git() {
     h.bundle_file(
         "child/workflow.ts",
         r#"
-import { step, branch } from "codemod/workflow";
+import { step } from "codemod/workflow";
+import { branch } from "codemod/git";
 export default async function main() {
   await step(branch("codemod-child"));
 }

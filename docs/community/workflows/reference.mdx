@@ -4,7 +4,7 @@ sidebarTitle: "Reference"
 description: "The workflow.ts API: steps, per-file callbacks, tasks, state, and resuming runs."
 ---
 
-A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow` and `codemod/deps`, and what else a workflow can import.
+A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow`, `codemod/git` and `codemod/deps`, and what else a workflow can import.
 
 ## Complete example
 
@@ -324,20 +324,26 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 | `installSkill({ package, path, harness, scope, force })` | Install a package's agent skill. |
 | `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback` on it. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: what the callback returns. |
 | `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
-| `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. See [Git steps](#git-steps). |
+| `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base, branch })` | Git automation. Imported from `codemod/git`. See [Git steps](#git-steps). |
 
 Callbacks kept in files and YAML rule files are imported, relative to the workflow file: there are no file paths to pass.
 
 ### Git steps
 
-`branch`, `commit` and `pullRequest` only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped.
+`branch`, `commit` and `pullRequest` come from `codemod/git`:
+
+```ts
+import { branch, commit, pullRequest } from "codemod/git";
+```
+
+They only touch git when the run uses `--managed-git`; otherwise they are recorded as skipped. They moved out of `codemod/workflow`; importing one from there is a build error that names `codemod/git`.
 
 They all work on the run's one checkout, so they can't run in parallel. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`, before it touches git. So does one inside a `codemod(...)` step that was started while other steps were running. The check happens when a step starts: a git step, or a `codemod(...)` step, that started first is not stopped by steps started after it, so don't start other steps while git work runs. To open one pull request per shard, run the shards one after another:
 
 ```ts
 for (const current of shards) {
   await step(branch(`codemod-${current.name}`));
-  await step(forEachFile({ language: "tsx" }, jssg("./codemod.ts", { files: current._meta_files })));
+  await step(forEachFile({ include: current._meta_files, language: "tsx" }, migrate));
   await step(commit(`refactor: migrate ${current.name}`));
   await step(pullRequest({ title: `refactor: migrate ${current.name}` }));
 }
@@ -557,7 +563,8 @@ export default async function main({ params }: { params: { team?: string } }) {
 Both of these are steps: they appear in the run's steps, and a finished wait is not repeated on resume.
 
 ```ts
-import { sleep, waitForEvent } from "codemod/workflow";
+import { sleep, step, waitForEvent } from "codemod/workflow";
+import { pullRequest } from "codemod/git";
 
 await step("Open the pull request", pullRequest({ title: "Migrate to v2" }));
 const ci = await waitForEvent<{ passed: boolean }>("ci-finished", { timeout: "1h" });

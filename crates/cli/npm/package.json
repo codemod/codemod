@@ -27,6 +27,10 @@
       "types": "./types/deps.d.ts",
       "default": "./runtime/deps.mjs"
     },
+    "./git": {
+      "types": "./types/git.d.ts",
+      "default": "./runtime/git.mjs"
+    },
     "./host": {
       "types": "./runtime/host.d.mts",
       "default": "./runtime/host.mjs"

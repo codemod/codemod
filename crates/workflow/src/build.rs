@@ -57,6 +57,15 @@ pub fn is_deps_module(specifier: &str) -> bool {
     codemod_module(specifier) == Some("deps")
 }
 
+/// Specifier of the git module: `branch`, `commit` and `pullRequest`.
+pub const GIT_MODULE: &str = "codemod/git";
+
+/// Whether a specifier names the git module (`codemod/git`, or
+/// `codemod:git`).
+pub fn is_git_module(specifier: &str) -> bool {
+    codemod_module(specifier) == Some("git")
+}
+
 /// Prelude appended to every extracted callback module.
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -122,7 +131,8 @@ const PURE_BUILTINS: &[&str] = &[
 pub fn module_class(specifier: &str) -> Result<ModuleClass, String> {
     match codemod_module(specifier) {
         Some("workflow") => return Ok(ModuleClass::Workflow),
-        Some("ast-grep" | "deps") => return Ok(ModuleClass::Pure),
+        // `codemod/git` only describes steps, as `codemod/workflow` does.
+        Some("ast-grep" | "deps" | "git") => return Ok(ModuleClass::Pure),
         Some(_) => return Ok(ModuleClass::StepsOnly),
         None => {}
     }
@@ -271,6 +281,9 @@ const REMOVED_STATE_API: &[&str] = &[
 /// Exports that moved from `codemod/workflow` to `codemod/deps`.
 const MOVED_TO_DEPS: &[&str] = &["dependencyGraph", "registry", "semver"];
 
+/// Exports that moved from `codemod/workflow` to `codemod/git`.
+const MOVED_TO_GIT: &[&str] = &["branch", "commit", "pullRequest"];
+
 pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
     let allocator = Allocator::default();
     let parsed = Parser::new(&allocator, source, SourceType::ts()).parse();
@@ -341,6 +354,14 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                     s.span.start,
                                     format!(
                                         "'{imported}' moved to \"{DEPS_MODULE}\": import {{ {imported} }} from \"{DEPS_MODULE}\""
+                                    ),
+                                ));
+                            }
+                            if module == FLOW_MODULE && MOVED_TO_GIT.contains(&imported.as_str()) {
+                                return Err(analysis.error(
+                                    s.span.start,
+                                    format!(
+                                        "'{imported}' moved to \"{GIT_MODULE}\": import {{ {imported} }} from \"{GIT_MODULE}\""
                                     ),
                                 ));
                             }
@@ -973,6 +994,7 @@ impl Analysis<'_> {
             // Other imports are copied as written: in an isolate,
             // `codemod/deps` gives `registry` and `semver` that run there.
             if is_flow_module(&import.source)
+                || is_git_module(&import.source)
                 || is_deps_module(&import.source) && imported == "dependencyGraph"
             {
                 return Err(self.error(

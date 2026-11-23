@@ -372,6 +372,15 @@ fn the_documented_features_translate_and_build() {
 
     expect("\"pr_size\": 20");
     expect("\"mode\": \"safe\"");
+    expect("import { branch, commit, pullRequest } from \"codemod/git\";");
+    let workflow_import = source
+        .lines()
+        .find(|line| line.starts_with("import {") && line.ends_with("from \"codemod/workflow\";"))
+        .unwrap();
+    assert!(
+        !workflow_import.contains("commit"),
+        "git steps imported from codemod/workflow: {workflow_import}"
+    );
     expect("state[\"shards\"] = await step(\"Build shards\", shard({ method: { type: \"directory\", maxFilesPerShard: Number(`${params.pr_size}`) }, target: \"./src\", files: { language: \"tsx\" }, filter: (file) => jssgWouldChange(codemodTransform, file, { language: \"tsx\", params }), previous: state[\"shards\"] }));");
     // Git steps share one checkout: the matrix with a pull request runs one
     // value at a time; the one without runs its values together.

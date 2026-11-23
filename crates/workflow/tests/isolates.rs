@@ -126,6 +126,36 @@ export default async function main() { setState("x", 1); }
 }
 
 #[test]
+fn importing_git_steps_from_the_workflow_module_points_to_codemod_git() {
+    let h = Harness::new();
+    let error = load_error(
+        &h,
+        r#"
+import { step, commit } from "codemod/workflow";
+export default async function main() { await step(commit("x")); }
+"#,
+    );
+    assert!(
+        error.contains(r#"'commit' moved to "codemod/git": import { commit } from "codemod/git""#),
+        "{error}"
+    );
+}
+
+#[test]
+fn git_steps_cannot_start_inside_a_callback() {
+    let h = Harness::new();
+    let error = load_error(
+        &h,
+        r#"
+import { step } from "codemod/workflow";
+import { branch } from "codemod/git";
+export default async function main() { await step(() => { branch("x"); }); }
+"#,
+    );
+    assert!(error.contains("uses 'branch' inside a"), "{error}");
+}
+
+#[test]
 fn callbacks_take_values_by_capture_and_hand_back_what_they_found() {
     let h = Harness::new();
     h.write("a.ts", "react-19");
