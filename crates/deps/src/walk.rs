@@ -68,8 +68,8 @@ impl Walk {
     }
 
     /// The shortest chain from each start to any target, following installed
-    /// edges of `kinds`. A chain does not pass through another workspace,
-    /// so each workspace answers for its own dependencies.
+    /// edges of `kinds`. A chain passes through the repository's own
+    /// packages too, so `web -> shared -> moment` reaches moment from web.
     pub fn chains(&self, from: &[usize], to: &HashSet<usize>, kinds: &[Kind]) -> Vec<Vec<usize>> {
         let mut found = Vec::new();
         for &start in from {
@@ -90,9 +90,7 @@ impl Walk {
                         end = Some(child);
                         break 'search;
                     }
-                    if self.graph.nodes[child].workspace.is_none() {
-                        queue.push_back(child);
-                    }
+                    queue.push_back(child);
                 }
             }
             if let Some(end) = end {
