@@ -718,14 +718,10 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
             Ok(results)
         })
         .await;
-        worker.shutdown(SHUTDOWN_GRACE).await;
+        worker.shutdown(isolate::SHUTDOWN_GRACE).await;
         results
     })
 }
-
-/// How long a worker waits, once its files are done, for work its callbacks
-/// left running.
-const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Why a callback's `jssgTransform` calls on other files fail.
 const NOT_SUPPORTED: &str = "jssgTransform() is not supported in forEachFile callbacks yet; change each file from its own callback";

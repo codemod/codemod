@@ -2082,6 +2082,43 @@ export default async function main() {
     assert_eq!(h.read("b.ts"), "const b = 2;\n");
 }
 
+/// A function step that returns with a timer or an interval still pending
+/// does not crash the run either.
+#[test]
+fn work_a_function_step_leaves_running_does_not_crash_the_run() {
+    let h = Harness::new();
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+export default async function main() {
+  const a = await step("Timer", () => { setTimeout(() => {}, 10_000); return 1; });
+  const b = await step("Interval", () => { setInterval(() => {}, 10); return 2; });
+  return [a, b];
+}
+"#,
+        Value::Null,
+    );
+    assert_eq!(output(&report).unwrap(), json!([1, 2]));
+}
+
+/// Nor does a `dependencyGraph` callback that leaves an interval running.
+#[test]
+fn work_a_dependency_graph_callback_leaves_running_does_not_crash_the_run() {
+    let h = Harness::new();
+    yarn_target(&h);
+    let report = h.start(
+        r#"
+import { step } from "codemod/workflow";
+import { dependencyGraph } from "codemod/deps";
+export default async function main() {
+  return await step(dependencyGraph({}, (g) => { setInterval(() => {}, 10); setTimeout(() => {}, 10_000); return g.node("dnd").name; }));
+}
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+}
+
 /// What every step of a dry run returns, and what it reports it would
 /// change in all, as a real run of the same workflow does it.
 const LATER_STEPS_SEE_EARLIER_ONES: &str = r#"

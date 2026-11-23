@@ -65,8 +65,8 @@ pub(crate) fn call(
     let registry = isolates.registry.clone();
 
     let (json, failure, changes) = block_on(async move {
-        let sandbox = isolate::start(options, registry).await?;
-        let sandbox = &sandbox;
+        let worker = isolate::start(options, registry).await?;
+        let sandbox = &worker;
         let json: Result<String, String> = async_with!(sandbox.context => |ctx| {
             let run = async {
                 let declared = Module::declare(ctx.clone(), name.as_str(), module.as_str())?;
@@ -85,6 +85,9 @@ pub(crate) fn call(
         })
         .await;
         let (failure, changes) = side_effects(sandbox);
+        // Timers or promises the code left running would abort the process
+        // when the runtime is freed: wait for them a little, else leak it.
+        worker.shutdown(isolate::SHUTDOWN_GRACE).await;
         Ok::<_, String>((json?, failure, changes))
     })?;
 
