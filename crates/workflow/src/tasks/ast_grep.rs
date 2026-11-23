@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use butterflow_core::execution::CodemodExecutionConfig;
+use butterflow_core::execution::{language_globs, CodemodExecutionConfig};
 use codemod_sandbox::sandbox::engine::language_data::get_extensions_for_language;
 use codemod_sandbox::{scan_pass_as, with_combined_scan_of, LanguageScan};
 use serde::Deserialize;
@@ -84,7 +84,29 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
         };
         // One walk (`execute` walks twice: once to count, once to visit),
         // then the files go to the threads in walk order.
-        let files = config.try_collect_files()?;
+        let mut files = config.try_collect_files()?;
+        // In a dry run, the files earlier steps would have removed are gone,
+        // and the ones they would have renamed into place are there.
+        if let Some(overlay) = &run.overlay {
+            files.retain(|file| match file.strip_prefix(&run.target) {
+                Ok(path) => !overlay.is_gone(&path.to_string_lossy().replace('\\', "/")),
+                Err(_) => true,
+            });
+            let include = match &request.include {
+                Some(globs) => globs.clone().into_vec(),
+                None => {
+                    let mut globs = Vec::new();
+                    for language in config.languages.iter().flatten() {
+                        globs.extend(language_globs(language)?);
+                    }
+                    globs
+                }
+            };
+            let exclude = request.exclude.clone().map(Globs::into_vec).unwrap_or_default();
+            for path in overlay.created(&include, &exclude)? {
+                files.push(changes::under(&run.target, &path));
+            }
+        }
         let threads = std::thread::available_parallelism()
             .map_or(1, |n| n.get())
             .min(12)
@@ -287,7 +309,12 @@ fn scan_one(
         return;
     };
     // One read: the scan's input is also the original the commit checks.
-    let original = match std::fs::read_to_string(path) {
+    // In a dry run, the text earlier steps would have left.
+    let read = match &run.overlay {
+        Some(overlay) => overlay.read(&display, path),
+        None => std::fs::read_to_string(path),
+    };
+    let original = match read {
         Ok(text) => text,
         // Gone since the walk: not a file now.
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,

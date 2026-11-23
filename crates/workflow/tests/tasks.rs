@@ -2081,3 +2081,111 @@ export default async function main() {
     assert_eq!(h.read("a.ts"), "const a = 2;\n");
     assert_eq!(h.read("b.ts"), "const b = 2;\n");
 }
+
+/// What every step of a dry run returns, and what it reports it would
+/// change in all, as a real run of the same workflow does it.
+const LATER_STEPS_SEE_EARLIER_ONES: &str = r#"
+import { step, forEachFile, astGrep } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  await step("One", forEachFile("**/*.ts", (file) => {
+    if (file.path === "gone.ts") return file.delete();
+    file.write(file.text.replace("1", "2"));
+    if (file.path === "old.ts") file.rename("new.ts");
+  }));
+  const seen = await step("Two", forEachFile("**/*.ts", (file) => {
+    file.write(file.text.replace("2", "3"));
+    return file.path;
+  }));
+  const rules = await step("Three", forEachFile(astGrep({ id: "let", language: "typescript", rule: { pattern: "const $A = 3" }, fix: "let $A = 3;" })));
+  await step("Four", async () => {
+    await jssgTransform((root) => root.root().text().replace("let", "var"), `${target}/a.ts`, "typescript");
+  });
+  return { seen: seen.outputs, matches: rules.matches };
+}
+"#;
+
+fn later_steps_target(h: &Harness) {
+    h.write("a.ts", "const a = 1;\n");
+    h.write("old.ts", "const o = 1;\n");
+    h.write("gone.ts", "const g = 1;\n");
+}
+
+/// In a dry run each step reads what the earlier ones would have left:
+/// edited text, renamed files at their new paths, deleted files gone. The
+/// diff it reports at the end is a real run's, and nothing is written.
+#[test]
+fn a_dry_run_lets_later_steps_see_what_earlier_ones_would_change() {
+    use butterflow_core::diff::{generate_unified_diff, DiffConfig, DiffMetadata};
+    let real = Harness::new();
+    later_steps_target(&real);
+    let real_report = real.start(LATER_STEPS_SEE_EARLIER_ONES, Value::Null);
+    let expected_output = json!({ "seen": ["a.ts", "new.ts"], "matches": 2 });
+    assert_eq!(output(&real_report).unwrap(), expected_output);
+    assert_eq!(real.read("a.ts"), "var a = 3;\n");
+    assert_eq!(real.read("new.ts"), "let o = 3;\n");
+    assert!(!real.exists("old.ts") && !real.exists("gone.ts"));
+
+    let dry = Harness::new();
+    later_steps_target(&dry);
+    let dry_report = dry.dry_run(LATER_STEPS_SEE_EARLIER_ONES);
+    assert_eq!(output(&dry_report).unwrap(), expected_output);
+    assert_eq!(dry.read("a.ts"), "const a = 1;\n");
+    assert_eq!(dry.read("old.ts"), "const o = 1;\n");
+    assert_eq!(dry.read("gone.ts"), "const g = 1;\n");
+    assert!(!dry.exists("new.ts"));
+
+    let diffs: Vec<(String, String)> = dry
+        .events
+        .take()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::RunDiff { path, diff, .. } => Some((path, diff)),
+            _ => None,
+        })
+        .collect();
+    let diff = |path: &str, before: &str, after: &str| {
+        let config = DiffConfig {
+            color: false,
+            ..DiffConfig::default()
+        };
+        let diff = generate_unified_diff(
+            std::path::Path::new(path),
+            before,
+            after,
+            &config,
+            DiffMetadata::default(),
+        );
+        (path.to_string(), diff.diff_text)
+    };
+    assert_eq!(
+        diffs,
+        vec![
+            diff("a.ts", "const a = 1;\n", &real.read("a.ts")),
+            diff("gone.ts", "const g = 1;\n", ""),
+            diff("new.ts", "", &real.read("new.ts")),
+            diff("old.ts", "const o = 1;\n", ""),
+        ]
+    );
+    assert!(diffs[0].1.contains("+var a = 3;"), "{diffs:?}");
+}
+
+/// A real run reports no run diff: its steps' diffs are in the summary.
+#[test]
+fn only_a_dry_run_reports_its_diff_when_it_ends() {
+    let h = Harness::new();
+    h.write("a.txt", "1\n");
+    let report = h.start(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() { await step(forEachFile("a.txt", (file) => file.write("2\n"))); }
+"#,
+        Value::Null,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    assert!(!h
+        .events
+        .take()
+        .iter()
+        .any(|event| matches!(event, Event::RunDiff { .. })));
+}

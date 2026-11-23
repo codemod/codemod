@@ -228,7 +228,9 @@ impl EventSink for NestedEvents {
                 });
                 return;
             }
-            Event::RunStarted { .. } | Event::RunFinished { .. } => return,
+            // A nested run shares its parent's dry run overlay: its changes
+            // are in the parent's diff.
+            Event::RunStarted { .. } | Event::RunDiff { .. } | Event::RunFinished { .. } => return,
         };
         self.parent.emit(Event::StepLog { position, line });
     }

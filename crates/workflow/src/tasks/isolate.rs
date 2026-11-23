@@ -111,7 +111,12 @@ impl StepIsolates {
             target_directory: run.target.clone(),
             default_language,
             semantic_provider: self.semantic_provider.clone(),
-            pending_files: None,
+            // In a dry run, `jssgTransform` starts from what earlier steps
+            // would have left.
+            pending_files: run
+                .overlay
+                .as_ref()
+                .map(super::overlay::Overlay::pending_files),
         }
     }
 }

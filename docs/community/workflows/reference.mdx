@@ -434,6 +434,8 @@ A command that exits with an error fails the step, and the error ends with what 
 
 Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
 
+A dry run keeps what each step would change in memory, and later steps read that instead of the disk: `forEachFile` callbacks, `astGrep` rules, `jssgTransform` in function steps and nested `codemod()` runs see the text earlier steps left, renamed files at their new paths, and not the files they deleted. Shell commands don't run in a dry run, so they see none of it. When the run ends, the CLI prints a unified diff of everything the run would change (with `--format jsonl`, one `run_diff` event per file, with `path`, `diff`, `additions` and `deletions`). A renamed file shows as its old path removed and its new path added.
+
 If a `codemod()` step resolves a preview-only registry package during an apply run, the step fails before starting that package. Rerun the workflow with `--dry-run` to preview it. This also applies to packages called by nested workflows.
 
 ### Coding agents

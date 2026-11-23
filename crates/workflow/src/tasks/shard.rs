@@ -183,7 +183,7 @@ fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<Stri
     let Some(filter) = &request.filter else {
         // Only text files: the ones a `forEachFile` callback would get.
         return Ok(Some(
-            for_each_file::read_selected(selected, None)
+            for_each_file::read_selected(selected, None, None)
                 .into_iter()
                 .map(|(path, _)| under_target(path))
                 .collect(),

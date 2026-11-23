@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -394,6 +394,8 @@ pub struct Renderer {
     seq: AtomicU64,
     /// Steps that finished with some of their files failed.
     partial: AtomicU64,
+    /// A dry run's diff has begun.
+    diffs_shown: AtomicBool,
 }
 
 impl Renderer {
@@ -409,6 +411,7 @@ impl Renderer {
             agent_text: Mutex::new(HashMap::new()),
             seq: AtomicU64::new(0),
             partial: AtomicU64::new(0),
+            diffs_shown: AtomicBool::new(false),
         }
     }
 
@@ -571,6 +574,15 @@ impl EventSink for Renderer {
                     StepStatus::Waiting => {}
                 }
             }
+            Event::RunDiff { diff, .. } => {
+                if !self.diffs_shown.swap(true, Ordering::SeqCst) {
+                    self.line(format!(
+                        "\n{}",
+                        style("Dry run: these changes were not written").bold()
+                    ));
+                }
+                self.line(color_diff(&diff));
+            }
             Event::RunFinished { status, .. } => {
                 if status == RunStatus::Succeeded {
                     match self.partial.load(Ordering::SeqCst) {
@@ -589,6 +601,27 @@ impl EventSink for Renderer {
             }
         }
     }
+}
+
+/// A unified diff with its headers, hunks, additions and removals styled.
+fn color_diff(diff: &str) -> String {
+    diff.trim_end()
+        .lines()
+        .map(|line| {
+            if line.starts_with("+++") || line.starts_with("---") {
+                style(line).bold().to_string()
+            } else if line.starts_with('+') {
+                style(line).green().to_string()
+            } else if line.starts_with('-') {
+                style(line).red().to_string()
+            } else if line.starts_with("@@") {
+                style(line).cyan().to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // --------------------------------------------------------- interaction ---

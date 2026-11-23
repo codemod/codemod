@@ -127,8 +127,8 @@ fn check_containment(target: &Path, path: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Check the plan, then apply it unless `dry_run`. Returns
-/// `{ written, renamed, deleted }`.
+/// Check the plan, then apply it: to disk, or in a dry run to the run's
+/// overlay, which later steps read. Returns `{ written, renamed, deleted }`.
 ///
 /// Nothing is applied when a path leaves the target, two changes collide, a
 /// file changed on disk since the task read it (another step edited it), or
@@ -160,9 +160,18 @@ pub(crate) fn commit(
             }
         }
     }
-    check_conflicts(target, &planned)?;
-    let unchanged = parallel_map(&planned, |plan| {
-        fs::read(target.join(&plan.path)).is_ok_and(|on_disk| on_disk == plan.original.as_bytes())
+    let overlay = run.overlay.as_deref();
+    let exists = |path: &str| match overlay {
+        Some(overlay) => overlay.exists(path),
+        None => target.join(path).exists(),
+    };
+    check_conflicts(target, &planned, &exists)?;
+    let unchanged = parallel_map(&planned, |plan| match overlay {
+        Some(overlay) => overlay
+            .read(&plan.path, &target.join(&plan.path))
+            .is_ok_and(|now| now == plan.original),
+        None => fs::read(target.join(&plan.path))
+            .is_ok_and(|on_disk| on_disk == plan.original.as_bytes()),
     });
     if let Some((plan, _)) = planned.iter().zip(unchanged).find(|(_, same)| !same) {
         return Err(format!(
@@ -171,8 +180,10 @@ pub(crate) fn commit(
         ));
     }
 
-    if !dry_run {
-        apply(target, &planned)?;
+    match overlay {
+        Some(overlay) => overlay.apply(&planned),
+        None if !dry_run => apply(target, &planned)?,
+        None => {}
     }
 
     let mut written = Vec::new();
@@ -248,7 +259,12 @@ fn normalized(planned: &[PlannedChange]) -> Result<Vec<PlannedChange>, String> {
 }
 
 /// Two files moved to one path, or a file moved onto one that stays.
-fn check_conflicts(target: &Path, planned: &[PlannedChange]) -> Result<(), String> {
+/// `exists`: whether a path (relative) is a file now.
+fn check_conflicts(
+    target: &Path,
+    planned: &[PlannedChange],
+    exists: &dyn Fn(&str) -> bool,
+) -> Result<(), String> {
     let vacated: HashSet<&str> = planned
         .iter()
         .filter(|p| !matches!(p.change, Change::Edit(_)))
@@ -268,7 +284,7 @@ fn check_conflicts(target: &Path, planned: &[PlannedChange]) -> Result<(), Strin
         }
         let stays_planned = planned_paths.contains(to.as_str()) && !vacated.contains(to.as_str());
         let stays_on_disk = !vacated.contains(to.as_str())
-            && target.join(to).exists()
+            && exists(to)
             && !same_file(&target.join(&plan.path), &target.join(to));
         if stays_planned || stays_on_disk {
             return Err(format!(
