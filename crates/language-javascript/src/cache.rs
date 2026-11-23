@@ -51,8 +51,17 @@ pub struct ExportedSymbol {
     /// Whether this is the default export
     pub is_default: bool,
     /// Whether this is a re-export (export { x } from './other')
-    #[allow(dead_code)]
     pub re_export_from: Option<String>,
+    /// Name of the binding this export refers to: the local binding for
+    /// `export { a as b }`, or the name in the source module for
+    /// `export { a as b } from './other'`. `None` for `export *` and
+    /// declaration exports.
+    pub local_name: Option<String>,
+    /// Byte range of the export specifier (`a as b`), when the export
+    /// comes from an `export { … }` clause.
+    pub specifier_range: Option<ByteRange>,
+    /// Byte range of the local name inside the specifier (`a` in `a as b`).
+    pub local_range: Option<ByteRange>,
 }
 
 /// Information about a reference to a symbol.
@@ -120,6 +129,16 @@ impl FileSymbols {
     /// Find an export by name.
     pub fn find_export_by_name(&self, name: &str) -> Option<&ExportedSymbol> {
         self.exports.iter().find(|e| e.name == name)
+    }
+
+    /// Find a re-export specifier (`export { a as b } from './x'`) whose
+    /// specifier span contains the given range.
+    pub fn find_reexport_specifier_at(&self, range: ByteRange) -> Option<&ExportedSymbol> {
+        self.exports.iter().find(|e| {
+            e.re_export_from.is_some()
+                && e.specifier_range
+                    .is_some_and(|r| r.start <= range.start && r.end >= range.end)
+        })
     }
 
     /// Get the default export.

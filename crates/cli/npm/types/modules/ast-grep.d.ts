@@ -60,6 +60,10 @@ declare module "codemod:ast-grep" {
      * When a symbol comes from an import that can't be resolved (e.g., external module),
      * the definition will point to the import statement with `kind: 'import'`.
      *
+     * In workspace scope, imported names and names inside a re-export
+     * (`export { a as b } from "./a"`, `export *`) follow the re-export chain
+     * to the original declaration (`kind: 'external'`).
+     *
      * @param options - Optional settings for definition lookup
      * @param options.resolveExternal - If false, stop at import statements without
      *   attempting to resolve the source module. Default: true
