@@ -166,6 +166,16 @@ pub(crate) fn commit(
         None => target.join(path).exists(),
     };
     check_conflicts(target, &planned, &exists)?;
+    if let Some(overlay) = overlay {
+        let destinations: Vec<&str> = planned
+            .iter()
+            .filter_map(|plan| match &plan.change {
+                Change::Move { to, .. } => Some(to.as_str()),
+                _ => None,
+            })
+            .collect();
+        overlay.check_destinations(&destinations)?;
+    }
     let unchanged = parallel_map(&planned, |plan| match overlay {
         Some(overlay) => overlay
             .read(&plan.path, &target.join(&plan.path))

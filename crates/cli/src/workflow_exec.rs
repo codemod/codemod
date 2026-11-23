@@ -605,7 +605,8 @@ impl EventSink for Renderer {
 
 /// A unified diff with its headers, hunks, additions and removals styled.
 fn color_diff(diff: &str) -> String {
-    diff.trim_end()
+    // Only the line breaks: trailing spaces on the last line are part of it.
+    diff.trim_end_matches(['\n', '\r'])
         .lines()
         .map(|line| {
             if line.starts_with("+++") || line.starts_with("---") {
@@ -694,5 +695,16 @@ impl Interaction for TerminalInteraction {
                 .map(|c| c.name.clone()),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod color_diff_tests {
+    use super::color_diff;
+
+    #[test]
+    fn trailing_spaces_on_the_last_line_are_kept() {
+        let shown = color_diff("-a\n+a \n");
+        assert_eq!(console::strip_ansi_codes(&shown), "-a\n+a ");
     }
 }

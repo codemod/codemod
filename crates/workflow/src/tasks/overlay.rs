@@ -82,6 +82,37 @@ impl Overlay {
         }
     }
 
+    /// Whether files may be moved to `destinations` as earlier steps left
+    /// the target, as a real run would find it: no parent of one is a file
+    /// (here, on disk, or another destination), and none is a directory.
+    pub fn check_destinations(&self, destinations: &[&str]) -> Result<(), String> {
+        let files = self.files();
+        let is_file = |path: &str| match files.get(path) {
+            Some(text) => text.is_some(),
+            None => under(&self.target, path).is_file(),
+        };
+        for to in destinations {
+            let parts: Vec<&str> = to.split('/').collect();
+            for end in 1..parts.len() {
+                let ancestor = parts[..end].join("/");
+                if is_file(&ancestor) || destinations.contains(&ancestor.as_str()) {
+                    return Err(format!(
+                        "cannot move a file to '{to}': '{ancestor}' is a file"
+                    ));
+                }
+            }
+            let inside = format!("{to}/");
+            let has_files = files
+                .range(inside.clone()..)
+                .take_while(|(path, _)| path.starts_with(&inside))
+                .any(|(_, text)| text.is_some());
+            if has_files || under(&self.target, to).is_dir() {
+                return Err(format!("cannot move a file to '{to}': it is a directory"));
+            }
+        }
+        Ok(())
+    }
+
     /// Record a step's checked plan as done.
     pub fn apply(&self, planned: &[PlannedChange]) {
         let mut files = self.files();

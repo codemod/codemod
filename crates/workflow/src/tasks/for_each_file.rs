@@ -666,22 +666,23 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                     match (transaction, outcomes.as_mut_slice()) {
                         // One file, in its own transaction.
                         (Some(transaction), [outcome]) => {
-                            let keep = match (outcome.as_mut(), compat) {
-                                (Err(_), _) => false,
+                            let (keep, renames) = match (outcome.as_mut(), compat) {
+                                (Err(_), _) => (false, Vec::new()),
                                 (Ok(file), Some(compat)) => {
-                                    match keep_changes(target, other_files, file, compat, effects.other_files) {
-                                        Ok(keep) => keep,
+                                    match keep_changes(target, file, compat, effects.other_files) {
+                                        Ok(Some(renames)) => (true, renames),
+                                        Ok(None) => (false, Vec::new()),
                                         Err(error) => {
                                             *outcome = Err(error);
-                                            false
+                                            (false, Vec::new())
                                         }
                                     }
                                 }
                                 (Ok(_), None) if !effects.other_files.is_empty() => {
                                     *outcome = Err(NOT_SUPPORTED.to_string());
-                                    false
+                                    (false, Vec::new())
                                 }
-                                (Ok(_), None) => true,
+                                (Ok(_), None) => (true, Vec::new()),
                             };
                             // A transform still running would change files after
                             // they are given back: refuse what the callback did.
@@ -691,6 +692,14 @@ fn worker(job: Job<'_>, progress: &(dyn Fn() + Sync)) -> WorkerResult {
                             } else {
                                 keep
                             };
+                            // Its renames count only when its changes do.
+                            if keep {
+                                other_files
+                                    .renames
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner())
+                                    .extend(renames);
+                            }
                             transaction.finish(keep);
                         }
                         _ if !effects.other_files.is_empty() => {
@@ -839,17 +848,16 @@ fn install_compat_host<'js>(
 
 /// Put what a jssg transform did to its file into the step's unwritten
 /// files, with the renames it and its `jssgTransform` calls made. Its
-/// effects are then committed from there. Gives whether to keep the
-/// transaction's changes.
+/// effects are then committed from there. Gives the renames to keep, or
+/// `None` when the transaction's changes are dropped.
 fn keep_changes(
     target: &Path,
-    other_files: &OtherFiles,
     outcome: &mut FileOutcome,
     compat: CompatFile,
     changed: Vec<FileChange>,
-) -> Result<bool, String> {
+) -> Result<Option<Vec<(PathBuf, PathBuf)>>, String> {
     if compat.discard {
-        return Ok(false);
+        return Ok(None);
     }
     let mut renames = Vec::new();
     for effect in std::mem::take(&mut outcome.effects) {
@@ -881,12 +889,7 @@ fn keep_changes(
             renames.push((path, to));
         }
     }
-    other_files
-        .renames
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .extend(renames);
-    Ok(true)
+    Ok(Some(renames))
 }
 
 /// What a callback's effects leave of one file. `delete()` wins over

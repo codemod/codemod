@@ -1446,28 +1446,121 @@ export default async function main() {
 /// select gets both fixes, and a `.py` file only the `python` one.
 #[test]
 fn ast_grep_rules_of_several_languages_each_apply_to_their_files() {
+    for repeat in ["", ", { repeat: true }"] {
+        let h = Harness::new();
+        h.write("a.js", "console.log(1);\nalert(2);\n");
+        h.write("b.ts", "console.log(1);\nalert(2);\n");
+        h.write("c.py", "print(1)\n");
+        let report = h.start(
+            &format!(
+                r#"
+import {{ step, forEachFile, astGrep }} from "codemod/workflow";
+export default async function main() {{
+  const result = await step(forEachFile(astGrep([
+    {{ id: "log", language: "typescript", rule: {{ pattern: "console.log($A)" }}, fix: "logger.info($A)" }},
+    {{ id: "alert", language: "javascript", rule: {{ pattern: "alert($A)" }}, fix: "notify($A)" }},
+    {{ id: "print", language: "python", rule: {{ pattern: "print($A)" }}, fix: "log($A)" }},
+  ]{repeat})));
+  return [result.changes.written, result.matches];
+}}
+"#
+            ),
+            Value::Null,
+        );
+        // a.js gets a typescript and a javascript fix, b.ts and c.py one each.
+        assert_eq!(
+            output(&report).unwrap(),
+            json!([["a.js", "b.ts", "c.py"], 4]),
+            "{repeat}"
+        );
+        assert_eq!(h.read("a.js"), "logger.info(1);\nnotify(2);\n");
+        assert_eq!(h.read("b.ts"), "logger.info(1);\nalert(2);\n");
+        assert_eq!(h.read("c.py"), "log(1)\n");
+    }
+}
+
+/// Rules of two languages that undo each other on a file fail it, rather
+/// than counting fixes that leave nothing changed.
+#[test]
+fn ast_grep_rules_of_two_languages_that_undo_each_other_fail_the_file() {
     let h = Harness::new();
-    h.write("a.js", "console.log(1);\nalert(2);\n");
-    h.write("b.ts", "console.log(1);\nalert(2);\n");
-    h.write("c.py", "print(1)\n");
+    h.write("a.js", "a();\n");
     let report = h.start(
         r#"
 import { step, forEachFile, astGrep } from "codemod/workflow";
 export default async function main() {
-  const result = await step(forEachFile(astGrep([
-    { id: "log", language: "typescript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" },
-    { id: "alert", language: "javascript", rule: { pattern: "alert($A)" }, fix: "notify($A)" },
-    { id: "print", language: "python", rule: { pattern: "print($A)" }, fix: "log($A)" },
-  ])));
-  return result.changes.written;
+  await step(forEachFile(astGrep([
+    { id: "ab", language: "typescript", rule: { pattern: "a()" }, fix: "b()" },
+    { id: "ba", language: "javascript", rule: { pattern: "b()" }, fix: "a()" },
+  ], { repeat: true })));
 }
 "#,
         Value::Null,
     );
-    assert_eq!(output(&report).unwrap(), json!(["a.js", "b.ts", "c.py"]));
-    assert_eq!(h.read("a.js"), "logger.info(1);\nnotify(2);\n");
-    assert_eq!(h.read("b.ts"), "logger.info(1);\nalert(2);\n");
-    assert_eq!(h.read("c.py"), "log(1)\n");
+    // Its only file failed, so the step did.
+    let error = output(&report).unwrap_err();
+    assert!(error.contains("undo each other"), "{error}");
+    assert_eq!(h.read("a.js"), "a();\n");
+}
+
+/// In a dry run, a file can't be moved under a path an earlier step moved a
+/// file to, as a real run can't.
+#[test]
+fn a_dry_run_refuses_a_move_under_a_file_an_earlier_step_made() {
+    let source = r#"
+import { step, forEachFile } from "codemod/workflow";
+export default async function main() {
+  await step("One", forEachFile("a.txt", (file) => file.rename("out")));
+  await step("Two", forEachFile("b.txt", (file) => file.rename("out/b.txt")));
+}
+"#;
+    for dry in [false, true] {
+        let h = Harness::new();
+        h.write("a.txt", "a\n");
+        h.write("b.txt", "b\n");
+        let report = if dry {
+            h.dry_run(source)
+        } else {
+            h.start(source, Value::Null)
+        };
+        let failed = output(&report).is_err()
+            || report
+                .steps
+                .iter()
+                .any(|step| step.label == "Two" && step.status != StepStatus::Succeeded);
+        assert!(failed, "dry: {dry}: {:?}", report.ending);
+    }
+}
+
+/// A function step's `jssgTransform` that only renames a file an earlier
+/// dry-run step made moves it.
+#[test]
+fn a_dry_run_keeps_a_rename_only_jssg_transform_of_a_file_an_earlier_step_made() {
+    let h = Harness::new();
+    h.write("a.ts", "const a = 1;\n");
+    let report = h.dry_run(
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { jssgTransform } from "codemod/ast-grep";
+export default async function main({ target }) {
+  await step("One", forEachFile("a.ts", (file) => file.rename("b.ts")));
+  await step("Two", async () => {
+    await jssgTransform((root) => { root.rename("c.ts"); return root.root().text(); }, `${target}/b.ts`, "typescript");
+  });
+}
+"#,
+    );
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let paths: Vec<String> = h
+        .events
+        .take()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::RunDiff { path, .. } => Some(path),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paths, ["a.ts", "c.ts"]);
 }
 
 const CONSOLE_TO_LOGGER: &str = r#"{ id: "log", language: "javascript", rule: { pattern: "console.log($A)" }, fix: "logger.info($A)" }"#;

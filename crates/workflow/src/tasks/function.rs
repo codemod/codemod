@@ -109,7 +109,7 @@ pub(crate) fn call(
 pub(crate) fn side_effects(sandbox: &Worker) -> (Option<String>, Vec<JssgFileChange>) {
     let effects = sandbox.take_side_effects();
     let failure = effects.failure.map(|failure| failure.message);
-    let renames: HashMap<PathBuf, PathBuf> = effects
+    let mut renames: HashMap<PathBuf, PathBuf> = effects
         .other_files
         .into_iter()
         .filter_map(|change| match change.result {
@@ -120,15 +120,32 @@ pub(crate) fn side_effects(sandbox: &Worker) -> (Option<String>, Vec<JssgFileCha
             _ => None,
         })
         .collect();
-    let changes = sandbox
+    let mut changes: Vec<JssgFileChange> = sandbox
         .changed_files()
         .into_iter()
         .map(|(path, original, content)| JssgFileChange {
-            rename_to: renames.get(&path).cloned(),
+            rename_to: renames.remove(&path),
             path,
             original,
             content,
         })
         .collect();
+    // Files only renamed: their text as the step found it (in a dry run,
+    // as earlier steps left it).
+    for (path, to) in renames {
+        let text = match sandbox.pending_files() {
+            Some(pending) => pending.take(&path).map(|(text, _)| text).ok(),
+            None => std::fs::read_to_string(&path).ok(),
+        };
+        if let Some(text) = text {
+            changes.push(JssgFileChange {
+                path,
+                original: text.clone(),
+                content: text,
+                rename_to: Some(to),
+            });
+        }
+    }
+    changes.sort_by(|a, b| a.path.cmp(&b.path));
     (failure, changes)
 }

@@ -131,6 +131,11 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Request) -> TaskResult {
                     fixed = Some(next);
                 }
             }
+            // One language's rules can undo another's: the text is back
+            // where it started though rules changed it.
+            if fixed.as_deref() == Some(text) && scans.len() > 1 {
+                return Err("rules of different languages undo each other's fixes on this file, so it was left as it was".to_string());
+            }
             Ok::<_, String>((matches, fixes, fixed.filter(|fixed| fixed != text)))
         };
         // (matches, the new text when the fixes changed the file).

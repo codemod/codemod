@@ -292,7 +292,9 @@ impl PendingFiles {
         }
     }
 
-    /// Every file whose text the step changed: `(path, on disk, now)`, by path.
+    /// Every file whose text the step changed: `(path, at the start of the
+    /// step, now)`, by path. The first text is the disk's, or in a dry run
+    /// what earlier steps left.
     pub fn changed(&self) -> Vec<(PathBuf, String, String)> {
         let mut changed: Vec<_> = self
             .lock()
