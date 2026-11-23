@@ -363,6 +363,14 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                     ),
                                 ));
                             }
+                            if is_deps_module(&module) {
+                                return Err(analysis.error(
+                                    s.span.start,
+                                    format!(
+                                        "import what you use from \"{module}\" by name (import {{ dependencyGraph }} from \"{module}\"): the build finds dependencyGraph callbacks by that name"
+                                    ),
+                                ));
+                            }
                             let line = format!("import * as {} from {:?};", s.local.name, module);
                             (&s.local, None, line)
                         }
@@ -501,7 +509,7 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                                     if task == "forEachFile" {
                                         "forEachFile takes a callback, written inline or imported from its file, or astGrep(...), optionally after a selector"
                                     } else {
-                                        "dependencyGraph takes options and a callback"
+                                        "dependencyGraph takes a callback, optionally after options"
                                     }
                                     .to_string(),
                                 ));

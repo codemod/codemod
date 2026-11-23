@@ -1,4 +1,4 @@
-//! `dependencyGraph({ lockfiles }, async (g) => ...)`: reads the target's
+//! `dependencyGraph([{ lockfiles },] async (g) => ...)`: reads the target's
 //! lockfiles into one graph and runs the extracted callback in its own
 //! isolate with `g`, a live handle on it. `g` never leaves Rust: its methods
 //! are host functions over node ids, and only what the callback returns is
@@ -198,7 +198,7 @@ fn node_json(walk: &Walk, id: usize) -> Value {
         "ecosystem": node.ecosystem,
         "name": node.name,
         "version": node.version,
-        "workspace": node.workspace,
+        "dir": node.workspace,
     })
 }
 

@@ -331,7 +331,9 @@ export function createTasks(options: Pick<Host, "callbackId"> = {}) {
    * with a live handle on it, in its own isolate. Only what the callback
    * returns is recorded.
    */
-  function dependencyGraph(options: unknown, callback: unknown): DependencyGraphTask {
+  function dependencyGraph(...args: unknown[]): DependencyGraphTask {
+    // `dependencyGraph(callback)` or `dependencyGraph(options, callback)`.
+    const [options, callback] = args.length < 2 ? [undefined, args[0]] : args;
     const extracted = callbackOf(callback);
     if (!extracted || extracted.fn) {
       throw new TypeError(

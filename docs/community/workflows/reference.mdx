@@ -322,7 +322,7 @@ The body is the code outside steps and callbacks. It runs again on every resume,
 | `codemod(source, { params })` | Run another codemod package (registry name or local path) as part of this step. |
 | `agent(prompt, options)` | Hand a prompt to a coding agent. See [Coding agents](#coding-agents). |
 | `installSkill({ package, path, harness, scope, force })` | Install a package's agent skill. |
-| `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback` on it. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: what the callback returns. |
+| `dependencyGraph(callback)`, `dependencyGraph({ lockfiles }, callback)` | Read the target's lockfiles into a graph and run `callback`, written inline, on it. Imported from `codemod/deps`. See [Dependencies](#dependencies). Result: what the callback returns. |
 | `approval(message)` | Wait for a person to approve. See [Approvals](#approvals). |
 | `branch(name)`, `commit(message, { add, allowEmpty })`, `pullRequest({ title, body, draft, base })` | Git automation. See [Git steps](#git-steps). |
 
@@ -362,10 +362,8 @@ import { step } from "codemod/workflow";
 import { dependencyGraph } from "codemod/deps";
 
 const usesMui = await step(
-  dependencyGraph({ lockfiles: "yarn.lock" }, (g) =>
-    g.dependents("@material-ui/core", { kinds: "prod" })
-      .filter((edge) => edge.from.isWorkspace)
-      .map((edge) => edge.from.workspace),
+  dependencyGraph((g) =>
+    g.dependents("@material-ui/core", { kinds: "prod" }).map((edge) => edge.from.dir),
   ),
 );
 ```
@@ -373,15 +371,39 @@ const usesMui = await step(
 | On the graph | Returns |
 |---|---|
 | `g.workspaces()` | The repository's own packages |
-| `g.nodes(name?)`, `g.node(name, version?)` | Installed packages, each a `name@version` node |
-| `g.dependents(name, { kinds })` | Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the peer it was installed with) |
-| `g.chains({ from, to, kinds })` | Shortest chains from each `from` node (default: every workspace) to a `to` node |
-| `node.dependencies({ kinds })`, `node.dependents({ kinds })` | Edges out of and into one node |
-| `node.workspacesReaching({ kinds })` | Each workspace that reaches the node, with its chain |
+| `g.nodes(name?)` | Every node, or every installed version of `name` |
+| `g.node(name, version?)` | One node, or `undefined` when none matches. Throws when several versions of `name` are installed and no version is given: use `g.nodes(name)` |
+| `g.dependents(name, { kinds, includeThirdParty })` | Edges that declare a dependency on `name`, resolved or not (a peer edge resolves only when pnpm records the peer it was installed with) |
+| `g.chains({ from, to, kinds })` | The shortest chain from each `from` node (default: every one of the repository's own packages) to a `to` node, `from` first. Chains pass through the repository's own packages |
+| `node.dependencies({ kinds })` | Edges the node declares |
+| `node.installedBy({ kinds, includeThirdParty })` | Edges installed onto this exact node |
 | `node.releases({ accepting, newerThanMine })` | The package's releases from the registry, each with `breaking` relative to the installed version |
 | `edge.accepts(version)` | Whether the edge's declared range accepts a version: `true`, `false`, or `null` when it cannot tell |
 
-Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`. In a step's result, nodes become `name@version` text and edges `{ from, to, kind, range }`.
+What lists dependents is about the repository's own packages: `g.dependents` and `node.installedBy` return only edges from them unless you pass `includeThirdParty: true`, and `g.chains` starts from them unless you pass the `from` nodes. So `g.dependents("react")` is the repository's packages that declare React, not every library that does.
+
+A node has `ecosystem`, `name` and `version`, and `dir` (the directory, relative to the target) when it is one of the repository's own packages, which `local` tells. Kinds are `prod`, `dev`, `peer`, `optional` and `build`. An edge has `from`, `to` (`null` when the lockfile does not resolve it), `name`, `range` and `kind`. In a step's result, nodes become `name@version` text and edges `{ from, to, kind, range }`.
+
+Who uses a package, and how: `g.dependents` gives the repository's packages that declare it, with their ranges, and `g.chains` the ones that reach it through other packages. A chain goes through the repository's own packages, so in a monorepo where `packages/web` depends on `@demo/shared`, which depends on `moment`, web reaches moment through `@demo/shared`:
+
+```ts
+const moment = await step(dependencyGraph((g) => {
+  const installed = g.nodes("moment");
+  return {
+    installed: installed.map((node) => node.version),
+    // Declared in a package.json, Cargo.toml or pyproject.toml.
+    declaredBy: g.dependents("moment")
+      .map((edge) => ({ dir: edge.from.dir, range: edge.range, kind: edge.kind })),
+    // Reached only through other packages.
+    reachedBy: g.chains({ to: installed })
+      .filter((chain) => chain.length > 2)
+      .map((chain) => ({ dir: chain[0].dir, via: chain.slice(1, -1).map((node) => node.name) })),
+  };
+}));
+// { installed: ["2.29.4"],
+//   declaredBy: [{ dir: "packages/api", range: "^2.29.4", kind: "prod" }, { dir: "packages/shared", range: "^2.29.4", kind: "prod" }],
+//   reachedBy: [{ dir: "packages/web", via: ["@demo/shared"] }] }
+```
 
 ### `registry` and `semver`
 
