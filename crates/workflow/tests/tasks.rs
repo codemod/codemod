@@ -1087,6 +1087,11 @@ export default async function main() {
     undiciAll: g.dependents("undici-types", { includeThirdParty: true }).map((e) => e.from),
     installedBy: g.node("undici-types").installedBy().map((e) => e.from),
     installedByAll: g.node("undici-types").installedBy({ includeThirdParty: true, kinds: "prod" }).map((e) => e.from),
+    // The root package dev-depends on @types/node; codemod optionally depends on its binaries.
+    typesNode: g.node("@types/node").installedBy().map((e) => e.kind),
+    typesNodeProd: g.node("@types/node").installedBy({ kinds: "prod" }).map((e) => e.from),
+    binary: g.node("@codemod.com/cli-linux-x64-gnu").installedBy({ includeThirdParty: true }).map((e) => e.kind),
+    binaryProd: g.node("@codemod.com/cli-linux-x64-gnu").installedBy({ includeThirdParty: true, kinds: "prod" }).map((e) => e.from),
   })));
 }
 "#,
@@ -1100,6 +1105,10 @@ export default async function main() {
             "undiciAll": ["@types/node@22.20.5"],
             "installedBy": [],
             "installedByAll": ["@types/node@22.20.5"],
+            "typesNode": ["dev"],
+            "typesNodeProd": [],
+            "binary": ["optional"],
+            "binaryProd": [],
         })
     );
 }
