@@ -170,6 +170,38 @@ test("rewrites the files the first step found", async () => {
 
 A label in `until` or `given` that matches no step is an error that lists the run's steps. Steps without a label get one from their task, such as `forEachFile src/**/*.ts`.
 
+### Test a callback file
+
+A `forEachFile` callback kept in its own file (its default export, `(file) => ...`) can be tested without the workflow around it. `runCallback` runs it on each file of the target in `language`, as a `forEachFile` step does, and applies what it writes, renames and deletes to the copy:
+
+```ts tests/migrate.test.ts
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { assertTree, fixtures, runCallback } from "codemod/testing";
+
+for (const fixture of fixtures(new URL("./fixtures", import.meta.url))) {
+  test(fixture.name, async () => {
+    const run = await runCallback(new URL("../scripts/migrate.ts", import.meta.url), {
+      target: fixture.input,
+      language: "typescript",
+    });
+    assertTree(run, fixture.expected);
+  });
+}
+
+test("counts what it rewrote", async () => {
+  const run = await runCallback("scripts/migrate.ts", {
+    target: { "a.ts": "var a = 1;\n" },
+    language: "typescript",
+  });
+  assert.deepEqual(run.outputs, [{ file: "a.ts", data: { count: 1 } }]);
+});
+```
+
+It runs with the codemod CLI, in the engine's runtime, so `definition()` and `references()` work as they do in a run. Its options are `target`, `language` (required), `semanticAnalysis` (`"file"`, the default, `"workspace"` or `"none"`), `capabilities`, `keep` and `signal`. The run it returns is a run without steps, plus `outputs` (what the callback returned, `{ file, data }` by path) and `failures` (`{ path, error }`); it fails when the callback failed on any file.
+
+The same fixtures run from the command line with [`codemod jssg test --callback`](/community/jssg/testing#test-a-foreachfile-callback).
+
 ### Mock a workflow's imports
 
 To mock modules the workflow imports, let your test runner load the workflow and pass the module to `runWorkflow`, with `path` set to the workflow file so relative task paths resolve:

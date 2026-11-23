@@ -753,6 +753,10 @@ npx codemod jssg test <codemod_file> [options]
   The parent directory containing your test case subdirectories (default: `"tests"`). Do not pass a specific test case subdirectory — use `--filter` instead.
 </ResponseField>
 
+<ResponseField name="--callback" type="boolean">
+  The file is a `forEachFile` callback (its default export is `(file) => ...`), not a transform. It runs on each input as a `forEachFile` step runs it; what it returns is snapshotted in `data.json`. See [Test a forEachFile callback](/community/jssg/testing#test-a-foreachfile-callback).
+</ResponseField>
+
 <ResponseField name="--filter" type="string">
   A pattern to run only tests whose names match the filter. Single-file fixtures use the test case directory name. Directory snapshot fixtures are still reported per file, using names like `<fixture>_<relative-path>`.
 </ResponseField>
