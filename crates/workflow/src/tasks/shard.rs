@@ -135,6 +135,21 @@ pub(crate) fn run(task: &TaskContext<'_>, content: Value) -> TaskResult {
 /// then those `filter` keeps. When neither is given, a built-in method
 /// takes every text file under `target`, and a shard function gets `None`.
 fn eligible(task: &TaskContext<'_>, request: &Request) -> Result<Option<Vec<String>>, TaskError> {
+    if let Some(target) = request.target.as_deref() {
+        let path = std::path::Path::new(target.trim());
+        if path.has_root()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir | std::path::Component::Prefix(_)
+                )
+            })
+        {
+            return Err(TaskError::Failed(format!(
+                "shard `target` '{target}' must be relative and stay within the run's target"
+            )));
+        }
+    }
     let everything = request.files.is_none() && request.filter.is_none();
     if everything && matches!(request.method, Method::Function { .. }) {
         return Ok(None);

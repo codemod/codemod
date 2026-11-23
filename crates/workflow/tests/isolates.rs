@@ -142,6 +142,26 @@ export default async function main() { await step(commit("x")); }
 }
 
 #[test]
+fn re_exporting_moved_functions_from_the_workflow_module_points_to_their_module() {
+    let h = Harness::new();
+    for (export, hint) in [
+        ("branch as makeBranch", r#"'branch' moved to "codemod/git""#),
+        ("semver", r#"'semver' moved to "codemod/deps""#),
+    ] {
+        let error = load_error(
+            &h,
+            &format!(
+                r#"
+export {{ {export} }} from "codemod/workflow";
+export default async function main() {{}}
+"#
+            ),
+        );
+        assert!(error.contains(hint), "{error}");
+    }
+}
+
+#[test]
 fn git_steps_cannot_start_inside_a_callback() {
     let h = Harness::new();
     let error = load_error(

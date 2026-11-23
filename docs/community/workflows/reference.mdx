@@ -341,6 +341,11 @@ They only touch git when the run uses `--managed-git`; otherwise they are record
 They all work on the run's one checkout, so they can't run in parallel. A git step started while other steps are still running fails with "managed git steps can't run in parallel", with or without `--managed-git`, before it touches git. So does one inside a `codemod(...)` step that was started while other steps were running. The check happens when a step starts: a git step, or a `codemod(...)` step, that started first is not stopped by steps started after it, so don't start other steps while git work runs. To open one pull request per shard, run the shards one after another:
 
 ```ts
+import { forEachFile, shard, step } from "codemod/workflow";
+import { branch, commit, pullRequest } from "codemod/git";
+import migrate from "./scripts/migrate.ts";
+
+const shards = await step(shard({ method: { type: "directory", maxFilesPerShard: 50 }, files: "src/**/*.tsx" }));
 for (const current of shards) {
   await step(branch(`codemod-${current.name}`));
   await step(forEachFile({ include: current._meta_files, language: "tsx" }, migrate));

@@ -474,6 +474,30 @@ nodes:
 }
 
 #[test]
+fn only_the_git_steps_used_are_imported_from_codemod_git() {
+    let yaml = |commit: &str| {
+        format!(
+            r#"
+version: "1"
+nodes:
+  - id: apply
+    name: Apply
+    steps:
+      - name: Run
+        run: echo hi
+{commit}"#
+        )
+    };
+    let source = translated(&yaml("        commit:\n          message: hi\n")).source;
+    assert!(
+        source.contains("import { commit } from \"codemod/git\";\n"),
+        "{source}"
+    );
+    let source = translated(&yaml("")).source;
+    assert!(!source.contains("codemod/git"), "{source}");
+}
+
+#[test]
 fn names_and_descriptions_cannot_break_out_of_comments() {
     let translated = translated(
         r#"

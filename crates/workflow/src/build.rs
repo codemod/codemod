@@ -418,6 +418,34 @@ pub fn build(file: &str, source: &str) -> Result<Built, BuildError> {
                     analysis.collect_whole(id.symbol_id(), class.span);
                 }
             }
+            Statement::ExportNamedDeclaration(export)
+                if export
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| codemod_module(&source.value) == Some("workflow")) =>
+            {
+                // `export { branch } from "codemod/workflow"`: the same
+                // migration hints as an import.
+                for specifier in &export.specifiers {
+                    if specifier.export_kind.is_type() {
+                        continue;
+                    }
+                    let name = specifier.local.name().to_string();
+                    let moved_to = if MOVED_TO_GIT.contains(&name.as_str()) {
+                        GIT_MODULE
+                    } else if MOVED_TO_DEPS.contains(&name.as_str()) {
+                        DEPS_MODULE
+                    } else {
+                        continue;
+                    };
+                    return Err(analysis.error(
+                        specifier.span.start,
+                        format!(
+                            "'{name}' moved to \"{moved_to}\": import {{ {name} }} from \"{moved_to}\""
+                        ),
+                    ));
+                }
+            }
             Statement::ExportNamedDeclaration(export) => match &export.declaration {
                 Some(Declaration::VariableDeclaration(declaration)) => {
                     analysis.collect_variables(declaration);

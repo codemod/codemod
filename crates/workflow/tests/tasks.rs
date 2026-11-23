@@ -310,6 +310,12 @@ fn built_in_shards_without_files_take_every_file_under_target() {
     }
     h.write("other.ts", "x\n");
     h.write(".git/config", "[core]\n");
+    // Not UTF-8: not a file a callback could read, so in no shard.
+    std::fs::write(
+        h.target.path().join("packages/a/logo.png"),
+        [0x89, 0x50, 0xff, 0xfe, 0x00],
+    )
+    .unwrap();
     let report = h.start(
         r#"
 import { step, shard } from "codemod/workflow";
@@ -336,6 +342,31 @@ export default async function main() {
     let everything = result[1].to_string();
     assert!(everything.contains("other.ts"), "{everything}");
     assert!(!everything.contains(".git"), "{everything}");
+    assert!(!everything.contains("logo.png"), "{everything}");
+}
+
+#[test]
+fn a_shard_target_outside_the_run_target_fails_before_reading_it() {
+    let h = Harness::new();
+    h.write("a/one.ts", "x\n");
+    for target in ["../outside", "/etc"] {
+        let report = h.start(
+            &format!(
+                r#"
+import {{ step, shard }} from "codemod/workflow";
+export default async function main() {{
+  return step(shard({{ method: {{ type: "directory", maxFilesPerShard: 5 }}, target: {target:?} }}));
+}}
+"#
+            ),
+            Value::Null,
+        );
+        let error = output(&report).unwrap_err();
+        assert!(
+            error.contains("must be relative and stay within the run's target"),
+            "{error}"
+        );
+    }
 }
 
 #[test]
