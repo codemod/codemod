@@ -1,6 +1,10 @@
 //! workflow.yaml compatibility: translates a YAML workflow into the
 //! equivalent TypeScript workflow. `workflow run` uses this in memory;
-//! `codemod workflow upgrade` writes the result next to the YAML.
+//! `codemod workflow upgrade` writes the result next to the YAML, with each
+//! jssg transform called from a plain `forEachFile` callback where it can be
+//! (see [`transform_module`]), where `workflow run` uses the compatibility
+//! adapter for all of them. The output is printed in Prettier's style
+//! ([`print`]), with selectors several steps share as one const.
 //!
 //! - a workflow with one plain node becomes a `main` that runs its steps;
 //!   otherwise each node becomes an async function, run in order when the
@@ -27,10 +31,12 @@
 //!   `pull_request` and step `commit` become git steps.
 
 pub mod expr;
+mod print;
+mod transform_module;
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use butterflow_models::node::NodeType;
 use butterflow_models::step::{
@@ -41,6 +47,7 @@ use butterflow_models::{Node, Step, Workflow};
 use serde_json::Value;
 
 use expr::{condition, js_string, string_list, template};
+use transform_module::{Analysis, TransformModule};
 
 /// A translated workflow.
 #[derive(Debug, Clone)]
@@ -50,14 +57,36 @@ pub struct Translated {
     pub warnings: Vec<String>,
 }
 
-/// Parse, validate and translate a workflow.yaml (or JSON) file.
+/// Parse, validate and translate a workflow.yaml (or JSON) file, as
+/// `workflow run` does: jssg transforms run through the compatibility
+/// adapter.
 pub fn translate_file(path: &Path) -> Result<Translated, String> {
+    let workflow = parse_and_validate(path)?;
+    Ok(translate(&workflow))
+}
+
+/// Translate a workflow.yaml (or JSON) file into the workflow.ts
+/// `codemod workflow upgrade` writes: a jssg transform is imported and
+/// called from a plain `forEachFile` callback, unless it needs what only
+/// the compatibility adapter does (see [`transform_module`]).
+pub fn upgrade_file(path: &Path) -> Result<Translated, String> {
+    let workflow = parse_and_validate(path)?;
+    let bundle = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let mut generator = Generator {
+        upgrade: Some(bundle),
+        ..Generator::default()
+    };
+    generator.workflow(&workflow);
+    Ok(generator.finish())
+}
+
+fn parse_and_validate(path: &Path) -> Result<Workflow, String> {
     let workflow = butterflow_core::utils::parse_workflow_file(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let bundle = path.parent().unwrap_or(Path::new("."));
     butterflow_core::utils::validate_workflow(&workflow, bundle)
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(translate(&workflow))
+    Ok(workflow)
 }
 
 /// Translate an already-parsed workflow.
@@ -96,7 +125,33 @@ struct Generator {
     jssg_modules: Vec<(String, String)>,
     /// What the callbacks import from the compatibility adapter.
     adapter: BTreeSet<&'static str>,
+    /// For `codemod workflow upgrade`: the workflow's directory, where the
+    /// jssg transforms are read to call them from plain callbacks.
+    upgrade: Option<PathBuf>,
+    /// What each jssg transform needs, by `js_file`.
+    analyses: HashMap<String, Analysis>,
+    /// Transforms called from plain callbacks: (local name, specifier, and
+    /// the local name of its `getSelector` when that is imported too).
+    plain_transforms: Vec<(String, String, Option<String>)>,
+    /// The workflow has one jssg transform, imported as `transform`.
+    single_transform: bool,
+    /// Templates take the run's target (a transform there reads `targetDir`).
+    templates_take_target: bool,
+    /// Transforms whose fallback to the adapter has been explained.
+    adapter_warned: BTreeSet<String>,
+    /// A plain callback parses with `codemod/ast-grep`.
+    uses_parse: bool,
+    /// The workflow's param defaults are all strings (or there are none).
+    string_defaults: bool,
+    /// A transform or `getSelector` gets `params`, typed as jssg types it.
+    params_to_transforms: bool,
+    /// `forEachFile` selectors, in the order used, with how often: each is
+    /// written at its place or, when shared, as a const.
+    selectors: Vec<(String, usize)>,
 }
+
+/// Object fields: (key, TypeScript value).
+type Fields = Vec<(&'static str, String)>;
 
 /// One node, generated before deciding how `main` runs it.
 struct NodeCode {
@@ -110,16 +165,21 @@ struct NodeCode {
     /// The node has git steps, so its matrix values run one at a time.
     uses_git: bool,
     uses_params: bool,
+    uses_target: bool,
     uses_state: bool,
 }
 
-/// Parameters of a node function: `params` and `state` when it uses them.
-fn parameters(params: bool, state: bool) -> Vec<&'static str> {
+/// Parameters of a node function: `params`, `target` and `state` when it
+/// uses them.
+fn parameters(code: &NodeCode) -> Vec<&'static str> {
     let mut names = Vec::new();
-    if params {
+    if code.uses_params {
         names.push("params");
     }
-    if state {
+    if code.uses_target {
+        names.push("target");
+    }
+    if code.uses_state {
         names.push("state");
     }
     names
@@ -130,9 +190,16 @@ fn declared(names: &[&str]) -> Vec<String> {
         .iter()
         .map(|name| match *name {
             "params" => "params: Params".to_string(),
+            "target" => "target: string".to_string(),
             _ => "state: State".to_string(),
         })
         .collect()
+}
+
+/// Whether generated code passes the run's target on: to a transform's
+/// options, or to a template.
+fn uses_target(text: &str) -> bool {
+    text.contains("targetDir: target") || text.contains(", target)")
 }
 
 /// Whether translated steps must carry state from one to the next: the
@@ -295,26 +362,17 @@ impl Generator {
         unique
     }
 
-    /// `(file) => jssgFile(module, file, { ... })`: the callback that runs
-    /// a jssg transform as the YAML engine did, and the selector for it.
-    fn jssg_callback(
-        &mut self,
-        js: &UseJSAstGrep,
-        scope: &Scope<'_>,
-        adapter: &'static str,
-    ) -> (Vec<(&'static str, String)>, String) {
-        self.adapter.insert(adapter);
-        let module = self.jssg_module(&js.js_file);
+    /// The selector for a jssg step, and the adapter's options.
+    fn jssg_selector(&mut self, js: &UseJSAstGrep, scope: &Scope<'_>) -> (Fields, Fields) {
         let mut selector = Vec::new();
         let mut options = Vec::new();
         for (key, value) in self.jssg_fields(js, scope) {
             match key {
                 // Exact files, as globs.
                 "include" | "files" => selector.push(("include", value)),
-                "exclude" | "semanticAnalysis" | "capabilities" => selector.push((key, value)),
-                "language" => {
-                    selector.push((key, value.clone()));
-                    options.push((key, value));
+                // The adapter parses with the selector's language.
+                "exclude" | "semanticAnalysis" | "capabilities" | "language" => {
+                    selector.push((key, value))
                 }
                 "basePath" | "dryRun" | "params" | "matrix" => options.push((key, value)),
                 // Workers run files in parallel already.
@@ -324,16 +382,245 @@ impl Generator {
         if js.language.is_none() {
             // workflow.yaml's default, where forEachFile's is the package's.
             selector.push(("language", js_string("typescript")));
-            options.push(("language", js_string("typescript")));
         }
+        (selector, options)
+    }
+
+    /// `(file) => jssgFile(module, file, { ... })`: the callback that runs
+    /// a jssg transform as the YAML engine did.
+    fn jssg_adapter(
+        &mut self,
+        js: &UseJSAstGrep,
+        mut options: Vec<(&'static str, String)>,
+        adapter: &'static str,
+    ) -> String {
+        self.adapter.insert(adapter);
+        let module = self.jssg_module(&js.js_file);
         if !options.iter().any(|(key, _)| *key == "params") {
             // The run's params, as a jssg step got them.
             options.push(("params", "params".into()));
         }
-        (
-            selector,
-            with_options(format!("(file) => {adapter}({module}, file"), &options),
+        with_options(format!("(file) => {adapter}({module}, file"), &options)
+    }
+
+    /// For `codemod workflow upgrade`: the transform at `js_file` as a
+    /// plain callback can call it, or why it keeps the adapter (`None`
+    /// when not upgrading).
+    fn plain_module(&mut self, js: &UseJSAstGrep) -> Result<TransformModule, Option<String>> {
+        let Some(bundle) = &self.upgrade else {
+            return Err(None);
+        };
+        let path = bundle.join(&js.js_file);
+        let analysis = self
+            .analyses
+            .entry(js.js_file.clone())
+            .or_insert_with(|| transform_module::analyze(&path))
+            .clone();
+        let module = match analysis {
+            Analysis::Plain(module) => module,
+            Analysis::Adapter(reason) => return Err(Some(reason)),
+        };
+        if js.dry_run == Some(true) {
+            return Err(Some("the step is a dry run".into()));
+        }
+        if js
+            .base_path
+            .as_deref()
+            .is_some_and(|base| base.contains("${{"))
+        {
+            return Err(Some("its base_path is an expression".into()));
+        }
+        Ok(module)
+    }
+
+    /// `(file) => { const out = transform(parse(file)); ... }`: the jssg
+    /// transform called as the adapter would, from a plain callback.
+    fn jssg_plain(
+        &mut self,
+        js: &UseJSAstGrep,
+        scope: &Scope<'_>,
+        module: &TransformModule,
+    ) -> String {
+        self.uses_parse = true;
+        let (name, selector) = self.plain_transform(&js.js_file, module.get_selector);
+        let mut statements = Vec::new();
+        if let Some(base) = js.base_path.as_deref().filter(|b| !is_root(b)) {
+            // Only files under the base, as the YAML engine ran it.
+            let base = base.replace('\\', "/");
+            let base = base.trim().trim_start_matches("./").trim_end_matches('/');
+            statements.push(format!(
+                "if (!file.path.startsWith({})) return",
+                js_string(&format!("{base}/"))
+            ));
+        }
+        let root = match &selector {
+            Some(selector) => {
+                self.params_to_transforms = true;
+                // Typed as the transform takes it: `parse` alone does not know the language.
+                statements.push(format!(
+                    "const root: Parameters<typeof {name}>[0] = parse(file)"
+                ));
+                statements.push(format!(
+                    "const matches = root.root().findAll({selector}({{ params }}))"
+                ));
+                statements.push("if (matches.length === 0) return".into());
+                "root"
+            }
+            None => "parse(file)",
+        };
+        let mut options: Vec<(&str, String)> = Vec::new();
+        if module.takes_options {
+            self.params_to_transforms = true;
+            options.push(("params", "params".into()));
+            options.push((
+                "language",
+                js_string(js.language.as_deref().unwrap_or("typescript")),
+            ));
+            options.push(("targetDir", "target".into()));
+            if selector.is_some() {
+                options.push(("matches", "matches".into()));
+            }
+            if scope.matrix {
+                options.push(("matrixValues", "matrix ?? undefined".into()));
+            }
+        }
+        let arguments = if options.is_empty() {
+            root.to_string()
+        } else {
+            format!("{root}, {}", object(&options))
+        };
+        let call = format!(
+            "{}{name}({arguments})",
+            if module.is_async { "await " } else { "" }
+        );
+        if module.returns_result {
+            statements.push(format!("const result = {call}"));
+            statements.push("if (typeof result === \"string\") return file.write(result)".into());
+            statements
+                .push("if (typeof result?.edit === \"string\") file.write(result.edit)".into());
+            statements.push("return result?.data".into());
+        } else {
+            statements.push(format!("const out = {call}"));
+            statements.push("if (typeof out === \"string\") file.write(out)".into());
+        }
+        format!(
+            "{}(file) => {{ {}; }}",
+            if module.is_async { "async " } else { "" },
+            statements.join("; ")
         )
+    }
+
+    /// The local name of a transform called from plain callbacks, imported
+    /// by default, and of its `getSelector` when it is used.
+    fn plain_transform(&mut self, path: &str, with_selector: bool) -> (String, Option<String>) {
+        let specifier = crate::imported::import_specifier(path);
+        let stem = crate::imported::camel_stem(&specifier).unwrap_or_else(|| "imported".into());
+        let index = match self
+            .plain_transforms
+            .iter()
+            .position(|(_, s, _)| *s == specifier)
+        {
+            Some(index) => index,
+            None => {
+                let base = if self.single_transform {
+                    "transform".to_string()
+                } else {
+                    format!("{stem}Transform")
+                };
+                let name = self.unique(&base);
+                self.plain_transforms.push((name, specifier, None));
+                self.plain_transforms.len() - 1
+            }
+        };
+        if with_selector && self.plain_transforms[index].2.is_none() {
+            let selector = if self.single_transform {
+                self.unique("getSelector")
+            } else {
+                self.unique(&format!("{stem}Selector"))
+            };
+            self.plain_transforms[index].2 = Some(selector);
+        }
+        let (name, _, selector) = &self.plain_transforms[index];
+        (name.clone(), selector.clone().filter(|_| with_selector))
+    }
+
+    fn unique(&mut self, name: &str) -> String {
+        let mut unique = name.to_string();
+        let mut n = 2;
+        while !self.taken.insert(unique.clone()) {
+            unique = format!("{name}{n}");
+            n += 1;
+        }
+        unique
+    }
+
+    /// `body` with its selectors in place: a selector used by more than
+    /// one step is a const, written to `source`.
+    fn selectors_in(&mut self, mut body: String, source: &mut String) -> String {
+        let shared: Vec<usize> = (0..self.selectors.len())
+            .filter(|index| {
+                let (text, uses) = &self.selectors[*index];
+                *uses > 1 && is_literal_object(text)
+            })
+            .collect();
+        let mut consts = String::new();
+        for (index, (text, _)) in self.selectors.clone().into_iter().enumerate() {
+            let value = if shared.contains(&index) {
+                let name = if shared.len() == 1 {
+                    self.unique("files")
+                } else {
+                    match language_of(&text).filter(|language| !language.is_empty()) {
+                        Some(language) => self.unique(&format!("{language}Files")),
+                        None => self.unique("files"),
+                    }
+                };
+                // `as const` keeps capabilities and languages their literal types.
+                let constant = if text.contains("capabilities:")
+                    || text.contains("semanticAnalysis:")
+                    || !text.contains("include:")
+                {
+                    " as const"
+                } else {
+                    ""
+                };
+                let _ = writeln!(consts, "const {name} = {text}{constant};");
+                name
+            } else {
+                text
+            };
+            body = body.replace(&format!("{SELECTOR_MARK}{index}\u{1}"), &value);
+        }
+        if !consts.is_empty() {
+            source.push_str(&consts);
+            source.push('\n');
+        }
+        body
+    }
+
+    /// `text` with its selectors written out.
+    fn with_selectors(&self, text: &str) -> String {
+        let mut text = text.to_string();
+        for (index, (selector, _)) in self.selectors.iter().enumerate() {
+            text = text.replace(&format!("{SELECTOR_MARK}{index}\u{1}"), selector);
+        }
+        text
+    }
+
+    /// `forEachFile(selector, transform)`.
+    fn for_each_file(&mut self, selector: &[(&str, String)], transform: String) -> String {
+        if selector.is_empty() {
+            return format!("forEachFile({transform})");
+        }
+        let text = object(selector);
+        let index = match self.selectors.iter().position(|(known, _)| *known == text) {
+            Some(index) => index,
+            None => {
+                self.selectors.push((text, 0));
+                self.selectors.len() - 1
+            }
+        };
+        self.selectors[index].1 += 1;
+        format!("forEachFile({SELECTOR_MARK}{index}\u{1}, {transform})")
     }
 
     fn warn(&mut self, message: String) -> String {
@@ -401,6 +688,22 @@ impl Generator {
         let has_defaults = defaults.as_object().is_some_and(|d| !d.is_empty());
         self.pass_params = has_defaults || !workflow.templates.is_empty();
         self.plumb_state = plumbs_state(workflow);
+        self.string_defaults = defaults
+            .as_object()
+            .is_none_or(|d| d.values().all(Value::is_string));
+        if self.upgrade.is_some() {
+            let transforms: Vec<&UseJSAstGrep> = jssg_steps(workflow);
+            let files: BTreeSet<&str> = transforms.iter().map(|js| js.js_file.as_str()).collect();
+            self.single_transform = files.len() == 1;
+            let mut template_transforms = Vec::new();
+            for template in &workflow.templates {
+                collect_jssg(&template.steps, &mut template_transforms);
+            }
+            self.templates_take_target = template_transforms.into_iter().any(|js| {
+                self.plain_module(js)
+                    .is_ok_and(|module| module.takes_options)
+            });
+        }
 
         let order = topological(&workflow.nodes);
         let nodes: Vec<NodeCode> = order
@@ -428,9 +731,14 @@ impl Generator {
             } else {
                 templates_text.push('\n');
             }
+            let target = if self.templates_take_target {
+                ", target: string"
+            } else {
+                ""
+            };
             let _ = writeln!(
                 templates_text,
-                "/** {} */\nasync function {name}(params: Params, matrix: Matrix, state: State) {{",
+                "/** {} */\nasync function {name}(params: Params, matrix: Matrix, state: State{target}) {{",
                 template_def.name
             );
             let empty = HashMap::new();
@@ -457,16 +765,26 @@ impl Generator {
         } else {
             ""
         };
+        let target_field = if nodes.iter().any(|node| node.uses_target) {
+            ", target"
+        } else {
+            ""
+        };
         if has_defaults {
             self.uses_context = true;
-            let _ = writeln!(main, "export default async function main({{ params: input{platform_field} }}: WorkflowContext<Params>) {{");
+            let _ = writeln!(main, "export default async function main({{ params: input{target_field}{platform_field} }}: WorkflowContext<Params>) {{");
             main.push_str("  const params: Params = { ...DEFAULT_PARAMS, ...input };\n");
         } else if uses_params {
             self.uses_context = true;
-            let _ = writeln!(main, "export default async function main({{ params{platform_field} }}: WorkflowContext<Params>) {{");
-        } else if self.uses_posix_state_outputs {
+            let _ = writeln!(main, "export default async function main({{ params{target_field}{platform_field} }}: WorkflowContext<Params>) {{");
+        } else if self.uses_posix_state_outputs || !target_field.is_empty() {
             self.uses_context = true;
-            main.push_str("export default async function main({ platform }: WorkflowContext) {\n");
+            let fields = format!("{target_field}{platform_field}");
+            let _ = writeln!(
+                main,
+                "export default async function main({{ {} }}: WorkflowContext) {{",
+                fields.trim_start_matches(", ")
+            );
         } else {
             main.push_str("export default async function main() {\n");
         }
@@ -485,13 +803,7 @@ impl Generator {
             main.push_str("  const state: State = {};\n");
         }
 
-        let call = |node: &NodeCode| {
-            format!(
-                "{}({})",
-                node.function,
-                parameters(node.uses_params, node.uses_state).join(", ")
-            )
-        };
+        let call = |node: &NodeCode| format!("{}({})", node.function, parameters(node).join(", "));
         let single = nodes.len() == 1 && nodes[0].matrix.is_none() && workflow.templates.is_empty();
         let chain = order.iter().enumerate().all(|(index, node)| match index {
             0 => node.depends_on.is_empty(),
@@ -542,7 +854,7 @@ impl Generator {
             for code in &nodes {
                 self.body.push('\n');
                 self.body.push_str(&code.preamble);
-                let names = parameters(code.uses_params, code.uses_state);
+                let names = parameters(code);
                 let params = declared(&names).join(", ");
                 match &code.matrix {
                     Some(source) => {
@@ -557,7 +869,7 @@ impl Generator {
                         } else {
                             let _ = writeln!(
                                 self.body,
-                                "async function {}({params}) {{\n  await Promise.all(\n    {source}.map((matrix: Matrix, index: number) => {instance}({pass}matrix, index)),\n  );\n}}\n",
+                                "async function {}({params}) {{\n  await Promise.all({source}.map((matrix: Matrix, index: number) => {instance}({pass}matrix, index)));\n}}\n",
                                 code.function
                             );
                         }
@@ -584,7 +896,7 @@ impl Generator {
         if has_defaults {
             let header = format!(
                 "const DEFAULT_PARAMS: Params = {};\n\n",
-                serde_json::to_string_pretty(&defaults).unwrap_or_else(|_| "{}".into())
+                json_literal(&defaults)
             );
             self.body.insert_str(0, &header);
         }
@@ -625,7 +937,7 @@ impl Generator {
                 .as_ref()
                 .map(|strategy| match (&strategy.values, &strategy.from_state) {
                     (Some(values), _) => {
-                        serde_json::to_string(values).unwrap_or_else(|_| "[]".into())
+                        json_literal(&serde_json::to_value(values).unwrap_or_default())
                     }
                     (None, Some(key)) => format!("(state[{}] ?? [])", js_string(key)),
                     (None, None) => "[]".into(),
@@ -688,14 +1000,17 @@ impl Generator {
             let _ = writeln!(inner, "  await step(pullRequest({}));", object(&fields));
         }
 
-        if matrix_source.is_none() && mentions(&inner, "matrix") {
+        // What the node uses, its selectors included.
+        let used = self.with_selectors(&inner);
+        if matrix_source.is_none() && mentions(&used, "matrix") {
             inner.insert_str(0, "  const matrix: Matrix = null;\n");
         }
         NodeCode {
             function,
             preamble,
-            uses_params: mentions(&inner, "params"),
-            uses_state: mentions(&inner, "state")
+            uses_params: mentions(&used, "params"),
+            uses_target: uses_target(&used),
+            uses_state: mentions(&used, "state")
                 || matrix_source
                     .as_deref()
                     .is_some_and(|source| mentions(source, "state")),
@@ -878,13 +1193,11 @@ impl Generator {
                 if let Some(exclude) = &ast_grep.exclude {
                     selector.push(("exclude", string_list(&rebased(exclude))));
                 }
-                for_each_file(
-                    &selector,
-                    format!(
-                        "astGrep({})",
-                        self.transform(&ast_grep.config_file, "Rules")
-                    ),
-                )
+                let rules = format!(
+                    "astGrep({})",
+                    self.transform(&ast_grep.config_file, "Rules")
+                );
+                self.for_each_file(&selector, rules)
             }
             StepAction::JSAstGrep(js) => {
                 self.import("forEachFile");
@@ -895,9 +1208,23 @@ impl Generator {
                     )));
                 }
                 // Which files, in which language, with which semantic analysis
-                // and capabilities, is the selector's part; the rest the adapter's.
-                let (selector, callback) = self.jssg_callback(js, scope, "jssgFile");
-                for_each_file(&selector, callback)
+                // and capabilities, is the selector's part; the rest the callback's.
+                let (selector, options) = self.jssg_selector(js, scope);
+                let callback = match self.plain_module(js) {
+                    Ok(module) => self.jssg_plain(js, scope, &module),
+                    Err(reason) => {
+                        if let Some(reason) = reason {
+                            if self.adapter_warned.insert(js.js_file.clone()) {
+                                notes.push_str(&self.warn(format!(
+                                    "{} runs through jssgFile, which runs a jssg transform as workflow.yaml did: {reason}",
+                                    js.js_file
+                                )));
+                            }
+                        }
+                        self.jssg_adapter(js, options, "jssgFile")
+                    }
+                };
+                self.for_each_file(&selector, callback)
             }
             StepAction::Codemod(codemod) => {
                 self.import("codemod");
@@ -996,15 +1323,19 @@ impl Generator {
                     // The files the transform would change, as the YAML engine's
                     // dry run of it found them.
                     Some(js) => {
-                        let (selector, filter) = self.jssg_callback(
+                        let (selector, mut options) = self.jssg_selector(
                             js,
                             &Scope {
                                 env: scope.env,
                                 meta_files: false,
                                 matrix: false,
                             },
-                            "jssgWouldChange",
                         );
+                        if let Some(language) = selector.iter().find(|(key, _)| *key == "language")
+                        {
+                            options.insert(0, language.clone());
+                        }
+                        let filter = self.jssg_adapter(js, options, "jssgWouldChange");
                         let selector: Vec<_> = selector
                             .into_iter()
                             .filter(|(key, _)| matches!(*key, "include" | "exclude" | "language"))
@@ -1025,12 +1356,20 @@ impl Generator {
             }
             StepAction::UseTemplate(use_template) => {
                 let function = self.function_name("Template", &use_template.template);
-                let inputs =
-                    serde_json::to_string(&use_template.inputs).unwrap_or_else(|_| "{}".into());
-                let statement = if use_template.inputs.is_empty() {
-                    format!("await {function}(params, matrix, state);")
+                let inputs = serde_json::to_value(&use_template.inputs)
+                    .map(|inputs| json_literal(&inputs))
+                    .unwrap_or_else(|_| "{}".into());
+                let target = if self.templates_take_target {
+                    ", target"
                 } else {
-                    format!("await {function}({{ ...params, ...{inputs} }}, matrix, state);")
+                    ""
+                };
+                let statement = if use_template.inputs.is_empty() {
+                    format!("await {function}(params, matrix, state{target});")
+                } else {
+                    format!(
+                        "await {function}({{ ...params, ...{inputs} }}, matrix, state{target});"
+                    )
                 };
                 return (notes, statement);
             }
@@ -1055,10 +1394,11 @@ impl Generator {
             fields.push(("language", js_string(language)));
         }
         if let Some(capabilities) = &js.capabilities {
-            fields.push((
-                "capabilities",
-                serde_json::to_string(capabilities).unwrap_or_default(),
-            ));
+            let capabilities: Vec<String> = serde_json::to_value(capabilities)
+                .ok()
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_default();
+            fields.push(("capabilities", string_list(&capabilities)));
         }
         if let Some(semantic) = &js.semantic_analysis {
             let mode = |mode: &SemanticAnalysisMode| match mode {
@@ -1094,7 +1434,11 @@ impl Generator {
         fields
     }
 
-    fn finish(self) -> Translated {
+    fn finish(mut self) -> Translated {
+        // Selectors in place first: what they use is imported like the rest.
+        let mut consts = String::new();
+        let body = self.body.clone();
+        self.body = self.selectors_in(body, &mut consts);
         let mut source = String::new();
         source.push_str("// Generated from workflow.yaml by `codemod workflow upgrade`.\n");
         for warning in &self.warnings {
@@ -1109,6 +1453,9 @@ impl Generator {
             imports.push("__evaluate as evaluate");
         }
         imports.sort_by_key(|name| name.trim_start_matches("__"));
+        if self.uses_parse {
+            source.push_str("import { parse } from \"codemod/ast-grep\";\n");
+        }
         let _ = writeln!(
             source,
             "import {{ {} }} from \"codemod/workflow\";",
@@ -1128,14 +1475,19 @@ impl Generator {
         for (name, specifier) in &self.transforms {
             let _ = writeln!(source, "import {name} from {};", js_string(specifier));
         }
+        for (name, specifier, selector) in &self.plain_transforms {
+            let named = match selector.as_deref() {
+                None => String::new(),
+                Some("getSelector") => ", { getSelector }".into(),
+                Some(local) => format!(", {{ getSelector as {local} }}"),
+            };
+            let _ = writeln!(
+                source,
+                "import {name}{named} from {};",
+                js_string(specifier)
+            );
+        }
         if !self.jssg_modules.is_empty() {
-            source.push_str(concat!(
-                "// codemod upgrade: the transforms below are jssg transform files, run by a\n",
-                "// compatibility adapter that does what workflow.yaml's js-ast-grep step did.\n",
-                "// To convert one, give forEachFile a callback in its place:\n",
-                "// (file) => { const root = parse(file); ...; file.write(text) }, with parse from\n",
-                "// \"codemod/ast-grep\", or move it to a file and import its default export.\n",
-            ));
             for (name, specifier) in &self.jssg_modules {
                 let _ = writeln!(source, "import * as {name} from {};", js_string(specifier));
             }
@@ -1149,7 +1501,13 @@ impl Generator {
         source.push('\n');
         let mut aliases = String::new();
         if mentions(&self.body, "Params") {
-            aliases.push_str("type Params = Record<string, any>;\n");
+            // What jssg types a transform's params as, when one gets them.
+            let value = if self.params_to_transforms && self.string_defaults {
+                "string"
+            } else {
+                "unknown"
+            };
+            let _ = writeln!(aliases, "type Params = Record<string, {value}>;");
         }
         if mentions(&self.body, "Matrix") || self.uses_matrix_env {
             aliases.push_str("type Matrix = Record<string, any> | null;\n");
@@ -1162,7 +1520,9 @@ impl Generator {
             source.push_str(&aliases);
             source.push('\n');
         }
+        source.push_str(&consts);
         source.push_str(&self.body);
+        let mut source = print::format(&source);
         if self.uses_after {
             source.push_str(
                 "\nfunction after(dependencies: Promise<unknown>[], run: () => Promise<unknown>) {\n  return Promise.all(dependencies).then(run);\n}\n",
@@ -1280,6 +1640,28 @@ fn workflow_templates(_workflow: &Workflow) -> HashMap<String, String> {
     HashMap::new()
 }
 
+/// The js-ast-grep steps of a workflow, its templates' included.
+fn jssg_steps(workflow: &Workflow) -> Vec<&UseJSAstGrep> {
+    let mut found = Vec::new();
+    for node in &workflow.nodes {
+        collect_jssg(&node.steps, &mut found);
+    }
+    for template in &workflow.templates {
+        collect_jssg(&template.steps, &mut found);
+    }
+    found
+}
+
+fn collect_jssg<'a>(steps: &'a [Step], found: &mut Vec<&'a UseJSAstGrep>) {
+    for step in steps {
+        match &step.action {
+            StepAction::JSAstGrep(js) => found.push(js),
+            StepAction::Shard(shard) => found.extend(shard.js_ast_grep.as_ref()),
+            _ => {}
+        }
+    }
+}
+
 /// Nodes ordered so every node comes after its dependencies.
 fn topological(nodes: &[Node]) -> Vec<&Node> {
     let mut ordered: Vec<&Node> = Vec::new();
@@ -1393,43 +1775,80 @@ fn object(fields: &[(&str, String)]) -> String {
 }
 
 /// `call` (an open call such as `jssg(transform`) closed with its options.
-/// Long option objects go on several lines.
 fn with_options(call: String, fields: &[(&str, String)]) -> String {
     if fields.is_empty() {
         return format!("{call})");
     }
-    let one_line = format!("{call}, {})", object(fields));
-    if one_line.len() <= 80 {
-        return one_line;
-    }
-    let mut out = format!("{call}, {{\n");
-    for (key, value) in fields {
-        if key == value {
-            let _ = writeln!(out, "  {key},");
-        } else {
-            let _ = writeln!(out, "  {}: {value},", property(key));
-        }
-    }
-    out.push_str("})");
-    out
+    format!("{call}, {})", object(fields))
 }
 
-/// `forEachFile(selector, transform)`.
-fn for_each_file(selector: &[(&str, String)], transform: String) -> String {
-    if selector.is_empty() {
-        return format!("forEachFile({transform})");
+/// Marks where a `forEachFile` selector goes, until `finish` knows whether
+/// it is shared.
+const SELECTOR_MARK: &str = "\u{1}selector";
+
+/// Whether a selector is made of literals only, so it can be a const.
+fn is_literal_object(text: &str) -> bool {
+    let Some(inner) = text.strip_prefix("{ ").and_then(|t| t.strip_suffix(" }")) else {
+        return false;
+    };
+    // Each `key: value` value is JSON; keys are plain identifiers.
+    let json = format!(
+        "{{{}}}",
+        inner
+            .split(", ")
+            .fold((String::new(), 0i32), |(mut out, depth), part| {
+                let opening = part.matches(['[', '{']).count() as i32;
+                let closing = part.matches([']', '}']).count() as i32;
+                if !out.is_empty() {
+                    out.push_str(", ");
+                }
+                match (depth, part.split_once(": ")) {
+                    (0, Some((key, value))) if key.chars().all(|c| c.is_ascii_alphanumeric()) => {
+                        let _ = write!(out, "\"{key}\": {value}");
+                    }
+                    _ => out.push_str(part),
+                }
+                (out, depth + opening - closing)
+            })
+            .0
+    );
+    serde_json::from_str::<Value>(&json).is_ok()
+}
+
+/// The `language` a selector names.
+fn language_of(text: &str) -> Option<String> {
+    let rest = text.split("language: \"").nth(1)?;
+    let language = rest.split('"').next()?;
+    Some(
+        language
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_lowercase(),
+    )
+}
+
+/// A JSON value as TypeScript, with spaces after commas and colons.
+fn json_literal(value: &Value) -> String {
+    match value {
+        Value::Object(map) if map.is_empty() => "{}".into(),
+        Value::Object(map) => {
+            let fields: Vec<String> = map
+                .iter()
+                .map(|(key, value)| format!("{}: {}", property(key), json_literal(value)))
+                .collect();
+            format!("{{ {} }}", fields.join(", "))
+        }
+        Value::Array(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(json_literal)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        other => other.to_string(),
     }
-    // The selector stays on one line when it fits there with the call it is for.
-    let one_line = format!("forEachFile({}, {transform})", object(selector));
-    if one_line.lines().next().is_some_and(|line| line.len() <= 80) {
-        return one_line;
-    }
-    let mut out = String::from("forEachFile({\n");
-    for (key, value) in selector {
-        let _ = writeln!(out, "  {}: {value},", property(key));
-    }
-    let _ = write!(out, "}}, {transform})");
-    out
 }
 
 /// A JSON value as a compact object literal, dropping nulls.
