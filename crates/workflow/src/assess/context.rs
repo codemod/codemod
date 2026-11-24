@@ -191,6 +191,19 @@ fn read(overlay: Option<&crate::tasks::overlay::Overlay>, file: &Path) -> Option
     }
 }
 
+/// `path` in the target, after resolving links; an error for one that
+/// leads out of it, so no file outside the target is sent to the model.
+fn inside(root: &Path, path: &str) -> Result<PathBuf, String> {
+    let file = root.join(relative_path(path)?);
+    match dunce::canonicalize(&file) {
+        Ok(real) if real.starts_with(root) => Ok(real),
+        Ok(_) => Err(format!("assess(): '{path}' leads out of the target")),
+        // Not on disk: a file an earlier step of a dry run created, read
+        // from the overlay.
+        Err(_) => Ok(file),
+    }
+}
+
 /// `path` relative to the target, with `/`; an error for one that leaves it.
 fn relative_path(path: &str) -> Result<PathBuf, String> {
     let candidate = Path::new(path);
@@ -224,7 +237,7 @@ pub(super) fn assemble(
     let limit = options.limit.unwrap_or(DEFAULT_LIMIT);
     let root = dunce::canonicalize(&run.target).unwrap_or_else(|_| run.target.clone());
     let overlay = run.overlay.clone();
-    let file = root.join(relative_path(path)?);
+    let file = inside(&root, path)?;
     let text = match text {
         Some(text) => text,
         None => read(overlay.as_deref(), &file)
@@ -336,7 +349,7 @@ pub(super) fn assemble(
     }
 
     for extra in &options.extra {
-        let target = root.join(relative_path(extra)?);
+        let target = inside(&root, extra)?;
         if !target.is_file() && read(overlay.as_deref(), &target).is_none() {
             return Err(format!(
                 "assess(): context.extra names '{extra}', which is not a file in the target"
@@ -776,6 +789,22 @@ mod tests {
                 "packages/web/src/app.ts"
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_out_of_the_target_are_refused() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "secret").unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(target.path()).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), root.join("link.txt"))
+            .unwrap();
+        std::fs::write(root.join("a.ts"), "").unwrap();
+        assert!(inside(&root, "link.txt")
+            .unwrap_err()
+            .contains("leads out of the target"));
+        assert_eq!(inside(&root, "a.ts").unwrap(), root.join("a.ts"));
     }
 
     #[test]
