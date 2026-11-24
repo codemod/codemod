@@ -4,6 +4,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use butterflow_state::run_store::FileCount;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -112,6 +113,9 @@ pub(crate) struct TaskOutcome {
     /// step is then recorded as partial.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partial: Option<String>,
+    /// With `partial`: how many files failed, of how many.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files: Option<FileCount>,
 }
 
 impl TaskOutcome {
@@ -119,6 +123,7 @@ impl TaskOutcome {
         Self {
             result,
             partial: None,
+            files: None,
         }
     }
 
@@ -126,6 +131,7 @@ impl TaskOutcome {
     pub fn with_failures(mut self, failed: usize, total: usize) -> Self {
         if failed > 0 {
             self.partial = Some(failed_files(failed, total));
+            self.files = Some(FileCount { failed, total });
         }
         self
     }

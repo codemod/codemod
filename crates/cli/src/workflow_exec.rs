@@ -149,6 +149,8 @@ pub struct ExecOutcome {
     pub report: RunReport,
     pub summary: Arc<Summary>,
     pub duration: Duration,
+    pub dry_run: bool,
+    pub format: OutputFormat,
 }
 
 impl ExecOutcome {
@@ -160,19 +162,74 @@ impl ExecOutcome {
         self.summary.stats.files_unmodified.load(Ordering::Relaxed)
     }
 
+    /// Files that failed: in the run's partial steps, or as counted while
+    /// the run progressed, whichever is more.
     pub fn files_with_errors(&self) -> usize {
-        self.summary.stats.files_with_errors.load(Ordering::Relaxed)
+        self.summary
+            .stats
+            .files_with_errors
+            .load(Ordering::Relaxed)
+            .max(self.failed_files())
     }
 
-    /// `Ok` when the run succeeded or is waiting for an approval. Failures
-    /// were already shown while the run progressed.
-    pub fn result(&self) -> Result<()> {
+    /// How many files failed in the run's partial steps.
+    pub fn failed_files(&self) -> usize {
+        self.report.failed_files()
+    }
+
+    /// `Ok` when the run finished or is waiting for an approval, even if
+    /// some files failed. Failures were already shown while the run
+    /// progressed.
+    pub fn ended(&self) -> Result<()> {
         match &self.report.ending {
             Ending::Succeeded(_) | Ending::AwaitingApproval(_) | Ending::Stopped(_) => Ok(()),
             Ending::Failed(_) | Ending::Canceled => Err(WorkflowFailureAlreadyReported.into()),
         }
     }
+
+    /// Like [`Self::ended`], but a run that finished with failed files is
+    /// an error too: [`FinishedWithFailedFiles`], exit code 2.
+    pub fn result(&self) -> Result<()> {
+        self.ended()?;
+        match self.failed_files() {
+            0 => Ok(()),
+            failed => Err(FinishedWithFailedFiles {
+                failed,
+                dry_run: self.dry_run,
+                quiet: self.format == OutputFormat::Jsonl,
+            }
+            .into()),
+        }
+    }
 }
+
+/// The exit code of a run that finished, but with some files failed. A run
+/// that failed outright exits with 1.
+pub const EXIT_FAILED_FILES: i32 = 2;
+
+/// A run finished, but some of its files failed. The CLI ends its output
+/// with this and exits with [`EXIT_FAILED_FILES`].
+#[derive(Debug)]
+pub struct FinishedWithFailedFiles {
+    pub failed: usize,
+    pub dry_run: bool,
+    /// The output is JSONL, where `run_finished` already says it.
+    pub quiet: bool,
+}
+
+impl std::fmt::Display for FinishedWithFailedFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let files = if self.failed == 1 { "file" } else { "files" };
+        let rest = if self.dry_run {
+            "dry run: nothing was written"
+        } else {
+            "changes to the other files were written"
+        };
+        write!(f, "{} {files} failed; {rest}.", self.failed)
+    }
+}
+
+impl std::error::Error for FinishedWithFailedFiles {}
 
 /// A workflow failure the run's output already described.
 #[derive(Debug)]
@@ -224,6 +281,8 @@ pub async fn start(request: ExecRequest) -> Result<ExecOutcome> {
         report,
         summary,
         duration: started.elapsed(),
+        dry_run,
+        format,
     };
     // A dry run is not saved, so there is nothing to resume.
     print_ending(&outcome, format, !dry_run);
@@ -257,6 +316,9 @@ pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutc
         report,
         summary,
         duration: started.elapsed(),
+        // A dry run is not saved, so it is never resumed.
+        dry_run: false,
+        format,
     };
     print_ending(&outcome, format, true);
     Ok(outcome)
@@ -392,8 +454,6 @@ pub struct Renderer {
     /// Streamed agent message text not yet followed by a full line.
     agent_text: Mutex<HashMap<u64, String>>,
     seq: AtomicU64,
-    /// Steps that finished with some of their files failed.
-    partial: AtomicU64,
     /// A dry run's diff has begun.
     diffs_shown: AtomicBool,
 }
@@ -410,7 +470,6 @@ impl Renderer {
             bars: Mutex::new(HashMap::new()),
             agent_text: Mutex::new(HashMap::new()),
             seq: AtomicU64::new(0),
-            partial: AtomicU64::new(0),
             diffs_shown: AtomicBool::new(false),
         }
     }
@@ -549,15 +608,12 @@ impl EventSink for Renderer {
                         style("✓").green(),
                         style(elapsed).dim()
                     )),
-                    StepStatus::Partial => {
-                        self.partial.fetch_add(1, Ordering::SeqCst);
-                        self.line(format!(
-                            "{} {label}: {} {}",
-                            style("◐").yellow(),
-                            error.unwrap_or_default(),
-                            style(elapsed).dim()
-                        ))
-                    }
+                    StepStatus::Partial => self.line(format!(
+                        "{} {label}: {} {}",
+                        style("◐").yellow(),
+                        error.unwrap_or_default(),
+                        style(elapsed).dim()
+                    )),
                     StepStatus::Failed => self.line(format!(
                         "{} {label}: {}",
                         style("✗").red(),
@@ -583,15 +639,21 @@ impl EventSink for Renderer {
                 }
                 self.line(color_diff(&diff));
             }
-            Event::RunFinished { status, .. } => {
+            Event::RunFinished {
+                status,
+                failed_files,
+                partial_steps,
+                ..
+            } => {
                 if status == RunStatus::Succeeded {
-                    match self.partial.load(Ordering::SeqCst) {
-                        0 => self.line(format!("{}", style("Done").green().bold())),
-                        steps => self.line(format!(
+                    match (failed_files, partial_steps.len()) {
+                        (0, _) => self.line(format!("{}", style("Done").green().bold())),
+                        (files, steps) => self.line(format!(
                             "{} {}",
                             style("Done").yellow().bold(),
                             style(format!(
-                                "(some files failed in {steps} {})",
+                                "({files} {} failed in {steps} {})",
+                                if files == 1 { "file" } else { "files" },
                                 if steps == 1 { "step" } else { "steps" }
                             ))
                             .yellow()

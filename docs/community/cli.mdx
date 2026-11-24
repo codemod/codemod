@@ -398,7 +398,7 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 </ResponseField>
 
 <ResponseField name="--format <text|jsonl>" type="string">
-  `jsonl` prints one JSON object per engine event (`run_started`, `step_started`, `step_progress`, `step_log`, `step_retrying`, `step_finished`, `run_finished`, ...) on stdout.
+  `jsonl` prints one JSON object per engine event (`run_started`, `step_started`, `step_progress`, `step_log`, `step_retrying`, `step_finished`, `run_finished`, ...) on stdout. `run_finished` has the run's `status`, its `error`, `failed_files` (how many files failed in all), and `partial_steps`: each step some files failed in, with its `position`, `label`, `failed_files` and `files` (how many it ran on).
 </ResponseField>
 
 <ResponseField name="-t, --target <PATH>" type="string">
@@ -462,6 +462,14 @@ A run is unattended when you pass `--no-interactive`, and also when there is no 
 
   The CLI creates parent directories as needed and overwrites the file with the current run's data.
 </ResponseField>
+
+**Exit codes** (`workflow run`, `workflow resume`, `codemod <package>`):
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | The run finished, or is waiting for an approval. |
+| `1` | The run failed or was canceled. |
+| `2` | The run finished, but some files failed. The other files' changes were written (in a dry run, nothing was), and the output ends with how many failed. A resumed run counts the files that failed in steps it reused. |
 
 **`workflow resume`**
 

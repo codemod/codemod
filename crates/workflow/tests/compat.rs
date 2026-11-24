@@ -907,6 +907,7 @@ export default function transform(root: any) {
     );
     assert!(output(&report).is_ok(), "{:?}", report.ending);
     assert_eq!(report.steps[0].status, StepStatus::Partial);
+    assert_eq!(report.failed_files(), 1);
     assert_eq!(h.read("src/b.ts"), "done\n");
     let events = h.events.take();
     let logged = events.iter().any(|event| {
