@@ -20,7 +20,8 @@ pub const SCOPE: &str = "{ params, matrix, state }";
 /// [`TEXT_HELPER`] defines it.
 pub const TEXT: &str = "asText";
 
-/// Arrays and objects print as compact JSON in their own key order, null as
+/// For a `${{ }}` in text (not a list field: see [`string_list`]): arrays
+/// and objects print as compact JSON in their own key order, null as
 /// nothing, and a value that is not set fails, as in workflow.yaml.
 pub const TEXT_HELPER: &str = r#"
 /** A `${{ }}` value in a string, as workflow.yaml printed it: arrays and objects as JSON, null as nothing. */

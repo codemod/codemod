@@ -59,7 +59,12 @@ fn nested_case(root: &Path) {
     }
 }
 
-const STALE: &str = r#"[{ "file": "c.ts", "data": { "marker": "other" } }]"#;
+/// The right files, but one file's data differs.
+const STALE: &str = r#"[
+  { "file": "c.ts", "data": { "marker": "other" } },
+  { "file": "src/a.ts", "data": { "marker": "a" } },
+  { "file": "src/lib/b.ts", "data": { "marker": "b" } }
+]"#;
 
 #[test]
 fn a_directory_case_with_nested_files_snapshots_data_at_its_root() {
@@ -121,4 +126,54 @@ fn a_filter_does_not_hide_a_data_mismatch() {
     assert!(!run.status.success(), "{}", output(&run));
     assert!(output(&run).contains("Data mismatch"), "{}", output(&run));
     assert_eq!(fs::read_to_string(case.join("data.json")).unwrap(), STALE);
+}
+
+/// A file that an earlier file deleted is skipped by the runner; the case's
+/// data is still checked, with the files that ran.
+#[test]
+fn a_case_whose_last_file_was_deleted_still_checks_its_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    nested_case(root);
+    write(
+        &root.join("scripts/codemod.ts"),
+        r#"
+import fs from "fs";
+export default function transform(root: any, options: any) {
+  const text = root.root().text();
+  const marker = text.match(/marker: (\w+)/)?.[1];
+  // c.ts runs first and deletes the case's last file.
+  if (marker === "c") fs.rmSync(`${options.targetDir}/src/lib/b.ts`);
+  return { edit: text.replace("OLD", "NEW"), data: { marker } };
+}
+"#,
+    );
+    let case = root.join("tests/case");
+    fs::remove_file(case.join("expected/src/lib/b.ts")).unwrap();
+
+    let first = jssg_test(root, &["--allow-fs"]);
+    assert!(first.status.success(), "{}", output(&first));
+    let data: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(case.join("data.json")).unwrap()).unwrap();
+    assert_eq!(
+        data,
+        serde_json::json!([
+            { "file": "c.ts", "data": { "marker": "c" } },
+            { "file": "src/a.ts", "data": { "marker": "a" } },
+        ])
+    );
+
+    let stale = r#"[
+  { "file": "c.ts", "data": { "marker": "c" } },
+  { "file": "src/a.ts", "data": { "marker": "other" } }
+]"#;
+    fs::write(case.join("data.json"), stale).unwrap();
+    let second = jssg_test(root, &["--allow-fs"]);
+    assert!(!second.status.success(), "{}", output(&second));
+    assert!(
+        output(&second).contains("Data mismatch"),
+        "{}",
+        output(&second)
+    );
+    assert_eq!(fs::read_to_string(case.join("data.json")).unwrap(), stale);
 }

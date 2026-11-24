@@ -272,6 +272,38 @@ nodes:
         .all(|s| s.status == StepStatus::Succeeded));
 }
 
+/// A `min_shard_size` whose value is null leaves the minimum unset, as
+/// before, rather than asking for shards of at least 0 files.
+#[test]
+fn a_null_shard_minimum_is_left_unset() {
+    let h = Harness::new();
+    h.write("src/alpha/a.ts", "y = 'OLD'\n");
+    h.bundle_file("scripts/codemod.ts", TRANSFORM);
+    let workflow = h.workflow_file(
+        "workflow.yaml",
+        r#"
+version: "1"
+nodes:
+  - id: evaluate
+    name: Evaluate shards
+    steps:
+      - name: Build shards
+        shard:
+          method:
+            type: directory
+            max_files_per_shard: ${{ params.max }}
+            min_shard_size: ${{ params.min }}
+          target: src
+          output_state: shards
+          file_pattern: "**/*.ts"
+"#,
+    );
+    let report = h.start_loaded(workflow, json!({ "max": 10, "min": null }), false);
+    assert!(output(&report).is_ok(), "{:?}", report.ending);
+    let shards = report.steps[0].result.as_ref().unwrap().as_array().unwrap();
+    assert_eq!(shards.len(), 1, "{shards:?}");
+}
+
 /// The shard's transform runs as the YAML engine's prescan ran it: as a dry
 /// run, so a transform that changes files only then is what picks them.
 #[test]
@@ -724,13 +756,22 @@ nodes:
 #[cfg(not(windows))]
 #[test]
 fn an_expression_naming_an_unset_value_fails_its_step() {
-    // A missing value, and a value under a missing parent.
-    for expression in ["state.missing", "state.missing.child"] {
+    // A missing value, a value under a missing parent, and a missing value
+    // in a step's name.
+    for (expression, name, run) in [
+        ("state.missing", "Show", "echo '${{ state.missing }}'"),
+        (
+            "state.missing.child",
+            "Show",
+            "echo '${{ state.missing.child }}'",
+        ),
+        ("state.missing", "Show ${{ state.missing }}", "echo shown"),
+    ] {
         let h = Harness::new();
         let workflow = h.workflow_file(
             "workflow.yaml",
             &format!(
-                "version: \"1\"\nnodes:\n  - id: only\n    name: Only\n    steps:\n      - name: Show\n        run: echo '${{{{ {expression} }}}}'\n"
+                "version: \"1\"\nnodes:\n  - id: only\n    name: Only\n    steps:\n      - name: \"{name}\"\n        run: \"{run}\"\n"
             ),
         );
         let report = h.start_loaded(workflow, Value::Null, false);
