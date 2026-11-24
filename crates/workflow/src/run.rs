@@ -29,7 +29,7 @@ use rquickjs::{CatchResultExt, Context, Ctx, Function, Module, Object, Promise, 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::build::{Built, DEPS_MODULE, FLOW_MODULE, GIT_MODULE};
+use crate::build::{Built, ASSESS_MODULE, DEPS_MODULE, FLOW_MODULE, GIT_MODULE};
 use crate::events::{Event, EventSink};
 use crate::interaction::Interaction;
 use crate::tasks::{self, TaskContext};
@@ -177,6 +177,8 @@ pub(crate) struct RunContext {
     /// A step that could not finish, which decides how the run ends whatever
     /// the body does with the error.
     pub interruption: Mutex<Option<Interruption>>,
+    /// The run's `assess()` calls: usage by step, and the import graph.
+    pub assess: crate::assess::RunAssess,
     /// Keeps `cancel` following the store's cancel requests; `None` for
     /// nested codemods, which share their parent's flag.
     pub _cancel_watch: Option<CancelWatch>,
@@ -264,6 +266,7 @@ impl RunContext {
             test: None,
             stopped: AtomicBool::new(false),
             interruption: Mutex::new(None),
+            assess: Default::default(),
             _cancel_watch: None,
         }
     }
@@ -503,7 +506,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
     runtime.set_loader(
         (
             // The body's codemod modules: `codemod/<name>`, or `codemod:<name>`.
-            CodemodModuleResolver::new(&["ast-grep", "workflow", "deps", "git"]),
+            CodemodModuleResolver::new(&["ast-grep", "workflow", "deps", "git", "assess"]),
             BodyPathResolver,
             llrt_resolver,
             BuiltinResolver::default()
@@ -517,6 +520,7 @@ pub(crate) fn execute(built: &Built, run: Arc<RunContext>) -> Result<Ending, Run
                 .with_module(FLOW_MODULE, crate::js::workflow_module())
                 .with_module(DEPS_MODULE, crate::js::deps_module())
                 .with_module(GIT_MODULE, crate::js::git_module())
+                .with_module(ASSESS_MODULE, crate::js::assess_module())
                 .with_module(ORCHESTRATOR_MODULE, crate::js::orchestrator())
                 .with_module(SEMVER_MODULE, crate::js::semver_module())
                 .with_module(PATH_SHIM_MODULE, include_str!("js/path.js")),

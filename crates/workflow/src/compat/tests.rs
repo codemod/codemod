@@ -5,6 +5,21 @@ fn parse(yaml: &str) -> Workflow {
     serde_yaml::from_str(yaml).unwrap_or_else(|e| panic!("bad test YAML: {e}"))
 }
 
+/// The text without whitespace, and without commas before a closing
+/// bracket, so a check does not depend on where lines break.
+fn squashed(text: &str) -> String {
+    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    compact
+        .replace(",)", ")")
+        .replace(",]", "]")
+        .replace(",}", "}")
+}
+
+/// Whether `source` has `needle`, however the lines break.
+fn has(source: &str, needle: &str) -> bool {
+    squashed(source).contains(&squashed(needle))
+}
+
 /// Translate and check the result builds.
 fn translated(yaml: &str) -> Translated {
     let result = translate(&parse(yaml));
@@ -102,15 +117,16 @@ fn a_linear_shell_workflow_becomes_a_sequence_of_awaits() {
     .unwrap();
     let source = translated(&text).source;
     assert!(
-        source.contains(
+        has(&source,
             "  const state: State = {};\n  await setupNode(state);\n  await transformNode(state);\n  await cleanupNode(state);\n}"
         ),
         "{source}"
     );
     assert!(
-        source.contains(
+        has(
+            &source,
             r#"applyStateOutputs(state, await step("Initialize", shell("CODEMOD_STATE_DIR="#
-        ) && source.contains(r#"(\n$CODEMOD_PATH/scripts/setup.sh\n)"#),
+        ) && has(&source, r#"(\n$CODEMOD_PATH/scripts/setup.sh\n)"#),
         "{source}"
     );
     for unused in [
@@ -120,7 +136,7 @@ fn a_linear_shell_workflow_becomes_a_sequence_of_awaits() {
         "DEFAULT_PARAMS",
         "const matrix",
     ] {
-        assert!(!source.contains(unused), "{unused} in:\n{source}");
+        assert!(!has(&source, unused), "{unused} in:\n{source}");
     }
 }
 
@@ -151,23 +167,24 @@ nodes:
         r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
 import { forEachFile, step } from "codemod/workflow";
 import type { WorkflowContext } from "codemod/workflow";
-// codemod upgrade: the transforms below are jssg transform files, run by a
-// compatibility adapter that does what workflow.yaml's js-ast-grep step did.
-// To convert one, give forEachFile a callback in its place:
-// (file) => { const root = parse(file); ...; file.write(text) }, with parse from
-// "codemod/ast-grep", or move it to a file and import its default export.
 import * as workflowTransform from "./src/workflow.ts";
 import { jssgFile } from "codemod-internal:jssg-compat";
 
-type Params = Record<string, any>;
+type Params = Record<string, unknown>;
 
 export default async function main({ params }: WorkflowContext<Params>) {
   // Apply AST Transformations
-  await step("Rewrite rmdir", forEachFile({
-    include: ["**/*.js", "**/*.ts"],
-    exclude: ["**/node_modules/**"],
-    language: "typescript",
-  }, (file) => jssgFile(workflowTransform, file, { language: "typescript", params })));
+  await step(
+    "Rewrite rmdir",
+    forEachFile(
+      {
+        include: ["**/*.js", "**/*.ts"],
+        exclude: ["**/node_modules/**"],
+        language: "typescript",
+      },
+      (file) => jssgFile(workflowTransform, file, { params }),
+    ),
+  );
 }
 "#
     );
@@ -198,13 +215,13 @@ nodes:
     for expected in [
         // workflow.yaml parses as TypeScript unless told otherwise.
         r#"import * as codemodTransform from "./scripts/codemod.ts";"#,
-        "await step(\"Transform\", forEachFile({\n    language: \"typescript\",\n  }, (file) => jssgFile(codemodTransform, file, { language: \"typescript\", params })));",
+        "await step(\"Transform\", forEachFile({ language: \"typescript\" }, (file) => jssgFile(codemodTransform, file, { params })));",
         r#"import configRules from "./rules/config.yml";"#,
         r#"await step("Rules", forEachFile(astGrep(configRules)));"#,
         r#"forEachFile({ include: ["src/**"] }, astGrep(configRules))"#,
     ] {
         assert!(
-            source.contains(expected),
+            has(&source, expected),
             "missing {expected} in:\n{source}"
         );
     }
@@ -239,12 +256,12 @@ nodes:
         "step 'Under base': max_threads is dropped",
     ] {
         assert!(
-            result.source.contains(expected),
+            has(&result.source, expected),
             "missing {expected} in:\n{}",
             result.source
         );
     }
-    assert!(!result.source.contains("basePath"), "{}", result.source);
+    assert!(!has(&result.source, "basePath"), "{}", result.source);
     assert_eq!(rebase_glob("a", "!b/*.ts"), "!a/b/*.ts");
     assert_eq!(rebase_glob("a/", "/top.ts"), "a/top.ts");
     assert_eq!(rebase_glob("./a", "dist/"), "a/**/dist/");
@@ -270,7 +287,7 @@ nodes:
     )
     .source;
     assert!(
-        source.contains("await Promise.all([aNode(), bNode()]);"),
+        has(&source, "await Promise.all([aNode(), bNode()]);"),
         "{source}"
     );
 }
@@ -367,15 +384,13 @@ nodes:
 fn the_documented_features_translate_and_build() {
     let result = translated(FEATURES);
     let source = &result.source;
-    let expect =
-        |needle: &str| assert!(source.contains(needle), "missing {needle:?} in:\n{source}");
+    let expect = |needle: &str| assert!(has(source, needle), "missing {needle:?} in:\n{source}");
 
-    expect("\"pr_size\": 20");
-    expect("\"mode\": \"safe\"");
+    expect("const DEFAULT_PARAMS: Params = { mode: \"safe\", pr_size: 20 };");
     expect("import { branch, commit, pullRequest } from \"codemod/git\";");
     let workflow_import = source
-        .lines()
-        .find(|line| line.starts_with("import {") && line.ends_with("from \"codemod/workflow\";"))
+        .split("import ")
+        .find(|part| part.starts_with('{') && part.contains("} from \"codemod/workflow\";"))
         .unwrap();
     assert!(
         !workflow_import.contains("commit"),
@@ -390,12 +405,13 @@ fn the_documented_features_translate_and_build() {
     expect("const branchName = `codemod-apply-${index}`;");
     expect("import * as codemodTransform from \"./scripts/codemod.ts\";");
     expect("import { jssgFile, jssgWouldChange } from \"codemod-internal:jssg-compat\";");
-    expect("forEachFile({\n    include: matrix?._meta_files,\n    language: \"tsx\",\n  }, (file) => jssgFile(codemodTransform, file, {\n    language: \"tsx\",\n    params,\n    matrix: matrix ?? undefined,\n  }))");
+    // The adapter parses with the selector's language.
+    expect("forEachFile({ include: matrix?._meta_files, language: \"tsx\" }, (file) => jssgFile(codemodTransform, file, { params, matrix: matrix ?? undefined }))");
     expect("if (evaluate(\"condition\", \"${{ params.mode == \\\"fast\\\" }}\", { params, matrix, state })) {");
     expect("await step(commit(`chore: ${asText(matrix?.name, \"matrix.name\")}`, { allowEmpty: true }));");
     expect("if (evaluate(\"condition\", \"contains(params.mode, \\\"x\\\")\", { params, matrix, state })) {");
     expect("shell(\"echo fast\", { env: { ...matrixEnv(matrix), CI: \"true\" } })");
-    expect("await lintFixTemplate({ ...params, ...{\"target_glob\":\"src/**\"} }, matrix, state);");
+    expect("await lintFixTemplate({ ...params, ...{ target_glob: \"src/**\" } }, matrix, state);");
     expect("await step(pullRequest({ title: `refactor: migrate ${asText(matrix?.name, \"matrix.name\")}`, draft: true, branch: branchName }));");
     expect("agent(`Summarize ${asText(matrix?.team, \"matrix.team\")}`)");
     expect("codemod(\"@codemod/other\", { params })");
@@ -461,16 +477,16 @@ nodes:
     for (name, yaml) in cases {
         let source = source_of(&yaml);
         assert!(
-            source.contains("for (let index = 0; index < values.length; index++)"),
+            has(
+                &source,
+                "for (let index = 0; index < values.length; index++)"
+            ),
             "{name}: not sequential:\n{source}"
         );
-        assert!(
-            !source.contains(".map((matrix: Matrix"),
-            "{name}:\n{source}"
-        );
+        assert!(!has(&source, ".map((matrix: Matrix"), "{name}:\n{source}");
     }
     let source = source_of(&matrix("", plain_step));
-    assert!(source.contains(".map((matrix: Matrix"), "{source}");
+    assert!(has(&source, ".map((matrix: Matrix"), "{source}");
 }
 
 #[test]
@@ -490,11 +506,11 @@ nodes:
     };
     let source = translated(&yaml("        commit:\n          message: hi\n")).source;
     assert!(
-        source.contains("import { commit } from \"codemod/git\";\n"),
+        has(&source, "import { commit } from \"codemod/git\";\n"),
         "{source}"
     );
     let source = translated(&yaml("")).source;
-    assert!(!source.contains("codemod/git"), "{source}");
+    assert!(!has(&source, "codemod/git"), "{source}");
     let source = translated(
         r#"
 version: "1"
@@ -509,7 +525,7 @@ nodes:
     )
     .source;
     assert!(
-        source.contains("import { branch } from \"codemod/git\";\n"),
+        has(&source, "import { branch } from \"codemod/git\";\n"),
         "{source}"
     );
 }
@@ -539,9 +555,10 @@ nodes:
 "#,
     );
     assert!(
-        translated
-            .source
-            .contains("Rewrite app/api/**\\/*.ts routes: Two lines, and a *\\/ too"),
+        has(
+            &translated.source,
+            "Rewrite app/api/**\\/*.ts routes: Two lines, and a *\\/ too"
+        ),
         "{}",
         translated.source
     );
@@ -569,11 +586,17 @@ nodes:
 "#,
     );
     assert!(
-        source.contains(r#"applyStateOutputs(state, await step("Version", shell("#),
+        has(
+            &source,
+            r#"applyStateOutputs(state, await step("Version", shell("#
+        ),
         "{source}"
     );
     assert!(
-        source.contains("(\\necho ${asText(state.version, \"state.version\")}\\n)"),
+        has(
+            &source,
+            "(\\necho ${asText(state.version, \"state.version\")}\\n)"
+        ),
         "{source}"
     );
 }
@@ -602,7 +625,10 @@ nodes:
 "#,
     );
     assert!(
-        source.contains(r#"applyStateOutputs(state, await step("Count", shell("#),
+        has(
+            &source,
+            r#"applyStateOutputs(state, await step("Count", shell("#
+        ),
         "{source}"
     );
 }
@@ -640,7 +666,10 @@ templates:
     );
     let source = source_of(&yaml);
     assert!(
-        source.contains(r#"applyStateOutputs(state, await step("Count", shell("#),
+        has(
+            &source,
+            r#"applyStateOutputs(state, await step("Count", shell("#
+        ),
         "{source}"
     );
 }
@@ -683,10 +712,10 @@ nodes:
 "#,
     );
     assert!(
-        source.contains(r#"await step("Run", shell("echo hi"));"#),
+        has(&source, r#"await step("Run", shell("echo hi"));"#),
         "{source}"
     );
-    assert!(!source.contains("State"), "{source}");
+    assert!(!has(&source, "State"), "{source}");
 }
 
 #[test]
@@ -705,7 +734,10 @@ nodes:
 "#,
     );
     assert!(
-        source.contains(r#"applyStateOutputs(state, await step("Run script", shell("#),
+        has(
+            &source,
+            r#"applyStateOutputs(state, await step("Run script", shell("#
+        ),
         "{source}"
     );
     // A script can use STATE_OUTPUTS even if the YAML does not mention it.
@@ -729,7 +761,420 @@ fn templates_used_many_times_over_are_walked_once() {
     yaml.push_str("nodes:\n  - id: top\n    name: Top\n    steps:\n      - name: Top\n        use:\n          template: t40\n");
     let source = source_of(&yaml);
     assert!(
-        source.contains("applyStateOutputs(state, await step(\"Count\""),
+        has(&source, "applyStateOutputs(state, await step(\"Count\""),
+        "{source}"
+    );
+}
+
+// ---- `codemod workflow upgrade`: plain callbacks ----
+
+/// `upgrade_file` on a package of `files`, checking the result builds.
+fn upgraded(yaml: &str, files: &[(&str, &str)]) -> Translated {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, text) in files {
+        let path = dir.path().join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let path = dir.path().join("workflow.yaml");
+    std::fs::write(&path, yaml).unwrap();
+    let result = upgrade_file(&path).unwrap();
+    if let Err(error) = build("workflow.ts", &result.source) {
+        panic!(
+            "upgraded workflow does not build: {error}\n\n{}",
+            result.source
+        );
+    }
+    result
+}
+
+const RMDIR_TRANSFORM: &str = "import type { SgRoot } from '@codemod.com/jssg-types/main';\nexport default function transform(root: SgRoot): string | null {\n  return null;\n}\n";
+
+const TS_GLOBS: &str = r#"          include:
+            - "**/*.cjs"
+            - "**/*.cts"
+            - "**/*.js"
+            - "**/*.jsx"
+            - "**/*.mjs"
+            - "**/*.mts"
+            - "**/*.ts"
+            - "**/*.tsx"
+          exclude:
+            - "**/node_modules/**"
+          language: typescript
+"#;
+
+#[test]
+fn an_upgraded_transform_is_called_from_a_plain_callback() {
+    let yaml = format!(
+        r#"version: "1"
+nodes:
+  - id: apply-transforms
+    name: Apply AST Transformations
+    type: automatic
+    steps:
+      - name: Handle DEP0147 via transforming `fs.rmdir` to `fs.rm`.
+        js-ast-grep:
+          js_file: src/workflow.ts
+          base_path: .
+{TS_GLOBS}"#
+    );
+    let result = upgraded(&yaml, &[("src/workflow.ts", RMDIR_TRANSFORM)]);
+    assert_eq!(
+        result.source,
+        r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
+import { parse } from "codemod/ast-grep";
+import { forEachFile, step } from "codemod/workflow";
+import transform from "./src/workflow.ts";
+
+export default async function main() {
+  // Apply AST Transformations
+  await step(
+    "Handle DEP0147 via transforming `fs.rmdir` to `fs.rm`.",
+    forEachFile(
+      {
+        include: [
+          "**/*.cjs",
+          "**/*.cts",
+          "**/*.js",
+          "**/*.jsx",
+          "**/*.mjs",
+          "**/*.mts",
+          "**/*.ts",
+          "**/*.tsx",
+        ],
+        exclude: ["**/node_modules/**"],
+        language: "typescript",
+      },
+      (file) => {
+        const out = transform(parse(file));
+        if (typeof out === "string") file.write(out);
+      },
+    ),
+  );
+}
+"#
+    );
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+}
+
+#[test]
+fn transforms_that_take_options_get_them_and_capabilities_stay_on_the_selector() {
+    let yaml = format!(
+        r#"version: "1"
+nodes:
+  - id: apply-transforms
+    name: Apply AST Transformations
+    type: automatic
+    steps:
+      - name: Migrate from chalk
+        js-ast-grep:
+          js_file: src/workflow.ts
+          base_path: .
+{TS_GLOBS}
+  - id: remove-dependencies
+    name: Remove chalk dependency
+    type: automatic
+    steps:
+      - name: Remove the chalk dependency
+        js-ast-grep:
+          js_file: src/remove-dependencies.ts
+          base_path: .
+          include:
+            - "**/package.json"
+          exclude:
+            - "**/node_modules/**"
+          language: typescript
+          capabilities:
+            - child_process
+            - fs
+"#
+    );
+    let result = upgraded(
+        &yaml,
+        &[
+            ("src/workflow.ts", RMDIR_TRANSFORM),
+            (
+                "src/remove-dependencies.ts",
+                "import type { Transform } from '@codemod.com/jssg-types/main';\nimport type Json from '@codemod.com/jssg-types/langs/json';\nconst transform: Transform<Json> = async (root) => {\n  return null;\n};\nexport default transform;\n",
+            ),
+        ],
+    );
+    assert_eq!(
+        result.source,
+        r#"// Generated from workflow.yaml by `codemod workflow upgrade`.
+import { parse } from "codemod/ast-grep";
+import { forEachFile, step } from "codemod/workflow";
+import type { WorkflowContext } from "codemod/workflow";
+import workflowTransform from "./src/workflow.ts";
+import removeDependenciesTransform from "./src/remove-dependencies.ts";
+
+type Params = Record<string, string>;
+
+export default async function main({ params, target }: WorkflowContext<Params>) {
+  await Promise.all([
+    applyTransformsNode(),
+    removeDependenciesNode(params, target),
+  ]);
+}
+
+/** Apply AST Transformations */
+async function applyTransformsNode() {
+  await step(
+    "Migrate from chalk",
+    forEachFile(
+      {
+        include: [
+          "**/*.cjs",
+          "**/*.cts",
+          "**/*.js",
+          "**/*.jsx",
+          "**/*.mjs",
+          "**/*.mts",
+          "**/*.ts",
+          "**/*.tsx",
+        ],
+        exclude: ["**/node_modules/**"],
+        language: "typescript",
+      },
+      (file) => {
+        const out = workflowTransform(parse(file));
+        if (typeof out === "string") file.write(out);
+      },
+    ),
+  );
+}
+
+/** Remove chalk dependency */
+async function removeDependenciesNode(params: Params, target: string) {
+  await step(
+    "Remove the chalk dependency",
+    forEachFile(
+      {
+        include: ["**/package.json"],
+        exclude: ["**/node_modules/**"],
+        language: "typescript",
+        capabilities: ["child_process", "fs"],
+      },
+      async (file) => {
+        const out = await removeDependenciesTransform(parse(file), {
+          params,
+          language: "typescript",
+          targetDir: target,
+        });
+        if (typeof out === "string") file.write(out);
+      },
+    ),
+  );
+}
+"#
+    );
+}
+
+#[test]
+fn a_selector_several_steps_share_is_one_const() {
+    let step = |name: &str| {
+        format!("      - name: {name}\n        js-ast-grep:\n          js_file: src/{name}.ts\n{TS_GLOBS}")
+    };
+    let yaml = format!(
+        "version: \"1\"\nnodes:\n  - id: apply\n    name: Apply\n    steps:\n{}{}{}",
+        step("enroll"),
+        step("unenroll"),
+        step("cleanup")
+    );
+    let files: Vec<(String, &str)> = ["enroll", "unenroll", "cleanup"]
+        .iter()
+        .map(|name| (format!("src/{name}.ts"), RMDIR_TRANSFORM))
+        .collect();
+    let files: Vec<(&str, &str)> = files.iter().map(|(n, t)| (n.as_str(), *t)).collect();
+    let source = upgraded(&yaml, &files).source;
+    assert_eq!(source.matches("\"**/*.tsx\"").count(), 1, "{source}");
+    assert!(
+        source.contains("const files = {\n  include: [\n    \"**/*.cjs\","),
+        "{source}"
+    );
+    assert!(
+        source.contains("  await step(\n    \"enroll\",\n    forEachFile(files, (file) => {\n      const out = enrollTransform(parse(file));\n"),
+        "{source}"
+    );
+    assert_eq!(
+        source.matches("language: \"typescript\"").count(),
+        1,
+        "{source}"
+    );
+}
+
+#[test]
+fn selectors_results_matrices_and_bases_are_kept_in_the_plain_callback() {
+    let result = upgraded(
+        r#"version: "1"
+nodes:
+  - id: report
+    name: Report
+    strategy:
+      type: matrix
+      values:
+        - team: a
+    steps:
+      - name: Report
+        js-ast-grep:
+          js_file: src/report.ts
+          base_path: ./packages/app/
+          language: tsx
+"#,
+        &[(
+            "src/report.ts",
+            "export const getSelector = () => ({ rule: { pattern: 'console.log($$$)' } });\nexport default async function transform(root, options) {\n  return { edit: null, data: options.matches.length };\n}\n",
+        )],
+    );
+    let source = &result.source;
+    for needle in [
+        "import transform, { getSelector } from \"./src/report.ts\";",
+        "if (!file.path.startsWith(\"packages/app/\")) return;",
+        "const root: Parameters<typeof transform>[0] = parse(file);",
+        "const matches = root.root().findAll(getSelector({ params }));",
+        "if (matches.length === 0) return;",
+        "const result = await transform(root, { params, language: \"tsx\", targetDir: target, matches, matrixValues: matrix ?? undefined });",
+        "if (typeof result === \"string\") return file.write(result);",
+        "if (typeof result?.edit === \"string\") file.write(result.edit);",
+        "return result?.data;",
+        "forEachFile({ language: \"tsx\" }, async (file) => {",
+    ] {
+        assert!(has(source, needle), "missing {needle} in:\n{source}");
+    }
+    assert!(!source.contains("jssg-compat"), "{source}");
+}
+
+#[test]
+fn a_transform_that_renames_its_file_keeps_the_adapter_with_a_reason() {
+    let result = upgraded(
+        r#"version: "1"
+nodes:
+  - id: styles
+    name: Styles
+    steps:
+      - name: Move styles
+        js-ast-grep:
+          js_file: src/move.ts
+          include: ["**/*.less"]
+          language: css
+"#,
+        &[(
+            "src/move.ts",
+            "export default function transform(root) {\n  root.rename(root.filename().replace('.less', '.css'));\n  return null;\n}\n",
+        )],
+    );
+    assert!(
+        has(
+            &result.source,
+            "(file) => jssgFile(moveTransform, file, { params })"
+        ),
+        "{}",
+        result.source
+    );
+    assert!(
+        result
+            .source
+            .contains("import { jssgFile } from \"codemod-internal:jssg-compat\";"),
+        "{}",
+        result.source
+    );
+    assert_eq!(
+        result.warnings,
+        ["src/move.ts runs through jssgFile, which runs a jssg transform as workflow.yaml did: move.ts calls root.rename()"]
+    );
+}
+
+#[test]
+fn templates_pass_the_target_to_transforms_that_take_options() {
+    let result = upgraded(
+        r#"version: "1"
+templates:
+  - id: fix
+    name: Fix
+    steps:
+      - name: Fix
+        js-ast-grep:
+          js_file: src/fix.ts
+nodes:
+  - id: apply
+    name: Apply
+    steps:
+      - name: Fix it
+        use:
+          template: fix
+"#,
+        &[(
+            "src/fix.ts",
+            "export default function transform(root, options) {\n  return options.targetDir;\n}\n",
+        )],
+    );
+    let source = &result.source;
+    for needle in [
+        "async function fixTemplate(params: Params, matrix: Matrix, state: State, target: string) {",
+        "await fixTemplate(params, matrix, state, target);",
+        "export default async function main({ params, target }: WorkflowContext<Params>) {",
+        "targetDir: target",
+    ] {
+        assert!(has(source, needle), "missing {needle} in:\n{source}");
+    }
+}
+
+#[test]
+fn what_a_selector_uses_is_imported() {
+    let source = source_of(
+        r#"
+version: "1"
+nodes:
+  - id: each
+    name: Each
+    strategy:
+      type: matrix
+      values:
+        - dir: two
+    steps:
+      - name: Whole base
+        ast-grep:
+          config_file: rules/config.yml
+          base_path: "${{ matrix.dir }}"
+"#,
+    );
+    assert!(has(&source, "__evaluate as evaluate"), "{source}");
+    // The node gets what the selector's expression reads.
+    assert!(has(&source, "async function eachNodeFor(params: Params, state: State, matrix: Matrix, index: number)"), "{source}");
+    assert!(
+        has(&source, "forEachFile({ include: evaluate(\"list\""),
+        "{source}"
+    );
+}
+
+#[test]
+fn transforms_with_the_same_file_name_get_their_own_names() {
+    let transform = "export const getSelector = () => ({ rule: { pattern: 'x' } });\nexport default function transform(root): string | null {\n  return null;\n}\n";
+    let source = upgraded(
+        r#"version: "1"
+nodes:
+  - id: apply
+    name: Apply
+    steps:
+      - name: A
+        js-ast-grep:
+          js_file: a/codemod.ts
+      - name: B
+        js-ast-grep:
+          js_file: b/codemod.ts
+"#,
+        &[("a/codemod.ts", transform), ("b/codemod.ts", transform)],
+    )
+    .source;
+    assert!(
+        source.contains(
+            "import codemodTransform, { getSelector as codemodSelector } from \"./a/codemod.ts\";"
+        ),
+        "{source}"
+    );
+    assert!(
+        source.contains("import codemodTransform2, { getSelector as codemodSelector2 } from \"./b/codemod.ts\";"),
         "{source}"
     );
 }

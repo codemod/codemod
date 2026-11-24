@@ -654,6 +654,8 @@ mod tests {
             run_id: "run-1".into(),
             status: RunStatus::Succeeded,
             error: None,
+            failed_files: 0,
+            partial_steps: Vec::new(),
         });
         assert!(view.is_finished());
     }
@@ -756,6 +758,8 @@ mod tests {
             run_id: "run-1".into(),
             status: RunStatus::Succeeded,
             error: None,
+            failed_files: 0,
+            partial_steps: Vec::new(),
         });
         assert_eq!(view.diffs[0].step, None);
         assert_eq!(view.key(key(KeyCode::Char('a'))), Action::Apply);
@@ -768,6 +772,8 @@ mod tests {
             run_id: "run-1".into(),
             status: RunStatus::Failed,
             error: Some("boom".into()),
+            failed_files: 0,
+            partial_steps: Vec::new(),
         });
         assert_eq!(view.key(key(KeyCode::Char('a'))), Action::None);
     }
@@ -853,6 +859,8 @@ mod tests {
             run_id: "run-1".into(),
             status: RunStatus::Canceled,
             error: None,
+            failed_files: 0,
+            partial_steps: Vec::new(),
         });
         assert_eq!(view.key(key(KeyCode::Char('q'))), Action::Exit);
     }

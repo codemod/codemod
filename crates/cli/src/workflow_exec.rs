@@ -41,6 +41,11 @@ pub struct RunFlags {
     #[arg(long)]
     pub allow_child_process: bool,
 
+    /// Allow codemod/assess to send files to the decision model (System One
+    /// by default): asked for interactively, required without a terminal
+    #[arg(long)]
+    pub allow_ai: bool,
+
     /// No interactive mode
     #[arg(long)]
     pub no_interactive: bool,
@@ -66,6 +71,19 @@ pub struct RunFlags {
 
 fn parse_decision_model(text: &str) -> Result<DecisionModel> {
     DecisionModel::parse(text)
+}
+
+/// Flags for starting a run that `workflow run` and `run` (registry
+/// packages) share; `workflow resume` has its own `--approve`.
+#[derive(clap::Args, Debug, Default, Clone)]
+pub struct StartFlags {
+    /// Give every approval the workflow asks for (manual steps, pull requests)
+    #[arg(long)]
+    pub approve: bool,
+
+    /// Let branch, commit and pull request steps change the git repository
+    #[arg(long)]
+    pub managed_git: bool,
 }
 
 impl RunFlags {
@@ -116,8 +134,10 @@ impl RunFlags {
             no_interactive: self.no_interactive,
             format: self.format,
             capabilities,
+            allow_ai: self.allow_ai,
             agent: self.agent.clone(),
             decision_model: self.model.clone(),
+            decision: None,
             registry: Some(registry),
             // Unattended runs install skills only when asked to.
             install_skill: (!self.no_interactive || self.install_skill).then(|| {
@@ -138,10 +158,15 @@ pub struct ExecSettings {
     pub no_interactive: bool,
     pub format: OutputFormat,
     pub capabilities: HashSet<LlrtSupportedModules>,
+    /// `--allow-ai`: codemod/assess may send files to the decision model.
+    pub allow_ai: bool,
     pub agent: Option<String>,
     /// The decision model `--model` asked for; filled in from the saved
     /// settings when the run starts.
     pub decision_model: Option<DecisionModel>,
+    /// What answers `codemod/assess`: set by the check before the run
+    /// starts, `None` when the workflow does not use it.
+    pub decision: Option<Arc<dyn codemod_workflow::assess::DecisionModel>>,
     pub registry: Option<RegistryClient>,
     pub install_skill: Option<Arc<dyn InstallSkillExecutor>>,
     /// Treat every approval as given.
@@ -186,6 +211,7 @@ pub struct ExecOutcome {
     /// Whether the run was a dry run: a launcher's dry run may have been
     /// applied for real since the command started.
     pub dry_run: bool,
+    pub format: OutputFormat,
 }
 
 impl ExecOutcome {
@@ -197,19 +223,74 @@ impl ExecOutcome {
         self.summary.stats.files_unmodified.load(Ordering::Relaxed)
     }
 
+    /// Files that failed: in the run's partial steps, or as counted while
+    /// the run progressed, whichever is more.
     pub fn files_with_errors(&self) -> usize {
-        self.summary.stats.files_with_errors.load(Ordering::Relaxed)
+        self.summary
+            .stats
+            .files_with_errors
+            .load(Ordering::Relaxed)
+            .max(self.failed_files())
     }
 
-    /// `Ok` when the run succeeded or is waiting for an approval. Failures
-    /// were already shown while the run progressed.
-    pub fn result(&self) -> Result<()> {
+    /// How many files failed in the run's partial steps.
+    pub fn failed_files(&self) -> usize {
+        self.report.failed_files()
+    }
+
+    /// `Ok` when the run finished or is waiting for an approval, even if
+    /// some files failed. Failures were already shown while the run
+    /// progressed.
+    pub fn ended(&self) -> Result<()> {
         match &self.report.ending {
             Ending::Succeeded(_) | Ending::AwaitingApproval(_) | Ending::Stopped(_) => Ok(()),
             Ending::Failed(_) | Ending::Canceled => Err(WorkflowFailureAlreadyReported.into()),
         }
     }
+
+    /// Like [`Self::ended`], but a run that finished with failed files is
+    /// an error too: [`FinishedWithFailedFiles`], exit code 2.
+    pub fn result(&self) -> Result<()> {
+        self.ended()?;
+        match self.failed_files() {
+            0 => Ok(()),
+            failed => Err(FinishedWithFailedFiles {
+                failed,
+                dry_run: self.dry_run,
+                quiet: self.format == OutputFormat::Jsonl,
+            }
+            .into()),
+        }
+    }
 }
+
+/// The exit code of a run that finished, but with some files failed. A run
+/// that failed outright exits with 1.
+pub const EXIT_FAILED_FILES: i32 = 2;
+
+/// A run finished, but some of its files failed. The CLI ends its output
+/// with this and exits with [`EXIT_FAILED_FILES`].
+#[derive(Debug)]
+pub struct FinishedWithFailedFiles {
+    pub failed: usize,
+    pub dry_run: bool,
+    /// The output is JSONL, where `run_finished` already says it.
+    pub quiet: bool,
+}
+
+impl std::fmt::Display for FinishedWithFailedFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let files = if self.failed == 1 { "file" } else { "files" };
+        let rest = if self.dry_run {
+            "dry run: nothing was written"
+        } else {
+            "changes to the other files were written"
+        };
+        write!(f, "{} {files} failed; {rest}.", self.failed)
+    }
+}
+
+impl std::error::Error for FinishedWithFailedFiles {}
 
 /// A workflow failure the run's output already described.
 #[derive(Debug)]
@@ -240,11 +321,21 @@ pub fn status_label(store: &dyn RunStore, run: &RunRecord) -> String {
 }
 
 pub async fn start(mut request: ExecRequest) -> Result<ExecOutcome> {
+    // `--model` (or the launcher's choice), before the saved one fills it in.
+    let chosen = request.settings.decision_model.clone();
     request.settings = request.settings.with_saved(None);
+    let workflow = load_workflow(&request.workflow).map_err(|e| anyhow!("{e}"))?;
+    // Before the launcher's screen opens: it may ask in the terminal.
+    request.settings.decision = crate::assess_preflight::decision_model(
+        &workflow.path,
+        chosen.as_ref(),
+        request.settings.allow_ai,
+        crate::utils::interactive::is_interactive(request.settings.no_interactive),
+        &crate::assess_preflight::TerminalPrompts,
+    )?;
     if request.settings.launcher {
         return crate::launcher::run_start(request).await;
     }
-    let workflow = load_workflow(&request.workflow).map_err(|e| anyhow!("{e}"))?;
     let format = request.settings.format;
     let dry_run = request.dry_run;
     let (engine, renderer, summary) = engine(&request.settings)?;
@@ -266,6 +357,7 @@ pub async fn start(mut request: ExecRequest) -> Result<ExecOutcome> {
         summary,
         duration: started.elapsed(),
         dry_run,
+        format,
     };
     // A dry run is not saved, so there is nothing to resume.
     print_ending(&outcome, format, !dry_run);
@@ -287,7 +379,16 @@ pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutc
             .filter_map(|name| name.parse::<LlrtSupportedModules>().ok()),
     );
     settings.managed_git |= record.settings.managed_git;
-    let settings = settings.with_saved(record.settings.agent.clone());
+    let chosen = settings.decision_model.clone();
+    let mut settings = settings.with_saved(record.settings.agent.clone());
+    // Asked again: a key given for the start is not kept.
+    settings.decision = crate::assess_preflight::decision_model(
+        &record.workflow_path,
+        chosen.as_ref(),
+        settings.allow_ai,
+        crate::utils::interactive::is_interactive(settings.no_interactive),
+        &crate::assess_preflight::TerminalPrompts,
+    )?;
     if settings.launcher {
         let title = record.name.clone().unwrap_or_else(|| {
             record
@@ -309,7 +410,9 @@ pub async fn resume(run_id: &str, mut settings: ExecSettings) -> Result<ExecOutc
         report,
         summary,
         duration: started.elapsed(),
+        // A dry run is not saved, so it is never resumed.
         dry_run: false,
+        format,
     };
     print_ending(&outcome, format, true);
     Ok(outcome)
@@ -345,6 +448,7 @@ pub(crate) fn engine_with(
         nested_observer: settings.nested_observer.clone(),
         package_registry: Some(Arc::new(codemod_deps::HttpRegistry::new())),
         summary: Arc::clone(&summary),
+        decision: settings.decision.clone(),
     };
     (Engine::new(store(), events, interaction, services), summary)
 }
@@ -455,8 +559,6 @@ pub struct Renderer {
     /// Streamed agent message text not yet followed by a full line.
     agent_text: Mutex<HashMap<u64, String>>,
     seq: AtomicU64,
-    /// Steps that finished with some of their files failed.
-    partial: AtomicU64,
     /// A dry run's diff has begun.
     diffs_shown: AtomicBool,
 }
@@ -473,7 +575,6 @@ impl Renderer {
             bars: Mutex::new(HashMap::new()),
             agent_text: Mutex::new(HashMap::new()),
             seq: AtomicU64::new(0),
-            partial: AtomicU64::new(0),
             diffs_shown: AtomicBool::new(false),
         }
     }
@@ -612,15 +713,12 @@ impl EventSink for Renderer {
                         style("✓").green(),
                         style(elapsed).dim()
                     )),
-                    StepStatus::Partial => {
-                        self.partial.fetch_add(1, Ordering::SeqCst);
-                        self.line(format!(
-                            "{} {label}: {} {}",
-                            style("◐").yellow(),
-                            error.unwrap_or_default(),
-                            style(elapsed).dim()
-                        ))
-                    }
+                    StepStatus::Partial => self.line(format!(
+                        "{} {label}: {} {}",
+                        style("◐").yellow(),
+                        error.unwrap_or_default(),
+                        style(elapsed).dim()
+                    )),
                     StepStatus::Failed => self.line(format!(
                         "{} {label}: {}",
                         style("✗").red(),
@@ -646,15 +744,21 @@ impl EventSink for Renderer {
                 }
                 self.line(color_diff(&diff));
             }
-            Event::RunFinished { status, .. } => {
+            Event::RunFinished {
+                status,
+                failed_files,
+                partial_steps,
+                ..
+            } => {
                 if status == RunStatus::Succeeded {
-                    match self.partial.load(Ordering::SeqCst) {
-                        0 => self.line(format!("{}", style("Done").green().bold())),
-                        steps => self.line(format!(
+                    match (failed_files, partial_steps.len()) {
+                        (0, _) => self.line(format!("{}", style("Done").green().bold())),
+                        (files, steps) => self.line(format!(
                             "{} {}",
                             style("Done").yellow().bold(),
                             style(format!(
-                                "(some files failed in {steps} {})",
+                                "({files} {} failed in {steps} {})",
+                                if files == 1 { "file" } else { "files" },
                                 if steps == 1 { "step" } else { "steps" }
                             ))
                             .yellow()

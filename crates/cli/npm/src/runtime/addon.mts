@@ -31,6 +31,17 @@ export interface OpenOptions {
   capabilities?: string[];
   store?: string;
   resume?: string;
+  decisionModel?: DecisionModelOptions;
+}
+
+/** `DecisionModelOptions` in crates/node/src/run.rs. */
+export interface DecisionModelOptions {
+  /** `"systemone"` or `"openai"`. */
+  provider?: string;
+  model?: string;
+  apiKey?: string;
+  /** The API root, for a proxy or a fake in tests. */
+  baseUrl?: string;
 }
 
 /** An event as the engine reports it (`Event` in crates/workflow/src/events.rs). */
@@ -97,7 +108,9 @@ export interface NativeRun {
     position: number,
     label: string,
     files: string,
-  ): Promise<{ changes: Json; failures: { path: string; error: string }[] }>;
+  ): Promise<{ changes: Json; failures: { path: string; error: string }[]; assessed?: Json }>;
+  /** Answer an `assess()` call of the step at `position`: `{ ok, value | error }` as JSON. */
+  assess(position: number, request: string): Promise<string>;
   /** Events since the last call. */
   takeEvents(): EngineEvent[];
   /** Record how the run ended, given how its body ended (JSON, or `"null"`). */

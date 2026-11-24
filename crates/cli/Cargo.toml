@@ -45,6 +45,7 @@ env_logger = { workspace = true }
 regex = { workspace = true }
 miette = { workspace = true }
 walkdir = { workspace = true }
+ignore = { workspace = true }
 tempfile = { workspace = true }
 num_cpus = "1.16"
 thiserror = { workspace = true }

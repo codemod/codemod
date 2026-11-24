@@ -815,6 +815,8 @@ mod tests {
             run_id: "run-2".into(),
             status: RunStatus::Succeeded,
             error: None,
+            failed_files: 0,
+            partial_steps: Vec::new(),
         });
         view.pane = Pane::Diff;
         assert_snapshot("dry-run-diff", &text(100, 14, |f| run(f, &view)));

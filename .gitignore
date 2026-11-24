@@ -31,6 +31,7 @@ generated/
 /crates/cli/npm/src/runtime/orchestrator.mts
 /crates/cli/npm/src/runtime/orchestrator-version.mts
 /crates/cli/npm/src/runtime/jssg-compat.mts
+/crates/cli/npm/src/runtime/assess-core.mts
 
 # Environment files
 **.env

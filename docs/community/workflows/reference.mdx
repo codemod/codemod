@@ -4,7 +4,7 @@ sidebarTitle: "Reference"
 description: "The workflow.ts API: steps, per-file callbacks, tasks, and resuming runs."
 ---
 
-A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow`, `codemod/git` and `codemod/deps`, and what else a workflow can import.
+A workflow is a TypeScript file, `workflow.ts`, whose default export runs **steps**. This page documents everything you can import from `codemod/workflow`, `codemod/git`, `codemod/deps` and `codemod/assess`, and what else a workflow can import.
 
 ## Complete example
 
@@ -160,7 +160,7 @@ An `astGrep` step also rejects a `basePath` that resolves outside the target.
 - The callback may be async: `async (file) => { ... }`.
 - Return a value to collect it; returned values become `result.outputs`, in path order. Return nothing to collect nothing.
 - A callback that throws fails only that file; the error appears in `result.failures`, and the file and its error are logged under the step.
-- When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again.
+- When some files fail, the step finishes as **partial**: the other files' changes are applied, the run goes on, and the step's status says how many failed (`1 of 12 files failed`). A resume keeps its result instead of running it again. A run with a partial step exits with code 2 when it finishes (see [exit codes](/community/cli#codemod-workflow)); a `codemod(...)` step is partial when files failed in the codemod it ran.
 - When the callback fails on every file it ran on, the step fails, with the first file's error.
 - To count what a callback found, return it: outputs are values, so add them up after the step, or give a [reducer](#reducing-outputs) that adds them up as files finish.
 
@@ -232,7 +232,7 @@ A callback (or function step) runs in its own isolate, so the build copies in wh
 
 - **Module-level constants, functions and classes** it uses are copied in.
 - **Local variables of the surrounding function** are passed in as frozen copies when the step starts. They must be JSON values.
-- **Imports** it uses are available: `codemod/ast-grep`, `codemod/runtime`, Node-style modules (`path`, `fs` with `--allow-fs`, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
+- **Imports** it uses are available: `codemod/ast-grep`, `codemod/runtime`, `codemod/assess`, Node-style modules (`path`, `fs` with `--allow-fs`, ...), npm packages and files next to the workflow (`import { rule } from "./lib/rules.ts"`).
 
 These are build errors, reported with the file, line and column:
 
@@ -346,7 +346,7 @@ parse("tsx", text);                 // the original JSSG form
 
 The body is the code outside steps and callbacks. It runs again on every resume, and a step's saved result is reused only when the body calls that same step again, so the body has to come out the same each time:
 
-- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, `codemod/git`, and npm packages or local files whose imports only reach these. In the QuickJS workflow body, you can import `sep` and `delimiter` by name from `node:path` (or `path`); Node's `path.posix` and `path.win32` are not available there.
+- **Pure modules are available:** `path`, `url`, `util`, `buffer`, `string_decoder`, `assert`, `events`, `zlib`, `codemod/ast-grep`, `codemod/git`, `codemod/assess` (its question builders; `assess()` itself rejects in the body), and npm packages or local files whose imports only reach these. In the QuickJS workflow body, you can import `sep` and `delimiter` by name from `node:path` (or `path`); Node's `path.posix` and `path.win32` are not available there.
 - **Modules that touch the outside world are build errors in the body:** `fs`, `child_process`, `os`, `process`, `crypto`, timers, `codemod/llm`, and packages that import any of them. The error names the import chain, for example `file-reader/index.js → file-reader/read.js → node:fs`. Use them inside a step or callback instead.
 - **`Date`, `Math.random`, `crypto.randomUUID` and `performance.now` are replay-safe.** Random numbers come from a generator seeded by the run, and the clock starts at the run's start time and moves only when a step finishes, to the time recorded for it.
 - **`console.log`** goes to the run's output.
@@ -399,11 +399,11 @@ Steps without git can still run in parallel, before or after. Separate checkouts
 
 ### Dependencies
 
-`dependencyGraph`, `registry` and `semver` come from `codemod/deps`. `dependencyGraph` reads the target's `yarn.lock` (Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` (v2 and v3), `Cargo.lock`, `uv.lock`, `poetry.lock` and `Pipfile.lock`, with each workspace's `package.json`, `Cargo.toml`, `pyproject.toml` or `Pipfile` for declared ranges and dependency kinds. Yarn 1 lockfiles, `npm-shrinkwrap.json`, and bun and Go lockfiles are not read.
+`dependencyGraph`, `registry` and `semver` come from `codemod/deps`. `dependencyGraph` reads the target's `yarn.lock` (Yarn 1 and Yarn 2+), `pnpm-lock.yaml` (lockfile 6.0 and later), `package-lock.json` and `npm-shrinkwrap.json` (v1, v2 and v3), `bun.lock`, `Cargo.lock`, `uv.lock`, `poetry.lock` and `Pipfile.lock`, with each workspace's `package.json`, `Cargo.toml`, `pyproject.toml` or `Pipfile` for declared ranges and dependency kinds. A Yarn 1 project's workspaces are the directories its root `package.json`'s `workspaces` globs match. Bun's binary `bun.lockb` and Go lockfiles are not read.
 
 Python packages have the ecosystem `pypi`, and their names are normalized as PyPI does, so `Typing_Extensions` is `typing-extensions`. `Pipfile.lock` keeps no dependencies between packages, so only the packages the `Pipfile` names are reached from the project.
 
-Without `lockfiles`, only the lockfiles at the target's root are read, since nested ones are usually fixtures or examples, and one that cannot be read is left out and listed in `g.skipped` as `{ lockfile, error }`. `lockfiles` picks which lockfiles are read instead, as a glob or a list of globs relative to the target: `**/yarn.lock` reads every `yarn.lock`, the root's included. A lockfile that `lockfiles` names and that cannot be read fails the step.
+Without `lockfiles`, only the lockfiles at the target's root are read, since nested ones are usually fixtures or examples, and one that cannot be read is left out and listed in `g.skipped` as `{ lockfile, error }`. A target with no lockfile at its root, or none that can be read, gets an empty graph: `g.lockfiles` is empty, and the callback still runs. `lockfiles` picks which lockfiles are read instead, as a glob or a list of globs relative to the target: `**/yarn.lock` reads every `yarn.lock`, the root's included. When you name lockfiles you expect them, so globs that match no lockfile fail the step, and so does a lockfile they match that cannot be read.
 
 `dependencyGraph`, `registry` and `semver` run with the codemod CLI. The Node.js host that `codemod/testing` uses by default doesn't have them yet: test a workflow that uses them with `{ host: "quickjs" }`.
 
@@ -508,7 +508,7 @@ A command that exits with an error fails the step, and the error ends with what 
 
 Shell commands, agents and skill installs are skipped in a dry run, and function steps and `forEachFile` callbacks run without `fs` and `child_process`, whatever capabilities the run has: a dry run changes nothing.
 
-A dry run keeps what each step would change in memory, and later steps read that instead of the disk: `forEachFile` callbacks, `astGrep` rules, `jssgTransform` in function steps and nested `codemod()` runs see the text earlier steps left, renamed files at their new paths, and not the files they deleted. Shell commands don't run in a dry run, so they see none of it. When the run ends, the CLI prints a unified diff of everything the run would change (with `--format jsonl`, one `run_diff` event per file, with `path`, `diff`, `additions` and `deletions`). A renamed file shows as its old path removed and its new path added.
+A dry run keeps what each step would change in memory, and later steps read that instead of the disk: `forEachFile` callbacks, `astGrep` rules, `jssgTransform` in function steps, the files `shard` picks and its `filter`, and nested `codemod()` runs see the text earlier steps left, renamed files at their new paths, and not the files they deleted. Shell commands don't run in a dry run, so they see none of it. When the run ends, the CLI prints a unified diff of everything the run would change (with `--format jsonl`, one `run_diff` event per file, with `path`, `diff`, `additions` and `deletions`). A renamed file shows as its old path removed and its new path added.
 
 If a `codemod()` step resolves a preview-only registry package during an apply run, the step fails before starting that package. Rerun the workflow with `--dry-run` to preview it. This also applies to packages called by nested workflows.
 
@@ -582,6 +582,143 @@ Without `agent`, the step uses:
 4. the built-in agent, when `LLM_API_KEY` is set (with `LLM_PROVIDER`, `LLM_MODEL` and `LLM_BASE_URL`).
 
 Otherwise the prompt is printed as instructions and nothing runs.
+
+## Assessing files with `codemod/assess`
+
+`assess(file, { questions })` asks a decision model typed questions about a file, inside a `forEachFile` callback or a function step, so AI judgments and ast-grep analysis happen in the same pass. Before it asks, the engine gathers the file's context itself: the files it imports, followed through re-exports, so the model does not spend tokens looking for them.
+
+The default model is TypeSafe's [System One](https://docs.typesafe.ai/api) (`jev-latest`); OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) (`gpt-6-luna`) works too. Both answer with probabilities rather than text.
+
+This workflow classifies every file's error handling, then rewrites only the files that swallow errors, with ast-grep:
+
+```ts workflow.ts
+import { step, forEachFile } from "codemod/workflow";
+import { parse } from "codemod/ast-grep";
+import { assess, yesNo, choice, number } from "codemod/assess";
+
+// Questions are data: define them once.
+const QUESTIONS = {
+  handlesErrors: yesNo("Does this file handle the errors its async calls can throw?"),
+  smell: choice("Which error-handling smell fits it best?", {
+    swallowed: "Errors are caught and dropped",
+    "logged-only": "Errors are caught and only logged",
+    none: null,
+  }),
+  risk: number("How risky is it to change this file's error handling?", { min: 1, max: 5 }),
+};
+
+export default async function main() {
+  const classified = await step("Classify error handling",
+    forEachFile({ language: "typescript", concurrency: 4 }, async (file) => {
+      const { answers, details } = await assess(file, { questions: QUESTIONS });
+      // answers.smell: "swallowed" | "logged-only" | "none"
+      return { path: file.path, smell: answers.smell, sure: details.smell.confidence > 0.8 };
+    }),
+  );
+
+  const swallowing = classified.outputs
+    .filter((output) => output.smell === "swallowed" && output.sure)
+    .map((output) => output.path);
+
+  await step("Log swallowed errors", forEachFile({ include: swallowing, language: "typescript" }, (file) => {
+    const root = parse(file).root();
+    const edits = root.findAll({ rule: { pattern: "catch ($E) {}" } })
+      .map((node) => node.replace(`catch (${node.getMatch("E")?.text()}) { console.error(${node.getMatch("E")?.text()}); }`));
+    if (edits.length) file.write(root.commitEdits(edits));
+  }));
+}
+```
+
+Run it with `--allow-ai` (or say yes when asked) and a key in the environment:
+
+```bash
+TYPESAFE_API_KEY=... npx codemod workflow run -w . --allow-ai
+```
+
+### Questions
+
+| Builder | Answer | `details` |
+|---|---|---|
+| `yesNo(question, { yes?, no?, threshold? })` | `boolean`: the probability of yes is at least `threshold` (0.5). `yes` and `no` say what counts as each | `{ probability }` |
+| `choice(options)`, `choice(question, options)` | One of the options (2 to 255): a list of names, or names to descriptions (`null` for none) | `{ probabilities, confidence }` |
+| `number(question, { min, max, levels? })` | A number from `min` to `max`, whole numbers, 2 to 10 of them; `levels` describe each. The answer is weighted by the model's probabilities, so it may fall between two | `{ probabilities, likeliest, confidence }` |
+| `list(question, options, { threshold? })` | The options (1 to 50) that apply. Each is asked as its own yes/no question | `{ probabilities }` |
+
+The answers are typed from the questions: `answers.smell` above is `"swallowed" | "logged-only" | "none"`. Decision models answer with probabilities, not text, so there is no free-text question; use a [coding agent](#coding-agents) for prose.
+
+### `assess(file, options)`
+
+`file` is a `forEachFile` file, or a path relative to the target (in a function step). It resolves to:
+
+```ts
+{
+  answers: { [id]: answer };   // typed, as above
+  details: { [id]: detail };   // probabilities and confidence
+  context: string[];           // the file, then every file shown with it
+  provider: string;            // "systemone" or "openai"
+  model: string;               // as the provider names it, e.g. "jev-1.13.0"
+  usage: { calls: number; inputTokens: number; outputTokens: number };
+}
+```
+
+| Option | Default | |
+|---|---|---|
+| `questions` | | Questions by id, made with the builders above |
+| `context.imports` | `true` | The files it imports. Each imported name is followed through re-exports (`export { x } from`, `export *`, a name imported and exported again) to the file that defines it, so a barrel `index.ts` shows the module behind it, not the barrel. A number follows imports that many levels deep; `false` shows none |
+| `context.dependents` | `false` | The files of the target that import it, directly or through re-exports: `true` for up to 10, or how many |
+| `context.extra` | `[]` | More files to show, relative to the target |
+| `context.limit` | `100000` | Characters of context besides the file. Files past it are named but not shown |
+| `allowMoreContext` | `0` | Let the model ask for one more file, up to this many times (at most 5). Each request offers it the imports one level deeper than shown and the files that import this one, and "the context is enough"; when it picks a file, the engine shows it and asks again. Each round is another request |
+| `provider`, `model` | | Which model answers this call; see [Choosing the model](#choosing-the-model) |
+| `timeout` | `"60s"` | How long one request may take, in milliseconds or as a duration |
+
+- Imports are read from JavaScript and TypeScript files, resolved as TypeScript does (relative paths, `tsconfig.json` `paths`, package `exports`). Files outside the target and in `node_modules` are not shown. Other languages get the file and its `extra` files.
+- **Recorded with the step.** The answers are part of the step's result, so a resumed run replays a finished step instead of asking again. A step that failed asks again when it runs again.
+- **Dry runs ask too**: asking changes no files. A dry run of a workflow that uses `codemod/assess` costs the same requests as a real one.
+- **Rate limits.** At most 4 requests are in flight at once across the run (`DECISION_CONCURRENCY` changes it). Requests that hit a rate limit (429), time out or fail with a server error are retried up to 3 times, waiting as the server's `Retry-After` says, or 0.5 s doubling to 8 s.
+- **Usage.** A `forEachFile` step whose callback asked has `assessed: { assessments, calls, inputTokens, outputTokens }` in its result, and both kinds of steps log it.
+- **Where it works.** In `forEachFile` callbacks and function steps, and in the files they import. In the workflow body, `assess()` rejects; the question builders work anywhere. Reducers, `shard` functions and `dependencyGraph` callbacks cannot assess.
+- An answer the model declines (OpenAI's refusals), or one outside the question's options, fails the file.
+
+### Choosing the model
+
+The provider and model come from, first to last:
+
+1. the call: `assess(file, { provider: "openai", model: "gpt-6-luna", ... })`;
+2. the workflow: `decision_model` in its package's `codemod.yaml`:
+   ```yaml codemod.yaml
+   decision_model:
+     provider: systemone
+     model: jev-latest
+   ```
+3. your user config: `"decisionModel"` in `config.json` in the codemod config directory (`~/.config/codemod/` on Linux, `~/Library/Application Support/codemod/` on macOS, `%APPDATA%\codemod\` on Windows):
+   ```json config.json
+   { "decisionModel": { "provider": "systemone", "model": "jev-latest" } }
+   ```
+4. the environment: `DECISION_PROVIDER` (`systemone` or `openai`) and `DECISION_MODEL` (or `TYPESAFE_DEFAULT_MODEL` for System One);
+5. System One with `jev-latest`.
+
+A level that names a provider only lends its model to that provider: a call that switches to OpenAI does not take a System One model from your config.
+
+Keys and endpoints come from the environment only:
+
+| Variable | |
+|---|---|
+| `TYPESAFE_API_KEY`, `OPENAI_API_KEY` | The provider's key |
+| `DECISION_API_KEY` | A key for the provider `DECISION_PROVIDER` names (or any, when it names none) |
+| `TYPESAFE_BASE_URL`, `OPENAI_BASE_URL` | The provider's API root |
+| `DECISION_BASE_URL`, `DECISION_PATH` | API root and request path, as `DECISION_API_KEY` applies; for Azure AI Foundry or a proxy |
+| `DECISION_AUTH_HEADER` | `authorization` (default, sends `Bearer <key>`) or a header that carries the raw key, such as `api-key` |
+| `DECISION_CONCURRENCY` | Requests in flight at once (default 4) |
+
+### Before the run
+
+The build sees whether the workflow, or a local file it imports, imports `codemod/assess`. When it does, the CLI settles two things before any step runs:
+
+- **Sending files.** `assess()` sends the file's contents and its context to the provider. `--allow-ai` allows it; an interactive run asks; a run without a terminal (or with `--no-interactive`) fails at once, naming `--allow-ai`.
+- **The key.** Without one, an interactive run asks for a key to use for that run only (it is not saved); a run without a terminal fails at once, naming the variable to set, for example `TYPESAFE_API_KEY`.
+
+`codemod workflow resume` checks both again. In tests (`codemod/testing`), nobody is asked: pass `decisionModel: { apiKey, baseUrl, provider, model }` to `runWorkflow`, for example a local fake server, or set the environment; a call without a key fails with what to set.
 
 ## Values between steps
 

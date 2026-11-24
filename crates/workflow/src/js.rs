@@ -59,6 +59,12 @@ javascript! {
     pub(crate) fn isolate_git_module = include_str!("js/isolate_git.ts"), "isolate_git.ts"
 }
 javascript! {
+    /// `codemod/assess` in the workflow body and isolates: the question
+    /// builders, and `assess()`, which asks through `__assessHost` where the
+    /// step installed one.
+    pub(crate) fn assess_module = include_str!("js/assess.ts"), "assess.ts"
+}
+javascript! {
     /// `codemod-internal:semver`: `semver` for the body and isolates.
     pub(crate) fn semver_module = include_str!("js/semver.ts"), "semver.ts"
 }
@@ -104,6 +110,7 @@ mod tests {
             super::dependencies_module(),
             super::isolate_workflow_module(),
             super::jssg_compat_module(),
+            super::assess_module(),
         ] {
             assert!(!js.is_empty());
             assert!(!js.contains("interface "), "types are left in:\n{js}");

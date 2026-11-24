@@ -82,23 +82,26 @@ declare module "codemod:workflow" {
    */
   export type JsonCompatible<T> = unknown extends T
     ? T
-    : T extends string | number | boolean | null | undefined | void
+    : // JSON already, such as a transform's `TransformData`: nothing to walk.
+      [T] extends [JsonValue | undefined | void]
       ? T
-      : T extends PromiseLike<unknown>
-        ? NotJson<"a Promise: await it first">
-        : T extends (...args: never[]) => unknown
-          ? NotJson<"a function">
-          : T extends ReadonlySet<unknown>
-            ? NotJson<"a Set: use an array">
-            : T extends ReadonlyMap<unknown, unknown>
-              ? NotJson<"a Map: use a plain object">
-              : T extends Date
-                ? NotJson<"a Date: use date.toISOString()">
-                : T extends RegExp
-                  ? NotJson<"a RegExp: use its source string">
-                  : T extends object
-                    ? { [K in keyof T]: JsonCompatible<T[K]> }
-                    : NotJson<"not JSON">;
+      : T extends string | number | boolean | null | undefined | void
+        ? T
+        : T extends PromiseLike<unknown>
+          ? NotJson<"a Promise: await it first">
+          : T extends (...args: never[]) => unknown
+            ? NotJson<"a function">
+            : T extends ReadonlySet<unknown>
+              ? NotJson<"a Set: use an array">
+              : T extends ReadonlyMap<unknown, unknown>
+                ? NotJson<"a Map: use a plain object">
+                : T extends Date
+                  ? NotJson<"a Date: use date.toISOString()">
+                  : T extends RegExp
+                    ? NotJson<"a RegExp: use its source string">
+                    : T extends object
+                      ? { [K in keyof T]: JsonCompatible<T[K]> }
+                      : NotJson<"not JSON">;
 
   /** Step results are deeply frozen. */
   export type Frozen<T> = T extends (...args: never[]) => unknown
@@ -348,6 +351,16 @@ declare module "codemod:workflow" {
     error: string;
   }
 
+  /** What a step's `assess()` calls (from `codemod/assess`) used. */
+  export interface AssessedUsage {
+    /** Calls that were answered. */
+    assessments: number;
+    /** Requests to the decision model, more when it asked for more files. */
+    calls: number;
+    inputTokens: number;
+    outputTokens: number;
+  }
+
   export interface ForEachFileResult<Output> {
     /** What the callback returned, in path order. Files that returned nothing are left out. */
     outputs: Output[];
@@ -357,6 +370,8 @@ declare module "codemod:workflow" {
      * callback throws on every file, the step fails instead.
      */
     failures: FileFailure[];
+    /** Present when the callback called `assess()`: what it used. */
+    assessed?: AssessedUsage;
   }
 
   /**
@@ -373,6 +388,8 @@ declare module "codemod:workflow" {
      * fails instead.
      */
     failures: FileFailure[];
+    /** Present when the callback called `assess()`: what it used. */
+    assessed?: AssessedUsage;
   }
 
   /**

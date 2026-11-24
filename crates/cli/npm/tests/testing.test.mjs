@@ -179,10 +179,108 @@ export default async function main() {
   },
 );
 
+/**
+ * A System One API on localhost: yes/no questions get 0.9, choices their
+ * first option. Keeps each request's authorization and body.
+ */
+async function fakeSystemOne() {
+  const { createServer } = await import("node:http");
+  const requests = [];
+  const server = createServer((request, response) => {
+    let text = "";
+    request.on("data", (chunk) => (text += chunk));
+    request.on("end", () => {
+      const body = JSON.parse(text);
+      requests.push({ path: request.url, auth: request.headers.authorization, body });
+      const answers = Object.fromEntries(
+        Object.entries(body.questions).map(([id, question]) => {
+          if (question.type === "noul") return [id, { type: "noul", noul: 0.9 }];
+          const [first, ...rest] = Object.keys(question.criteria);
+          const probabilities = {
+            [first]: 0.8,
+            ...Object.fromEntries(rest.map((o) => [o, 0.2 / rest.length])),
+          };
+          return [id, { type: "choice", choice: first, confidence: 0.7, probabilities }];
+        }),
+      );
+      response.setHeader("content-type", "application/json");
+      response.end(
+        JSON.stringify({
+          model: "jev-test",
+          answers,
+          usage: { input_tokens: 50, output_tokens: 3 },
+        }),
+      );
+    });
+  });
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    requests,
+    close: () => new Promise((done) => server.close(done)),
+  };
+}
+
+const ASSESS_WORKFLOW = `
+import { step, forEachFile } from "codemod/workflow";
+import { assess, yesNo, choice } from "codemod/assess";
+export default async function main() {
+  const classified = await step("Classify", forEachFile("src/a.ts", async (file) => {
+    const { answers, context, model } = await assess(file, {
+      questions: { handlesErrors: yesNo("Does it handle errors?"), kind: choice(["library", "app"]) },
+    });
+    return { answers, context, model };
+  }));
+  const one = await step("One", async () => {
+    const { answers } = await assess("src/b.ts", { questions: { ok: yesNo("Is it fine?") } });
+    return answers.ok;
+  });
+  return { outputs: classified.outputs, assessed: classified.assessed, one };
+}
+`;
+
 // The same tests on both hosts: Node (in this process) and the engine's
 // QuickJS runtime (through the CLI).
 for (const host of Object.keys(HOSTS)) {
   const runWorkflow = (workflow, options) => run(workflow, { ...options, host });
+
+  test(
+    `${host}: assess asks the decision model about a file and the files it imports`,
+    HOSTS[host],
+    async () => {
+      const server = await fakeSystemOne();
+      try {
+        const dir = scratch({ "workflow.ts": ASSESS_WORKFLOW });
+        const run = await runWorkflow(join(dir, "workflow.ts"), {
+          target: {
+            "src/a.ts": 'import { b } from "./b";\nexport const a = b;\n',
+            "src/b.ts": "export const b = 1;\n",
+          },
+          decisionModel: { apiKey: "test-key", baseUrl: server.url },
+        });
+        assert.equal(run.status, "succeeded", run.error ?? undefined);
+        assert.deepEqual(run.output, {
+          outputs: [
+            {
+              answers: { handlesErrors: true, kind: "library" },
+              context: ["src/a.ts", "src/b.ts"],
+              model: "jev-test",
+            },
+          ],
+          assessed: { assessments: 1, calls: 1, inputTokens: 50, outputTokens: 3 },
+          one: true,
+        });
+        assert.equal(server.requests.length, 2);
+        const [first] = server.requests;
+        assert.equal(first.path, "/v1/systemone");
+        assert.equal(first.auth, "Bearer test-key");
+        assert.equal(first.body.model, "jev-latest");
+        assert.match(first.body.state, /----- src\/b\.ts \(defines b\) -----\nexport const b = 1;/);
+      } finally {
+        await server.close();
+      }
+    },
+  );
 
   test(
     `${host}: runWorkflow runs the whole workflow on a copy of the target`,
@@ -845,6 +943,63 @@ export default async function main() {
     assert.equal(result.status, "succeeded", result.error);
     assert.deepEqual(result.output, [["x", "y"]]);
     assert.deepEqual(result.logs, [{ step: "Consts", line: "a.ts 2" }]);
+  },
+);
+
+test(
+  "node: a dry run lets later steps see what earlier ones would change",
+  HOSTS.node,
+  async () => {
+    const { runWorkflow: runOnHost } = await import("../runtime/host.mjs");
+    const path = join(
+      scratch({
+        "workflow.ts": `
+import { step, forEachFile, astGrep, shard } from "codemod/workflow";
+export default async function main() {
+  await step("One", forEachFile("**/*.ts", (file) => {
+    if (file.path === "gone.ts") return file.delete();
+    file.write(file.text.replace("1", "2"));
+    if (file.path === "old.ts") file.rename("new.ts");
+  }));
+  const seen = await step("Two", forEachFile("**/*.ts", (file) => {
+    file.write(file.text.replace("2", "3"));
+    return file.path;
+  }));
+  const rules = await step("Three", forEachFile(astGrep({ id: "let", language: "typescript", rule: { pattern: "const $A = 3" }, fix: "let $A = 3;" })));
+  const shards = await step("Four", shard({ method: { type: "directory", maxFilesPerShard: 10 }, files: "**/*.ts", filter: (file) => file.text.includes("let") }));
+  return { seen: seen.outputs, matches: rules.matches, sharded: shards.flatMap((s: any) => s._meta_files).sort() };
+}
+`,
+      }),
+      "workflow.ts",
+    );
+    const files = {
+      "a.ts": "const a = 1;\n",
+      "old.ts": "const o = 1;\n",
+      "gone.ts": "const g = 1;\n",
+    };
+    const expected = { seen: ["a.ts", "new.ts"], matches: 2, sharded: ["a.ts", "new.ts"] };
+
+    const real = scratch(files);
+    const realRun = await runOnHost(path, { target: real });
+    assert.equal(realRun.status, "succeeded", realRun.error);
+    assert.deepEqual(realRun.output, expected);
+    assert.equal(readFileSync(join(real, "new.ts"), "utf8"), "let o = 3;\n");
+
+    const dry = scratch(files);
+    const dryRun = await runOnHost(path, { target: dry, dryRun: true });
+    assert.equal(dryRun.status, "succeeded", dryRun.error);
+    assert.deepEqual(dryRun.output, expected);
+    // Nothing is written.
+    for (const [file, text] of Object.entries(files)) {
+      assert.equal(readFileSync(join(dry, file), "utf8"), text);
+    }
+    assert.throws(() => readFileSync(join(dry, "new.ts")));
+    // The run's diff is what the real run changed.
+    const diffs = dryRun.events
+      .filter((event) => event.event === "run_diff")
+      .map((event) => event.path);
+    assert.deepEqual(diffs, ["a.ts", "gone.ts", "new.ts", "old.ts"]);
   },
 );
 

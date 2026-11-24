@@ -9,18 +9,22 @@ use std::path::PathBuf;
 
 use crate::auth::types::{AuthTokens, UserInfo};
 
+/// `config.json` in the codemod config directory. Other parts of the CLI
+/// keep their own keys in the same file (`agent` and `decisionModel`, read by
+/// `user_settings` and by `codemod/assess`), so keys this struct does not name
+/// are kept as they are when it is saved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
-    // Defaulted: the file may hold only run preferences (`user_settings`)
-    // when nobody has logged in yet.
+    // Defaulted to empty, not to `Config::default()`: the file may hold only
+    // run preferences when nobody has logged in yet, and `load_config_with_env`
+    // then fills in the registry settings, `CODEMOD_REGISTRY_URL` included.
     #[serde(default)]
     pub default_registry: String,
     #[serde(default)]
     pub registries: HashMap<String, RegistryAuthConfig>,
-    #[serde(default)]
     pub anonymous_feedback: AnonymousFeedbackConfig,
-    /// Keys other parts of the CLI keep in the same file (run preferences,
-    /// see `user_settings`), kept as they are when this is saved.
+    /// Every other key (run preferences, see `user_settings`).
     #[serde(flatten)]
     pub other: serde_json::Map<String, serde_json::Value>,
 }
@@ -369,6 +373,39 @@ mod tests {
     use std::collections::HashSet;
     use std::fs;
     use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn the_decision_model_agent_and_unknown_keys_survive_a_save() {
+        let temp_dir = tempfile::tempdir().expect("expected temp dir");
+        // As another tool may write it: without the registry settings.
+        fs::write(
+            temp_dir.path().join("config.json"),
+            r#"{ "decisionModel": { "provider": "openai", "model": "gpt-6-luna" }, "agent": "claude-code", "launcher": { "lastRun": 1 } }"#,
+        )
+        .expect("expected config write");
+        let storage =
+            TokenStorage::with_config_dir(temp_dir.path().to_path_buf()).expect("storage");
+        let config = storage.load_config().expect("config");
+        assert!(!config.default_registry.is_empty());
+        storage.enable_anonymous_feedback().expect("save");
+        let path = temp_dir.path().join("config.json");
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["decisionModel"]["model"], "gpt-6-luna");
+        assert_eq!(saved["agent"], "claude-code");
+        assert_eq!(saved["launcher"]["lastRun"], 1);
+        assert_eq!(saved["anonymous_feedback"]["enabled"], true);
+        // Both readers of the preferences still see them after the save.
+        let settings = crate::user_settings::SettingsFile::at(path.clone()).load();
+        assert_eq!(settings.agent.as_deref(), Some("claude-code"));
+        assert_eq!(
+            settings.decision_model.map(|model| model.id()).as_deref(),
+            Some("openai/gpt-6-luna")
+        );
+        let preference = codemod_workflow::assess::config::user_preference(&path).unwrap();
+        assert_eq!(preference.provider.as_deref(), Some("openai"));
+        assert_eq!(preference.model.as_deref(), Some("gpt-6-luna"));
+    }
 
     #[test]
     fn missing_feedback_config_defaults_to_disabled() {

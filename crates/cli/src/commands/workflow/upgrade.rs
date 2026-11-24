@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use codemod_workflow::compat::translate_file;
+use codemod_workflow::compat::upgrade_file;
 use console::style;
 
 use crate::utils::manifest::CodemodManifest;
@@ -86,33 +86,75 @@ pub fn handler(args: &Command) -> Result<()> {
 }
 
 /// The generated files reference `codemod/workflow`, which ships with the
-/// `codemod` package; suggest depending on it when the nearest package.json
-/// does not.
+/// `codemod` package; suggest depending on it when no package.json from
+/// `dir` up to its workspace root does. In a workspace, the hint names the
+/// root, so a monorepo of recipes gets it once, not once per recipe.
 fn types_hint(dir: &Path) {
-    let manifest = dir
-        .canonicalize()
-        .unwrap_or_else(|_| dir.to_path_buf())
-        .ancestors()
-        .map(|ancestor| ancestor.join("package.json"))
-        .find(|candidate| candidate.is_file());
-    let Some(manifest) = manifest else {
-        return;
-    };
-    let has_codemod = std::fs::read_to_string(&manifest)
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .is_some_and(|json| {
-            ["dependencies", "devDependencies"]
-                .iter()
-                .any(|field| json[field].get("codemod").is_some())
-        });
-    if !has_codemod {
+    if let Some(manifest) = missing_codemod(dir) {
         println!(
-            "{} Add codemod to {}, so its scripts run that CLI and editors get the workflow types: npm install codemod",
+            "{} Add codemod to {}, so its scripts run that CLI and editors get the workflow types: npm install --save-dev codemod",
             style("i").cyan(),
-            manifest.display()
+            shown(&manifest).display()
         );
     }
+}
+
+/// The package.json to add `codemod` to: the workspace root's, else the
+/// nearest one; `None` when one of them has it already, or there is none.
+fn missing_codemod(dir: &Path) -> Option<PathBuf> {
+    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let mut manifests = Vec::new();
+    let mut workspace_root = None;
+    for ancestor in dir.ancestors() {
+        let manifest = ancestor.join("package.json");
+        if manifest.is_file() {
+            let json = std::fs::read_to_string(&manifest)
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .unwrap_or_default();
+            if ["dependencies", "devDependencies"]
+                .iter()
+                .any(|field| json[field].get("codemod").is_some())
+            {
+                return None;
+            }
+            let is_root =
+                json.get("workspaces").is_some() || ancestor.join("pnpm-workspace.yaml").is_file();
+            manifests.push(manifest.clone());
+            if is_root {
+                workspace_root = Some(manifest);
+                break;
+            }
+        }
+        if ancestor.join(".git").exists() {
+            break;
+        }
+    }
+    workspace_root.or_else(|| manifests.into_iter().next())
+}
+
+/// `path` relative to the current directory, when that is at most a few
+/// levels up (`../../package.json`).
+fn shown(path: &Path) -> PathBuf {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| cwd.canonicalize().ok())
+        .and_then(|cwd| relative_to(path, &cwd))
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+fn relative_to(path: &Path, base: &Path) -> Option<PathBuf> {
+    let common = base
+        .ancestors()
+        .enumerate()
+        .find(|(_, ancestor)| path.starts_with(ancestor))?;
+    let (up, ancestor) = common;
+    if up > 3 || ancestor.parent().is_none() {
+        return None;
+    }
+    let mut relative: PathBuf = (0..up).map(|_| "..").collect();
+    relative.push(path.strip_prefix(ancestor).ok()?);
+    Some(relative)
 }
 
 fn is_package(dir: &Path) -> bool {
@@ -153,7 +195,7 @@ fn upgrade_package(package_dir: &Path, conversions: &[Conversion], args: &Comman
     // not leave the package half upgraded.
     let mut translated = Vec::new();
     for conversion in conversions {
-        translated.push(translate_file(&conversion.yaml).map_err(|e| anyhow!(e))?);
+        translated.push(upgrade_file(&conversion.yaml).map_err(|e| anyhow!(e))?);
     }
     if args.dry_run {
         for (conversion, translation) in conversions.iter().zip(&translated) {
@@ -561,6 +603,78 @@ mod tests {
         assert!(!dir.path().join("workflow.yaml").exists());
         let manifest = std::fs::read_to_string(dir.path().join("codemod.yaml")).unwrap();
         assert!(manifest.contains("workflow: workflow.ts"), "{manifest}");
+    }
+
+    #[test]
+    fn the_install_hint_names_the_workspace_root_once_and_only_when_needed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join("recipes/a")).unwrap();
+        std::fs::write(
+            root.join("package.json"),
+            r#"{ "workspaces": ["recipes/*"] }"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("recipes/a/package.json"), r#"{ "name": "a" }"#).unwrap();
+        assert_eq!(
+            missing_codemod(&root.join("recipes/a")),
+            Some(root.join("package.json"))
+        );
+        std::fs::write(
+            root.join("package.json"),
+            r#"{ "workspaces": ["recipes/*"], "devDependencies": { "codemod": "2.0.0" } }"#,
+        )
+        .unwrap();
+        assert_eq!(missing_codemod(&root.join("recipes/a")), None);
+        assert_eq!(
+            relative_to(&root.join("package.json"), &root.join("recipes/a")),
+            Some(PathBuf::from("../../package.json"))
+        );
+        assert_eq!(
+            relative_to(&root.join("recipes/a/package.json"), &root),
+            Some(PathBuf::from("recipes/a/package.json"))
+        );
+        // Outside a workspace: the nearest package.json.
+        std::fs::write(root.join("package.json"), r#"{ "name": "solo" }"#).unwrap();
+        assert_eq!(
+            missing_codemod(&root.join("recipes/a")),
+            Some(root.join("recipes/a/package.json"))
+        );
+    }
+
+    #[test]
+    fn upgrading_calls_a_jssg_transform_from_a_plain_callback() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("codemod.yaml"),
+            "schema_version: \"1.0\"\nname: demo\nversion: 0.1.0\ndescription: d\nauthor: a\nworkflow: workflow.yaml\n",
+        )
+        .unwrap();
+        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/workflow.ts"),
+            "export default function transform(root: unknown): string | null {\n  return null;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("workflow.yaml"),
+            "version: \"1\"\nnodes:\n  - id: a\n    name: A\n    steps:\n      - name: Rewrite\n        js-ast-grep:\n          js_file: src/workflow.ts\n          language: typescript\n",
+        )
+        .unwrap();
+        handler(&Command {
+            path: Some(dir.path().to_path_buf()),
+            keep_yaml: false,
+            dry_run: false,
+        })
+        .unwrap();
+        let source = std::fs::read_to_string(dir.path().join("workflow.ts")).unwrap();
+        assert!(
+            source.contains("import transform from \"./src/workflow.ts\";"),
+            "{source}"
+        );
+        assert!(!source.contains("jssg-compat"), "{source}");
+        assert!(codemod_workflow::load_workflow(&dir.path().join("workflow.ts")).is_ok());
     }
 
     #[test]

@@ -11,7 +11,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::build::{build, BuildError, Built};
-use crate::events::{Event, EventSink};
+use crate::events::{Event, EventSink, PartialStep};
 use crate::interaction::Interaction;
 use crate::run::{execute, CancelWatch, Ending, RunContext, RunError, TestPlan};
 use crate::Services;
@@ -119,6 +119,11 @@ pub struct RunReport {
 }
 
 impl RunReport {
+    /// How many files failed in the run's partial steps.
+    pub fn failed_files(&self) -> usize {
+        self.steps.iter().map(StepRecord::failed_files).sum()
+    }
+
     /// The report as the `codemod/testing` helpers and the Node.js host
     /// return it.
     pub fn to_json(&self) -> Value {
@@ -238,12 +243,16 @@ impl Execution {
                 });
             }
         }
+        let steps = context.store.load_steps(&self.record.id)?;
+        let partial_steps = PartialStep::of(&steps);
         context.events.emit(Event::RunFinished {
             run_id: self.record.id.clone(),
             status: self.record.status,
             error: self.record.error.clone(),
+            failed_files: partial_steps.iter().map(|step| step.failed_files).sum(),
+            partial_steps,
         });
-        Ok(context.store.load_steps(&self.record.id)?)
+        Ok(steps)
     }
 }
 
@@ -428,6 +437,7 @@ impl Engine {
             test,
             stopped: AtomicBool::new(false),
             interruption: Mutex::new(None),
+            assess: Default::default(),
         });
         Execution {
             record,

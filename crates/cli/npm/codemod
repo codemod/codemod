@@ -130,8 +130,22 @@ function latestBootstrapArgs() {
   ];
 }
 
-function shouldBootstrapLatestNoCommand(argv, env = process.env) {
-  return argv.length === 0 && !env[CODEMOD_BOOTSTRAPPED_ENV];
+/** This package's version: `0.0.0` in a checkout, set when it is published. */
+function ownVersion() {
+  try {
+    return require("./package.json").version;
+  } catch {
+    return "0.0.0";
+  }
+}
+
+/**
+ * Whether a bare `codemod` re-runs as `codemod@latest`, the newest release.
+ * A prerelease (`2.0.0-alpha.7`) runs itself: `latest` is another release
+ * line, which would not run its packages.
+ */
+function shouldBootstrapLatestNoCommand(argv, env = process.env, version = ownVersion()) {
+  return argv.length === 0 && !env[CODEMOD_BOOTSTRAPPED_ENV] && !version.includes("-");
 }
 
 function spawnLatestCli({ env = process.env, platform = process.platform, spawnImpl = spawn }) {

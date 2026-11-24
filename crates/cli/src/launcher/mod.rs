@@ -487,6 +487,7 @@ async fn run_on_screen(
         summary,
         duration: started.elapsed(),
         dry_run,
+        format: settings.format,
     };
     print_record(&view);
     crate::workflow_exec::print_ending(&outcome, settings.format, !dry_run);

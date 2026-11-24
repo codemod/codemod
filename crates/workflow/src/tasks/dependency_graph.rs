@@ -44,12 +44,20 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         .ok_or_else(|| format!("unknown callback '{}'", request.callback))?;
     let only = request.lockfiles.map(Globs::into_vec).unwrap_or_default();
     let graph = codemod_deps::load(&run.target, &only)?;
-    task.log(format!(
-        "read {} ({} packages, {} dependencies)",
-        graph.lockfiles.join(", "),
-        graph.nodes.len(),
-        graph.edges.len()
-    ));
+    if graph.lockfiles.is_empty() && graph.skipped.is_empty() {
+        task.log(
+            "no lockfile at the target's root, so the graph is empty; nested ones are read when `lockfiles` names them, such as **/yarn.lock",
+        );
+    } else if graph.lockfiles.is_empty() {
+        task.log("no lockfile could be read, so the graph is empty");
+    } else {
+        task.log(format!(
+            "read {} ({} packages, {} dependencies)",
+            graph.lockfiles.join(", "),
+            graph.nodes.len(),
+            graph.edges.len()
+        ));
+    }
     for skipped in &graph.skipped {
         task.log(format!("skipped {}: {}", skipped.lockfile, skipped.error));
     }
@@ -67,7 +75,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
     let attach_name = module_name(task, "dependency-graph");
 
     let (json, failure, changes) = block_on(async move {
-        let worker = isolate::start(options, registry).await?;
+        let worker = isolate::start(options, registry, None).await?;
         let sandbox = &worker;
         let json: Result<String, String> = async_with!(sandbox.context => |ctx| {
             let run = async {
@@ -88,8 +96,7 @@ pub(crate) fn run(task: &TaskContext<'_>, request: Value) -> Result<TaskOutcome,
         })
         .await;
         let (failure, changes) = side_effects(sandbox);
-        // Timers or promises the code left running would abort the process
-        // when the runtime is freed: wait for them a little, else leak it.
+        // Clears timers the code left running, so the runtime can be freed.
         worker.shutdown(isolate::SHUTDOWN_GRACE).await;
         Ok::<_, String>((json?, failure, changes))
     })?;

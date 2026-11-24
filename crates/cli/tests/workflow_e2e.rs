@@ -189,6 +189,180 @@ export default async function main() {
 }
 "#;
 
+/// Fails on files without `var `: src/b.ts in the fixture.
+const PICKY: &str = r#"
+export default function picky(file: { text: string; write(text: string): void }) {
+  if (!file.text.includes("var ")) throw new Error("no var here");
+  file.write(file.text.replaceAll("var ", "let "));
+}
+"#;
+
+const TS_SOME_FILES_FAIL: &str = r#"
+import { step, forEachFile } from "codemod/workflow";
+import picky from "./scripts/picky.ts";
+export default async function main() {
+  await step("Replace var", forEachFile("src/**/*.ts", picky));
+}
+"#;
+
+/// The YAML transform that fails on src/b.ts.
+const PICKY_TRANSFORM: &str = r#"
+export default function transform(root: any) {
+  const text = root.root().text();
+  if (!text.includes("var ")) throw new Error("no var here");
+  return text.replaceAll("var ", "let ");
+}
+"#;
+
+/// The last line of stderr that is not blank.
+fn last_line(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .map(|line| console::strip_ansi_codes(line).trim().to_string())
+        .rfind(|line| !line.is_empty())
+        .unwrap_or_default()
+}
+
+fn some_files_fail() -> Fixture {
+    let fixture = Fixture::new();
+    fixture.package_file("scripts/picky.ts", PICKY);
+    fixture.package_file("workflow.ts", TS_SOME_FILES_FAIL);
+    fixture
+}
+
+#[test]
+fn a_run_where_some_files_failed_exits_2_and_says_so_last() {
+    let fixture = some_files_fail();
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert_eq!(fixture.read("src/a.ts"), "let a = 1;\n");
+    assert_eq!(
+        last_line(&output),
+        "1 file failed; changes to the other files were written.",
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_dry_run_where_some_files_failed_exits_2_and_says_nothing_was_written() {
+    let fixture = some_files_fail();
+    let output = fixture.run(&["--dry-run"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
+    assert_eq!(
+        last_line(&output),
+        "1 file failed; dry run: nothing was written.",
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_hard_failure_still_exits_1() {
+    let fixture = Fixture::new();
+    fixture.package_file("workflow.ts", TS_FAILING);
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+}
+
+#[test]
+fn run_finished_counts_failed_files_in_jsonl() {
+    let fixture = some_files_fail();
+    let output = fixture.run(&["--format", "jsonl"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let finished: serde_json::Value = stdout
+        .lines()
+        .filter(|line| line.starts_with('{'))
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .rfind(|event| event["event"] == "run_finished")
+        .unwrap_or_else(|| panic!("no run_finished in {stdout}"));
+    assert_eq!(finished["status"], "succeeded", "{finished}");
+    assert_eq!(finished["failed_files"], 1, "{finished}");
+    assert_eq!(
+        finished["partial_steps"],
+        serde_json::json!([{ "position": 0, "label": "Replace var", "failed_files": 1, "files": 2 }]),
+        "{finished}"
+    );
+    // JSONL has no text summary on stderr.
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("file failed"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_workflow_yaml_run_where_some_files_failed_exits_2() {
+    let fixture = Fixture::new();
+    fixture.package_file("scripts/codemod.ts", PICKY_TRANSFORM);
+    fixture.package_file("workflow.yaml", YAML);
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert_eq!(fixture.read("src/a.ts"), "let a = 1;\n");
+    assert_eq!(
+        last_line(&output),
+        "1 file failed; changes to the other files were written.",
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_resumed_run_with_failed_files_exits_2() {
+    let fixture = Fixture::new();
+    fixture.package_file("scripts/picky.ts", PICKY);
+    let failing = TS_SOME_FILES_FAIL.replace(
+        "forEachFile(\"src/**/*.ts\", picky));",
+        "forEachFile(\"src/**/*.ts\", picky));\n  await step(\"Check\", () => { throw new Error(\"not ready\"); });",
+    );
+    fixture.package_file("workflow.ts", &failing);
+    let output = fixture.run(&[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+
+    let id = latest_run_id(&fixture);
+    fixture.package_file(
+        "workflow.ts",
+        &failing.replace("throw new Error(\"not ready\");", "return 1;"),
+    );
+    let output = fixture.codemod(&["workflow", "resume", "--id", &id, "--no-interactive"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert_eq!(
+        last_line(&output),
+        "1 file failed; changes to the other files were written.",
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn codemod_run_where_some_files_failed_exits_2() {
+    let fixture = some_files_fail();
+    fixture.package_file(
+        "codemod.yaml",
+        "schema_version: \"1.0\"\nname: picky\nversion: 0.1.0\ndescription: picky\nauthor: test\nworkflow: workflow.ts\n",
+    );
+    let package = fixture.package.path().to_str().unwrap();
+    let target = fixture.target.path().to_str().unwrap();
+    let output = fixture.codemod(&[
+        "run",
+        package,
+        "--target",
+        target,
+        "--no-interactive",
+        "--allow-dirty",
+    ]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert_eq!(fixture.read("src/a.ts"), "let a = 1;\n");
+    assert_eq!(
+        last_line(&output),
+        "1 file failed; changes to the other files were written.",
+        "{}",
+        text(&output)
+    );
+}
+
 #[test]
 fn a_failed_run_is_listed_and_resumes_after_the_fix() {
     let fixture = Fixture::new();
@@ -352,4 +526,60 @@ export default async function main() {
     );
     assert_eq!(result["steps"].as_array().unwrap().len(), 2);
     assert_eq!(fixture.read("src/a.ts"), "let a = 1;\n");
+}
+
+#[test]
+fn a_workflow_that_assesses_fails_before_any_step_without_permission_or_a_key() {
+    let fixture = Fixture::new();
+    fixture.package_file(
+        "workflow.ts",
+        r#"
+import { step, forEachFile } from "codemod/workflow";
+import { assess, yesNo } from "codemod/assess";
+export default async function main() {
+  await step("Mark", forEachFile("src/a.ts", (file) => { file.write("marked\n"); }));
+  await step("Ask", forEachFile("src/*.ts", (file) => assess(file, { questions: { ok: yesNo("Fine?") } })));
+}
+"#,
+    );
+    let home = TempDir::new().unwrap();
+    let run = |extra: &[&str]| {
+        let package = fixture.package.path().to_str().unwrap();
+        let target = fixture.target.path().to_str().unwrap();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codemod"));
+        command
+            .args(["workflow", "run", "-w", package, "--target", target])
+            .args(["--no-interactive", "--allow-dirty"])
+            .args(extra)
+            .env("CODEMOD_RUN_STORE_DIR", fixture.store.path())
+            .env("DISABLE_ANALYTICS", "true")
+            // No user config, and no key.
+            .env("HOME", home.path())
+            .env("XDG_CONFIG_HOME", home.path())
+            .env("APPDATA", home.path());
+        for name in [
+            "TYPESAFE_API_KEY",
+            "OPENAI_API_KEY",
+            "DECISION_API_KEY",
+            "DECISION_PROVIDER",
+            "DECISION_MODEL",
+        ] {
+            command.env_remove(name);
+        }
+        command.output().expect("failed to run codemod")
+    };
+
+    let output = run(&[]);
+    assert!(!output.status.success());
+    assert!(text(&output).contains("--allow-ai"), "{}", text(&output));
+
+    let output = run(&["--allow-ai"]);
+    assert!(!output.status.success());
+    assert!(
+        text(&output).contains("set TYPESAFE_API_KEY (or DECISION_API_KEY)"),
+        "{}",
+        text(&output)
+    );
+    // Neither run got to the first step.
+    assert_eq!(fixture.read("src/a.ts"), "var a = 1;\n");
 }

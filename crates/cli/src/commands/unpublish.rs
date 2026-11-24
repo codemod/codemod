@@ -71,8 +71,9 @@ pub async fn handler(args: &Command) -> Result<()> {
         .get_auth_for_registry(&registry_url)?
         .ok_or_else(|| {
             anyhow!(
-                "Not authenticated with registry: {}. Run 'npx codemod@latest login' first.",
-                registry_url
+                "Not authenticated with registry: {}. Run '{}' first.",
+                registry_url,
+                crate::utils::cli_command::npx_codemod("login")
             )
         })?;
 
@@ -225,8 +226,9 @@ async fn unpublish_package(
             }
             reqwest::StatusCode::UNAUTHORIZED => {
                 Err(anyhow!(
-                    "Authentication failed. Please run 'npx codemod@latest login' again.\n\
-                     Your session may have expired."
+                    "Authentication failed. Please run '{}' again.\n\
+                     Your session may have expired.",
+                    crate::utils::cli_command::npx_codemod("login")
                 ))
             }
             _ => {

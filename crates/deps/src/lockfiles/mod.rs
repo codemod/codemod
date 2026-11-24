@@ -13,26 +13,32 @@ use std::path::Path;
 
 use crate::model::{Graph, Kind, Skipped};
 
+mod bun;
 mod cargo;
 mod npm;
 mod pnpm;
 mod python;
 mod yarn;
+mod yarn_classic;
 
+pub use bun::parse as bun;
 pub use cargo::{parse as cargo, Manifests as CargoManifests};
 pub use npm::parse as package_lock;
 pub use pnpm::parse as pnpm;
 pub use python::{pipfile, poetry, uv};
 pub use yarn::parse as yarn;
+pub use yarn_classic::parse as yarn_classic;
 
 /// Reads a file relative to the lockfile's directory.
 pub type ReadFile<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 /// Lockfiles this crate reads, by file name.
-pub const LOCKFILES: [&str; 7] = [
+pub const LOCKFILES: [&str; 9] = [
     "yarn.lock",
     "pnpm-lock.yaml",
     "package-lock.json",
+    "npm-shrinkwrap.json",
+    "bun.lock",
     "Cargo.lock",
     "uv.lock",
     "poetry.lock",
@@ -45,9 +51,10 @@ pub const LOCKFILES: [&str; 7] = [
 /// `node_modules` and `target` are skipped. A workspace keeps its lockfile
 /// at its root, so nested ones are usually fixtures or examples.
 ///
-/// A lockfile `only` names that cannot be read is an error. Without `only`,
-/// one that cannot be read is left out and listed in [`Graph::skipped`];
-/// it is an error only when no lockfile can be read.
+/// A lockfile `only` names that cannot be read is an error, and so are
+/// globs that match no lockfile. Without `only`, one that cannot be read is
+/// left out and listed in [`Graph::skipped`], and a root without lockfiles
+/// is an empty graph.
 pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
     let mut found: Vec<String> = ignore::WalkBuilder::new(root)
         .hidden(false)
@@ -67,20 +74,14 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
         })
         .collect();
     found.sort();
-    let nested = !found.is_empty();
     found.retain(|path| match only {
         [] => !path.contains('/'),
         globs => globs.iter().any(|glob| glob_match(glob, path)),
     });
-    if found.is_empty() {
-        let hint = if only.is_empty() && nested {
-            "; name nested ones with a glob such as **/yarn.lock"
-        } else {
-            ""
-        };
+    if found.is_empty() && !only.is_empty() {
         return Err(format!(
-            "no lockfile ({}) at {}{hint}",
-            LOCKFILES.join(", "),
+            "no lockfile matches {} under {}",
+            only.join(", "),
             root.display()
         ));
     }
@@ -95,32 +96,88 @@ pub fn load(root: &Path, only: &[String]) -> Result<Graph, String> {
         let parsed = read(file)
             .ok_or_else(|| "cannot read the file".to_string())
             .and_then(|text| match file {
+                "yarn.lock" if yarn_classic::is_classic(&text) => {
+                    yarn_classic(&text, &read, &yarn_workspaces(&base, &read))
+                }
                 "yarn.lock" => yarn(&text, &read),
                 "pnpm-lock.yaml" => pnpm(&text, &read),
-                "package-lock.json" => package_lock(&text),
+                "package-lock.json" | "npm-shrinkwrap.json" => package_lock(&text, &read),
+                "bun.lock" => bun(&text),
                 "uv.lock" => uv(&text),
                 "poetry.lock" => poetry(&text, &read),
                 "Pipfile.lock" => pipfile(&text, &read),
                 _ => cargo(&text, &CargoManifests::find(&base)),
             });
         match parsed {
-            Ok(parsed) => graph.merge(parsed, dir),
+            Ok(mut parsed) => {
+                // package-lock.json's parser also reads npm-shrinkwrap.json.
+                parsed.lockfiles = vec![file.to_string()];
+                graph.merge(parsed, dir)
+            }
             Err(error) if only.is_empty() => graph.skipped.push(Skipped { lockfile, error }),
             Err(error) => return Err(format!("{lockfile}: {error}")),
         }
     }
-    if graph.lockfiles.is_empty() {
-        let reasons: Vec<String> = graph
-            .skipped
-            .iter()
-            .map(|skipped| format!("{}: {}", skipped.lockfile, skipped.error))
-            .collect();
-        return Err(format!(
-            "no lockfile could be read ({})",
-            reasons.join("; ")
-        ));
-    }
     Ok(graph)
+}
+
+/// The directories of a Yarn 1 project's workspaces other than the root,
+/// relative to `base`: those with a package.json that the root
+/// package.json's `workspaces` globs (or `workspaces.packages`) match and
+/// no `!` glob excludes.
+fn yarn_workspaces(base: &Path, read: ReadFile) -> Vec<String> {
+    let Some(manifest) =
+        read("package.json").and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    else {
+        return Vec::new();
+    };
+    let Some(workspaces) = manifest.get("workspaces") else {
+        return Vec::new();
+    };
+    let globs: Vec<&str> = workspaces
+        .get("packages")
+        .unwrap_or(workspaces)
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    let normalize = |glob: &str| {
+        glob.trim_start_matches("./")
+            .trim_end_matches('/')
+            .to_string()
+    };
+    let include: Vec<String> = globs
+        .iter()
+        .filter(|glob| !glob.starts_with('!'))
+        .map(|glob| normalize(glob))
+        .collect();
+    let exclude: Vec<String> = globs
+        .iter()
+        .filter_map(|glob| glob.strip_prefix('!'))
+        .map(normalize)
+        .collect();
+    if include.is_empty() {
+        return Vec::new();
+    }
+    let mut dirs: Vec<String> = ignore::WalkBuilder::new(base)
+        .hidden(false)
+        .filter_entry(|entry| !matches!(entry.file_name().to_str(), Some("node_modules" | ".git")))
+        .build()
+        .flatten()
+        .filter(|entry| entry.file_name() == "package.json")
+        .filter_map(|entry| {
+            let dir = entry.path().parent()?.strip_prefix(base).ok()?;
+            Some(dir.to_string_lossy().replace('\\', "/"))
+        })
+        .filter(|dir| !dir.is_empty())
+        .filter(|dir| {
+            include.iter().any(|glob| path_glob_match(glob, dir))
+                && !exclude.iter().any(|glob| path_glob_match(glob, dir))
+        })
+        .collect();
+    dirs.sort();
+    dirs
 }
 
 /// The version of a workspace package that declares none, as Yarn records it.
@@ -205,6 +262,23 @@ pub(crate) fn versions_by_name(graph: &Graph) -> HashMap<String, Vec<usize>> {
         map.entry(node.name.clone()).or_default().push(id);
     }
     map
+}
+
+/// A glob over `/`-separated paths: `*` stays within one directory name,
+/// and `**` matches any number of them, none included.
+pub(crate) fn path_glob_match(glob: &str, path: &str) -> bool {
+    fn matches(glob: &[&str], path: &[&str]) -> bool {
+        match glob.split_first() {
+            None => path.is_empty(),
+            Some((&"**", rest)) => (0..=path.len()).any(|skip| matches(rest, &path[skip..])),
+            Some((first, rest)) => path
+                .split_first()
+                .is_some_and(|(name, path)| star_match(first, name) && matches(rest, path)),
+        }
+    }
+    let glob: Vec<&str> = glob.split('/').collect();
+    let path: Vec<&str> = path.split('/').collect();
+    matches(&glob, &path)
 }
 
 /// `*` matches any run of characters, and a leading `**/` also matches no
